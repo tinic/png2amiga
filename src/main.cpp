@@ -128,7 +128,6 @@ void print_usage() {
         "         ehb, ehb-lace\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
-        "  --interlace                     Set LACE bit in CAMG\n"
         "  --copper                        Per-scanline copper palettes\n"
         "\n"
         "HAM encoding:\n"
@@ -218,10 +217,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg == "--interlace") {
-            config.interlace = true;
-            continue;
-        }
 
         if (arg == "--crop-auto") {
             config.crop_auto = true;
