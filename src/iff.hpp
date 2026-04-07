@@ -38,6 +38,7 @@ enum class Compression : std::uint8_t {
 
 struct IffOptions {
     Compression compression = Compression::byterun1;
+    bool hires = false;             // set HIRES bit in CAMG
     bool interlace = false;         // set LACE bit in CAMG
     bool has_transparency = false;  // BMHD masking=2, transparentColor=0
 

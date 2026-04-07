@@ -44,14 +44,14 @@ std::string sanitize_symbol(std::string_view name) {
     return result;
 }
 
-// CAMG viewport mode word (same logic as iff.cpp)
-std::uint32_t make_camg(amiga::Mode mode, bool interlace) {
+// CAMG viewport mode word
+std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace) {
     std::uint32_t camg = 0;
     auto params = amiga::get_mode_params(mode);
-    if (params.is_hires)     camg |= 0x8000;
-    if (params.is_ham)       camg |= 0x0800;
-    if (params.is_ehb)       camg |= 0x0080;
-    if (params.is_interlaced || interlace) camg |= 0x0004;
+    if (hires)           camg |= 0x8000;
+    if (params.is_ham)   camg |= 0x0800;
+    if (params.is_ehb)   camg |= 0x0080;
+    if (interlace)       camg |= 0x0004;
     return camg;
 }
 
@@ -85,7 +85,7 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
     out += "#endif\n\n";
 
     // Metadata defines
-    auto camg = make_camg(mode, options.interlace);
+    auto camg = make_camg(mode, options.hires, options.interlace);
     out += std::format("#define {}_WIDTH   {}\n", SYM, planes.width);
     out += std::format("#define {}_HEIGHT  {}\n", SYM, planes.height);
     out += std::format("#define {}_DEPTH   {}\n", SYM, planes.depth);
@@ -284,10 +284,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     auto bpr = planes.bytes_per_row;
     auto is_ham = params.is_ham;
 
-    // Hires: from mode params or explicit override (compound modes like ham8-hires)
-    bool is_hires = params.is_hires || options.hires;
-    auto camg = make_camg(mode, options.interlace);
-    if (is_hires && !params.is_hires) camg |= 0x8000;
+    bool is_hires = options.hires;
+    auto camg = make_camg(mode, is_hires, options.interlace);
 
     // Palette count (EHB: only 32 base colors)
     auto pal_count = palette.size();
@@ -554,7 +552,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    USHORT* cl = copper1;\n\n";
 
     // Display setup — use standard Amiga display parameters
-    bool is_lace = params.is_interlaced || options.interlace;
+    bool is_lace = options.interlace;
     auto y_start = 44;
     // For interlace: display window is per-field (half total height)
     // disp_height no longer needed — using fixed PAL diwstop (0x2CC1)

@@ -615,9 +615,9 @@ Result<void> save_preview(std::string_view path, const Image& preview,
                           bool has_trans, const std::vector<bool>& mask,
                           amiga::Mode mode, bool hires = false,
                           bool interlace = false) {
-    auto params = amiga::get_mode_params(mode);
-    bool is_hires = params.is_hires || hires;
-    bool is_lace = params.is_interlaced || interlace;
+    (void)mode;
+    bool is_hires = hires;
+    bool is_lace = interlace;
     std::size_t sx = is_hires ? 1 : 2;
     std::size_t sy = is_lace ? 1 : 2;
     if (is_hires && is_lace) { sx = 1; sy = 1; }
@@ -631,11 +631,10 @@ Result<void> save_preview(std::string_view path, const Image& preview,
 }
 
 // Show preview in terminal (iTerm2 inline image protocol)
-void show_terminal_preview(const Image& preview, amiga::Mode mode,
+void show_terminal_preview(const Image& preview, amiga::Mode /*mode*/,
                            bool hires = false, bool interlace = false) {
-    auto params = amiga::get_mode_params(mode);
-    bool is_hires = params.is_hires || hires;
-    bool is_lace = params.is_interlaced || interlace;
+    bool is_hires = hires;
+    bool is_lace = interlace;
     std::size_t sx = is_hires ? 1 : 2;
     std::size_t sy = is_lace ? 1 : 2;
     if (is_hires && is_lace) { sx = 1; sy = 1; }
@@ -945,6 +944,7 @@ int main(int argc, char* argv[]) {
             if (ends_with(config->output_path, ".iff") ||
                 ends_with(config->output_path, ".ilbm")) {
                 iff::IffOptions iff_opts;
+                iff_opts.hires = config->hires;
                 iff_opts.interlace = config->interlace;
                 iff_opts.has_transparency = has_transparency;
                 if (!ham_result->scanline_palettes.empty()) {
@@ -1140,6 +1140,7 @@ int main(int argc, char* argv[]) {
             if (ends_with(config->output_path, ".iff") ||
                 ends_with(config->output_path, ".ilbm")) {
                 iff::IffOptions iff_opts;
+                iff_opts.hires = config->hires;
                 iff_opts.interlace = config->interlace;
 
                 // IFF writer will trim palette to 32 base colors for EHB
@@ -1293,6 +1294,7 @@ int main(int argc, char* argv[]) {
             if (ends_with(config->output_path, ".iff") ||
                 ends_with(config->output_path, ".ilbm")) {
                 iff::IffOptions iff_opts;
+                iff_opts.hires = config->hires;
                 iff_opts.interlace = config->interlace;
                 iff_opts.has_transparency = has_transparency;
                 iff_opts.scanline_palettes = &copper_result->scanline_palettes;
@@ -1480,7 +1482,8 @@ int main(int argc, char* argv[]) {
         if (ends_with(config->output_path, ".iff") ||
             ends_with(config->output_path, ".ilbm")) {
             iff::IffOptions iff_opts;
-            iff_opts.interlace = config->interlace;
+            iff_opts.hires = config->hires;
+                iff_opts.interlace = config->interlace;
             iff_opts.has_transparency = has_transparency;
 
             auto result = iff::save_ilbm(
