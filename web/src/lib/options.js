@@ -98,8 +98,6 @@ export const EXAMPLES = [
   { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 1.0 } },
   { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'checker', ditherStrength: 0.8 } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 1.0 } },
-  { name: 'panda',        file: 'panda.png',          opts: { mode: 'ehb', dither: 'checker', ditherStrength: 1.0 } },
-  { name: 'transparent',  file: 'transparent.png',    opts: { mode: 'lores', depth: 5, dither: 'checker', alphaThreshold: 0 } },
 ]
 
 export function defaultOptions() {
