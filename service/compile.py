@@ -8,6 +8,7 @@ Compilation runs inside a bubblewrap (bwrap) sandbox:
 - apt install bubblewrap
 """
 
+import gzip
 import os
 import subprocess
 import tempfile
@@ -141,13 +142,26 @@ class CompileHandler(BaseHTTPRequestHandler):
             return
 
         ext = "adf" if fmt == "adf" else "exe"
-        self.send_response(200)
-        self._cors_headers()
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Disposition", f'attachment; filename="viewer.{ext}"')
-        self.send_header("Content-Length", str(len(result)))
-        self.end_headers()
-        self.wfile.write(result)
+        # Gzip compress — ADF is 880KB mostly empty, exe has compressible image data
+        accept = self.headers.get("Accept-Encoding", "")
+        if "gzip" in accept:
+            compressed = gzip.compress(result, compresslevel=6)
+            self.send_response(200)
+            self._cors_headers()
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Disposition", f'attachment; filename="viewer.{ext}"')
+            self.send_header("Content-Length", str(len(compressed)))
+            self.end_headers()
+            self.wfile.write(compressed)
+        else:
+            self.send_response(200)
+            self._cors_headers()
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="viewer.{ext}"')
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
 
     def _cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
