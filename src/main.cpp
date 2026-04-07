@@ -247,9 +247,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v.starts_with("ehb")) config.mode = amiga::Mode::ehb;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
-                // Apply compound mode overrides
+                // Apply compound mode overrides + set flags from built-in modes
                 if (mode_hires) { config.hires = true; if (!config.width) config.width = 640; }
-                if (mode_lace) config.interlace = true;
+                auto mp = amiga::get_mode_params(config.mode);
+                config.interlace = mode_lace || mp.is_interlaced;
+                config.hires = config.hires || mp.is_hires;
             }
             else if (arg == "--depth") {
                 config.depth = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
@@ -651,7 +653,7 @@ int main(int argc, char* argv[]) {
     }
 
     // --- Validate mode combinations ---
-    if (config->copper && (amiga::get_mode_params(config->mode).is_interlaced || config->interlace)) {
+    if (config->copper && config->interlace) {
         std::println(stderr,
             "Error: --copper is not compatible with interlace modes "
             "(copper WAITs conflict with field switching)");
@@ -722,6 +724,8 @@ int main(int argc, char* argv[]) {
     // hires: 0.5 (tall pixels), lores_interlace: 2.0 (wide pixels)
     auto par = static_cast<double>(params.preview_scale_x)
              / static_cast<double>(params.preview_scale_y);
+    // For compound lace modes (e.g. ham6-lace), base mode isn't interlaced
+    // but config->interlace is true — adjust PAR for double vertical resolution
     if (config->interlace && !params.is_interlaced) par *= 2.0;
 
     std::size_t target_w, target_h;
