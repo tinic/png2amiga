@@ -667,6 +667,24 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     return make_result(std::move(bytes), *result);
 }
 
+ConvertResult convert_viewer(const std::uint8_t* input_data,
+                             std::size_t input_size,
+                             const Options& options) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+
+    cheader::CHeaderOptions ch_opts;
+    if (!options.symbol_name.empty())
+        ch_opts.symbol_name = options.symbol_name;
+    ch_opts.interlace = result->interlace;
+    auto viewer = cheader::generate_viewer(
+        result->planes, result->palette, result->mode, ch_opts);
+    if (!viewer) return make_error(viewer.error().message);
+
+    std::vector<std::uint8_t> bytes(viewer->begin(), viewer->end());
+    return make_result(std::move(bytes), *result);
+}
+
 ConvertResult convert_raw(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {

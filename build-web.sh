@@ -9,5 +9,5 @@ echo "Building web..."
 cd web
 npm run build
 
-echo "Done. Output in docs/"
-ls -lh ../docs/index.html ../docs/assets/*.wasm
+echo "Done. Output in service/html/"
+ls -lh ../service/html/index.html ../service/html/assets/*.wasm

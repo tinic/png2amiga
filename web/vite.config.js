@@ -19,7 +19,7 @@ export default defineConfig({
   },
   assetsInclude: ['**/*.wasm'],
   build: {
-    outDir: '../docs',
+    outDir: '../service/html',
     emptyOutDir: true,
   }
 })

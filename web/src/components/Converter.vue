@@ -18,7 +18,7 @@ import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 import Panel from 'primevue/panel'
 
-const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertRaw } = useWasm()
+const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertRaw } = useWasm()
 const { imageBytes, imageName, imageUrl, dragOver, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
@@ -217,19 +217,19 @@ async function downloadIFF() {
   converting.value = false
 }
 
-async function downloadHeader() {
+async function downloadViewer() {
   if (!imageBytes.value) return
   converting.value = true
   try {
     const stem = options.symbolName ||
       (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_')
-    const result = await convertHeader(imageBytes.value, buildWasmOptions(), stem)
+    const result = await convertViewer(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
     const blob = new Blob([result.header || result.data], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = stem + '.h'
+    a.download = stem + '.cpp'
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) { errorMsg.value = e.message }
@@ -247,6 +247,33 @@ async function downloadRaw() {
     const a = document.createElement('a')
     a.href = url
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.raw'
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
+}
+
+async function compileAndDownload(format) {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertViewer(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    const source = result.header || new TextDecoder().decode(result.data)
+    const resp = await fetch(`/api/compile?format=${format}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: source,
+    })
+    if (!resp.ok) {
+      errorMsg.value = await resp.text()
+      return
+    }
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.' + format
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) { errorMsg.value = e.message }
@@ -511,8 +538,14 @@ async function loadExample(example) {
                 title="Download the converted image as a PNG preview file." />
               <Button v-if="!options.copper" label="iff" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadIFF"
                 title="Download as IFF ILBM (Deluxe Paint, Personal Paint, WinUAE compatible)." />
-              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
-                title="Download C header with UWORD bitplane arrays and OCS palette for Amiga C projects (VBCC/GCC m68k)." />
+              <Button label="exe" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
+                title="Download compiled AmigaOS executable. Click left mouse button to exit." />
+              <Button label="adf" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
+                title="Download bootable Amiga floppy disk image (ADF)." />
+            </div>
+            <div class="flex gap-2">
+              <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
+                title="Download standalone AmigaOS viewer source (.cpp) — compile with m68k-amiga-elf-gcc." />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
                 title="Download raw interleaved bitplane data for direct DMA. Companion .pal file from CLI." />
             </div>

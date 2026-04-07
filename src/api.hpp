@@ -86,6 +86,11 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options);
 
+// Convert raw image data and return standalone viewer .cpp source (UTF-8 text).
+ConvertResult convert_viewer(const std::uint8_t* input_data,
+                             std::size_t input_size,
+                             const Options& options);
+
 // Convert raw image data and return RGBA pixel data (for live preview).
 ConvertResult convert_rgba(const std::uint8_t* input_data,
                            std::size_t input_size,
