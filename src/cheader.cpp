@@ -284,9 +284,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     auto bpr = planes.bytes_per_row;
     auto is_ham = params.is_ham;
 
-    // Detect hires from actual image width (compound modes like ham8-hires
-    // have a lores base mode but 640px data)
-    bool is_hires = params.is_hires || (width > 320);
+    // Hires: from mode params or explicit override (compound modes like ham8-hires)
+    bool is_hires = params.is_hires || options.hires;
     auto camg = make_camg(mode, options.interlace);
     if (is_hires && !params.is_hires) camg |= 0x8000;
 

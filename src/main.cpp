@@ -36,9 +36,9 @@ using namespace png2amiga;
 // Pad bitplane data to mode display width (for viewer .cpp export only)
 // ---------------------------------------------------------------------------
 
-void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode) {
-    // Use 640 if image is wider than 320 (compound hires modes), else mode default
-    auto display_w = (planes.width > 320)
+void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode,
+                        bool hires = false) {
+    auto display_w = (hires || amiga::get_mode_params(mode).is_hires)
         ? std::size_t{640} : amiga::default_width(mode);
     if (planes.width == display_w) return;
     auto old_bpr = planes.bytes_per_row;
@@ -72,6 +72,7 @@ struct Config {
     std::string input_path;
     std::string output_path;           // .png for preview, .iff for ILBM, .h for C header
     amiga::Mode mode = amiga::Mode::lores;
+    bool hires = false;                // compound mode hires override
     bool interlace = false;            // LACE bit in CAMG
     std::size_t depth = 5;
     preprocess::Settings preprocess{};
@@ -252,7 +253,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides
-                if (mode_hires && !config.width) config.width = 640;
+                if (mode_hires) { config.hires = true; if (!config.width) config.width = 640; }
                 if (mode_lace) config.interlace = true;
             }
             else if (arg == "--depth") {
@@ -615,24 +616,33 @@ std::vector<bool> scale_mask(const std::vector<bool>& mask,
 // Display preview in terminal and optionally save to file
 Result<void> save_preview(std::string_view path, const Image& preview,
                           bool has_trans, const std::vector<bool>& mask,
-                          amiga::Mode mode) {
+                          amiga::Mode mode, bool hires = false,
+                          bool interlace = false) {
     auto params = amiga::get_mode_params(mode);
-    auto scaled = scale_preview(preview, params.preview_scale_x,
-                                params.preview_scale_y);
+    bool is_hires = params.is_hires || hires;
+    bool is_lace = params.is_interlaced || interlace;
+    std::size_t sx = is_hires ? 1 : 2;
+    std::size_t sy = is_lace ? 1 : 2;
+    if (is_hires && is_lace) { sx = 1; sy = 1; }
+    auto scaled = scale_preview(preview, sx, sy);
     if (has_trans) {
         auto scaled_mask = scale_mask(mask, preview.width(), preview.height(),
-                                      params.preview_scale_x,
-                                      params.preview_scale_y);
+                                      sx, sy);
         return png_io::save(path, scaled, scaled_mask);
     }
     return png_io::save(path, scaled);
 }
 
 // Show preview in terminal (iTerm2 inline image protocol)
-void show_terminal_preview(const Image& preview, amiga::Mode mode) {
+void show_terminal_preview(const Image& preview, amiga::Mode mode,
+                           bool hires = false, bool interlace = false) {
     auto params = amiga::get_mode_params(mode);
-    auto scaled = scale_preview(preview, params.preview_scale_x,
-                                params.preview_scale_y);
+    bool is_hires = params.is_hires || hires;
+    bool is_lace = params.is_interlaced || interlace;
+    std::size_t sx = is_hires ? 1 : 2;
+    std::size_t sy = is_lace ? 1 : 2;
+    if (is_hires && is_lace) { sx = 1; sy = 1; }
+    auto scaled = scale_preview(preview, sx, sy);
     iterm2_display(scaled);
 }
 
@@ -928,7 +938,7 @@ int main(int argc, char* argv[]) {
                 : ham::render_ham(ham_result->planes,
                                  ham_result->base_palette, data_bits);
             if (ham_preview)
-                show_terminal_preview(*ham_preview, config->mode);
+                show_terminal_preview(*ham_preview, config->mode, config->hires, config->interlace);
         }
 
         // Output
@@ -982,7 +992,7 @@ int main(int argc, char* argv[]) {
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
                 }
 
-                pad_planes_to_mode(ham_result->planes, config->mode);
+                pad_planes_to_mode(ham_result->planes, config->mode, config->hires);
                 auto result = cheader::save_viewer(
                     config->output_path, ham_result->planes,
                     ham_result->base_palette, config->mode, ch_opts);
@@ -1033,7 +1043,7 @@ int main(int argc, char* argv[]) {
                 }
                 auto result = save_preview(config->output_path, *preview,
                                            has_transparency, transparency_mask,
-                                           config->mode);
+                                           config->mode, config->hires, config->interlace);
                 if (!result) {
                     std::println(stderr, "PNG write error: {}", result.error().message);
                     return 1;
@@ -1122,7 +1132,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        show_terminal_preview(*preview, config->mode);
+        show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -1166,7 +1176,7 @@ int main(int argc, char* argv[]) {
                     : config->symbol_name;
                 ch_opts2.interlace = config->interlace;
 
-                pad_planes_to_mode(planes.value(), config->mode);
+                pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
                     config->output_path, planes.value(), full_palette,
                     config->mode, ch_opts2);
@@ -1201,7 +1211,7 @@ int main(int argc, char* argv[]) {
             } else {
                 auto result = save_preview(config->output_path, *preview,
                                            has_transparency, transparency_mask,
-                                           config->mode);
+                                           config->mode, config->hires, config->interlace);
                 if (!result) {
                     std::println(stderr, "PNG write error: {}",
                                  result.error().message);
@@ -1273,7 +1283,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        show_terminal_preview(*preview, config->mode);
+        show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -1323,7 +1333,7 @@ int main(int argc, char* argv[]) {
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
 
-                pad_planes_to_mode(copper_result->planes, config->mode);
+                pad_planes_to_mode(copper_result->planes, config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
                     config->output_path, copper_result->planes,
                     cmap_palette, config->mode, ch_opts2);
@@ -1351,7 +1361,7 @@ int main(int argc, char* argv[]) {
             } else {
                 auto result = save_preview(config->output_path, *preview,
                                            has_transparency, transparency_mask,
-                                           config->mode);
+                                           config->mode, config->hires, config->interlace);
                 if (!result) {
                     std::println(stderr, "PNG write error: {}",
                                  result.error().message);
@@ -1458,7 +1468,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Terminal preview
-    show_terminal_preview(*preview, config->mode);
+    show_terminal_preview(*preview, config->mode, config->interlace);
 
     // Output
     if (!config->output_path.empty()) {
@@ -1501,7 +1511,7 @@ int main(int argc, char* argv[]) {
                 : config->symbol_name;
             ch_opts.interlace = config->interlace;
 
-            pad_planes_to_mode(planes.value(), config->mode);
+            pad_planes_to_mode(planes.value(), config->mode, config->hires);
             auto result = cheader::save_viewer(
                 config->output_path, planes.value(), used_palette,
                 config->mode, ch_opts);
@@ -1536,7 +1546,7 @@ int main(int argc, char* argv[]) {
         } else {
             auto result = save_preview(config->output_path, *preview,
                                        has_transparency, transparency_mask,
-                                       config->mode);
+                                       config->mode, config->hires, config->interlace);
             if (!result) {
                 std::println(stderr, "PNG write error: {}", result.error().message);
                 return 1;

@@ -41,6 +41,7 @@ namespace png2amiga::cheader {
 struct CHeaderOptions {
     std::string symbol_name = "image";   // base name for symbols
     bool interleaved = false;            // if true, emit single interleaved array
+    bool hires = false;                  // override HIRES for compound modes (ham8-hires etc.)
     bool interlace = false;              // set LACE bit in CAMG
 
     // Copper: per-scanline register changes (nullptr = no copper)

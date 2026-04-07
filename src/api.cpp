@@ -240,6 +240,7 @@ struct PipelineResult {
     bitplane::BitplaneData planes;
     std::vector<Color3f> palette;
     amiga::Mode mode;
+    bool hires = false;
     bool interlace;
 
     // Copper mode
@@ -323,6 +324,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     const Options& orig_options) {
     auto options = decompose_mode_options(orig_options);
     auto mode = parse_mode(options.mode);
+    bool compound_hires = orig_options.mode.find("hires") != std::string::npos;
 
     // We need source dimensions to compute the target size.
     // Peek at the source image dimensions first.
@@ -389,6 +391,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.planes = std::move(ham_result->planes);
         result.palette = std::move(ham_result->base_palette);
         result.mode = mode;
+        result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
         result.interlace = options.interlace;
         if (options.copper) {
             result.copper = true;
@@ -477,6 +480,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.planes = *std::move(planes);
         result.palette = std::move(full_palette);
         result.mode = mode;
+        result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
         result.interlace = options.interlace;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
@@ -507,6 +511,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.planes = std::move(copper_result->planes);
         result.palette = std::vector<Color3f>(first_pal.begin(), first_pal.end());
         result.mode = mode;
+        result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
         result.interlace = options.interlace;
         result.copper = true;
         result.scanline_palettes = std::move(copper_result->scanline_palettes);
@@ -590,6 +595,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.planes = *std::move(planes);
     result.palette = std::move(used_palette);
     result.mode = mode;
+    result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
     result.interlace = options.interlace;
     result.has_transparency = has_transparency;
     result.transparency_mask = tmask;
@@ -696,9 +702,8 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     if (!result) return make_error(result.error().message);
 
     // Pad or crop bitplanes to display width for correct hardware row stride.
-    // Use 640 if image is wider than 320 (compound hires modes), else mode default.
     auto mode = result->mode;
-    auto display_w = (result->planes.width > 320)
+    auto display_w = result->hires
         ? std::size_t{640} : amiga::default_width(mode);
     auto& planes = result->planes;
     if (planes.width != display_w) {
@@ -728,6 +733,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     cheader::CHeaderOptions ch_opts;
     if (!options.symbol_name.empty())
         ch_opts.symbol_name = options.symbol_name;
+    ch_opts.hires = result->hires;
     ch_opts.interlace = result->interlace;
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
