@@ -503,7 +503,7 @@ std::string base64_encode(std::span<const std::uint8_t> data) {
     return out;
 }
 
-void iterm2_display(const Image& image, unsigned scale = 4) {
+void iterm2_display(const Image& image, unsigned scale = 2) {
     auto png = png_io::encode(image);
     if (!png) return;
     auto encoded = base64_encode(*png);
