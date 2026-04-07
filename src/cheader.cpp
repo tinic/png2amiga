@@ -693,31 +693,36 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        *cl++ = (line << 8) | 0x01;  // WAIT start of line (before ddfstrt)\n";
         out += "        *cl++ = 0xfffe;\n";
         if (aga_banks) {
-            // AGA: group changes by bank, add BPLCON3 switches
-            out += std::format("        int cur_bank = 0;\n");
-        }
-        out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-        out += std::format("            UWORD reg = {}_copper[y][s].reg;\n", sym);
-        out += "            if (reg == 0xFFFF) continue;\n";
-        out += std::format("            UWORD col = {}_copper[y][s].color;\n", sym);
-        if (aga_banks) {
-            out += "            int bank = reg / 32;\n";
-            out += "            if (bank != cur_bank) {\n";
-            out += "                *cl++ = 0x0106;  // BPLCON3\n";
-            out += "                *cl++ = (UWORD)(bank << 13);\n";
-            out += "                cur_bank = bank;\n";
+            // AGA: emit changes sorted by bank to minimize BPLCON3 switches.
+            // Two passes: bank 0 (regs 0-31) then bank 1+ (regs 32+).
+            auto num_banks = (pal_count + 31) / 32;
+            out += std::format("        for (int bank = 0; bank < {}; bank++) {{\n",
+                               num_banks);
+            out += "            int any = 0;\n";
+            out += std::format("            for (int s = 0; s < {}; s++) {{\n", cpl);
+            out += std::format("                UWORD reg = {}_copper[y][s].reg;\n", sym);
+            out += "                if (reg == 0xFFFF) continue;\n";
+            out += "                if ((int)(reg / 32) != bank) continue;\n";
+            out += "                if (!any && bank > 0) {\n";
+            out += "                    *cl++ = 0x0106;\n";
+            out += "                    *cl++ = (UWORD)(bank << 13);\n";
+            out += "                }\n";
+            out += "                any = 1;\n";
+            out += std::format("                *cl++ = offsetof(struct Custom, color)"
+                               " + (reg % 32) * 2;\n");
+            out += std::format("                *cl++ = {}_copper[y][s].color;\n", sym);
             out += "            }\n";
-            out += "            *cl++ = offsetof(struct Custom, color) + (reg % 32) * 2;\n";
+            out += "            if (any && bank > 0) {\n";
+            out += "                *cl++ = 0x0106; *cl++ = 0x0000;\n";
+            out += "            }\n";
+            out += "        }\n";
         } else {
-            out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
-        }
-        out += "            *cl++ = col;\n";
-        out += "        }\n";
-        if (aga_banks) {
-            // Reset to bank 0 if we switched
-            out += "        if (cur_bank != 0) {\n";
-            out += "            *cl++ = 0x0106; *cl++ = 0x0000;\n";
-            out += "            cur_bank = 0;\n";
+            out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
+            out += std::format("            UWORD reg = {}_copper[y][s].reg;\n", sym);
+            out += "            if (reg == 0xFFFF) continue;\n";
+            out += std::format("            *cl++ = offsetof(struct Custom, color)"
+                               " + reg * 2;\n");
+            out += std::format("            *cl++ = {}_copper[y][s].color;\n", sym);
             out += "        }\n";
         }
         out += "    }\n\n";
