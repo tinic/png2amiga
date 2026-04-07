@@ -862,13 +862,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        else\n";
         out += "            c->cop1lc = cop_even;  // short frame = even field\n";
         out += "    };\n";
-        out += "    custom->intena = 0x8000 | (1<<5);  // enable VBL interrupt\n\n";
+        out += "    custom->intena = 0x8000 | (1<<5);  // enable VBL interrupt\n";
+        out += "    Enable();  // allow CPU to service interrupts\n\n";
     }
 
     // Wait for left mouse button
     out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
 
     // Cleanup
+    if (is_lace) {
+        out += "    Disable();  // re-disable before FreeSystem restores state\n";
+    }
     out += "    FreeSystem();\n";
     out += std::format("    FreeMem(copper1, {});\n", cop_size);
     if (is_lace) {
