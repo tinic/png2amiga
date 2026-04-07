@@ -27,6 +27,7 @@ namespace png2amiga::api {
 
 namespace {
 
+
 amiga::Mode parse_mode(const std::string& s) {
     if (s == "lores") return amiga::Mode::lores;
     if (s == "lores-lace") return amiga::Mode::lores_interlace;
@@ -128,12 +129,15 @@ Result<Image> auto_crop_to_aspect(const Image& src,
     return crop_image(src, cx, cy, cw, ch);
 }
 
-// Load image from memory, crop, scale, preprocess
+// Load image from memory, crop, scale, preprocess.
+// If the source has alpha, computes a transparency mask at target resolution
+// using the configured alpha threshold / dither method.
 Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                                    std::size_t input_size,
                                    const Options& options,
                                    std::size_t target_w,
-                                   std::size_t target_h) {
+                                   std::size_t target_h,
+                                   std::vector<bool>* out_tmask = nullptr) {
     int w{}, h{}, channels{};
     auto* raw = stbi_load_from_memory(input_data,
         static_cast<int>(input_size), &w, &h, &channels, 4);
@@ -154,20 +158,45 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     }
 
     std::vector<Color3f> pixels(pixel_count);
-    std::vector<float> alpha;
-    if (any_transparent) alpha.resize(pixel_count);
+    std::vector<float> src_alpha;
+    if (any_transparent) src_alpha.resize(pixel_count);
 
     for (std::size_t i = 0; i < pixel_count; ++i) {
         auto base = i * 4;
         pixels[i] = color_space::srgb_u8_to_linear(
             raw[base], raw[base + 1], raw[base + 2]);
         if (any_transparent)
-            alpha[i] = static_cast<float>(raw[base + 3]) / 255.0f;
+            src_alpha[i] = static_cast<float>(raw[base + 3]) / 255.0f;
     }
     stbi_image_free(raw);
 
+    // Compute transparency mask at target resolution before crop/scale
+    // destroys the alpha channel. Bilinear-sample source alpha, then
+    // apply threshold or ordered dither.
+    if (out_tmask && any_transparent) {
+        auto aw = width, ah = height;
+        out_tmask->resize(target_w * target_h);
+        auto alpha_dither = parse_dither(options.alpha_dither);
+        float cutoff = 0.5f + options.alpha_threshold;
+        for (std::size_t y = 0; y < target_h; ++y) {
+            auto sy = std::min(y * ah / target_h, ah - 1);
+            for (std::size_t x = 0; x < target_w; ++x) {
+                auto sx = std::min(x * aw / target_w, aw - 1);
+                float a = src_alpha[sy * aw + sx];
+                if (alpha_dither != dither::Method::none) {
+                    float thr = dither::ordered_threshold(alpha_dither, x, y);
+                    (*out_tmask)[y * target_w + x] = a < (cutoff + thr * options.alpha_dither_strength);
+                } else {
+                    (*out_tmask)[y * target_w + x] = a < cutoff;
+                }
+            }
+        }
+    } else if (out_tmask) {
+        out_tmask->clear();
+    }
+
     Image image(width, height, std::move(pixels),
-                any_transparent ? std::move(alpha) : std::vector<float>{});
+                any_transparent ? std::move(src_alpha) : std::vector<float>{});
 
     // Crop (before scaling)
     if (options.crop_w > 0 && options.crop_h > 0) {
@@ -211,11 +240,16 @@ struct PipelineResult {
     amiga::Mode mode;
     bool interlace;
 
-    // Copper mode: per-scanline palettes (empty if not copper)
+    // Copper mode
     bool copper = false;
     std::vector<std::vector<Color3f>> scanline_palettes;
     std::size_t copper_num_colors{};
 
+    // Set after construction:
+    bool has_transparency = false;
+    std::vector<bool> transparency_mask;
+    float copper_changes{};
+    float quant_error{};
 };
 
 // Round to nearest even number (Amiga prefers even heights)
@@ -233,8 +267,10 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     auto params = amiga::get_mode_params(mode);
     auto mode_w = params.screen_width;
     auto src_aspect = static_cast<double>(src_w) / static_cast<double>(src_h);
+    // PAR from mode params; interlace doubles vertical resolution
     auto par = static_cast<double>(params.preview_scale_x)
              / static_cast<double>(params.preview_scale_y);
+    if (options.interlace && !params.is_interlaced) par *= 2.0;
 
     bool have_w = options.width > 0;
     bool have_h = options.height > 0;
@@ -245,7 +281,12 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     }
     if (have_w) {
         auto w = static_cast<std::size_t>(options.width);
-        auto h = round_even(static_cast<double>(w) * par / src_aspect);
+        // If width differs from mode default, adjust PAR for the resolution change
+        // (e.g. ham6 at 640px = hires HAM, pixels are half-width)
+        auto w_par = (w != mode_w && mode_w > 0)
+            ? par * static_cast<double>(mode_w) / static_cast<double>(w)
+            : par;
+        auto h = round_even(static_cast<double>(w) * w_par / src_aspect);
         return {w, h};
     }
     if (have_h) {
@@ -282,9 +323,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto depth = static_cast<std::size_t>(
         std::clamp(options.depth, 1, 8));
 
+    std::vector<bool> tmask;
     auto image = load_and_preprocess(input_data, input_size, options,
-                                      target_w, target_h);
+                                      target_w, target_h, &tmask);
     if (!image) return std::unexpected{image.error()};
+    bool has_transparency = !tmask.empty();
 
     auto chipset = resolve_chipset(options.chipset, mode);
 
@@ -301,45 +344,73 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.dither_strength = options.dither_strength;
         ham_opts.error_clamp = options.error_clamp;
 
-        auto ham_result = ham::encode_ham(*image, mode, chipset, ham_opts);
+        Result<ham::HamResult> ham_result;
+        if (options.copper) {
+            ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts);
+        } else {
+            ham_result = ham::encode_ham(*image, mode, chipset, ham_opts);
+        }
         if (!ham_result) return std::unexpected{ham_result.error()};
 
         // Render preview using HAM decoder (not simple palette lookup)
         auto data_bits = ham_result->planes.depth - 2;
-        auto preview = ham::render_ham(ham_result->planes,
-                                       ham_result->base_palette,
-                                       data_bits);
+        Result<Image> preview;
+        if (options.copper && !ham_result->scanline_palettes.empty()) {
+            preview = ham::render_ham_copper(ham_result->planes,
+                                            ham_result->scanline_palettes,
+                                            data_bits);
+        } else {
+            preview = ham::render_ham(ham_result->planes,
+                                     ham_result->base_palette,
+                                     data_bits);
+        }
         if (!preview) return std::unexpected{preview.error()};
 
-        return PipelineResult{
-            *std::move(preview),
-            std::move(ham_result->planes),
-            std::move(ham_result->base_palette),
-            mode,
-            options.interlace,
-            false, {}, 0,
-        };
+        PipelineResult result;
+        result.rendered = *std::move(preview);
+        result.planes = std::move(ham_result->planes);
+        result.palette = std::move(ham_result->base_palette);
+        result.mode = mode;
+        result.interlace = options.interlace;
+        if (options.copper) {
+            result.copper = true;
+            result.scanline_palettes = std::move(ham_result->scanline_palettes);
+            // Compute average actual changes per line
+            std::size_t total_ch = 0;
+            for (auto& ch : ham_result->copper_changes) total_ch += ch.size();
+            auto h = image->height();
+            result.copper_changes = h > 0
+                ? static_cast<float>(total_ch) / static_cast<float>(h) : 0.0f;
+        }
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.quant_error = ham_result->total_error;
+        return result;
     }
 
     // --- EHB mode: 32 base colors + 32 half-brightness ---
     if (mode == amiga::Mode::ehb) {
         depth = 6;  // EHB is always 6 bitplanes
 
-        // Generate 32 base colors via median-cut, or load from file
+        // Generate base colors via median-cut, or load from file.
+        // Reserve index 0 for transparency when needed.
+        auto ehb_base = has_transparency ? std::size_t{31} : std::size_t{32};
         Palette base_pal;
         if (!options.palette_file.empty()) {
             auto loaded = palette_io::load_palette(options.palette_file);
             if (!loaded) return std::unexpected{loaded.error()};
             base_pal = *std::move(loaded);
-            if (base_pal.colors.size() > 32)
-                base_pal.colors.resize(32);
+            if (base_pal.colors.size() > ehb_base)
+                base_pal.colors.resize(ehb_base);
             snap_to_chipset(base_pal, chipset);
         } else {
-            auto quantized = quantize::quantize(*image, 32,
+            auto quantized = quantize::quantize(*image, ehb_base,
                                                 quantize_algo(chipset));
             if (!quantized) return std::unexpected{quantized.error()};
             base_pal = *std::move(quantized);
         }
+        if (has_transparency)
+            base_pal.colors.insert(base_pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
 
         // Build full 64-color EHB palette (32 base + 32 half-bright)
         auto ehb_pal = palette::make_ehb_palette(base_pal.colors);
@@ -353,7 +424,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
 
-        auto dither_result = dither::apply(*image, ehb_pal.colors, dith);
+        dither::DitherResult dither_result;
+        if (has_transparency) {
+            // Skip index 0 during dithering
+            std::span<const Color3f> dither_span{ehb_pal.colors.data() + 1,
+                                                  ehb_pal.colors.size() - 1};
+            dither_result = dither::apply(*image, dither_span, dith);
+            for (auto& idx : dither_result.indices) ++idx;
+            for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
+                if (tmask[i]) dither_result.indices[i] = 0;
+        } else {
+            dither_result = dither::apply(*image, ehb_pal.colors, dith);
+        }
 
         // Encode to 6 bitplanes
         auto planes = bitplane::encode(dither_result.indices,
@@ -370,14 +452,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto preview = bitplane::render(*planes, full_palette);
         if (!preview) return std::unexpected{preview.error()};
 
-        return PipelineResult{
-            *std::move(preview),
-            *std::move(planes),
-            std::move(full_palette),
-            mode,
-            options.interlace,
-            false, {}, 0,
-        };
+        PipelineResult result;
+        result.rendered = *std::move(preview);
+        result.planes = *std::move(planes);
+        result.palette = std::move(full_palette);
+        result.mode = mode;
+        result.interlace = options.interlace;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.quant_error = dither_result.total_error;
+        return result;
     }
 
     // --- Copper palette mode ---
@@ -387,7 +471,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
 
-        auto copper_result = copper::encode_copper(*image, depth, dith);
+        auto copper_result = copper::encode_copper(*image, depth, dith, chipset);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,
@@ -398,35 +482,45 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // (for CMAP chunk in IFF; the real palettes are in COPL)
         auto& first_pal = copper_result->scanline_palettes[0];
 
-        return PipelineResult{
-            *std::move(preview),
-            std::move(copper_result->planes),
-            std::vector<Color3f>(first_pal.begin(), first_pal.end()),
-            mode,
-            options.interlace,
-            true,  // copper
-            std::move(copper_result->scanline_palettes),
-            copper_result->num_colors,
-        };
+        PipelineResult result;
+        result.rendered = *std::move(preview);
+        result.planes = std::move(copper_result->planes);
+        result.palette = std::vector<Color3f>(first_pal.begin(), first_pal.end());
+        result.mode = mode;
+        result.interlace = options.interlace;
+        result.copper = true;
+        result.scanline_palettes = std::move(copper_result->scanline_palettes);
+        result.copper_num_colors = copper_result->num_colors;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.copper_changes = copper_result->avg_changes_per_line;
+        result.quant_error = copper_result->total_error;
+        return result;
     }
 
     // --- Standard bitplane modes ---
     auto max_colors = std::size_t{1} << depth;
 
-    // Build palette
+    // Build palette.
+    // When transparency is present, reserve index 0 for transparent color:
+    // quantize N-1 colors, then prepend black at index 0.
+    auto quant_colors = has_transparency ? max_colors - 1 : max_colors;
     Palette pal;
     if (!options.palette_file.empty()) {
         auto loaded = palette_io::load_palette(options.palette_file);
         if (!loaded) return std::unexpected{loaded.error()};
         pal = *std::move(loaded);
-        if (pal.colors.size() > max_colors)
-            pal.colors.resize(max_colors);
+        if (pal.colors.size() > quant_colors)
+            pal.colors.resize(quant_colors);
         snap_to_chipset(pal, chipset);
     } else {
-        auto quantized = quantize::quantize(*image, max_colors,
+        auto quantized = quantize::quantize(*image, quant_colors,
                                             quantize_algo(chipset));
         if (!quantized) return std::unexpected{quantized.error()};
         pal = *std::move(quantized);
+    }
+    if (has_transparency) {
+        pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
     }
 
     if (options.match_range)
@@ -442,7 +536,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto pal_size = std::min(pal.size(), max_colors);
     std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
-    auto dither_result = dither::apply(*image, pal_span, dith);
+    dither::DitherResult dither_result;
+    if (has_transparency) {
+        // Dither against colors [1..N] only (skip reserved index 0)
+        std::span<const Color3f> dither_span{pal.colors.data() + 1, pal_size - 1};
+        dither_result = dither::apply(*image, dither_span, dith);
+        // Offset all indices by 1 (index 0 is reserved for transparency)
+        for (auto& idx : dither_result.indices) ++idx;
+        // Force transparent pixels to index 0
+        for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
+            if (tmask[i]) dither_result.indices[i] = 0;
+    } else {
+        dither_result = dither::apply(*image, pal_span, dith);
+    }
 
     // Encode to bitplanes
     auto planes = bitplane::encode(dither_result.indices,
@@ -457,14 +563,35 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto preview = bitplane::render(*planes, used_palette);
     if (!preview) return std::unexpected{preview.error()};
 
-    return PipelineResult{
-        *std::move(preview),
-        *std::move(planes),
-        std::move(used_palette),
-        mode,
-        options.interlace,
-        false, {}, 0,
-    };
+    PipelineResult result;
+    result.rendered = *std::move(preview);
+    result.planes = *std::move(planes);
+    result.palette = std::move(used_palette);
+    result.mode = mode;
+    result.interlace = options.interlace;
+    result.has_transparency = has_transparency;
+    result.transparency_mask = tmask;
+    result.quant_error = dither_result.total_error;
+    return result;
+}
+
+ConvertResult make_error(const std::string& msg) {
+    ConvertResult r;
+    r.error = msg;
+    return r;
+}
+
+ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& p) {
+    ConvertResult r;
+    r.data = std::move(data);
+    r.width = static_cast<int>(p.rendered.width());
+    r.height = static_cast<int>(p.rendered.height());
+    r.depth = static_cast<int>(p.planes.depth);
+    r.colors = static_cast<int>(p.palette.size());
+    r.copperChanges = p.copper_changes;
+    r.quantError = p.quant_error;
+    r.hasTransparency = p.has_transparency;
+    return r;
 }
 
 } // namespace
@@ -472,45 +599,43 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 ConvertResult convert(const std::uint8_t* input_data, std::size_t input_size,
                       const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
-    if (!result) return {{}, 0, 0, result.error().message};
+    if (!result) return make_error(result.error().message);
 
     auto png = png_io::encode(result->rendered);
-    if (!png) return {{}, 0, 0, png.error().message};
+    if (!png) return make_error(png.error().message);
 
-    return {*std::move(png),
-            static_cast<int>(result->rendered.width()),
-            static_cast<int>(result->rendered.height()), ""};
+    return make_result(*std::move(png), *result);
 }
 
 ConvertResult convert_rgba(const std::uint8_t* input_data,
                            std::size_t input_size,
                            const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
-    if (!result) return {{}, 0, 0, result.error().message};
+    if (!result) return make_error(result.error().message);
 
     auto& img = result->rendered;
     auto w = img.width();
     auto h = img.height();
     std::vector<std::uint8_t> rgba(w * h * 4);
 
+    auto& tmask = result->transparency_mask;
+
     for (std::size_t i = 0; i < w * h; ++i) {
         auto srgb = color_space::linear_to_srgb(img.pixels()[i]).clamped();
         rgba[i * 4 + 0] = static_cast<std::uint8_t>(srgb.r * 255.0f + 0.5f);
         rgba[i * 4 + 1] = static_cast<std::uint8_t>(srgb.g * 255.0f + 0.5f);
         rgba[i * 4 + 2] = static_cast<std::uint8_t>(srgb.b * 255.0f + 0.5f);
-        rgba[i * 4 + 3] = 255;
+        rgba[i * 4 + 3] = (i < tmask.size() && tmask[i]) ? 0 : 255;
     }
 
-    return {std::move(rgba),
-            static_cast<int>(w),
-            static_cast<int>(h), ""};
+    return make_result(std::move(rgba), *result);
 }
 
 ConvertResult convert_iff(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
-    if (!result) return {{}, 0, 0, result.error().message};
+    if (!result) return make_error(result.error().message);
 
     iff::IffOptions iff_opts;
     iff_opts.interlace = result->interlace;
@@ -519,66 +644,48 @@ ConvertResult convert_iff(const std::uint8_t* input_data,
     }
 
     auto iff_data = iff::write_ilbm(
-        result->planes,
-        result->palette,
-        result->mode,
-        iff_opts);
-    if (!iff_data) return {{}, 0, 0, iff_data.error().message};
+        result->planes, result->palette, result->mode, iff_opts);
+    if (!iff_data) return make_error(iff_data.error().message);
 
-    return {*std::move(iff_data),
-            static_cast<int>(result->rendered.width()),
-            static_cast<int>(result->rendered.height()), ""};
+    return make_result(*std::move(iff_data), *result);
 }
 
 ConvertResult convert_cheader(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
-    if (!result) return {{}, 0, 0, result.error().message};
+    if (!result) return make_error(result.error().message);
 
     cheader::CHeaderOptions ch_opts;
-    if (!options.symbol_name.empty()) {
+    if (!options.symbol_name.empty())
         ch_opts.symbol_name = options.symbol_name;
-    }
     auto header = cheader::generate(
-        result->planes,
-        result->palette,
-        result->mode,
-        ch_opts);
-    if (!header) return {{}, 0, 0, header.error().message};
+        result->planes, result->palette, result->mode, ch_opts);
+    if (!header) return make_error(header.error().message);
 
-    // Convert string to bytes
     std::vector<std::uint8_t> bytes(header->begin(), header->end());
-
-    return {std::move(bytes),
-            static_cast<int>(result->rendered.width()),
-            static_cast<int>(result->rendered.height()), ""};
+    return make_result(std::move(bytes), *result);
 }
 
 ConvertResult convert_raw(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
-    if (!result) return {{}, 0, 0, result.error().message};
+    if (!result) return make_error(result.error().message);
 
-    // Return the raw interleaved bitplane bytes directly
-    return {std::move(result->planes.data),
-            static_cast<int>(result->rendered.width()),
-            static_cast<int>(result->rendered.height()), ""};
+    return make_result(std::move(result->planes.data), *result);
 }
 
 ConvertResult convert_palette(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
-    if (!result) return {{}, 0, 0, result.error().message};
+    if (!result) return make_error(result.error().message);
 
     auto pal_data = palette_io::encode_ocs_palette(result->palette);
-    if (!pal_data) return {{}, 0, 0, pal_data.error().message};
+    if (!pal_data) return make_error(pal_data.error().message);
 
-    return {*std::move(pal_data),
-            static_cast<int>(result->rendered.width()),
-            static_cast<int>(result->rendered.height()), ""};
+    return make_result(*std::move(pal_data), *result);
 }
 
 } // namespace png2amiga::api

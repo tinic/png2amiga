@@ -7,7 +7,7 @@ import Converter from './components/Converter.vue'
     <div class="max-w-screen-xl mx-auto p-4">
       <header class="mb-5 pb-4 border-bottom-1 surface-border">
         <div class="flex align-items-center gap-3">
-          <div class="logo">A500</div>
+          <img src="/boing.svg" alt="Amiga Boing Ball" class="logo" />
           <div>
             <h1 class="m-0 title">png2amiga</h1>
             <p class="m-0 mt-1 text-sm text-color-secondary">
@@ -24,17 +24,8 @@ import Converter from './components/Converter.vue'
 
 <style scoped>
 .logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 3rem;
   height: 3rem;
-  border-radius: 0.75rem;
-  background: linear-gradient(135deg, #e44d26, #f16529);
-  color: #fff;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: -0.03em;
   flex-shrink: 0;
 }
 

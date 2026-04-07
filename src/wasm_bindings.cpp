@@ -70,7 +70,7 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("alphaDither"))
         opts.alpha_dither = js_opts["alphaDither"].as<std::string>();
     if (js_opts.hasOwnProperty("alphaDitherStrength"))
-        opts.alpha_threshold = js_opts["alphaDitherStrength"].as<float>();
+        opts.alpha_dither_strength = js_opts["alphaDitherStrength"].as<float>();
     return opts;
 }
 
@@ -117,6 +117,11 @@ val js_convert_rgba(val input_array, val js_opts) {
     val obj = val::object();
     obj.set("width", result.width);
     obj.set("height", result.height);
+    obj.set("depth", result.depth);
+    obj.set("colors", result.colors);
+    obj.set("copperChanges", result.copperChanges);
+    obj.set("quantError", result.quantError);
+    obj.set("hasTransparency", result.hasTransparency);
     obj.set("error", result.error);
 
     if (!result.data.empty())

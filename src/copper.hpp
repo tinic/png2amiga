@@ -52,7 +52,8 @@ struct CopperResult {
     std::vector<std::vector<Color3f>> scanline_palettes;
 
     std::size_t num_colors{};           // palette size (2^depth)
-    std::size_t changes_per_line{};     // K (4 for OCS, 8 for AGA)
+    std::size_t changes_per_line{};     // K budget (max per line)
+    float avg_changes_per_line{};       // actual average changes made
     float total_error{};
 };
 

@@ -67,7 +67,7 @@ struct Config {
     std::string symbol_name;           // base name for C symbols (default: derived from output)
 
     // Transparency
-    float alpha_threshold = 0.5f;      // hard cutoff: alpha < threshold = transparent
+    float alpha_threshold = 0.0f;      // offset from 0.5 midpoint (-0.5..0.5)
     dither::Method alpha_dither = dither::Method::none;  // none = use threshold
     float alpha_dither_strength = 1.0f; // strength for alpha dither (independent)
 
@@ -125,7 +125,7 @@ void print_usage() {
         "  --height <int>                  Override output height\n"
         "\n"
         "Transparency (color 0 = transparent when input has alpha):\n"
-        "  --alpha-threshold <0.0-1.0>     Hard cutoff, no dither (default: 0.5)\n"
+        "  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)\n"
         "  --alpha-dither <method>         Dither alpha (e.g. checker, bayer4x4)\n"
         "  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)\n"
         "\n"
@@ -749,14 +749,14 @@ int main(int argc, char* argv[]) {
                     float a = scaled_alpha[y * target_w + x];
                     float threshold = dither::ordered_threshold(adm, x, y);
                     transparency_mask[y * target_w + x] =
-                        (a + threshold * config->alpha_dither_strength) < 0.5f;
+                        (a + threshold * config->alpha_dither_strength) < (0.5f + config->alpha_threshold);
                 }
             }
         } else {
             for (std::size_t y = 0; y < target_h; ++y) {
                 for (std::size_t x = 0; x < target_w; ++x) {
                     transparency_mask[y * target_w + x] =
-                        scaled_alpha[y * target_w + x] < config->alpha_threshold;
+                        scaled_alpha[y * target_w + x] < (0.5f + config->alpha_threshold);
                 }
             }
         }

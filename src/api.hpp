@@ -44,8 +44,9 @@ struct Options {
     bool copper = false;                // use per-scanline copper palettes
 
     // Transparency
-    float alpha_threshold = 0.5f;       // hard cutoff: alpha < threshold = transparent
+    float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)
     std::string alpha_dither;           // alpha dither method (empty = hard threshold)
+    float alpha_dither_strength = 1.0f; // dither pattern intensity
 
     // C header output
     std::string symbol_name;            // base name for C symbols (default: "image")
@@ -62,7 +63,12 @@ struct ConvertResult {
     std::vector<std::uint8_t> data;     // output file bytes (IFF or PNG)
     int width{};
     int height{};
-    std::string error;
+    int depth{};                        // bitplane depth
+    int colors{};                       // number of palette colors
+    float copperChanges{};              // avg actual color changes per line (0 if no copper)
+    float quantError{};                 // perceptual encoding error
+    bool hasTransparency{};             // source image had alpha channel
+    std::string error;                  // error message (empty on success)
 };
 
 // Convert raw image data (PNG/JPEG bytes) to Amiga format.

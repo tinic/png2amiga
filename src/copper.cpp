@@ -273,6 +273,13 @@ Result<CopperResult> encode_copper(const Image& image,
     auto planes = bitplane::encode(all_indices, width, height, depth);
     if (!planes) return std::unexpected{planes.error()};
 
+    // Compute average actual changes per line
+    std::size_t total_changes = 0;
+    for (auto& ch : scanline_changes) total_changes += ch.size();
+    float avg_changes = height > 0
+        ? static_cast<float>(total_changes) / static_cast<float>(height)
+        : 0.0f;
+
     return CopperResult{
         *std::move(planes),
         std::move(base_pal),
@@ -280,6 +287,7 @@ Result<CopperResult> encode_copper(const Image& image,
         std::move(scanline_palettes),
         num_colors,
         changes_per_line,
+        avg_changes,
         total_error,
     };
 }

@@ -9,6 +9,9 @@ export default defineConfig({
       '@wasm': path.resolve(__dirname, '../build-wasm')
     }
   },
+  worker: {
+    format: 'es',
+  },
   server: {
     fs: {
       allow: ['..']

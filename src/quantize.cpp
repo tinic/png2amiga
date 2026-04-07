@@ -10,7 +10,9 @@
 #include <limits>
 #include <numeric>
 #include <span>
+#ifndef __EMSCRIPTEN__
 #include <thread>
+#endif
 #include <vector>
 
 namespace png2amiga::quantize {
@@ -224,7 +226,12 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
             new_palette[k] = best_ocs;
         };
 
-        // Launch threads for cluster refinement
+        // Cluster refinement — threaded on native, sequential on WASM
+#ifdef __EMSCRIPTEN__
+        for (std::size_t k = 0; k < max_colors; ++k) {
+            refine_cluster(k);
+        }
+#else
         auto num_threads = std::min(
             static_cast<std::size_t>(std::thread::hardware_concurrency()),
             max_colors);
@@ -242,6 +249,7 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
             for (auto& t : threads) t.join();
             k += batch;
         }
+#endif
 
         // Check for convergence
         for (std::size_t i = 0; i < max_colors; ++i) {
@@ -417,7 +425,7 @@ std::vector<color_space::OKLab> wu_quantize_oklab(
     }
 
     // Compute 3D prefix sums
-    auto prefix_sum_3d = [](std::vector<auto>& t) {
+    auto prefix_sum_3d = []<typename T>(std::vector<T>& t) {
         for (std::size_t l = 1; l < WU_BINS; ++l)
             for (std::size_t a = 0; a < WU_BINS; ++a)
                 for (std::size_t b = 0; b < WU_BINS; ++b)

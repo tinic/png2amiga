@@ -3,10 +3,11 @@ import { ref, reactive, watch, nextTick, computed } from 'vue'
 import { useWasm } from '../composables/useWasm.js'
 import { useImageUpload } from '../composables/useImageUpload.js'
 import {
-  MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
+  MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, HAM_QUALITY,
   SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
   defaultOptions, isHamMode, isEhbMode, isErrorDiffusion,
-  maxDepth, defaultDepth, numColors, numBitplanes,
+  maxDepth, defaultDepth, effectiveChipset, previewScale,
+  modesForChipset, decomposeMode,
 } from '../lib/options.js'
 
 import InputNumber from 'primevue/inputnumber'
@@ -22,16 +23,17 @@ const { imageBytes, imageName, imageUrl, dragOver, onDrop, onDragOver, onDragLea
 
 const showUploadHint = ref(true)
 
-// Load test example by default once WASM is ready
+// Load first example by default once WASM is ready
 watch(wasmLoading, (loading) => {
-  if (!loading && !imageBytes.value) {
+  if (!loading && !wasmError.value && !imageBytes.value) {
     const example = EXAMPLES[0]
     fetch(`/examples/${example.file}`)
       .then(r => r.arrayBuffer())
       .then(buf => {
         imageBytes.value = new Uint8Array(buf)
         imageName.value = example.file
-        const blob = new Blob([buf], { type: 'image/png' })
+        const type = example.file.endsWith('.jpg') || example.file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
+        const blob = new Blob([buf], { type })
         imageUrl.value = URL.createObjectURL(blob)
       })
   }
@@ -42,8 +44,12 @@ const canvasRef = ref(null)
 const converting = ref(false)
 const resultInfo = ref('')
 const errorMsg = ref('')
+const sizeOverride = ref(false)
+const lastWidth = ref(320)
+const lastHeight = ref(160)
+const imageHasAlpha = ref(false)
 
-// Flatten dither methods for Select component
+// Flatten dither methods for grouped Select component
 const groupedDitherOptions = DITHER_METHODS.map(g => ({
   label: g.group,
   items: g.items.map(d => ({ value: d.value, label: d.label }))
@@ -57,50 +63,75 @@ const showDepthSlider = computed(() => {
 // Whether HAM controls should be shown
 const showHamControls = computed(() => isHamMode(options.mode))
 
-// Current depth max
+// Available modes for current chipset
+const availableModes = computed(() => modesForChipset(options.chipset))
+
+// Current depth max for the slider
 const depthMax = computed(() => maxDepth(options.mode, options.chipset))
 
-// Status line info
-const statusColors = computed(() => numColors(options.mode, options.depth))
-const statusBitplanes = computed(() => numBitplanes(options.mode, options.depth))
-const statusChipset = computed(() => options.chipset.toUpperCase())
+// Effective chipset label for status line
+const statusChipset = computed(() => {
+  return effectiveChipset(options.mode, options.chipset).toUpperCase()
+})
 
 // Update depth when mode changes
 watch(() => options.mode, (mode) => {
   options.depth = defaultDepth(mode)
-  // Auto-set chipset for AGA-only modes
-  if (mode === 'ham7' || mode === 'ham8') {
-    options.chipset = 'aga'
-  }
 })
 
-// Clamp depth when chipset changes
+// When chipset changes, reset mode if current mode isn't available
 watch(() => options.chipset, () => {
+  const modes = modesForChipset(options.chipset)
+  if (!modes.find(m => m.value === options.mode)) {
+    options.mode = 'lores'
+  }
   const max = maxDepth(options.mode, options.chipset)
   if (max > 0 && options.depth > max) {
     options.depth = max
   }
 })
 
+// When size override is toggled, populate from last result or reset to 0
+watch(sizeOverride, (on) => {
+  if (on) {
+    options.width = lastWidth.value
+    options.height = lastHeight.value
+  } else {
+    options.width = 0
+    options.height = 0
+  }
+})
+
+// Build the options object to pass to WASM (matches wasm_bindings.cpp field names)
 function buildWasmOptions() {
-  return { ...options }
+  const opts = { ...options }
+  if (opts.alphaDither === 'none') opts.alphaDither = ''
+  // Decompose compound modes (e.g. 'ham6-hires-lace' -> mode='ham6', width=640, interlace)
+  const dec = decomposeMode(opts.mode)
+  opts.mode = dec.mode
+  if (dec.width) opts.width = dec.width
+  if (dec.interlace) opts.interlace = true
+  return opts
 }
 
 let debounceTimer = null
+let spinnerTimer = null
 
 function doConvert() {
   if (!imageBytes.value || wasmLoading.value) return
 
   clearTimeout(debounceTimer)
   debounceTimer = setTimeout(async () => {
-    converting.value = true
     errorMsg.value = ''
 
-    await nextTick()
-    await new Promise(r => setTimeout(r, 10))
+    // Show spinner only if conversion takes longer than 100ms
+    clearTimeout(spinnerTimer)
+    spinnerTimer = setTimeout(() => { converting.value = true }, 100)
 
     try {
-      const result = convertRGBA(imageBytes.value, buildWasmOptions())
+      const result = await convertRGBA(imageBytes.value, buildWasmOptions())
+
+      clearTimeout(spinnerTimer)
 
       if (result.error) {
         errorMsg.value = result.error
@@ -109,15 +140,15 @@ function doConvert() {
       }
 
       const canvas = canvasRef.value
-      if (!canvas) return
+      if (!canvas) { converting.value = false; return }
 
-      const scale = 2
-      const dw = result.width * scale
-      const dh = result.height * scale
+      const { sx, sy } = previewScale(options.mode)
+      const dw = result.width * sx
+      const dh = result.height * sy
       canvas.width = dw
       canvas.height = dh
-      canvas.style.width = `${result.width * 2}px`
-      canvas.style.height = `${result.height * 2}px`
+      canvas.style.width = `${dw}px`
+      canvas.style.height = `${dh}px`
 
       const ctx = canvas.getContext('2d')
       ctx.imageSmoothingEnabled = false
@@ -132,8 +163,17 @@ function doConvert() {
       tmpCtx.putImageData(imgData, 0, 0)
       ctx.drawImage(tmp, 0, 0, dw, dh)
 
-      resultInfo.value = `${result.width} x ${result.height}`
+      lastWidth.value = result.width
+      lastHeight.value = result.height
+      imageHasAlpha.value = !!result.hasTransparency
+
+      let info = `${result.width}x${result.height}, ${statusChipset.value}`
+      info += `, ${result.depth || '?'}bpl, ${result.colors || 0} colors`
+      if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} cop/line`
+      if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
+      resultInfo.value = info
     } catch (e) {
+      clearTimeout(spinnerTimer)
       errorMsg.value = e.message
     }
 
@@ -143,14 +183,12 @@ function doConvert() {
 
 watch([imageBytes, () => ({ ...options })], doConvert, { deep: true })
 
-function downloadPNG() {
+async function downloadPNG() {
   if (!imageBytes.value) return
+  converting.value = true
   try {
-    const result = convertPNG(imageBytes.value, buildWasmOptions())
-    if (result.error) {
-      errorMsg.value = result.error
-      return
-    }
+    const result = await convertPNG(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
     const blob = new Blob([result.data], { type: 'image/png' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -158,19 +196,16 @@ function downloadPNG() {
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '-amiga.png'
     a.click()
     URL.revokeObjectURL(url)
-  } catch (e) {
-    errorMsg.value = e.message
-  }
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
 }
 
-function downloadIFF() {
+async function downloadIFF() {
   if (!imageBytes.value) return
+  converting.value = true
   try {
-    const result = convertIFF(imageBytes.value, buildWasmOptions())
-    if (result.error) {
-      errorMsg.value = result.error
-      return
-    }
+    const result = await convertIFF(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
     const blob = new Blob([result.data], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -178,40 +213,35 @@ function downloadIFF() {
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.iff'
     a.click()
     URL.revokeObjectURL(url)
-  } catch (e) {
-    errorMsg.value = e.message
-  }
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
 }
 
-function downloadHeader() {
+async function downloadHeader() {
   if (!imageBytes.value) return
+  converting.value = true
   try {
-    const stem = (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_')
-    const result = convertHeader(imageBytes.value, buildWasmOptions(), stem)
-    if (result.error) {
-      errorMsg.value = result.error
-      return
-    }
-    const blob = new Blob([result.data], { type: 'text/plain' })
+    const stem = options.symbolName ||
+      (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_')
+    const result = await convertHeader(imageBytes.value, buildWasmOptions(), stem)
+    if (result.error) { errorMsg.value = result.error; return }
+    const blob = new Blob([result.header || result.data], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
     a.download = stem + '.h'
     a.click()
     URL.revokeObjectURL(url)
-  } catch (e) {
-    errorMsg.value = e.message
-  }
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
 }
 
-function downloadRaw() {
+async function downloadRaw() {
   if (!imageBytes.value) return
+  converting.value = true
   try {
-    const result = convertRaw(imageBytes.value, buildWasmOptions())
-    if (result.error) {
-      errorMsg.value = result.error
-      return
-    }
+    const result = await convertRaw(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
     const blob = new Blob([result.data], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -219,9 +249,8 @@ function downloadRaw() {
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.raw'
     a.click()
     URL.revokeObjectURL(url)
-  } catch (e) {
-    errorMsg.value = e.message
-  }
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
 }
 
 function resetOptions() {
@@ -234,13 +263,15 @@ function dismissHint() {
 
 async function loadExample(example) {
   dismissHint()
+  // Reset to defaults, then apply example-specific settings
   Object.assign(options, defaultOptions())
   if (example.opts) Object.assign(options, example.opts)
   const resp = await fetch(`/examples/${example.file}`)
   const buf = await resp.arrayBuffer()
   imageBytes.value = new Uint8Array(buf)
   imageName.value = example.file
-  const blob = new Blob([buf], { type: 'image/png' })
+  const type = example.file.endsWith('.jpg') || example.file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
+  const blob = new Blob([buf], { type })
   imageUrl.value = URL.createObjectURL(blob)
 }
 </script>
@@ -260,7 +291,7 @@ async function loadExample(example) {
       <div class="col-12 md:col-4 lg:col-3">
         <div class="flex flex-column gap-3">
 
-          <!-- Upload -->
+          <!-- Upload / Image -->
           <Panel header="Image">
             <div
               class="drop-zone border-2 border-round-lg cursor-pointer overflow-hidden"
@@ -286,6 +317,7 @@ async function loadExample(example) {
                     <i class="pi pi-images mb-2" style="font-size: 1.5rem"></i>
                     <div class="font-semibold text-sm">Drop or click to load your own image</div>
                     <div class="text-xs mt-1" style="opacity: 0.7">Or pick an example below</div>
+                    <div class="text-xs mt-2" style="opacity: 0.5">CLI tool with more features on <a href="https://github.com/tinic/png2amiga" target="_blank" style="color: inherit;">GitHub</a></div>
                   </div>
                 </div>
                 <div class="text-xs text-color-secondary mt-2 px-1 flex justify-content-between overflow-hidden">
@@ -299,7 +331,7 @@ async function loadExample(example) {
                 <div class="text-xs text-color-secondary">or click to browse</div>
               </template>
             </div>
-            <div v-if="EXAMPLES.length > 1" class="mt-3">
+            <div class="mt-3">
               <label class="block text-xs text-color-secondary font-semibold mb-2">Examples</label>
               <div class="flex flex-wrap gap-1">
                 <div
@@ -315,25 +347,25 @@ async function loadExample(example) {
             </div>
           </Panel>
 
-          <!-- Mode / Chipset / Depth -->
-          <Panel header="Mode">
+          <!-- Output Settings -->
+          <Panel header="Output">
             <div class="flex flex-column gap-2">
               <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Amiga graphics mode. Lores: 320px, Hires: 640px, HAM: Hold-And-Modify, EHB: Extra Half-Brite.">Mode</label>
-                <div class="col-8">
-                  <Select v-model="options.mode" :options="MODES" optionValue="value" optionLabel="label" class="w-full" />
-                </div>
-              </div>
-
-              <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="OCS: Original Chip Set (12-bit, max 6 planes). AGA: Advanced Graphics Architecture (24-bit, max 8 planes).">Chipset</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="OCS: Original Chip Set (12-bit). AGA: Advanced Graphics Architecture (24-bit).">Chipset</label>
                 <div class="col-8">
                   <Select v-model="options.chipset" :options="CHIPSETS" optionValue="value" optionLabel="label" class="w-full" />
                 </div>
               </div>
 
+              <div class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Amiga graphics mode. Lores: 320px, Hires: 640px, HAM: Hold-And-Modify, EHB: Extra Half-Brite.">Mode</label>
+                <div class="col-8">
+                  <Select v-model="options.mode" :options="availableModes" optionValue="value" optionLabel="label" class="w-full" />
+                </div>
+              </div>
+
               <div v-if="showDepthSlider" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Number of bitplanes (1-8). More planes = more colors but more memory.">Depth</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Number of bitplanes (1-8). More planes = more colors but more chip RAM.">Depth</label>
                 <div class="col-5">
                   <Slider v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full" />
                 </div>
@@ -342,29 +374,8 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Flags -->
               <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Set LACE bit in CAMG for interlaced display (double vertical resolution).">Interlace</label>
-                <div class="col-8">
-                  <ToggleSwitch v-model="options.interlace" />
-                </div>
-              </div>
-
-              <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Per-scanline copper palette changes. Each row gets its own optimal palette.">Copper</label>
-                <div class="col-8">
-                  <ToggleSwitch v-model="options.copper" />
-                </div>
-              </div>
-
-            </div>
-          </Panel>
-
-          <!-- Dithering -->
-          <Panel header="Color Dithering">
-            <div class="flex flex-column gap-2">
-              <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Method</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
                 <div class="col-8">
                   <Select
                     v-model="options.dither"
@@ -377,32 +388,82 @@ async function loadExample(example) {
                   />
                 </div>
               </div>
+
+              <!-- Copper (not available for EHB) -->
+              <div v-if="!isEhbMode(options.mode)" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Enable per-scanline copper palette changes. Each row gets its own optimal palette via the copper.">Copper</label>
+                <div class="col-8">
+                  <ToggleSwitch v-model="options.copper" />
+                </div>
+              </div>
+
+              <!-- HAM options (inline) -->
+              <template v-if="showHamControls">
+                <div class="grid align-items-center">
+                  <label class="col-4 text-xs text-color-secondary font-semibold" title="HAM quality: fast = greedy per-pixel, optimal = DP beam search for minimum perceptual error.">Quality</label>
+                  <div class="col-8">
+                    <Select v-model="options.hamQuality" :options="HAM_QUALITY" optionValue="value" optionLabel="label" class="w-full" />
+                  </div>
+                </div>
+
+                <div v-if="options.hamQuality === 'optimal'" class="grid align-items-center">
+                  <label class="col-4 text-xs text-color-secondary font-semibold" title="Beam width for DP search. Higher = better quality, slower. Range 1-256.">Beam</label>
+                  <div class="col-5">
+                    <Slider v-model="options.hamBeam" :min="1" :max="256" :step="1" class="w-full" />
+                  </div>
+                  <div class="col-3">
+                    <InputNumber v-model="options.hamBeam" :min="1" :max="256" :step="1" class="w-full input-sm" />
+                  </div>
+                </div>
+              </template>
+
+              <!-- Resize override -->
+              <div class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold">Resize</label>
+                <div class="col-8">
+                  <ToggleSwitch v-model="sizeOverride" />
+                </div>
+              </div>
+              <template v-if="sizeOverride">
+                <div class="grid align-items-center">
+                  <label class="col-4 text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
+                  <div class="col-8">
+                    <InputNumber v-model="options.width" :min="16" :step="16" class="w-full input-sm" />
+                  </div>
+                </div>
+                <div class="grid align-items-center">
+                  <label class="col-4 text-xs text-color-secondary font-semibold" title="Output height in pixels.">Height</label>
+                  <div class="col-8">
+                    <InputNumber v-model="options.height" :min="2" :step="2" class="w-full input-sm" />
+                  </div>
+                </div>
+              </template>
             </div>
           </Panel>
 
-          <!-- Alpha -->
-          <Panel header="Alpha" :toggleable="true" :collapsed="true">
+          <!-- Alpha (only shown when source has transparency) -->
+          <Panel v-if="imageHasAlpha" header="Alpha">
             <div class="flex flex-column gap-2">
               <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Alpha threshold: pixels below this value become transparent.">Threshold</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Shift the alpha cutoff. 0 = standard 50% threshold. Negative = more opaque pixels pass, positive = fewer.">Threshold</label>
                 <div class="col-5">
-                  <Slider v-model="options.alphaThreshold" :min="0" :max="1.0" :step="0.05" class="w-full" />
+                  <Slider v-model="options.alphaThreshold" :min="-0.5" :max="0.5" :step="0.05" class="w-full" />
                 </div>
                 <div class="col-3">
-                  <InputNumber v-model="options.alphaThreshold" :min="0" :max="1.0" :step="0.05"
+                  <InputNumber v-model="options.alphaThreshold" :min="-0.5" :max="0.5" :step="0.05"
                     :minFractionDigits="2" :maxFractionDigits="2" class="w-full input-sm" />
                 </div>
               </div>
 
               <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Alpha dithering method. Empty = hard threshold.">Dither</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Alpha dithering method. Hard threshold = binary cutoff. Others dither alpha to 1-bit using the selected pattern.">Dither</label>
                 <div class="col-8">
                   <Select v-model="options.alphaDither" :options="ALPHA_DITHER_METHODS" optionValue="value" optionLabel="label" class="w-full" />
                 </div>
               </div>
 
-              <div v-if="options.alphaDither" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Alpha dither strength.">Strength</label>
+              <div v-if="options.alphaDither !== 'none'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Alpha dither strength. Controls how aggressively alpha is dithered.">Strength</label>
                 <div class="col-5">
                   <Slider v-model="options.alphaDitherStrength" :min="0" :max="3.0" :step="0.05" class="w-full" />
                 </div>
@@ -414,41 +475,9 @@ async function loadExample(example) {
             </div>
           </Panel>
 
-          <!-- HAM controls -->
-          <Panel v-if="showHamControls" header="HAM Encoding">
-            <div class="flex flex-column gap-2">
-              <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="HAM quality: fast = greedy per-pixel, optimal = DP beam search.">Quality</label>
-                <div class="col-8">
-                  <Select v-model="options.hamQuality" :options="[
-                    { value: 'fast', label: 'Fast (greedy)' },
-                    { value: 'optimal', label: 'Optimal (beam search)' },
-                  ]" optionValue="value" optionLabel="label" class="w-full" />
-                </div>
-              </div>
-
-              <div v-if="options.hamQuality === 'optimal'" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Beam width for DP search. Higher = better quality, slower. 16-256.">Beam</label>
-                <div class="col-5">
-                  <Slider v-model="options.hamBeam" :min="1" :max="256" :step="1" class="w-full" />
-                </div>
-                <div class="col-3">
-                  <InputNumber v-model="options.hamBeam" :min="1" :max="256" :step="1" class="w-full input-sm" />
-                </div>
-              </div>
-            </div>
-          </Panel>
-
           <!-- Adjustments -->
           <Panel header="Adjustments">
             <div class="flex flex-column gap-2">
-              <div class="grid align-items-center">
-                <label class="col-3 text-xs text-color-secondary font-semibold" title="Remap image color range to fit the palette range in OKLab space.">Match Range</label>
-                <div class="col-9">
-                  <ToggleSwitch v-model="options.matchRange" />
-                </div>
-              </div>
-
               <div v-for="s in SLIDERS" :key="s.key" class="grid align-items-center">
                 <label class="col-3 text-xs text-color-secondary font-semibold white-space-nowrap" :title="s.tip">{{ s.label }}</label>
                 <div class="col-6">
@@ -475,74 +504,17 @@ async function loadExample(example) {
             </div>
           </Panel>
 
-          <!-- Crop -->
-          <Panel header="Crop" :toggleable="true" :collapsed="true">
-            <div class="flex flex-column gap-2">
-              <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Auto-crop to target mode aspect ratio (center crop).">Auto</label>
-                <div class="col-8">
-                  <ToggleSwitch v-model="options.cropAuto" />
-                </div>
-              </div>
-
-              <template v-if="!options.cropAuto">
-                <div class="grid align-items-center">
-                  <label class="col-3 text-xs text-color-secondary font-semibold">X</label>
-                  <div class="col-9">
-                    <InputNumber v-model="options.cropX" :min="0" :step="1" class="w-full input-sm" />
-                  </div>
-                </div>
-                <div class="grid align-items-center">
-                  <label class="col-3 text-xs text-color-secondary font-semibold">Y</label>
-                  <div class="col-9">
-                    <InputNumber v-model="options.cropY" :min="0" :step="1" class="w-full input-sm" />
-                  </div>
-                </div>
-                <div class="grid align-items-center">
-                  <label class="col-3 text-xs text-color-secondary font-semibold">W</label>
-                  <div class="col-9">
-                    <InputNumber v-model="options.cropW" :min="0" :step="1" class="w-full input-sm" placeholder="0 = no crop" />
-                  </div>
-                </div>
-                <div class="grid align-items-center">
-                  <label class="col-3 text-xs text-color-secondary font-semibold">H</label>
-                  <div class="col-9">
-                    <InputNumber v-model="options.cropH" :min="0" :step="1" class="w-full input-sm" placeholder="0 = no crop" />
-                  </div>
-                </div>
-              </template>
-            </div>
-          </Panel>
-
-          <!-- Size Override -->
-          <Panel header="Size" :toggleable="true" :collapsed="true">
-            <div class="flex flex-column gap-2">
-              <div class="grid align-items-center">
-                <label class="col-3 text-xs text-color-secondary font-semibold" title="Override output width (0 = mode default).">Width</label>
-                <div class="col-9">
-                  <InputNumber v-model="options.width" :min="0" :step="16" class="w-full input-sm" placeholder="0 = auto" />
-                </div>
-              </div>
-              <div class="grid align-items-center">
-                <label class="col-3 text-xs text-color-secondary font-semibold" title="Override output height (0 = from aspect ratio).">Height</label>
-                <div class="col-9">
-                  <InputNumber v-model="options.height" :min="0" :step="2" class="w-full input-sm" placeholder="0 = auto" />
-                </div>
-              </div>
-            </div>
-          </Panel>
-
-          <!-- Actions -->
+          <!-- Export Actions -->
           <div class="flex flex-column gap-2">
             <div class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
-                title="Download converted image as PNG preview." />
+                title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadIFF"
-                title="Download as IFF ILBM (Deluxe Paint, WinUAE compatible)." />
+                title="Download as IFF ILBM (Deluxe Paint, Personal Paint, WinUAE compatible)." />
               <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
-                title="Download C header with bitplane arrays and palette for Amiga C projects." />
+                title="Download C header with UWORD bitplane arrays and OCS palette for Amiga C projects (VBCC/GCC m68k)." />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
-                title="Download raw interleaved bitplane data." />
+                title="Download raw interleaved bitplane data for direct DMA. Companion .pal file from CLI." />
             </div>
             <Button label="Reset" icon="pi pi-refresh" severity="secondary" outlined class="w-full" @click="resetOptions"
               title="Reset all parameters to defaults." />
@@ -551,7 +523,7 @@ async function loadExample(example) {
         </div>
       </div>
 
-      <!-- Preview (sticky) -->
+      <!-- Preview (sticky right side) -->
       <div class="col-12 md:col-8 lg:col-9 preview-col">
         <div v-if="!imageBytes" class="surface-card border-round-lg flex align-items-center justify-content-center" style="min-height: 500px;">
           <div class="text-center text-color-secondary">
@@ -562,17 +534,15 @@ async function loadExample(example) {
 
         <div v-else class="flex flex-column gap-2">
           <div class="preview-container surface-card border-round-lg overflow-hidden relative">
-            <canvas ref="canvasRef" class="preview-canvas" />
-            <div v-if="converting" class="overlay flex align-items-center justify-content-center">
-              <ProgressSpinner style="width: 2rem; height: 2rem" />
+            <div class="canvas-wrap relative">
+              <canvas ref="canvasRef" class="preview-canvas" />
+              <div v-if="converting" class="overlay flex align-items-center justify-content-center">
+                <ProgressSpinner style="width: 2rem; height: 2rem" />
+              </div>
             </div>
           </div>
           <div class="flex justify-content-between align-items-center px-1">
-            <span class="text-xs text-color-secondary">
-              {{ resultInfo }}
-              <template v-if="resultInfo"> | </template>
-              {{ statusBitplanes }} planes, {{ statusColors }} colors, {{ statusChipset }}
-            </span>
+            <span class="text-xs text-color-secondary">{{ resultInfo }}</span>
             <div class="flex align-items-center gap-2">
               <span v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</span>
             </div>
@@ -674,10 +644,22 @@ async function loadExample(example) {
   padding: 1rem;
 }
 
+.canvas-wrap {
+  display: inline-block;
+}
+
 .preview-canvas {
   display: block;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+  background-image:
+    linear-gradient(45deg, #808080 25%, transparent 25%),
+    linear-gradient(-45deg, #808080 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #808080 75%),
+    linear-gradient(-45deg, transparent 75%, #808080 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-color: #c0c0c0;
 }
 
 .overlay {

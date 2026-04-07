@@ -1,54 +1,70 @@
-import { ref, shallowRef } from 'vue'
+import { ref } from 'vue'
+import WasmWorker from '../workers/wasm.worker.js?worker'
+
+let worker = null
+let nextId = 0
+const pending = new Map()
 
 export function useWasm() {
-  const module = shallowRef(null)
   const loading = ref(true)
   const error = ref('')
 
-  async function init() {
-    try {
-      const { default: createPng2Amiga } = await import('@wasm/png2amiga.js')
-      module.value = await createPng2Amiga({
-        locateFile: (path) => {
-          if (path.endsWith('.wasm')) {
-            return new URL('../../../build-wasm/png2amiga.wasm', import.meta.url).href
-          }
-          return path
+  if (!worker) {
+    worker = new WasmWorker()
+    worker.onmessage = (e) => {
+      const msg = e.data
+      if (msg.type === 'ready') {
+        loading.value = false
+        return
+      }
+      if (msg.type === 'error') {
+        error.value = msg.error
+        loading.value = false
+        return
+      }
+      const cb = pending.get(msg.id)
+      if (cb) {
+        pending.delete(msg.id)
+        if (msg.error) {
+          cb.reject(new Error(msg.error))
+        } else {
+          // Reconstruct typed arrays from transferred buffers
+          const r = msg.result
+          if (r.rgba) r.rgba = new Uint8Array(r.rgba)
+          if (r.data) r.data = new Uint8Array(r.data)
+          cb.resolve(r)
         }
-      })
-      loading.value = false
-    } catch (e) {
-      error.value = `Failed to load WASM: ${e.message}`
-      loading.value = false
+      }
     }
   }
 
+  function call(fn, ...args) {
+    const id = nextId++
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject })
+      worker.postMessage({ id, fn, args })
+    })
+  }
+
   function convertRGBA(imageBytes, options) {
-    if (!module.value) throw new Error('WASM not loaded')
-    return module.value.convertRGBA(imageBytes, options)
+    return call('convertRGBA', imageBytes, options)
   }
 
   function convertPNG(imageBytes, options) {
-    if (!module.value) throw new Error('WASM not loaded')
-    return module.value.convert(imageBytes, options)
+    return call('convert', imageBytes, options)
   }
 
   function convertIFF(imageBytes, options) {
-    if (!module.value) throw new Error('WASM not loaded')
-    return module.value.convertIFF(imageBytes, options)
+    return call('convertIFF', imageBytes, options)
   }
 
   function convertHeader(imageBytes, options, name) {
-    if (!module.value) throw new Error('WASM not loaded')
-    return module.value.convertHeader(imageBytes, options, name)
+    return call('convertHeader', imageBytes, options, name)
   }
 
   function convertRaw(imageBytes, options) {
-    if (!module.value) throw new Error('WASM not loaded')
-    return module.value.convertRaw(imageBytes, options)
+    return call('convertRaw', imageBytes, options)
   }
 
-  init()
-
-  return { module, loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertRaw }
+  return { loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertRaw }
 }
