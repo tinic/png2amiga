@@ -1,6 +1,5 @@
 build/
 build-wasm/
-service/html/
 service/toolchain/
 .cache/
 .claude/
