@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Compile service: receives png2amiga viewer .cpp source, returns .exe or .adf."""
+"""Compile service: receives png2amiga viewer .cpp source, returns .exe or .adf.
+
+Compilation runs inside a bubblewrap (bwrap) sandbox:
+- Read-only access to toolchain binaries and headers
+- Read-write access to temp directory only
+- No network, no access to host filesystem
+- apt install bubblewrap
+"""
 
 import os
 import subprocess
@@ -8,7 +15,6 @@ import shutil
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import sys
-import platform
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -21,20 +27,35 @@ TOOLCHAIN = os.path.join(_TC_ROOT, "bin")
 TEMPLATE = os.path.join(_TC_ROOT, "template")
 SUPPORT = os.path.join(TEMPLATE, "support")
 
-# Detect platform
-SYSTEM = platform.system()
-if SYSTEM == "Darwin":
-    PLATFORM = "darwin"
-elif SYSTEM == "Linux":
-    PLATFORM = "linux"
-else:
-    PLATFORM = "win32"
-
+PLATFORM = "linux"
 GCC = os.path.join(TOOLCHAIN, PLATFORM, "opt", "bin", "m68k-amiga-elf-gcc")
+GCC_DIR = os.path.join(TOOLCHAIN, PLATFORM, "opt")
 ELF2HUNK = os.path.join(TOOLCHAIN, PLATFORM, "elf2hunk")
 EXE2ADF = os.path.join(TOOLCHAIN, PLATFORM, "exe2adf")
 
 PORT = int(os.environ.get("PORT", "3001"))
+MAX_BODY = 5 * 1024 * 1024  # 5MB max source size
+
+
+def _sandbox(cmd, tmpdir):
+    """Wrap a command in bubblewrap sandbox."""
+    return [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind", "/usr", "/usr",
+        "--ro-bind", "/lib", "/lib",
+        "--ro-bind", "/lib64", "/lib64",
+        "--ro-bind", GCC_DIR, GCC_DIR,
+        "--ro-bind", ELF2HUNK, ELF2HUNK,
+        "--ro-bind", EXE2ADF, EXE2ADF,
+        "--ro-bind", TEMPLATE, TEMPLATE,
+        "--bind", tmpdir, tmpdir,
+        "--proc", "/proc",
+        "--dev", "/dev",
+        "--tmpfs", "/tmp",
+        "--chdir", tmpdir,
+    ] + cmd
 
 
 def compile_viewer(source_code, output_format="exe"):
@@ -44,12 +65,10 @@ def compile_viewer(source_code, output_format="exe"):
         elf_path = os.path.join(tmpdir, "viewer.elf")
         exe_path = os.path.join(tmpdir, "viewer.exe")
 
-        # Write source
         with open(src_path, "w") as f:
             f.write(source_code)
 
-        # Compile
-        subprocess.run([
+        subprocess.run(_sandbox([
             GCC, "-m68000", "-Ofast", "-nostdlib",
             "-fomit-frame-pointer", "-fno-exceptions",
             "-I", TEMPLATE,
@@ -59,18 +78,17 @@ def compile_viewer(source_code, output_format="exe"):
             src_path,
             os.path.join(SUPPORT, "gcc8_a_support.s"),
             os.path.join(SUPPORT, "gcc8_c_support.c"),
-        ], check=True, capture_output=True, timeout=30)
+        ], tmpdir), check=True, capture_output=True, timeout=30)
 
-        # elf2hunk
-        subprocess.run([
-            ELF2HUNK, elf_path, exe_path,
-        ], check=True, capture_output=True, timeout=10)
+        subprocess.run(_sandbox(
+            [ELF2HUNK, elf_path, exe_path], tmpdir
+        ), check=True, capture_output=True, timeout=10)
 
         if output_format == "adf":
             adf_path = os.path.join(tmpdir, "viewer.adf")
-            subprocess.run([
-                EXE2ADF, "-i", exe_path, "-a", adf_path, "-l", "png2amiga",
-            ], check=True, capture_output=True, timeout=10)
+            subprocess.run(_sandbox(
+                [EXE2ADF, "-i", exe_path, "-a", adf_path, "-l", "png2amiga"], tmpdir
+            ), check=True, capture_output=True, timeout=10)
             with open(adf_path, "rb") as f:
                 return f.read()
         else:
@@ -97,7 +115,7 @@ class CompileHandler(BaseHTTPRequestHandler):
             return
 
         content_length = int(self.headers.get("Content-Length", 0))
-        if content_length == 0 or content_length > 50 * 1024 * 1024:
+        if content_length == 0 or content_length > MAX_BODY:
             self.send_error(400, "Invalid content length")
             return
 
@@ -111,6 +129,8 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else str(e)
+            stderr = stderr.replace(TEMPLATE, "<toolchain>")
+            stderr = stderr.replace(GCC_DIR, "<toolchain>")
             self.wfile.write(f"Compile error:\n{stderr}".encode())
             return
         except Exception as e:
@@ -118,15 +138,13 @@ class CompileHandler(BaseHTTPRequestHandler):
             self._cors_headers()
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(str(e).encode())
+            self.wfile.write(b"Internal error")
             return
 
-        content_type = "application/octet-stream"
         ext = "adf" if fmt == "adf" else "exe"
-
         self.send_response(200)
         self._cors_headers()
-        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Disposition", f'attachment; filename="viewer.{ext}"')
         self.send_header("Content-Length", str(len(result)))
         self.end_headers()
@@ -142,14 +160,17 @@ class CompileHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    # Verify toolchain
     for tool, path in [("gcc", GCC), ("elf2hunk", ELF2HUNK), ("exe2adf", EXE2ADF)]:
         if not os.path.isfile(path):
             print(f"Error: {tool} not found at {path}", file=sys.stderr)
             sys.exit(1)
 
+    if not shutil.which("bwrap"):
+        print("Error: bubblewrap (bwrap) not found. apt install bubblewrap", file=sys.stderr)
+        sys.exit(1)
+
     server = HTTPServer(("127.0.0.1", PORT), CompileHandler)
-    print(f"Compile server listening on http://127.0.0.1:{PORT}", file=sys.stderr)
+    print(f"Compile server listening on http://127.0.0.1:{PORT} (sandboxed)", file=sys.stderr)
     server.serve_forever()
 
 

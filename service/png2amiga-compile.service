@@ -9,5 +9,12 @@ WorkingDirectory=/var/www/png2amiga
 Restart=on-failure
 RestartSec=5
 
+# Security hardening
+DynamicUser=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+MemoryMax=512M
+
 [Install]
 WantedBy=multi-user.target
