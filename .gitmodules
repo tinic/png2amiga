@@ -1,0 +1,3 @@
+[submodule "/Users/turo/png2amiga/third_party/vscode-amiga-debug"]
+	path = /Users/turo/png2amiga/third_party/vscode-amiga-debug
+	url = https://github.com/BartmanAbyss/vscode-amiga-debug.git

@@ -1,0 +1,13 @@
+build/
+build-wasm/
+docs/
+.cache/
+.claude/
+web/node_modules/
+web/dist/
+*.exe
+*.elf
+*.adf
+*.o
+*.d
+test_output/
