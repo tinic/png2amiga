@@ -1005,6 +1005,7 @@ Result<HamResult> encode_ham_copper_generic(
     std::size_t num_base_colors,
     std::size_t num_bitplanes,
     amiga::Chipset chipset,
+    bool is_hires,
     const HamOptions& opts,
     std::size_t override_changes) {
 
@@ -1019,16 +1020,12 @@ Result<HamResult> encode_ham_copper_generic(
     }
 
     auto data_bits = num_bitplanes - 2;
-    // Empirically tested DMA limits:
-    // HAM8 (8 planes, FMODE=3): max 2 changes/line
-    // HAM6 (6 planes): 16 changes/line works on A500
     std::size_t changes_per_line;
     if (override_changes > 0) {
         changes_per_line = override_changes;
-    } else if (num_bitplanes > 6) {
-        changes_per_line = 2;
     } else {
-        changes_per_line = std::min(num_base_colors, std::size_t{16});
+        changes_per_line = copper::max_changes_per_line(
+            num_bitplanes, true, is_hires, chipset);
     }
 
     // Global base palette
@@ -1202,6 +1199,7 @@ Result<HamResult> encode_ham8(const Image& image, const HamOptions& opts) {
 Result<HamResult> encode_ham_copper(const Image& image, amiga::Mode mode,
                                     amiga::Chipset chipset,
                                     const HamOptions& opts,
+                                    bool is_hires,
                                     std::size_t override_changes) {
     auto params = amiga::get_mode_params(mode);
     if (!params.is_ham) {
@@ -1211,8 +1209,8 @@ Result<HamResult> encode_ham_copper(const Image& image, amiga::Mode mode,
         }};
     }
     return encode_ham_copper_generic(image, params.max_colors,
-                                     params.bitplane_depth, chipset, opts,
-                                     override_changes);
+                                     params.bitplane_depth, chipset, is_hires,
+                                     opts, override_changes);
 }
 
 // ===========================================================================

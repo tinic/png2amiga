@@ -177,6 +177,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::size_t depth,
                                    const dither::Settings& dither_settings,
                                    amiga::Chipset chipset,
+                                   bool is_ham,
+                                   bool is_hires,
                                    std::size_t override_changes) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
@@ -196,12 +198,8 @@ Result<CopperResult> encode_copper(const Image& image,
     }
 
     auto num_colors = std::size_t{1} << depth;
-    // Empirically tested DMA limits:
-    // ≤6 planes: 16 changes/line works on A500
-    // >6 planes (8): only 2 changes/line even with FMODE=3
     auto changes_per_line = (override_changes > 0) ? override_changes
-        : (depth > 6) ? std::size_t{2}
-        : std::min(num_colors, std::size_t{16});
+        : max_changes_per_line(depth, is_ham, is_hires, chipset);
 
     // Step 1: Generate global base palette (N-1 colors + black at index 0)
     auto algo = (chipset == amiga::Chipset::aga)
@@ -258,6 +256,13 @@ Result<CopperResult> encode_copper(const Image& image,
             changes.push_back(CopperChange{static_cast<std::uint8_t>(swap.slot),
                                           swap.new_color});
         }
+
+        // Sort changes by register index (bank 0 first) to minimize
+        // BPLCON3 switches in the copper list
+        std::sort(changes.begin(), changes.end(),
+                  [](const CopperChange& a, const CopperChange& b) {
+                      return a.reg < b.reg;
+                  });
 
         // Snapshot the effective palette for this scanline
         scanline_palettes[y] = current_pal;

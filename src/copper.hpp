@@ -58,18 +58,50 @@ struct CopperResult {
 };
 
 // ---------------------------------------------------------------------------
+// Maximum copper changes per line (empirically tested DMA limits).
+// ---------------------------------------------------------------------------
+
+constexpr std::size_t max_changes_per_line(std::size_t depth, bool is_ham,
+                                           bool is_hires,
+                                           amiga::Chipset chipset) noexcept {
+    if (chipset == amiga::Chipset::aga) {
+        if (is_hires) {
+            if (is_ham && depth == 6) return 4;
+            if (is_ham && depth == 8) return 8;
+            if (depth >= 8) return 4;
+            if (depth >= 7) return 4;
+            if (depth >= 6) return 8;
+            return 16;
+        }
+        // Lores AGA
+        if (is_ham && depth == 8) return 4;
+        if (is_ham && depth == 6) return 8;
+        if (depth >= 8) return 4;
+        if (depth >= 7) return 4;
+        if (depth >= 6) return 8;
+        return 16;
+    }
+    // OCS
+    if (is_ham) return 8;  // HAM6
+    if (is_hires) return std::size_t{1} << depth;
+    return std::size_t{1} << depth;
+}
+
+// ---------------------------------------------------------------------------
 // Encode an image using per-scanline copper palette changes.
 //
 // image:           preprocessed, scaled image (linear RGB)
 // depth:           bitplane depth (1-6 for OCS, 1-8 for AGA)
 // dither_settings: dithering method and parameters
-// chipset:         determines changes_per_line (OCS=4, AGA=8)
+// chipset:         determines changes_per_line
 // ---------------------------------------------------------------------------
 
 Result<CopperResult> encode_copper(const Image& image,
                                    std::size_t depth,
                                    const dither::Settings& dither_settings,
                                    amiga::Chipset chipset = amiga::Chipset::ocs,
+                                   bool is_ham = false,
+                                   bool is_hires = false,
                                    std::size_t override_changes = 0);  // 0 = auto
 
 // ---------------------------------------------------------------------------

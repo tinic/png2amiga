@@ -908,7 +908,7 @@ int main(int argc, char* argv[]) {
 
         Result<ham::HamResult> ham_result = config->copper
             ? ham::encode_ham_copper(*image, config->mode, chipset, ham_opts,
-                                   static_cast<std::size_t>(config->copper_changes))
+                                   config->hires, static_cast<std::size_t>(config->copper_changes))
             : ham::encode_ham(*image, config->mode, chipset, ham_opts);
 
         if (!ham_result) {
@@ -1237,8 +1237,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        auto cpl = (chipset == amiga::Chipset::aga)
-            ? std::size_t{8} : std::size_t{4};
+        auto cpl = copper::max_changes_per_line(config->depth, false, config->hires, chipset);
         std::println("Mode:   Copper ({} changes/line)", cpl);
 
         dither::Settings dith;
@@ -1250,7 +1249,7 @@ int main(int argc, char* argv[]) {
                      dither_name(dith.method), dith.strength);
 
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
-            static_cast<std::size_t>(config->copper_changes));
+            false, config->hires, static_cast<std::size_t>(config->copper_changes));
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);

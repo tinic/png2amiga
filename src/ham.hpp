@@ -141,6 +141,7 @@ Result<HamResult> encode_ham_copper(const Image& image,
                                     amiga::Mode mode,
                                     amiga::Chipset chipset = amiga::Chipset::ocs,
                                     const HamOptions& opts = {},
+                                    bool is_hires = false,
                                     std::size_t override_changes = 0);
 
 // Render copper HAM with per-scanline palettes

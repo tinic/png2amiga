@@ -366,7 +366,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         Result<ham::HamResult> ham_result;
         if (options.copper) {
-            ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts);
+            ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts, compound_hires);
         } else {
             ham_result = ham::encode_ham(*image, mode, chipset, ham_opts);
         }
@@ -495,7 +495,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
 
-        auto copper_result = copper::encode_copper(*image, depth, dith, chipset);
+        auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
+                                                     false, compound_hires);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,
