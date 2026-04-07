@@ -738,18 +738,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto last_line = y_start + (is_lace
             ? static_cast<int>(height / 2)
             : static_cast<int>(height));
-        if (last_line >= 256) {
-            // Copper can only WAIT for VP 0-255 in one instruction.
-            // For lines >= 256: first wait past the 255 boundary, then wait for target.
+        if (last_line >= 256 && !has_copper) {
+            // Need boundary cross only if per-scanline copper loop didn't already do it
             out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
-                   "  // WAIT line >= 256 (end of field)\n";
-            out += std::format("    *cl++ = ({}<<8)|1; *cl++ = 0xfffe;"
-                               "  // WAIT line {}\n",
-                               last_line & 0xFF, last_line);
-        } else {
-            out += std::format("    *cl++ = ({}<<8)|1; *cl++ = 0xfffe;"
-                               "  // WAIT line {}\n", last_line, last_line);
+                   "  // WAIT past line 255\n";
         }
+        out += std::format("    *cl++ = ({}<<8)|1; *cl++ = 0xfffe;"
+                           "  // WAIT line {}\n",
+                           last_line >= 256 ? (last_line & 0xFF) : last_line,
+                           last_line);
         out += "    *cl++ = offsetof(struct Custom, bplcon0); "
                "*cl++ = 0x0200;  // 0 planes, blank\n";
     }
