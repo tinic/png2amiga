@@ -6,7 +6,7 @@ import { track } from '../lib/analytics.js'
 import {
   MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, HAM_QUALITY,
   SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
-  defaultOptions, isHamMode, isEhbMode, isErrorDiffusion,
+  defaultOptions, isHamMode, isEhbMode, isErrorDiffusion, isInterlaceMode,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset, decomposeMode,
 } from '../lib/options.js'
@@ -87,6 +87,8 @@ watch(() => options.mode, (mode, oldMode) => {
   } else if (options.depth > max) {
     options.depth = max
   }
+  // Copper not compatible with interlace
+  if (isInterlaceMode(mode)) options.copper = false
   track('mode-change', { from: oldMode, to: mode })
 })
 
@@ -479,8 +481,8 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Copper (not available for EHB) -->
-              <div v-if="!isEhbMode(options.mode)" class="grid align-items-center">
+              <!-- Copper (not available for EHB or interlace) -->
+              <div v-if="!isEhbMode(options.mode) && !isInterlaceMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Enable per-scanline copper palette changes. Each row gets its own optimal palette via the copper.">Copper</label>
                 <div class="col-8">
                   <ToggleSwitch v-model="options.copper" />
