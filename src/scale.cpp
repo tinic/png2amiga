@@ -43,6 +43,9 @@ Image scale_horizontal(const Image& src, std::size_t dst_width,
     Image dst(dst_width, src_h);
 
     float ratio = static_cast<float>(src_w) / static_cast<float>(dst_width);
+    // Widen kernel when downscaling to integrate all source pixels
+    float filter_scale = std::max(1.0f, ratio);
+    int support = static_cast<int>(std::ceil(2.0f * filter_scale));
 
     for (std::size_t y = 0; y < src_h; ++y) {
         for (std::size_t x = 0; x < dst_width; ++x) {
@@ -52,11 +55,12 @@ Image scale_horizontal(const Image& src, std::size_t dst_width,
             Color3f sum{};
             float weight_sum = 0.0f;
 
-            for (int k = -1; k <= 2; ++k) {
+            for (int k = -support; k <= support; ++k) {
                 int sx = center + k;
                 sx = std::clamp(sx, 0, static_cast<int>(src_w) - 1);
 
-                float w = kernel_fn(src_x - static_cast<float>(sx));
+                float dist = (src_x - static_cast<float>(sx)) / filter_scale;
+                float w = kernel_fn(dist);
                 sum += src[static_cast<std::size_t>(sx), y] * w;
                 weight_sum += w;
             }
@@ -78,6 +82,8 @@ Image scale_vertical(const Image& src, std::size_t dst_height,
     Image dst(src_w, dst_height);
 
     float ratio = static_cast<float>(src_h) / static_cast<float>(dst_height);
+    float filter_scale = std::max(1.0f, ratio);
+    int support = static_cast<int>(std::ceil(2.0f * filter_scale));
 
     for (std::size_t y = 0; y < dst_height; ++y) {
         float src_y = (static_cast<float>(y) + 0.5f) * ratio - 0.5f;
@@ -87,11 +93,12 @@ Image scale_vertical(const Image& src, std::size_t dst_height,
             Color3f sum{};
             float weight_sum = 0.0f;
 
-            for (int k = -1; k <= 2; ++k) {
+            for (int k = -support; k <= support; ++k) {
                 int sy = center + k;
                 sy = std::clamp(sy, 0, static_cast<int>(src_h) - 1);
 
-                float w = kernel_fn(src_y - static_cast<float>(sy));
+                float dist = (src_y - static_cast<float>(sy)) / filter_scale;
+                float w = kernel_fn(dist);
                 sum += src[x, static_cast<std::size_t>(sy)] * w;
                 weight_sum += w;
             }
