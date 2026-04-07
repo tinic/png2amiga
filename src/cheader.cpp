@@ -860,10 +860,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    *(volatile APTR*)(((UBYTE*)VBR) + 0x6c) = (APTR)+[]() __attribute__((interrupt)) {\n";
         out += "        volatile struct Custom* c = (volatile struct Custom*)0xdff000;\n";
         out += "        c->intreq = (1<<5); c->intreq = (1<<5); // ack VBL\n";
-        out += "        if (*(volatile UWORD*)0xdff004 & 0x8000)  // LOF bit in VPOSR\n";
-        out += "            c->cop1lc = cop_odd;   // long frame = odd field\n";
+        out += "        if (*(volatile UWORD*)0xdff004 & 0x8000)  // LOF: long frame ended\n";
+        out += "            c->cop1lc = cop_even;  // next frame is even (short)\n";
         out += "        else\n";
-        out += "            c->cop1lc = cop_even;  // short frame = even field\n";
+        out += "            c->cop1lc = cop_odd;   // next frame is odd (long)\n";
         out += "    };\n";
         out += "    custom->intena = 0x8000 | (1<<5);  // enable VBL interrupt\n";
         out += "    Enable();  // allow CPU to service interrupts\n\n";
