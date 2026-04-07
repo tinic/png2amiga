@@ -821,6 +821,27 @@ int main(int argc, char* argv[]) {
         image = *std::move(scaled);
     }
 
+    // Pad or crop to mode's display width for correct viewer/hardware row stride
+    auto mode_w = amiga::default_width(config->mode);
+    if (image->width() != mode_w) {
+        auto old_w = image->width();
+        auto h = image->height();
+        Image padded(mode_w, h);
+        auto copy_w = std::min(old_w, mode_w);
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < copy_w; ++x)
+                padded[x, y] = (*image)[x, y];
+        if (has_transparency) {
+            std::vector<bool> new_mask(mode_w * h, true);
+            for (std::size_t y = 0; y < h; ++y)
+                for (std::size_t x = 0; x < copy_w; ++x)
+                    new_mask[y * mode_w + x] = transparency_mask[y * old_w + x];
+            transparency_mask = std::move(new_mask);
+        }
+        std::println("Pad:    {}x{} -> {}x{}", old_w, h, mode_w, h);
+        image = std::move(padded);
+    }
+
     // Preprocess
     preprocess::apply(*image, config->preprocess);
 

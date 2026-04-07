@@ -329,6 +329,28 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
 
+    // Pad or crop to mode's display width so viewer/hardware gets correct row stride
+    auto mode_w = amiga::default_width(mode);
+    if (image->width() != mode_w) {
+        auto old_w = image->width();
+        auto h = image->height();
+        auto new_w = mode_w;
+        Image padded(new_w, h);
+        auto copy_w = std::min(old_w, new_w);
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < copy_w; ++x)
+                padded[x, y] = (*image)[x, y];
+        // Update transparency mask
+        if (has_transparency) {
+            std::vector<bool> new_mask(new_w * h, true); // pad = transparent
+            for (std::size_t y = 0; y < h; ++y)
+                for (std::size_t x = 0; x < copy_w; ++x)
+                    new_mask[y * new_w + x] = tmask[y * old_w + x];
+            tmask = std::move(new_mask);
+        }
+        *image = std::move(padded);
+    }
+
     auto chipset = resolve_chipset(options.chipset, mode);
 
     // --- HAM modes: use dedicated HAM encoder ---
