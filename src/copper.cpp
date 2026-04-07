@@ -43,7 +43,8 @@ SwapCandidate find_best_swap(
     std::span<const color_space::OKLab> current_lab,
     std::span<const Color3f> row,
     std::span<const color_space::OKLab> row_lab,
-    amiga::Chipset chipset) {
+    amiga::Chipset chipset,
+    const std::vector<bool>& excluded = {}) {
 
     auto num_colors = current_pal.size();
     auto width = row.size();
@@ -83,6 +84,7 @@ SwapCandidate find_best_swap(
 
     for (std::size_t k = 1; k < num_colors; ++k) {
         if (stats[k].count == 0) continue;
+        if (!excluded.empty() && excluded[k]) continue;
 
         // Ideal centroid for this cluster
         auto n = static_cast<double>(stats[k].count);
@@ -233,9 +235,10 @@ Result<CopperResult> encode_copper(const Image& image,
             row_lab[x] = color_space::linear_to_oklab(row[x]);
         }
 
-        // Greedily find the best K swaps
+        // Greedily find the best K swaps (each slot swapped at most once per line)
         std::vector<CopperChange> changes;
         changes.reserve(changes_per_line);
+        std::vector<bool> swapped(num_colors, false);
 
         for (std::size_t s = 0; s < changes_per_line; ++s) {
             // Precompute current palette in OKLab
@@ -245,14 +248,15 @@ Result<CopperResult> encode_copper(const Image& image,
             }
 
             auto swap = find_best_swap(
-                current_pal, pal_lab, row, row_lab, chipset);
+                current_pal, pal_lab, row, row_lab, chipset, swapped);
 
-            if (swap.error_reduction <= 0.0f) break;  // no improvement possible
+            if (swap.error_reduction <= 0.0f) break;
 
             // Apply the swap
+            swapped[swap.slot] = true;
             current_pal[swap.slot] = swap.new_color;
-            changes.push_back({static_cast<std::uint8_t>(swap.slot),
-                               swap.new_color});
+            changes.push_back(CopperChange{static_cast<std::uint8_t>(swap.slot),
+                                          swap.new_color});
         }
 
         // Snapshot the effective palette for this scanline

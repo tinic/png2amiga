@@ -243,7 +243,9 @@ struct PipelineResult {
     // Copper mode
     bool copper = false;
     std::vector<std::vector<Color3f>> scanline_palettes;
+    std::vector<std::vector<copper::CopperChange>> scanline_changes;
     std::size_t copper_num_colors{};
+    std::size_t changes_per_line{};
 
     // Set after construction:
     bool has_transparency = false;
@@ -375,9 +377,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (options.copper) {
             result.copper = true;
             result.scanline_palettes = std::move(ham_result->scanline_palettes);
+            result.scanline_changes = std::move(ham_result->copper_changes);
+            result.changes_per_line = ham_result->changes_per_line;
             // Compute average actual changes per line
             std::size_t total_ch = 0;
-            for (auto& ch : ham_result->copper_changes) total_ch += ch.size();
+            for (auto& ch : result.scanline_changes) total_ch += ch.size();
             auto h = image->height();
             result.copper_changes = h > 0
                 ? static_cast<float>(total_ch) / static_cast<float>(h) : 0.0f;
@@ -490,7 +494,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = options.interlace;
         result.copper = true;
         result.scanline_palettes = std::move(copper_result->scanline_palettes);
+        result.scanline_changes = std::move(copper_result->scanline_changes);
         result.copper_num_colors = copper_result->num_colors;
+        result.changes_per_line = copper_result->changes_per_line;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.copper_changes = copper_result->avg_changes_per_line;
@@ -705,6 +711,10 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     if (!options.symbol_name.empty())
         ch_opts.symbol_name = options.symbol_name;
     ch_opts.interlace = result->interlace;
+    if (result->copper && !result->scanline_changes.empty()) {
+        ch_opts.copper_changes = &result->scanline_changes;
+        ch_opts.copper_changes_per_line = result->changes_per_line;
+    }
     auto viewer = cheader::generate_viewer(
         planes, result->palette, result->mode, ch_opts);
     if (!viewer) return make_error(viewer.error().message);
