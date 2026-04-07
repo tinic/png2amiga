@@ -656,7 +656,7 @@ int main(int argc, char* argv[]) {
     }
 
     // --- Validate mode combinations ---
-    if (config->copper && amiga::get_mode_params(config->mode).is_interlaced) {
+    if (config->copper && (amiga::get_mode_params(config->mode).is_interlaced || config->interlace)) {
         std::println(stderr,
             "Error: --copper is not compatible with interlace modes "
             "(copper WAITs conflict with field switching)");
