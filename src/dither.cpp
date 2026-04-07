@@ -223,7 +223,7 @@ template <std::size_t W, std::size_t H>
 DitherResult apply_ordered(const Image& image,
                            const std::array<std::array<float, W>, H>& matrix,
                            std::span<const OKLab> palette_lab,
-                           float strength, bool interlace = false) {
+                           float strength) {
     auto w = image.width();
     auto h = image.height();
 
@@ -235,9 +235,7 @@ DitherResult apply_ordered(const Image& image,
         for (std::size_t x = 0; x < w; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(image[x, y]);
 
-            // For interlace: halve Y so each field gets a full dither pattern
-            auto dy = interlace ? y / 2 : y;
-            float threshold = matrix[dy % H][x % W];
+            float threshold = matrix[y % H][x % W];
 
             // Apply threshold bias in OKLab space.
             // L channel gets larger bias (luminance is most perceptually
@@ -450,34 +448,34 @@ DitherResult apply(const Image& image,
     // Ordered dithering
     case Method::bayer2x2:
         return apply_ordered(image, bayer2, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::bayer4x4:
         return apply_ordered(image, bayer4, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::bayer8x8:
         return apply_ordered(image, bayer8, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::checker:
         return apply_ordered(image, checker_mat, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::h2x4:
         return apply_ordered(image, h2x4_mat, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::clustered_dot:
         return apply_ordered(image, clustered_mat, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::line2:
         return apply_ordered(image, line2_mat, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::line_checker:
         return apply_ordered(image, line_checker_mat, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::line4:
         return apply_ordered(image, line4_mat, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
     case Method::line8:
         return apply_ordered(image, line8_mat, pal_span,
-                             settings.strength, settings.interlace);
+                             settings.strength);
 
     // Error diffusion
     case Method::floyd_steinberg:

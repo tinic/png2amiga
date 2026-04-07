@@ -48,7 +48,6 @@ struct Settings {
     float strength = 1.0f;      // 0.0 = no dithering, 1.0 = full
     float error_clamp = 0.12f;  // max error magnitude per OKLab channel
     bool serpentine = true;      // alternate scan direction (error diffusion)
-    bool interlace = false;     // halve Y for ordered dither (each field gets checker)
 };
 
 // ---------------------------------------------------------------------------
