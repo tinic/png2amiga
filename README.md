@@ -1,6 +1,14 @@
 # png2amiga
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Web App](https://img.shields.io/badge/Try_it-png2amiga.app-brightgreen)](https://www.png2amiga.app)
+[![C++26](https://img.shields.io/badge/C%2B%2B-26-blue.svg)](https://en.cppreference.com/w/cpp/26)
+
 PNG/JPEG to Commodore Amiga graphics converter. Produces IFF ILBM files, C headers, raw bitplane data, and self-contained AmigaOS executables with built-in viewers.
+
+**[Try it in your browser at png2amiga.app](https://www.png2amiga.app)** — live preview via WebAssembly, compile to Amiga executables server-side.
+
+Built for Amiga demo scene production. All color operations use [OKLab](https://bottosson.github.io/posts/oklab/) perceptual color space. Multithreaded native CLI + WASM web app. Sister project to [png2c64](https://github.com/tinic/png2c64).
 
 ## Features
 
