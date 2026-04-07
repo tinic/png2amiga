@@ -747,8 +747,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                            "  // WAIT line {}\n",
                            last_line >= 256 ? (last_line & 0xFF) : last_line,
                            last_line);
-        out += "    *cl++ = offsetof(struct Custom, bplcon0); "
-               "*cl++ = 0x0200;  // 0 planes, blank\n";
+        auto blank_bplcon0 = is_lace ? 0x0204 : 0x0200;
+        out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); "
+               "*cl++ = 0x{:04X};  // 0 planes, blank\n", blank_bplcon0);
     }
 
     // End copper list
@@ -827,8 +828,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += std::format("    *cl2++ = ({}<<8)|1; *cl2++ = 0xfffe;\n",
                                    last_line);
             }
-            out += "    *cl2++ = offsetof(struct Custom, bplcon0); "
-                   "*cl2++ = 0x0200;\n";
+            out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
+                   "*cl2++ = 0x{:04X};\n", is_lace ? 0x0204 : 0x0200);
         }
         out += "    *cl2++ = 0xffff; *cl2++ = 0xfffe;\n\n";
 
@@ -860,10 +861,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    *(volatile APTR*)(((UBYTE*)VBR) + 0x6c) = (APTR)+[]() __attribute__((interrupt)) {\n";
         out += "        volatile struct Custom* c = (volatile struct Custom*)0xdff000;\n";
         out += "        c->intreq = (1<<5); c->intreq = (1<<5); // ack VBL\n";
-        out += "        if (*(volatile UWORD*)0xdff004 & 0x8000)  // LOF: long frame ended\n";
-        out += "            c->cop1lc = cop_even;  // next frame is even (short)\n";
+        out += "        if (*(volatile UWORD*)0xdff004 & 0x8000)\n";
+        out += "            c->cop1lc = cop_even;\n";
         out += "        else\n";
-        out += "            c->cop1lc = cop_odd;   // next frame is odd (long)\n";
+        out += "            c->cop1lc = cop_odd;\n";
         out += "    };\n";
         out += "    custom->intena = 0x8000 | (1<<5);  // enable VBL interrupt\n";
         out += "    Enable();  // allow CPU to service interrupts\n\n";
