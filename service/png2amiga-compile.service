@@ -1,0 +1,13 @@
+[Unit]
+Description=png2amiga compile service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /var/www/png2amiga/service/compile.py
+WorkingDirectory=/var/www/png2amiga
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
