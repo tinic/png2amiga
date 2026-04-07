@@ -1,6 +1,5 @@
 build/
 build-wasm/
-docs/
 .cache/
 .claude/
 web/node_modules/
