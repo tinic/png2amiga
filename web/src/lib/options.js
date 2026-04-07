@@ -71,7 +71,7 @@ export const HAM_QUALITY = [
 export const SLIDERS = [
   { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 3.0, step: 0.05, default: 1.0,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
-  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3.0, step: 0.05, default: 1.0,
+  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3.0, step: 0.05, default: 0.8,
     tip: 'Dithering intensity. 0 = no dithering effect, 1 = standard, >1 = exaggerated.' },
   { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1.0, step: 0.05, default: 0.0,
     tip: 'Additive lightness shift in perceptual OKLab space.' },
@@ -95,9 +95,9 @@ export const DIFFUSION_SLIDERS = [
 ]
 
 export const EXAMPLES = [
-  { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 1.0 } },
+  { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
   { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'none' } },
-  { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 1.0 } },
+  { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'checker', alphaThreshold: 0 } },
 ]
 
