@@ -545,7 +545,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             cop_size += height * 8;
         }
     }
-    cop_size += 64;  // padding for blank-below, end markers, etc.
+    cop_size += 128;  // padding for blank-below, 256-boundary WAITs, end markers
 
     out += std::format("    USHORT* copper1 = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
                        cop_size);
@@ -695,7 +695,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    // Per-scanline copper palette changes\n";
         out += std::format("    for (int y = 0; y < {}; y++) {{\n", height);
         out += std::format("        USHORT line = y + {};\n", y_start);
-        out += "        *cl++ = (line << 8) | 0x01;  // WAIT start of line (before ddfstrt)\n";
+        out += "        if (line == 256) {\n";
+        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
+        out += "        }\n";
+        out += "        *cl++ = ((line & 0xFF) << 8) | 0x01;\n";
         out += "        *cl++ = 0xfffe;\n";
         if (aga_banks) {
             // AGA: changes are pre-sorted by register (bank 0 first).
@@ -735,12 +738,20 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto last_line = y_start + (is_lace
             ? static_cast<int>(height / 2)
             : static_cast<int>(height));
-        if (last_line < 256) {
+        if (last_line >= 256) {
+            // Copper can only WAIT for VP 0-255 in one instruction.
+            // For lines >= 256: first wait past the 255 boundary, then wait for target.
+            out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
+                   "  // WAIT line >= 256 (end of field)\n";
+            out += std::format("    *cl++ = ({}<<8)|1; *cl++ = 0xfffe;"
+                               "  // WAIT line {}\n",
+                               last_line & 0xFF, last_line);
+        } else {
             out += std::format("    *cl++ = ({}<<8)|1; *cl++ = 0xfffe;"
                                "  // WAIT line {}\n", last_line, last_line);
-            out += "    *cl++ = offsetof(struct Custom, bplcon0); "
-                   "*cl++ = 0x0200;  // 0 planes, blank\n";
         }
+        out += "    *cl++ = offsetof(struct Custom, bplcon0); "
+               "*cl++ = 0x0200;  // 0 planes, blank\n";
     }
 
     // End copper list
@@ -811,12 +822,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Blank below image in even field
         {
             auto last_line = y_start + static_cast<int>(height / 2);
-            if (last_line < 256) {
+            if (last_line >= 256) {
+                out += "    *cl2++ = 0xFFDF; *cl2++ = 0xFFFE;\n";
+                out += std::format("    *cl2++ = ({}<<8)|1; *cl2++ = 0xfffe;\n",
+                                   last_line & 0xFF);
+            } else {
                 out += std::format("    *cl2++ = ({}<<8)|1; *cl2++ = 0xfffe;\n",
                                    last_line);
-                out += "    *cl2++ = offsetof(struct Custom, bplcon0); "
-                       "*cl2++ = 0x0200;\n";
             }
+            out += "    *cl2++ = offsetof(struct Custom, bplcon0); "
+                   "*cl2++ = 0x0200;\n";
         }
         out += "    *cl2++ = 0xffff; *cl2++ = 0xfffe;\n\n";
 
