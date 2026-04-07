@@ -96,7 +96,7 @@ export const DIFFUSION_SLIDERS = [
 
 export const EXAMPLES = [
   { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 1.0 } },
-  { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'checker', ditherStrength: 0.8 } },
+  { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'none' } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 1.0 } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'checker', alphaThreshold: 0 } },
 ]
