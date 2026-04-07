@@ -329,28 +329,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
 
-    // Pad or crop to mode's display width so viewer/hardware gets correct row stride
-    auto mode_w = amiga::default_width(mode);
-    if (image->width() != mode_w) {
-        auto old_w = image->width();
-        auto h = image->height();
-        auto new_w = mode_w;
-        Image padded(new_w, h);
-        auto copy_w = std::min(old_w, new_w);
-        for (std::size_t y = 0; y < h; ++y)
-            for (std::size_t x = 0; x < copy_w; ++x)
-                padded[x, y] = (*image)[x, y];
-        // Update transparency mask
-        if (has_transparency) {
-            std::vector<bool> new_mask(new_w * h, true); // pad = transparent
-            for (std::size_t y = 0; y < h; ++y)
-                for (std::size_t x = 0; x < copy_w; ++x)
-                    new_mask[y * new_w + x] = tmask[y * old_w + x];
-            tmask = std::move(new_mask);
-        }
-        *image = std::move(padded);
-    }
-
     auto chipset = resolve_chipset(options.chipset, mode);
 
     // --- HAM modes: use dedicated HAM encoder ---
@@ -695,12 +673,40 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
+    // Pad or crop bitplanes to mode display width for correct hardware row stride
+    auto mode = result->mode;
+    auto mode_w = amiga::default_width(mode);
+    auto& planes = result->planes;
+    if (planes.width != mode_w) {
+        auto old_bpr = planes.bytes_per_row;
+        auto new_bpr = ((mode_w + 15) / 16) * 2;  // word-aligned
+        auto depth = planes.depth;
+        auto height = planes.height;
+        std::vector<std::uint8_t> padded(depth * height * new_bpr, 0);
+        auto copy_bpr = std::min(old_bpr, new_bpr);
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t p = 0; p < depth; ++p) {
+                auto src_off = planes.plane_row_offset(p, y);
+                std::size_t dst_off;
+                if (planes.layout == bitplane::Layout::interleaved)
+                    dst_off = y * depth * new_bpr + p * new_bpr;
+                else
+                    dst_off = p * height * new_bpr + y * new_bpr;
+                std::copy_n(planes.data.data() + src_off, copy_bpr,
+                            padded.data() + dst_off);
+            }
+        }
+        planes.data = std::move(padded);
+        planes.width = mode_w;
+        planes.bytes_per_row = new_bpr;
+    }
+
     cheader::CHeaderOptions ch_opts;
     if (!options.symbol_name.empty())
         ch_opts.symbol_name = options.symbol_name;
     ch_opts.interlace = result->interlace;
     auto viewer = cheader::generate_viewer(
-        result->planes, result->palette, result->mode, ch_opts);
+        planes, result->palette, result->mode, ch_opts);
     if (!viewer) return make_error(viewer.error().message);
 
     std::vector<std::uint8_t> bytes(viewer->begin(), viewer->end());

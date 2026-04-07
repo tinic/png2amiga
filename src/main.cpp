@@ -33,6 +33,36 @@ namespace {
 using namespace png2amiga;
 
 // ---------------------------------------------------------------------------
+// Pad bitplane data to mode display width (for viewer .cpp export only)
+// ---------------------------------------------------------------------------
+
+void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode) {
+    auto mode_w = amiga::default_width(mode);
+    if (planes.width == mode_w) return;
+    auto old_bpr = planes.bytes_per_row;
+    auto new_bpr = ((mode_w + 15) / 16) * 2;
+    auto depth = planes.depth;
+    auto height = planes.height;
+    std::vector<std::uint8_t> padded(depth * height * new_bpr, 0);
+    auto copy_bpr = std::min(old_bpr, new_bpr);
+    for (std::size_t y = 0; y < height; ++y) {
+        for (std::size_t p = 0; p < depth; ++p) {
+            auto src_off = planes.plane_row_offset(p, y);
+            std::size_t dst_off;
+            if (planes.layout == bitplane::Layout::interleaved)
+                dst_off = y * depth * new_bpr + p * new_bpr;
+            else
+                dst_off = p * height * new_bpr + y * new_bpr;
+            std::copy_n(planes.data.data() + src_off, copy_bpr,
+                        padded.data() + dst_off);
+        }
+    }
+    planes.data = std::move(padded);
+    planes.width = mode_w;
+    planes.bytes_per_row = new_bpr;
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -821,27 +851,6 @@ int main(int argc, char* argv[]) {
         image = *std::move(scaled);
     }
 
-    // Pad or crop to mode's display width for correct viewer/hardware row stride
-    auto mode_w = amiga::default_width(config->mode);
-    if (image->width() != mode_w) {
-        auto old_w = image->width();
-        auto h = image->height();
-        Image padded(mode_w, h);
-        auto copy_w = std::min(old_w, mode_w);
-        for (std::size_t y = 0; y < h; ++y)
-            for (std::size_t x = 0; x < copy_w; ++x)
-                padded[x, y] = (*image)[x, y];
-        if (has_transparency) {
-            std::vector<bool> new_mask(mode_w * h, true);
-            for (std::size_t y = 0; y < h; ++y)
-                for (std::size_t x = 0; x < copy_w; ++x)
-                    new_mask[y * mode_w + x] = transparency_mask[y * old_w + x];
-            transparency_mask = std::move(new_mask);
-        }
-        std::println("Pad:    {}x{} -> {}x{}", old_w, h, mode_w, h);
-        image = std::move(padded);
-    }
-
     // Preprocess
     preprocess::apply(*image, config->preprocess);
 
@@ -961,6 +970,7 @@ int main(int argc, char* argv[]) {
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
                 }
 
+                pad_planes_to_mode(ham_result->planes, config->mode);
                 auto result = cheader::save_viewer(
                     config->output_path, ham_result->planes,
                     ham_result->base_palette, config->mode, ch_opts);
@@ -1144,6 +1154,7 @@ int main(int argc, char* argv[]) {
                     : config->symbol_name;
                 ch_opts2.interlace = config->interlace;
 
+                pad_planes_to_mode(planes.value(), config->mode);
                 auto result2 = cheader::save_viewer(
                     config->output_path, planes.value(), full_palette,
                     config->mode, ch_opts2);
@@ -1300,6 +1311,7 @@ int main(int argc, char* argv[]) {
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
 
+                pad_planes_to_mode(copper_result->planes, config->mode);
                 auto result2 = cheader::save_viewer(
                     config->output_path, copper_result->planes,
                     cmap_palette, config->mode, ch_opts2);
@@ -1477,6 +1489,7 @@ int main(int argc, char* argv[]) {
                 : config->symbol_name;
             ch_opts.interlace = config->interlace;
 
+            pad_planes_to_mode(planes.value(), config->mode);
             auto result = cheader::save_viewer(
                 config->output_path, planes.value(), used_palette,
                 config->mode, ch_opts);
