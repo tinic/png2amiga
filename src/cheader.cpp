@@ -845,6 +845,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // Start display
     out += "    custom->cop1lc = (ULONG)copper1;\n";
+    if (is_lace) {
+        out += "    custom->cop2lc = (ULONG)copper2;\n";
+    }
     out += "    custom->dmacon = DMAF_BLITTER;\n";
     out += "    custom->copjmp1 = 0x7fff;\n";
     out += "    custom->dmacon = DMAF_SETCLR | DMAF_MASTER | "
