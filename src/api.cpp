@@ -446,6 +446,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.method = parse_dither(options.dither);
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
+        dith.interlace = options.interlace;
 
         dither::DitherResult dither_result;
         if (has_transparency) {
@@ -494,6 +495,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.method = parse_dither(options.dither);
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
+        dith.interlace = options.interlace;
 
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
                                                      false, compound_hires);
@@ -559,6 +561,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     dith.method = parse_dither(options.dither);
     dith.strength = options.dither_strength;
     dith.error_clamp = options.error_clamp;
+        dith.interlace = options.interlace;
 
     // Limit palette span to max_colors
     auto pal_size = std::min(pal.size(), max_colors);

@@ -1104,6 +1104,7 @@ int main(int argc, char* argv[]) {
         dith.method = config->dither_method;
         dith.strength = config->dither_strength;
         dith.error_clamp = config->error_clamp;
+        dith.interlace = config->interlace;
 
         std::println("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
@@ -1244,6 +1245,7 @@ int main(int argc, char* argv[]) {
         dith.method = config->dither_method;
         dith.strength = config->dither_strength;
         dith.error_clamp = config->error_clamp;
+        dith.interlace = config->interlace;
 
         std::println("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
@@ -1437,6 +1439,7 @@ int main(int argc, char* argv[]) {
     dith.method = config->dither_method;
     dith.strength = config->dither_strength;
     dith.error_clamp = config->error_clamp;
+        dith.interlace = config->interlace;
 
     std::println("Dither: {} (strength: {:.2f})",
                  dither_name(dith.method), dith.strength);
