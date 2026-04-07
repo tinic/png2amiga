@@ -1474,7 +1474,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Terminal preview
-    show_terminal_preview(*preview, config->mode, config->interlace);
+    show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
     // Output
     if (!config->output_path.empty()) {
