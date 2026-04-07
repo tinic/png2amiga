@@ -13,7 +13,6 @@ RestartSec=5
 DynamicUser=yes
 ProtectHome=yes
 NoNewPrivileges=yes
-PrivateTmp=yes
 MemoryMax=512M
 
 [Install]

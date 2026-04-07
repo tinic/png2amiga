@@ -53,7 +53,6 @@ def _sandbox(cmd, tmpdir):
         "--bind", tmpdir, tmpdir,
         "--proc", "/proc",
         "--dev", "/dev",
-        "--tmpfs", "/tmp",
         "--chdir", tmpdir,
     ] + cmd
 
