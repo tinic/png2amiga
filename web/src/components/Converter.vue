@@ -78,9 +78,15 @@ const statusChipset = computed(() => {
   return effectiveChipset(options.mode, options.chipset).toUpperCase()
 })
 
-// Update depth when mode changes
+// Update depth when mode changes — only clamp, don't reset
 watch(() => options.mode, (mode, oldMode) => {
-  options.depth = defaultDepth(mode)
+  const max = maxDepth(mode, options.chipset)
+  if (max === 0) {
+    // Fixed depth modes (HAM, EHB) — use their default
+    options.depth = defaultDepth(mode)
+  } else if (options.depth > max) {
+    options.depth = max
+  }
   track('mode-change', { from: oldMode, to: mode })
 })
 
