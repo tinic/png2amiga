@@ -1,5 +1,6 @@
 <script setup>
 import Converter from './components/Converter.vue'
+import { track } from './lib/analytics.js'
 </script>
 
 <template>
@@ -12,7 +13,7 @@ import Converter from './components/Converter.vue'
             <h1 class="m-0 title">png2amiga</h1>
             <p class="m-0 mt-1 text-sm text-color-secondary">
               Convert images to Commodore Amiga OCS/AGA formats with perceptual color matching
-              — <a href="https://github.com/tinic/png2amiga" target="_blank" class="github-link">GitHub <i class="pi pi-github"></i></a>
+              — <a href="https://github.com/tinic/png2amiga" target="_blank" class="github-link" @click="track('github-click')">GitHub <i class="pi pi-github"></i></a>
             </p>
           </div>
         </div>

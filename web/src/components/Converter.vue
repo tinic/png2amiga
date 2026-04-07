@@ -1,7 +1,8 @@
 <script setup>
-import { ref, reactive, watch, nextTick, computed } from 'vue'
+import { ref, reactive, watch, nextTick, computed, onBeforeUnmount } from 'vue'
 import { useWasm } from '../composables/useWasm.js'
 import { useImageUpload } from '../composables/useImageUpload.js'
+import { track } from '../lib/analytics.js'
 import {
   MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, HAM_QUALITY,
   SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
@@ -19,7 +20,7 @@ import ProgressSpinner from 'primevue/progressspinner'
 import Panel from 'primevue/panel'
 
 const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertRaw } = useWasm()
-const { imageBytes, imageName, imageUrl, dragOver, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
+const { imageBytes, imageName, imageUrl, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
 
@@ -48,6 +49,9 @@ const sizeOverride = ref(false)
 const lastWidth = ref(320)
 const lastHeight = ref(160)
 const imageHasAlpha = ref(false)
+const pageLoadTime = Date.now()
+let firstConvertTracked = false
+let exportCount = 0
 
 // Flatten dither methods for grouped Select component
 const groupedDitherOptions = DITHER_METHODS.map(g => ({
@@ -75,12 +79,14 @@ const statusChipset = computed(() => {
 })
 
 // Update depth when mode changes
-watch(() => options.mode, (mode) => {
+watch(() => options.mode, (mode, oldMode) => {
   options.depth = defaultDepth(mode)
+  track('mode-change', { from: oldMode, to: mode })
 })
 
 // When chipset changes, reset mode if current mode isn't available
-watch(() => options.chipset, () => {
+watch(() => options.chipset, (chipset, oldChipset) => {
+  track('chipset-change', { from: oldChipset, to: chipset })
   const modes = modesForChipset(options.chipset)
   if (!modes.find(m => m.value === options.mode)) {
     options.mode = 'lores'
@@ -114,6 +120,29 @@ function buildWasmOptions() {
   return opts
 }
 
+// Track dither changes
+watch(() => options.dither, (to, from) => { track('dither-change', { from, to }) })
+watch(() => options.copper, (enabled) => { track('copper-toggle', { enabled }) })
+
+// Track slider tweaks (debounced)
+let tweakTimer = null
+for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) {
+  watch(() => options[s.key], (val) => {
+    clearTimeout(tweakTimer)
+    tweakTimer = setTimeout(() => track('setting-tweak', { key: s.key, value: val }), 500)
+  })
+}
+
+// Session duration on page unload
+onBeforeUnmount(() => {
+  track('session-duration', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
+})
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    track('session-duration', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
+  })
+}
+
 let debounceTimer = null
 let spinnerTimer = null
 
@@ -123,6 +152,7 @@ function doConvert() {
   clearTimeout(debounceTimer)
   debounceTimer = setTimeout(async () => {
     errorMsg.value = ''
+    const convertStart = performance.now()
 
     // Show spinner only if conversion takes longer than 100ms
     clearTimeout(spinnerTimer)
@@ -135,6 +165,7 @@ function doConvert() {
 
       if (result.error) {
         errorMsg.value = result.error
+        track('error', { type: 'convert', message: result.error, mode: options.mode })
         converting.value = false
         return
       }
@@ -172,9 +203,23 @@ function doConvert() {
       if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} cop/line`
       if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
       resultInfo.value = info
+
+      const convertMs = performance.now() - convertStart
+      track('convert', {
+        mode: options.mode, chipset: options.chipset, dither: options.dither,
+        depth: options.depth, copper: options.copper,
+        ditherStrength: options.ditherStrength, gamma: options.gamma,
+        brightness: options.brightness, contrast: options.contrast,
+        saturation: options.saturation, convertMs: Math.round(convertMs),
+      })
+      if (!firstConvertTracked) {
+        firstConvertTracked = true
+        track('first-convert-time', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
+      }
     } catch (e) {
       clearTimeout(spinnerTimer)
       errorMsg.value = e.message
+      track('error', { type: 'convert-exception', message: e.message })
     }
 
     converting.value = false
@@ -196,6 +241,8 @@ async function downloadPNG() {
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '-amiga.png'
     a.click()
     URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format: 'png', mode: options.mode, exportCount, secsSinceUpload: uploadTimestamp.value ? Math.round((Date.now() - uploadTimestamp.value) / 1000) : undefined })
   } catch (e) { errorMsg.value = e.message }
   converting.value = false
 }
@@ -213,6 +260,8 @@ async function downloadIFF() {
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.iff'
     a.click()
     URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format: 'iff', mode: options.mode, exportCount })
   } catch (e) { errorMsg.value = e.message }
   converting.value = false
 }
@@ -232,6 +281,8 @@ async function downloadViewer() {
     a.download = stem + '.cpp'
     a.click()
     URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format: 'cpp', mode: options.mode, exportCount })
   } catch (e) { errorMsg.value = e.message }
   converting.value = false
 }
@@ -249,6 +300,8 @@ async function downloadRaw() {
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.raw'
     a.click()
     URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format: 'raw', mode: options.mode, exportCount })
   } catch (e) { errorMsg.value = e.message }
   converting.value = false
 }
@@ -276,12 +329,15 @@ async function compileAndDownload(format) {
     a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.' + format
     a.click()
     URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format, mode: options.mode, exportCount })
   } catch (e) { errorMsg.value = e.message }
   converting.value = false
 }
 
 function resetOptions() {
   Object.assign(options, defaultOptions())
+  track('reset')
 }
 
 function dismissHint() {
@@ -290,6 +346,7 @@ function dismissHint() {
 
 async function loadExample(example) {
   dismissHint()
+  track('example', { name: example.name })
   // Reset to defaults, then apply example-specific settings
   Object.assign(options, defaultOptions())
   if (example.opts) Object.assign(options, example.opts)
