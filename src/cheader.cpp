@@ -278,12 +278,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                     const CHeaderOptions& options) {
     auto sym = sanitize_symbol(options.symbol_name);
     auto params = amiga::get_mode_params(mode);
-    auto camg = make_camg(mode, options.interlace);
     auto width = planes.width;
     auto height = planes.height;
     auto depth = planes.depth;
     auto bpr = planes.bytes_per_row;
     auto is_ham = params.is_ham;
+
+    // Detect hires from actual image width (compound modes like ham8-hires
+    // have a lores base mode but 640px data)
+    bool is_hires = params.is_hires || (width > 320);
+    auto camg = make_camg(mode, options.interlace);
+    if (is_hires && !params.is_hires) camg |= 0x8000;
 
     // Palette count (EHB: only 32 base colors)
     auto pal_count = palette.size();
@@ -382,7 +387,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // FMODE=3 needed for sufficient DMA bandwidth:
     // - Hires >4 planes (always)
     // - Lores >6 planes + copper (determined later, but planar layout needed for both)
-    bool use_planar = (params.is_hires && depth > 4) || (depth > 6);
+    bool use_planar = (is_hires && depth > 4) || (depth > 6);
 
     // --- Image data ---
     out += std::format("// {}x{}, {} bitplanes, CAMG 0x{:04X}\n",
@@ -508,7 +513,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // Check if AGA is required but not present
     bool requires_aga = (pal_count > 32) || (depth > 6) ||
-                        (params.is_hires && depth > 4);
+                        (is_hires && depth > 4);
     if (requires_aga) {
         out += "    // Check for AGA: graphics.library v39+ only exists on A1200/A4000\n";
         out += "    if (GfxBase->LibNode.lib_Version < 39) {\n";
@@ -560,13 +565,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // - Lores >6 planes + copper
     // - Hires >4 planes (always, even without copper)
     bool need_fmode3 = ((depth > 6) && has_copper) ||
-                       (params.is_hires && depth > 4);
+                       (is_hires && depth > 4);
 
-    if (params.is_hires && need_fmode3) {
+    if (is_hires && need_fmode3) {
         // FMODE=3 hires: ddfstrt = normal (0x3C) - 8 = 0x34
         out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x0034;\n";
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D4;\n";
-    } else if (params.is_hires) {
+    } else if (is_hires) {
         out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x003C;\n";
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D4;\n";
     } else {
@@ -593,14 +598,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     auto bpu3 = (depth == 8) ? (1 << 4) : 0;    // 8th plane on AGA
     auto bplcon0 = (bpu << 12) | bpu3 | (1 << 9);  // + COLOR
     if (is_ham) bplcon0 |= (1 << 11);           // HAM
-    if (params.is_hires) bplcon0 |= (1 << 15);  // HIRES
+    if (is_hires) bplcon0 |= (1 << 15);  // HIRES
     if (is_lace) bplcon0 |= (1 << 2);           // LACE
     // EHB: no special bit (hardware auto-detects 6 planes without HAM)
 
     out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); "
                        "*cl++ = 0x{:04X};\n", bplcon0);
     out += "    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0;\n";
-    out += "    *cl++ = offsetof(struct Custom, bplcon2); *cl++ = 0x0000;\n";
+    // KILLEHB (bit 9): prevent 6-plane non-EHB from triggering EHB
+    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham) ? 0x0200 : 0x0000;
+    out += std::format("    *cl++ = offsetof(struct Custom, bplcon2); *cl++ = 0x{:04X};\n",
+                       bplcon2);
     out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // BPLCON3 = 0 (bank 0, no LOCT)\n\n";
 
     // Planar modulo: 0 normally, +bpr for interlace (skip other field), -8 for FMODE=3
@@ -693,28 +701,25 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        *cl++ = (line << 8) | 0x01;  // WAIT start of line (before ddfstrt)\n";
         out += "        *cl++ = 0xfffe;\n";
         if (aga_banks) {
-            // AGA: emit changes sorted by bank to minimize BPLCON3 switches.
-            // Two passes: bank 0 (regs 0-31) then bank 1+ (regs 32+).
-            auto num_banks = (pal_count + 31) / 32;
-            out += std::format("        for (int bank = 0; bank < {}; bank++) {{\n",
-                               num_banks);
-            out += "            int any = 0;\n";
-            out += std::format("            for (int s = 0; s < {}; s++) {{\n", cpl);
-            out += std::format("                UWORD reg = {}_copper[y][s].reg;\n", sym);
-            out += "                if (reg == 0xFFFF) continue;\n";
-            out += "                if ((int)(reg / 32) != bank) continue;\n";
-            out += "                if (!any && bank > 0) {\n";
-            out += "                    *cl++ = 0x0106;\n";
-            out += "                    *cl++ = (UWORD)(bank << 13);\n";
-            out += "                }\n";
-            out += "                any = 1;\n";
-            out += std::format("                *cl++ = offsetof(struct Custom, color)"
-                               " + (reg % 32) * 2;\n");
-            out += std::format("                *cl++ = {}_copper[y][s].color;\n", sym);
+            // AGA: changes are pre-sorted by register (bank 0 first).
+            // Track current bank, switch only when crossing a bank boundary,
+            // reset to bank 0 once at the end.
+            out += "        int cur_bank = 0;\n";
+            out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
+            out += std::format("            UWORD reg = {}_copper[y][s].reg;\n", sym);
+            out += "            if (reg == 0xFFFF) continue;\n";
+            out += "            int bank = reg / 32;\n";
+            out += "            if (bank != cur_bank) {\n";
+            out += "                *cl++ = 0x0106;\n";
+            out += "                *cl++ = (UWORD)(bank << 13);\n";
+            out += "                cur_bank = bank;\n";
             out += "            }\n";
-            out += "            if (any && bank > 0) {\n";
-            out += "                *cl++ = 0x0106; *cl++ = 0x0000;\n";
-            out += "            }\n";
+            out += "            *cl++ = offsetof(struct Custom, color)"
+                   " + (reg % 32) * 2;\n";
+            out += std::format("            *cl++ = {}_copper[y][s].color;\n", sym);
+            out += "        }\n";
+            out += "        if (cur_bank != 0) {\n";
+            out += "            *cl++ = 0x0106; *cl++ = 0x0000;\n";
             out += "        }\n";
         } else {
             out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
@@ -752,7 +757,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    USHORT* cl2 = copper2;\n\n";
 
         // Rebuild even field copper list
-        if (params.is_hires) {
+        if (is_hires) {
             auto h_ddf = need_fmode3 ? 0x0034 : 0x003C;
             out += std::format("    *cl2++ = offsetof(struct Custom, ddfstrt); *cl2++ = 0x{:04X};\n", h_ddf);
             out += "    *cl2++ = offsetof(struct Custom, ddfstop); *cl2++ = 0x00D4;\n";
@@ -769,7 +774,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
                            "*cl2++ = 0x{:04X};\n", bplcon0);
         out += "    *cl2++ = offsetof(struct Custom, bplcon1); *cl2++ = 0;\n";
-        out += "    *cl2++ = offsetof(struct Custom, bplcon2); *cl2++ = 0x0000;\n";
+        out += std::format("    *cl2++ = offsetof(struct Custom, bplcon2); *cl2++ = 0x{:04X};\n",
+                           bplcon2);
 
         if (use_planar) {
             // Planar interlace: mod = bpr (skip other field row), -8 for FMODE=3

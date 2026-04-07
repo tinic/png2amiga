@@ -37,10 +37,12 @@ using namespace png2amiga;
 // ---------------------------------------------------------------------------
 
 void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode) {
-    auto mode_w = amiga::default_width(mode);
-    if (planes.width == mode_w) return;
+    // Use 640 if image is wider than 320 (compound hires modes), else mode default
+    auto display_w = (planes.width > 320)
+        ? std::size_t{640} : amiga::default_width(mode);
+    if (planes.width == display_w) return;
     auto old_bpr = planes.bytes_per_row;
-    auto new_bpr = ((mode_w + 15) / 16) * 2;
+    auto new_bpr = ((display_w + 15) / 16) * 2;
     auto depth = planes.depth;
     auto height = planes.height;
     std::vector<std::uint8_t> padded(depth * height * new_bpr, 0);
@@ -58,7 +60,7 @@ void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode) {
         }
     }
     planes.data = std::move(padded);
-    planes.width = mode_w;
+    planes.width = display_w;
     planes.bytes_per_row = new_bpr;
 }
 
@@ -724,7 +726,11 @@ int main(int argc, char* argv[]) {
         target_h = *config->height;
     } else if (config->width) {
         target_w = *config->width;
-        target_h = round_even(static_cast<double>(target_w) * par / src_aspect);
+        // Adjust PAR when width differs from mode default (e.g. ham6 at 640px = hires)
+        auto w_par = (target_w != params.screen_width && params.screen_width > 0)
+            ? par * static_cast<double>(params.screen_width) / static_cast<double>(target_w)
+            : par;
+        target_h = round_even(static_cast<double>(target_w) * w_par / src_aspect);
     } else if (config->height) {
         target_h = *config->height;
         target_w = static_cast<std::size_t>(
@@ -868,13 +874,8 @@ int main(int argc, char* argv[]) {
     auto chipset = effective_chipset(*config);
     std::println("Chipset: {}", chipset == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
 
-    // AGA depth 6 in standard mode = EHB (hardware auto-detect).
-    // Upgrade to 7 to get true 64+ color indexed mode.
-    if (chipset == amiga::Chipset::aga && config->depth == 6 &&
-        !amiga::is_ham(config->mode) && config->mode != amiga::Mode::ehb) {
-        std::println("Note:   depth 6 on AGA triggers EHB, upgrading to 7 (128 colors)");
-        config->depth = 7;
-    }
+    // AGA depth 6 in standard mode: set KILLEHB to prevent hardware
+    // from triggering EHB. This allows a true 64-color indexed palette.
 
     // --- HAM modes ---
     if (amiga::is_ham(config->mode)) {

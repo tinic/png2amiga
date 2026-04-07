@@ -695,13 +695,15 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
-    // Pad or crop bitplanes to mode display width for correct hardware row stride
+    // Pad or crop bitplanes to display width for correct hardware row stride.
+    // Use 640 if image is wider than 320 (compound hires modes), else mode default.
     auto mode = result->mode;
-    auto mode_w = amiga::default_width(mode);
+    auto display_w = (result->planes.width > 320)
+        ? std::size_t{640} : amiga::default_width(mode);
     auto& planes = result->planes;
-    if (planes.width != mode_w) {
+    if (planes.width != display_w) {
         auto old_bpr = planes.bytes_per_row;
-        auto new_bpr = ((mode_w + 15) / 16) * 2;  // word-aligned
+        auto new_bpr = ((display_w + 15) / 16) * 2;  // word-aligned
         auto depth = planes.depth;
         auto height = planes.height;
         std::vector<std::uint8_t> padded(depth * height * new_bpr, 0);
@@ -719,7 +721,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
             }
         }
         planes.data = std::move(padded);
-        planes.width = mode_w;
+        planes.width = display_w;
         planes.bytes_per_row = new_bpr;
     }
 
