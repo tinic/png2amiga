@@ -38,7 +38,7 @@ struct Options {
 
     // HAM encoding
     std::string ham_quality = "optimal"; // fast, optimal
-    int ham_beam = 48;                   // beam width for DP mode (1-256)
+    int ham_beam = 16;                   // beam width for DP mode (1-256)
 
     // Copper palette (per-scanline palette changes)
     bool copper = false;                // use per-scanline copper palettes

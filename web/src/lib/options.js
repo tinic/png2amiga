@@ -114,7 +114,7 @@ export function defaultOptions() {
     height: 0,
     // HAM
     hamQuality: 'optimal',
-    hamBeam: 48,
+    hamBeam: 16,
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',

@@ -509,7 +509,7 @@ async function loadExample(example) {
             <div class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button label="iff" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadIFF"
+              <Button v-if="!options.copper" label="iff" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadIFF"
                 title="Download as IFF ILBM (Deluxe Paint, Personal Paint, WinUAE compatible)." />
               <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
                 title="Download C header with UWORD bitplane arrays and OCS palette for Amiga C projects (VBCC/GCC m68k)." />

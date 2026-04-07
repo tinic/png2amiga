@@ -40,8 +40,12 @@ if(EMSCRIPTEN)
     )
     target_include_directories(png2amiga_wasm PRIVATE src ${CMAKE_SOURCE_DIR}/third_party)
     target_link_libraries(png2amiga_wasm PRIVATE stb)
+    target_compile_options(png2amiga_wasm PRIVATE -O3 -msimd128 -flto)
     target_link_options(png2amiga_wasm PRIVATE
         --bind
+        -O3
+        -flto
+        -msimd128
         -sALLOW_MEMORY_GROWTH=1
         -sEXPORT_ES6=1
         -sMODULARIZE=1

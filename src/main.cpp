@@ -49,7 +49,7 @@ struct Config {
 
     // HAM encoding
     ham::Quality ham_quality = ham::Quality::optimal;
-    std::size_t ham_beam = 48;
+    std::size_t ham_beam = 16;
 
     // Dithering
     dither::Method dither_method = dither::Method::floyd_steinberg;
@@ -1172,6 +1172,13 @@ int main(int argc, char* argv[]) {
 
     // --- Copper palette mode ---
     if (config->copper) {
+        if (!config->output_path.empty() &&
+            (ends_with(config->output_path, ".iff") ||
+             ends_with(config->output_path, ".ilbm"))) {
+            std::println(stderr, "Error: IFF output is not supported with copper mode");
+            return 1;
+        }
+
         auto cpl = (chipset == amiga::Chipset::aga)
             ? std::size_t{8} : std::size_t{4};
         std::println("Mode:   Copper ({} changes/line)", cpl);

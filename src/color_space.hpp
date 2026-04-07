@@ -2,6 +2,7 @@
 
 #include "types.hpp"
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 
@@ -104,14 +105,32 @@ struct OKLab {
     float b{};
 };
 
-constexpr OKLab linear_to_oklab(Color3f c) noexcept {
+// Fast cube root via IEEE 754 bit hack + one Halley iteration.
+// ~6-7 significant digits — full float precision recovery.
+inline float fast_cbrt(float x) noexcept {
+    if (x == 0.0f) return 0.0f;
+    float sign = 1.0f;
+    if (x < 0.0f) { sign = -1.0f; x = -x; }
+
+    auto i = std::bit_cast<std::uint32_t>(x);
+    i = i / 3 + 0x2a508bfe;
+    float y = std::bit_cast<float>(i);
+
+    // Halley iteration (cubically convergent)
+    float y3 = y * y * y;
+    y *= (y3 + 2.0f * x) / (2.0f * y3 + x);
+
+    return sign * y;
+}
+
+inline OKLab linear_to_oklab(Color3f c) noexcept {
     float l = 0.4122214708f * c.r + 0.5363325363f * c.g + 0.0514459929f * c.b;
     float m = 0.2119034982f * c.r + 0.6806995451f * c.g + 0.1073969566f * c.b;
     float s = 0.0883024619f * c.r + 0.2817188376f * c.g + 0.6299787005f * c.b;
 
-    float l_ = std::cbrt(l);
-    float m_ = std::cbrt(m);
-    float s_ = std::cbrt(s);
+    float l_ = fast_cbrt(l);
+    float m_ = fast_cbrt(m);
+    float s_ = fast_cbrt(s);
 
     return {
         0.2104542553f * l_ + 0.7936177850f * m_ - 0.0040720468f * s_,
@@ -137,7 +156,7 @@ constexpr Color3f oklab_to_linear(OKLab lab) noexcept {
 }
 
 // Squared perceptual distance in OKLab space
-constexpr float perceptual_distance_sq(Color3f a, Color3f b) noexcept {
+inline float perceptual_distance_sq(Color3f a, Color3f b) noexcept {
     auto la = linear_to_oklab(a);
     auto lb = linear_to_oklab(b);
     float dL = la.L - lb.L;

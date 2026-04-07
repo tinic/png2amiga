@@ -168,10 +168,6 @@ bool is_error_diffusion(dither::Method m) {
 // start of each scanline it resets to the background color (palette[0]).
 // ===========================================================================
 
-float color_distance_sq(Color3f a, Color3f b) {
-    return color_space::perceptual_distance_sq(a, b);
-}
-
 // ---------------------------------------------------------------------------
 // Generic HAM pixel encoding (greedy)
 //
@@ -200,6 +196,28 @@ constexpr std::uint8_t make_ham_value(std::uint8_t control, std::uint8_t data,
     return static_cast<std::uint8_t>((control << data_bits) | data);
 }
 
+// ---------------------------------------------------------------------------
+// Precomputed data for HAM encoding (computed once, reused for all scanlines)
+// ---------------------------------------------------------------------------
+
+struct HamPrecomp {
+    std::vector<OKLab> palette_lab;         // OKLab for each palette entry
+    std::vector<std::uint8_t> expand_lut;   // expand_to_8bit lookup table [0..2^data_bits)
+    std::size_t data_bits;
+    std::size_t num_data_values;            // 1 << data_bits
+
+    HamPrecomp(std::span<const Color3f> palette, std::size_t db)
+        : data_bits(db), num_data_values(std::size_t{1} << db) {
+        palette_lab.resize(palette.size());
+        for (std::size_t i = 0; i < palette.size(); ++i)
+            palette_lab[i] = color_space::linear_to_oklab(palette[i]);
+
+        expand_lut.resize(num_data_values);
+        for (std::size_t v = 0; v < num_data_values; ++v)
+            expand_lut[v] = expand_to_8bit(static_cast<std::uint8_t>(v), db);
+    }
+};
+
 // Extract control and data from a HAM value (inverse of make_ham_value)
 constexpr std::pair<std::uint8_t, std::uint8_t>
 split_ham_value(std::uint8_t value, std::size_t data_bits) noexcept {
@@ -217,16 +235,23 @@ split_ham_value(std::uint8_t value, std::size_t data_bits) noexcept {
 HamPixelResult encode_ham_pixel(
     SRGBColor prev,
     Color3f target,
-    std::span<const Color3f> base_palette,
-    std::span<const SRGBColor> base_srgb,
-    std::size_t data_bits) {
+    const HamPrecomp& pre,
+    std::span<const SRGBColor> base_srgb) {
+
+    auto data_bits = pre.data_bits;
 
     HamPixelResult best;
     best.error = std::numeric_limits<float>::max();
 
-    // Option 1: SET palette color (control = 00)
-    for (std::size_t i = 0; i < base_palette.size(); ++i) {
-        float err = color_distance_sq(target, base_palette[i]);
+    // Compute target OKLab once for all candidates
+    auto target_lab = color_space::linear_to_oklab(target);
+
+    // Option 1: SET palette color (control = 00) — uses precomputed palette OKLab
+    for (std::size_t i = 0; i < pre.palette_lab.size(); ++i) {
+        float dL = target_lab.L - pre.palette_lab[i].L;
+        float da = target_lab.a - pre.palette_lab[i].a;
+        float db = target_lab.b - pre.palette_lab[i].b;
+        float err = dL * dL + da * da + db * db;
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b00, static_cast<std::uint8_t>(i), data_bits);
@@ -241,9 +266,13 @@ HamPixelResult encode_ham_pixel(
     // Option 2: MODIFY BLUE (control = 01)
     {
         auto b_data = reduce_to_bits(target_srgb.b, data_bits);
-        auto b8 = expand_to_8bit(b_data, data_bits);
+        auto b8 = pre.expand_lut[b_data];
         SRGBColor modified{prev.r, prev.g, b8};
-        float err = color_distance_sq(target, srgb8_to_linear(modified));
+        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
+        float dL = target_lab.L - lab.L;
+        float da = target_lab.a - lab.a;
+        float db = target_lab.b - lab.b;
+        float err = dL * dL + da * da + db * db;
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b01, b_data, data_bits);
@@ -254,9 +283,13 @@ HamPixelResult encode_ham_pixel(
     // Option 3: MODIFY RED (control = 10)
     {
         auto r_data = reduce_to_bits(target_srgb.r, data_bits);
-        auto r8 = expand_to_8bit(r_data, data_bits);
+        auto r8 = pre.expand_lut[r_data];
         SRGBColor modified{r8, prev.g, prev.b};
-        float err = color_distance_sq(target, srgb8_to_linear(modified));
+        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
+        float dL = target_lab.L - lab.L;
+        float da = target_lab.a - lab.a;
+        float db = target_lab.b - lab.b;
+        float err = dL * dL + da * da + db * db;
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b10, r_data, data_bits);
@@ -267,9 +300,13 @@ HamPixelResult encode_ham_pixel(
     // Option 4: MODIFY GREEN (control = 11)
     {
         auto g_data = reduce_to_bits(target_srgb.g, data_bits);
-        auto g8 = expand_to_8bit(g_data, data_bits);
+        auto g8 = pre.expand_lut[g_data];
         SRGBColor modified{prev.r, g8, prev.b};
-        float err = color_distance_sq(target, srgb8_to_linear(modified));
+        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
+        float dL = target_lab.L - lab.L;
+        float da = target_lab.a - lab.a;
+        float db = target_lab.b - lab.b;
+        float err = dL * dL + da * da + db * db;
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b11, g_data, data_bits);
@@ -319,22 +356,26 @@ struct BeamState {
 };
 
 // Expand all possible HAM operations from a given previous color state.
-// Generic for any data_bits.
+// Uses precomputed palette OKLab and expand LUT. Target OKLab is passed in
+// to avoid recomputing it for every beam state at the same pixel.
 void expand_ham(
     SRGBColor prev,
-    Color3f target,
+    OKLab target_lab,
     float prev_error,
     std::uint16_t parent_idx,
-    std::span<const Color3f> base_palette,
+    const HamPrecomp& pre,
     std::span<const SRGBColor> base_srgb,
-    std::size_t data_bits,
     std::vector<BeamState>& candidates) {
 
-    auto num_data_values = std::size_t{1} << data_bits;
+    auto data_bits = pre.data_bits;
+    auto num_data_values = pre.num_data_values;
 
-    // SET palette color (control = 00)
-    for (std::size_t i = 0; i < base_palette.size(); ++i) {
-        float err = color_distance_sq(target, base_palette[i]);
+    // SET palette color (control = 00) — uses precomputed palette OKLab
+    for (std::size_t i = 0; i < pre.palette_lab.size(); ++i) {
+        float dL = target_lab.L - pre.palette_lab[i].L;
+        float da = target_lab.a - pre.palette_lab[i].a;
+        float db = target_lab.b - pre.palette_lab[i].b;
+        float err = dL * dL + da * da + db * db;
         candidates.push_back({
             base_srgb[i],
             prev_error + err,
@@ -343,11 +384,14 @@ void expand_ham(
         });
     }
 
-    // MODIFY BLUE (control = 01)
+    // MODIFY BLUE (control = 01) — uses expand LUT
     for (std::size_t bv = 0; bv < num_data_values; ++bv) {
-        auto b8 = expand_to_8bit(static_cast<std::uint8_t>(bv), data_bits);
-        SRGBColor modified{prev.r, prev.g, b8};
-        float err = color_distance_sq(target, srgb8_to_linear(modified));
+        SRGBColor modified{prev.r, prev.g, pre.expand_lut[bv]};
+        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
+        float dL = target_lab.L - lab.L;
+        float da = target_lab.a - lab.a;
+        float db = target_lab.b - lab.b;
+        float err = dL * dL + da * da + db * db;
         candidates.push_back({
             modified, prev_error + err,
             make_ham_value(0b01, static_cast<std::uint8_t>(bv), data_bits),
@@ -357,9 +401,12 @@ void expand_ham(
 
     // MODIFY RED (control = 10)
     for (std::size_t rv = 0; rv < num_data_values; ++rv) {
-        auto r8 = expand_to_8bit(static_cast<std::uint8_t>(rv), data_bits);
-        SRGBColor modified{r8, prev.g, prev.b};
-        float err = color_distance_sq(target, srgb8_to_linear(modified));
+        SRGBColor modified{pre.expand_lut[rv], prev.g, prev.b};
+        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
+        float dL = target_lab.L - lab.L;
+        float da = target_lab.a - lab.a;
+        float db = target_lab.b - lab.b;
+        float err = dL * dL + da * da + db * db;
         candidates.push_back({
             modified, prev_error + err,
             make_ham_value(0b10, static_cast<std::uint8_t>(rv), data_bits),
@@ -369,9 +416,12 @@ void expand_ham(
 
     // MODIFY GREEN (control = 11)
     for (std::size_t gv = 0; gv < num_data_values; ++gv) {
-        auto g8 = expand_to_8bit(static_cast<std::uint8_t>(gv), data_bits);
-        SRGBColor modified{prev.r, g8, prev.b};
-        float err = color_distance_sq(target, srgb8_to_linear(modified));
+        SRGBColor modified{prev.r, pre.expand_lut[gv], prev.b};
+        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
+        float dL = target_lab.L - lab.L;
+        float da = target_lab.a - lab.a;
+        float db = target_lab.b - lab.b;
+        float err = dL * dL + da * da + db * db;
         candidates.push_back({
             modified, prev_error + err,
             make_ham_value(0b11, static_cast<std::uint8_t>(gv), data_bits),
@@ -412,10 +462,9 @@ struct ScanlineResult {
 ScanlineResult encode_scanline_dp(
     std::span<const Color3f> target_row,
     SRGBColor start_color,
-    std::span<const Color3f> base_palette,
+    const HamPrecomp& pre,
     std::span<const SRGBColor> base_srgb,
-    std::size_t beam_width,
-    std::size_t data_bits) {
+    std::size_t beam_width) {
 
     auto width = target_row.size();
     if (width == 0) return {{}, 0.0f};
@@ -425,8 +474,7 @@ ScanlineResult encode_scanline_dp(
     std::vector<BeamState> current_beam;
 
     // Operations per state: num_base + 3 * 2^data_bits
-    auto num_data_values = std::size_t{1} << data_bits;
-    auto ops_per_state = base_palette.size() + 3 * num_data_values;
+    auto ops_per_state = pre.palette_lab.size() + 3 * pre.num_data_values;
     candidates.reserve(beam_width * ops_per_state);
 
     std::vector<BeamState> prev_beam;
@@ -434,13 +482,14 @@ ScanlineResult encode_scanline_dp(
 
     for (std::size_t x = 0; x < width; ++x) {
         candidates.clear();
-        auto target = target_row[x];
+        // Compute target OKLab once per pixel (not per beam state)
+        auto target_lab = color_space::linear_to_oklab(target_row[x]);
 
         for (std::size_t s = 0; s < prev_beam.size(); ++s) {
             auto parent_idx = static_cast<std::uint16_t>(s);
-            expand_ham(prev_beam[s].color, target,
+            expand_ham(prev_beam[s].color, target_lab,
                        prev_beam[s].cumulative_error, parent_idx,
-                       base_palette, base_srgb, data_bits, candidates);
+                       pre, base_srgb, candidates);
         }
 
         prune_beam(candidates, current_beam, beam_width);
@@ -479,9 +528,8 @@ ScanlineResult encode_scanline_dp(
 ScanlineResult encode_scanline_greedy(
     std::span<const Color3f> target_row,
     SRGBColor start_color,
-    std::span<const Color3f> base_palette,
-    std::span<const SRGBColor> base_srgb,
-    std::size_t data_bits) {
+    const HamPrecomp& pre,
+    std::span<const SRGBColor> base_srgb) {
 
     auto width = target_row.size();
     std::vector<std::uint8_t> values(width);
@@ -490,7 +538,7 @@ ScanlineResult encode_scanline_greedy(
 
     for (std::size_t x = 0; x < width; ++x) {
         HamPixelResult result = encode_ham_pixel(
-            prev, target_row[x], base_palette, base_srgb, data_bits);
+            prev, target_row[x], pre, base_srgb);
 
         values[x] = result.value;
         prev = result.result_color;
@@ -547,9 +595,8 @@ struct ScanlineResultWithColor {
 ScanlineResultWithColor encode_scanline_greedy_dithered(
     std::span<const Color3f> target_row,
     SRGBColor start_color,
-    std::span<const Color3f> base_palette,
+    const HamPrecomp& pre,
     std::span<const SRGBColor> base_srgb,
-    std::size_t data_bits,
     std::span<const DiffusionEntry> kernel,
     float strength,
     float error_clamp_val,
@@ -584,7 +631,7 @@ ScanlineResultWithColor encode_scanline_greedy_dithered(
 
         // Run HAM pixel encoder
         HamPixelResult result = encode_ham_pixel(
-            prev, adjusted_linear, base_palette, base_srgb, data_bits);
+            prev, adjusted_linear, pre, base_srgb);
 
         values[x] = result.value;
         output_colors[x] = result.result_color;
@@ -634,10 +681,9 @@ ScanlineResultWithColor encode_scanline_greedy_dithered(
 ScanlineResult encode_scanline_dp_dithered(
     std::span<const Color3f> target_row,
     SRGBColor start_color,
-    std::span<const Color3f> base_palette,
+    const HamPrecomp& pre,
     std::span<const SRGBColor> base_srgb,
     std::size_t beam_width,
-    std::size_t data_bits,
     std::span<const DiffusionEntry> kernel,
     float strength,
     float error_clamp_val,
@@ -665,8 +711,7 @@ ScanlineResult encode_scanline_dp_dithered(
 
     // Run DP on the adjusted targets
     auto result = encode_scanline_dp(
-        adjusted_row, start_color, base_palette, base_srgb,
-        beam_width, data_bits);
+        adjusted_row, start_color, pre, base_srgb, beam_width);
 
     // Post-pass: compute actual output colors and propagate errors
     // to future scanlines
@@ -674,7 +719,7 @@ ScanlineResult encode_scanline_dp_dithered(
 
     for (std::size_t x = 0; x < width; ++x) {
         auto actual_srgb = decode_ham_value(
-            result.values[x], prev, base_srgb, data_bits);
+            result.values[x], prev, base_srgb, pre.data_bits);
         prev = actual_srgb;
 
         // Compute error: adjusted target vs actual output (in OKLab)
@@ -738,8 +783,10 @@ Result<HamResult> encode_ham_generic(
     for (std::size_t i = 0; i < base_pal.size(); ++i) {
         base_srgb[i] = linear_to_srgb8(base_pal.colors[i]);
     }
-    std::span<const Color3f> pal_span{base_pal.colors};
     std::span<const SRGBColor> srgb_span{base_srgb};
+
+    // Precompute palette OKLab + expand LUT (used by all scanline encoders)
+    HamPrecomp pre{std::span<const Color3f>{base_pal.colors}, data_bits};
 
     // Encode all pixels
     std::vector<std::uint8_t> ham_values(w * h);
@@ -783,11 +830,11 @@ Result<HamResult> encode_ham_generic(
 
             if (opts.quality == Quality::optimal) {
                 scanline = encode_scanline_dp(
-                    dithered_span, start, pal_span, srgb_span,
-                    opts.beam_width, data_bits);
+                    dithered_span, start, pre, srgb_span,
+                    opts.beam_width);
             } else {
                 scanline = encode_scanline_greedy(
-                    dithered_span, start, pal_span, srgb_span, data_bits);
+                    dithered_span, start, pre, srgb_span);
             }
 
             std::copy(scanline.values.begin(), scanline.values.end(),
@@ -807,8 +854,8 @@ Result<HamResult> encode_ham_generic(
 
             if (opts.quality == Quality::optimal) {
                 auto scanline = encode_scanline_dp_dithered(
-                    row, start, pal_span, srgb_span,
-                    opts.beam_width, data_bits,
+                    row, start, pre, srgb_span,
+                    opts.beam_width,
                     kernel, opts.dither_strength, opts.error_clamp,
                     error_buf, y, h);
 
@@ -817,7 +864,7 @@ Result<HamResult> encode_ham_generic(
                 total_error += scanline.error;
             } else {
                 auto scanline = encode_scanline_greedy_dithered(
-                    row, start, pal_span, srgb_span, data_bits,
+                    row, start, pre, srgb_span,
                     kernel, opts.dither_strength, opts.error_clamp,
                     error_buf, y, h, true /*serpentine*/);
 
@@ -836,11 +883,11 @@ Result<HamResult> encode_ham_generic(
 
             if (opts.quality == Quality::optimal) {
                 scanline = encode_scanline_dp(
-                    row, start, pal_span, srgb_span,
-                    opts.beam_width, data_bits);
+                    row, start, pre, srgb_span,
+                    opts.beam_width);
             } else {
                 scanline = encode_scanline_greedy(
-                    row, start, pal_span, srgb_span, data_bits);
+                    row, start, pre, srgb_span);
             }
 
             std::copy(scanline.values.begin(), scanline.values.end(),
@@ -907,12 +954,15 @@ std::vector<HamSwap> find_ham_swaps(
         float worst_pixel_error = 0.0f;
         Color3f worst_pixel_target{};
 
+        // Build precomp for current palette state
+        HamPrecomp swap_pre{
+            std::span<const Color3f>{current_pal.data(), num_base_colors},
+            data_bits};
+
         for (std::size_t x = 0; x < w; ++x) {
             auto result = encode_ham_pixel(
-                prev, row[x],
-                std::span<const Color3f>{current_pal.data(), num_base_colors},
-                std::span<const SRGBColor>{pal_srgb},
-                data_bits);
+                prev, row[x], swap_pre,
+                std::span<const SRGBColor>{pal_srgb});
             auto [control, data_idx] = split_ham_value(result.value, data_bits);
             if (control == 0) {
                 auto idx = data_idx;
@@ -1022,23 +1072,27 @@ Result<HamResult> encode_ham_copper_generic(
         all_changes[y] = std::move(line_changes);
         scanline_palettes[y] = current_pal;
 
-        // Precompute sRGB
+        // Precompute sRGB + OKLab for this scanline's palette
         std::vector<SRGBColor> pal_srgb(num_base_colors);
         for (std::size_t i = 0; i < num_base_colors; ++i) {
             pal_srgb[i] = linear_to_srgb8(current_pal[i]);
         }
-        std::span<const Color3f> pal_span{current_pal.data(), num_base_colors};
         std::span<const SRGBColor> srgb_span{pal_srgb};
         SRGBColor start = pal_srgb.empty()
             ? SRGBColor{0, 0, 0} : pal_srgb[0];
+
+        // Rebuild precomp for this scanline's (potentially modified) palette
+        HamPrecomp line_pre{
+            std::span<const Color3f>{current_pal.data(), num_base_colors},
+            data_bits};
 
         // Encode scanline
         if (use_error_diffusion) {
             // Error diffusion with cross-scanline propagation
             if (opts.quality == Quality::optimal) {
                 auto scanline = encode_scanline_dp_dithered(
-                    row, start, pal_span, srgb_span,
-                    opts.beam_width, data_bits,
+                    row, start, line_pre, srgb_span,
+                    opts.beam_width,
                     kernel, opts.dither_strength, opts.error_clamp,
                     error_buf, y, h);
                 std::copy(scanline.values.begin(), scanline.values.end(),
@@ -1046,7 +1100,7 @@ Result<HamResult> encode_ham_copper_generic(
                 total_error += scanline.error;
             } else {
                 auto scanline = encode_scanline_greedy_dithered(
-                    row, start, pal_span, srgb_span, data_bits,
+                    row, start, line_pre, srgb_span,
                     kernel, opts.dither_strength, opts.error_clamp,
                     error_buf, y, h, true);
                 std::copy(scanline.values.begin(), scanline.values.end(),
@@ -1072,20 +1126,18 @@ Result<HamResult> encode_ham_copper_generic(
             }
             std::span<const Color3f> dr{dithered_row};
             ScanlineResult scanline = (opts.quality == Quality::optimal)
-                ? encode_scanline_dp(dr, start, pal_span, srgb_span,
-                                     opts.beam_width, data_bits)
-                : encode_scanline_greedy(dr, start, pal_span, srgb_span,
-                                         data_bits);
+                ? encode_scanline_dp(dr, start, line_pre, srgb_span,
+                                     opts.beam_width)
+                : encode_scanline_greedy(dr, start, line_pre, srgb_span);
             std::copy(scanline.values.begin(), scanline.values.end(),
                       ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
             total_error += scanline.error;
         } else {
             // No dithering
             ScanlineResult scanline = (opts.quality == Quality::optimal)
-                ? encode_scanline_dp(row, start, pal_span, srgb_span,
-                                     opts.beam_width, data_bits)
-                : encode_scanline_greedy(row, start, pal_span, srgb_span,
-                                         data_bits);
+                ? encode_scanline_dp(row, start, line_pre, srgb_span,
+                                     opts.beam_width)
+                : encode_scanline_greedy(row, start, line_pre, srgb_span);
             std::copy(scanline.values.begin(), scanline.values.end(),
                       ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
             total_error += scanline.error;
