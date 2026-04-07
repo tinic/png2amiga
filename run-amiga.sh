@@ -41,13 +41,16 @@ echo "Creating ADF: $ADF"
 "$EXE2ADF" -i "$INPUT" -a "$ADF" -l "png2amiga"
 
 MODEL="${2:-A1200}"
-if [ "$MODEL" = "a500" ] || [ "$MODEL" = "A500" ]; then
-    MODEL="A500"
-elif [ "$MODEL" = "a1200" ] || [ "$MODEL" = "A1200" ]; then
-    MODEL="A1200"
-fi
+NTSC=""
+for arg in "${@:2}"; do
+    case "$arg" in
+        a500|A500) MODEL="A500" ;;
+        a1200|A1200) MODEL="A1200" ;;
+        ntsc|NTSC) NTSC="--ntsc_mode=1" ;;
+    esac
+done
 
-echo "Launching fs-uae ($MODEL)..."
+echo "Launching fs-uae ($MODEL${NTSC:+ NTSC})..."
 "$FSUAE" \
     --floppy_drive_0="$ADF" \
     --amiga_model="$MODEL" \
@@ -55,6 +58,7 @@ echo "Launching fs-uae ($MODEL)..."
     --fast_memory=8192 \
     --window_width=800 \
     --window_height=600 \
+    $NTSC \
     2>/dev/null &
 
-echo "fs-uae started ($MODEL). Press left mouse button to exit."
+echo "fs-uae started ($MODEL${NTSC:+ NTSC}). Press left mouse button to exit."
