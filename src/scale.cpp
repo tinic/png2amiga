@@ -44,7 +44,7 @@ Image scale_horizontal(const Image& src, std::size_t dst_width,
 
     float ratio = static_cast<float>(src_w) / static_cast<float>(dst_width);
     // Widen kernel when downscaling to integrate all source pixels
-    float filter_scale = std::max(1.0f, ratio);
+    float filter_scale = std::max(1.0f, ratio * 0.75f);
     int support = static_cast<int>(std::ceil(2.0f * filter_scale));
 
     for (std::size_t y = 0; y < src_h; ++y) {
@@ -82,7 +82,7 @@ Image scale_vertical(const Image& src, std::size_t dst_height,
     Image dst(src_w, dst_height);
 
     float ratio = static_cast<float>(src_h) / static_cast<float>(dst_height);
-    float filter_scale = std::max(1.0f, ratio);
+    float filter_scale = std::max(1.0f, ratio * 0.75f);
     int support = static_cast<int>(std::ceil(2.0f * filter_scale));
 
     for (std::size_t y = 0; y < dst_height; ++y) {
