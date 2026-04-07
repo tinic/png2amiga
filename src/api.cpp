@@ -33,9 +33,11 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "lores-lace") return amiga::Mode::lores_interlace;
     if (s == "hires") return amiga::Mode::hires;
     if (s == "hires-lace") return amiga::Mode::hires_interlace;
-    if (s == "ham6") return amiga::Mode::ham6;
-    if (s == "ham8") return amiga::Mode::ham8;
-    if (s == "ehb") return amiga::Mode::ehb;
+    if (s == "ham6" || s == "ham6-lace" || s == "ham6-hires" || s == "ham6-hires-lace")
+        return amiga::Mode::ham6;
+    if (s == "ham8" || s == "ham8-lace" || s == "ham8-hires" || s == "ham8-hires-lace")
+        return amiga::Mode::ham8;
+    if (s == "ehb" || s == "ehb-lace") return amiga::Mode::ehb;
     return amiga::Mode::lores;
 }
 
@@ -303,9 +305,23 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     return {w, h};
 }
 
+// Decompose compound mode strings (e.g. "ham6-hires-lace") into base mode
+// + width/interlace overrides. Mutates a local copy of options.
+Options decompose_mode_options(const Options& opts) {
+    auto o = opts;
+    auto& s = o.mode;
+    bool has_hires = s.find("hires") != std::string::npos;
+    bool has_lace = s.size() > 4 && s.find("-lace") != std::string::npos;
+    // Only override if user didn't already set these
+    if (has_hires && o.width == 0) o.width = 640;
+    if (has_lace) o.interlace = true;
+    return o;
+}
+
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     std::size_t input_size,
-                                    const Options& options) {
+                                    const Options& orig_options) {
+    auto options = decompose_mode_options(orig_options);
     auto mode = parse_mode(options.mode);
 
     // We need source dimensions to compute the target size.

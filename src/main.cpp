@@ -118,8 +118,11 @@ void print_usage() {
         "Usage: png2amiga [options] input.[png|jpg] [output.png|output.iff|output.h]\n"
         "\n"
         "Modes:\n"
-        "  --mode lores|lores-lace|hires|hires-lace|ham6|ham8|ehb\n"
-        "                                  Graphics mode (default: lores)\n"
+        "  --mode <mode>                   Graphics mode (default: lores)\n"
+        "         lores, lores-lace, hires, hires-lace,\n"
+        "         ham6, ham6-lace, ham6-hires, ham6-hires-lace,\n"
+        "         ham8, ham8-lace, ham8-hires, ham8-hires-lace,\n"
+        "         ehb, ehb-lace\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
         "  --interlace                     Set LACE bit in CAMG\n"
@@ -233,15 +236,22 @@ Result<Config> parse_args(int argc, char* argv[]) {
             auto val = std::string_view(argv[++i]);
 
             if (arg == "--mode") {
-                if (val == "lores") config.mode = amiga::Mode::lores;
-                else if (val == "lores-lace") config.mode = amiga::Mode::lores_interlace;
-                else if (val == "hires") config.mode = amiga::Mode::hires;
-                else if (val == "hires-lace") config.mode = amiga::Mode::hires_interlace;
-                else if (val == "ham6") config.mode = amiga::Mode::ham6;
-                else if (val == "ham8") config.mode = amiga::Mode::ham8;
-                else if (val == "ehb") config.mode = amiga::Mode::ehb;
+                auto v = std::string(val);
+                // Decompose compound modes: extract base mode + hires/lace flags
+                bool mode_hires = v.find("hires") != std::string::npos;
+                bool mode_lace = v.size() > 4 && v.find("-lace") != std::string::npos;
+                if (v == "lores") config.mode = amiga::Mode::lores;
+                else if (v == "lores-lace") config.mode = amiga::Mode::lores_interlace;
+                else if (v == "hires") config.mode = amiga::Mode::hires;
+                else if (v == "hires-lace") config.mode = amiga::Mode::hires_interlace;
+                else if (v.starts_with("ham6")) config.mode = amiga::Mode::ham6;
+                else if (v.starts_with("ham8")) config.mode = amiga::Mode::ham8;
+                else if (v.starts_with("ehb")) config.mode = amiga::Mode::ehb;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "Unknown mode: " + std::string(val)}};
+                    "Unknown mode: " + v}};
+                // Apply compound mode overrides
+                if (mode_hires && !config.width) config.width = 640;
+                if (mode_lace) config.interlace = true;
             }
             else if (arg == "--depth") {
                 config.depth = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
@@ -705,6 +715,7 @@ int main(int argc, char* argv[]) {
     // hires: 0.5 (tall pixels), lores_interlace: 2.0 (wide pixels)
     auto par = static_cast<double>(params.preview_scale_x)
              / static_cast<double>(params.preview_scale_y);
+    if (config->interlace && !params.is_interlaced) par *= 2.0;
 
     std::size_t target_w, target_h;
     if (config->width && config->height) {
