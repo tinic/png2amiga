@@ -538,6 +538,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
     if (has_copper) {
         cop_size += height * options.copper_changes_per_line * 8 + height * 4;
+        if (pal_count > 32) {
+            // Extra space for BPLCON3 bank switches + reset per line
+            cop_size += height * 8;
+        }
     }
     cop_size += 64;  // padding for blank-below, end markers, etc.
 
@@ -682,18 +686,40 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Copper changes per scanline
     if (has_copper) {
         auto cpl = options.copper_changes_per_line;
+        bool aga_banks = (pal_count > 32);
         out += "    // Per-scanline copper palette changes\n";
         out += std::format("    for (int y = 0; y < {}; y++) {{\n", height);
         out += std::format("        USHORT line = y + {};\n", y_start);
         out += "        *cl++ = (line << 8) | 0x01;  // WAIT start of line (before ddfstrt)\n";
         out += "        *cl++ = 0xfffe;\n";
+        if (aga_banks) {
+            // AGA: group changes by bank, add BPLCON3 switches
+            out += std::format("        int cur_bank = 0;\n");
+        }
         out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
         out += std::format("            UWORD reg = {}_copper[y][s].reg;\n", sym);
         out += "            if (reg == 0xFFFF) continue;\n";
         out += std::format("            UWORD col = {}_copper[y][s].color;\n", sym);
-        out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
+        if (aga_banks) {
+            out += "            int bank = reg / 32;\n";
+            out += "            if (bank != cur_bank) {\n";
+            out += "                *cl++ = 0x0106;  // BPLCON3\n";
+            out += "                *cl++ = (UWORD)(bank << 13);\n";
+            out += "                cur_bank = bank;\n";
+            out += "            }\n";
+            out += "            *cl++ = offsetof(struct Custom, color) + (reg % 32) * 2;\n";
+        } else {
+            out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
+        }
         out += "            *cl++ = col;\n";
         out += "        }\n";
+        if (aga_banks) {
+            // Reset to bank 0 if we switched
+            out += "        if (cur_bank != 0) {\n";
+            out += "            *cl++ = 0x0106; *cl++ = 0x0000;\n";
+            out += "            cur_bank = 0;\n";
+            out += "        }\n";
+        }
         out += "    }\n\n";
     }
 
