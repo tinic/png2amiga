@@ -131,11 +131,7 @@ watch(sizeOverride, (on) => {
 function buildWasmOptions() {
   const opts = { ...options }
   if (opts.alphaDither === 'none') opts.alphaDither = ''
-  // Decompose compound modes (e.g. 'ham6-hires-lace' -> mode='ham6', width=640, interlace)
-  const dec = decomposeMode(opts.mode)
-  opts.mode = dec.mode
-  if (dec.width) opts.width = dec.width
-  if (dec.interlace) opts.interlace = true
+  // Pass compound mode string as-is — C++ decompose_mode_options handles it
   return opts
 }
 
