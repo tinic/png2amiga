@@ -550,12 +550,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    return cl;\n";
     out += "}\n\n";
 
-    if (options.fade_in && !is_ham) {
+    if (options.fade_in) {
         out += "// Scale a 12-bit OCS color (0x0RGB) by step/15.\n";
         out += "static inline UWORD fadeColor(UWORD c, int step) {\n";
         out += "    return (UWORD)((((c>>8)&0xF)*step/15<<8) | "
                "(((c>>4)&0xF)*step/15<<4) | ((c&0xF)*step/15));\n";
-        out += "}\n\n";
+        out += "}\n";
+        // AGA: during 16-step fade, 12-bit precision is visually identical
+        // to 24-bit. Full LOCT precision is restored on the final step.
+        out += "\n";
     }
 
     // --- main() ---
@@ -736,7 +739,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     // Fade-in: save cl position, loop 16 steps rebuilding from here
-    bool do_fade = options.fade_in && !is_ham && !is_lace;
+    bool do_fade = options.fade_in && !is_lace;
     if (do_fade) {
         out += "    USHORT* cl_pal = cl;  // save position for fade rewind\n";
         out += "    for (int fade_step = 0; fade_step <= 15; fade_step++) {\n";
@@ -796,6 +799,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
         out += "    }\n";
         if (options.aga) {
+            // During fade: skip LOCT (12-bit precision is fine for a 16-step fade)
+            // On final step or no-fade: write full 24-bit lo nibbles
             if (do_fade) out += "    if (fade_step == 15) {\n";
             out += "    *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
             out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
@@ -1077,6 +1082,63 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // Wait for left mouse button
     out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
+
+    // Fade-out: reverse 15→0
+    if (do_fade) {
+        out += "    // Fade-out\n";
+        out += "    for (int fade_step = 14; fade_step >= 0; fade_step--) {\n";
+        out += "    cl = cl_pal;\n";
+        // Emit a minimal palette-only fade (no copper changes needed for fadeout)
+        if (pal_count <= 32) {
+            out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+            out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+            out += std::format("        *cl++ = fadeColor({}_palette[i], fade_step);\n", sym);
+            out += "    }\n";
+        } else {
+            auto num_banks = (pal_count + 31) / 32;
+            for (std::size_t bank = 0; bank < static_cast<std::size_t>(num_banks); ++bank) {
+                auto base = bank * 32;
+                auto count = std::min(std::size_t{32}, pal_count - base);
+                auto bank_bits = static_cast<unsigned>(bank << 13);
+                out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};\n", bank_bits);
+                out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
+                out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+                out += std::format("        *cl++ = fadeColor({}_palette[{} + i], fade_step);\n", sym, base);
+                out += "    }\n";
+            }
+            out += "    *cl++ = 0x0106; *cl++ = 0x0000;\n";
+        }
+        if (has_copper) {
+            // Fade copper changes too
+            out += std::format("    for (int y = 1; y < {}; y++) {{\n", height);
+            out += std::format("        USHORT line = y - 1 + {};\n", y_start);
+            out += "        if (line == 256) { *cl++ = 0xFFDF; *cl++ = 0xFFFE; }\n";
+            out += "        *cl++ = ((line & 0xFF) << 8) | 0xDF;\n";
+            out += "        *cl++ = 0xfffe;\n";
+            out += std::format("        for (int s = 0; s < {}; s++) {{\n",
+                               options.copper_changes_per_line);
+            out += std::format("            UWORD reg = {}_copper[y][s].reg;\n", sym);
+            out += "            if (reg == 0xFFFF) continue;\n";
+            out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
+            out += std::format("            *cl++ = fadeColor({}_copper[y][s].color, fade_step);\n", sym);
+            out += "        }\n";
+            out += "    }\n";
+        }
+        // Blank + end
+        {
+            auto last_line = y_start + static_cast<int>(height);
+            if (last_line >= 256 && !has_copper) {
+                out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
+            }
+            out += std::format("    *cl++ = ({}<<8)|1; *cl++ = 0xfffe;\n",
+                               last_line >= 256 ? (last_line & 0xFF) : last_line);
+            out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); *cl++ = {};\n",
+                               blank_expr);
+        }
+        out += "    *cl++ = 0xffff; *cl++ = 0xfffe;\n";
+        out += "    WaitVbl();\n";
+        out += "    }\n\n";
+    }
 
     // Cleanup
     if (is_lace) {
