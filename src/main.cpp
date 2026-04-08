@@ -1123,10 +1123,171 @@ int main(int argc, char* argv[]) {
 
     // --- EHB mode ---
     if (config->mode == amiga::Mode::ehb) {
-        std::println("Mode:   EHB (Extra Half-Brite)");
-
         // EHB is always 6 bitplanes, 32 base + 32 half-brightness
         auto ehb_depth = std::size_t{6};
+
+        // --- EHB with copper ---
+        if (config->copper) {
+            auto cpl = copper::max_changes_per_line(5, false, config->hires, chipset);
+            std::println("Mode:   EHB + Copper ({} changes/line)", cpl);
+
+            dither::Settings dith;
+            dith.method = config->dither_method;
+            dith.strength = config->dither_strength;
+            dith.error_clamp = config->error_clamp;
+
+            std::println("Dither: {} (strength: {:.2f})",
+                         dither_name(dith.method), dith.strength);
+
+            // Copper encoder optimizes 32 base colors per scanline (depth=5)
+            auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
+                false, config->hires, static_cast<std::size_t>(config->copper_changes));
+            if (!copper_result) {
+                std::println(stderr, "Copper encode error: {}",
+                             copper_result.error().message);
+                return 1;
+            }
+
+            // Re-dither each scanline against its 64-color EHB palette
+            auto w = image->width();
+            auto h = image->height();
+            std::vector<std::uint8_t> all_indices(w * h);
+            float total_error = 0.0f;
+
+            bool use_ordered = dither::is_ordered(dith.method) &&
+                               dith.method != dither::Method::none;
+            bool use_diffusion = !use_ordered &&
+                                 dith.method != dither::Method::none;
+            std::vector<color_space::OKLab> err_buf;
+            if (use_diffusion) err_buf.resize(w * h);
+
+            for (std::size_t y = 0; y < h; ++y) {
+                auto& base32 = copper_result->scanline_palettes[y];
+                Palette bp;
+                bp.colors.assign(base32.begin(), base32.end());
+                auto ehb64 = palette::make_ehb_palette(bp.colors);
+
+                auto row = image->row(y);
+                std::vector<color_space::OKLab> pal_lab(ehb64.colors.size());
+                for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
+                    pal_lab[i] = color_space::linear_to_oklab(ehb64.colors[i]);
+
+                for (std::size_t x = 0; x < w; ++x) {
+                    auto pixel_lab = color_space::linear_to_oklab(row[x]);
+                    if (!err_buf.empty()) {
+                        auto& e = err_buf[y * w + x];
+                        pixel_lab.L += e.L; pixel_lab.a += e.a; pixel_lab.b += e.b;
+                    }
+                    if (use_ordered) {
+                        float thr = dither::ordered_threshold(dith.method, x, y);
+                        pixel_lab.L += thr * dith.strength * 0.15f;
+                        pixel_lab.a += thr * dith.strength * 0.03f;
+                        pixel_lab.b += thr * dith.strength * 0.03f;
+                    }
+                    float best_d = std::numeric_limits<float>::max();
+                    std::uint8_t best_k = 0;
+                    for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                        float dL = pixel_lab.L - pal_lab[k].L;
+                        float da = pixel_lab.a - pal_lab[k].a;
+                        float db = pixel_lab.b - pal_lab[k].b;
+                        float d = dL * dL + da * da + db * db;
+                        if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
+                    }
+                    all_indices[y * w + x] = best_k;
+                    total_error += best_d;
+                    if (use_diffusion) {
+                        auto& cl = pal_lab[best_k];
+                        color_space::OKLab qe = {
+                            (pixel_lab.L - cl.L) * dith.strength,
+                            (pixel_lab.a - cl.a) * dith.strength,
+                            (pixel_lab.b - cl.b) * dith.strength};
+                        auto sp = [&](std::size_t nx, std::size_t ny, float wt) {
+                            if (nx < w && ny < h) {
+                                auto& e = err_buf[ny * w + nx];
+                                e.L += qe.L * wt; e.a += qe.a * wt; e.b += qe.b * wt;
+                            }
+                        };
+                        sp(x+1, y, 7.f/16); if (x>0) sp(x-1, y+1, 3.f/16);
+                        sp(x, y+1, 5.f/16); sp(x+1, y+1, 1.f/16);
+                    }
+                }
+            }
+
+            if (has_transparency) {
+                for (std::size_t i = 0; i < transparency_mask.size() && i < all_indices.size(); ++i)
+                    if (transparency_mask[i]) all_indices[i] = 0;
+            }
+
+            auto planes = bitplane::encode(all_indices, w, h, ehb_depth);
+            if (!planes) {
+                std::println(stderr, "Encode error: {}", planes.error().message);
+                return 1;
+            }
+
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {} changes/line, error: {:.4f}",
+                         planes->depth, planes->total_bytes(),
+                         copper_result->num_colors, copper_result->changes_per_line,
+                         total_error);
+
+            // Per-scanline preview
+            Image rendered(w, h);
+            for (std::size_t y = 0; y < h; ++y) {
+                auto& base32 = copper_result->scanline_palettes[y];
+                Palette bp;
+                bp.colors.assign(base32.begin(), base32.end());
+                auto ehb64 = palette::make_ehb_palette(bp.colors);
+                for (std::size_t x = 0; x < w; ++x) {
+                    auto idx = all_indices[y * w + x];
+                    if (idx < ehb64.colors.size())
+                        rendered[x, y] = ehb64.colors[idx];
+                }
+            }
+
+            show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
+
+            // Use base palette for CMAP
+            std::vector<Color3f> cmap_palette = copper_result->base_palette;
+
+            if (!config->output_path.empty()) {
+                if (ends_with(config->output_path, ".png")) {
+                    auto result = save_preview(config->output_path, rendered,
+                                               has_transparency, transparency_mask,
+                                               config->mode, config->hires, config->interlace);
+                    if (!result) {
+                        std::println(stderr, "PNG write error: {}", result.error().message);
+                        return 1;
+                    }
+                    std::println("PNG:    {}", config->output_path);
+                } else if (ends_with(config->output_path, ".cpp") ||
+                           ends_with(config->output_path, ".c")) {
+                    cheader::CHeaderOptions ch_opts;
+                    ch_opts.symbol_name = config->symbol_name.empty()
+                        ? derive_symbol_name(config->output_path)
+                        : config->symbol_name;
+                    ch_opts.hires = config->hires;
+                    ch_opts.interlace = config->interlace;
+                    ch_opts.copper_changes = &copper_result->scanline_changes;
+                    ch_opts.copper_changes_per_line = copper_result->changes_per_line;
+
+                    pad_planes_to_mode(planes.value(), config->mode, config->hires);
+                    auto result = cheader::save_viewer(
+                        config->output_path, planes.value(),
+                        cmap_palette, config->mode, ch_opts);
+                    if (!result) {
+                        std::println(stderr, "Viewer write error: {}", result.error().message);
+                        return 1;
+                    }
+                    std::println("Viewer: {}", config->output_path);
+                } else {
+                    std::println(stderr, "EHB copper: only .png and .cpp output supported");
+                    return 1;
+                }
+            }
+            return 0;
+        }
+
+        // --- EHB without copper ---
+        std::println("Mode:   EHB (Extra Half-Brite)");
 
         Palette base_pal;
         if (!config->palette_file.empty()) {

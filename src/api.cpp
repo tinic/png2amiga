@@ -482,6 +482,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             std::vector<std::uint8_t> all_indices(w * h);
             float total_error = 0.0f;
 
+            bool use_ordered = dither::is_ordered(dith.method) &&
+                               dith.method != dither::Method::none;
+            bool use_diffusion = !use_ordered &&
+                                 dith.method != dither::Method::none;
+            // Error buffer for diffusion (OKLab per pixel)
+            std::vector<color_space::OKLab> err_buf;
+            if (use_diffusion) err_buf.resize(w * h);
+
             for (std::size_t y = 0; y < h; ++y) {
                 // Get this scanline's base palette from copper
                 auto& base32 = copper_result->scanline_palettes[y];
@@ -489,8 +497,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 bp.colors.assign(base32.begin(), base32.end());
                 auto ehb64 = palette::make_ehb_palette(bp.colors);
 
-                // Dither this row against all 64 colors with correct Y
-                // (can't use dither::apply on a 1-row image — Y would always be 0)
+                // Dither this row against all 64 EHB colors
                 auto row = image->row(y);
                 std::vector<color_space::OKLab> pal_lab(ehb64.colors.size());
                 for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
@@ -499,8 +506,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (std::size_t x = 0; x < w; ++x) {
                     auto pixel_lab = color_space::linear_to_oklab(row[x]);
 
-                    // Apply ordered dither threshold with correct (x, y)
-                    if (dither::is_ordered(dith.method) && dith.method != dither::Method::none) {
+                    // Add accumulated error from previous rows
+                    if (!err_buf.empty()) {
+                        auto& e = err_buf[y * w + x];
+                        pixel_lab.L += e.L;
+                        pixel_lab.a += e.a;
+                        pixel_lab.b += e.b;
+                    }
+
+                    // Ordered dither: apply threshold with correct (x, y)
+                    if (use_ordered) {
                         float thr = dither::ordered_threshold(dith.method, x, y);
                         pixel_lab.L += thr * dith.strength * 0.15f;
                         pixel_lab.a += thr * dith.strength * 0.03f;
@@ -519,6 +534,27 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     }
                     all_indices[y * w + x] = best_k;
                     total_error += best_d;
+
+                    // Error diffusion: propagate to neighbors
+                    if (use_diffusion) {
+                        auto chosen_lab = pal_lab[best_k];
+                        color_space::OKLab qerr = {
+                            (pixel_lab.L - chosen_lab.L) * dith.strength,
+                            (pixel_lab.a - chosen_lab.a) * dith.strength,
+                            (pixel_lab.b - chosen_lab.b) * dith.strength,
+                        };
+                        // Floyd-Steinberg weights: right 7/16, below-left 3/16, below 5/16, below-right 1/16
+                        auto spread = [&](std::size_t nx, std::size_t ny, float wt) {
+                            if (nx < image->width() && ny < h) {
+                                auto& e = err_buf[ny * image->width() + nx];
+                                e.L += qerr.L * wt; e.a += qerr.a * wt; e.b += qerr.b * wt;
+                            }
+                        };
+                        spread(x + 1, y, 7.0f / 16.0f);
+                        if (x > 0) spread(x - 1, y + 1, 3.0f / 16.0f);
+                        spread(x, y + 1, 5.0f / 16.0f);
+                        spread(x + 1, y + 1, 1.0f / 16.0f);
+                    }
                 }
             }
 
