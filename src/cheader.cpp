@@ -841,8 +841,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     // Turn off floppy motor
-    out += "    // Turn off floppy motor\n";
-    out += "    *(volatile UBYTE*)0xbfd100 |= 0xf8;  // deselect + motor off\n\n";
+    out += "    // Turn off floppy motor (select DF0, motor off, deselect)\n";
+    out += "    *(volatile UBYTE*)0xbfd100 &= ~(1<<3);  // select DF0\n";
+    out += "    *(volatile UBYTE*)0xbfd100 |=  (1<<7);   // motor off\n";
+    out += "    *(volatile UBYTE*)0xbfd100 |=  (1<<3);   // deselect DF0\n\n";
 
     // Start display
     out += "    custom->cop1lc = (ULONG)copper1;\n";
