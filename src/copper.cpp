@@ -241,6 +241,11 @@ Result<CopperResult> encode_copper(const Image& image,
     std::vector<std::vector<Color3f>> scanline_palettes(height);
     float total_error = 0.0f;
 
+    // Error diffusion: per-row buffer (palette changes per scanline, so
+    // cross-scanline error propagation is not meaningful)
+    bool use_diffusion = dither_settings.method != dither::Method::none &&
+                         !dither::is_ordered(dither_settings.method);
+
     // Precompute all rows in OKLab for neighbor lookups
     std::vector<std::vector<color_space::OKLab>> all_lab(height);
     for (std::size_t y = 0; y < height; ++y) {
@@ -321,8 +326,51 @@ Result<CopperResult> encode_copper(const Image& image,
             pal_lab[i] = color_space::linear_to_oklab(current_pal[i]);
         }
 
-        dither_row(row, pal_lab, y, dither_settings,
-                   all_indices, y * width, total_error);
+        if (use_diffusion) {
+            // Error diffusion within the scanline only. Cross-scanline
+            // propagation doesn't work because each row has a different
+            // copper palette. Same-row error (7/16 to right neighbor)
+            // is the only meaningful propagation.
+            auto ec = dither_settings.error_clamp;
+            auto str = dither_settings.strength;
+            std::vector<color_space::OKLab> row_err(width);
+            for (std::size_t x = 0; x < width; ++x) {
+                auto pixel_lab = color_space::linear_to_oklab(row[x]);
+
+                // Add accumulated same-row error
+                pixel_lab.L += std::clamp(row_err[x].L, -ec, ec);
+                pixel_lab.a += std::clamp(row_err[x].a, -ec, ec);
+                pixel_lab.b += std::clamp(row_err[x].b, -ec, ec);
+
+                // Find nearest color
+                float best_d = std::numeric_limits<float>::max();
+                std::size_t best_k = 0;
+                for (std::size_t k = 0; k < num_colors; ++k) {
+                    float dL = pixel_lab.L - pal_lab[k].L;
+                    float da = pixel_lab.a - pal_lab[k].a;
+                    float db = pixel_lab.b - pal_lab[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) { best_d = d; best_k = k; }
+                }
+                all_indices[y * width + x] = static_cast<std::uint8_t>(best_k);
+                total_error += best_d;
+
+                // Propagate error to right neighbor only
+                color_space::OKLab qerr = {
+                    (pixel_lab.L - pal_lab[best_k].L) * str,
+                    (pixel_lab.a - pal_lab[best_k].a) * str,
+                    (pixel_lab.b - pal_lab[best_k].b) * str,
+                };
+                if (x + 1 < width) {
+                    row_err[x + 1].L += qerr.L * (7.0f / 16.0f);
+                    row_err[x + 1].a += qerr.a * (7.0f / 16.0f);
+                    row_err[x + 1].b += qerr.b * (7.0f / 16.0f);
+                }
+            }
+        } else {
+            dither_row(row, pal_lab, y, dither_settings,
+                       all_indices, y * width, total_error);
+        }
     }
 
     // Encode to bitplanes
