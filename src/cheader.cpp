@@ -947,11 +947,19 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    }\n";
         out += "    // Build 16 faded copies (step 15 = copper1 itself)\n";
         out += "    fade_cops[15] = copper1;\n";
+        out += "    int fade_ok = 1;\n";
         out += "    for (int s = 0; s < 15; s++) {\n";
         out += std::format("        fade_cops[s] = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
                            cop_size);
+        out += "        if (!fade_cops[s]) { fade_ok = 0; break; }\n";
         out += "        CopyMem(copper1, fade_cops[s], cop_len);\n";
         out += "        fadeApply(copper1, fade_cops[s], fade_off, fade_cnt, s);\n";
+        out += "    }\n";
+        out += "    if (!fade_ok) {\n";
+        out += "        // Not enough chip RAM for fade — free what we got, skip fade\n";
+        out += "        for (int s = 0; s < 15; s++) if (fade_cops[s]) "
+               "{ FreeMem(fade_cops[s], " + std::to_string(cop_size) + "); fade_cops[s] = 0; }\n";
+        out += "        for (int s = 0; s < 16; s++) fade_cops[s] = copper1;\n";
         out += "    }\n";
         out += std::format("    FreeMem(fade_off, {});\n", max_offsets * 2);
         // Fade-in: just swap cop1lc each frame
@@ -1096,6 +1104,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        WaitVbl();\n";
         out += "        custom->cop1lc = (ULONG)fade_cops[fade];\n";
         out += "    }\n";
+        out += "    WaitVbl();\n";
+        // Switch back to copper1 before freeing fade lists
+        out += "    custom->cop1lc = (ULONG)copper1;\n";
         out += "    WaitVbl();\n";
         out += std::format("    for (int s = 0; s < 15; s++) FreeMem(fade_cops[s], {});\n\n",
                            cop_size);
