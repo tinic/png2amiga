@@ -2,6 +2,17 @@
 #include "color_space.hpp"
 #include "palette.hpp"
 
+namespace {
+using OKLab = png2amiga::color_space::OKLab;
+
+inline float oklab_dist_sq(OKLab a, OKLab b) noexcept {
+    float dL = (a.L - b.L) * png2amiga::color_space::WEIGHT_L;
+    float da = (a.a - b.a) * png2amiga::color_space::WEIGHT_A;
+    float db = (a.b - b.b) * png2amiga::color_space::WEIGHT_B;
+    return dL * dL + da * da + db * db;
+}
+} // namespace
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -117,147 +128,48 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
         return result;
     }
 
-    // Step 2: Weighted median-cut on OCS colors to get initial palette
-    // Build a weighted color array (expand by sqrt of weight for rough
-    // approximation, then median-cut). Better: do proper weighted median-cut.
-    // For simplicity and correctness, use the histogram entries directly.
-
-    // Initial palette via weighted k-means++ seeding
+    // Step 2: Greedy sequential palette construction.
+    // Add one color at a time, each time picking the OCS color that
+    // minimizes the total weighted error across all histogram entries.
+    // Same approach as abc (AmigAtari Bitmap Converter).
     std::vector<std::uint16_t> palette_ocs(max_colors);
 
-    // Seed first center: the OCS color with the most pixels
-    auto max_it = std::max_element(entries.begin(), entries.end(),
-        [](auto& a, auto& b) { return a.weight < b.weight; });
-    palette_ocs[0] = max_it->ocs_index;
-
-    // k-means++ seeding: pick subsequent centers weighted by distance
-    std::vector<float> min_dists(entries.size(),
+    // Per-entry cache: current minimum distance to any existing palette color
+    std::vector<float> best_dist(entries.size(),
                                  std::numeric_limits<float>::max());
-    for (std::size_t k = 1; k < max_colors; ++k) {
-        // Update min distances to nearest existing center
-        auto prev_lab = lut.oklab[palette_ocs[k - 1]];
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            auto lab = lut.oklab[entries[i].ocs_index];
-            float dL = lab.L - prev_lab.L;
-            float da = lab.a - prev_lab.a;
-            float db = lab.b - prev_lab.b;
-            float dist = dL * dL + da * da + db * db;
-            min_dists[i] = std::min(min_dists[i], dist);
-        }
-        // Pick the entry with max weighted distance
-        float best_score = -1.0f;
-        std::size_t best_idx = 0;
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            float score = min_dists[i] * static_cast<float>(entries[i].weight);
-            if (score > best_score) {
-                best_score = score;
-                best_idx = i;
-            }
-        }
-        palette_ocs[k] = entries[best_idx].ocs_index;
-    }
 
-    // Step 3: K-means refinement with brute-force OCS search
-    // Each iteration: assign entries to nearest palette color, then for
-    // each cluster find the OCS color minimizing total weighted error.
-    constexpr int max_iterations = 15;
-    std::vector<std::size_t> assignments(entries.size());
+    for (std::size_t k = 0; k < max_colors; ++k) {
+        // Try all 4096 OCS colors, pick the one that reduces total error most
+        float best_total = std::numeric_limits<float>::max();
+        std::uint16_t best_ocs = 0;
 
-    for (int iter = 0; iter < max_iterations; ++iter) {
-        // Assign each entry to nearest palette color
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            auto lab = lut.oklab[entries[i].ocs_index];
-            float best_dist = std::numeric_limits<float>::max();
-            std::size_t best_k = 0;
-            for (std::size_t k = 0; k < max_colors; ++k) {
-                auto pal_lab = lut.oklab[palette_ocs[k]];
-                float dL = lab.L - pal_lab.L;
-                float da = lab.a - pal_lab.a;
-                float db = lab.b - pal_lab.b;
-                float dist = dL * dL + da * da + db * db;
-                if (dist < best_dist) {
-                    best_dist = dist;
-                    best_k = k;
-                }
-            }
-            assignments[i] = best_k;
-        }
+        for (std::uint16_t candidate = 0; candidate < 4096; ++candidate) {
+            auto cand_lab = lut.oklab[candidate];
+            float total = 0.0f;
 
-        // For each cluster, brute-force find the best OCS color
-        // Parallelize across clusters
-        std::vector<std::uint16_t> new_palette(max_colors);
-        bool changed = false;
-
-        auto refine_cluster = [&](std::size_t k) {
-            // Collect cluster members
-            std::vector<std::size_t> members;
             for (std::size_t i = 0; i < entries.size(); ++i) {
-                if (assignments[i] == k) members.push_back(i);
-            }
-            if (members.empty()) {
-                new_palette[k] = palette_ocs[k];
-                return;
+                float d = oklab_dist_sq(lut.oklab[entries[i].ocs_index], cand_lab);
+                float effective = std::min(d, best_dist[i]);
+                total += effective * static_cast<float>(entries[i].weight);
             }
 
-            // Try all 4096 OCS colors, find the one minimizing
-            // total weighted perceptual error for this cluster
-            float best_error = std::numeric_limits<float>::max();
-            std::uint16_t best_ocs = palette_ocs[k];
-
-            for (std::uint16_t candidate = 0; candidate < 4096; ++candidate) {
-                auto cand_lab = lut.oklab[candidate];
-                float total_err = 0.0f;
-
-                for (auto idx : members) {
-                    auto lab = lut.oklab[entries[idx].ocs_index];
-                    float dL = lab.L - cand_lab.L;
-                    float da = lab.a - cand_lab.a;
-                    float db = lab.b - cand_lab.b;
-                    total_err += (dL * dL + da * da + db * db)
-                                 * static_cast<float>(entries[idx].weight);
-                }
-
-                if (total_err < best_error) {
-                    best_error = total_err;
-                    best_ocs = candidate;
-                }
+            if (total < best_total) {
+                best_total = total;
+                best_ocs = candidate;
             }
-
-            new_palette[k] = best_ocs;
-        };
-
-        // Cluster refinement — threaded on native, sequential on WASM
-#ifdef __EMSCRIPTEN__
-        for (std::size_t k = 0; k < max_colors; ++k) {
-            refine_cluster(k);
         }
-#else
-        auto num_threads = std::min(
-            static_cast<std::size_t>(std::thread::hardware_concurrency()),
-            max_colors);
-        if (num_threads < 1) num_threads = 1;
 
-        std::vector<std::thread> threads;
-        std::size_t k = 0;
+        palette_ocs[k] = best_ocs;
 
-        while (k < max_colors) {
-            threads.clear();
-            auto batch = std::min(num_threads, max_colors - k);
-            for (std::size_t t = 0; t < batch; ++t) {
-                threads.emplace_back(refine_cluster, k + t);
-            }
-            for (auto& t : threads) t.join();
-            k += batch;
+        // Update per-entry best distances with the newly added color
+        auto new_lab = lut.oklab[best_ocs];
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            float d = oklab_dist_sq(lut.oklab[entries[i].ocs_index], new_lab);
+            best_dist[i] = std::min(best_dist[i], d);
         }
-#endif
-
-        // Check for convergence
-        for (std::size_t i = 0; i < max_colors; ++i) {
-            if (new_palette[i] != palette_ocs[i]) changed = true;
-        }
-        palette_ocs = new_palette;
-        if (!changed) break;
     }
+
+    // (k-means refinement removed — greedy sequential is sufficient)
 
     // Build result palette
     Palette result;
@@ -631,10 +543,7 @@ Palette median_cut(std::span<const Color3f> colors,
             float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = 0;
             for (std::size_t k = 0; k < n_colors; ++k) {
-                float dL = samples_lab[i].L - centroids[k].L;
-                float da = samples_lab[i].a - centroids[k].a;
-                float db = samples_lab[i].b - centroids[k].b;
-                float d = dL * dL + da * da + db * db;
+                float d = oklab_dist_sq(samples_lab[i], centroids[k]);
                 if (d < best_d) { best_d = d; best_k = k; }
             }
             assignments[i] = best_k;
@@ -687,10 +596,7 @@ Palette median_cut(std::span<const Color3f> colors,
                 static_cast<float>(acc[k].a / dn),
                 static_cast<float>(acc[k].b / dn),
             };
-            float dL = nlab.L - centroids[k].L;
-            float da = nlab.a - centroids[k].a;
-            float db = nlab.b - centroids[k].b;
-            if (dL * dL + da * da + db * db > 1e-12f) {
+            if (oklab_dist_sq(nlab, centroids[k]) > 1e-12f) {
                 changed = true;
                 centroids[k] = nlab;
             }

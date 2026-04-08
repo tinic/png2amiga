@@ -290,6 +290,15 @@ Result<Config> parse_args(int argc, char* argv[]) {
             else if (arg == "--copper-changes") {
                 config.copper_changes = std::atoi(std::string(val).c_str());
             }
+            else if (arg == "--weight-l") {
+                color_space::WEIGHT_L = std::stof(std::string(val));
+            }
+            else if (arg == "--weight-a") {
+                color_space::WEIGHT_A = std::stof(std::string(val));
+            }
+            else if (arg == "--weight-b") {
+                color_space::WEIGHT_B = std::stof(std::string(val));
+            }
             else if (arg == "--dither") {
                 auto m = parse_dither_method(val);
                 if (!m) return std::unexpected{m.error()};
@@ -1452,15 +1461,16 @@ int main(int argc, char* argv[]) {
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
         std::println("Palette: 2 colors (monochrome)");
     } else {
-        // Quantize N-1 colors, reserve index 0 for black (border/transparency)
-        auto quantized = auto_quantize(*image,
-            max_colors > 1 ? max_colors - 1 : 1, chipset);
+        // Reserve index 0 for black only when transparency is present
+        auto quant_n = has_transparency ? (max_colors > 1 ? max_colors - 1 : 1) : max_colors;
+        auto quantized = auto_quantize(*image, quant_n, chipset);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;
         }
         pal = *std::move(quantized);
-        pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
+        if (has_transparency)
+            pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
         // STF: snap OCS brute-force result to 9-bit precision
         if (amiga::is_stf(config->mode)) snap_palette(pal, chipset, config->mode);
         std::println("Palette: {} colors (auto, {})",

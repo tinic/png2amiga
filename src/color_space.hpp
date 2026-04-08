@@ -156,12 +156,21 @@ constexpr Color3f oklab_to_linear(OKLab lab) noexcept {
 }
 
 // Squared perceptual distance in OKLab space
+// OKLab channel weights for perceptual distance.
+// Boosting 'a' (red-green axis) preserves reds better — OKLab
+// slightly underweights red perception vs human sensitivity.
+// Tuned OKLab weights: slightly de-weight luminance to preserve more
+// color variation in the palette. Optimized on fantasy.png lores 5bpl.
+inline float WEIGHT_L = 0.85f;
+inline float WEIGHT_A = 1.05f;   // red-green axis
+inline float WEIGHT_B = 1.0f;    // blue-yellow axis
+
 inline float perceptual_distance_sq(Color3f a, Color3f b) noexcept {
     auto la = linear_to_oklab(a);
     auto lb = linear_to_oklab(b);
-    float dL = la.L - lb.L;
-    float da = la.a - lb.a;
-    float db = la.b - lb.b;
+    float dL = (la.L - lb.L) * WEIGHT_L;
+    float da = (la.a - lb.a) * WEIGHT_A;
+    float db = (la.b - lb.b) * WEIGHT_B;
     return dL * dL + da * da + db * db;
 }
 
