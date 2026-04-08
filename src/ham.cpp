@@ -689,10 +689,14 @@ ScanlineResult encode_scanline_dp_dithered(
     float error_clamp_val,
     std::vector<OKLab>& error_buf,
     std::size_t y,
-    std::size_t total_height) {
+    std::size_t total_height,
+    bool serpentine) {
 
     auto width = target_row.size();
     if (width == 0) return {{}, 0.0f};
+
+    // Serpentine: flip kernel dx on odd rows to break horizontal bias
+    bool reverse = serpentine && (y % 2 == 1);
 
     // Pre-pass: adjust targets with accumulated errors from previous scanlines
     std::vector<Color3f> adjusted_row(width);
@@ -709,12 +713,13 @@ ScanlineResult encode_scanline_dp_dithered(
         };
     }
 
-    // Run DP on the adjusted targets
+    // Run DP on the adjusted targets (always left-to-right, HAM constraint)
     auto result = encode_scanline_dp(
         adjusted_row, start_color, pre, base_srgb, beam_width);
 
     // Post-pass: compute actual output colors and propagate errors
-    // to future scanlines
+    // to future scanlines. Serpentine flips dx to alternate the
+    // error distribution direction, breaking horizontal line artifacts.
     SRGBColor prev = start_color;
 
     for (std::size_t x = 0; x < width; ++x) {
@@ -734,7 +739,8 @@ ScanlineResult encode_scanline_dp_dithered(
         for (auto& entry : kernel) {
             if (entry.dy <= 0) continue;  // skip same-row entries
 
-            auto nx = static_cast<std::ptrdiff_t>(x) + entry.dx;
+            auto nx = static_cast<std::ptrdiff_t>(x) +
+                      (reverse ? -entry.dx : entry.dx);
             auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
 
             if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
@@ -857,7 +863,7 @@ Result<HamResult> encode_ham_generic(
                     row, start, pre, srgb_span,
                     opts.beam_width,
                     kernel, opts.dither_strength, opts.error_clamp,
-                    error_buf, y, h);
+                    error_buf, y, h, true /*serpentine*/);
 
                 std::copy(scanline.values.begin(), scanline.values.end(),
                           ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
@@ -1092,7 +1098,7 @@ Result<HamResult> encode_ham_copper_generic(
                     row, start, line_pre, srgb_span,
                     opts.beam_width,
                     kernel, opts.dither_strength, opts.error_clamp,
-                    error_buf, y, h);
+                    error_buf, y, h, true /*serpentine*/);
                 std::copy(scanline.values.begin(), scanline.values.end(),
                           ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
                 total_error += scanline.error;
