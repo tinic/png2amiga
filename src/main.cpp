@@ -119,7 +119,7 @@ struct Config {
 
 void print_usage() {
     std::println(stderr,
-        "Usage: png2amiga [options] input.[png|jpg] [output.png|output.iff|output.h]\n"
+        "Usage: png2amiga [options] input.[png|jpg] [-o output.png|output.iff|output.h]\n"
         "\n"
         "Modes:\n"
         "  --mode <mode>                   Graphics mode (default: lores)\n"
@@ -236,6 +236,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--copper") {
             config.copper = true;
+            continue;
+        }
+
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            config.output_path = std::string(argv[++i]);
             continue;
         }
 
