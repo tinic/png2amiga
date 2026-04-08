@@ -506,12 +506,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (std::size_t x = 0; x < w; ++x) {
                     auto pixel_lab = color_space::linear_to_oklab(row[x]);
 
-                    // Add accumulated error from previous rows
+                    // Add accumulated error from previous rows (clamped)
                     if (!err_buf.empty()) {
                         auto& e = err_buf[y * w + x];
-                        pixel_lab.L += e.L;
-                        pixel_lab.a += e.a;
-                        pixel_lab.b += e.b;
+                        auto ec = dith.error_clamp;
+                        pixel_lab.L += std::clamp(e.L, -ec, ec);
+                        pixel_lab.a += std::clamp(e.a, -ec, ec);
+                        pixel_lab.b += std::clamp(e.b, -ec, ec);
                     }
 
                     // Ordered dither: apply threshold with correct (x, y)
