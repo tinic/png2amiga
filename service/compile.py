@@ -73,6 +73,8 @@ def compile_viewer(source_code, output_format="exe"):
         subprocess.run(_sandbox([
             GCC, "-m68000", "-Ofast", "-nostdlib",
             "-fomit-frame-pointer", "-fno-exceptions",
+            "-nostdinc",                   # block #include of system files
+            "-isystem", GCC_DIR,           # only allow cross-compiler headers
             "-I", TEMPLATE,
             "-Wa,--register-prefix-optional",
             "-Wl,--emit-relocs,-Ttext=0",
@@ -166,7 +168,7 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.wfile.write(result)
 
     def _cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", "https://www.png2amiga.app")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
