@@ -36,44 +36,48 @@ struct SwapCandidate {
 // Find the best single swap for a scanline.
 // current_pal: the current palette (in linear RGB)
 // current_lab: precomputed OKLab of current palette
-// row: the scanline pixels
-// row_lab: precomputed OKLab of row pixels
+// rows: scanline pixels (current + optional neighbors for smoothing)
+// rows_lab: precomputed OKLab of row pixels
+// weights: per-row weight (1.0 for current, less for neighbors)
 SwapCandidate find_best_swap(
     std::span<const Color3f> current_pal,
     std::span<const color_space::OKLab> current_lab,
-    std::span<const Color3f> row,
-    std::span<const color_space::OKLab> row_lab,
+    std::span<const std::span<const Color3f>> rows,
+    std::span<const std::span<const color_space::OKLab>> rows_lab,
+    std::span<const float> weights,
     amiga::Chipset chipset,
     const std::vector<bool>& excluded = {}) {
 
     auto num_colors = current_pal.size();
-    auto width = row.size();
+    auto width = rows[0].size();
 
     // Assign each pixel to nearest palette color and track per-slot error
     struct SlotStats {
         double sum_L{}, sum_a{}, sum_b{};
         double total_error{};
-        std::size_t count{};
+        double count{};
     };
     std::vector<SlotStats> stats(num_colors);
-    std::vector<std::size_t> assignments(width);
 
-    for (std::size_t x = 0; x < width; ++x) {
-        float best_d = std::numeric_limits<float>::max();
-        std::size_t best_k = 0;
-        for (std::size_t k = 0; k < num_colors; ++k) {
-            float dL = row_lab[x].L - current_lab[k].L;
-            float da = row_lab[x].a - current_lab[k].a;
-            float db = row_lab[x].b - current_lab[k].b;
-            float d = dL * dL + da * da + db * db;
-            if (d < best_d) { best_d = d; best_k = k; }
+    for (std::size_t r = 0; r < rows.size(); ++r) {
+        auto w = static_cast<double>(weights[r]);
+        auto& rl = rows_lab[r];
+        for (std::size_t x = 0; x < width; ++x) {
+            float best_d = std::numeric_limits<float>::max();
+            std::size_t best_k = 0;
+            for (std::size_t k = 0; k < num_colors; ++k) {
+                float dL = rl[x].L - current_lab[k].L;
+                float da = rl[x].a - current_lab[k].a;
+                float db = rl[x].b - current_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            stats[best_k].sum_L += static_cast<double>(rl[x].L) * w;
+            stats[best_k].sum_a += static_cast<double>(rl[x].a) * w;
+            stats[best_k].sum_b += static_cast<double>(rl[x].b) * w;
+            stats[best_k].total_error += static_cast<double>(best_d) * w;
+            stats[best_k].count += w;
         }
-        assignments[x] = best_k;
-        stats[best_k].sum_L += static_cast<double>(row_lab[x].L);
-        stats[best_k].sum_a += static_cast<double>(row_lab[x].a);
-        stats[best_k].sum_b += static_cast<double>(row_lab[x].b);
-        stats[best_k].total_error += static_cast<double>(best_d);
-        stats[best_k].count++;
     }
 
     // For each slot, compute what happens if we replace it with its
@@ -83,11 +87,11 @@ SwapCandidate find_best_swap(
     SwapCandidate best{0, {}, -1.0f};
 
     for (std::size_t k = 1; k < num_colors; ++k) {
-        if (stats[k].count == 0) continue;
+        if (stats[k].count < 0.001) continue;
         if (!excluded.empty() && excluded[k]) continue;
 
-        // Ideal centroid for this cluster
-        auto n = static_cast<double>(stats[k].count);
+        // Ideal centroid for this cluster (weighted by neighbor rows)
+        auto n = stats[k].count;
         color_space::OKLab centroid{
             static_cast<float>(stats[k].sum_L / n),
             static_cast<float>(stats[k].sum_a / n),
@@ -95,17 +99,30 @@ SwapCandidate find_best_swap(
         };
 
         // Error with the centroid instead of current color
-        float new_error = 0.0f;
-        for (std::size_t x = 0; x < width; ++x) {
-            if (assignments[x] != k) continue;
-            float dL = row_lab[x].L - centroid.L;
-            float da = row_lab[x].a - centroid.a;
-            float db = row_lab[x].b - centroid.b;
-            new_error += dL * dL + da * da + db * db;
+        double new_error = 0.0;
+        for (std::size_t r = 0; r < rows.size(); ++r) {
+            auto w = static_cast<double>(weights[r]);
+            auto& rl = rows_lab[r];
+            for (std::size_t x = 0; x < width; ++x) {
+                // Check if pixel is assigned to this slot
+                float best_d = std::numeric_limits<float>::max();
+                std::size_t best_k = 0;
+                for (std::size_t j = 0; j < num_colors; ++j) {
+                    float dL = rl[x].L - current_lab[j].L;
+                    float da = rl[x].a - current_lab[j].a;
+                    float db = rl[x].b - current_lab[j].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) { best_d = d; best_k = j; }
+                }
+                if (best_k != k) continue;
+                float dL = rl[x].L - centroid.L;
+                float da = rl[x].a - centroid.a;
+                float db = rl[x].b - centroid.b;
+                new_error += static_cast<double>(dL * dL + da * da + db * db) * w;
+            }
         }
 
-        auto reduction = static_cast<float>(stats[k].total_error)
-                         - new_error;
+        auto reduction = static_cast<float>(stats[k].total_error - new_error);
         if (reduction > best.error_reduction) {
             auto linear = color_space::oklab_to_linear(centroid).clamped();
             // Snap to chipset precision
@@ -224,13 +241,36 @@ Result<CopperResult> encode_copper(const Image& image,
     std::vector<std::vector<Color3f>> scanline_palettes(height);
     float total_error = 0.0f;
 
+    // Precompute all rows in OKLab for neighbor lookups
+    std::vector<std::vector<color_space::OKLab>> all_lab(height);
+    for (std::size_t y = 0; y < height; ++y) {
+        all_lab[y].resize(width);
+        auto row = image.row(y);
+        for (std::size_t x = 0; x < width; ++x)
+            all_lab[y][x] = color_space::linear_to_oklab(row[x]);
+    }
+
     for (std::size_t y = 0; y < height; ++y) {
         auto row = image.row(y);
 
-        // Precompute row pixels in OKLab
-        std::vector<color_space::OKLab> row_lab(width);
-        for (std::size_t x = 0; x < width; ++x) {
-            row_lab[x] = color_space::linear_to_oklab(row[x]);
+        // Build neighbor rows with weights for smoothing.
+        // Current row weight=1.0, ±1 rows weight=0.3
+        constexpr float neighbor_weight = 0.3f;
+        std::vector<std::span<const Color3f>> rows;
+        std::vector<std::span<const color_space::OKLab>> rows_lab;
+        std::vector<float> weights;
+        if (y > 0) {
+            rows.push_back(image.row(y - 1));
+            rows_lab.push_back(all_lab[y - 1]);
+            weights.push_back(neighbor_weight);
+        }
+        rows.push_back(row);
+        rows_lab.push_back(all_lab[y]);
+        weights.push_back(1.0f);
+        if (y + 1 < height) {
+            rows.push_back(image.row(y + 1));
+            rows_lab.push_back(all_lab[y + 1]);
+            weights.push_back(neighbor_weight);
         }
 
         // Greedily find the best K swaps (each slot swapped at most once per line)
@@ -246,7 +286,7 @@ Result<CopperResult> encode_copper(const Image& image,
             }
 
             auto swap = find_best_swap(
-                current_pal, pal_lab, row, row_lab, chipset, swapped);
+                current_pal, pal_lab, rows, rows_lab, weights, chipset, swapped);
 
             if (swap.error_reduction <= 0.0f) break;
 
