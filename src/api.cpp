@@ -462,6 +462,98 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (mode == amiga::Mode::ehb) {
         depth = 6;  // EHB is always 6 bitplanes
 
+        // --- EHB with copper: per-scanline base palette optimization ---
+        if (options.copper) {
+            // Use copper encoder with depth=5 (32 base colors).
+            // It generates per-scanline palette changes for the base 32.
+            dither::Settings dith;
+            dith.method = parse_dither(options.dither);
+            dith.strength = options.dither_strength;
+            dith.error_clamp = options.error_clamp;
+
+            auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
+                                                       false, compound_hires);
+            if (!copper_result) return std::unexpected{copper_result.error()};
+
+            // Now re-dither each scanline against its 64-color EHB palette
+            // (32 base from copper + 32 half-brite derived).
+            auto w = image->width();
+            auto h = image->height();
+            std::vector<std::uint8_t> all_indices(w * h);
+            float total_error = 0.0f;
+
+            for (std::size_t y = 0; y < h; ++y) {
+                // Get this scanline's base palette from copper
+                auto& base32 = copper_result->scanline_palettes[y];
+                Palette bp;
+                bp.colors.assign(base32.begin(), base32.end());
+                auto ehb64 = palette::make_ehb_palette(bp.colors);
+
+                // Dither this row against all 64 colors
+                Image row_img(w, 1, std::vector<Color3f>(
+                    image->row(y).begin(), image->row(y).end()));
+                auto row_result = dither::apply(row_img, ehb64.colors, dith);
+
+                std::copy(row_result.indices.begin(), row_result.indices.end(),
+                          all_indices.begin() + static_cast<std::ptrdiff_t>(y * w));
+                total_error += row_result.total_error;
+            }
+
+            // Handle transparency
+            if (has_transparency) {
+                for (std::size_t i = 0; i < tmask.size() && i < all_indices.size(); ++i)
+                    if (tmask[i]) all_indices[i] = 0;
+            }
+
+            // Encode to 6 bitplanes
+            auto planes = bitplane::encode(all_indices, w, h, 6);
+            if (!planes) return std::unexpected{planes.error()};
+
+            // Render preview using last scanline's palette (approximate)
+            // Better: render per-scanline with correct palettes
+            auto& last_base = copper_result->scanline_palettes[0];
+            Palette preview_bp;
+            preview_bp.colors.assign(last_base.begin(), last_base.end());
+            auto preview_ehb = palette::make_ehb_palette(preview_bp.colors);
+
+            // Per-scanline preview render
+            Image rendered(w, h);
+            for (std::size_t y = 0; y < h; ++y) {
+                auto& base32 = copper_result->scanline_palettes[y];
+                Palette bp;
+                bp.colors.assign(base32.begin(), base32.end());
+                auto ehb64 = palette::make_ehb_palette(bp.colors);
+                for (std::size_t x = 0; x < w; ++x) {
+                    auto idx = all_indices[y * w + x];
+                    if (idx < ehb64.colors.size())
+                        rendered[x, y] = ehb64.colors[idx];
+                }
+            }
+
+            // Use base palette from first scanline for IFF CMAP
+            auto& first_pal = copper_result->scanline_palettes[0];
+
+            PipelineResult result;
+            result.rendered = std::move(rendered);
+            result.planes = *std::move(planes);
+            result.palette = std::vector<Color3f>(first_pal.begin(), first_pal.end());
+            result.mode = mode;
+            result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
+            result.interlace = options.interlace;
+            result.copper = true;
+            result.scanline_palettes = std::move(copper_result->scanline_palettes);
+            result.scanline_changes = std::move(copper_result->scanline_changes);
+            result.copper_num_colors = copper_result->num_colors;
+            result.changes_per_line = copper_result->changes_per_line;
+            result.has_transparency = has_transparency;
+            result.transparency_mask = tmask;
+            result.copper_changes = copper_result->avg_changes_per_line;
+            result.quant_error = total_error;
+            return result;
+        }
+
+        // --- EHB without copper: global palette ---
+
         // Generate base colors via median-cut, or load from file.
         // Reserve index 0 for transparency when needed.
         auto ehb_base = has_transparency ? std::size_t{31} : std::size_t{32};
@@ -496,7 +588,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         dither::DitherResult dither_result;
         if (has_transparency) {
-            // Skip index 0 during dithering
             std::span<const Color3f> dither_span{ehb_pal.colors.data() + 1,
                                                   ehb_pal.colors.size() - 1};
             dither_result = dither::apply(*image, dither_span, dith);
@@ -513,9 +604,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                        depth);
         if (!planes) return std::unexpected{planes.error()};
 
-        // For IFF output, only the 32 base colors go in CMAP.
-        // But for preview rendering, we need all 64.
-        // Store all 64 in the palette — the IFF writer will trim for EHB.
         std::vector<Color3f> full_palette(ehb_pal.colors.begin(),
                                           ehb_pal.colors.end());
 
