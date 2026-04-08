@@ -489,14 +489,37 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 bp.colors.assign(base32.begin(), base32.end());
                 auto ehb64 = palette::make_ehb_palette(bp.colors);
 
-                // Dither this row against all 64 colors
-                Image row_img(w, 1, std::vector<Color3f>(
-                    image->row(y).begin(), image->row(y).end()));
-                auto row_result = dither::apply(row_img, ehb64.colors, dith);
+                // Dither this row against all 64 colors with correct Y
+                // (can't use dither::apply on a 1-row image — Y would always be 0)
+                auto row = image->row(y);
+                std::vector<color_space::OKLab> pal_lab(ehb64.colors.size());
+                for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
+                    pal_lab[i] = color_space::linear_to_oklab(ehb64.colors[i]);
 
-                std::copy(row_result.indices.begin(), row_result.indices.end(),
-                          all_indices.begin() + static_cast<std::ptrdiff_t>(y * w));
-                total_error += row_result.total_error;
+                for (std::size_t x = 0; x < w; ++x) {
+                    auto pixel_lab = color_space::linear_to_oklab(row[x]);
+
+                    // Apply ordered dither threshold with correct (x, y)
+                    if (dither::is_ordered(dith.method) && dith.method != dither::Method::none) {
+                        float thr = dither::ordered_threshold(dith.method, x, y);
+                        pixel_lab.L += thr * dith.strength * 0.15f;
+                        pixel_lab.a += thr * dith.strength * 0.03f;
+                        pixel_lab.b += thr * dith.strength * 0.03f;
+                    }
+
+                    // Find nearest color
+                    float best_d = std::numeric_limits<float>::max();
+                    std::uint8_t best_k = 0;
+                    for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                        float dL = pixel_lab.L - pal_lab[k].L;
+                        float da = pixel_lab.a - pal_lab[k].a;
+                        float db = pixel_lab.b - pal_lab[k].b;
+                        float d = dL * dL + da * da + db * db;
+                        if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
+                    }
+                    all_indices[y * w + x] = best_k;
+                    total_error += best_d;
+                }
             }
 
             // Handle transparency
