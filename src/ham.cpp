@@ -551,228 +551,6 @@ ScanlineResult encode_scanline_greedy(
 // ---------------------------------------------------------------------------
 // Decode a HAM value back to the output sRGB color (used by dithered encoder)
 // ---------------------------------------------------------------------------
-
-SRGBColor decode_ham_value(std::uint8_t ham_value, SRGBColor prev,
-                           std::span<const SRGBColor> base_srgb,
-                           std::size_t data_bits) {
-    auto [control, data_val] = split_ham_value(ham_value, data_bits);
-
-    switch (control) {
-    case 0b00:  // SET palette color
-        if (data_val < base_srgb.size()) {
-            return base_srgb[data_val];
-        }
-        return SRGBColor{0, 0, 0};
-    case 0b01:  // MODIFY BLUE
-        return SRGBColor{prev.r, prev.g, expand_to_8bit(data_val, data_bits)};
-    case 0b10:  // MODIFY RED
-        return SRGBColor{expand_to_8bit(data_val, data_bits), prev.g, prev.b};
-    case 0b11:  // MODIFY GREEN
-        return SRGBColor{prev.r, expand_to_8bit(data_val, data_bits), prev.b};
-    }
-    return prev;
-}
-
-// ===========================================================================
-// Dithered greedy encoder
-//
-// Applies error diffusion during HAM encoding. For each pixel:
-// 1. Add accumulated error to the target color (in OKLab space)
-// 2. Convert adjusted target back to linear RGB
-// 3. Run the HAM pixel encoder against the adjusted target
-// 4. Compute quantization error (adjusted_lab - actual_output_lab)
-// 5. Distribute error to neighbors using the diffusion kernel
-//
-// Supports serpentine scanning (alternating direction per scanline).
-// ===========================================================================
-
-struct ScanlineResultWithColor {
-    std::vector<std::uint8_t> values;
-    float error;
-    std::vector<SRGBColor> output_colors;   // for error computation
-};
-
-ScanlineResultWithColor encode_scanline_greedy_dithered(
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::span<const DiffusionEntry> kernel,
-    float strength,
-    float error_clamp_val,
-    std::vector<OKLab>& error_buf,     // width * rows_needed (modified in place)
-    std::size_t y,                      // current row index
-    std::size_t total_height,
-    bool serpentine) {
-
-    auto width = target_row.size();
-    std::vector<std::uint8_t> values(width);
-    std::vector<SRGBColor> output_colors(width);
-    float total_error = 0.0f;
-    SRGBColor prev = start_color;
-
-    bool reverse = serpentine && (y % 2 == 1);
-
-    for (std::size_t step = 0; step < width; ++step) {
-        std::size_t x = reverse ? (width - 1 - step) : step;
-        auto buf_idx = y * width + x;
-
-        // Add accumulated error to the original target
-        auto target_lab = color_space::linear_to_oklab(target_row[x]);
-        auto clamped_err = oklab_clamp(error_buf[buf_idx], error_clamp_val);
-        auto adjusted_lab = oklab_add(target_lab, clamped_err);
-
-        // Convert adjusted target back to linear RGB for the HAM encoder
-        auto adjusted_linear = color_space::oklab_to_linear(adjusted_lab);
-        // Clamp to valid range
-        adjusted_linear.r = std::clamp(adjusted_linear.r, 0.0f, 1.0f);
-        adjusted_linear.g = std::clamp(adjusted_linear.g, 0.0f, 1.0f);
-        adjusted_linear.b = std::clamp(adjusted_linear.b, 0.0f, 1.0f);
-
-        // Run HAM pixel encoder
-        HamPixelResult result = encode_ham_pixel(
-            prev, adjusted_linear, pre, base_srgb);
-
-        values[x] = result.value;
-        output_colors[x] = result.result_color;
-        prev = result.result_color;
-        total_error += result.error;
-
-        // Compute quantization error in OKLab space
-        auto actual_lab = color_space::linear_to_oklab(
-            srgb8_to_linear(result.result_color));
-        auto quant_error = oklab_scale(
-            oklab_sub(adjusted_lab, actual_lab), strength);
-
-        // Distribute error to neighbors
-        for (auto& entry : kernel) {
-            auto nx = static_cast<std::ptrdiff_t>(x) +
-                      (reverse ? -entry.dx : entry.dx);
-            auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
-
-            if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
-                ny >= 0 && static_cast<std::size_t>(ny) < total_height) {
-                auto nidx = static_cast<std::size_t>(ny) * width +
-                            static_cast<std::size_t>(nx);
-                error_buf[nidx] = oklab_clamp(
-                    oklab_add(error_buf[nidx],
-                              oklab_scale(quant_error, entry.weight)),
-                    error_clamp_val);
-            }
-        }
-    }
-
-    return {std::move(values), total_error, std::move(output_colors)};
-}
-
-// ---------------------------------------------------------------------------
-// Dithered DP beam search encoder
-//
-// For the DP beam search, full per-pixel error diffusion is impractical
-// because the beam explores multiple paths simultaneously. Instead, we
-// apply error diffusion as a pre-pass: errors from previous scanlines
-// are added to targets before DP optimization begins within the row.
-// This gives inter-scanline diffusion benefit while DP handles intra-row.
-//
-// After the DP scanline is encoded, we compute the actual output errors
-// and propagate them to future scanlines.
-// ---------------------------------------------------------------------------
-
-ScanlineResult encode_scanline_dp_dithered(
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::size_t beam_width,
-    std::span<const DiffusionEntry> kernel,
-    float strength,
-    float error_clamp_val,
-    std::vector<OKLab>& error_buf,
-    std::size_t y,
-    std::size_t total_height,
-    bool serpentine) {
-
-    auto width = target_row.size();
-    if (width == 0) return {{}, 0.0f};
-
-    // Serpentine: flip kernel dx on odd rows to break horizontal bias
-    bool reverse = serpentine && (y % 2 == 1);
-
-    // Pre-pass: adjust targets with accumulated errors from previous scanlines
-    std::vector<Color3f> adjusted_row(width);
-    for (std::size_t x = 0; x < width; ++x) {
-        auto buf_idx = y * width + x;
-        auto target_lab = color_space::linear_to_oklab(target_row[x]);
-        auto clamped_err = oklab_clamp(error_buf[buf_idx], error_clamp_val);
-        auto adjusted_lab = oklab_add(target_lab, clamped_err);
-        auto linear = color_space::oklab_to_linear(adjusted_lab);
-        adjusted_row[x] = {
-            std::clamp(linear.r, 0.0f, 1.0f),
-            std::clamp(linear.g, 0.0f, 1.0f),
-            std::clamp(linear.b, 0.0f, 1.0f),
-        };
-    }
-
-    // Build renormalized kernel: only future-row entries (dy > 0), but
-    // scaled so weights sum to 1.0. Without this, the same-row weight
-    // (e.g. 7/16 for Floyd-Steinberg) is lost, causing systematic
-    // under-correction that shows as horizontal banding.
-    std::vector<DiffusionEntry> future_kernel;
-    float future_weight_sum = 0.0f;
-    for (auto& entry : kernel) {
-        if (entry.dy > 0) {
-            future_kernel.push_back(entry);
-            future_weight_sum += entry.weight;
-        }
-    }
-    if (future_weight_sum > 0.0f) {
-        float scale = 1.0f / future_weight_sum;
-        for (auto& entry : future_kernel)
-            entry.weight *= scale;
-    }
-
-    // Run DP on the adjusted targets (always left-to-right, HAM constraint)
-    auto result = encode_scanline_dp(
-        adjusted_row, start_color, pre, base_srgb, beam_width);
-
-    // Post-pass: compute actual output colors and propagate errors
-    // to future scanlines. Serpentine flips dx to alternate the
-    // error distribution direction, breaking horizontal line artifacts.
-    SRGBColor prev = start_color;
-
-    for (std::size_t x = 0; x < width; ++x) {
-        auto actual_srgb = decode_ham_value(
-            result.values[x], prev, base_srgb, pre.data_bits);
-        prev = actual_srgb;
-
-        // Compute error: adjusted target vs actual output (in OKLab)
-        auto adjusted_lab = color_space::linear_to_oklab(adjusted_row[x]);
-        auto actual_lab = color_space::linear_to_oklab(
-            srgb8_to_linear(actual_srgb));
-        auto quant_error = oklab_scale(
-            oklab_sub(adjusted_lab, actual_lab), strength);
-
-        for (auto& entry : future_kernel) {
-            auto nx = static_cast<std::ptrdiff_t>(x) +
-                      (reverse ? -entry.dx : entry.dx);
-            auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
-
-            if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
-                ny >= 0 && static_cast<std::size_t>(ny) < total_height) {
-                auto nidx = static_cast<std::size_t>(ny) * width +
-                            static_cast<std::size_t>(nx);
-                error_buf[nidx] = oklab_clamp(
-                    oklab_add(error_buf[nidx],
-                              oklab_scale(quant_error, entry.weight)),
-                    error_clamp_val);
-            }
-        }
-    }
-
-    return result;
-}
-
-// ---------------------------------------------------------------------------
 // Generic HAM encoder (works for any depth 4-8)
 // ---------------------------------------------------------------------------
 
@@ -862,36 +640,82 @@ Result<HamResult> encode_ham_generic(
             total_error += scanline.error;
         }
     } else if (use_error_diffusion) {
-        // Error diffusion dithering path
+        // Error diffusion for HAM: pre-dither the image from full precision
+        // to chipset color depth (OCS 12-bit / STF 9-bit), then encode HAM
+        // on the pre-dithered image without further dithering.
+        // This matches abc's approach: error diffusion smooths the color
+        // quantization step, not the HAM encoding itself. Trying to diffuse
+        // during HAM encoding causes horizontal banding because HAM's
+        // sequential pixel dependency conflicts with error propagation.
         auto kernel = get_diffusion_kernel(opts.dither_method);
+        auto strength = opts.dither_strength;
+        auto error_clamp_val = opts.error_clamp;
 
-        // Error buffer: needs to cover current row + max kernel reach
-        std::vector<OKLab> error_buf(w * h);  // full image error buffer
+        // Pre-dither: quantize each pixel to chipset precision with error diffusion
+        Image dithered_image(w, h);
+        std::vector<OKLab> error_buf(w * h, OKLab{0, 0, 0});
 
         for (std::size_t y = 0; y < h; ++y) {
-            SRGBColor start = base_srgb[0];
+            bool reverse = (y % 2 == 1);  // serpentine
             auto row = image.row(y);
+            for (std::size_t step = 0; step < w; ++step) {
+                std::size_t x = reverse ? (w - 1 - step) : step;
+                auto buf_idx = y * w + x;
 
-            if (opts.quality == Quality::optimal) {
-                auto scanline = encode_scanline_dp_dithered(
-                    row, start, pre, srgb_span,
-                    opts.beam_width,
-                    kernel, opts.dither_strength, opts.error_clamp,
-                    error_buf, y, h, true /*serpentine*/);
+                // Add accumulated error to original color
+                auto target_lab = color_space::linear_to_oklab(row[x]);
+                auto clamped_err = oklab_clamp(error_buf[buf_idx], error_clamp_val);
+                auto adjusted_lab = oklab_add(target_lab, clamped_err);
+                auto adjusted = color_space::oklab_to_linear(adjusted_lab);
+                adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
+                adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
+                adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
 
-                std::copy(scanline.values.begin(), scanline.values.end(),
-                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-                total_error += scanline.error;
-            } else {
-                auto scanline = encode_scanline_greedy_dithered(
-                    row, start, pre, srgb_span,
-                    kernel, opts.dither_strength, opts.error_clamp,
-                    error_buf, y, h, true /*serpentine*/);
+                // Quantize to chipset precision
+                auto quantized = (chipset == amiga::Chipset::aga)
+                    ? adjusted  // AGA is 24-bit, no quantization needed
+                    : palette::quantize_to_ocs(adjusted);
+                dithered_image[x, y] = quantized;
 
-                std::copy(scanline.values.begin(), scanline.values.end(),
-                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-                total_error += scanline.error;
+                // Compute and distribute error
+                auto actual_lab = color_space::linear_to_oklab(quantized);
+                auto quant_error = oklab_scale(
+                    oklab_sub(adjusted_lab, actual_lab), strength);
+
+                for (auto& entry : kernel) {
+                    auto nx = static_cast<std::ptrdiff_t>(x) +
+                              (reverse ? -entry.dx : entry.dx);
+                    auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
+                    if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
+                        ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                        auto nidx = static_cast<std::size_t>(ny) * w +
+                                    static_cast<std::size_t>(nx);
+                        error_buf[nidx] = oklab_clamp(
+                            oklab_add(error_buf[nidx],
+                                      oklab_scale(quant_error, entry.weight)),
+                            error_clamp_val);
+                    }
+                }
             }
+        }
+
+        // Now encode HAM on the pre-dithered image (no further dithering)
+        for (std::size_t y = 0; y < h; ++y) {
+            SRGBColor start = base_srgb[0];
+            auto row = dithered_image.row(y);
+
+            ScanlineResult scanline;
+            if (opts.quality == Quality::optimal) {
+                scanline = encode_scanline_dp(
+                    row, start, pre, srgb_span, opts.beam_width);
+            } else {
+                scanline = encode_scanline_greedy(
+                    row, start, pre, srgb_span);
+            }
+
+            std::copy(scanline.values.begin(), scanline.values.end(),
+                      ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
+            total_error += scanline.error;
         }
     } else {
         // Non-dithered encoding path (original algorithm)
@@ -1061,21 +885,65 @@ Result<HamResult> encode_ham_copper_generic(
     std::vector<std::vector<copper::CopperChange>> all_changes(h);
     float total_error = 0.0f;
 
-    // Error diffusion state (persists across scanlines)
+    // Error diffusion state
     bool use_error_diffusion = (opts.dither_method != dither::Method::none) &&
                                is_error_diffusion(opts.dither_method);
     bool use_ordered = (opts.dither_method != dither::Method::none) &&
                        dither::is_ordered(opts.dither_method);
 
-    std::vector<OKLab> error_buf;
-    std::span<const DiffusionEntry> kernel;
+    // For error diffusion: pre-dither image to chipset precision (same fix
+    // as non-copper path). The dithered image is used for both copper palette
+    // selection and HAM encoding.
+    Image dithered_image(0, 0);
     if (use_error_diffusion) {
-        error_buf.resize(w * h);
-        kernel = get_diffusion_kernel(opts.dither_method);
+        dithered_image = Image(w, h);
+        auto kernel = get_diffusion_kernel(opts.dither_method);
+        auto strength = opts.dither_strength;
+        auto error_clamp_val = opts.error_clamp;
+        std::vector<OKLab> error_buf(w * h, OKLab{0, 0, 0});
+
+        for (std::size_t y = 0; y < h; ++y) {
+            bool reverse = (y % 2 == 1);
+            auto row = image.row(y);
+            for (std::size_t step = 0; step < w; ++step) {
+                std::size_t x = reverse ? (w - 1 - step) : step;
+                auto buf_idx = y * w + x;
+                auto target_lab = color_space::linear_to_oklab(row[x]);
+                auto clamped_err = oklab_clamp(error_buf[buf_idx], error_clamp_val);
+                auto adjusted_lab = oklab_add(target_lab, clamped_err);
+                auto adjusted = color_space::oklab_to_linear(adjusted_lab);
+                adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
+                adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
+                adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
+                auto quantized = (chipset == amiga::Chipset::aga)
+                    ? adjusted : palette::quantize_to_ocs(adjusted);
+                dithered_image[x, y] = quantized;
+                auto actual_lab = color_space::linear_to_oklab(quantized);
+                auto quant_error = oklab_scale(
+                    oklab_sub(adjusted_lab, actual_lab), strength);
+                for (auto& entry : kernel) {
+                    auto nx = static_cast<std::ptrdiff_t>(x) +
+                              (reverse ? -entry.dx : entry.dx);
+                    auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
+                    if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
+                        ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                        auto nidx = static_cast<std::size_t>(ny) * w +
+                                    static_cast<std::size_t>(nx);
+                        error_buf[nidx] = oklab_clamp(
+                            oklab_add(error_buf[nidx],
+                                      oklab_scale(quant_error, entry.weight)),
+                            error_clamp_val);
+                    }
+                }
+            }
+        }
     }
 
+    // Use pre-dithered image for error diffusion, original for other modes
+    const Image& encode_image = use_error_diffusion ? dithered_image : image;
+
     for (std::size_t y = 0; y < h; ++y) {
-        auto row = image.row(y);
+        auto row = encode_image.row(y);
 
         // Find best K swaps (modifies current_pal in-place)
         auto swaps = find_ham_swaps(row, current_pal, num_base_colors,
@@ -1104,28 +972,8 @@ Result<HamResult> encode_ham_copper_generic(
             std::span<const Color3f>{current_pal.data(), num_base_colors},
             data_bits};
 
-        // Encode scanline
-        if (use_error_diffusion) {
-            // Error diffusion with cross-scanline propagation
-            if (opts.quality == Quality::optimal) {
-                auto scanline = encode_scanline_dp_dithered(
-                    row, start, line_pre, srgb_span,
-                    opts.beam_width,
-                    kernel, opts.dither_strength, opts.error_clamp,
-                    error_buf, y, h, true /*serpentine*/);
-                std::copy(scanline.values.begin(), scanline.values.end(),
-                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-                total_error += scanline.error;
-            } else {
-                auto scanline = encode_scanline_greedy_dithered(
-                    row, start, line_pre, srgb_span,
-                    kernel, opts.dither_strength, opts.error_clamp,
-                    error_buf, y, h, true);
-                std::copy(scanline.values.begin(), scanline.values.end(),
-                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-                total_error += scanline.error;
-            }
-        } else if (use_ordered) {
+        // Encode scanline (error diffusion already handled by pre-dither)
+        if (use_ordered) {
             // Ordered dithering with correct Y coordinate
             std::vector<Color3f> dithered_row(w);
             for (std::size_t x = 0; x < w; ++x) {
