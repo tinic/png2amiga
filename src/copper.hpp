@@ -64,27 +64,33 @@ struct CopperResult {
 constexpr std::size_t max_changes_per_line(std::size_t depth, bool is_ham,
                                            bool is_hires,
                                            amiga::Chipset chipset) noexcept {
+    // Copper palette changes are written at end-of-display (past DDFSTOP),
+    // giving ~100 free color clocks through end-of-line + HBLANK + pre-DDFSTRT.
+    // OCS: 1 MOVE per color (12-bit). AGA: 2 MOVEs per color (bank + value).
     if (chipset == amiga::Chipset::aga) {
+        // AGA needs bank switching for regs 32+, ~2 MOVEs per change
+        if (is_ham) {
+            // HAM6 AGA: 16 base colors, all swappable (slot 0 = start color)
+            if (depth == 6) return 16;
+            // HAM8 AGA: 64 base colors, 12 tested stable
+            if (depth == 8) return 12;
+        }
         if (is_hires) {
-            if (is_ham && depth == 6) return 4;
-            if (is_ham && depth == 8) return 8;
             if (depth >= 8) return 4;
-            if (depth >= 7) return 4;
             if (depth >= 6) return 8;
             return 16;
         }
-        // Lores AGA
-        if (is_ham && depth == 8) return 4;
-        if (is_ham && depth == 6) return 8;
         if (depth >= 8) return 4;
-        if (depth >= 7) return 4;
         if (depth >= 6) return 8;
         return 16;
     }
-    // OCS
-    if (is_ham) return 8;  // HAM6
-    if (is_hires) return std::size_t{1} << depth;
-    return std::size_t{1} << depth;
+    // OCS: 1 MOVE per change, plenty of time
+    if (is_ham) return 16;  // HAM6: all 16 base colors
+    if (is_hires) {
+        if (depth >= 4) return 16;
+        return std::size_t{1} << depth;
+    }
+    return std::min(std::size_t{1} << depth, std::size_t{32});
 }
 
 // ---------------------------------------------------------------------------
