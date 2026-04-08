@@ -31,6 +31,7 @@ SUPPORT = os.path.join(TEMPLATE, "support")
 PLATFORM = "linux"
 GCC = os.path.join(TOOLCHAIN, PLATFORM, "opt", "bin", "m68k-amiga-elf-gcc")
 GCC_DIR = os.path.join(TOOLCHAIN, PLATFORM, "opt")
+SYS_INCLUDE = os.path.join(GCC_DIR, "m68k-amiga-elf", "sys-include")
 ELF2HUNK = os.path.join(TOOLCHAIN, PLATFORM, "elf2hunk")
 EXE2ADF = os.path.join(TOOLCHAIN, PLATFORM, "exe2adf")
 DH0 = os.path.join(TOOLCHAIN, "dh0")  # startup-sequence + system commands for ADF
@@ -72,8 +73,9 @@ def compile_viewer(source_code, output_format="exe"):
         subprocess.run(_sandbox([
             GCC, "-m68000", "-Ofast", "-nostdlib",
             "-fomit-frame-pointer", "-fno-exceptions",
-            "-nostdinc",                   # block #include of system files
-            "-isystem", GCC_DIR,           # only allow cross-compiler headers
+            "-nostdinc",                   # block #include of host system files
+            "-isystem", SYS_INCLUDE,       # Amiga SDK headers (proto/, exec/, etc.)
+            "-isystem", os.path.join(GCC_DIR, "lib", "gcc", "m68k-amiga-elf", "14.2.0", "include"),  # gcc builtins (stddef.h etc.)
             "-I", TEMPLATE,
             "-Wa,--register-prefix-optional",
             "-Wl,--emit-relocs,-Ttext=0",
