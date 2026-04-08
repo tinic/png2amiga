@@ -189,8 +189,8 @@ export function isHiresMode(mode) {
 
 // Pixel display scale for preview (minimum pixel size on screen)
 export function previewScale(mode) {
-  const hi = isHiresMode(mode) || mode.endsWith('-med')
-  const lace = isInterlaceMode(mode)
+  const hi = isHiresMode(mode) || mode.endsWith('-med') || mode.endsWith('-hi')
+  const lace = isInterlaceMode(mode) || mode.endsWith('-hi')  // -hi is 640x400 square pixels
   if (hi && lace) return { sx: 1, sy: 1 }
   if (hi)         return { sx: 1, sy: 2 }
   if (lace)       return { sx: 2, sy: 1 }
