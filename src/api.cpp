@@ -470,6 +470,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
+        // Force transparent pixels to black in rendered preview
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
+        }
         result.quant_error = ham_result->total_error;
         return result;
     }
@@ -695,6 +700,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = options.interlace;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
+        // Force transparent pixels to black in rendered preview
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
+        }
         result.quant_error = dither_result.total_error;
         return result;
     }
@@ -732,6 +742,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.changes_per_line = copper_result->changes_per_line;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
+        // Force transparent pixels to black in rendered preview
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
+        }
         result.copper_changes = copper_result->avg_changes_per_line;
         result.quant_error = copper_result->total_error;
         return result;
@@ -822,6 +837,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.interlace = options.interlace;
     result.has_transparency = has_transparency;
     result.transparency_mask = tmask;
+    if (has_transparency) {
+        for (std::size_t i = 0; i < tmask.size(); ++i)
+            if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
+    }
     result.quant_error = dither_result.total_error;
     return result;
 }
