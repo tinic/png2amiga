@@ -695,7 +695,7 @@ async function loadExample(example) {
       </div>
 
       <!-- Preview (sticky right side) -->
-      <div class="col-12 md:col-8 lg:col-9 preview-col">
+      <div class="col-12 md:col-8 lg:col-9 preview-col" :class="{ 'loupe-fullscreen': loupeActive }">
         <div v-if="!imageBytes" class="surface-card border-round-lg flex align-items-center justify-content-center" style="min-height: 500px;">
           <div class="text-center text-color-secondary">
             <i class="pi pi-upload text-5xl mb-3 block"></i>
@@ -765,6 +765,26 @@ async function loadExample(example) {
   position: sticky;
   top: 1rem;
   align-self: start;
+}
+.preview-col.loupe-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100% !important;
+  max-width: 100% !important;
+  background: var(--p-surface-ground);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.preview-col.loupe-fullscreen .preview-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0;
 }
 
 .drop-zone {
