@@ -726,9 +726,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // Build palette.
     // Atari mono: fixed B/W palette (no quantization needed).
-    // When transparency is present, reserve index 0 for transparent color:
-    // quantize N-1 colors, then prepend black at index 0.
-    auto quant_colors = has_transparency ? max_colors - 1 : max_colors;
+    // Amiga: always reserve index 0 for black (border/background color).
+    // Atari: use full palette (no border register tied to index 0).
+    // Transparency: also reserves index 0 for transparent (black).
+    auto is_atari = amiga::is_atari(mode);
+    auto reserve_zero = has_transparency || !is_atari;
+    auto quant_colors = reserve_zero ? max_colors - 1 : max_colors;
     Palette pal;
     if (amiga::is_atari_hi(mode)) {
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
@@ -747,7 +750,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // STF: snap OCS brute-force result to 9-bit precision before dithering
         if (amiga::is_stf(mode)) snap_to_chipset(pal, chipset, mode);
     }
-    if (has_transparency) {
+    if (reserve_zero) {
         pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
     }
 

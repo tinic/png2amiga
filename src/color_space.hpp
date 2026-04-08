@@ -161,6 +161,7 @@ constexpr Color3f oklab_to_linear(OKLab lab) noexcept {
 // slightly underweights red perception vs human sensitivity.
 // Tuned OKLab weights: slightly de-weight luminance to preserve more
 // color variation in the palette. Optimized on fantasy.png lores 5bpl.
+// Use --weight-l/--weight-a/--weight-b CLI flags to experiment.
 inline float WEIGHT_L = 0.85f;
 inline float WEIGHT_A = 1.05f;   // red-green axis
 inline float WEIGHT_B = 1.0f;    // blue-yellow axis

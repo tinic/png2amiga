@@ -1631,15 +1631,19 @@ int main(int argc, char* argv[]) {
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
         std::println("Palette: 2 colors (monochrome)");
     } else {
-        // Reserve index 0 for black only when transparency is present
-        auto quant_n = has_transparency ? (max_colors > 1 ? max_colors - 1 : 1) : max_colors;
+        // Amiga: always reserve index 0 for black (border/background color).
+        // Atari: use full palette (no border register tied to index 0).
+        // Transparency: also reserves index 0 for transparent (black).
+        auto is_atari = amiga::is_atari(config->mode);
+        auto reserve_zero = has_transparency || !is_atari;
+        auto quant_n = reserve_zero ? (max_colors > 1 ? max_colors - 1 : 1) : max_colors;
         auto quantized = auto_quantize(*image, quant_n, chipset);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;
         }
         pal = *std::move(quantized);
-        if (has_transparency)
+        if (reserve_zero)
             pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
         // STF: snap OCS brute-force result to 9-bit precision
         if (amiga::is_stf(config->mode)) snap_palette(pal, chipset, config->mode);
@@ -1649,21 +1653,8 @@ int main(int argc, char* argv[]) {
                      chipset == amiga::Chipset::aga ? "median-cut" : "OCS brute-force");
     }
 
-    // Color 0 = black (background/border, transparency).
-    // Already reserved during quantization (N-1 colors + black at 0).
-
     if (config->match_range) {
         preprocess::match_palette_range(*image, pal);
-    }
-
-    // When transparency is present, reserve color 0 for transparent.
-    // Generate N-1 opaque colors, then insert transparent at index 0.
-    if (has_transparency && pal.colors.size() > 1) {
-        // Shift palette: insert black (transparent color) at index 0
-        pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
-        if (pal.colors.size() > max_colors)
-            pal.colors.resize(max_colors);
-        std::println("Transparency: color 0 reserved (transparent)");
     }
 
     // Apply dithering
