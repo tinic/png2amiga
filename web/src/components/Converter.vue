@@ -50,6 +50,31 @@ const lastWidth = ref(320)
 const lastHeight = ref(160)
 const imageHasAlpha = ref(false)
 const pageLoadTime = Date.now()
+
+// Loupe (4x zoom with drag-to-pan)
+const loupeActive = ref(false)
+const loupeX = ref(0)  // pan offset in CSS pixels (negative = scrolled right/down)
+const loupeY = ref(0)
+let dragStart = null    // { x, y, ox, oy } while dragging
+
+function loupeToggle() {
+  loupeActive.value = !loupeActive.value
+  loupeX.value = 0
+  loupeY.value = 0
+}
+function loupePointerDown(e) {
+  if (!loupeActive.value) return
+  dragStart = { x: e.clientX, y: e.clientY, ox: loupeX.value, oy: loupeY.value }
+  e.currentTarget.setPointerCapture(e.pointerId)
+}
+function loupePointerMove(e) {
+  if (!dragStart) return
+  loupeX.value = dragStart.ox + (e.clientX - dragStart.x)
+  loupeY.value = dragStart.oy + (e.clientY - dragStart.y)
+}
+function loupePointerUp() {
+  dragStart = null
+}
 let firstConvertTracked = false
 let exportCount = 0
 
@@ -674,13 +699,19 @@ async function loadExample(example) {
         </div>
 
         <div v-else class="flex flex-column gap-2">
-          <div class="preview-container surface-card border-round-lg overflow-hidden relative">
-            <div class="canvas-wrap relative">
+          <div class="preview-container surface-card border-round-lg overflow-hidden relative"
+               @pointerdown="loupePointerDown" @pointermove="loupePointerMove" @pointerup="loupePointerUp"
+               :class="{ 'loupe-active': loupeActive }"
+          >
+            <div class="canvas-wrap relative" :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
               <canvas ref="canvasRef" class="preview-canvas" />
               <div v-if="converting" class="overlay flex align-items-center justify-content-center">
                 <ProgressSpinner style="width: 2rem; height: 2rem" />
               </div>
             </div>
+            <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
+              <i class="pi pi-search"></i>
+            </button>
           </div>
           <div class="flex justify-content-between align-items-center px-1">
             <span class="text-xs text-color-secondary">{{ resultInfo }}</span>
@@ -784,9 +815,42 @@ async function loadExample(example) {
   background: #000;
   padding: 1rem;
 }
+.preview-container.loupe-active {
+  cursor: grab;
+  overflow: hidden;
+}
+.preview-container.loupe-active:active {
+  cursor: grabbing;
+}
 
 .canvas-wrap {
   display: inline-block;
+}
+
+.loupe-btn {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  transition: background 0.15s, color 0.15s;
+}
+.loupe-btn:hover {
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+}
+.loupe-btn.active {
+  background: var(--p-primary-color);
+  color: #fff;
 }
 
 .preview-canvas {
