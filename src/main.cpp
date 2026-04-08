@@ -757,11 +757,10 @@ int main(int argc, char* argv[]) {
         target_w = params.is_hires
             ? params.screen_width
             : std::min(params.screen_width, src_w);
-        if (params.screen_height > 0) {
-            target_h = params.screen_height;  // fixed height (Atari ST)
-        } else {
-            target_h = round_even(static_cast<double>(target_w) * par / src_aspect);
-        }
+        target_h = round_even(static_cast<double>(target_w) * par / src_aspect);
+        // Atari: clamp to fixed height, pad/crop handled after scaling
+        if (params.screen_height > 0 && target_h > params.screen_height)
+            target_h = params.screen_height;
     }
 
     std::println("Input:  {}x{}", image->width(), image->height());
@@ -890,6 +889,27 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         image = *std::move(scaled);
+    }
+
+    // Atari: center vertically in fixed-height frame if image is shorter
+    if (params.screen_height > 0 && image->height() < params.screen_height) {
+        auto w = image->width();
+        auto h = image->height();
+        auto fh = params.screen_height;
+        Image padded(w, fh);
+        auto y_off = (fh - h) / 2;
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < w; ++x)
+                padded[x, y + y_off] = (*image)[x, y];
+        if (has_transparency) {
+            std::vector<bool> new_mask(w * fh, true);
+            for (std::size_t y = 0; y < h; ++y)
+                for (std::size_t x = 0; x < w; ++x)
+                    new_mask[(y + y_off) * w + x] = transparency_mask[y * w + x];
+            transparency_mask = std::move(new_mask);
+        }
+        std::println("Center: {}x{} -> {}x{} (vertical pad)", w, h, w, fh);
+        image = std::move(padded);
     }
 
     // Preprocess

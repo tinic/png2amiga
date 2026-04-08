@@ -532,14 +532,14 @@ async function loadExample(example) {
                 </div>
               </template>
 
-              <!-- Resize override -->
-              <div class="grid align-items-center">
+              <!-- Resize override (not for Atari — fixed resolution) -->
+              <div v-if="!isAtariMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold">Resize</label>
                 <div class="col-8">
                   <ToggleSwitch v-model="sizeOverride" />
                 </div>
               </div>
-              <template v-if="sizeOverride">
+              <template v-if="sizeOverride && !isAtariMode(options.mode)">
                 <div class="grid align-items-center">
                   <label class="col-4 text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
                   <div class="col-8">

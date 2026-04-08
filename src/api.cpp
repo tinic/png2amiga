@@ -312,11 +312,10 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     }
     // Neither: use mode default width, but don't upscale small images
     auto w = std::min(mode_w, src_w);
-    auto mode_h = params.screen_height;
-    if (mode_h > 0) {
-        return {w, mode_h};  // fixed height (Atari ST)
-    }
     auto h = round_even(static_cast<double>(w) * par / src_aspect);
+    // For fixed-height modes (Atari ST), clamp to screen_height
+    auto mode_h = params.screen_height;
+    if (mode_h > 0 && h > mode_h) h = mode_h;
     return {w, h};
 }
 
@@ -365,6 +364,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                       target_w, target_h, &tmask);
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
+
+    // Atari: center vertically in fixed-height frame if image is shorter
+    auto mode_h = amiga::get_mode_params(mode).screen_height;
+    if (mode_h > 0 && image->height() < mode_h) {
+        auto w = image->width();
+        auto h = image->height();
+        Image padded(w, mode_h);
+        auto y_off = (mode_h - h) / 2;
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < w; ++x)
+                padded[x, y + y_off] = (*image)[x, y];
+        if (has_transparency) {
+            std::vector<bool> new_mask(w * mode_h, true);
+            for (std::size_t y = 0; y < h; ++y)
+                for (std::size_t x = 0; x < w; ++x)
+                    new_mask[(y + y_off) * w + x] = tmask[y * w + x];
+            tmask = std::move(new_mask);
+        }
+        *image = std::move(padded);
+    }
 
     auto chipset = resolve_chipset(options.chipset, mode);
 
