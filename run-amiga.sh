@@ -33,12 +33,16 @@ if [ "$EXT" = "cpp" ] || [ "$EXT" = "c" ]; then
     "$SCRIPT_DIR/build-amiga.sh" "$INPUT" "$EXE"
     INPUT="$EXE"
     BASENAME="${INPUT%.*}"
+    EXT="exe"
 fi
 
-ADF="${BASENAME}.adf"
-
-echo "Creating ADF: $ADF"
-"$EXE2ADF" -i "$INPUT" -a "$ADF" -l "png2amiga"
+if [ "$EXT" = "adf" ]; then
+    ADF="$INPUT"
+else
+    ADF="${BASENAME}.adf"
+    echo "Creating ADF: $ADF"
+    "$EXE2ADF" -i "$INPUT" -a "$ADF" -l "png2amiga"
+fi
 
 MODEL="${2:-A1200}"
 NTSC=""
