@@ -126,6 +126,7 @@ export const EXAMPLES = [
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'checker', alphaThreshold: 0 } },
   { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
+  { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'floyd-steinberg', copper: true } },
 ]
 
 export function defaultOptions() {
