@@ -254,23 +254,30 @@ Result<CopperResult> encode_copper(const Image& image,
         auto row = image.row(y);
 
         // Build neighbor rows with weights for smoothing.
-        // Current row weight=1.0, ±1 rows weight=0.3
-        constexpr float neighbor_weight = 0.3f;
+        // Current row weight=1.0, neighbors decay with distance.
+        constexpr std::size_t neighbor_radius = 4;
+        constexpr float decay = 0.5f;  // weight halves per row of distance
         std::vector<std::span<const Color3f>> rows;
         std::vector<std::span<const color_space::OKLab>> rows_lab;
         std::vector<float> weights;
-        if (y > 0) {
-            rows.push_back(image.row(y - 1));
-            rows_lab.push_back(all_lab[y - 1]);
-            weights.push_back(neighbor_weight);
-        }
-        rows.push_back(row);
-        rows_lab.push_back(all_lab[y]);
-        weights.push_back(1.0f);
-        if (y + 1 < height) {
-            rows.push_back(image.row(y + 1));
-            rows_lab.push_back(all_lab[y + 1]);
-            weights.push_back(neighbor_weight);
+        for (std::size_t dy = 0; dy <= neighbor_radius; ++dy) {
+            float w = (dy == 0) ? 1.0f : std::pow(decay, static_cast<float>(dy));
+            if (dy == 0) {
+                rows.push_back(row);
+                rows_lab.push_back(all_lab[y]);
+                weights.push_back(w);
+            } else {
+                if (y >= dy) {
+                    rows.push_back(image.row(y - dy));
+                    rows_lab.push_back(all_lab[y - dy]);
+                    weights.push_back(w);
+                }
+                if (y + dy < height) {
+                    rows.push_back(image.row(y + dy));
+                    rows_lab.push_back(all_lab[y + dy]);
+                    weights.push_back(w);
+                }
+            }
         }
 
         // Greedily find the best K swaps (each slot swapped at most once per line)
