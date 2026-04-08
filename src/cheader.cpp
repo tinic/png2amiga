@@ -929,30 +929,36 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Fade: scan copper list for color register offsets, then patch per frame
     if (do_fade) {
         out += "    ULONG cop_len = (ULONG)cl - (ULONG)copper1 + 4;\n";
-        out += std::format("    USHORT* copper_src = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
-                           cop_size);
-        out += "    CopyMem(copper1, copper_src, cop_len);\n";
-        // Scan once to find color register value offsets
-        out += "    // Find all color register value positions in the copper list\n";
+        // Precompute all 16 fade steps as separate copper lists in chip RAM.
+        // During fade, just swap cop1lc — zero CPU chip RAM access per frame.
+        out += "    USHORT* fade_cops[16];\n";
+        out += "    // Find color register value positions\n";
         out += "    USHORT fade_off[4096]; int fade_cnt = 0;\n";
         out += "    { USHORT* p = copper1;\n";
         out += "      while (!(p[0] == 0xFFFF && p[1] == 0xFFFE)) {\n";
         out += "        if ((p[0] & 1) == 0 && p[0] >= 0x0180 && p[0] <= 0x01BE)\n";
-        out += "            fade_off[fade_cnt++] = (USHORT)((ULONG)(p+1) - (ULONG)copper1) / 2;\n";
+        out += "            fade_off[fade_cnt++] = (USHORT)(((ULONG)(p+1) - (ULONG)copper1) >> 1);\n";
         out += "        p += 2;\n";
         out += "      }\n";
         out += "    }\n";
-        // Fade-in
-        out += "    // Fade-in: patch only color values\n";
-        out += "    fadeApply(copper_src, copper1, fade_off, fade_cnt, 0);\n";
-        out += "    custom->cop1lc = (ULONG)copper1;\n";
+        out += "    // Build 16 faded copies (step 15 = copper1 itself)\n";
+        out += "    fade_cops[15] = copper1;\n";
+        out += "    for (int s = 0; s < 15; s++) {\n";
+        out += std::format("        fade_cops[s] = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
+                           cop_size);
+        out += "        CopyMem(copper1, fade_cops[s], cop_len);\n";
+        out += "        fadeApply(copper1, fade_cops[s], fade_off, fade_cnt, s);\n";
+        out += "    }\n";
+        // Fade-in: just swap cop1lc each frame
+        out += "    // Fade-in: one cop1lc write per frame\n";
+        out += "    custom->cop1lc = (ULONG)fade_cops[0];\n";
         out += "    custom->dmacon = DMAF_BLITTER;\n";
         out += "    custom->copjmp1 = 0x7fff;\n";
         out += "    custom->dmacon = DMAF_SETCLR | DMAF_MASTER | "
                "DMAF_RASTER | DMAF_COPPER;\n";
         out += "    for (int fade = 1; fade <= 15; fade++) {\n";
         out += "        WaitVbl();\n";
-        out += "        fadeApply(copper_src, copper1, fade_off, fade_cnt, fade);\n";
+        out += "        custom->cop1lc = (ULONG)fade_cops[fade];\n";
         out += "    }\n\n";
     }
 
@@ -1078,14 +1084,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Wait for left mouse button
     out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
 
-    // Fade-out: reverse 15→0
+    // Fade-out: reverse 15→0, then free
     if (do_fade) {
         out += "    // Fade-out\n";
         out += "    for (int fade = 14; fade >= 0; fade--) {\n";
         out += "        WaitVbl();\n";
-        out += "        fadeApply(copper_src, copper1, fade_off, fade_cnt, fade);\n";
+        out += "        custom->cop1lc = (ULONG)fade_cops[fade];\n";
         out += "    }\n";
-        out += std::format("    FreeMem(copper_src, {});\n\n", cop_size);
+        out += "    WaitVbl();\n";
+        out += std::format("    for (int s = 0; s < 15; s++) FreeMem(fade_cops[s], {});\n\n",
+                           cop_size);
     }
 
     // Cleanup
