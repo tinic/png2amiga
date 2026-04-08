@@ -769,7 +769,7 @@ async function loadExample(example) {
 .preview-col.loupe-expanded {
   position: sticky;
   top: 1rem;
-  height: calc(100vh - 8rem);
+  height: calc(100vh - 8.5rem);
   display: flex;
   flex-direction: column;
 }
