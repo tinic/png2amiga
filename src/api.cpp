@@ -442,7 +442,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             base_pal = *std::move(loaded);
             if (base_pal.colors.size() > ehb_base)
                 base_pal.colors.resize(ehb_base);
-            snap_to_chipset(base_pal, chipset);
+            snap_to_chipset(base_pal, chipset, mode);
         } else {
             auto quantized = quantize::quantize(*image, ehb_base,
                                                 quantize_algo(chipset));
@@ -563,6 +563,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                             quantize_algo(chipset, mode));
         if (!quantized) return std::unexpected{quantized.error()};
         pal = *std::move(quantized);
+        // STF: snap OCS brute-force result to 9-bit precision before dithering
+        if (amiga::is_stf(mode)) snap_to_chipset(pal, chipset, mode);
     }
     if (has_transparency) {
         pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});

@@ -574,13 +574,14 @@ Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
                               quantize::Algorithm::ocs_bruteforce);
 }
 
-// Snap palette to chipset precision (only needed for loaded palettes or
-// median-cut results — OCS brute-force already produces OCS colors)
-void snap_palette(Palette& pal, amiga::Chipset chipset) {
-    if (chipset != amiga::Chipset::aga) {
-        for (auto& c : pal.colors) {
+// Snap palette to chipset/mode precision
+void snap_palette(Palette& pal, amiga::Chipset chipset, amiga::Mode mode) {
+    if (amiga::is_stf(mode)) {
+        for (auto& c : pal.colors)
+            c = palette::quantize_to_stf(c);
+    } else if (chipset != amiga::Chipset::aga) {
+        for (auto& c : pal.colors)
             c = palette::quantize_to_ocs(c);
-        }
     }
 }
 
@@ -1089,7 +1090,7 @@ int main(int argc, char* argv[]) {
             base_pal = *std::move(loaded);
             if (base_pal.colors.size() > 32)
                 base_pal.colors.resize(32);
-            snap_palette(base_pal, chipset);
+            snap_palette(base_pal, chipset, config->mode);
             std::println("Palette: {} colors loaded from {}",
                          base_pal.size(), config->palette_file);
         } else {
@@ -1409,7 +1410,7 @@ int main(int argc, char* argv[]) {
         pal = *std::move(loaded);
         if (pal.colors.size() > max_colors)
             pal.colors.resize(max_colors);
-        snap_palette(pal, chipset);
+        snap_palette(pal, chipset, config->mode);
         std::println("Palette: {} colors (loaded from {})",
                      pal.size(), config->palette_file);
     } else {
@@ -1422,8 +1423,11 @@ int main(int argc, char* argv[]) {
         }
         pal = *std::move(quantized);
         pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
+        // STF: snap OCS brute-force result to 9-bit precision
+        if (amiga::is_stf(config->mode)) snap_palette(pal, chipset, config->mode);
         std::println("Palette: {} colors (auto, {})",
                      pal.size(),
+                     amiga::is_stf(config->mode) ? "STF 9-bit" :
                      chipset == amiga::Chipset::aga ? "median-cut" : "OCS brute-force");
     }
 
