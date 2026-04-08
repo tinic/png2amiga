@@ -741,8 +741,42 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Write palette changes at end of visible display (H=0xDF, past DDFSTOP).
         // This gives ~100 free color clocks (end-of-line + HBLANK + before next
         // DDFSTRT) instead of ~40 from HBLANK alone.
-        // Changes for line Y are written at end of line Y-1; line 0's palette
-        // is already set during initial copper setup.
+        // Line 0's changes are written inline (before display starts, no WAIT needed).
+        // Lines 1+ are written at end of the previous line.
+        auto emit_copper_changes = [&](const std::string& y_expr, bool aga) {
+            if (aga) {
+                out += "        { int cur_bank = 0;\n";
+                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
+                out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
+                out += "            if (reg == 0xFFFF) continue;\n";
+                out += "            int bank = reg / 32;\n";
+                out += "            if (bank != cur_bank) {\n";
+                out += "                *cl++ = 0x0106;\n";
+                out += "                *cl++ = (UWORD)(bank << 13);\n";
+                out += "                cur_bank = bank;\n";
+                out += "            }\n";
+                out += "            *cl++ = offsetof(struct Custom, color)"
+                       " + (reg % 32) * 2;\n";
+                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                out += "        }\n";
+                out += "        if (cur_bank != 0) {\n";
+                out += "            *cl++ = 0x0106; *cl++ = 0x0000;\n";
+                out += "        } }\n";
+            } else {
+                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
+                out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
+                out += "            if (reg == 0xFFFF) continue;\n";
+                out += std::format("            *cl++ = offsetof(struct Custom, color)"
+                                   " + reg * 2;\n");
+                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                out += "        }\n";
+            }
+        };
+
+        // Line 0: write changes before display starts (no WAIT)
+        out += "    // Line 0 copper changes (before display)\n";
+        emit_copper_changes("0", aga_banks);
+
         out += "    // Per-scanline copper palette changes (end of previous line)\n";
         out += std::format("    for (int y = 1; y < {}; y++) {{\n", height);
         out += std::format("        USHORT line = y - 1 + {};\n", y_start);
@@ -751,36 +785,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        }\n";
         out += "        *cl++ = ((line & 0xFF) << 8) | 0xDF;\n";
         out += "        *cl++ = 0xfffe;\n";
-        if (aga_banks) {
-            // AGA: changes are pre-sorted by register (bank 0 first).
-            // Track current bank, switch only when crossing a bank boundary,
-            // reset to bank 0 once at the end.
-            out += "        int cur_bank = 0;\n";
-            out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-            out += std::format("            UWORD reg = {}_copper[y][s].reg;\n", sym);
-            out += "            if (reg == 0xFFFF) continue;\n";
-            out += "            int bank = reg / 32;\n";
-            out += "            if (bank != cur_bank) {\n";
-            out += "                *cl++ = 0x0106;\n";
-            out += "                *cl++ = (UWORD)(bank << 13);\n";
-            out += "                cur_bank = bank;\n";
-            out += "            }\n";
-            out += "            *cl++ = offsetof(struct Custom, color)"
-                   " + (reg % 32) * 2;\n";
-            out += std::format("            *cl++ = {}_copper[y][s].color;\n", sym);
-            out += "        }\n";
-            out += "        if (cur_bank != 0) {\n";
-            out += "            *cl++ = 0x0106; *cl++ = 0x0000;\n";
-            out += "        }\n";
-        } else {
-            out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-            out += std::format("            UWORD reg = {}_copper[y][s].reg;\n", sym);
-            out += "            if (reg == 0xFFFF) continue;\n";
-            out += std::format("            *cl++ = offsetof(struct Custom, color)"
-                               " + reg * 2;\n");
-            out += std::format("            *cl++ = {}_copper[y][s].color;\n", sym);
-            out += "        }\n";
-        }
+        emit_copper_changes("y", aga_banks);
         out += "    }\n\n";
     }
 
