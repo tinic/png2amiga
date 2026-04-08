@@ -511,7 +511,7 @@ async function loadExample(example) {
                     optionGroupLabel="label"
                     optionGroupChildren="items"
                     class="flex-1"
-                    style="min-width:0;overflow:hidden"
+                    style="min-width:0"
                   />
                   <Button icon="pi pi-chevron-right" severity="secondary" text size="small"
                     @click="cycleDither(1)" style="min-width:1.5rem;padding:0.15rem" />
