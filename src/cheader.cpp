@@ -465,6 +465,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "\n";
     }
     out += "};\n\n";
+    // AGA low nibbles (only for viewer, not .h export)
+    if (options.aga) {
+        out += std::format("static const UWORD {}_palette_lo[] = {{\n", sym);
+        for (std::size_t i = 0; i < pal_count; ++i) {
+            auto aga = palette::linear_to_aga_hilo(palette[i]);
+            out += std::format("    0x{:04X}", aga.lo);
+            if (i + 1 < pal_count) out += ",";
+            out += "\n";
+        }
+        out += "};\n\n";
+    }
 
     // --- Copper list (if present) ---
     bool has_copper = options.copper_changes && !options.copper_changes->empty();
@@ -495,6 +506,29 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += "\n";
         }
         out += "};\n\n";
+
+        // AGA: low nibble copper data
+        if (options.aga) {
+            out += std::format("static const struct CopperEntry {}_copper_lo"
+                               "[{}][{}] = {{\n", sym, ch_height, cpl);
+            for (std::size_t y = 0; y < ch_height; ++y) {
+                out += "    { ";
+                auto& line = changes[y];
+                for (std::size_t s = 0; s < cpl; ++s) {
+                    if (s < line.size()) {
+                        auto aga = palette::linear_to_aga_hilo(line[s].color);
+                        out += std::format("{{{},0x{:04X}}}", line[s].reg, aga.lo);
+                    } else {
+                        out += "{0xFFFF,0x0000}";
+                    }
+                    if (s + 1 < cpl) out += ",";
+                }
+                out += " }";
+                if (y + 1 < ch_height) out += ",";
+                out += "\n";
+            }
+            out += "};\n\n";
+        }
     }
 
     // --- Copper list builder helper ---
@@ -713,25 +747,34 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += std::format("        *cl++ = {}_palette[{} + i];\n", sym, base);
             out += "    }\n";
 
-            // Low nibbles (LOCT=1) — only for non-HAM modes
-            if (!is_ham) {
+            // Low nibbles (LOCT=1)
+            if (options.aga) {
                 out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
                                    "  // bank {}, LOCT=1\n",
                                    bank_bits | 0x0200, bank);
                 out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
                 out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
-                out += "        *cl++ = 0x0000;\n";
+                out += std::format("        *cl++ = {}_palette_lo[{} + i];\n", sym, base);
                 out += "    }\n";
             }
         }
         // Reset to bank 0, LOCT=0
         out += "    *cl++ = 0x0106; *cl++ = 0x0000;\n\n";
     } else {
-        // OCS/ECS: just write 32 colors directly
+        // <=32 colors: write directly (no bank switching)
         out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
         out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
         out += std::format("        *cl++ = {}_palette[i];\n", sym);
-        out += "    }\n\n";
+        out += "    }\n";
+        if (options.aga) {
+            out += "    *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
+            out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+            out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+            out += std::format("        *cl++ = {}_palette_lo[i];\n", sym);
+            out += "    }\n";
+            out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+        }
+        out += "\n";
     }
 
     // Copper changes per scanline
@@ -745,6 +788,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Lines 1+ are written at end of the previous line.
         auto emit_copper_changes = [&](const std::string& y_expr, bool aga) {
             if (aga) {
+                // High nibbles with bank switching
                 out += "        { int cur_bank = 0;\n";
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
@@ -759,15 +803,49 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                        " + (reg % 32) * 2;\n";
                 out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
-                out += "        if (cur_bank != 0) {\n";
-                out += "            *cl++ = 0x0106; *cl++ = 0x0000;\n";
-                out += "        } }\n";
-            } else {
+                // Low nibbles (LOCT=1)
+                out += "        cur_bank = 0;\n";
+                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
+                out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
+                out += "            if (reg == 0xFFFF) continue;\n";
+                out += "            int bank = reg / 32;\n";
+                out += "            if (bank != cur_bank) {\n";
+                out += "                *cl++ = 0x0106;\n";
+                out += "                *cl++ = (UWORD)((bank << 13) | 0x0200);\n";
+                out += "                cur_bank = bank;\n";
+                out += "            } else if (s == 0) {\n";
+                out += "                *cl++ = 0x0106;\n";
+                out += "                *cl++ = (UWORD)((bank << 13) | 0x0200);\n";
+                out += "            }\n";
+                out += "            *cl++ = offsetof(struct Custom, color)"
+                       " + (reg % 32) * 2;\n";
+                out += std::format("            *cl++ = {}_copper_lo[{}][s].color;\n", sym, y_expr);
+                out += "        }\n";
+                // Reset to bank 0, LOCT=0
+                out += "        *cl++ = 0x0106; *cl++ = 0x0000;\n";
+                out += "        }\n";
+            } else if (options.aga) {
+                // AGA <=32 colors: no bank switching but need LOCT
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
                 out += "            if (reg == 0xFFFF) continue;\n";
-                out += std::format("            *cl++ = offsetof(struct Custom, color)"
-                                   " + reg * 2;\n");
+                out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
+                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                out += "        }\n";
+                out += "        *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
+                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
+                out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
+                out += "            if (reg == 0xFFFF) continue;\n";
+                out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
+                out += std::format("            *cl++ = {}_copper_lo[{}][s].color;\n", sym, y_expr);
+                out += "        }\n";
+                out += "        *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+            } else {
+                // OCS: simple writes
+                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
+                out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
+                out += "            if (reg == 0xFFFF) continue;\n";
+                out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
                 out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
             }

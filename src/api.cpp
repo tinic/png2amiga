@@ -985,6 +985,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
         ch_opts.symbol_name = options.symbol_name;
     ch_opts.hires = result->hires;
     ch_opts.interlace = result->interlace;
+    ch_opts.aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga);
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;

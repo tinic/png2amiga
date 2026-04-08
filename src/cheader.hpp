@@ -43,6 +43,7 @@ struct CHeaderOptions {
     bool interleaved = false;            // if true, emit single interleaved array
     bool hires = false;                  // override HIRES for compound modes (ham8-hires etc.)
     bool interlace = false;              // set LACE bit in CAMG
+    bool aga = false;                    // AGA chipset (24-bit palette)
 
     // Copper: per-scanline register changes (nullptr = no copper)
     const std::vector<std::vector<copper::CopperChange>>* copper_changes = nullptr;

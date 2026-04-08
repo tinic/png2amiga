@@ -39,6 +39,19 @@ constexpr std::uint16_t linear_to_ocs(Color3f color) noexcept {
     return static_cast<std::uint16_t>((r4 << 8) | (g4 << 4) | b4);
 }
 
+// AGA 24-bit: split into high and low nibble words for LOCT register.
+// hi = upper 4 bits per channel (0x0RGB), lo = lower 4 bits (0x0RGB).
+struct AGA_HiLo { std::uint16_t hi; std::uint16_t lo; };
+constexpr AGA_HiLo linear_to_aga_hilo(Color3f color) noexcept {
+    auto srgb = color_space::linear_to_srgb(color).clamped();
+    auto r8 = static_cast<int>(srgb.r * 255.0f + 0.5f) & 0xFF;
+    auto g8 = static_cast<int>(srgb.g * 255.0f + 0.5f) & 0xFF;
+    auto b8 = static_cast<int>(srgb.b * 255.0f + 0.5f) & 0xFF;
+    auto hi = static_cast<std::uint16_t>(((r8 >> 4) << 8) | ((g8 >> 4) << 4) | (b8 >> 4));
+    auto lo = static_cast<std::uint16_t>(((r8 & 0xF) << 8) | ((g8 & 0xF) << 4) | (b8 & 0xF));
+    return {hi, lo};
+}
+
 // ---------------------------------------------------------------------------
 // Atari STF 9-bit color: 3 bits per channel (0-7), 512 possible colors
 // Stored as 0x0RGB where each nibble is 0-7
