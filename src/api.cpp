@@ -30,31 +30,6 @@ namespace png2amiga::api {
 namespace {
 
 
-// Zero out bitplane data for transparent pixels.
-// All-zero bits = index 0 (SET palette[0] in HAM, color 0 in standard modes).
-void mask_transparent_planes(bitplane::BitplaneData& planes,
-                             const std::vector<bool>& tmask,
-                             std::size_t width, std::size_t height) {
-    if (tmask.empty()) return;
-    auto depth = planes.depth;
-    for (std::size_t y = 0; y < height; ++y) {
-        for (std::size_t x = 0; x < width; ++x) {
-            if (x >= width || y >= height) continue;
-            auto i = y * width + x;
-            if (i >= tmask.size() || !tmask[i]) continue;
-            // Clear this pixel's bit in all bitplanes
-            auto byte_in_row = x / 8;
-            auto bit_in_byte = 7 - (x % 8);
-            auto mask = static_cast<std::uint8_t>(~(1u << bit_in_byte));
-            for (std::size_t p = 0; p < depth; ++p) {
-                auto off = planes.plane_row_offset(p, y) + byte_in_row;
-                if (off < planes.data.size())
-                    planes.data[off] &= mask;
-            }
-        }
-    }
-}
-
 amiga::Mode parse_mode(const std::string& s) {
     if (s == "lores") return amiga::Mode::lores;
     if (s == "lores-lace") return amiga::Mode::lores_interlace;
@@ -452,6 +427,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.dither_strength = options.dither_strength;
         ham_opts.error_clamp = options.error_clamp;
 
+        // Force transparent pixels to black BEFORE HAM encoding so the
+        // encoder handles color transitions correctly at transparency edges.
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
         Result<ham::HamResult> ham_result;
         if (options.copper) {
             ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts, compound_hires);
@@ -459,11 +441,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             ham_result = ham::encode_ham(*image, mode, chipset, ham_opts);
         }
         if (!ham_result) return std::unexpected{ham_result.error()};
-
-        // Force transparent pixels to index 0 (SET palette[0] = black)
-        if (has_transparency)
-            mask_transparent_planes(ham_result->planes, tmask,
-                                    image->width(), image->height());
 
         // Render preview using HAM decoder (not simple palette lookup)
         auto data_bits = ham_result->planes.depth - 2;
@@ -512,6 +489,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // --- EHB mode: 32 base colors + 32 half-brightness ---
     if (mode == amiga::Mode::ehb) {
         depth = 6;  // EHB is always 6 bitplanes
+
+        // Force transparent pixels to black before encoding
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
 
         // --- EHB with copper: per-scanline base palette optimization ---
         if (options.copper) {

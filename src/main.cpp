@@ -1005,6 +1005,12 @@ int main(int argc, char* argv[]) {
         ham_opts.dither_strength = config->dither_strength;
         ham_opts.error_clamp = config->error_clamp;
 
+        // Force transparent pixels to black before HAM encoding
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
         Result<ham::HamResult> ham_result = config->copper
             ? ham::encode_ham_copper(*image, config->mode, chipset, ham_opts,
                                    config->hires, static_cast<std::size_t>(config->copper_changes))
@@ -1167,6 +1173,12 @@ int main(int argc, char* argv[]) {
     if (config->mode == amiga::Mode::ehb) {
         // EHB is always 6 bitplanes, 32 base + 32 half-brightness
         auto ehb_depth = std::size_t{6};
+
+        // Force transparent pixels to black before encoding
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
 
         // --- EHB with copper ---
         if (config->copper) {
