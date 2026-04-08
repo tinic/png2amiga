@@ -1015,14 +1015,20 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        if (config->copper) {
-            std::println("Copper: {} base colors, {} changes/line",
-                         ham_result->base_palette.size(), ham_result->changes_per_line);
+        if (config->copper && !ham_result->copper_changes.empty()) {
+            std::size_t total_ch = 0;
+            for (auto& ch : ham_result->copper_changes) total_ch += ch.size();
+            float avg_ch = ham_result->copper_changes.size() > 0
+                ? static_cast<float>(total_ch) / static_cast<float>(ham_result->copper_changes.size())
+                : 0.0f;
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
+                         ham_result->planes.depth, ham_result->planes.total_bytes(),
+                         ham_result->base_palette.size(), avg_ch, ham_result->total_error);
+        } else {
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
+                         ham_result->planes.depth, ham_result->planes.total_bytes(),
+                         ham_result->base_palette.size(), ham_result->total_error);
         }
-
-        std::println("Encoded: {} bitplanes, {} bytes, {} base palette colors, error: {:.4f}",
-                     ham_result->planes.depth, ham_result->planes.total_bytes(),
-                     ham_result->base_palette.size(), ham_result->total_error);
 
         // Terminal preview (HAM decode)
         {
@@ -1385,9 +1391,9 @@ int main(int argc, char* argv[]) {
         std::vector<Color3f> full_palette(ehb_pal.colors.begin(),
                                           ehb_pal.colors.end());
 
-        std::println("Encoded: {} bitplanes, {} bytes, error: {:.4f}",
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
                      planes->depth, planes->total_bytes(),
-                     dither_result.total_error);
+                     full_palette.size(), dither_result.total_error);
 
         // Render preview
         auto preview = bitplane::render(*planes, full_palette);
@@ -1732,8 +1738,9 @@ int main(int argc, char* argv[]) {
 
     std::vector<Color3f> used_palette(pal_span.begin(), pal_span.end());
 
-    std::println("Encoded: {} bitplanes, {} bytes, error: {:.4f}",
-                 planes->depth, planes->total_bytes(), dither_result.total_error);
+    std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
+                 planes->depth, planes->total_bytes(), used_palette.size(),
+                 dither_result.total_error);
 
     // Render preview
     auto preview = bitplane::render(*planes, used_palette);
