@@ -613,17 +613,28 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Calculate copper list size: display setup + bitplane ptrs + colors + copper changes + end
     auto cop_size = 128 + depth * 4 * 2 + pal_count * 4;
     if (pal_count > 32) {
-        // AGA: double writes (LOCT high + low) + BPLCON3 per bank + reset
+        // AGA >32: double writes (LOCT high + low) + BPLCON3 per bank + reset
         auto num_banks = (pal_count + 31) / 32;
         cop_size += pal_count * 4;  // double the color writes (LOCT=1 pass)
         cop_size += static_cast<std::size_t>((num_banks * 2 + 1) * 4);  // BPLCON3 switches
+    } else if (options.aga) {
+        // AGA <=32: LOCT=1 pass + BPLCON3 switches (2 for LOCT on/off)
+        cop_size += pal_count * 4 + 8;
     }
     if (has_copper) {
         cop_size += height * options.copper_changes_per_line * 8 + height * 4;
-        if (pal_count > 32) {
-            // Extra space for BPLCON3 bank switches + reset per line
-            cop_size += height * 8;
+        if (options.aga) {
+            // AGA LOCT per scanline: BPLCON3 LOCT=1 + N color writes + BPLCON3 LOCT=0
+            cop_size += height * (8 + options.copper_changes_per_line * 4);
+            if (pal_count > 32) {
+                // Extra bank switches per scanline for hi pass
+                cop_size += height * 8;
+            }
         }
+        // Line 0 copper changes emitted separately (before display)
+        cop_size += options.copper_changes_per_line * 4;
+        if (options.aga)
+            cop_size += 8 + options.copper_changes_per_line * 4;
     }
     cop_size += 128;  // padding for blank-below, 256-boundary WAITs, end markers
 
