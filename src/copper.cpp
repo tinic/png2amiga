@@ -241,10 +241,13 @@ Result<CopperResult> encode_copper(const Image& image,
     std::vector<std::vector<Color3f>> scanline_palettes(height);
     float total_error = 0.0f;
 
-    // Error diffusion: per-row buffer (palette changes per scanline, so
-    // cross-scanline error propagation is not meaningful)
     bool use_diffusion = dither_settings.method != dither::Method::none &&
                          !dither::is_ordered(dither_settings.method);
+    // Cross-scanline error buffer. Even though the palette changes per row,
+    // the error (target - actual in OKLab) is palette-independent and valid
+    // for correcting future pixels against any palette.
+    std::vector<color_space::OKLab> err_buf;
+    if (use_diffusion) err_buf.resize(width * height);
 
     // Precompute all rows in OKLab for neighbor lookups
     std::vector<std::vector<color_space::OKLab>> all_lab(height);
@@ -327,22 +330,24 @@ Result<CopperResult> encode_copper(const Image& image,
         }
 
         if (use_diffusion) {
-            // Error diffusion within the scanline only. Cross-scanline
-            // propagation doesn't work because each row has a different
-            // copper palette. Same-row error (7/16 to right neighbor)
-            // is the only meaningful propagation.
+            // Full 2D error diffusion with serpentine scanning.
+            // The error (target - actual in OKLab) is palette-independent,
+            // so cross-scanline propagation works even though the copper
+            // palette changes per row.
+            bool reverse = (y % 2 == 1);
             auto ec = dither_settings.error_clamp;
             auto str = dither_settings.strength;
-            std::vector<color_space::OKLab> row_err(width);
-            for (std::size_t x = 0; x < width; ++x) {
+            for (std::size_t step = 0; step < width; ++step) {
+                std::size_t x = reverse ? (width - 1 - step) : step;
                 auto pixel_lab = color_space::linear_to_oklab(row[x]);
 
-                // Add accumulated same-row error
-                pixel_lab.L += std::clamp(row_err[x].L, -ec, ec);
-                pixel_lab.a += std::clamp(row_err[x].a, -ec, ec);
-                pixel_lab.b += std::clamp(row_err[x].b, -ec, ec);
+                // Add accumulated error from previous pixels/rows
+                auto& e = err_buf[y * width + x];
+                pixel_lab.L += std::clamp(e.L, -ec, ec);
+                pixel_lab.a += std::clamp(e.a, -ec, ec);
+                pixel_lab.b += std::clamp(e.b, -ec, ec);
 
-                // Find nearest color
+                // Find nearest color in this scanline's palette
                 float best_d = std::numeric_limits<float>::max();
                 std::size_t best_k = 0;
                 for (std::size_t k = 0; k < num_colors; ++k) {
@@ -355,17 +360,31 @@ Result<CopperResult> encode_copper(const Image& image,
                 all_indices[y * width + x] = static_cast<std::uint8_t>(best_k);
                 total_error += best_d;
 
-                // Propagate error to right neighbor only
+                // Compute error against ORIGINAL pixel, not error-adjusted
+                // pixel. Prevents error-on-error accumulation when the
+                // copper palette changes between rows.
+                auto orig_lab = color_space::linear_to_oklab(row[x]);
                 color_space::OKLab qerr = {
-                    (pixel_lab.L - pal_lab[best_k].L) * str,
-                    (pixel_lab.a - pal_lab[best_k].a) * str,
-                    (pixel_lab.b - pal_lab[best_k].b) * str,
+                    (orig_lab.L - pal_lab[best_k].L) * str,
+                    (orig_lab.a - pal_lab[best_k].a) * str,
+                    (orig_lab.b - pal_lab[best_k].b) * str,
                 };
-                if (x + 1 < width) {
-                    row_err[x + 1].L += qerr.L * (7.0f / 16.0f);
-                    row_err[x + 1].a += qerr.a * (7.0f / 16.0f);
-                    row_err[x + 1].b += qerr.b * (7.0f / 16.0f);
-                }
+                auto spread = [&](std::ptrdiff_t dx, std::ptrdiff_t dy, float wt) {
+                    auto nx = static_cast<std::ptrdiff_t>(x) + (reverse ? -dx : dx);
+                    auto ny = static_cast<std::ptrdiff_t>(y) + dy;
+                    if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
+                        ny >= 0 && static_cast<std::size_t>(ny) < height) {
+                        auto idx = static_cast<std::size_t>(ny) * width +
+                                   static_cast<std::size_t>(nx);
+                        err_buf[idx].L += qerr.L * wt;
+                        err_buf[idx].a += qerr.a * wt;
+                        err_buf[idx].b += qerr.b * wt;
+                    }
+                };
+                spread(1, 0, 7.0f / 16.0f);
+                spread(-1, 1, 3.0f / 16.0f);
+                spread(0, 1, 5.0f / 16.0f);
+                spread(1, 1, 1.0f / 16.0f);
             }
         } else {
             dither_row(row, pal_lab, y, dither_settings,
