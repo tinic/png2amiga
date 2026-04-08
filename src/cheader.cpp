@@ -459,18 +459,19 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // --- Palette ---
     out += std::format("static const UWORD {}_palette[] = {{\n", sym);
     for (std::size_t i = 0; i < pal_count; ++i) {
-        auto rgb12 = palette::linear_to_ocs(palette[i]);
-        out += std::format("    0x{:04X}", rgb12);
+        if (options.aga) {
+            out += std::format("    0x{:04X}", palette::linear_to_aga_hilo(palette[i]).hi);
+        } else {
+            out += std::format("    0x{:04X}", palette::linear_to_ocs(palette[i]));
+        }
         if (i + 1 < pal_count) out += ",";
         out += "\n";
     }
     out += "};\n\n";
-    // AGA low nibbles (only for viewer, not .h export)
     if (options.aga) {
         out += std::format("static const UWORD {}_palette_lo[] = {{\n", sym);
         for (std::size_t i = 0; i < pal_count; ++i) {
-            auto aga = palette::linear_to_aga_hilo(palette[i]);
-            out += std::format("    0x{:04X}", aga.lo);
+            out += std::format("    0x{:04X}", palette::linear_to_aga_hilo(palette[i]).lo);
             if (i + 1 < pal_count) out += ",";
             out += "\n";
         }
@@ -494,8 +495,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             auto& line = changes[y];
             for (std::size_t s = 0; s < cpl; ++s) {
                 if (s < line.size()) {
-                    auto rgb12 = palette::linear_to_ocs(line[s].color);
-                    out += std::format("{{{},0x{:04X}}}", line[s].reg, rgb12);
+                    auto hi = options.aga
+                        ? palette::linear_to_aga_hilo(line[s].color).hi
+                        : palette::linear_to_ocs(line[s].color);
+                    out += std::format("{{{},0x{:04X}}}", line[s].reg, hi);
                 } else {
                     out += "{0xFFFF,0x0000}";
                 }
