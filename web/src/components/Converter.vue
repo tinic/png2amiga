@@ -768,8 +768,8 @@ async function loadExample(example) {
 }
 .preview-col.loupe-expanded {
   position: sticky;
-  top: 0;
-  height: 100vh;
+  top: 1rem;
+  height: calc(100vh - 2rem);
   display: flex;
   flex-direction: column;
 }
