@@ -75,14 +75,9 @@ constexpr std::size_t max_changes_per_line(std::size_t depth, bool is_ham,
             // HAM8 AGA: 64 base colors, 12 tested stable
             if (depth == 8) return 12;
         }
-        if (is_hires) {
-            if (depth >= 8) return 4;
-            if (depth >= 6) return 8;
-            return 16;
-        }
-        if (depth >= 8) return 4;
-        if (depth >= 6) return 8;
-        return 16;
+        if (is_hires)
+            return std::min(std::size_t{16}, std::size_t{1} << depth);
+        return std::min(std::size_t{32}, std::size_t{1} << depth);
     }
     // OCS: 1 MOVE per change, plenty of time
     if (is_ham) return 16;  // HAM6: all 16 base colors
