@@ -59,6 +59,15 @@ const groupedDitherOptions = DITHER_METHODS.map(g => ({
   items: g.items.map(d => ({ value: d.value, label: d.label }))
 }))
 
+// Flat list of all dither values for prev/next cycling
+const allDitherValues = DITHER_METHODS.flatMap(g => g.items.map(d => d.value))
+
+function cycleDither(dir) {
+  const idx = allDitherValues.indexOf(options.dither)
+  const next = (idx + dir + allDitherValues.length) % allDitherValues.length
+  options.dither = allDitherValues[next]
+}
+
 // Whether depth slider should be shown (not for HAM/EHB/Atari where depth is fixed)
 const showDepthSlider = computed(() => {
   return !isHamMode(options.mode) && !isEhbMode(options.mode) && !isAtariMode(options.mode)
@@ -491,7 +500,9 @@ async function loadExample(example) {
 
               <div class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
-                <div class="col-8">
+                <div class="col-8 flex gap-1 align-items-center">
+                  <Button icon="pi pi-chevron-left" severity="secondary" text size="small"
+                    @click="cycleDither(-1)" style="min-width:1.5rem;padding:0.15rem" />
                   <Select
                     v-model="options.dither"
                     :options="groupedDitherOptions"
@@ -499,8 +510,10 @@ async function loadExample(example) {
                     optionLabel="label"
                     optionGroupLabel="label"
                     optionGroupChildren="items"
-                    class="w-full"
+                    class="flex-1"
                   />
+                  <Button icon="pi pi-chevron-right" severity="secondary" text size="small"
+                    @click="cycleDither(1)" style="min-width:1.5rem;padding:0.15rem" />
                 </div>
               </div>
 
