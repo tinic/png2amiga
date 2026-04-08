@@ -989,9 +989,10 @@ std::vector<HamSwap> find_ham_swaps(
         }
 
         auto new_color = worst_pixel_target;
-        if (chipset != amiga::Chipset::aga) {
-            new_color = palette::quantize_to_ocs(new_color);
-        }
+        // Always OCS-quantize: copper changes are written as 12-bit in the viewer,
+        // so the encoder must use the same precision for pixel-exact match.
+        (void)chipset;
+        new_color = palette::quantize_to_ocs(new_color);
 
         current_pal[min_slot] = new_color;
         swaps.push_back({min_slot, new_color});
