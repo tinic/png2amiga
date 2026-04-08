@@ -54,15 +54,32 @@ for arg in "${@:2}"; do
     esac
 done
 
-echo "Launching fs-uae ($MODEL${NTSC:+ NTSC})..."
+# Memory configuration per model
+case "$MODEL" in
+    A500)
+        # Stock A500: 512K chip + 512K slow (trapdoor expansion)
+        CHIP=512
+        SLOW=512
+        FAST=0
+        ;;
+    *)
+        # A1200+: 2MB chip + 8MB fast
+        CHIP=2048
+        SLOW=0
+        FAST=8192
+        ;;
+esac
+
+echo "Launching fs-uae ($MODEL: ${CHIP}K chip, ${SLOW}K slow, ${FAST}K fast${NTSC:+, NTSC})..."
 "$FSUAE" \
     --floppy_drive_0="$ADF" \
     --amiga_model="$MODEL" \
-    --chip_memory=2048 \
-    --fast_memory=8192 \
+    --chip_memory="$CHIP" \
+    --slow_memory="$SLOW" \
+    --fast_memory="$FAST" \
     --window_width=800 \
     --window_height=600 \
     $NTSC \
     2>/dev/null &
 
-echo "fs-uae started ($MODEL${NTSC:+ NTSC}). Press left mouse button to exit."
+echo "fs-uae started. Press left mouse button to exit."
