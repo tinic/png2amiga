@@ -21,6 +21,10 @@ enum class Layout : unsigned char {
     // Used by Amiga hardware display (copper DMA), most demos, and games.
     // Memory: [row0_plane0][row0_plane1]...[row0_planeN][row1_plane0]...
     interleaved,
+
+    // Atari ST: planes interleaved at the word level (16-pixel groups)
+    // Memory: [word0_p0][word0_p1]..[word0_pN][word1_p0][word1_p1]...
+    word_interleaved,
 };
 
 // ---------------------------------------------------------------------------

@@ -63,20 +63,41 @@ Result<BitplaneData> encode(const std::vector<std::uint8_t>& pixel_indices,
     result.layout = layout;
     result.data.resize(result.total_bytes(), 0);
 
-    for (std::size_t y = 0; y < height; ++y) {
-        for (std::size_t x = 0; x < width; ++x) {
-            auto index = pixel_indices[y * width + x];
-            // Clamp to valid range
-            if (index > max_index) index = max_index;
-
-            // For each bitplane, extract the corresponding bit and set it
-            for (std::size_t plane = 0; plane < depth; ++plane) {
-                if ((index >> plane) & 1u) {
-                    auto offset = result.plane_row_offset(plane, y);
-                    auto byte_idx = x / 8;
-                    auto bit_idx = 7u - (x % 8);  // MSB first
-                    result.data[offset + byte_idx] |=
-                        static_cast<std::uint8_t>(1u << bit_idx);
+    if (layout == Layout::word_interleaved) {
+        // Atari ST: planes interleaved at word level
+        // For each 16-pixel group: word_p0, word_p1, ..., word_pN
+        auto words_per_row = bytes_per_row / 2;
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                auto index = pixel_indices[y * width + x];
+                if (index > max_index) index = max_index;
+                auto word_group = x / 16;
+                auto bit_in_word = 15u - (x % 16);  // MSB first
+                for (std::size_t plane = 0; plane < depth; ++plane) {
+                    if ((index >> plane) & 1u) {
+                        auto word_off = y * words_per_row * depth
+                                      + word_group * depth + plane;
+                        auto byte_off = word_off * 2 + (bit_in_word < 8 ? 0 : 1);
+                        auto bit = bit_in_word < 8 ? bit_in_word : (bit_in_word - 8);
+                        result.data[byte_off] |=
+                            static_cast<std::uint8_t>(1u << bit);
+                    }
+                }
+            }
+        }
+    } else {
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                auto index = pixel_indices[y * width + x];
+                if (index > max_index) index = max_index;
+                for (std::size_t plane = 0; plane < depth; ++plane) {
+                    if ((index >> plane) & 1u) {
+                        auto offset = result.plane_row_offset(plane, y);
+                        auto byte_idx = x / 8;
+                        auto bit_idx = 7u - (x % 8);  // MSB first
+                        result.data[offset + byte_idx] |=
+                            static_cast<std::uint8_t>(1u << bit_idx);
+                    }
                 }
             }
         }
@@ -99,21 +120,39 @@ Result<std::vector<std::uint8_t>> decode(const BitplaneData& planes) {
 
     std::vector<std::uint8_t> indices(planes.width * planes.height, 0);
 
-    for (std::size_t y = 0; y < planes.height; ++y) {
-        for (std::size_t x = 0; x < planes.width; ++x) {
-            std::uint8_t color = 0;
-
-            for (std::size_t plane = 0; plane < planes.depth; ++plane) {
-                auto offset = planes.plane_row_offset(plane, y);
-                auto byte_idx = x / 8;
-                auto bit_idx = 7u - (x % 8);
-
-                if ((planes.data[offset + byte_idx] >> bit_idx) & 1u) {
-                    color |= static_cast<std::uint8_t>(1u << plane);
+    if (planes.layout == Layout::word_interleaved) {
+        auto words_per_row = planes.bytes_per_row / 2;
+        for (std::size_t y = 0; y < planes.height; ++y) {
+            for (std::size_t x = 0; x < planes.width; ++x) {
+                std::uint8_t color = 0;
+                auto word_group = x / 16;
+                auto bit_in_word = 15u - (x % 16);
+                for (std::size_t plane = 0; plane < planes.depth; ++plane) {
+                    auto word_off = y * words_per_row * planes.depth
+                                  + word_group * planes.depth + plane;
+                    auto byte_off = word_off * 2 + (bit_in_word < 8 ? 0 : 1);
+                    auto bit = bit_in_word < 8 ? bit_in_word : (bit_in_word - 8);
+                    if ((planes.data[byte_off] >> bit) & 1u) {
+                        color |= static_cast<std::uint8_t>(1u << plane);
+                    }
                 }
+                indices[y * planes.width + x] = color;
             }
-
-            indices[y * planes.width + x] = color;
+        }
+    } else {
+        for (std::size_t y = 0; y < planes.height; ++y) {
+            for (std::size_t x = 0; x < planes.width; ++x) {
+                std::uint8_t color = 0;
+                for (std::size_t plane = 0; plane < planes.depth; ++plane) {
+                    auto offset = planes.plane_row_offset(plane, y);
+                    auto byte_idx = x / 8;
+                    auto bit_idx = 7u - (x % 8);
+                    if ((planes.data[offset + byte_idx] >> bit_idx) & 1u) {
+                        color |= static_cast<std::uint8_t>(1u << plane);
+                    }
+                }
+                indices[y * planes.width + x] = color;
+            }
         }
     }
 

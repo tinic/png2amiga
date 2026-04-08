@@ -24,6 +24,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/quantize.cpp
     src/dither.cpp
     src/bitplane.cpp
+    src/degas.cpp
     src/ham.cpp
     src/iff.cpp
     src/cheader.cpp

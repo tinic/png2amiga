@@ -2,6 +2,7 @@
 #include "api.hpp"
 #include "bitplane.hpp"
 #include "cheader.hpp"
+#include "degas.hpp"
 #include "color_space.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
@@ -125,7 +126,8 @@ void print_usage() {
         "         lores, lores-lace, hires, hires-lace,\n"
         "         ham6, ham6-lace, ham6-hires, ham6-hires-lace,\n"
         "         ham8, ham8-lace, ham8-hires, ham8-hires-lace,\n"
-        "         ehb, ehb-lace\n"
+        "         ehb, ehb-lace,\n"
+        "         stf-low, stf-med, ste-low, ste-med\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
         "  --copper                        Per-scanline copper palettes\n"
@@ -245,6 +247,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v.starts_with("ham6")) config.mode = amiga::Mode::ham6;
                 else if (v.starts_with("ham8")) config.mode = amiga::Mode::ham8;
                 else if (v.starts_with("ehb")) config.mode = amiga::Mode::ehb;
+                else if (v == "stf-low") config.mode = amiga::Mode::stf_low;
+                else if (v == "stf-med") config.mode = amiga::Mode::stf_med;
+                else if (v == "ste-low") config.mode = amiga::Mode::ste_low;
+                else if (v == "ste-med") config.mode = amiga::Mode::ste_med;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -685,7 +691,8 @@ int main(int argc, char* argv[]) {
         // Check depth against mode+chipset limits
         // (HAM/EHB have fixed depths so --depth is ignored for them,
         //  but for standard modes the user's depth must be valid)
-        if (!amiga::is_ham(config->mode) && config->mode != amiga::Mode::ehb) {
+        if (!amiga::is_ham(config->mode) && config->mode != amiga::Mode::ehb &&
+            !amiga::is_atari(config->mode)) {
             auto max_d = amiga::max_user_depth(config->mode, cs);
             if (config->depth > max_d) {
                 auto mp = amiga::get_mode_params(config->mode);
@@ -749,7 +756,11 @@ int main(int argc, char* argv[]) {
         target_w = params.is_hires
             ? params.screen_width
             : std::min(params.screen_width, src_w);
-        target_h = round_even(static_cast<double>(target_w) * par / src_aspect);
+        if (params.screen_height > 0) {
+            target_h = params.screen_height;  // fixed height (Atari ST)
+        } else {
+            target_h = round_even(static_cast<double>(target_w) * par / src_aspect);
+        }
     }
 
     std::println("Input:  {}x{}", image->width(), image->height());
@@ -864,6 +875,10 @@ int main(int argc, char* argv[]) {
         actual_depth = amiga::get_mode_params(config->mode).bitplane_depth;
     else if (config->mode == amiga::Mode::ehb)
         actual_depth = 6;
+    else if (amiga::is_atari(config->mode)) {
+        actual_depth = amiga::get_mode_params(config->mode).bitplane_depth;
+        config->depth = actual_depth;
+    }
     std::println("Target: {}x{} @ {} bitplanes", target_w, target_h, actual_depth);
 
     // Scale
@@ -1452,10 +1467,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Encode to bitplanes
+    // Encode to bitplanes (Atari uses word-interleaved layout)
+    auto bp_layout = amiga::is_atari(config->mode)
+        ? bitplane::Layout::word_interleaved
+        : bitplane::Layout::interleaved;
     auto planes = bitplane::encode(dither_result.indices,
                                    image->width(), image->height(),
-                                   config->depth);
+                                   config->depth, bp_layout);
     if (!planes) {
         std::println(stderr, "Encode error: {}", planes.error().message);
         return 1;
@@ -1478,7 +1496,21 @@ int main(int argc, char* argv[]) {
 
     // Output
     if (!config->output_path.empty()) {
-        if (ends_with(config->output_path, ".iff") ||
+        if (ends_with(config->output_path, ".pi1") ||
+            ends_with(config->output_path, ".pi2") ||
+            ends_with(config->output_path, ".pi3")) {
+            if (!amiga::is_atari(config->mode)) {
+                std::println(stderr, "Error: Degas output requires an Atari ST/STE mode");
+                return 1;
+            }
+            auto result = degas::save(config->output_path, planes.value(),
+                                      used_palette, config->mode);
+            if (!result) {
+                std::println(stderr, "Degas write error: {}", result.error().message);
+                return 1;
+            }
+            std::println("Degas:  {} (32034 bytes)", config->output_path);
+        } else if (ends_with(config->output_path, ".iff") ||
             ends_with(config->output_path, ".ilbm")) {
             iff::IffOptions iff_opts;
             iff_opts.hires = config->hires;

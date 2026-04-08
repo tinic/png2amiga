@@ -4,6 +4,7 @@
 #include "cheader.hpp"
 #include "color_space.hpp"
 #include "copper.hpp"
+#include "degas.hpp"
 #include "dither.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
@@ -38,6 +39,10 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "ham8" || s == "ham8-lace" || s == "ham8-hires" || s == "ham8-hires-lace")
         return amiga::Mode::ham8;
     if (s == "ehb" || s == "ehb-lace") return amiga::Mode::ehb;
+    if (s == "stf-low") return amiga::Mode::stf_low;
+    if (s == "stf-med") return amiga::Mode::stf_med;
+    if (s == "ste-low") return amiga::Mode::ste_low;
+    if (s == "ste-med") return amiga::Mode::ste_med;
     return amiga::Mode::lores;
 }
 
@@ -53,14 +58,19 @@ amiga::Chipset resolve_chipset(const std::string& s, amiga::Mode mode) {
     return amiga::Chipset::ocs;
 }
 
-quantize::Algorithm quantize_algo(amiga::Chipset chipset) {
+quantize::Algorithm quantize_algo(amiga::Chipset chipset, amiga::Mode mode = amiga::Mode::lores) {
+    // STF uses brute-force over 512 colors (same algorithm, different precision)
+    // STE 12-bit = OCS 12-bit → same brute-force
+    if (amiga::is_atari(mode)) return quantize::Algorithm::ocs_bruteforce;
     return chipset == amiga::Chipset::aga
         ? quantize::Algorithm::median_cut
         : quantize::Algorithm::ocs_bruteforce;
 }
 
-void snap_to_chipset(Palette& pal, amiga::Chipset chipset) {
-    if (chipset != amiga::Chipset::aga) {
+void snap_to_chipset(Palette& pal, amiga::Chipset chipset, amiga::Mode mode = amiga::Mode::lores) {
+    if (amiga::is_stf(mode)) {
+        for (auto& c : pal.colors) c = palette::quantize_to_stf(c);
+    } else if (chipset != amiga::Chipset::aga) {
         for (auto& c : pal.colors) c = palette::quantize_to_ocs(c);
     }
 }
@@ -302,6 +312,10 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     }
     // Neither: use mode default width, but don't upscale small images
     auto w = std::min(mode_w, src_w);
+    auto mode_h = params.screen_height;
+    if (mode_h > 0) {
+        return {w, mode_h};  // fixed height (Atari ST)
+    }
     auto h = round_even(static_cast<double>(w) * par / src_aspect);
     return {w, h};
 }
@@ -342,6 +356,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     auto depth = static_cast<std::size_t>(
         std::clamp(options.depth, 1, 8));
+    // Atari modes have fixed depth
+    if (amiga::is_atari(mode))
+        depth = amiga::get_mode_params(mode).bitplane_depth;
 
     std::vector<bool> tmask;
     auto image = load_and_preprocess(input_data, input_size, options,
@@ -540,10 +557,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         pal = *std::move(loaded);
         if (pal.colors.size() > quant_colors)
             pal.colors.resize(quant_colors);
-        snap_to_chipset(pal, chipset);
+        snap_to_chipset(pal, chipset, mode);
     } else {
         auto quantized = quantize::quantize(*image, quant_colors,
-                                            quantize_algo(chipset));
+                                            quantize_algo(chipset, mode));
         if (!quantized) return std::unexpected{quantized.error()};
         pal = *std::move(quantized);
     }
@@ -578,10 +595,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dither_result = dither::apply(*image, pal_span, dith);
     }
 
-    // Encode to bitplanes
+    // Encode to bitplanes (Atari uses word-interleaved layout)
+    auto bp_layout = amiga::is_atari(mode)
+        ? bitplane::Layout::word_interleaved
+        : bitplane::Layout::interleaved;
     auto planes = bitplane::encode(dither_result.indices,
                                    image->width(), image->height(),
-                                   depth);
+                                   depth, bp_layout);
     if (!planes) return std::unexpected{planes.error()};
 
     // Build used palette vector
@@ -677,6 +697,19 @@ ConvertResult convert_iff(const std::uint8_t* input_data,
     if (!iff_data) return make_error(iff_data.error().message);
 
     return make_result(*std::move(iff_data), *result);
+}
+
+ConvertResult convert_degas(const std::uint8_t* input_data,
+                            std::size_t input_size,
+                            const Options& options) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+
+    auto degas_data = degas::encode(
+        result->planes, result->palette, result->mode);
+    if (!degas_data) return make_error(degas_data.error().message);
+
+    return make_result(*std::move(degas_data), *result);
 }
 
 ConvertResult convert_cheader(const std::uint8_t* input_data,

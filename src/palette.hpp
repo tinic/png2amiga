@@ -40,6 +40,37 @@ constexpr std::uint16_t linear_to_ocs(Color3f color) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Atari STF 9-bit color: 3 bits per channel (0-7), 512 possible colors
+// Stored as 0x0RGB where each nibble is 0-7
+// ---------------------------------------------------------------------------
+
+constexpr Color3f stf_to_linear(std::uint16_t rgb9) noexcept {
+    auto r3 = static_cast<std::uint8_t>((rgb9 >> 8) & 0x7);
+    auto g3 = static_cast<std::uint8_t>((rgb9 >> 4) & 0x7);
+    auto b3 = static_cast<std::uint8_t>(rgb9 & 0x7);
+    // 3-bit to 8-bit: replicate bits (abc -> abcabcab)
+    auto r8 = static_cast<std::uint8_t>((r3 << 5) | (r3 << 2) | (r3 >> 1));
+    auto g8 = static_cast<std::uint8_t>((g3 << 5) | (g3 << 2) | (g3 >> 1));
+    auto b8 = static_cast<std::uint8_t>((b3 << 5) | (b3 << 2) | (b3 >> 1));
+    return color_space::srgb_u8_to_linear(r8, g8, b8);
+}
+
+constexpr std::uint16_t linear_to_stf(Color3f color) noexcept {
+    auto srgb = color_space::linear_to_srgb(color).clamped();
+    auto r3 = static_cast<std::uint16_t>(
+        static_cast<int>(srgb.r * 7.0f + 0.5f) & 0x7);
+    auto g3 = static_cast<std::uint16_t>(
+        static_cast<int>(srgb.g * 7.0f + 0.5f) & 0x7);
+    auto b3 = static_cast<std::uint16_t>(
+        static_cast<int>(srgb.b * 7.0f + 0.5f) & 0x7);
+    return static_cast<std::uint16_t>((r3 << 8) | (g3 << 4) | b3);
+}
+
+constexpr Color3f quantize_to_stf(Color3f color) noexcept {
+    return stf_to_linear(linear_to_stf(color));
+}
+
+// ---------------------------------------------------------------------------
 // AGA 24-bit color: 8 bits per channel
 // Stored as 0x00RRGGBB
 // ---------------------------------------------------------------------------

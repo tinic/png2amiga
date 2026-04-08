@@ -13,18 +13,26 @@ const ALL_MODES = [
   { value: 'ham8-hires',       label: 'HAM8 Hires',                   chipset: 'aga' },
   { value: 'ham8-hires-lace',  label: 'HAM8 Hires Interlace',         chipset: 'aga' },
   { value: 'ehb',              label: 'EHB (Extra Half-Brite)',        chipset: 'ocs' },
+  { value: 'stf-low',          label: 'ST Low (320x200, 16 colors)',   chipset: 'stf' },
+  { value: 'stf-med',          label: 'ST Medium (640x200, 4 colors)', chipset: 'stf' },
+  { value: 'ste-low',          label: 'STE Low (320x200, 16 colors)',  chipset: 'ste' },
+  { value: 'ste-med',          label: 'STE Medium (640x200, 4 colors)',chipset: 'ste' },
 ]
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset) {
+  if (chipset === 'stf') return ALL_MODES.filter(m => m.chipset === 'stf')
+  if (chipset === 'ste') return ALL_MODES.filter(m => m.chipset === 'ste')
   return ALL_MODES.filter(m => chipset === 'aga' || m.chipset === 'ocs')
 }
 
 export const MODES = ALL_MODES
 
 export const CHIPSETS = [
-  { value: 'ocs',  label: 'OCS (12-bit)' },
-  { value: 'aga',  label: 'AGA (24-bit)' },
+  { value: 'ocs',  label: 'Amiga OCS (12-bit)' },
+  { value: 'aga',  label: 'Amiga AGA (24-bit)' },
+  { value: 'stf',  label: 'Atari STF (9-bit)' },
+  { value: 'ste',  label: 'Atari STE (12-bit)' },
 ]
 
 export const DITHER_METHODS = [
@@ -149,6 +157,10 @@ export function isEhbMode(mode) {
   return mode === 'ehb'
 }
 
+export function isAtariMode(mode) {
+  return mode.startsWith('stf-') || mode.startsWith('ste-')
+}
+
 const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis'])
 
 export function isErrorDiffusion(dither) {
@@ -191,7 +203,7 @@ export function decomposeMode(uiMode) {
 
 // Maximum bitplane depth for a given mode/chipset
 export function maxDepth(mode, chipset) {
-  if (isHamMode(mode) || isEhbMode(mode)) return 0 // depth is fixed for these modes
+  if (isHamMode(mode) || isEhbMode(mode) || isAtariMode(mode)) return 0
   if (isHiresMode(mode)) return chipset === 'aga' ? 8 : 4
   return chipset === 'aga' ? 8 : 5
 }
@@ -202,6 +214,8 @@ export function defaultDepth(mode) {
   const ham = hamType(mode)
   if (ham === 'ham6') return 6
   if (ham === 'ham8') return 8
+  if (mode === 'stf-low' || mode === 'ste-low') return 4
+  if (mode === 'stf-med' || mode === 'ste-med') return 2
   if (isHiresMode(mode)) return 4
   return 5
 }

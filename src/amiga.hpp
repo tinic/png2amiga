@@ -22,6 +22,12 @@ enum class Mode : unsigned char {
 
     // Extra Half-Brite
     ehb,                // OCS/ECS: 6 bitplanes, 32 colors + 32 half-bright
+
+    // Atari ST/STE
+    stf_low,            // STF 320x200, 4 bitplanes, 16 colors, 9-bit palette
+    stf_med,            // STF 640x200, 2 bitplanes, 4 colors, 9-bit palette
+    ste_low,            // STE 320x200, 4 bitplanes, 16 colors, 12-bit palette
+    ste_med,            // STE 640x200, 2 bitplanes, 4 colors, 12-bit palette
 };
 
 // ---------------------------------------------------------------------------
@@ -75,6 +81,15 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {320, 0, 8, 64,  true,  false, false, false, 1, 1};
     case Mode::ehb:
         return {320, 0, 6, 64,  false, true,  false, false, 1, 1};
+    // Atari ST/STE — fixed 200 lines, square pixels (low) or tall pixels (med)
+    case Mode::stf_low:
+        return {320, 200, 4, 16, false, false, false, false, 2, 2};
+    case Mode::stf_med:
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2};
+    case Mode::ste_low:
+        return {320, 200, 4, 16, false, false, false, false, 2, 2};
+    case Mode::ste_med:
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2};
     }
     std::unreachable();
 }
@@ -99,6 +114,17 @@ constexpr std::size_t ham_base_colors(Mode mode) noexcept {
     return std::size_t{1} << ham_data_bits(mode);
 }
 
+// Check if a mode is an Atari ST/STE mode
+constexpr bool is_atari(Mode mode) noexcept {
+    return mode == Mode::stf_low || mode == Mode::stf_med ||
+           mode == Mode::ste_low || mode == Mode::ste_med;
+}
+
+// Check if a mode is Atari STF (9-bit palette)
+constexpr bool is_stf(Mode mode) noexcept {
+    return mode == Mode::stf_low || mode == Mode::stf_med;
+}
+
 // Maximum bitplane depth for a chipset (raw hardware limit)
 constexpr std::size_t max_depth(Chipset chipset) noexcept {
     switch (chipset) {
@@ -115,9 +141,10 @@ constexpr std::size_t max_depth(Chipset chipset) noexcept {
 // HAM/EHB have fixed depths (not user-configurable).
 // Standard modes: OCS lores=5, hires=4; AGA=8.
 constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
-    // HAM/EHB depths are fixed by the mode, not user-configurable
+    // HAM/EHB/Atari depths are fixed by the mode, not user-configurable
     if (is_ham(mode)) return get_mode_params(mode).bitplane_depth;
     if (mode == Mode::ehb) return 6;
+    if (is_atari(mode)) return get_mode_params(mode).bitplane_depth;
 
     // AGA standard modes
     if (chipset == Chipset::aga) return 8;
