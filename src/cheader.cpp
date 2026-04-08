@@ -841,10 +841,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                        " + (reg % 32) * 2;\n";
                 out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
-                // Low nibbles (LOCT=1) — skip during fade (OCS precision is fine)
-                if (do_fade) {
-                    out += "        if (fade_step == 15) {\n";
-                }
+                // Low nibbles (LOCT=1)
                 out += "        cur_bank = 0;\n";
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
@@ -864,9 +861,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "        }\n";
                 // Reset to bank 0, LOCT=0
                 out += "        *cl++ = 0x0106; *cl++ = 0x0000;\n";
-                if (do_fade) {
-                    out += "        } // end fade_step==15 LOCT block\n";
-                }
                 out += "        }\n";
             } else if (options.aga) {
                 // AGA <=32 colors: no bank switching but need LOCT
@@ -876,8 +870,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
                 out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
-                // LOCT: skip during fade, write on final step
-                if (do_fade) out += "        if (fade_step == 15) {\n";
+                // LOCT: write low nibbles
                 out += "        *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
@@ -886,7 +879,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += std::format("            *cl++ = {}_copper_lo[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
                 out += "        *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
-                if (do_fade) out += "        }\n";
             } else {
                 // OCS: simple writes
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
