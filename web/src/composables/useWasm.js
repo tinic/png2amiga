@@ -66,9 +66,13 @@ export function useWasm() {
     return call('convertViewer', imageBytes, options)
   }
 
+  function convertDegas(imageBytes, options) {
+    return call('convertDegas', imageBytes, options)
+  }
+
   function convertRaw(imageBytes, options) {
     return call('convertRaw', imageBytes, options)
   }
 
-  return { loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertRaw }
+  return { loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw }
 }

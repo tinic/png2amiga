@@ -19,7 +19,7 @@ import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 import Panel from 'primevue/panel'
 
-const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertRaw } = useWasm()
+const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw } = useWasm()
 const { imageBytes, imageName, imageUrl, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
@@ -253,6 +253,27 @@ async function downloadPNG() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: 'png', mode: options.mode, exportCount, secsSinceUpload: uploadTimestamp.value ? Math.round((Date.now() - uploadTimestamp.value) / 1000) : undefined })
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
+}
+
+async function downloadDegas() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertDegas(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    const isMed = options.mode.endsWith('-med')
+    const ext = isMed ? '.pi2' : '.pi1'
+    const blob = new Blob([result.data], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + ext
+    a.click()
+    URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format: ext, mode: options.mode, exportCount })
   } catch (e) { errorMsg.value = e.message }
   converting.value = false
 }
@@ -600,7 +621,15 @@ async function loadExample(example) {
 
           <!-- Export Actions -->
           <div class="flex flex-column gap-2">
-            <div class="flex gap-2">
+            <!-- Atari export buttons -->
+            <div v-if="isAtariMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button :label="options.mode.endsWith('-med') ? 'pi2' : 'pi1'" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadDegas"
+                title="Download as Degas Elite file for Atari ST/STE." />
+            </div>
+            <!-- Amiga export buttons -->
+            <div v-if="!isAtariMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button v-if="!options.copper" label="iff" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -610,7 +639,7 @@ async function loadExample(example) {
               <Button label="adf" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode)" class="flex gap-2">
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
                 title="Download standalone AmigaOS viewer source (.cpp) — compile with m68k-amiga-elf-gcc." />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"

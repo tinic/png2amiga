@@ -49,6 +49,9 @@ self.onmessage = async (e) => {
       case 'convertViewer':
         result = Module.convertViewer(args[0], args[1])
         break
+      case 'convertDegas':
+        result = Module.convertDegas(args[0], args[1])
+        break
       case 'convertRaw':
         result = Module.convertRaw(args[0], args[1])
         break
