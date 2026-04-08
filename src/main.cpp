@@ -1016,10 +1016,8 @@ int main(int argc, char* argv[]) {
         }
 
         if (config->copper) {
-            auto cpl = (chipset == amiga::Chipset::aga)
-                ? std::size_t{8} : std::size_t{4};
             std::println("Copper: {} base colors, {} changes/line",
-                         ham_result->base_palette.size(), cpl);
+                         ham_result->base_palette.size(), ham_result->changes_per_line);
         }
 
         std::println("Encoded: {} bitplanes, {} bytes, {} base palette colors, error: {:.4f}",
@@ -1162,7 +1160,9 @@ int main(int argc, char* argv[]) {
 
         // --- EHB with copper ---
         if (config->copper) {
-            auto cpl = copper::max_changes_per_line(5, false, config->hires, chipset);
+            auto cpl = config->copper_changes > 0
+                ? static_cast<std::size_t>(config->copper_changes)
+                : copper::max_changes_per_line(5, false, config->hires, chipset);
             std::println("Mode:   EHB + Copper ({} changes/line)", cpl);
 
             dither::Settings dith;
@@ -1500,7 +1500,9 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        auto cpl = copper::max_changes_per_line(config->depth, false, config->hires, chipset);
+        auto cpl = config->copper_changes > 0
+            ? static_cast<std::size_t>(config->copper_changes)
+            : copper::max_changes_per_line(config->depth, false, config->hires, chipset);
         std::println("Mode:   Copper ({} changes/line)", cpl);
 
         dither::Settings dith;
