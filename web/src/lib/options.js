@@ -99,6 +99,7 @@ export const EXAMPLES = [
   { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'none' } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'checker', alphaThreshold: 0 } },
+  { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
 ]
 
 export function defaultOptions() {
