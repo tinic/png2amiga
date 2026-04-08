@@ -49,6 +49,16 @@ export const DITHER_METHODS = [
     { value: 'h2x4',          label: 'H 2x4' },
     { value: 'clustered-dot', label: 'Clustered Dot' },
   ]},
+  { group: 'Halftone', items: [
+    { value: 'halftone8x8',   label: 'Halftone 8x8 (45°)' },
+    { value: 'diagonal8x8',   label: 'Diagonal 8x8 (newspaper)' },
+    { value: 'spiral5x5',     label: 'Spiral 5x5' },
+  ]},
+  { group: 'Non-rectangular', items: [
+    { value: 'hex8x8',        label: 'Hexagonal 8x8' },
+    { value: 'hex5x5',        label: 'Hexagonal 5x5' },
+    { value: 'blue-noise',    label: 'Blue Noise' },
+  ]},
   { group: 'Lines', items: [
     { value: 'line2',         label: 'Line 2' },
     { value: 'line-checker',  label: 'Line Checker' },

@@ -31,6 +31,14 @@ enum class Method : unsigned char {
     line4,            // 1x4 horizontal gradient
     line8,            // 1x8 horizontal gradient
 
+    // Additional ordered dithering
+    halftone8x8,      // 45-degree clustered dot halftone (newspaper look)
+    diagonal8x8,      // 45-degree diagonal clustered dot (64 levels)
+    spiral5x5,        // spiral dot growth from center
+    hex8x8,           // non-rectangular hexagonal tiling
+    hex5x5,           // non-rectangular slanted square tiling
+    blue_noise,       // 64x64 blue noise (film-grain look, no visible pattern)
+
     // Error diffusion
     floyd_steinberg,
     atkinson,
@@ -90,6 +98,12 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::line_checker:
     case Method::line4:
     case Method::line8:
+    case Method::halftone8x8:
+    case Method::diagonal8x8:
+    case Method::spiral5x5:
+    case Method::hex8x8:
+    case Method::hex5x5:
+    case Method::blue_noise:
         return true;
     default:
         return false;

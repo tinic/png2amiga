@@ -193,6 +193,12 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "line-checker") return dither::Method::line_checker;
     if (s == "line4") return dither::Method::line4;
     if (s == "line8") return dither::Method::line8;
+    if (s == "halftone8x8") return dither::Method::halftone8x8;
+    if (s == "diagonal8x8") return dither::Method::diagonal8x8;
+    if (s == "spiral5x5") return dither::Method::spiral5x5;
+    if (s == "hex8x8") return dither::Method::hex8x8;
+    if (s == "hex5x5") return dither::Method::hex5x5;
+    if (s == "blue-noise") return dither::Method::blue_noise;
     if (s == "floyd-steinberg") return dither::Method::floyd_steinberg;
     if (s == "atkinson") return dither::Method::atkinson;
     if (s == "sierra-lite") return dither::Method::sierra_lite;
@@ -542,6 +548,12 @@ const char* dither_name(dither::Method m) {
     case dither::Method::line_checker: return "line-checker";
     case dither::Method::line4: return "line4";
     case dither::Method::line8: return "line8";
+    case dither::Method::halftone8x8: return "halftone8x8";
+    case dither::Method::diagonal8x8: return "diagonal8x8";
+    case dither::Method::spiral5x5: return "spiral5x5";
+    case dither::Method::hex8x8: return "hex8x8";
+    case dither::Method::hex5x5: return "hex5x5";
+    case dither::Method::blue_noise: return "blue-noise";
     case dither::Method::floyd_steinberg: return "floyd-steinberg";
     case dither::Method::atkinson: return "atkinson";
     case dither::Method::sierra_lite: return "sierra-lite";
