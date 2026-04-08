@@ -1,18 +1,19 @@
 // All modes with chipset availability (ocs = available on both, aga = AGA only)
 const ALL_MODES = [
   { value: 'lores',            label: 'Lores (320px)',                 chipset: 'ocs' },
-  { value: 'lores-lace',       label: 'Lores Interlace (320px)',       chipset: 'ocs' },
-  { value: 'hires',            label: 'Hires (640px)',                 chipset: 'ocs' },
-  { value: 'hires-lace',       label: 'Hires Interlace (640px)',       chipset: 'ocs' },
-  { value: 'ham6',             label: 'HAM6 Lores',                   chipset: 'ocs' },
-  { value: 'ham6-lace',        label: 'HAM6 Lores Interlace',         chipset: 'ocs' },
-  { value: 'ham6-hires',       label: 'HAM6 Hires',                   chipset: 'aga' },
-  { value: 'ham6-hires-lace',  label: 'HAM6 Hires Interlace',         chipset: 'aga' },
-  { value: 'ham8',             label: 'HAM8 Lores',                   chipset: 'aga' },
-  { value: 'ham8-lace',        label: 'HAM8 Lores Interlace',         chipset: 'aga' },
-  { value: 'ham8-hires',       label: 'HAM8 Hires',                   chipset: 'aga' },
-  { value: 'ham8-hires-lace',  label: 'HAM8 Hires Interlace',         chipset: 'aga' },
   { value: 'ehb',              label: 'EHB (Extra Half-Brite)',        chipset: 'ocs' },
+  { value: 'hires',            label: 'Hires (640px)',                 chipset: 'ocs' },
+  { value: 'ham6',             label: 'HAM6 Lores',                   chipset: 'ocs' },
+  { value: 'ham6-hires',       label: 'HAM6 Hires',                   chipset: 'aga' },
+  { value: 'ham8',             label: 'HAM8 Lores',                   chipset: 'aga' },
+  { value: 'ham8-hires',       label: 'HAM8 Hires',                   chipset: 'aga' },
+  { value: 'lores-lace',       label: 'Lores Interlace (320px)',       chipset: 'ocs' },
+  { value: 'ehb-lace',         label: 'EHB Interlace',                chipset: 'ocs' },
+  { value: 'hires-lace',       label: 'Hires Interlace (640px)',       chipset: 'ocs' },
+  { value: 'ham6-lace',        label: 'HAM6 Lores Interlace',         chipset: 'ocs' },
+  { value: 'ham6-hires-lace',  label: 'HAM6 Hires Interlace',         chipset: 'aga' },
+  { value: 'ham8-lace',        label: 'HAM8 Lores Interlace',         chipset: 'aga' },
+  { value: 'ham8-hires-lace',  label: 'HAM8 Hires Interlace',         chipset: 'aga' },
   { value: 'stf-low',          label: 'ST Low (320x200, 16 colors)',   chipset: 'stf' },
   { value: 'stf-med',          label: 'ST Medium (640x200, 4 colors)', chipset: 'stf' },
   { value: 'stf-hi',           label: 'ST High (640x400, mono)',       chipset: 'stf' },
@@ -171,7 +172,7 @@ export function isHamMode(mode) {
 }
 
 export function isEhbMode(mode) {
-  return mode === 'ehb'
+  return mode === 'ehb' || mode === 'ehb-lace'
 }
 
 export function isAtariMode(mode) {
