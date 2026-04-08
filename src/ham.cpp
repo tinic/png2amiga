@@ -713,6 +713,24 @@ ScanlineResult encode_scanline_dp_dithered(
         };
     }
 
+    // Build renormalized kernel: only future-row entries (dy > 0), but
+    // scaled so weights sum to 1.0. Without this, the same-row weight
+    // (e.g. 7/16 for Floyd-Steinberg) is lost, causing systematic
+    // under-correction that shows as horizontal banding.
+    std::vector<DiffusionEntry> future_kernel;
+    float future_weight_sum = 0.0f;
+    for (auto& entry : kernel) {
+        if (entry.dy > 0) {
+            future_kernel.push_back(entry);
+            future_weight_sum += entry.weight;
+        }
+    }
+    if (future_weight_sum > 0.0f) {
+        float scale = 1.0f / future_weight_sum;
+        for (auto& entry : future_kernel)
+            entry.weight *= scale;
+    }
+
     // Run DP on the adjusted targets (always left-to-right, HAM constraint)
     auto result = encode_scanline_dp(
         adjusted_row, start_color, pre, base_srgb, beam_width);
@@ -734,11 +752,7 @@ ScanlineResult encode_scanline_dp_dithered(
         auto quant_error = oklab_scale(
             oklab_sub(adjusted_lab, actual_lab), strength);
 
-        // Only distribute to future rows (dy > 0) since DP already
-        // optimized within this row
-        for (auto& entry : kernel) {
-            if (entry.dy <= 0) continue;  // skip same-row entries
-
+        for (auto& entry : future_kernel) {
             auto nx = static_cast<std::ptrdiff_t>(x) +
                       (reverse ? -entry.dx : entry.dx);
             auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
