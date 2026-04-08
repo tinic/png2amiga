@@ -1454,6 +1454,7 @@ int main(int argc, char* argv[]) {
                     : config->symbol_name;
                 ch_opts2.hires = config->hires;
                 ch_opts2.interlace = config->interlace;
+                ch_opts2.aga = (chipset == amiga::Chipset::aga);
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
@@ -1596,7 +1597,6 @@ int main(int argc, char* argv[]) {
                 ch_opts.hires = config->hires;
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
 
@@ -1617,6 +1617,7 @@ int main(int argc, char* argv[]) {
                     : config->symbol_name;
                 ch_opts2.hires = config->hires;
                 ch_opts2.interlace = config->interlace;
+                ch_opts2.aga = (chipset == amiga::Chipset::aga);
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
 
