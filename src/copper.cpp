@@ -59,9 +59,16 @@ SwapCandidate find_best_swap(
     };
     std::vector<SlotStats> stats(num_colors);
 
+    // Cache assignments and weighted OKLab values for reuse
+    auto total_pixels = rows.size() * width;
+    std::vector<std::uint8_t> assignments(total_pixels);
+    std::vector<float> pixel_weights(total_pixels);
+
     for (std::size_t r = 0; r < rows.size(); ++r) {
-        auto w = static_cast<double>(weights[r]);
+        auto w = weights[r];
+        auto wd = static_cast<double>(w);
         auto& rl = rows_lab[r];
+        auto base = r * width;
         for (std::size_t x = 0; x < width; ++x) {
             float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = 0;
@@ -72,11 +79,13 @@ SwapCandidate find_best_swap(
                 float d = dL * dL + da * da + db * db;
                 if (d < best_d) { best_d = d; best_k = k; }
             }
-            stats[best_k].sum_L += static_cast<double>(rl[x].L) * w;
-            stats[best_k].sum_a += static_cast<double>(rl[x].a) * w;
-            stats[best_k].sum_b += static_cast<double>(rl[x].b) * w;
-            stats[best_k].total_error += static_cast<double>(best_d) * w;
-            stats[best_k].count += w;
+            assignments[base + x] = static_cast<std::uint8_t>(best_k);
+            pixel_weights[base + x] = w;
+            stats[best_k].sum_L += static_cast<double>(rl[x].L) * wd;
+            stats[best_k].sum_a += static_cast<double>(rl[x].a) * wd;
+            stats[best_k].sum_b += static_cast<double>(rl[x].b) * wd;
+            stats[best_k].total_error += static_cast<double>(best_d) * wd;
+            stats[best_k].count += wd;
         }
     }
 
@@ -98,27 +107,18 @@ SwapCandidate find_best_swap(
             static_cast<float>(stats[k].sum_b / n),
         };
 
-        // Error with the centroid instead of current color
+        // Error with the centroid — use cached assignments
         double new_error = 0.0;
         for (std::size_t r = 0; r < rows.size(); ++r) {
-            auto w = static_cast<double>(weights[r]);
             auto& rl = rows_lab[r];
+            auto base = r * width;
             for (std::size_t x = 0; x < width; ++x) {
-                // Check if pixel is assigned to this slot
-                float best_d = std::numeric_limits<float>::max();
-                std::size_t best_k = 0;
-                for (std::size_t j = 0; j < num_colors; ++j) {
-                    float dL = rl[x].L - current_lab[j].L;
-                    float da = rl[x].a - current_lab[j].a;
-                    float db = rl[x].b - current_lab[j].b;
-                    float d = dL * dL + da * da + db * db;
-                    if (d < best_d) { best_d = d; best_k = j; }
-                }
-                if (best_k != k) continue;
+                if (assignments[base + x] != k) continue;
                 float dL = rl[x].L - centroid.L;
                 float da = rl[x].a - centroid.a;
                 float db = rl[x].b - centroid.b;
-                new_error += static_cast<double>(dL * dL + da * da + db * db) * w;
+                new_error += static_cast<double>(dL * dL + da * da + db * db)
+                           * static_cast<double>(pixel_weights[base + x]);
             }
         }
 
