@@ -580,57 +580,84 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     bool need_fmode3 = ((depth > 6) && has_copper) ||
                        (is_hires && depth > 4);
 
+    // --- Display window and data fetch timing ---
+    // DDFSTRT/DDFSTOP: when the chipset starts/stops fetching bitplane data each line.
+    // FMODE=3 (64-bit fetch) needs earlier start (-8) for the wider DMA fetch alignment.
+    out += "    // Data fetch start/stop — controls which horizontal pixels have bitplane data\n";
     if (is_hires && need_fmode3) {
-        // FMODE=3 hires: ddfstrt = normal (0x3C) - 8 = 0x34
-        out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x0034;\n";
+        out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x0034;  // hires FMODE=3\n";
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D4;\n";
     } else if (is_hires) {
-        out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x003C;\n";
+        out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x003C;  // hires standard\n";
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D4;\n";
     } else {
-        // Lores: standard 0x38, or 0x30 for FMODE=3 (0x38 - 8)
         auto lores_ddfstrt = need_fmode3 ? 0x0030 : 0x0038;
-        out += std::format("    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x{:04X};\n",
-                           lores_ddfstrt);
+        out += std::format("    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x{:04X};  // lores{}\n",
+                           lores_ddfstrt, need_fmode3 ? " FMODE=3" : "");
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D0;\n";
     }
-    out += std::format("    *cl++ = offsetof(struct Custom, diwstrt); "
-                       "*cl++ = 0x{:04X};\n", 0x0081 + (y_start << 8));
-    // Standard PAL diwstop — works for all heights, black below image
-    out += "    *cl++ = offsetof(struct Custom, diwstop); *cl++ = 0x2CC1;\n";
 
-    // (need_fmode3 declared earlier)
+    // DIWSTRT/DIWSTOP: display window — the visible rectangle on screen.
+    // VSTART=44 (PAL standard), HSTART=0x81. DIWSTOP=0x2CC1 covers full PAL height.
+    out += "    // Display window start/stop — visible area on screen\n";
+    out += std::format("    *cl++ = offsetof(struct Custom, diwstrt); "
+                       "*cl++ = 0x{:04X};  // VSTART={}, HSTART=$81\n",
+                       0x0081 + (y_start << 8), y_start);
+    out += "    *cl++ = offsetof(struct Custom, diwstop); *cl++ = 0x2CC1;  // full PAL height\n";
+
+    // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed for >6 planes)
     if (use_planar) {
-        out += std::format("    *cl++ = 0x01fc; *cl++ = 0x{:04X};  // FMODE\n",
-                           need_fmode3 ? 0x0003 : 0x0000);
+        out += std::format("    *cl++ = 0x01fc; *cl++ = 0x{:04X};  "
+                           "// FMODE: {} DMA fetch\n",
+                           need_fmode3 ? 0x0003 : 0x0000,
+                           need_fmode3 ? "64-bit" : "16-bit");
     }
 
-    // BPLCON0
-    // BPLCON0: BPU2-0 in bits 14-12, BPU3 in bit 4 (AGA 8th plane)
-    auto bpu = static_cast<int>(depth) & 7;     // planes 1-7
-    auto bpu3 = (depth == 8) ? (1 << 4) : 0;    // 8th plane on AGA
-    auto bplcon0 = (bpu << 12) | bpu3 | (1 << 9);  // + COLOR
-    if (is_ham) bplcon0 |= (1 << 11);           // HAM
-    if (is_hires) bplcon0 |= (1 << 15);  // HIRES
-    if (is_lace) bplcon0 |= (1 << 2);           // LACE
-    // EHB: no special bit (hardware auto-detects 6 planes without HAM)
+    // --- BPLCON0: main display control register ---
+    // Bit 15: HIRES (640px mode)
+    // Bit 14-12: BPU2-0 (bitplane count, 1-7)
+    // Bit 11: HAM (Hold-And-Modify mode)
+    // Bit 9: COLOR (color composite output enable, always set)
+    // Bit 4: BPU3 (8th bitplane on AGA)
+    // Bit 2: LACE (interlace enable)
+    auto bpu = static_cast<int>(depth) & 7;
+    auto bpu3 = (depth == 8) ? (1 << 4) : 0;
+    auto bplcon0 = (bpu << 12) | bpu3 | (1 << 9);
+    if (is_ham) bplcon0 |= (1 << 11);
+    if (is_hires) bplcon0 |= (1 << 15);
+    if (is_lace) bplcon0 |= (1 << 2);
+
+    // Build description string for the comment
+    std::string bplcon0_desc;
+    bplcon0_desc += std::to_string(depth) + " planes";
+    if (is_hires) bplcon0_desc += ", HIRES";
+    if (is_ham) bplcon0_desc += ", HAM";
+    if (is_lace) bplcon0_desc += ", LACE";
 
     out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); "
-                       "*cl++ = 0x{:04X};\n", bplcon0);
-    out += "    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0;\n";
-    // KILLEHB (bit 9): prevent 6-plane non-EHB from triggering EHB
-    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham) ? 0x0200 : 0x0000;
-    out += std::format("    *cl++ = offsetof(struct Custom, bplcon2); *cl++ = 0x{:04X};\n",
-                       bplcon2);
-    out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // BPLCON3 = 0 (bank 0, no LOCT)\n\n";
+                       "*cl++ = 0x{:04X};  // {}\n", bplcon0, bplcon0_desc);
+    out += "    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0;  // scroll offset = 0\n";
 
-    // Planar modulo: 0 normally, +bpr for interlace (skip other field), -8 for FMODE=3
+    // BPLCON2: playfield priority and KILLEHB
+    // Bit 9: KILLEHB — prevents 6-plane non-EHB from triggering Extra Half-Brite
+    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham) ? 0x0200 : 0x0000;
+    if (bplcon2)
+        out += std::format("    *cl++ = offsetof(struct Custom, bplcon2); "
+                           "*cl++ = 0x{:04X};  // KILLEHB\n", bplcon2);
+    else
+        out += "    *cl++ = offsetof(struct Custom, bplcon2); *cl++ = 0x0000;\n";
+
+    // BPLCON3: AGA palette bank select (bank 0, LOCT=0)
+    out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // BPLCON3: bank 0, no LOCT\n\n";
+
+    // --- Bitplane modulo ---
+    // BPL1MOD/BPL2MOD: bytes to skip after each row's DMA fetch.
+    // Interleaved layout: mod = bpr * (depth-1) to skip other planes' data.
+    // Interlace: mod = bpr * (depth*2-1) to also skip the other field's row.
+    // Planar layout: mod = 0 normally, +bpr for interlace, -8 for FMODE=3.
     int planar_mod = (is_lace ? static_cast<int>(bpr) : 0) + (need_fmode3 ? -8 : 0);
 
     if (use_planar) {
-        // Planar layout: each plane is contiguous.
-        // Normal: mod=0. Interlace: mod=bpr (skip other field's row).
-        // FMODE=3: subtract 8 from normal mod.
         auto plane_size = bpr * height;
         out += std::format("    *cl++ = offsetof(struct Custom, bpl1mod); *cl++ = {};\n",
                            planar_mod);
