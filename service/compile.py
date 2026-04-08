@@ -168,7 +168,10 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.wfile.write(result)
 
     def _cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "https://www.png2amiga.app")
+        origin = self.headers.get("Origin", "")
+        allowed = {"https://www.png2amiga.app", "https://png2amiga.app"}
+        if origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
