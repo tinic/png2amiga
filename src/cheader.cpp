@@ -738,13 +738,18 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (has_copper) {
         auto cpl = options.copper_changes_per_line;
         bool aga_banks = (pal_count > 32);
-        out += "    // Per-scanline copper palette changes\n";
-        out += std::format("    for (int y = 0; y < {}; y++) {{\n", height);
-        out += std::format("        USHORT line = y + {};\n", y_start);
+        // Write palette changes at end of visible display (H=0xDF, past DDFSTOP).
+        // This gives ~100 free color clocks (end-of-line + HBLANK + before next
+        // DDFSTRT) instead of ~40 from HBLANK alone.
+        // Changes for line Y are written at end of line Y-1; line 0's palette
+        // is already set during initial copper setup.
+        out += "    // Per-scanline copper palette changes (end of previous line)\n";
+        out += std::format("    for (int y = 1; y < {}; y++) {{\n", height);
+        out += std::format("        USHORT line = y - 1 + {};\n", y_start);
         out += "        if (line == 256) {\n";
         out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
         out += "        }\n";
-        out += "        *cl++ = ((line & 0xFF) << 8) | 0x01;\n";
+        out += "        *cl++ = ((line & 0xFF) << 8) | 0xDF;\n";
         out += "        *cl++ = 0xfffe;\n";
         if (aga_banks) {
             // AGA: changes are pre-sorted by register (bank 0 first).
