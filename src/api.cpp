@@ -836,10 +836,10 @@ int count_unique_colors(const Image& img) {
     std::unordered_set<std::uint32_t> seen;
     for (std::size_t y = 0; y < img.height(); ++y)
         for (std::size_t x = 0; x < img.width(); ++x) {
-            auto& c = img[x, y];
-            auto r = static_cast<std::uint32_t>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 255.0f));
-            auto g = static_cast<std::uint32_t>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 255.0f));
-            auto b = static_cast<std::uint32_t>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 255.0f));
+            auto srgb = color_space::linear_to_srgb(img[x, y]).clamped();
+            auto r = static_cast<std::uint32_t>(srgb.r * 255.0f + 0.5f);
+            auto g = static_cast<std::uint32_t>(srgb.g * 255.0f + 0.5f);
+            auto b = static_cast<std::uint32_t>(srgb.b * 255.0f + 0.5f);
             seen.insert((r << 16) | (g << 8) | b);
         }
     return static_cast<int>(seen.size());
