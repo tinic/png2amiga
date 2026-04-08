@@ -122,6 +122,7 @@ struct Config {
     // Copper palette
     bool copper = false;               // per-scanline palette changes
     int copper_changes = 0;            // 0 = auto (based on chipset/depth)
+    bool fade_in = false;              // 16-step fade-in from black
 
     // Cropping
     int crop_x = 0;
@@ -250,6 +251,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--copper") {
             config.copper = true;
+            continue;
+        }
+
+        if (arg == "--fade-in") {
+            config.fade_in = true;
             continue;
         }
 
@@ -1076,7 +1082,9 @@ int main(int argc, char* argv[]) {
                 ch_opts.hires = config->hires;
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
@@ -1100,7 +1108,9 @@ int main(int argc, char* argv[]) {
                 ch_opts.hires = config->hires;
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
@@ -1447,7 +1457,9 @@ int main(int argc, char* argv[]) {
                 ch_opts.hires = config->hires;
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
 
                 auto result = cheader::save(
                     config->output_path, planes.value(), full_palette,
@@ -1467,6 +1479,7 @@ int main(int argc, char* argv[]) {
                 ch_opts2.hires = config->hires;
                 ch_opts2.interlace = config->interlace;
                 ch_opts2.aga = (chipset == amiga::Chipset::aga);
+                ch_opts2.fade_in = config->fade_in;
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
@@ -1609,6 +1622,7 @@ int main(int argc, char* argv[]) {
                 ch_opts.hires = config->hires;
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
 
@@ -1630,6 +1644,7 @@ int main(int argc, char* argv[]) {
                 ch_opts2.hires = config->hires;
                 ch_opts2.interlace = config->interlace;
                 ch_opts2.aga = (chipset == amiga::Chipset::aga);
+                ch_opts2.fade_in = config->fade_in;
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
 
@@ -1813,6 +1828,7 @@ int main(int argc, char* argv[]) {
             ch_opts.hires = config->hires;
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
 
             auto result = cheader::save(
                 config->output_path, planes.value(), used_palette,
@@ -1832,6 +1848,7 @@ int main(int argc, char* argv[]) {
             ch_opts.hires = config->hires;
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
+                ch_opts.fade_in = config->fade_in;
 
             pad_planes_to_mode(planes.value(), config->mode, config->hires);
             auto result = cheader::save_viewer(

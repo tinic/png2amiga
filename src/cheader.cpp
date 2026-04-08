@@ -550,6 +550,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    return cl;\n";
     out += "}\n\n";
 
+    if (options.fade_in && !is_ham) {
+        out += "// Scale a 12-bit OCS color (0x0RGB) by step/15.\n";
+        out += "static inline UWORD fadeColor(UWORD c, int step) {\n";
+        out += "    return (UWORD)((((c>>8)&0xF)*step/15<<8) | "
+               "(((c>>4)&0xF)*step/15<<4) | ((c&0xF)*step/15));\n";
+        out += "}\n\n";
+    }
+
     // --- main() ---
     out += "// ========================================================================\n";
     out += "// Entry point: take system, build copper list, display, wait for click\n";
@@ -727,6 +735,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
     }
 
+    // Fade-in: save cl position, loop 16 steps rebuilding from here
+    bool do_fade = options.fade_in && !is_ham && !is_lace;
+    if (do_fade) {
+        out += "    USHORT* cl_pal = cl;  // save position for fade rewind\n";
+        out += "    for (int fade_step = 0; fade_step <= 15; fade_step++) {\n";
+        out += "    cl = cl_pal;\n";
+    }
+
     // Set palette via copper list.
     // AGA >32 colors: BPLCON3 bank switching.
     // For HAM modes: skip LOCT write — the nibble-copy (0xN → 0xNN)
@@ -747,11 +763,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                "  // bank {}\n", bank_bits, bank);
             out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
             out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
-            out += std::format("        *cl++ = {}_palette[{} + i];\n", sym, base);
+            if (do_fade) {
+                out += std::format("        *cl++ = fadeColor({}_palette[{} + i], fade_step);\n", sym, base);
+            } else {
+                out += std::format("        *cl++ = {}_palette[{} + i];\n", sym, base);
+            }
             out += "    }\n";
 
-            // Low nibbles (LOCT=1)
+            // Low nibbles (LOCT=1) — skip during fade, full precision on final step
             if (options.aga) {
+                if (do_fade) out += "    if (fade_step == 15) {\n";
                 out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
                                    "  // bank {}, LOCT=1\n",
                                    bank_bits | 0x0200, bank);
@@ -759,6 +780,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
                 out += std::format("        *cl++ = {}_palette_lo[{} + i];\n", sym, base);
                 out += "    }\n";
+                if (do_fade) out += "    }\n";
             }
         }
         // Reset to bank 0, LOCT=0
@@ -767,15 +789,21 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // <=32 colors: write directly (no bank switching)
         out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
         out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
-        out += std::format("        *cl++ = {}_palette[i];\n", sym);
+        if (do_fade) {
+            out += std::format("        *cl++ = fadeColor({}_palette[i], fade_step);\n", sym);
+        } else {
+            out += std::format("        *cl++ = {}_palette[i];\n", sym);
+        }
         out += "    }\n";
         if (options.aga) {
+            if (do_fade) out += "    if (fade_step == 15) {\n";
             out += "    *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
             out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
             out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
             out += std::format("        *cl++ = {}_palette_lo[i];\n", sym);
             out += "    }\n";
             out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+            if (do_fade) out += "    }\n";
         }
         out += "\n";
     }
@@ -804,9 +832,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "            }\n";
                 out += "            *cl++ = offsetof(struct Custom, color)"
                        " + (reg % 32) * 2;\n";
-                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                if (do_fade) {
+                    out += std::format("            *cl++ = fadeColor({}_copper[{}][s].color, fade_step);\n", sym, y_expr);
+                } else {
+                    out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                }
                 out += "        }\n";
-                // Low nibbles (LOCT=1)
+                // Low nibbles (LOCT=1) — skip during fade (OCS precision is fine)
+                if (do_fade) {
+                    out += "        if (fade_step == 15) {\n";
+                }
                 out += "        cur_bank = 0;\n";
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
@@ -826,6 +861,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "        }\n";
                 // Reset to bank 0, LOCT=0
                 out += "        *cl++ = 0x0106; *cl++ = 0x0000;\n";
+                if (do_fade) {
+                    out += "        } // end fade_step==15 LOCT block\n";
+                }
                 out += "        }\n";
             } else if (options.aga) {
                 // AGA <=32 colors: no bank switching but need LOCT
@@ -833,8 +871,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
                 out += "            if (reg == 0xFFFF) continue;\n";
                 out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
-                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                if (do_fade) {
+                    out += std::format("            *cl++ = fadeColor({}_copper[{}][s].color, fade_step);\n", sym, y_expr);
+                } else {
+                    out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                }
                 out += "        }\n";
+                // LOCT: skip during fade, write on final step
+                if (do_fade) out += "        if (fade_step == 15) {\n";
                 out += "        *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
@@ -843,13 +887,18 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += std::format("            *cl++ = {}_copper_lo[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
                 out += "        *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+                if (do_fade) out += "        }\n";
             } else {
                 // OCS: simple writes
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
                 out += "            if (reg == 0xFFFF) continue;\n";
                 out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
-                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                if (do_fade) {
+                    out += std::format("            *cl++ = fadeColor({}_copper[{}][s].color, fade_step);\n", sym, y_expr);
+                } else {
+                    out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                }
                 out += "        }\n";
             }
         };
@@ -893,6 +942,19 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // End copper list
     out += "    *cl++ = 0xffff; *cl++ = 0xfffe;\n\n";
+
+    // Close fade loop: activate display on first step, WaitVbl between steps
+    if (do_fade) {
+        out += "    if (fade_step == 0) {\n";
+        out += "        custom->cop1lc = (ULONG)copper1;\n";
+        out += "        custom->dmacon = DMAF_BLITTER;\n";
+        out += "        custom->copjmp1 = 0x7fff;\n";
+        out += "        custom->dmacon = DMAF_SETCLR | DMAF_MASTER | "
+               "DMAF_RASTER | DMAF_COPPER;\n";
+        out += "    }\n";
+        out += "    WaitVbl();\n";
+        out += "    } // end fade loop\n\n";
+    }
 
     // For interlace: build a second copper list for the even field
     // and a vblank interrupt handler that swaps cop1lc based on LOF bit.
@@ -985,15 +1047,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    *(volatile UBYTE*)0xbfd100 |=  (1<<7);   // motor off\n";
     out += "    *(volatile UBYTE*)0xbfd100 |=  (1<<3);   // deselect DF0\n\n";
 
-    // Start display
-    out += "    custom->cop1lc = (ULONG)copper1;\n";
-    if (is_lace) {
-        out += "    custom->cop2lc = (ULONG)copper2;\n";
+    // Start display (fade-in mode activates inside the fade loop)
+    if (!do_fade) {
+        out += "    custom->cop1lc = (ULONG)copper1;\n";
+        if (is_lace) {
+            out += "    custom->cop2lc = (ULONG)copper2;\n";
+        }
+        out += "    custom->dmacon = DMAF_BLITTER;\n";
+        out += "    custom->copjmp1 = 0x7fff;\n";
+        out += "    custom->dmacon = DMAF_SETCLR | DMAF_MASTER | "
+               "DMAF_RASTER | DMAF_COPPER;\n\n";
     }
-    out += "    custom->dmacon = DMAF_BLITTER;\n";
-    out += "    custom->copjmp1 = 0x7fff;\n";
-    out += "    custom->dmacon = DMAF_SETCLR | DMAF_MASTER | "
-           "DMAF_RASTER | DMAF_COPPER;\n\n";
 
     if (is_lace) {
         // Vblank interrupt handler: swap copper list based on LOF bit

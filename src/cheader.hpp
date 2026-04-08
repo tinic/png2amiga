@@ -44,6 +44,7 @@ struct CHeaderOptions {
     bool hires = false;                  // override HIRES for compound modes (ham8-hires etc.)
     bool interlace = false;              // set LACE bit in CAMG
     bool aga = false;                    // AGA chipset (24-bit palette)
+    bool fade_in = false;                // 16-step fade-in from black
 
     // Copper: per-scanline register changes (nullptr = no copper)
     const std::vector<std::vector<copper::CopperChange>>* copper_changes = nullptr;
