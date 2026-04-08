@@ -672,9 +672,9 @@ Result<HamResult> encode_ham_generic(
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
 
                 // Quantize to chipset precision
-                auto quantized = (chipset == amiga::Chipset::aga)
-                    ? adjusted  // AGA is 24-bit, no quantization needed
-                    : palette::quantize_to_ocs(adjusted);
+                // HAM modify channels are always limited by data_bits precision.
+                // HAM6: 4-bit = OCS 12-bit, HAM8: 6-bit ≈ lossless → skip.
+                auto quantized = palette::quantize_to_ocs(adjusted);
                 dithered_image[x, y] = quantized;
 
                 // Compute and distribute error
@@ -915,8 +915,7 @@ Result<HamResult> encode_ham_copper_generic(
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
-                auto quantized = (chipset == amiga::Chipset::aga)
-                    ? adjusted : palette::quantize_to_ocs(adjusted);
+                auto quantized = palette::quantize_to_ocs(adjusted);
                 dithered_image[x, y] = quantized;
                 auto actual_lab = color_space::linear_to_oklab(quantized);
                 auto quant_error = oklab_scale(

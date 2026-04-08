@@ -6,7 +6,7 @@ import { track } from '../lib/analytics.js'
 import {
   MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, HAM_QUALITY,
   SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
-  defaultOptions, isHamMode, isEhbMode, isAtariMode, isErrorDiffusion, isInterlaceMode,
+  defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion, isInterlaceMode,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset, decomposeMode,
 } from '../lib/options.js'
@@ -91,19 +91,28 @@ function loupePointerUp() {
 let firstConvertTracked = false
 let exportCount = 0
 
-// Flatten dither methods for grouped Select component
-const groupedDitherOptions = DITHER_METHODS.map(g => ({
-  label: g.group,
-  items: g.items.map(d => ({ value: d.value, label: d.label }))
-}))
+// Flatten dither methods for grouped Select component.
+// HAM8 has 6-bit modify channels (~lossless), so error diffusion is useless.
+const groupedDitherOptions = computed(() => {
+  const hide_diffusion = hamType(options.mode) === 'ham8'
+  return DITHER_METHODS
+    .filter(g => !(hide_diffusion && g.group === 'Error Diffusion'))
+    .map(g => ({
+      label: g.group,
+      items: g.items.map(d => ({ value: d.value, label: d.label }))
+    }))
+})
 
 // Flat list of all dither values for prev/next cycling
-const allDitherValues = DITHER_METHODS.flatMap(g => g.items.map(d => d.value))
+const allDitherValues = computed(() =>
+  groupedDitherOptions.value.flatMap(g => g.items.map(d => d.value))
+)
 
 function cycleDither(dir) {
-  const idx = allDitherValues.indexOf(options.dither)
-  const next = (idx + dir + allDitherValues.length) % allDitherValues.length
-  options.dither = allDitherValues[next]
+  const vals = allDitherValues.value
+  const idx = vals.indexOf(options.dither)
+  const next = (idx + dir + vals.length) % vals.length
+  options.dither = vals[next]
 }
 
 // Whether depth slider should be shown (not for HAM/EHB/Atari where depth is fixed)
@@ -136,6 +145,9 @@ watch(() => options.mode, (mode, oldMode) => {
   }
   // Copper not compatible with interlace
   if (isInterlaceMode(mode)) options.copper = false
+  // HAM8: error diffusion is useless (6-bit ≈ lossless), reset to ordered/none
+  if (hamType(mode) === 'ham8' && isErrorDiffusion(options.dither))
+    options.dither = 'none'
   track('mode-change', { from: oldMode, to: mode })
 })
 
