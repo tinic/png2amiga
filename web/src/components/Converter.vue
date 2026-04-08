@@ -264,8 +264,7 @@ function doConvert() {
       imageHasAlpha.value = !!result.hasTransparency
 
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
-      info += `, ${result.depth || '?'}bpl, ${result.colors || 0} colors`
-      if (result.totalColors > result.colors) info += ` (${result.totalColors} unique)`
+      info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
       if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} cop/line`
       if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
       resultInfo.value = info
