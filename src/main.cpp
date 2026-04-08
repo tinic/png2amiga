@@ -917,12 +917,28 @@ int main(int argc, char* argv[]) {
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
-        auto scaled = scale::bicubic(*image, target_w, target_h);
-        if (!scaled) {
-            std::println(stderr, "Scale error: {}", scaled.error().message);
-            return 1;
+        // Skip bicubic for trivial size differences (±1 pixel) to avoid
+        // unnecessary blur. Just pad (repeat edge) or crop instead.
+        auto dw = static_cast<int>(target_w) - static_cast<int>(image->width());
+        auto dh = static_cast<int>(target_h) - static_cast<int>(image->height());
+        if (std::abs(dw) <= 1 && std::abs(dh) <= 1) {
+            Image padded(target_w, target_h);
+            for (std::size_t y = 0; y < target_h; ++y) {
+                auto sy = std::min(y, image->height() - 1);
+                for (std::size_t x = 0; x < target_w; ++x) {
+                    auto sx = std::min(x, image->width() - 1);
+                    padded[x, y] = (*image)[sx, sy];
+                }
+            }
+            image = std::move(padded);
+        } else {
+            auto scaled = scale::bicubic(*image, target_w, target_h);
+            if (!scaled) {
+                std::println(stderr, "Scale error: {}", scaled.error().message);
+                return 1;
+            }
+            image = *std::move(scaled);
         }
-        image = *std::move(scaled);
     }
 
     // Atari: center vertically in fixed-height frame if image is shorter
