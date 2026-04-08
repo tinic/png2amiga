@@ -120,6 +120,7 @@ val js_convert_rgba(val input_array, val js_opts) {
     obj.set("depth", result.depth);
     obj.set("colors", result.colors);
     obj.set("copperChanges", result.copperChanges);
+    obj.set("totalColors", result.totalColors);
     obj.set("quantError", result.quantError);
     obj.set("hasTransparency", result.hasTransparency);
     obj.set("error", result.error);

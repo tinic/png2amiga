@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <unordered_set>
 #include <vector>
 
 namespace png2amiga::api {
@@ -831,6 +832,19 @@ ConvertResult make_error(const std::string& msg) {
     return r;
 }
 
+int count_unique_colors(const Image& img) {
+    std::unordered_set<std::uint32_t> seen;
+    for (std::size_t y = 0; y < img.height(); ++y)
+        for (std::size_t x = 0; x < img.width(); ++x) {
+            auto& c = img[x, y];
+            auto r = static_cast<std::uint32_t>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 255.0f));
+            auto g = static_cast<std::uint32_t>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 255.0f));
+            auto b = static_cast<std::uint32_t>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 255.0f));
+            seen.insert((r << 16) | (g << 8) | b);
+        }
+    return static_cast<int>(seen.size());
+}
+
 ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& p) {
     ConvertResult r;
     r.data = std::move(data);
@@ -839,6 +853,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.depth = static_cast<int>(p.planes.depth);
     r.colors = static_cast<int>(p.palette.size());
     r.copperChanges = p.copper_changes;
+    r.totalColors = count_unique_colors(p.rendered);
     r.quantError = p.quant_error;
     r.hasTransparency = p.has_transparency;
     return r;
