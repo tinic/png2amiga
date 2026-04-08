@@ -54,7 +54,6 @@ def _sandbox(cmd, tmpdir):
         "--ro-bind", DH0, DH0,
         "--ro-bind", TEMPLATE, TEMPLATE,
         "--bind", tmpdir, tmpdir,
-        "--proc", "/proc",
         "--dev", "/dev",
         "--chdir", tmpdir,
     ] + cmd
