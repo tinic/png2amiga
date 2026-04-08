@@ -64,6 +64,7 @@ function loupeToggle() {
 }
 function loupePointerDown(e) {
   if (!loupeActive.value) return
+  if (e.target.closest('.loupe-btn')) return
   dragStart = { x: e.clientX, y: e.clientY, ox: loupeX.value, oy: loupeY.value }
   e.currentTarget.setPointerCapture(e.pointerId)
 }
