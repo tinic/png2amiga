@@ -23,7 +23,7 @@ const ALL_MODES = [
 export function modesForChipset(chipset) {
   if (chipset === 'stf') return ALL_MODES.filter(m => m.chipset === 'stf')
   if (chipset === 'ste') return ALL_MODES.filter(m => m.chipset === 'ste')
-  return ALL_MODES.filter(m => chipset === 'aga' || m.chipset === 'ocs')
+  return ALL_MODES.filter(m => (chipset === 'aga' || m.chipset === 'ocs') && m.chipset !== 'stf' && m.chipset !== 'ste')
 }
 
 export const MODES = ALL_MODES
