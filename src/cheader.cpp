@@ -933,7 +933,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // During fade, just swap cop1lc — zero CPU chip RAM access per frame.
         out += "    USHORT* fade_cops[16];\n";
         out += "    // Find color register value positions\n";
-        out += "    USHORT fade_off[4096]; int fade_cnt = 0;\n";
+        // Estimate max offsets: palette (×2 for AGA LOCT) + copper changes (×2) + margin
+        auto max_offsets = (pal_count * 2) + (height * options.copper_changes_per_line * 2) + 256;
+        out += std::format("    USHORT* fade_off = (USHORT*)AllocMem({}, 0);\n",
+                           max_offsets * 2);
+        out += "    int fade_cnt = 0;\n";
         out += "    { USHORT* p = copper1;\n";
         out += "      while (!(p[0] == 0xFFFF && p[1] == 0xFFFE)) {\n";
         out += "        if ((p[0] & 1) == 0 && p[0] >= 0x0180 && p[0] <= 0x01BE)\n";
@@ -949,6 +953,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        CopyMem(copper1, fade_cops[s], cop_len);\n";
         out += "        fadeApply(copper1, fade_cops[s], fade_off, fade_cnt, s);\n";
         out += "    }\n";
+        out += std::format("    FreeMem(fade_off, {});\n", max_offsets * 2);
         // Fade-in: just swap cop1lc each frame
         out += "    // Fade-in: one cop1lc write per frame\n";
         out += "    custom->cop1lc = (ULONG)fade_cops[0];\n";
