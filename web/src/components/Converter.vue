@@ -6,7 +6,7 @@ import { track } from '../lib/analytics.js'
 import {
   MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, HAM_QUALITY,
   SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
-  defaultOptions, isHamMode, isEhbMode, isErrorDiffusion, isInterlaceMode,
+  defaultOptions, isHamMode, isEhbMode, isAtariMode, isErrorDiffusion, isInterlaceMode,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset, decomposeMode,
 } from '../lib/options.js'
@@ -59,9 +59,9 @@ const groupedDitherOptions = DITHER_METHODS.map(g => ({
   items: g.items.map(d => ({ value: d.value, label: d.label }))
 }))
 
-// Whether depth slider should be shown (not for HAM/EHB where depth is fixed)
+// Whether depth slider should be shown (not for HAM/EHB/Atari where depth is fixed)
 const showDepthSlider = computed(() => {
-  return !isHamMode(options.mode) && !isEhbMode(options.mode)
+  return !isHamMode(options.mode) && !isEhbMode(options.mode) && !isAtariMode(options.mode)
 })
 
 // Whether HAM controls should be shown
@@ -97,8 +97,10 @@ watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
   const modes = modesForChipset(options.chipset)
   if (!modes.find(m => m.value === options.mode)) {
-    options.mode = 'lores'
+    options.mode = modes[0].value
   }
+  // Disable copper for Atari modes
+  if (isAtariMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
   if (max > 0 && options.depth > max) {
     options.depth = max
@@ -481,8 +483,8 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Copper (not available for EHB or interlace) -->
-              <div v-if="!isEhbMode(options.mode) && !isInterlaceMode(options.mode)" class="grid align-items-center">
+              <!-- Copper (not available for EHB, interlace, or Atari) -->
+              <div v-if="!isEhbMode(options.mode) && !isInterlaceMode(options.mode) && !isAtariMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Enable per-scanline copper palette changes. Each row gets its own optimal palette via the copper.">Copper</label>
                 <div class="col-8">
                   <ToggleSwitch v-model="options.copper" />
