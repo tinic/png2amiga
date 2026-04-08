@@ -55,12 +55,20 @@ const pageLoadTime = Date.now()
 const loupeActive = ref(false)
 const loupeX = ref(0)  // pan offset in CSS pixels (negative = scrolled right/down)
 const loupeY = ref(0)
+const loupeHeight = ref(null)
+const previewColRef = ref(null)
 let dragStart = null    // { x, y, ox, oy } while dragging
 
 function loupeToggle() {
   loupeActive.value = !loupeActive.value
   loupeX.value = 0
   loupeY.value = 0
+  if (loupeActive.value && previewColRef.value) {
+    const rect = previewColRef.value.getBoundingClientRect()
+    loupeHeight.value = `${window.innerHeight - rect.top - 16}px`
+  } else {
+    loupeHeight.value = null
+  }
 }
 function loupePointerDown(e) {
   if (!loupeActive.value) return
@@ -695,7 +703,7 @@ async function loadExample(example) {
       </div>
 
       <!-- Preview (sticky right side) -->
-      <div class="col-12 md:col-8 lg:col-9 preview-col" :class="{ 'loupe-expanded': loupeActive }">
+      <div ref="previewColRef" class="col-12 md:col-8 lg:col-9 preview-col" :class="{ 'loupe-expanded': loupeActive }" :style="loupeHeight ? { height: loupeHeight } : {}">
         <div v-if="!imageBytes" class="surface-card border-round-lg flex align-items-center justify-content-center" style="min-height: 500px;">
           <div class="text-center text-color-secondary">
             <i class="pi pi-upload text-5xl mb-3 block"></i>
@@ -769,7 +777,6 @@ async function loadExample(example) {
 .preview-col.loupe-expanded {
   position: sticky;
   top: 1rem;
-  height: calc(100vh - 8.5rem);
   display: flex;
   flex-direction: column;
 }
