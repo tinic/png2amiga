@@ -215,8 +215,10 @@ Result<CopperResult> encode_copper(const Image& image,
     }
 
     auto num_colors = std::size_t{1} << depth;
-    auto changes_per_line = (override_changes > 0) ? override_changes
-        : max_changes_per_line(depth, is_ham, is_hires, chipset);
+    auto max_swappable = num_colors > 1 ? num_colors - 1 : std::size_t{0};  // slot 0 reserved
+    auto changes_per_line = (override_changes > 0)
+        ? std::min(override_changes, max_swappable)
+        : std::min(max_changes_per_line(depth, is_ham, is_hires, chipset), max_swappable);
 
     // Step 1: Generate global base palette (N-1 colors + black at index 0)
     auto algo = (chipset == amiga::Chipset::aga)
@@ -360,9 +362,9 @@ Result<CopperResult> encode_copper(const Image& image,
                 all_indices[y * width + x] = static_cast<std::uint8_t>(best_k);
                 total_error += best_d;
 
-                // Compute error against ORIGINAL pixel, not error-adjusted
-                // pixel. Prevents error-on-error accumulation when the
-                // copper palette changes between rows.
+                // Error against ORIGINAL pixel (not adjusted). This prevents
+                // error-on-error cascading across copper palette changes.
+                // Same approach as abc's dithering implementation.
                 auto orig_lab = color_space::linear_to_oklab(row[x]);
                 color_space::OKLab qerr = {
                     (orig_lab.L - pal_lab[best_k].L) * str,

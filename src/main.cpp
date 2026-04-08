@@ -1261,9 +1261,9 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {} changes/line, error: {:.4f}",
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
                          planes->depth, planes->total_bytes(),
-                         copper_result->num_colors, copper_result->changes_per_line,
+                         copper_result->num_colors, copper_result->avg_changes_per_line,
                          total_error);
 
             // Per-scanline preview
@@ -1500,10 +1500,12 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        auto max_swap = ((std::size_t{1} << config->depth) > 1)
+            ? (std::size_t{1} << config->depth) - 1 : std::size_t{0};
         auto cpl = config->copper_changes > 0
-            ? static_cast<std::size_t>(config->copper_changes)
-            : copper::max_changes_per_line(config->depth, false, config->hires, chipset);
-        std::println("Mode:   Copper ({} changes/line)", cpl);
+            ? std::min(static_cast<std::size_t>(config->copper_changes), max_swap)
+            : std::min(copper::max_changes_per_line(config->depth, false, config->hires, chipset), max_swap);
+        std::println("Mode:   Copper (max {} changes/line)", cpl);
 
         dither::Settings dith;
         dith.method = config->dither_method;
@@ -1535,9 +1537,9 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {} changes/line, error: {:.4f}",
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
                      copper_result->planes.depth, copper_result->planes.total_bytes(),
-                     copper_result->num_colors, copper_result->changes_per_line,
+                     copper_result->num_colors, copper_result->avg_changes_per_line,
                      copper_result->total_error);
 
         // Use base palette for IFF CMAP
