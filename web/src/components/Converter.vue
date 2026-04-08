@@ -502,7 +502,7 @@ async function loadExample(example) {
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
                 <div class="col-8 flex gap-1 align-items-center">
                   <Button icon="pi pi-chevron-left" severity="secondary" text size="small"
-                    @click="cycleDither(-1)" style="min-width:1.5rem;padding:0.15rem" />
+                    @click="cycleDither(-1)" style="min-width:1.2rem;padding:0.1rem 0" />
                   <Select
                     v-model="options.dither"
                     :options="groupedDitherOptions"
@@ -514,7 +514,7 @@ async function loadExample(example) {
                     style="min-width:0"
                   />
                   <Button icon="pi pi-chevron-right" severity="secondary" text size="small"
-                    @click="cycleDither(1)" style="min-width:1.5rem;padding:0.15rem" />
+                    @click="cycleDither(1)" style="min-width:1.2rem;padding:0.1rem 0" />
                 </div>
               </div>
 
