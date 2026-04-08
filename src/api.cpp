@@ -43,6 +43,8 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "stf-med") return amiga::Mode::stf_med;
     if (s == "ste-low") return amiga::Mode::ste_low;
     if (s == "ste-med") return amiga::Mode::ste_med;
+    if (s == "stf-hi") return amiga::Mode::stf_hi;
+    if (s == "ste-hi") return amiga::Mode::ste_hi;
     return amiga::Mode::lores;
 }
 
@@ -572,11 +574,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto max_colors = std::size_t{1} << depth;
 
     // Build palette.
+    // Atari mono: fixed B/W palette (no quantization needed).
     // When transparency is present, reserve index 0 for transparent color:
     // quantize N-1 colors, then prepend black at index 0.
     auto quant_colors = has_transparency ? max_colors - 1 : max_colors;
     Palette pal;
-    if (!options.palette_file.empty()) {
+    if (amiga::is_atari_hi(mode)) {
+        pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
+    } else if (!options.palette_file.empty()) {
         auto loaded = palette_io::load_palette(options.palette_file);
         if (!loaded) return std::unexpected{loaded.error()};
         pal = *std::move(loaded);

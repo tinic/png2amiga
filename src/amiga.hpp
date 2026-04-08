@@ -26,8 +26,10 @@ enum class Mode : unsigned char {
     // Atari ST/STE
     stf_low,            // STF 320x200, 4 bitplanes, 16 colors, 9-bit palette
     stf_med,            // STF 640x200, 2 bitplanes, 4 colors, 9-bit palette
+    stf_hi,             // STF 640x400, 1 bitplane, monochrome
     ste_low,            // STE 320x200, 4 bitplanes, 16 colors, 12-bit palette
     ste_med,            // STE 640x200, 2 bitplanes, 4 colors, 12-bit palette
+    ste_hi,             // STE 640x400, 1 bitplane, monochrome
 };
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,9 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {320, 200, 4, 16, false, false, false, false, 2, 2};
     case Mode::ste_med:
         return {640, 200, 2,  4, false, false, true,  false, 1, 2};
+    case Mode::stf_hi:
+    case Mode::ste_hi:
+        return {640, 400, 1,  2, false, false, true,  false, 1, 1};
     }
     std::unreachable();
 }
@@ -116,13 +121,18 @@ constexpr std::size_t ham_base_colors(Mode mode) noexcept {
 
 // Check if a mode is an Atari ST/STE mode
 constexpr bool is_atari(Mode mode) noexcept {
-    return mode == Mode::stf_low || mode == Mode::stf_med ||
-           mode == Mode::ste_low || mode == Mode::ste_med;
+    return mode == Mode::stf_low || mode == Mode::stf_med || mode == Mode::stf_hi ||
+           mode == Mode::ste_low || mode == Mode::ste_med || mode == Mode::ste_hi;
 }
 
 // Check if a mode is Atari STF (9-bit palette)
 constexpr bool is_stf(Mode mode) noexcept {
-    return mode == Mode::stf_low || mode == Mode::stf_med;
+    return mode == Mode::stf_low || mode == Mode::stf_med || mode == Mode::stf_hi;
+}
+
+// Check if a mode is Atari monochrome high-res
+constexpr bool is_atari_hi(Mode mode) noexcept {
+    return mode == Mode::stf_hi || mode == Mode::ste_hi;
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)

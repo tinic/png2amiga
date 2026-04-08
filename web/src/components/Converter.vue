@@ -268,8 +268,8 @@ async function downloadDegas() {
   try {
     const result = await convertDegas(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
-    const isMed = options.mode.endsWith('-med')
-    const ext = isMed ? '.pi2' : '.pi1'
+    const ext = options.mode.endsWith('-hi') ? '.pi3'
+               : options.mode.endsWith('-med') ? '.pi2' : '.pi1'
     const blob = new Blob([result.data], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -637,7 +637,7 @@ async function loadExample(example) {
             <div v-if="isAtariMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button :label="options.mode.endsWith('-med') ? 'pi2' : 'pi1'" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadDegas"
+              <Button :label="options.mode.endsWith('-hi') ? 'pi3' : options.mode.endsWith('-med') ? 'pi2' : 'pi1'" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadDegas"
                 title="Download as Degas Elite file for Atari ST/STE." />
             </div>
             <!-- Amiga export buttons -->

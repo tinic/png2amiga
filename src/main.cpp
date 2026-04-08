@@ -127,7 +127,7 @@ void print_usage() {
         "         ham6, ham6-lace, ham6-hires, ham6-hires-lace,\n"
         "         ham8, ham8-lace, ham8-hires, ham8-hires-lace,\n"
         "         ehb, ehb-lace,\n"
-        "         stf-low, stf-med, ste-low, ste-med\n"
+        "         stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
         "  --copper                        Per-scanline copper palettes\n"
@@ -257,6 +257,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "stf-med") config.mode = amiga::Mode::stf_med;
                 else if (v == "ste-low") config.mode = amiga::Mode::ste_low;
                 else if (v == "ste-med") config.mode = amiga::Mode::ste_med;
+                else if (v == "stf-hi") config.mode = amiga::Mode::stf_hi;
+                else if (v == "ste-hi") config.mode = amiga::Mode::ste_hi;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -1445,6 +1447,10 @@ int main(int argc, char* argv[]) {
         snap_palette(pal, chipset, config->mode);
         std::println("Palette: {} colors (loaded from {})",
                      pal.size(), config->palette_file);
+    } else if (amiga::is_atari_hi(config->mode)) {
+        // Monochrome: fixed white + black palette
+        pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
+        std::println("Palette: 2 colors (monochrome)");
     } else {
         // Quantize N-1 colors, reserve index 0 for black (border/transparency)
         auto quantized = auto_quantize(*image,

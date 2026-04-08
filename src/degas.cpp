@@ -52,13 +52,14 @@ Result<std::vector<std::uint8_t>> encode(
     }
 
     bool is_med = (mode == amiga::Mode::stf_med || mode == amiga::Mode::ste_med);
+    bool is_hi = amiga::is_atari_hi(mode);
     bool is_stf = amiga::is_stf(mode);
 
     std::vector<std::uint8_t> out(32034, 0);
 
-    // Resolution word (big-endian)
+    // Resolution word (big-endian): 0=low, 1=medium, 2=high
     out[0] = 0;
-    out[1] = is_med ? 1 : 0;
+    out[1] = is_hi ? 2 : (is_med ? 1 : 0);
 
     // Palette: 16 entries, 2 bytes each (big-endian)
     for (std::size_t i = 0; i < 16 && i < palette.size(); ++i) {

@@ -15,8 +15,10 @@ const ALL_MODES = [
   { value: 'ehb',              label: 'EHB (Extra Half-Brite)',        chipset: 'ocs' },
   { value: 'stf-low',          label: 'ST Low (320x200, 16 colors)',   chipset: 'stf' },
   { value: 'stf-med',          label: 'ST Medium (640x200, 4 colors)', chipset: 'stf' },
+  { value: 'stf-hi',           label: 'ST High (640x400, mono)',       chipset: 'stf' },
   { value: 'ste-low',          label: 'STE Low (320x200, 16 colors)',  chipset: 'ste' },
   { value: 'ste-med',          label: 'STE Medium (640x200, 4 colors)',chipset: 'ste' },
+  { value: 'ste-hi',           label: 'STE High (640x400, mono)',      chipset: 'ste' },
 ]
 
 // Filter modes available for a given chipset
@@ -226,6 +228,7 @@ export function defaultDepth(mode) {
   if (ham === 'ham8') return 8
   if (mode === 'stf-low' || mode === 'ste-low') return 4
   if (mode === 'stf-med' || mode === 'ste-med') return 2
+  if (mode === 'stf-hi' || mode === 'ste-hi') return 1
   if (isHiresMode(mode)) return 4
   return 5
 }
