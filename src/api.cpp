@@ -237,19 +237,16 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     }
 
     if (image.width() != target_w || image.height() != target_h) {
-        // Skip bicubic for trivial size differences (±1 pixel) to avoid
-        // unnecessary blur. Just pad (repeat edge) or crop instead.
-        auto dw = static_cast<int>(target_w) - static_cast<int>(image.width());
-        auto dh = static_cast<int>(target_h) - static_cast<int>(image.height());
-        if (std::abs(dw) <= 1 && std::abs(dh) <= 1) {
+        // Interlace needs even height. If only 1 row short, pad instead of
+        // resampling the entire image (avoids blur from bicubic).
+        if (image.width() == target_w && target_h == image.height() + 1) {
             Image padded(target_w, target_h);
-            for (std::size_t y = 0; y < target_h; ++y) {
-                auto sy = std::min(y, image.height() - 1);
-                for (std::size_t x = 0; x < target_w; ++x) {
-                    auto sx = std::min(x, image.width() - 1);
-                    padded[x, y] = image[sx, sy];
-                }
-            }
+            for (std::size_t y = 0; y < image.height(); ++y)
+                for (std::size_t x = 0; x < target_w; ++x)
+                    padded[x, y] = image[x, y];
+            // Repeat last row
+            for (std::size_t x = 0; x < target_w; ++x)
+                padded[x, target_h - 1] = image[x, image.height() - 1];
             image = std::move(padded);
         } else {
             auto scaled = scale::bicubic(image, target_w, target_h);
@@ -294,10 +291,11 @@ struct PipelineResult {
     float quant_error{};
 };
 
-// Round to nearest even number (Amiga prefers even heights)
-std::size_t round_even(double v) {
+// Round height. Only force even for interlace (fields must be equal).
+std::size_t round_height(double v, bool interlace) {
     auto r = static_cast<std::size_t>(std::lround(v));
-    return (r + 1) & ~std::size_t{1};  // round up to even
+    if (interlace) return (r + 1) & ~std::size_t{1};  // round up to even
+    return r;
 }
 
 // Compute target dimensions from source image size and user options.
@@ -312,6 +310,7 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     // PAR from mode params; interlace doubles vertical resolution
     auto par = static_cast<double>(params.preview_scale_x)
              / static_cast<double>(params.preview_scale_y);
+    bool interlace = options.interlace || params.is_interlaced;
     if (options.interlace && !params.is_interlaced) par *= 2.0;
 
     bool have_w = options.width > 0;
@@ -328,7 +327,7 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
         auto w_par = (w != mode_w && mode_w > 0)
             ? par * static_cast<double>(mode_w) / static_cast<double>(w)
             : par;
-        auto h = round_even(static_cast<double>(w) * w_par / src_aspect);
+        auto h = round_height(static_cast<double>(w) * w_par / src_aspect, interlace);
         return {w, h};
     }
     if (have_h) {
@@ -339,7 +338,7 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     }
     // Neither: use mode default width, but don't upscale small images
     auto w = std::min(mode_w, src_w);
-    auto h = round_even(static_cast<double>(w) * par / src_aspect);
+    auto h = round_height(static_cast<double>(w) * par / src_aspect, interlace);
     // For fixed-height modes (Atari ST), clamp to screen_height
     auto mode_h = params.screen_height;
     if (mode_h > 0 && h > mode_h) h = mode_h;

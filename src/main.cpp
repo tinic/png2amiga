@@ -755,10 +755,12 @@ int main(int argc, char* argv[]) {
     auto src_h = image->height();
     auto src_aspect = static_cast<double>(src_w) / static_cast<double>(src_h);
 
-    // Round to nearest even number (Amiga prefers even heights)
-    auto round_even = [](double v) -> std::size_t {
+    bool interlace = config->interlace || params.is_interlaced;
+    // Only force even height for interlace (fields must be equal).
+    auto round_h = [interlace](double v) -> std::size_t {
         auto r = static_cast<std::size_t>(std::lround(v));
-        return (r + 1) & ~std::size_t{1};
+        if (interlace) return (r + 1) & ~std::size_t{1};
+        return r;
     };
 
     // Pixel aspect ratio: PAR = pixel_width / pixel_height
@@ -780,7 +782,7 @@ int main(int argc, char* argv[]) {
         auto w_par = (target_w != params.screen_width && params.screen_width > 0)
             ? par * static_cast<double>(params.screen_width) / static_cast<double>(target_w)
             : par;
-        target_h = round_even(static_cast<double>(target_w) * w_par / src_aspect);
+        target_h = round_h(static_cast<double>(target_w) * w_par / src_aspect);
     } else if (config->height) {
         target_h = *config->height;
         target_w = static_cast<std::size_t>(
@@ -791,7 +793,7 @@ int main(int argc, char* argv[]) {
         target_w = params.is_hires
             ? params.screen_width
             : std::min(params.screen_width, src_w);
-        target_h = round_even(static_cast<double>(target_w) * par / src_aspect);
+        target_h = round_h(static_cast<double>(target_w) * par / src_aspect);
         // Atari: clamp to fixed height, pad/crop handled after scaling
         if (params.screen_height > 0 && target_h > params.screen_height)
             target_h = params.screen_height;
@@ -917,19 +919,15 @@ int main(int argc, char* argv[]) {
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
-        // Skip bicubic for trivial size differences (±1 pixel) to avoid
-        // unnecessary blur. Just pad (repeat edge) or crop instead.
-        auto dw = static_cast<int>(target_w) - static_cast<int>(image->width());
-        auto dh = static_cast<int>(target_h) - static_cast<int>(image->height());
-        if (std::abs(dw) <= 1 && std::abs(dh) <= 1) {
+        // Interlace needs even height. If only 1 row short, pad instead of
+        // resampling the entire image (avoids blur from bicubic).
+        if (image->width() == target_w && target_h == image->height() + 1) {
             Image padded(target_w, target_h);
-            for (std::size_t y = 0; y < target_h; ++y) {
-                auto sy = std::min(y, image->height() - 1);
-                for (std::size_t x = 0; x < target_w; ++x) {
-                    auto sx = std::min(x, image->width() - 1);
-                    padded[x, y] = (*image)[sx, sy];
-                }
-            }
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < target_w; ++x)
+                    padded[x, y] = (*image)[x, y];
+            for (std::size_t x = 0; x < target_w; ++x)
+                padded[x, target_h - 1] = (*image)[x, image->height() - 1];
             image = std::move(padded);
         } else {
             auto scaled = scale::bicubic(*image, target_w, target_h);
