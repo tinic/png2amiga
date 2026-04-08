@@ -98,8 +98,8 @@ watch(() => options.chipset, (chipset, oldChipset) => {
   const modes = modesForChipset(options.chipset)
   if (!modes.find(m => m.value === options.mode)) {
     options.mode = modes[0].value
+    options.depth = defaultDepth(options.mode)
   }
-  // Disable copper for Atari modes
   if (isAtariMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
   if (max > 0 && options.depth > max) {
