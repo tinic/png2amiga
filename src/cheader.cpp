@@ -601,9 +601,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // VSTART=44 (PAL standard), HSTART=0x81. DIWSTOP=0x2CC1 covers full PAL height.
     out += "    // Display window start/stop — visible area on screen\n";
     out += std::format("    *cl++ = offsetof(struct Custom, diwstrt); "
-                       "*cl++ = 0x{:04X};  // VSTART={}, HSTART=$81\n",
-                       0x0081 + (y_start << 8), y_start);
-    out += "    *cl++ = offsetof(struct Custom, diwstop); *cl++ = 0x2CC1;  // full PAL height\n";
+                       "*cl++ = ({}<<8)|0x81;  // VSTART={}, HSTART=$81\n",
+                       y_start, y_start);
+    out += "    *cl++ = offsetof(struct Custom, diwstop); "
+           "*cl++ = (0x2C<<8)|0xC1;  // VSTOP=300, HSTOP=$C1 (full PAL)\n";
 
     // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed for >6 planes)
     if (use_planar) {
@@ -627,15 +628,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (is_hires) bplcon0 |= (1 << 15);
     if (is_lace) bplcon0 |= (1 << 2);
 
-    // Build description string for the comment
-    std::string bplcon0_desc;
-    bplcon0_desc += std::to_string(depth) + " planes";
-    if (is_hires) bplcon0_desc += ", HIRES";
-    if (is_ham) bplcon0_desc += ", HAM";
-    if (is_lace) bplcon0_desc += ", LACE";
+    // Emit BPLCON0 as OR of named parts
+    std::string bplcon0_expr;
+    if (is_hires) bplcon0_expr += "(1<<15)/*HIRES*/|";
+    bplcon0_expr += std::format("({}<<12)/*BPU*/", bpu);
+    if (is_ham) bplcon0_expr += "|(1<<11)/*HAM*/";
+    bplcon0_expr += "|(1<<9)/*COLOR*/";
+    if (bpu3) bplcon0_expr += "|(1<<4)/*BPU3=8planes*/";
+    if (is_lace) bplcon0_expr += "|(1<<2)/*LACE*/";
 
     out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); "
-                       "*cl++ = 0x{:04X};  // {}\n", bplcon0, bplcon0_desc);
+                       "*cl++ = {};  // 0x{:04X}\n", bplcon0_expr, bplcon0);
     out += "    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0;  // scroll offset = 0\n";
 
     // BPLCON2: playfield priority and KILLEHB
@@ -776,7 +779,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    }\n\n";
     }
 
-    // Blank below image: disable bitplanes after last line
+    // Blank below image: 0 bitplanes, keep LACE if interlaced
+    auto blank_expr = is_lace
+        ? "(1<<9)/*COLOR*/|(1<<2)/*LACE*/"
+        : "(1<<9)/*COLOR*/";
     {
         auto last_line = y_start + (is_lace
             ? static_cast<int>(height / 2)
@@ -790,9 +796,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                            "  // WAIT line {}\n",
                            last_line >= 256 ? (last_line & 0xFF) : last_line,
                            last_line);
-        auto blank_bplcon0 = is_lace ? 0x0204 : 0x0200;
         out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); "
-               "*cl++ = 0x{:04X};  // 0 planes, blank\n", blank_bplcon0);
+               "*cl++ = {};  // 0 planes, blank below image\n", blank_expr);
     }
 
     // End copper list
@@ -815,13 +820,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += "    *cl2++ = offsetof(struct Custom, ddfstop); *cl2++ = 0x00D0;\n";
         }
         out += std::format("    *cl2++ = offsetof(struct Custom, diwstrt); "
-                           "*cl2++ = 0x{:04X};\n", 0x0081 + (y_start << 8));
-        out += "    *cl2++ = offsetof(struct Custom, diwstop); *cl2++ = 0x2CC1;\n";
+                           "*cl2++ = ({}<<8)|0x81;\n", y_start);
+        out += "    *cl2++ = offsetof(struct Custom, diwstop); *cl2++ = (0x2C<<8)|0xC1;\n";
         if (use_planar)
             out += std::format("    *cl2++ = 0x01fc; *cl2++ = 0x{:04X};\n",
                                need_fmode3 ? 0x0003 : 0x0000);
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
-                           "*cl2++ = 0x{:04X};\n", bplcon0);
+                           "*cl2++ = {};  // 0x{:04X}\n", bplcon0_expr, bplcon0);
         out += "    *cl2++ = offsetof(struct Custom, bplcon1); *cl2++ = 0;\n";
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon2); *cl2++ = 0x{:04X};\n",
                            bplcon2);
@@ -872,7 +877,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                    last_line);
             }
             out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
-                   "*cl2++ = 0x{:04X};\n", is_lace ? 0x0204 : 0x0200);
+                   "*cl2++ = {};\n", blank_expr);
         }
         out += "    *cl2++ = 0xffff; *cl2++ = 0xfffe;\n\n";
 
