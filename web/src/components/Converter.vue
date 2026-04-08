@@ -70,8 +70,12 @@ function loupePointerDown(e) {
 }
 function loupePointerMove(e) {
   if (!dragStart) return
-  loupeX.value = dragStart.ox + (e.clientX - dragStart.x)
-  loupeY.value = dragStart.oy + (e.clientY - dragStart.y)
+  const canvas = canvasRef.value
+  if (!canvas) return
+  const maxX = canvas.clientWidth * 3
+  const maxY = canvas.clientHeight * 3
+  loupeX.value = Math.min(0, Math.max(-maxX, dragStart.ox + (e.clientX - dragStart.x)))
+  loupeY.value = Math.min(0, Math.max(-maxY, dragStart.oy + (e.clientY - dragStart.y)))
 }
 function loupePointerUp() {
   dragStart = null
