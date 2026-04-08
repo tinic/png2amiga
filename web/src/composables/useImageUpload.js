@@ -5,6 +5,8 @@ export function useImageUpload() {
   const imageBytes = ref(null)
   const imageName = ref('')
   const imageUrl = ref(null)
+  const imageWidth = ref(0)
+  const imageHeight = ref(0)
   const dragOver = ref(false)
   const uploadTimestamp = ref(0)
 
@@ -27,6 +29,8 @@ export function useImageUpload() {
     uploadTimestamp.value = Date.now()
     const img = new Image()
     img.onload = () => {
+      imageWidth.value = img.width
+      imageHeight.value = img.height
       track('upload', { type: file.type, size: Math.round(file.size / 1024), width: img.width, height: img.height })
     }
     img.src = imageUrl.value
@@ -57,5 +61,5 @@ export function useImageUpload() {
 
   onUnmounted(revokeUrl)
 
-  return { imageBytes, imageName, imageUrl, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker }
+  return { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker }
 }
