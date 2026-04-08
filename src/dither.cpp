@@ -140,6 +140,46 @@ constexpr auto bayer4 = make_bayer4x4();
 constexpr auto bayer8 = make_bayer8x8();
 constexpr auto checker_mat = make_checker();
 constexpr auto h2x4_mat = make_h2x4();
+
+// V 4x2: vertical bias (4 wide, 2 tall) — good for hires 1:2 tall pixels
+constexpr auto make_v4x2() noexcept {
+    return std::array<std::array<float, 4>, 2>{{
+        {{-0.35f, -0.15f,  0.15f,  0.35f}},
+        {{ 0.25f,  0.05f, -0.05f, -0.25f}},
+    }};
+}
+
+// Bayer 4x2: standard Bayer ordering in 4 wide x 2 tall
+constexpr auto make_bayer4x2() noexcept {
+    constexpr std::array<std::array<int, 4>, 2> raw = {{
+        {{0, 4, 1, 5}},
+        {{6, 2, 7, 3}},
+    }};
+    std::array<std::array<float, 4>, 2> m{};
+    for (std::size_t y = 0; y < 2; ++y)
+        for (std::size_t x = 0; x < 4; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 8.0f - 0.5f;
+    return m;
+}
+
+// Bayer 2x4: standard Bayer ordering in 2 wide x 4 tall
+constexpr auto make_bayer2x4() noexcept {
+    constexpr std::array<std::array<int, 2>, 4> raw = {{
+        {{0, 6}},
+        {{4, 2}},
+        {{1, 7}},
+        {{5, 3}},
+    }};
+    std::array<std::array<float, 2>, 4> m{};
+    for (std::size_t y = 0; y < 4; ++y)
+        for (std::size_t x = 0; x < 2; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 8.0f - 0.5f;
+    return m;
+}
+
+constexpr auto v4x2_mat = make_v4x2();
+constexpr auto bayer4x2_mat = make_bayer4x2();
+constexpr auto bayer2x4_mat = make_bayer2x4();
 constexpr auto clustered_mat = make_clustered_dot();
 constexpr auto line2_mat = make_line2();
 constexpr auto line_checker_mat = make_line_checker();
@@ -579,6 +619,15 @@ DitherResult apply(const Image& image,
     case Method::h2x4:
         return apply_ordered(image, h2x4_mat, pal_span,
                              settings.strength);
+    case Method::v4x2:
+        return apply_ordered(image, v4x2_mat, pal_span,
+                             settings.strength);
+    case Method::bayer4x2:
+        return apply_ordered(image, bayer4x2_mat, pal_span,
+                             settings.strength);
+    case Method::bayer2x4:
+        return apply_ordered(image, bayer2x4_mat, pal_span,
+                             settings.strength);
     case Method::clustered_dot:
         return apply_ordered(image, clustered_mat, pal_span,
                              settings.strength);
@@ -651,6 +700,9 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
     case Method::bayer8x8:      return bayer8[y % 8][x % 8];
     case Method::checker:       return checker_mat[y % 2][x % 2];
     case Method::h2x4:          return h2x4_mat[y % 4][x % 2];
+    case Method::v4x2:          return v4x2_mat[y % 2][x % 4];
+    case Method::bayer4x2:      return bayer4x2_mat[y % 2][x % 4];
+    case Method::bayer2x4:      return bayer2x4_mat[y % 4][x % 2];
     case Method::clustered_dot: return clustered_mat[y % 4][x % 4];
     case Method::line2:         return line2_mat[y % 2][0];
     case Method::line_checker:  return line_checker_mat[y % 2][x % 2];

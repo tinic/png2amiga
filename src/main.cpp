@@ -192,6 +192,9 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "line2") return dither::Method::line2;
     if (s == "line-checker") return dither::Method::line_checker;
     if (s == "line4") return dither::Method::line4;
+    if (s == "v4x2") return dither::Method::v4x2;
+    if (s == "bayer4x2") return dither::Method::bayer4x2;
+    if (s == "bayer2x4") return dither::Method::bayer2x4;
     if (s == "line8") return dither::Method::line8;
     if (s == "halftone8x8") return dither::Method::halftone8x8;
     if (s == "diagonal8x8") return dither::Method::diagonal8x8;
@@ -558,6 +561,9 @@ const char* dither_name(dither::Method m) {
     case dither::Method::line2: return "line2";
     case dither::Method::line_checker: return "line-checker";
     case dither::Method::line4: return "line4";
+    case dither::Method::v4x2: return "v4x2";
+    case dither::Method::bayer4x2: return "bayer4x2";
+    case dither::Method::bayer2x4: return "bayer2x4";
     case dither::Method::line8: return "line8";
     case dither::Method::halftone8x8: return "halftone8x8";
     case dither::Method::diagonal8x8: return "diagonal8x8";

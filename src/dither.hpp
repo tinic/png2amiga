@@ -24,8 +24,15 @@ enum class Method : unsigned char {
     bayer4x4,
     bayer8x8,
     checker,          // 2x2 checkerboard
-    h2x4,            // 2x4 Bayer (perceptually square at 2:1 pixel ratio)
     clustered_dot,    // 4x4 clustered dot
+
+    // Non-square ordered (for non-square pixel modes)
+    h2x4,             // 2 wide x 4 tall (lores interlace, wide pixels)
+    v4x2,             // 4 wide x 2 tall (hires, tall pixels)
+    bayer4x2,         // Bayer 4 wide x 2 tall (hires)
+    bayer2x4,         // Bayer 2 wide x 4 tall (interlace)
+
+    // Lines
     line2,            // 1x2 alternating rows
     line_checker,     // 2x2 line-biased
     line4,            // 1x4 horizontal gradient
@@ -98,6 +105,7 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::line_checker:
     case Method::line4:
     case Method::line8:
+    case Method::v4x2: case Method::bayer4x2: case Method::bayer2x4:
     case Method::halftone8x8:
     case Method::diagonal8x8:
     case Method::spiral5x5:

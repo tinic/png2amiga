@@ -88,6 +88,9 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "line2") return dither::Method::line2;
     if (s == "line-checker") return dither::Method::line_checker;
     if (s == "line4") return dither::Method::line4;
+    if (s == "v4x2") return dither::Method::v4x2;
+    if (s == "bayer4x2") return dither::Method::bayer4x2;
+    if (s == "bayer2x4") return dither::Method::bayer2x4;
     if (s == "line8") return dither::Method::line8;
     if (s == "halftone8x8") return dither::Method::halftone8x8;
     if (s == "diagonal8x8") return dither::Method::diagonal8x8;

@@ -48,8 +48,13 @@ export const DITHER_METHODS = [
   ]},
   { group: 'Ordered (pattern)', items: [
     { value: 'checker',       label: 'Checker' },
-    { value: 'h2x4',          label: 'H 2x4' },
     { value: 'clustered-dot', label: 'Clustered Dot' },
+  ]},
+  { group: 'Non-square', items: [
+    { value: 'h2x4',          label: 'H 2x4 (wide pixels)' },
+    { value: 'v4x2',          label: 'V 4x2 (tall pixels)' },
+    { value: 'bayer4x2',      label: 'Bayer 4x2 (hires)' },
+    { value: 'bayer2x4',      label: 'Bayer 2x4 (interlace)' },
   ]},
   { group: 'Halftone', items: [
     { value: 'halftone8x8',   label: 'Halftone 8x8 (45°)' },
