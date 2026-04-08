@@ -70,15 +70,13 @@ constexpr std::size_t max_changes_per_line(std::size_t depth, bool is_ham,
     if (chipset == amiga::Chipset::aga) {
         // AGA needs bank switching for regs 32+, ~2 MOVEs per change
         if (is_ham) {
-            // HAM6 AGA: 16 base colors, all swappable (slot 0 = start color)
-            if (depth == 6) return 16;
-            // HAM8 AGA: 64 base colors, 12 tested stable
-            if (depth == 8) return 12;
+            if (depth == 6) return is_hires ? 10 : 14;
+            if (depth == 8) return is_hires ? 10 : 12;
         }
         // AGA needs 2 copper MOVEs per color (hi + lo nibbles via LOCT)
         if (is_hires)
-            return std::min(std::size_t{8}, std::size_t{1} << depth);
-        return std::min(std::size_t{16}, std::size_t{1} << depth);
+            return std::min(std::size_t{10}, std::size_t{1} << depth);
+        return std::min(std::size_t{14}, std::size_t{1} << depth);
     }
     // OCS: 1 MOVE per change, plenty of time
     if (is_ham) return 16;  // HAM6: all 16 base colors
