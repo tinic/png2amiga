@@ -64,7 +64,7 @@ Result<std::vector<std::uint8_t>> encode(
     for (std::size_t i = 0; i < 16 && i < palette.size(); ++i) {
         auto word = is_stf
             ? to_stf_palette_word(palette[i])
-            : to_ste_palette_word(palette[i]);
+            : to_stf_palette_word(palette[i]);  // STE: use STF format for tool compatibility
         out[2 + i * 2]     = static_cast<std::uint8_t>(word >> 8);
         out[2 + i * 2 + 1] = static_cast<std::uint8_t>(word & 0xFF);
     }

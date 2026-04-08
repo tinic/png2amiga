@@ -77,8 +77,9 @@ Result<BitplaneData> encode(const std::vector<std::uint8_t>& pixel_indices,
                     if ((index >> plane) & 1u) {
                         auto word_off = y * words_per_row * depth
                                       + word_group * depth + plane;
-                        auto byte_off = word_off * 2 + (bit_in_word < 8 ? 0 : 1);
-                        auto bit = bit_in_word < 8 ? bit_in_word : (bit_in_word - 8);
+                        // Big-endian: bits 15-8 in high byte (offset 0), bits 7-0 in low byte (offset 1)
+                        auto byte_off = word_off * 2 + (bit_in_word >= 8 ? 0 : 1);
+                        auto bit = bit_in_word >= 8 ? (bit_in_word - 8) : bit_in_word;
                         result.data[byte_off] |=
                             static_cast<std::uint8_t>(1u << bit);
                     }
@@ -130,8 +131,8 @@ Result<std::vector<std::uint8_t>> decode(const BitplaneData& planes) {
                 for (std::size_t plane = 0; plane < planes.depth; ++plane) {
                     auto word_off = y * words_per_row * planes.depth
                                   + word_group * planes.depth + plane;
-                    auto byte_off = word_off * 2 + (bit_in_word < 8 ? 0 : 1);
-                    auto bit = bit_in_word < 8 ? bit_in_word : (bit_in_word - 8);
+                    auto byte_off = word_off * 2 + (bit_in_word >= 8 ? 0 : 1);
+                    auto bit = bit_in_word >= 8 ? (bit_in_word - 8) : bit_in_word;
                     if ((planes.data[byte_off] >> bit) & 1u) {
                         color |= static_cast<std::uint8_t>(1u << plane);
                     }
