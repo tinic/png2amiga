@@ -937,10 +937,11 @@ ConvertResult convert_rgba(const std::uint8_t* input_data,
     for (std::size_t i = 0; i < w * h; ++i) {
         bool transparent = (i < tmask.size() && tmask[i]);
         if (transparent) {
+            // Amiga displays color 0 (black) for transparent pixels
             rgba[i * 4 + 0] = 0;
             rgba[i * 4 + 1] = 0;
             rgba[i * 4 + 2] = 0;
-            rgba[i * 4 + 3] = 0;
+            rgba[i * 4 + 3] = 255;
         } else {
             auto srgb = color_space::linear_to_srgb(img.pixels()[i]).clamped();
             rgba[i * 4 + 0] = static_cast<std::uint8_t>(srgb.r * 255.0f + 0.5f);
