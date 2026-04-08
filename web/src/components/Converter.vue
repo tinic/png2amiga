@@ -782,6 +782,7 @@ async function loadExample(example) {
 .preview-col.loupe-expanded .preview-container {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .drop-zone {
