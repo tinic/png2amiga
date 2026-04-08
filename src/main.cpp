@@ -25,6 +25,7 @@
 #include <fstream>
 #include <optional>
 #include <print>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,6 +33,19 @@
 namespace {
 
 using namespace png2amiga;
+
+int count_unique_colors(const Image& img) {
+    std::unordered_set<std::uint32_t> seen;
+    for (std::size_t y = 0; y < img.height(); ++y)
+        for (std::size_t x = 0; x < img.width(); ++x) {
+            auto srgb = color_space::linear_to_srgb(img[x, y]).clamped();
+            auto r = static_cast<std::uint32_t>(srgb.r * 255.0f + 0.5f);
+            auto g = static_cast<std::uint32_t>(srgb.g * 255.0f + 0.5f);
+            auto b = static_cast<std::uint32_t>(srgb.b * 255.0f + 0.5f);
+            seen.insert((r << 16) | (g << 8) | b);
+        }
+    return static_cast<int>(seen.size());
+}
 
 // ---------------------------------------------------------------------------
 // Pad bitplane data to mode display width (for viewer .cpp export only)
@@ -674,6 +688,7 @@ Result<void> save_preview(std::string_view path, const Image& preview,
 // Show preview in terminal (iTerm2 inline image protocol)
 void show_terminal_preview(const Image& preview, amiga::Mode /*mode*/,
                            bool hires = false, bool interlace = false) {
+    std::println("Colors: {} unique", count_unique_colors(preview));
     bool is_hires = hires;
     bool is_lace = interlace;
     std::size_t sx = is_hires ? 1 : 2;
