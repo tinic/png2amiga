@@ -886,11 +886,19 @@ ConvertResult convert_rgba(const std::uint8_t* input_data,
     auto& tmask = result->transparency_mask;
 
     for (std::size_t i = 0; i < w * h; ++i) {
-        auto srgb = color_space::linear_to_srgb(img.pixels()[i]).clamped();
-        rgba[i * 4 + 0] = static_cast<std::uint8_t>(srgb.r * 255.0f + 0.5f);
-        rgba[i * 4 + 1] = static_cast<std::uint8_t>(srgb.g * 255.0f + 0.5f);
-        rgba[i * 4 + 2] = static_cast<std::uint8_t>(srgb.b * 255.0f + 0.5f);
-        rgba[i * 4 + 3] = (i < tmask.size() && tmask[i]) ? 0 : 255;
+        bool transparent = (i < tmask.size() && tmask[i]);
+        if (transparent) {
+            rgba[i * 4 + 0] = 0;
+            rgba[i * 4 + 1] = 0;
+            rgba[i * 4 + 2] = 0;
+            rgba[i * 4 + 3] = 0;
+        } else {
+            auto srgb = color_space::linear_to_srgb(img.pixels()[i]).clamped();
+            rgba[i * 4 + 0] = static_cast<std::uint8_t>(srgb.r * 255.0f + 0.5f);
+            rgba[i * 4 + 1] = static_cast<std::uint8_t>(srgb.g * 255.0f + 0.5f);
+            rgba[i * 4 + 2] = static_cast<std::uint8_t>(srgb.b * 255.0f + 0.5f);
+            rgba[i * 4 + 3] = 255;
+        }
     }
 
     return make_result(std::move(rgba), *result);
