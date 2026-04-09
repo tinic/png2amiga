@@ -937,8 +937,8 @@ async function loadExample(example) {
                   <div class="resize-bracket bot"></div>
                   <Button class="aspect-lock"
                           severity="secondary" text
-                          :icon="aspectLocked ? 'pi pi-link' : 'pi pi-unlink'"
-                          v-tooltip.top="aspectLocked ? 'Aspect ratio locked — click to unlink' : 'Aspect ratio unlinked — click to lock'"
+                          :icon="aspectLocked ? 'pi pi-lock' : 'pi pi-lock-open'"
+                          v-tooltip.top="aspectLocked ? 'Aspect ratio locked — click to unlock' : 'Aspect ratio unlocked — click to lock'"
                           @click="aspectLocked = !aspectLocked" />
                 </div>
               </template>
