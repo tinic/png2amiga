@@ -945,21 +945,23 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Precompute all 16 fade steps as separate copper lists in chip RAM.
         // During fade, just swap cop1lc — zero CPU chip RAM access per frame.
         out += "    USHORT* fade_cops[16] = {0};\n";
+        out += "    custom->color[0] = 0xF00;  // debug: red = alloc start\n";
         out += "    // Single alloc for all fade copies, carve into slices\n";
         out += "    int fade_steps = 0;\n";
         out += "    USHORT* fade_block = 0;\n";
-        out += "    { // Try largest block first, shrink if needed\n";
-        out += "      int want = 15;\n";
-        out += "      while (want > 0) {\n";
+        out += std::format("    {{ ULONG avail = AvailMem(MEMF_CHIP | MEMF_LARGEST);\n");
+        out += std::format("      int want = (int)(avail / {});\n", cop_size);
+        out += "      if (want > 15) want = 15;\n";
+        out += "      if (want > 0) {\n";
         out += std::format("          fade_block = (USHORT*)AllocMem((ULONG)want * {}, MEMF_CHIP);\n",
                            cop_size);
-        out += "          if (fade_block) { fade_steps = want; break; }\n";
-        out += "          want--;\n";
+        out += "          if (fade_block) fade_steps = want;\n";
         out += "      }\n";
         out += "      for (int s = 0; s < fade_steps; s++)\n";
         out += std::format("          fade_cops[s] = (USHORT*)((UBYTE*)fade_block + (ULONG)s * {});\n",
                            cop_size);
         out += "    }\n";
+        out += "    custom->color[0] = 0x0F0;  // debug: green = alloc done, build start\n";
         out += "    fade_cops[fade_steps] = copper1;  // last = full brightness\n";
         out += "    // Build faded copies in a single pass (no CopyMem needed)\n";
         out += "    for (int s = 0; s < fade_steps; s++) {\n";
