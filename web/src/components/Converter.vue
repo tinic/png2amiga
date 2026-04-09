@@ -218,6 +218,8 @@ const paletteMismatchDepth = computed(() => {
     return ''
   }
   if (n > maxColors) return `Palette has ${n} colors, depth ${d} supports ${maxColors}`
+  const idealDepth = Math.ceil(Math.log2(n || 1))
+  if (d > idealDepth) return `Palette has ${n} colors, depth ${idealDepth} would suffice (using ${d})`
   return ''
 })
 
