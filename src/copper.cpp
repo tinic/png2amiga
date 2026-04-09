@@ -382,6 +382,10 @@ Result<CopperResult> encode_copper(const Image& image,
             // The error (target - actual in OKLab) is palette-independent,
             // so cross-scanline propagation works even though the copper
             // palette changes per row.
+            // Kernel is selected from dither_settings.method, so all
+            // error-diffusion methods (floyd-steinberg, atkinson,
+            // sierra-lite, stucki, jarvis) take effect in copper mode.
+            auto kernel = dither::error_diffusion_kernel(dither_settings.method);
             bool reverse = (y % 2 == 1);
             auto ec = dither_settings.error_clamp;
             auto str = dither_settings.strength;
@@ -417,22 +421,18 @@ Result<CopperResult> encode_copper(const Image& image,
                     (orig_lab.a - pal_lab[best_k].a) * str,
                     (orig_lab.b - pal_lab[best_k].b) * str,
                 };
-                auto spread = [&](std::ptrdiff_t dx, std::ptrdiff_t dy, float wt) {
-                    auto nx = static_cast<std::ptrdiff_t>(x) + (reverse ? -dx : dx);
-                    auto ny = static_cast<std::ptrdiff_t>(y) + dy;
+                for (auto& [kdx, kdy, kw] : kernel) {
+                    auto nx = static_cast<std::ptrdiff_t>(x) + (reverse ? -kdx : kdx);
+                    auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
                     if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
                         ny >= 0 && static_cast<std::size_t>(ny) < height) {
                         auto idx = static_cast<std::size_t>(ny) * width +
                                    static_cast<std::size_t>(nx);
-                        err_buf[idx].L += qerr.L * wt;
-                        err_buf[idx].a += qerr.a * wt;
-                        err_buf[idx].b += qerr.b * wt;
+                        err_buf[idx].L += qerr.L * kw;
+                        err_buf[idx].a += qerr.a * kw;
+                        err_buf[idx].b += qerr.b * kw;
                     }
-                };
-                spread(1, 0, 7.0f / 16.0f);
-                spread(-1, 1, 3.0f / 16.0f);
-                spread(0, 1, 5.0f / 16.0f);
-                spread(1, 1, 1.0f / 16.0f);
+                }
             }
         } else {
             dither_row(row, pal_lab, y, dither_settings,

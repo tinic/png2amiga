@@ -416,11 +416,7 @@ DitherResult apply_ordered(const Image& image,
 // Error diffusion
 // ===========================================================================
 
-struct DiffusionEntry {
-    int dx;
-    int dy;
-    float weight;
-};
+// DiffusionEntry is declared publicly in dither.hpp.
 
 // Floyd-Steinberg
 //        * 7/16
@@ -691,6 +687,17 @@ DitherResult apply(const Image& image,
     }
 
     return apply_none(image, pal_span);
+}
+
+std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
+    switch (method) {
+    case Method::floyd_steinberg: return floyd_steinberg_kernel;
+    case Method::atkinson:        return atkinson_kernel;
+    case Method::sierra_lite:     return sierra_lite_kernel;
+    case Method::stucki:          return stucki_kernel;
+    case Method::jarvis:          return jarvis_kernel;
+    default:                      return {};
+    }
 }
 
 float ordered_threshold(Method method, std::size_t x, std::size_t y) {

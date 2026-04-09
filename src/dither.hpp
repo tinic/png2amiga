@@ -125,4 +125,22 @@ constexpr bool is_ordered(Method m) noexcept {
 
 float ordered_threshold(Method method, std::size_t x, std::size_t y);
 
+// ---------------------------------------------------------------------------
+// Error-diffusion kernel entry: distribute `weight` of the quantization
+// error to the pixel offset (dx, dy) from the current one. Used by callers
+// that need to run their own diffusion loop (e.g., copper mode with
+// per-scanline palette swaps).
+// ---------------------------------------------------------------------------
+
+struct DiffusionEntry {
+    int dx;
+    int dy;
+    float weight;
+};
+
+// Returns the kernel for the given error-diffusion method, or an empty
+// span for ordered / none. Floyd-Steinberg, Atkinson, Sierra Lite,
+// Stucki, Jarvis are supported.
+std::span<const DiffusionEntry> error_diffusion_kernel(Method method);
+
 } // namespace png2amiga::dither
