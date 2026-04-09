@@ -1239,13 +1239,11 @@ async function loadExample(example) {
 :deep(.aspect-lock .p-button-icon) {
   font-size: 0.85rem;
 }
-/* Dim the brackets when the lock is unlinked, and paint the chain icon white */
+/* Dim the brackets when the lock is unlinked (the icon shape itself
+ * already conveys the state, so no color override needed) */
 .resize-fields.unlinked .resize-bracket {
   border-color: var(--p-content-border-color, #4b5563);
   opacity: 0.25;
-}
-.resize-fields.unlinked :deep(.aspect-lock .p-button-icon) {
-  color: #fff;
 }
 
 .preview-col {
