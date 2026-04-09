@@ -942,7 +942,7 @@ async function loadExample(example) {
             <!-- Advanced section -->
             <Panel header="Advanced" toggleable collapsed class="mt-2">
               <!-- Custom palette -->
-              <div v-if="!isHamMode(options.mode)" class="mb-3">
+              <div v-if="!isHamMode(options.mode)">
                 <label class="block text-xs text-color-secondary font-semibold mb-1">Custom Palette</label>
                 <div class="flex gap-2 align-items-center">
                   <Button label="Load" icon="pi pi-upload" size="small" severity="secondary" @click="loadPalette" :disabled="converting" />
@@ -959,7 +959,7 @@ async function loadExample(example) {
               </div>
 
               <!-- Crop -->
-              <div class="mb-3">
+              <div class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1">Crop</label>
                 <div class="flex gap-2 align-items-center mb-1">
                   <label class="text-xs" style="width:1.5rem">X</label>
@@ -980,7 +980,7 @@ async function loadExample(example) {
               </div>
 
               <!-- Copper changes override -->
-              <div v-if="options.copper" class="mb-3">
+              <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1">Copper Changes/Line</label>
                 <div class="flex gap-2 align-items-center">
                   <InputNumber v-model="options.copperChanges" :min="0" :max="copperMax" class="flex-1 input-sm" placeholder="0 = auto" />
@@ -989,7 +989,7 @@ async function loadExample(example) {
               </div>
 
               <!-- Mask export (only when source has transparency) -->
-              <div v-if="imageHasAlpha" class="mb-3">
+              <div v-if="imageHasAlpha" class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1">Mask Export</label>
                 <div class="flex align-items-center gap-2 mb-2">
                   <input type="checkbox" v-model="options.maskInvert" id="maskInvert" />
