@@ -973,11 +973,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        for (int s = 0; s < 16; s++) fade_cops[s] = copper1;\n";
         out += "    }\n";
         out += std::format("    FreeMem(fade_off, {});\n", max_offsets * 2);
-        // Fade-in: just swap cop1lc each frame
+        // Fade-in: start with black copper list, sync to VBL before enabling
         out += "    // Fade-in: one cop1lc write per frame\n";
         out += "    custom->cop1lc = (ULONG)fade_cops[0];\n";
-        out += "    custom->dmacon = DMAF_BLITTER;\n";
         out += "    custom->copjmp1 = 0x7fff;\n";
+        out += "    custom->dmacon = DMAF_BLITTER;\n";
+        out += "    WaitVbl();  // sync so copper starts at frame top\n";
         out += "    custom->dmacon = DMAF_SETCLR | DMAF_MASTER | "
                "DMAF_RASTER | DMAF_COPPER;\n";
         out += "    for (int fade = 1; fade <= 15; fade++) {\n";
