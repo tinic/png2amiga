@@ -927,7 +927,6 @@ Result<void> save_preview(std::string_view path, const Image& preview,
 // Show preview in terminal (iTerm2 inline image protocol)
 void show_terminal_preview(const Image& preview, amiga::Mode /*mode*/,
                            bool hires = false, bool interlace = false) {
-    std::println("Colors: {} unique", count_unique_colors(preview));
     bool is_hires = hires;
     bool is_lace = interlace;
     std::size_t sx = is_hires ? 1 : 2;
@@ -1297,6 +1296,15 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // Render preview first so we can count unique colors for the stats line.
+        auto data_bits = ham_result->planes.depth - 2;
+        auto ham_preview = !ham_result->scanline_palettes.empty()
+            ? ham::render_ham_copper(ham_result->planes,
+                                    ham_result->scanline_palettes, data_bits)
+            : ham::render_ham(ham_result->planes,
+                             ham_result->base_palette, data_bits);
+        int ham_unique = ham_preview ? count_unique_colors(*ham_preview) : 0;
+
         if (config->copper && !ham_result->copper_changes.empty()) {
             std::size_t total_ch = 0;
             for (auto& ch : ham_result->copper_changes) total_ch += ch.size();
@@ -1305,24 +1313,15 @@ int main(int argc, char* argv[]) {
                 : 0.0f;
             std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
                          ham_result->planes.depth, ham_result->planes.total_bytes(),
-                         ham_result->base_palette.size(), avg_ch, ham_result->total_error);
+                         ham_unique, avg_ch, ham_result->total_error);
         } else {
             std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
                          ham_result->planes.depth, ham_result->planes.total_bytes(),
-                         ham_result->base_palette.size(), ham_result->total_error);
+                         ham_unique, ham_result->total_error);
         }
 
-        // Terminal preview (HAM decode)
-        {
-            auto data_bits = ham_result->planes.depth - 2;
-            auto ham_preview = !ham_result->scanline_palettes.empty()
-                ? ham::render_ham_copper(ham_result->planes,
-                                        ham_result->scanline_palettes, data_bits)
-                : ham::render_ham(ham_result->planes,
-                                 ham_result->base_palette, data_bits);
-            if (ham_preview)
-                show_terminal_preview(*ham_preview, config->mode, config->hires, config->interlace);
-        }
+        if (ham_preview)
+            show_terminal_preview(*ham_preview, config->mode, config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -1414,20 +1413,12 @@ int main(int argc, char* argv[]) {
                              ham_result->base_palette.size(),
                              ham_result->base_palette.size() * 2);
             } else {
-                // Render preview using HAM decoder
-                auto data_bits = ham_result->planes.depth - 2;
-                auto preview = !ham_result->scanline_palettes.empty()
-                    ? ham::render_ham_copper(ham_result->planes,
-                                            ham_result->scanline_palettes,
-                                            data_bits)
-                    : ham::render_ham(ham_result->planes,
-                                     ham_result->base_palette,
-                                     data_bits);
-                if (!preview) {
-                    std::println(stderr, "Render error: {}", preview.error().message);
+                // Use the preview rendered earlier for the stats line.
+                if (!ham_preview) {
+                    std::println(stderr, "Render error: {}", ham_preview.error().message);
                     return 1;
                 }
-                auto result = save_preview(config->output_path, *preview,
+                auto result = save_preview(config->output_path, *ham_preview,
                                            has_transparency, transparency_mask,
                                            config->mode, config->hires, config->interlace);
                 if (!result) {
@@ -1569,11 +1560,6 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
-                         planes->depth, planes->total_bytes(),
-                         copper_result->num_colors, copper_result->avg_changes_per_line,
-                         total_error);
-
             // Per-scanline preview
             Image rendered(w, h);
             for (std::size_t y = 0; y < h; ++y) {
@@ -1587,6 +1573,12 @@ int main(int argc, char* argv[]) {
                         rendered[x, y] = ehb64.colors[idx];
                 }
             }
+
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
+                         planes->depth, planes->total_bytes(),
+                         count_unique_colors(rendered),
+                         copper_result->avg_changes_per_line,
+                         total_error);
 
             show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
 
@@ -1762,16 +1754,16 @@ int main(int argc, char* argv[]) {
         std::vector<Color3f> full_palette(ehb_pal.colors.begin(),
                                           ehb_pal.colors.end());
 
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
-                     planes->depth, planes->total_bytes(),
-                     full_palette.size(), dither_result.total_error);
-
         // Render preview
         auto preview = bitplane::render(*planes, full_palette);
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
         }
+
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
+                     planes->depth, planes->total_bytes(),
+                     count_unique_colors(*preview), dither_result.total_error);
 
         show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
@@ -1927,11 +1919,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
-                     copper_result->planes.depth, copper_result->planes.total_bytes(),
-                     copper_result->num_colors, copper_result->avg_changes_per_line,
-                     copper_result->total_error);
-
         // Use base palette for IFF CMAP
         std::vector<Color3f> cmap_palette = copper_result->base_palette;
 
@@ -1942,6 +1929,12 @@ int main(int argc, char* argv[]) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
         }
+
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
+                     copper_result->planes.depth, copper_result->planes.total_bytes(),
+                     count_unique_colors(*preview),
+                     copper_result->avg_changes_per_line,
+                     copper_result->total_error);
 
         show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
@@ -2161,16 +2154,16 @@ int main(int argc, char* argv[]) {
 
     std::vector<Color3f> used_palette(pal_span.begin(), pal_span.end());
 
-    std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
-                 planes->depth, planes->total_bytes(), used_palette.size(),
-                 dither_result.total_error);
-
     // Render preview
     auto preview = bitplane::render(*planes, used_palette);
     if (!preview) {
         std::println(stderr, "Render error: {}", preview.error().message);
         return 1;
     }
+
+    std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
+                 planes->depth, planes->total_bytes(),
+                 count_unique_colors(*preview), dither_result.total_error);
 
     // Terminal preview
     show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
