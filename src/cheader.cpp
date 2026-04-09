@@ -610,12 +610,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
            "(CONST_STRPTR)\"graphics.library\", 0);\n";
     out += "    if (!GfxBase) return 0;\n\n";
 
-    // Check if AGA is required but not present
+    // Check if AGA is required but not present.
+    // Query the Lisa chip revision bits directly via GfxBase->ChipRevBits0
+    // — the authoritative hardware-level check. The older `lib_Version
+    // < 39` heuristic was unreliable because v39 shipped with OS 3.0 on
+    // ECS A3000s and can also be installed on plain ECS machines via
+    // kickstart upgrades.
     bool requires_aga = (pal_count > 32) || (depth > 6) ||
                         (is_hires && depth > 4);
     if (requires_aga) {
-        out += "    // Check for AGA: graphics.library v39+ only exists on A1200/A4000\n";
-        out += "    if (GfxBase->LibNode.lib_Version < 39) {\n";
+        out += "    // AGA detection: GFXF_AA_LISA bit is only set when the Lisa chip is present\n";
+        out += "    if (!(GfxBase->ChipRevBits0 & GFXF_AA_LISA)) {\n";
         out += "        struct Library* DOSBase = OpenLibrary("
                "(CONST_STRPTR)\"dos.library\", 0);\n";
         out += "        if (DOSBase) {\n";
