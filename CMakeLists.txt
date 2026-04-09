@@ -209,4 +209,185 @@ else()
     )
     set_tests_properties("palette-load-iff" PROPERTIES DEPENDS "palette-iff-gen")
 
+    # ----- --lock-index / --pin-index-at -----
+
+    # Single lock at index 0 in lores: replaces the implicit black-at-0
+    add_test(
+        NAME "lock-index-lores-single"
+        COMMAND png2amiga --mode lores --depth 5
+                --lock-index 0 ff00ff
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_lock_lores_single.iff
+    )
+
+    # Multiple locks in lores
+    add_test(
+        NAME "lock-index-lores-multi"
+        COMMAND png2amiga --mode lores --depth 5
+                --lock-index 0 000000
+                --lock-index 5 ff0000
+                --lock-index 31 ffffff
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_lock_lores_multi.iff
+    )
+
+    # Round-trip: load the locked IFF as a palette, depth 5 mode
+    add_test(
+        NAME "lock-index-roundtrip"
+        COMMAND png2amiga --mode lores --depth 5
+                --palette ${CMAKE_BINARY_DIR}/test_lock_lores_multi.iff
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_lock_roundtrip.iff
+    )
+    set_tests_properties("lock-index-roundtrip" PROPERTIES DEPENDS "lock-index-lores-multi")
+
+    # Pin in lores: deterministic ordered dither so the source pixel resolves
+    # the same on every run.
+    add_test(
+        NAME "pin-index-lores"
+        COMMAND png2amiga --mode lores --depth 5 --dither bayer4x4
+                --pin-index-at 5 100 50
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_pin_lores.iff
+    )
+
+    # Lock + pin combination
+    add_test(
+        NAME "lock-and-pin-lores"
+        COMMAND png2amiga --mode lores --depth 5 --dither bayer4x4
+                --lock-index 0 ff00ff
+                --lock-index 31 ffff00
+                --pin-index-at 5 100 50
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_lock_and_pin.iff
+    )
+
+    # Hex prefix variants (#rrggbb, 0xrrggbb, 3-digit shorthand)
+    add_test(
+        NAME "lock-index-hex-prefix"
+        COMMAND png2amiga --mode lores --depth 5
+                --lock-index 0 "#ff00ff"
+                --lock-index 1 0xff0000
+                --lock-index 2 f0c
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_lock_hex_prefix.iff
+    )
+
+    # Lock in EHB mode (operates on the 32 base colors)
+    add_test(
+        NAME "lock-index-ehb"
+        COMMAND png2amiga --mode ehb
+                --lock-index 0 000000
+                --lock-index 1 ff0000
+                --lock-index 31 ffffff
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_lock_ehb.iff
+    )
+
+    # Pin in EHB: deterministic dither so the resolved index is stable
+    add_test(
+        NAME "pin-index-ehb"
+        COMMAND png2amiga --mode ehb --dither bayer4x4
+                --pin-index-at 5 100 50
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_pin_ehb.iff
+    )
+
+    # Lock applied on top of a loaded user palette
+    add_test(
+        NAME "lock-index-with-user-palette"
+        COMMAND png2amiga --mode lores --depth 4
+                --palette ${CMAKE_BINARY_DIR}/test_palette.txt
+                --lock-index 0 ffffff
+                --lock-index 15 000000
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_lock_user_pal.iff
+    )
+    set_tests_properties("lock-index-with-user-palette"
+        PROPERTIES DEPENDS "palette-load-hex")
+
+    # ----- Rejection cases (WILL_FAIL) -----
+
+    # HAM rejects locks
+    add_test(
+        NAME "lock-index-ham-rejected"
+        COMMAND png2amiga --mode ham6
+                --lock-index 0 ff0000
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_ham_lock.iff
+    )
+    set_tests_properties("lock-index-ham-rejected" PROPERTIES WILL_FAIL TRUE)
+
+    # HAM rejects pins
+    add_test(
+        NAME "pin-index-ham-rejected"
+        COMMAND png2amiga --mode ham6
+                --pin-index-at 5 100 50
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_ham_pin.iff
+    )
+    set_tests_properties("pin-index-ham-rejected" PROPERTIES WILL_FAIL TRUE)
+
+    # Copper rejects locks
+    add_test(
+        NAME "lock-index-copper-rejected"
+        COMMAND png2amiga --mode lores --depth 5 --copper
+                --lock-index 0 ff0000
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_copper_lock.png
+    )
+    set_tests_properties("lock-index-copper-rejected" PROPERTIES WILL_FAIL TRUE)
+
+    # Out-of-range lock index (depth 5 → max_colors 32, index 32 invalid)
+    add_test(
+        NAME "lock-index-out-of-range"
+        COMMAND png2amiga --mode lores --depth 5
+                --lock-index 32 ff0000
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_lock_oob.iff
+    )
+    set_tests_properties("lock-index-out-of-range" PROPERTIES WILL_FAIL TRUE)
+
+    # Duplicate lock index
+    add_test(
+        NAME "lock-index-duplicate"
+        COMMAND png2amiga --mode lores --depth 5
+                --lock-index 5 ff0000
+                --lock-index 5 00ff00
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_lock_dup.iff
+    )
+    set_tests_properties("lock-index-duplicate" PROPERTIES WILL_FAIL TRUE)
+
+    # Pin out of image bounds (test.png scales to 320x119 by default)
+    add_test(
+        NAME "pin-index-out-of-bounds"
+        COMMAND png2amiga --mode lores --depth 5
+                --pin-index-at 5 9999 9999
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_pin_oob.iff
+    )
+    set_tests_properties("pin-index-out-of-bounds" PROPERTIES WILL_FAIL TRUE)
+
+    # Pin targets a locked slot
+    add_test(
+        NAME "pin-index-targets-locked"
+        COMMAND png2amiga --mode lores --depth 5
+                --lock-index 5 ff0000
+                --pin-index-at 5 100 50
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_pin_locked.iff
+    )
+    set_tests_properties("pin-index-targets-locked" PROPERTIES WILL_FAIL TRUE)
+
+    # Bad hex format
+    add_test(
+        NAME "lock-index-bad-hex"
+        COMMAND png2amiga --mode lores --depth 5
+                --lock-index 0 zzzzzz
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/test_reject_lock_hex.iff
+    )
+    set_tests_properties("lock-index-bad-hex" PROPERTIES WILL_FAIL TRUE)
+
 endif() # NOT EMSCRIPTEN
