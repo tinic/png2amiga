@@ -100,7 +100,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    amiga::Chipset chipset = amiga::Chipset::ocs,
                                    bool is_ham = false,
                                    bool is_hires = false,
-                                   std::size_t override_changes = 0);  // 0 = auto
+                                   std::size_t override_changes = 0,  // 0 = auto
+                                   const std::vector<Color3f>* user_palette = nullptr);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.

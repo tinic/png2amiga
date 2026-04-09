@@ -196,7 +196,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    amiga::Chipset chipset,
                                    bool is_ham,
                                    bool is_hires,
-                                   std::size_t override_changes) {
+                                   std::size_t override_changes,
+                                   const std::vector<Color3f>* user_palette) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -220,20 +221,30 @@ Result<CopperResult> encode_copper(const Image& image,
         ? std::min(override_changes, max_swappable)
         : std::min(max_changes_per_line(depth, is_ham, is_hires, chipset), max_swappable);
 
-    // Step 1: Generate global base palette (N-1 colors + black at index 0)
-    auto algo = (chipset == amiga::Chipset::aga)
-        ? quantize::Algorithm::median_cut
-        : quantize::Algorithm::ocs_bruteforce;
-    auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
-    auto base_result = quantize::quantize(image, reserve, algo);
-    if (!base_result) return std::unexpected{base_result.error()};
-    auto base_pal = std::move(base_result->colors);
-    if (chipset != amiga::Chipset::aga) {
-        for (auto& c : base_pal) c = palette::quantize_to_ocs(c);
-    }
-    base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});
-    while (base_pal.size() < num_colors) {
-        base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
+    // Step 1: Base palette — user-provided or auto-quantized
+    std::vector<Color3f> base_pal;
+    if (user_palette && !user_palette->empty()) {
+        // Use user palette as-is (already snapped to chipset by caller)
+        base_pal = *user_palette;
+        if (base_pal.size() > num_colors)
+            base_pal.resize(num_colors);
+        while (base_pal.size() < num_colors)
+            base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
+    } else {
+        // Auto-quantize: N-1 colors + black at index 0
+        auto algo = (chipset == amiga::Chipset::aga)
+            ? quantize::Algorithm::median_cut
+            : quantize::Algorithm::ocs_bruteforce;
+        auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
+        auto base_result = quantize::quantize(image, reserve, algo);
+        if (!base_result) return std::unexpected{base_result.error()};
+        base_pal = std::move(base_result->colors);
+        if (chipset != amiga::Chipset::aga) {
+            for (auto& c : base_pal) c = palette::quantize_to_ocs(c);
+        }
+        base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});
+        while (base_pal.size() < num_colors)
+            base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
     }
 
     // Step 2: Process scanlines — accumulate palette changes

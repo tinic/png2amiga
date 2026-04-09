@@ -758,9 +758,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
 
+        // Load user palette for copper base (if provided)
+        std::vector<Color3f> copper_user_pal;
+        if (has_user_palette(options)) {
+            auto loaded = load_user_palette(options);
+            if (loaded) {
+                Palette tmp = *std::move(loaded);
+                snap_to_chipset(tmp, chipset, mode);
+                copper_user_pal = std::move(tmp.colors);
+            }
+        }
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
                                                      false, compound_hires,
-                                                     static_cast<std::size_t>(options.copper_changes));
+                                                     static_cast<std::size_t>(options.copper_changes),
+                                                     copper_user_pal.empty() ? nullptr : &copper_user_pal);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,
