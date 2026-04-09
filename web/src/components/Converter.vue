@@ -1239,13 +1239,13 @@ async function loadExample(example) {
 :deep(.aspect-lock .p-button-icon) {
   font-size: 0.85rem;
 }
-/* Dim the brackets when the lock is unlinked, and paint the chain icon black */
+/* Dim the brackets when the lock is unlinked, and paint the chain icon white */
 .resize-fields.unlinked .resize-bracket {
   border-color: var(--p-content-border-color, #4b5563);
   opacity: 0.25;
 }
 .resize-fields.unlinked :deep(.aspect-lock .p-button-icon) {
-  color: #000;
+  color: #fff;
 }
 
 .preview-col {
