@@ -95,7 +95,10 @@ struct ConvertResult {
     float copperChanges{};              // avg actual color changes per line (0 if no copper)
     int totalColors{};                  // unique colors in rendered output
     int planeBytes{};                   // raw bitplane data size
-    int copperBytes{};                  // copper list size (0 if no copper)
+    int copperBytes{};                  // copper data size in .raw file (0 if no copper)
+    int changesPerLine{};               // K used by encoder (post auto-stretch)
+    int maxMovesPerLine{};              // worst-case copper MOVEs per scanline
+    bool aga{};                         // chipset is AGA (true ⇒ palette has hi+lo halves)
     float quantError{};                 // perceptual encoding error
     bool hasTransparency{};             // source image had alpha channel
     std::string error;                  // error message (empty on success)

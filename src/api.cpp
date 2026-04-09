@@ -299,6 +299,7 @@ struct PipelineResult {
     std::vector<std::vector<copper::CopperChange>> scanline_changes;
     std::size_t copper_num_colors{};
     std::size_t changes_per_line{};
+    std::size_t max_moves_per_line{};   // worst-case copper MOVEs/line for chip-RAM sizing
 
     // Set after construction:
     bool has_transparency = false;
@@ -500,6 +501,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto h = image->height();
             result.copper_changes = h > 0
                 ? static_cast<float>(total_ch) / static_cast<float>(h) : 0.0f;
+            // HAM base palette is 2^(depth-2) colors; >32 means bank-switching
+            auto ham_base = std::size_t{1} << (depth - 2);
+            bool ham_aga_banks = is_aga && ham_base > 32;
+            for (auto& ch : result.scanline_changes) {
+                auto m = copper::moves_for_line(ch, is_aga, ham_aga_banks);
+                if (m > result.max_moves_per_line) result.max_moves_per_line = m;
+            }
         }
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
@@ -673,6 +681,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.scanline_changes = std::move(copper_result->scanline_changes);
             result.copper_num_colors = copper_result->num_colors;
             result.changes_per_line = copper_result->changes_per_line;
+            result.max_moves_per_line = copper_result->max_moves_per_line;
             result.has_transparency = has_transparency;
             result.transparency_mask = tmask;
             result.copper_changes = copper_result->avg_changes_per_line;
@@ -888,6 +897,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.scanline_changes = std::move(copper_result->scanline_changes);
         result.copper_num_colors = copper_result->num_colors;
         result.changes_per_line = copper_result->changes_per_line;
+        result.max_moves_per_line = copper_result->max_moves_per_line;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         // Force transparent pixels to black in rendered preview
@@ -1061,13 +1071,16 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.copperChanges = p.copper_changes;
     r.totalColors = count_unique_colors(p.rendered);
     r.planeBytes = static_cast<int>(p.planes.total_bytes());
+    r.aga = p.aga;
     if (p.copper && !p.scanline_changes.empty()) {
         auto h = p.rendered.height();
         auto cpl = p.changes_per_line;
-        // Just per-scanline change data (palette counted separately in JS)
+        // .raw output writes a fixed [h][cpl] grid with sentinels (4 B/entry)
         auto cop_data_bytes = h * cpl * 4;  // reg(2) + color(2) per change
         if (p.aga) cop_data_bytes *= 2;     // hi + lo per change
         r.copperBytes = static_cast<int>(cop_data_bytes);
+        r.changesPerLine = static_cast<int>(cpl);
+        r.maxMovesPerLine = static_cast<int>(p.max_moves_per_line);
     }
     r.quantError = p.quant_error;
     r.hasTransparency = p.has_transparency;

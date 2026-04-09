@@ -131,6 +131,9 @@ val js_convert_rgba(val input_array, val js_opts) {
     obj.set("depth", result.depth);
     obj.set("colors", result.colors);
     obj.set("copperChanges", result.copperChanges);
+    obj.set("changesPerLine", result.changesPerLine);
+    obj.set("maxMovesPerLine", result.maxMovesPerLine);
+    obj.set("aga", result.aga);
     obj.set("totalColors", result.totalColors);
     obj.set("planeBytes", result.planeBytes);
     obj.set("copperBytes", result.copperBytes);

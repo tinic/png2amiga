@@ -51,6 +51,9 @@ const lastHeight = ref(160)
 const lastCopPerLine = ref(0)
 const lastPlaneBytes = ref(0)
 const lastCopperBytes = ref(0)
+const lastChangesPerLine = ref(0)
+const lastMaxMovesPerLine = ref(0)
+const lastAga = ref(false)
 const imageHasAlpha = ref(false)
 const paletteData = ref(null)    // raw palette file bytes (Uint8Array)
 const paletteColors = ref([])    // parsed CSS color strings for preview
@@ -132,14 +135,17 @@ const rawTooltipHtml = computed(() => {
   const d = options.depth || defaultDepth(options.mode)
   const dd = defaultDepth(options.mode)
   const bpr = Math.ceil(w / 16) * 2
-  const aga = options.chipset === 'aga'
+  // Use the actual chipset reported by the encoder, not the user's option,
+  // because mode-driven chipset (e.g. HAM7/8 force AGA) may override.
+  const aga = lastAga.value
   const colors = 1 << (isHamMode(options.mode) ? dd - 2 : d)
   const pb = lastPlaneBytes.value
   const cb = lastCopperBytes.value
   const palSize = colors * 2
-  // Copper data per pass = cb for OCS, cb/2 per pass for AGA (hi+lo)
+  // .raw uses fixed [h][cpl] grid with sentinels for unused/skipped slots.
+  // copPerPass = h * cpl * 4. cpl reported by the encoder (post auto-stretch).
+  const cpl = lastChangesPerLine.value
   const copPerPass = aga && cb ? cb / 2 : cb
-  const cpl = h > 0 && copPerPass > 0 ? Math.round(copPerPass / h / 4) : 0
   let off = 0
   let lines = []
   lines.push(`Raw binary format (big-endian):`)
@@ -360,6 +366,9 @@ function doConvert() {
       lastCopPerLine.value = result.copperChanges || 0
       lastPlaneBytes.value = result.planeBytes || 0
       lastCopperBytes.value = result.copperBytes || 0
+      lastChangesPerLine.value = result.changesPerLine || 0
+      lastMaxMovesPerLine.value = result.maxMovesPerLine || 0
+      lastAga.value = !!result.aga
       imageHasAlpha.value = !!result.hasTransparency
 
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
@@ -367,17 +376,28 @@ function doConvert() {
       if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg cop/line`
       // Size stats
       const pb = result.planeBytes || 0
-      const cb = result.copperBytes || 0  // per-scanline copper change data only
+      const cb = result.copperBytes || 0  // per-scanline copper change data in .raw output
       const depth = result.depth || 0
       const colors = result.colors || 0
-      // Disk: bitplanes + palette (2B/color) + copper change data
-      const diskBytes = pb + colors * 2 + cb
-      // Chip RAM: bitplanes + copper list structure
-      //   base: setup(128) + bpl ptrs(depth*8) + palette(colors*4) + end(4)
-      //   copper: change data + WAITs(height*4) + BPLCON3 switches
-      const baseCop = 128 + depth * 8 + colors * 4 + 4
-      const copList = cb ? cb + result.height * 4 + (cb > colors * 4 ? 256 : 0) : 0
-      const chipBytes = pb + baseCop + copList
+      const aga = !!result.aga
+      const maxMoves = result.maxMovesPerLine || 0
+
+      // Disk: bitplanes + palette (AGA has hi+lo) + copper change data
+      // .raw layout: pb + colors*2 (hi pal) + colors*2 (lo pal, AGA only) + cb
+      const palBytes = colors * (aga ? 4 : 2)
+      const diskBytes = pb + palBytes + cb
+
+      // Chip RAM: bitplanes + actual copper list
+      //   - Initial setup: ~80 bytes (BPLCON0/1/2/3 + DDF + DIW + FMODE)
+      //   - Per-frame palette write: 1 instruction per color (OCS) or 2 (AGA hi+lo)
+      //   - Per-scanline copper writes: WAIT + max_moves instructions per line, ×4 bytes
+      //     (uses worst-case max_moves_per_line — actual is slightly less on most lines)
+      //   - End markers + blank-below: ~32 bytes
+      const initSetup = 80
+      const palSetup = colors * (aga ? 8 : 4)
+      const perLineCopper = (1 + maxMoves) * 4
+      const copList = cb ? result.height * perLineCopper : 0
+      const chipBytes = pb + initSetup + palSetup + copList + 32
       if (pb > 0) {
         const fmt = (b) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
         info += `, disk: ${fmt(diskBytes)}, chip: ${fmt(chipBytes)}`
