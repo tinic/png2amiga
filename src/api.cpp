@@ -141,31 +141,8 @@ Result<Image> crop_image(const Image& src,
     return dst;
 }
 
-// Auto-crop: center-crop source to target aspect ratio
-Result<Image> auto_crop_to_aspect(const Image& src,
-                                  std::size_t target_w, std::size_t target_h) {
-    auto src_w = src.width();
-    auto src_h = src.height();
-
-    auto target_ratio = static_cast<double>(target_w) / static_cast<double>(target_h);
-    auto src_ratio = static_cast<double>(src_w) / static_cast<double>(src_h);
-
-    std::size_t cw, ch;
-    if (src_ratio > target_ratio) {
-        ch = src_h;
-        cw = static_cast<std::size_t>(
-            static_cast<double>(src_h) * target_ratio + 0.5);
-    } else {
-        cw = src_w;
-        ch = static_cast<std::size_t>(
-            static_cast<double>(src_w) / target_ratio + 0.5);
-    }
-
-    auto cx = (src_w - cw) / 2;
-    auto cy = (src_h - ch) / 2;
-
-    return crop_image(src, cx, cy, cw, ch);
-}
+// Auto-crop region selection is inlined into load_and_preprocess so the
+// transparency mask can be sampled from the same region.
 
 // Load image from memory, crop, scale, preprocess.
 // If the source has alpha, computes a transparency mask at target resolution
@@ -208,19 +185,61 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     }
     stbi_image_free(raw);
 
-    // Compute transparency mask at target resolution before crop/scale
-    // destroys the alpha channel. Bilinear-sample source alpha, then
-    // apply threshold or ordered dither.
+    // Determine the effective source crop region up front so we can sample
+    // the transparency mask from the cropped region rather than the full
+    // source image. crop and tmask have to agree, otherwise the mask
+    // references pixels that the image no longer contains.
+    std::size_t crop_x = 0, crop_y = 0;
+    std::size_t crop_w = width, crop_h = height;
+    bool will_crop = false;
+    if (options.crop_w > 0 && options.crop_h > 0) {
+        auto cx = static_cast<std::size_t>(options.crop_x);
+        auto cy = static_cast<std::size_t>(options.crop_y);
+        auto cw = static_cast<std::size_t>(options.crop_w);
+        auto ch = static_cast<std::size_t>(options.crop_h);
+        if (cx + cw > width || cy + ch > height || cw == 0 || ch == 0) {
+            stbi_image_free(raw);
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                std::format("Crop region {}x{}+{}+{} exceeds image {}x{}",
+                            cw, ch, cx, cy, width, height),
+            }};
+        }
+        crop_x = cx; crop_y = cy; crop_w = cw; crop_h = ch;
+        will_crop = true;
+    } else if (options.crop_auto) {
+        // Center-crop source to target aspect ratio
+        auto target_ratio = static_cast<double>(target_w) / static_cast<double>(target_h);
+        auto src_ratio = static_cast<double>(width) / static_cast<double>(height);
+        if (src_ratio > target_ratio) {
+            crop_h = height;
+            crop_w = static_cast<std::size_t>(
+                static_cast<double>(height) * target_ratio + 0.5);
+        } else {
+            crop_w = width;
+            crop_h = static_cast<std::size_t>(
+                static_cast<double>(width) / target_ratio + 0.5);
+        }
+        crop_x = (width - crop_w) / 2;
+        crop_y = (height - crop_h) / 2;
+        will_crop = (crop_w != width || crop_h != height);
+    }
+
+    // Compute transparency mask at target resolution from the (cropped)
+    // source region. Sample alpha at the source pixel that maps to each
+    // target pixel via the crop window, then apply threshold or ordered
+    // dither.
     if (out_tmask && any_transparent) {
-        auto aw = width, ah = height;
         out_tmask->resize(target_w * target_h);
         auto alpha_dither = parse_dither(options.alpha_dither);
         float cutoff = 0.5f + options.alpha_threshold;
         for (std::size_t y = 0; y < target_h; ++y) {
-            auto sy = std::min(y * ah / target_h, ah - 1);
+            auto sy = std::min(crop_y + y * crop_h / target_h,
+                               crop_y + crop_h - 1);
             for (std::size_t x = 0; x < target_w; ++x) {
-                auto sx = std::min(x * aw / target_w, aw - 1);
-                float a = src_alpha[sy * aw + sx];
+                auto sx = std::min(crop_x + x * crop_w / target_w,
+                                   crop_x + crop_w - 1);
+                float a = src_alpha[sy * width + sx];
                 if (alpha_dither != dither::Method::none) {
                     float thr = dither::ordered_threshold(alpha_dither, x, y);
                     (*out_tmask)[y * target_w + x] = a < (cutoff + thr * options.alpha_dither_strength);
@@ -236,17 +255,9 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     Image image(width, height, std::move(pixels),
                 any_transparent ? std::move(src_alpha) : std::vector<float>{});
 
-    // Crop (before scaling)
-    if (options.crop_w > 0 && options.crop_h > 0) {
-        auto cropped = crop_image(image,
-            static_cast<std::size_t>(options.crop_x),
-            static_cast<std::size_t>(options.crop_y),
-            static_cast<std::size_t>(options.crop_w),
-            static_cast<std::size_t>(options.crop_h));
-        if (!cropped) return std::unexpected{cropped.error()};
-        image = *std::move(cropped);
-    } else if (options.crop_auto) {
-        auto cropped = auto_crop_to_aspect(image, target_w, target_h);
+    // Apply the crop region we already validated above.
+    if (will_crop) {
+        auto cropped = crop_image(image, crop_x, crop_y, crop_w, crop_h);
         if (!cropped) return std::unexpected{cropped.error()};
         image = *std::move(cropped);
     }

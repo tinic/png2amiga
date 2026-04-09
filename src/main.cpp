@@ -565,35 +565,8 @@ Result<Image> crop_image(const Image& src,
     return dst;
 }
 
-// Auto-crop: center-crop source to target aspect ratio
-Result<Image> auto_crop_to_aspect(const Image& src,
-                                  std::size_t target_w, std::size_t target_h) {
-    auto src_w = src.width();
-    auto src_h = src.height();
-
-    // Compute the largest rectangle of the target aspect ratio that fits
-    auto target_ratio = static_cast<double>(target_w) / static_cast<double>(target_h);
-    auto src_ratio = static_cast<double>(src_w) / static_cast<double>(src_h);
-
-    std::size_t crop_w, crop_h;
-    if (src_ratio > target_ratio) {
-        // Source is wider than target ratio — crop width
-        crop_h = src_h;
-        crop_w = static_cast<std::size_t>(
-            static_cast<double>(src_h) * target_ratio + 0.5);
-    } else {
-        // Source is taller than target ratio — crop height
-        crop_w = src_w;
-        crop_h = static_cast<std::size_t>(
-            static_cast<double>(src_w) / target_ratio + 0.5);
-    }
-
-    // Center the crop
-    auto cx = (src_w - crop_w) / 2;
-    auto cy = (src_h - crop_h) / 2;
-
-    return crop_image(src, cx, cy, crop_w, crop_h);
-}
+// Auto-crop region selection is inlined into the pipeline so the
+// transparency mask can be sampled from the same region.
 
 // ---------------------------------------------------------------------------
 // iTerm2 inline image display
@@ -1055,36 +1028,75 @@ int main(int argc, char* argv[]) {
 
     std::println("Input:  {}x{}", image->width(), image->height());
 
+    // Determine the effective source crop region BEFORE building the mask,
+    // so we can sample alpha from the cropped region rather than the full
+    // source. Otherwise the mask references pixels the image will no
+    // longer contain after crop.
+    std::size_t crop_x = 0, crop_y = 0;
+    std::size_t crop_w = image->width(), crop_h = image->height();
+    bool will_crop = false;
+    if (config->crop_w > 0 && config->crop_h > 0) {
+        auto cx = static_cast<std::size_t>(config->crop_x);
+        auto cy = static_cast<std::size_t>(config->crop_y);
+        auto cw = static_cast<std::size_t>(config->crop_w);
+        auto ch = static_cast<std::size_t>(config->crop_h);
+        if (cx + cw > image->width() || cy + ch > image->height() || cw == 0 || ch == 0) {
+            std::println(stderr, "Crop region {}x{}+{}+{} exceeds image {}x{}",
+                         cw, ch, cx, cy, image->width(), image->height());
+            return 1;
+        }
+        crop_x = cx; crop_y = cy; crop_w = cw; crop_h = ch;
+        will_crop = true;
+    } else if (config->crop_auto) {
+        auto target_ratio = static_cast<double>(target_w) / static_cast<double>(target_h);
+        auto src_ratio = static_cast<double>(image->width()) /
+                         static_cast<double>(image->height());
+        if (src_ratio > target_ratio) {
+            crop_h = image->height();
+            crop_w = static_cast<std::size_t>(
+                static_cast<double>(image->height()) * target_ratio + 0.5);
+        } else {
+            crop_w = image->width();
+            crop_h = static_cast<std::size_t>(
+                static_cast<double>(image->width()) / target_ratio + 0.5);
+        }
+        crop_x = (image->width() - crop_w) / 2;
+        crop_y = (image->height() - crop_h) / 2;
+        will_crop = (crop_w != image->width() || crop_h != image->height());
+    }
+
     // Compute transparency mask from source alpha BEFORE crop/scale
-    // (crop and scale lose the alpha channel).
-    // Scale alpha to target resolution first, then dither/threshold at
-    // target resolution so the dither pattern matches output pixels.
+    // (crop and scale lose the alpha channel). Bilinearly sample the
+    // (possibly cropped) source region into target resolution, then
+    // dither/threshold at target so the dither pattern matches output pixels.
     std::vector<bool> transparency_mask;
     bool has_transparency = false;
 
     if (image->has_alpha()) {
-        auto alpha_w = image->width();
-        auto alpha_h = image->height();
-
-        // Scale alpha to target resolution (bilinear)
+        // Scale the cropped source region to target resolution (bilinear).
         std::vector<float> scaled_alpha(target_w * target_h);
+        auto last_x = crop_x + crop_w - 1;
+        auto last_y = crop_y + crop_h - 1;
         for (std::size_t y = 0; y < target_h; ++y) {
-            auto fy = static_cast<double>(y) * static_cast<double>(alpha_h)
-                      / static_cast<double>(target_h);
-            auto sy = static_cast<std::size_t>(fy);
-            if (sy >= alpha_h - 1) sy = alpha_h - 1;
+            auto fy = static_cast<double>(crop_y) +
+                      (static_cast<double>(y) + 0.5) *
+                          static_cast<double>(crop_h) /
+                          static_cast<double>(target_h) - 0.5;
+            if (fy < static_cast<double>(crop_y)) fy = static_cast<double>(crop_y);
+            auto sy = std::min(static_cast<std::size_t>(fy), last_y);
+            auto sy1 = std::min(sy + 1, last_y);
             auto ty = static_cast<float>(fy - static_cast<double>(sy));
-            auto sy1 = std::min(sy + 1, alpha_h - 1);
 
             for (std::size_t x = 0; x < target_w; ++x) {
-                auto fx = static_cast<double>(x) * static_cast<double>(alpha_w)
-                          / static_cast<double>(target_w);
-                auto sx = static_cast<std::size_t>(fx);
-                if (sx >= alpha_w - 1) sx = alpha_w - 1;
+                auto fx = static_cast<double>(crop_x) +
+                          (static_cast<double>(x) + 0.5) *
+                              static_cast<double>(crop_w) /
+                              static_cast<double>(target_w) - 0.5;
+                if (fx < static_cast<double>(crop_x)) fx = static_cast<double>(crop_x);
+                auto sx = std::min(static_cast<std::size_t>(fx), last_x);
+                auto sx1 = std::min(sx + 1, last_x);
                 auto tx = static_cast<float>(fx - static_cast<double>(sx));
-                auto sx1 = std::min(sx + 1, alpha_w - 1);
 
-                // Bilinear interpolation
                 float a00 = image->alpha_at(sx,  sy);
                 float a10 = image->alpha_at(sx1, sy);
                 float a01 = image->alpha_at(sx,  sy1);
@@ -1130,32 +1142,24 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Crop (before scaling)
-    if (config->crop_w > 0 && config->crop_h > 0) {
-        auto cropped = crop_image(*image,
-            static_cast<std::size_t>(config->crop_x),
-            static_cast<std::size_t>(config->crop_y),
-            static_cast<std::size_t>(config->crop_w),
-            static_cast<std::size_t>(config->crop_h));
+    // Apply the crop region we already validated above.
+    if (will_crop) {
+        auto cropped = crop_image(*image, crop_x, crop_y, crop_w, crop_h);
         if (!cropped) {
             std::println(stderr, "Crop error: {}", cropped.error().message);
             return 1;
         }
-        image = *std::move(cropped);
-        std::println("Crop:   {}x{}+{}+{} -> {}x{}",
-                     config->crop_w, config->crop_h,
-                     config->crop_x, config->crop_y,
-                     image->width(), image->height());
-    } else if (config->crop_auto) {
-        auto cropped = auto_crop_to_aspect(*image, target_w, target_h);
-        if (!cropped) {
-            std::println(stderr, "Auto-crop error: {}", cropped.error().message);
-            return 1;
+        if (config->crop_w > 0 && config->crop_h > 0) {
+            std::println("Crop:   {}x{}+{}+{} -> {}x{}",
+                         crop_w, crop_h, crop_x, crop_y,
+                         cropped->width(), cropped->height());
+        } else {
+            std::println("Crop:   auto {}x{} -> {}x{} (center, {:g}:{:g} aspect)",
+                         image->width(), image->height(),
+                         cropped->width(), cropped->height(),
+                         static_cast<double>(target_w),
+                         static_cast<double>(target_h));
         }
-        std::println("Crop:   auto {}x{} -> {}x{} (center, {:g}:{:g} aspect)",
-                     image->width(), image->height(),
-                     cropped->width(), cropped->height(),
-                     static_cast<double>(target_w), static_cast<double>(target_h));
         image = *std::move(cropped);
     }
 
