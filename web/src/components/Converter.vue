@@ -473,8 +473,10 @@ async function downloadViewer() {
   converting.value = true
   try {
     const stem = options.symbolName ||
-      (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_')
-    const result = await convertViewer(imageBytes.value, buildWasmOptions())
+      (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_')
+    const opts = buildWasmOptions()
+    opts.symbolName = stem
+    const result = await convertViewer(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
     const blob = new Blob([result.header || result.data], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
@@ -512,7 +514,11 @@ async function compileAndDownload(format) {
   if (!imageBytes.value) return
   converting.value = true
   try {
-    const result = await convertViewer(imageBytes.value, buildWasmOptions())
+    const stem = options.symbolName ||
+      (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_')
+    const opts = buildWasmOptions()
+    opts.symbolName = stem
+    const result = await convertViewer(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
     const source = result.header || new TextDecoder().decode(result.data)
     const resp = await fetch(`/api/compile?format=${format}`, {
