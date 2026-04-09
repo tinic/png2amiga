@@ -1736,6 +1736,12 @@ int main(int argc, char* argv[]) {
 
     // --- Standard bitplane modes ---
 
+    // Force transparent pixels to black before quantization/encoding
+    if (has_transparency) {
+        for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+            if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+    }
+
     // Build palette
     auto max_colors = std::size_t{1} << config->depth;
     Palette pal;

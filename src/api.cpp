@@ -771,6 +771,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // --- Standard bitplane modes ---
+
+    // Force transparent pixels to black before quantization/encoding
+    if (has_transparency) {
+        for (std::size_t i = 0; i < tmask.size(); ++i)
+            if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+    }
+
     auto max_colors = std::size_t{1} << depth;
 
     // Build palette.
