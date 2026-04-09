@@ -199,26 +199,11 @@ const availableModes = computed(() => modesForChipset(options.chipset))
 // Current depth max for the slider
 const depthMax = computed(() => maxDepth(options.mode, options.chipset))
 
-// Copper changes max for current mode
-const copperMax = computed(() => {
-  const d = options.depth || defaultDepth(options.mode)
-  const ham = isHamMode(options.mode)
-  const aga = options.chipset === 'aga'
-  // Mirror the C++ max_changes_per_line logic
-  if (aga) {
-    if (ham) return d === 8 ? 4 : 7
-    if (d >= 6) return 4
-    if (d >= 3) return 7
-    if (d === 2) return 4
-    return 2
-  }
-  if (ham) return 16
-  if (d >= 5) return 16
-  if (d === 4) return 16
-  if (d === 3) return 8
-  if (d === 2) return 4
-  return 2
-})
+// Copper changes slider range: static 0..16 across all modes. 0 = auto
+// (safe default, backend picks worst-case K from the 14-MOVE budget); any
+// value above the safe K is an explicit user override and may overshoot
+// real hardware — we let people try it anyway.
+const copperMax = computed(() => 16)
 
 // Effective chipset label for status line
 const statusChipset = computed(() => {
