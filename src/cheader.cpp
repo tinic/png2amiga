@@ -612,23 +612,29 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // Check if AGA is required but not present.
     //
-    // Query GfxBase->ChipRevBits0, but look for the ALICE bit, not LISA.
-    // Alice is the AGA Agnus replacement and is the defining AGA chip —
-    // GFXF_AA_ALICE is set on every AGA machine (A1200/A4000/CD32), while
-    // GFXF_AA_LISA alone is fragile and has been observed to fail on
-    // real A1200s. Canonical refs: jvaltane howtocode, lysator mirror.
+    // ChipRevBits0 is normally populated by SetPatch in the Workbench
+    // startup-sequence, but our viewer may be launched straight from a
+    // bootblock/trackloader with no Workbench up — in that case the
+    // field is 0 even on real AGA hardware. We call SetChipRev() once
+    // ourselves to force-populate the field and use its return value
+    // directly (it's the same chiprev bits, returned for convenience).
+    // SetChipRev() exists from graphics.library v39 onwards.
     //
-    // ChipRevBits0 is populated automatically by SetPatch in the
-    // startup-sequence on V39+, so for a DOS-launched exe (we print
-    // errors via Write()) the field is already valid when main() runs.
-    // Gate with lib_Version >= 39 to also reject pre-OS-3.0 which
-    // doesn't have the field at all.
+    // We check the ALICE bit, not LISA. Alice is the AGA Agnus
+    // replacement and is the defining AGA chip — GFXF_AA_ALICE is set
+    // on every AGA machine (A1200/A4000/CD32). Canonical refs:
+    //   https://jvaltane.kapsi.fi/amiga/howtocode/aga.html
+    //   http://www.lysator.liu.se/amiga/code/guide/howtocode/text/AGA
     bool requires_aga = (pal_count > 32) || (depth > 6) ||
                         (is_hires && depth > 4);
     if (requires_aga) {
-        out += "    // AGA detection: require graphics.library v39+ AND the Alice chip\n";
+        out += "    // AGA detection: force-populate via SetChipRev, check Alice bit\n";
+        out += "    ULONG chiprev = 0;\n";
+        out += "    if (GfxBase->LibNode.lib_Version >= 39) {\n";
+        out += "        chiprev = SetChipRev(SETCHIPREV_BEST);\n";
+        out += "    }\n";
         out += "    if (GfxBase->LibNode.lib_Version < 39 ||\n";
-        out += "        !(GfxBase->ChipRevBits0 & GFXF_AA_ALICE)) {\n";
+        out += "        !(chiprev & GFXF_AA_ALICE)) {\n";
         out += "        struct Library* DOSBase = OpenLibrary("
                "(CONST_STRPTR)\"dos.library\", 0);\n";
         out += "        if (DOSBase) {\n";
@@ -638,7 +644,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // stack buffer and emit via dos.library/Write).
         out += "            {\n";
         out += "                static const char hex_chars[] = \"0123456789ABCDEF\";\n";
-        out += "                char dbg[64];\n";
+        out += "                char dbg[96];\n";
         out += "                char* dp = dbg;\n";
         out += "                const char* sp;\n";
         out += "                for (sp = \"  graphics.library v=0x\"; *sp; ++sp) *dp++ = *sp;\n";
@@ -647,10 +653,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "                *dp++ = hex_chars[(gv >>  8) & 0xF];\n";
         out += "                *dp++ = hex_chars[(gv >>  4) & 0xF];\n";
         out += "                *dp++ = hex_chars[ gv        & 0xF];\n";
-        out += "                for (sp = \"  ChipRevBits0=0x\"; *sp; ++sp) *dp++ = *sp;\n";
-        out += "                UBYTE crb = GfxBase->ChipRevBits0;\n";
-        out += "                *dp++ = hex_chars[(crb >> 4) & 0xF];\n";
-        out += "                *dp++ = hex_chars[ crb       & 0xF];\n";
+        out += "                for (sp = \"  SetChipRev=0x\"; *sp; ++sp) *dp++ = *sp;\n";
+        out += "                for (int i = 7; i >= 0; --i)\n";
+        out += "                    *dp++ = hex_chars[(chiprev >> (i*4)) & 0xF];\n";
         out += "                *dp++ = '\\n';\n";
         out += "                Write(Output(), (APTR)dbg, (LONG)(dp - dbg));\n";
         out += "            }\n";
