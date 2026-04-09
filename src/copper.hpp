@@ -62,29 +62,27 @@ struct CopperResult {
 // ---------------------------------------------------------------------------
 
 constexpr std::size_t max_changes_per_line(std::size_t depth, bool is_ham,
-                                           bool is_hires,
+                                           [[maybe_unused]] bool is_hires,
                                            amiga::Chipset chipset) noexcept {
-    // Copper palette changes are written at end-of-display (past DDFSTOP),
-    // giving ~100 free color clocks through end-of-line + HBLANK + pre-DDFSTRT.
-    // OCS: 1 MOVE per color (12-bit). AGA: 2 MOVEs per color (bank + value).
+    // Hardware-tested conservative limits (worst-case BPLCON3 + LOCT).
+    // Copper changes written at end-of-display (past DDFSTOP).
     if (chipset == amiga::Chipset::aga) {
-        // AGA needs bank switching for regs 32+, ~2 MOVEs per change
         if (is_ham) {
-            if (depth == 6) return is_hires ? 10 : 14;
-            if (depth == 8) return is_hires ? 10 : 12;
+            if (depth == 6) return 6;   // HAM6 AGA
+            if (depth == 8) return 3;   // HAM8 AGA
         }
-        // AGA needs 2 copper MOVEs per color (hi + lo nibbles via LOCT)
-        if (is_hires)
-            return std::min(std::size_t{10}, std::size_t{1} << depth);
-        return std::min(std::size_t{14}, std::size_t{1} << depth);
+        if (depth >= 6) return 3;
+        if (depth >= 3) return 6;
+        if (depth == 2) return 4;
+        return 2;  // 1bpl
     }
-    // OCS: 1 MOVE per change, plenty of time
-    if (is_ham) return 16;  // HAM6: all 16 base colors
-    if (is_hires) {
-        if (depth >= 4) return 16;
-        return std::size_t{1} << depth;
-    }
-    return std::min(std::size_t{1} << depth, std::size_t{32});
+    // OCS
+    if (is_ham) return 14;  // HAM6 OCS
+    if (depth >= 5) return 14;
+    if (depth == 4) return 16;
+    if (depth == 3) return 8;
+    if (depth == 2) return 4;
+    return 2;  // 1bpl
 }
 
 // ---------------------------------------------------------------------------
