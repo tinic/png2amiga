@@ -1197,7 +1197,7 @@ async function loadExample(example) {
   grid-template-columns: 33.33% 1fr 0.5rem auto;
   grid-template-rows: auto auto;
   column-gap: 0.5rem;
-  row-gap: 0.25rem;
+  row-gap: 0.6rem;
   align-items: center;
 }
 .resize-fields .resize-label {
