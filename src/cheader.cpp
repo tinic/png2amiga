@@ -468,57 +468,87 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto cpl = options.copper_changes_per_line;
         auto ch_height = changes.size();
 
-        out += std::format("// Copper: {} changes/line, {} scanlines\n",
+        // Variable-length per-scanline storage. Each line emits only its
+        // *real* hi/lo entries; per-line count arrays say how many. The
+        // viewer walks running pointers advanced by the count per line.
+        // Drops the prior fixed [H][cpl] grid + 0xFFFF sentinel scheme,
+        // which wasted bytes on padding and nibble-skip placeholders.
+
+        // Precompute per-line counts (hi: skip slots flagged skip_hi; lo: all)
+        std::vector<std::size_t> n_hi(ch_height), n_lo(ch_height);
+        for (std::size_t y = 0; y < ch_height; ++y) {
+            for (auto& ch : changes[y]) {
+                if (!(options.aga && ch.skip_hi)) ++n_hi[y];
+                ++n_lo[y];
+            }
+        }
+
+        out += std::format("// Copper: {} changes/line max, {} scanlines\n",
                            cpl, ch_height);
         out += "struct CopperEntry { UWORD reg; UWORD color; };\n";
-        out += std::format("static const struct CopperEntry {}_copper"
-                           "[{}][{}] = {{\n", sym, ch_height, cpl);
-        for (std::size_t y = 0; y < ch_height; ++y) {
-            out += "    { ";
-            auto& line = changes[y];
-            for (std::size_t s = 0; s < cpl; ++s) {
-                if (s < line.size()) {
-                    // Nibble-skip: if the encoder marked skip_hi, emit 0xFFFF
-                    // sentinel so the viewer's existing skip path drops the
-                    // hi-pass write. Only meaningful for AGA (LOCT exists).
-                    if (options.aga && line[s].skip_hi) {
-                        out += "{0xFFFF,0x0000}";
-                    } else {
-                        auto hi = options.aga
-                            ? palette::linear_to_aga_hilo(line[s].color).hi
-                            : palette::linear_to_ocs(line[s].color);
-                        out += std::format("{{{},0x{:04X}}}", line[s].reg, hi);
-                    }
-                } else {
-                    out += "{0xFFFF,0x0000}";
-                }
-                if (s + 1 < cpl) out += ",";
+
+        // Per-line count arrays
+        auto emit_count_array = [&](const char* suffix,
+                                    const std::vector<std::size_t>& counts) {
+            out += std::format("static const UBYTE {}_copper_n_{}[{}] = {{\n    ",
+                               sym, suffix, ch_height);
+            for (std::size_t y = 0; y < ch_height; ++y) {
+                out += std::format("{}", counts[y]);
+                if (y + 1 < ch_height) out += ",";
+                if ((y + 1) % 16 == 0) out += "\n    ";
             }
-            out += " }";
-            if (y + 1 < ch_height) out += ",";
-            out += "\n";
+            out += "\n};\n\n";
+        };
+        emit_count_array("hi", n_hi);
+        if (options.aga) emit_count_array("lo", n_lo);
+
+        // Flat hi-entry array
+        std::size_t total_hi = 0;
+        for (auto v : n_hi) total_hi += v;
+        out += std::format("static const struct CopperEntry {}_copper_hi[{}] = {{\n",
+                           sym, std::max(total_hi, std::size_t{1}));
+        if (total_hi == 0) {
+            out += "    {0,0}\n";  // dummy entry to avoid zero-sized array
+        } else {
+            std::size_t emitted = 0;
+            for (std::size_t y = 0; y < ch_height; ++y) {
+                if (n_hi[y] == 0) continue;
+                out += "    ";
+                for (auto& ch : changes[y]) {
+                    if (options.aga && ch.skip_hi) continue;
+                    auto hi = options.aga
+                        ? palette::linear_to_aga_hilo(ch.color).hi
+                        : palette::linear_to_ocs(ch.color);
+                    out += std::format("{{{},0x{:04X}}}", ch.reg, hi);
+                    ++emitted;
+                    if (emitted < total_hi) out += ",";
+                }
+                out += std::format("  /* y={} */\n", y);
+            }
         }
         out += "};\n\n";
 
-        // AGA: low nibble copper data
+        // Flat lo-entry array (AGA only)
         if (options.aga) {
-            out += std::format("static const struct CopperEntry {}_copper_lo"
-                               "[{}][{}] = {{\n", sym, ch_height, cpl);
-            for (std::size_t y = 0; y < ch_height; ++y) {
-                out += "    { ";
-                auto& line = changes[y];
-                for (std::size_t s = 0; s < cpl; ++s) {
-                    if (s < line.size()) {
-                        auto aga = palette::linear_to_aga_hilo(line[s].color);
-                        out += std::format("{{{},0x{:04X}}}", line[s].reg, aga.lo);
-                    } else {
-                        out += "{0xFFFF,0x0000}";
+            std::size_t total_lo = 0;
+            for (auto v : n_lo) total_lo += v;
+            out += std::format("static const struct CopperEntry {}_copper_lo[{}] = {{\n",
+                               sym, std::max(total_lo, std::size_t{1}));
+            if (total_lo == 0) {
+                out += "    {0,0}\n";
+            } else {
+                std::size_t emitted = 0;
+                for (std::size_t y = 0; y < ch_height; ++y) {
+                    if (n_lo[y] == 0) continue;
+                    out += "    ";
+                    for (auto& ch : changes[y]) {
+                        auto aga = palette::linear_to_aga_hilo(ch.color);
+                        out += std::format("{{{},0x{:04X}}}", ch.reg, aga.lo);
+                        ++emitted;
+                        if (emitted < total_lo) out += ",";
                     }
-                    if (s + 1 < cpl) out += ",";
+                    out += std::format("  /* y={} */\n", y);
                 }
-                out += " }";
-                if (y + 1 < ch_height) out += ",";
-                out += "\n";
             }
             out += "};\n\n";
         }
@@ -795,24 +825,30 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // Copper changes per scanline
     if (has_copper) {
-        auto cpl = options.copper_changes_per_line;
         bool aga_banks = (pal_count > 32);
         // Write palette changes at end of visible display (H=0xDF, past DDFSTOP).
         // This gives ~100 free color clocks (end-of-line + HBLANK + before next
         // DDFSTRT) instead of ~40 from HBLANK alone.
-        // Line 0's changes are written inline (before display starts, no WAIT needed).
-        // Lines 1+ are written at end of the previous line.
+        // Line 0's changes are written inline (before display starts, no WAIT).
+        //
+        // The hi/lo entry tables are flat variable-length arrays; per-line
+        // count arrays say how many entries belong to each line. Two running
+        // pointers (p_hi, p_lo) walk the data, advanced by the count per line.
+        out += std::format("    const struct CopperEntry* p_hi = {}_copper_hi;\n", sym);
+        if (options.aga)
+            out += std::format("    const struct CopperEntry* p_lo = {}_copper_lo;\n", sym);
+
         auto emit_copper_changes = [&](const std::string& y_expr, bool aga) {
             if (aga) {
                 // High nibbles with bank switching.
-                // Force first BPLCON3 unconditionally so the lingering LOCT=1
-                // from the previous line's lo pass gets cleared. Subsequent
-                // BPLCON3 writes happen only when the bank changes.
-                // No per-scanline BPLCON3 reset at the end — saves 1 MOVE.
-                out += "        { int cur_bank = -1;  // sentinel: forces first BPLCON3\n";
-                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-                out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
-                out += "            if (reg == 0xFFFF) continue;\n";
+                // Force first BPLCON3 unconditionally (cur_bank=-1 sentinel)
+                // so the lingering LOCT=1 from the previous line's lo pass
+                // gets cleared. Subsequent BPLCON3 writes happen only when
+                // the bank changes. No per-scanline BPLCON3 reset — saves 1 MOVE.
+                out += "        { int cur_bank = -1;\n";
+                out += std::format("          int n_hi = {}_copper_n_hi[{}];\n", sym, y_expr);
+                out += "          for (int s = 0; s < n_hi; s++) {\n";
+                out += "            UWORD reg = p_hi->reg;\n";
                 out += "            int bank = reg / 32;\n";
                 out += "            if (bank != cur_bank) {\n";
                 out += "                *cl++ = 0x0106;\n";
@@ -821,13 +857,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "            }\n";
                 out += "            *cl++ = offsetof(struct Custom, color)"
                        " + (reg % 32) * 2;\n";
-                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
-                out += "        }\n";
+                out += "            *cl++ = p_hi->color;\n";
+                out += "            p_hi++;\n";
+                out += "          }\n";
                 // Low nibbles (LOCT=1) — force first BPLCON3 LOCT
-                out += "        cur_bank = -1;  // sentinel: forces first BPLCON3 LOCT\n";
-                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-                out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
-                out += "            if (reg == 0xFFFF) continue;\n";
+                out += "          cur_bank = -1;\n";
+                out += std::format("          int n_lo = {}_copper_n_lo[{}];\n", sym, y_expr);
+                out += "          for (int s = 0; s < n_lo; s++) {\n";
+                out += "            UWORD reg = p_lo->reg;\n";
                 out += "            int bank = reg / 32;\n";
                 out += "            if (bank != cur_bank) {\n";
                 out += "                *cl++ = 0x0106;\n";
@@ -836,33 +873,38 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "            }\n";
                 out += "            *cl++ = offsetof(struct Custom, color)"
                        " + (reg % 32) * 2;\n";
-                out += std::format("            *cl++ = {}_copper_lo[{}][s].color;\n", sym, y_expr);
-                out += "        }\n";
+                out += "            *cl++ = p_lo->color;\n";
+                out += "            p_lo++;\n";
+                out += "          }\n";
                 out += "        }\n";
             } else if (options.aga) {
                 // AGA <=32 colors: no bank switching but need LOCT
-                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-                out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
-                out += "            if (reg == 0xFFFF) continue;\n";
-                out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
-                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
-                out += "        }\n";
+                out += "        {\n";
+                out += std::format("          int n_hi = {}_copper_n_hi[{}];\n", sym, y_expr);
+                out += "          for (int s = 0; s < n_hi; s++) {\n";
+                out += "            *cl++ = offsetof(struct Custom, color) + p_hi->reg * 2;\n";
+                out += "            *cl++ = p_hi->color;\n";
+                out += "            p_hi++;\n";
+                out += "          }\n";
                 // LOCT: write low nibbles
-                out += "        *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
-                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-                out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
-                out += "            if (reg == 0xFFFF) continue;\n";
-                out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
-                out += std::format("            *cl++ = {}_copper_lo[{}][s].color;\n", sym, y_expr);
+                out += "          *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
+                out += std::format("          int n_lo = {}_copper_n_lo[{}];\n", sym, y_expr);
+                out += "          for (int s = 0; s < n_lo; s++) {\n";
+                out += "            *cl++ = offsetof(struct Custom, color) + p_lo->reg * 2;\n";
+                out += "            *cl++ = p_lo->color;\n";
+                out += "            p_lo++;\n";
+                out += "          }\n";
+                out += "          *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
                 out += "        }\n";
-                out += "        *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
             } else {
                 // OCS: simple writes
-                out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
-                out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
-                out += "            if (reg == 0xFFFF) continue;\n";
-                out += "            *cl++ = offsetof(struct Custom, color) + reg * 2;\n";
-                out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
+                out += "        {\n";
+                out += std::format("          int n_hi = {}_copper_n_hi[{}];\n", sym, y_expr);
+                out += "          for (int s = 0; s < n_hi; s++) {\n";
+                out += "            *cl++ = offsetof(struct Custom, color) + p_hi->reg * 2;\n";
+                out += "            *cl++ = p_hi->color;\n";
+                out += "            p_hi++;\n";
+                out += "          }\n";
                 out += "        }\n";
             }
         };
