@@ -48,6 +48,7 @@ const errorMsg = ref('')
 const sizeOverride = ref(false)
 const lastWidth = ref(320)
 const lastHeight = ref(160)
+const lastCopPerLine = ref(0)
 const imageHasAlpha = ref(false)
 const pageLoadTime = Date.now()
 
@@ -125,33 +126,46 @@ const rawTooltipHtml = computed(() => {
   const w = lastWidth.value
   const h = lastHeight.value
   const d = options.depth || defaultDepth(options.mode)
+  const dd = defaultDepth(options.mode)
   const bpr = Math.ceil(w / 16) * 2
   const planeSize = bpr * h
   const totalPlanes = planeSize * d
-  const colors = options.copper ? (1 << d) : (1 << d)
+  const colors = 1 << (isHamMode(options.mode) ? dd - 2 : d)
   const aga = options.chipset === 'aga'
   const palSize = colors * 2
-  const cpl = options.copper ? '~' : '0'
+  const copPerLine = options.copper ? lastCopPerLine.value : 0
   let off = 0
   let lines = []
   lines.push(`Raw binary format (big-endian):`)
   lines.push(``)
   lines.push(`Offset  Size     Content`)
-  lines.push(`------  -------  ----------------------`)
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${totalPlanes.toLocaleString().padStart(7)}  Bitplanes (${d}bpl, ${bpr}B/row, interleaved)`)
+  lines.push(`------  -------  ----------------------------`)
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${totalPlanes.toLocaleString().padStart(7)}  Bitplanes`)
+  lines.push(`                 (${d}bpl, ${bpr}B/row, interleaved)`)
   off += totalPlanes
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette (${colors} colors, 0x0RGB)`)
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette`)
+  lines.push(`                 (${colors} colors, 0x0RGB)`)
   off += palSize
   if (aga) {
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette lo (${colors} colors, LOCT)`)
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette lo`)
+    lines.push(`                 (${colors} colors, LOCT)`)
     off += palSize
   }
   if (options.copper) {
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ...      Copper (reg:u16 + color:u16 per change/line)`)
-    if (aga) lines.push(`        ...      Copper lo (LOCT, same layout)`)
+    const cpl = Math.round(copPerLine) || '?'
+    const copSize = h * cpl * 4
+    const copSizeStr = copSize ? copSize.toLocaleString().padStart(7) : '    ...'
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper`)
+    lines.push(`                 (${cpl} changes/line, ${h} lines)`)
+    if (copSize) off += copSize
+    if (aga) {
+      lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper lo`)
+      lines.push(`                 (LOCT, same layout)`)
+      if (copSize) off += copSize
+    }
   }
-  lines.push(``)
-  lines.push(`${w}x${h}, ${d}bpl, ${aga ? 'AGA' : 'OCS'}`)
+  lines.push(`------  -------  ----------------------------`)
+  lines.push(`Total:  ${off.toLocaleString().padStart(7)}  ${w}x${h}, ${d}bpl, ${aga ? 'AGA 24-bit' : 'OCS 12-bit'}`)
   return `<pre style="margin:0;font-size:0.7rem;line-height:1.3;white-space:pre">${lines.join('\n')}</pre>`
 })
 
@@ -296,6 +310,7 @@ function doConvert() {
 
       lastWidth.value = result.width
       lastHeight.value = result.height
+      lastCopPerLine.value = result.copperChanges || 0
       imageHasAlpha.value = !!result.hasTransparency
 
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
