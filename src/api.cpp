@@ -669,15 +669,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // --- EHB without copper: global palette ---
 
         // Generate base colors via median-cut, or load from file.
-        // Reserve index 0 for transparency when needed.
-        auto ehb_base = has_transparency ? std::size_t{31} : std::size_t{32};
+        // With custom palette: use as-is (32 colors expected).
+        // Without: reserve index 0 for transparency when needed.
+        bool user_pal_ehb = has_user_palette(options);
+        auto ehb_base = (user_pal_ehb) ? std::size_t{32}
+            : (has_transparency ? std::size_t{31} : std::size_t{32});
         Palette base_pal;
-        if (has_user_palette(options)) {
+        if (user_pal_ehb) {
             auto loaded = load_user_palette(options);
             if (!loaded) return std::unexpected{loaded.error()};
             base_pal = *std::move(loaded);
-            if (base_pal.colors.size() > ehb_base)
-                base_pal.colors.resize(ehb_base);
+            if (base_pal.colors.size() > 32)
+                base_pal.colors.resize(32);
             snap_to_chipset(base_pal, chipset, mode);
         } else {
             auto quantized = quantize::quantize(*image, ehb_base,
@@ -809,24 +812,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Atari: use full palette (no border register tied to index 0).
     // Transparency: also reserves index 0 for transparent (black).
     auto is_atari = amiga::is_atari(mode);
-    auto reserve_zero = has_transparency || !is_atari;
+    bool user_pal = has_user_palette(options);
+    // With custom palette: use as-is, no forced black at index 0.
+    // Without: reserve index 0 for black (Amiga border/background).
+    auto reserve_zero = !user_pal && (has_transparency || !is_atari);
     auto quant_colors = reserve_zero ? max_colors - 1 : max_colors;
     Palette pal;
     if (amiga::is_atari_hi(mode)) {
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
-    } else if (!options.palette_file.empty()) {
-        auto loaded = palette_io::load_palette(options.palette_file);
+    } else if (user_pal) {
+        auto loaded = load_user_palette(options);
         if (!loaded) return std::unexpected{loaded.error()};
         pal = *std::move(loaded);
-        if (pal.colors.size() > quant_colors)
-            pal.colors.resize(quant_colors);
+        if (pal.colors.size() > max_colors)
+            pal.colors.resize(max_colors);
         snap_to_chipset(pal, chipset, mode);
     } else {
         auto quantized = quantize::quantize(*image, quant_colors,
                                             quantize_algo(chipset, mode));
         if (!quantized) return std::unexpected{quantized.error()};
         pal = *std::move(quantized);
-        // STF: snap OCS brute-force result to 9-bit precision before dithering
         if (amiga::is_stf(mode)) snap_to_chipset(pal, chipset, mode);
     }
     if (reserve_zero) {
