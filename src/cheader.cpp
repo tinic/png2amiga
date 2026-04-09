@@ -394,16 +394,25 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    Permit();\n";
     out += "}\n\n";
 
-    // FMODE=3 needed for sufficient DMA bandwidth:
-    // - Hires >4 planes (always)
-    // - Lores >6 planes + copper (determined later, but planar layout needed for both)
-    bool use_planar = (is_hires && depth > 4) || (depth > 6);
-
     // --- Image data ---
+    // Always use line-interleaved layout (plane 0 row 0, plane 1 row 0, ...
+    // plane N row 0, plane 0 row 1, ...). Better DRAM page locality than
+    // planar — consecutive plane fetches stay on the same DRAM row, which
+    // matters most under FMODE=3 with many bitplanes.
+    //
+    // FMODE=3 (64-bit DMA fetch) is needed when bandwidth is tight:
+    //   - Hires >4 planes (always)
+    //   - Lores >6 planes WITH copper
+    // Computed up here so it gates both the data array's 8-byte alignment
+    // and the BPLxMOD/FMODE register writes later in the copper list.
+    bool has_copper = options.copper_changes && !options.copper_changes->empty();
+    bool need_fmode3 = ((depth > 6) && has_copper) ||
+                       (is_hires && depth > 4);
+
     out += std::format("// {}x{}, {} bitplanes, CAMG 0x{:04X}\n",
                        width, height, depth, camg);
-    // Align to 8 bytes for FMODE=3 (64-bit DMA fetch)
-    auto align = use_planar ? 8 : 2;
+    // 8-byte alignment when FMODE=3 (64-bit DMA fetch); 2-byte otherwise.
+    auto align = need_fmode3 ? 8 : 2;
     out += std::format("static const UWORD {}_planes[]"
                        " __attribute__((aligned({})))"
                        " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
@@ -413,45 +422,20 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     auto total_words = words_per_row * depth * height;
     std::size_t word_count = 0;
 
-    // For depth > 6 (FMODE=3): use planar layout (all rows of plane 0, then plane 1, ...)
-    // This avoids modulo complications with 64-bit DMA overread.
-    // For depth <= 6: use interleaved layout (plane 0 row 0, plane 1 row 0, ...).
-    bool planar_layout = use_planar;
-
-    if (planar_layout) {
+    for (std::size_t y = 0; y < height; ++y) {
         for (std::size_t p = 0; p < depth; ++p) {
-            out += std::format("    /* plane {} */\n", p);
-            for (std::size_t y = 0; y < height; ++y) {
-                out += "    ";
-                auto offset = planes.plane_row_offset(p, y);
-                for (std::size_t w = 0; w < words_per_row; ++w) {
-                    auto byte_off = offset + w * 2;
-                    auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
-                    auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
-                    auto word = static_cast<std::uint16_t>((hi << 8) | lo);
-                    ++word_count;
-                    out += std::format("0x{:04X}", word);
-                    if (word_count < total_words) out += ",";
-                }
-                out += "\n";
+            out += "    ";
+            auto offset = planes.plane_row_offset(p, y);
+            for (std::size_t w = 0; w < words_per_row; ++w) {
+                auto byte_off = offset + w * 2;
+                auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
+                auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
+                auto word = static_cast<std::uint16_t>((hi << 8) | lo);
+                ++word_count;
+                out += std::format("0x{:04X}", word);
+                if (word_count < total_words) out += ",";
             }
-        }
-    } else {
-        for (std::size_t y = 0; y < height; ++y) {
-            for (std::size_t p = 0; p < depth; ++p) {
-                out += "    ";
-                auto offset = planes.plane_row_offset(p, y);
-                for (std::size_t w = 0; w < words_per_row; ++w) {
-                    auto byte_off = offset + w * 2;
-                    auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
-                    auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
-                    auto word = static_cast<std::uint16_t>((hi << 8) | lo);
-                    ++word_count;
-                    out += std::format("0x{:04X}", word);
-                    if (word_count < total_words) out += ",";
-                }
-                out += "\n";
-            }
+            out += "\n";
         }
     }
     out += "};\n\n";
@@ -479,7 +463,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     // --- Copper list (if present) ---
-    bool has_copper = options.copper_changes && !options.copper_changes->empty();
     if (has_copper) {
         auto& changes = *options.copper_changes;
         auto cpl = options.copper_changes_per_line;
@@ -650,12 +633,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // For interlace: display window is per-field (half total height)
     // disp_height no longer needed — using fixed PAL diwstop (0x2CC1)
 
-    // FMODE=3 needed when copper steals DMA cycles from 8-plane fetch
-    // FMODE=3 needed when DMA bandwidth is tight:
-    // - Lores >6 planes + copper
-    // - Hires >4 planes (always, even without copper)
-    bool need_fmode3 = ((depth > 6) && has_copper) ||
-                       (is_hires && depth > 4);
+    // (need_fmode3 already computed up at the data array section so it could
+    // gate the data array's 8-byte alignment.)
 
     // --- Display window and data fetch timing ---
     // DDFSTRT/DDFSTOP: when the chipset starts/stops fetching bitplane data each line.
@@ -683,12 +662,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    *cl++ = offsetof(struct Custom, diwstop); "
            "*cl++ = (0x2C<<8)|0xC1;  // VSTOP=300, HSTOP=$C1 (full PAL)\n";
 
-    // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed for >6 planes)
-    if (use_planar) {
-        out += std::format("    *cl++ = 0x01fc; *cl++ = 0x{:04X};  "
-                           "// FMODE: {} DMA fetch\n",
-                           need_fmode3 ? 0x0003 : 0x0000,
-                           need_fmode3 ? "64-bit" : "16-bit");
+    // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed
+    // for >6 plane modes and hires-5+). Always emit when FMODE=3 is needed;
+    // otherwise leave at the chipset default (0).
+    if (need_fmode3) {
+        out += "    *cl++ = 0x01fc; *cl++ = 0x0003;  // FMODE: 64-bit DMA fetch\n";
     }
 
     // --- BPLCON0: main display control register ---
@@ -731,41 +709,25 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // BPLCON3: bank 0, no LOCT\n\n";
 
     // --- Bitplane modulo ---
-    // BPL1MOD/BPL2MOD: bytes to skip after each row's DMA fetch.
-    // Interleaved layout: mod = bpr * (depth-1) to skip other planes' data.
-    // Interlace: mod = bpr * (depth*2-1) to also skip the other field's row.
-    // Planar layout: mod = 0 normally, +bpr for interlace, -8 for FMODE=3.
-    int planar_mod = (is_lace ? static_cast<int>(bpr) : 0) + (need_fmode3 ? -8 : 0);
+    // Interleaved layout: each plane's pointer needs to skip past the other
+    // planes' rows after consuming bpr bytes of its own row.
+    //   Progressive: mod = bpr * (depth - 1)
+    //   Interlace:   mod = bpr * (depth*2 - 1)   (also skip the other field's row)
+    // FMODE=3 reads 8 bytes past the visible area as overread, so the pointer
+    // has advanced bpr+8 instead of bpr — subtract 8 from the modulo.
+    auto mod = static_cast<int>(bpr) *
+               (static_cast<int>(depth) * (is_lace ? 2 : 1) - 1)
+             - (need_fmode3 ? 8 : 0);
+    out += std::format("    *cl++ = offsetof(struct Custom, bpl1mod); "
+                       "*cl++ = {};\n", mod);
+    out += std::format("    *cl++ = offsetof(struct Custom, bpl2mod); "
+                       "*cl++ = {};\n\n", mod);
 
-    if (use_planar) {
-        auto plane_size = bpr * height;
-        out += std::format("    *cl++ = offsetof(struct Custom, bpl1mod); *cl++ = {};\n",
-                           planar_mod);
-        out += std::format("    *cl++ = offsetof(struct Custom, bpl2mod); *cl++ = {};\n\n",
-                           planar_mod);
-
-        out += std::format("    const UBYTE* planes[{}];\n", depth);
-        out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
-        out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
-                           sym, plane_size);
-        out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
-    } else {
-        // Interleaved layout: planes interleaved per row
-        auto mod = static_cast<int>(bpr) * (static_cast<int>(depth) - 1);
-        if (is_lace) {
-            mod = static_cast<int>(bpr) * (static_cast<int>(depth) * 2 - 1);
-        }
-        out += std::format("    *cl++ = offsetof(struct Custom, bpl1mod); "
-                           "*cl++ = {};\n", mod);
-        out += std::format("    *cl++ = offsetof(struct Custom, bpl2mod); "
-                           "*cl++ = {};\n\n", mod);
-
-        out += std::format("    const UBYTE* planes[{}];\n", depth);
-        out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
-        out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
-                           sym, bpr);
-        out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
-    }
+    out += std::format("    const UBYTE* planes[{}];\n", depth);
+    out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
+    out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
+                       sym, bpr);
+    out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
 
     bool do_fade = options.fade_in && !is_lace && !is_ham;
 
@@ -1000,40 +962,29 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    *cl2++ = offsetof(struct Custom, diwstrt); "
                            "*cl2++ = ({}<<8)|0x81;\n", y_start);
         out += "    *cl2++ = offsetof(struct Custom, diwstop); *cl2++ = (0x2C<<8)|0xC1;\n";
-        if (use_planar)
-            out += std::format("    *cl2++ = 0x01fc; *cl2++ = 0x{:04X};\n",
-                               need_fmode3 ? 0x0003 : 0x0000);
+        if (need_fmode3)
+            out += "    *cl2++ = 0x01fc; *cl2++ = 0x0003;\n";
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
                            "*cl2++ = {};  // 0x{:04X}\n", bplcon0_expr, bplcon0);
         out += "    *cl2++ = offsetof(struct Custom, bplcon1); *cl2++ = 0;\n";
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon2); *cl2++ = 0x{:04X};\n",
                            bplcon2);
 
-        if (use_planar) {
-            // Planar interlace: mod = bpr (skip other field row), -8 for FMODE=3
-            auto plane_size = bpr * height;
-            out += std::format("    *cl2++ = offsetof(struct Custom, bpl1mod); *cl2++ = {};\n",
-                               planar_mod);
-            out += std::format("    *cl2++ = offsetof(struct Custom, bpl2mod); *cl2++ = {};\n",
-                               planar_mod);
-            out += std::format("    const UBYTE* planes_even[{}];\n", depth);
-            out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
-            out += std::format("        planes_even[i] = (const UBYTE*){}_planes"
-                               " + {} * i + {};\n",
-                               sym, plane_size, bpr);  // offset by one row within each plane
-        } else {
-            // Interleaved: mod skips other field, even field starts one interleaved row later
-            auto lace_mod = static_cast<int>(bpr) * (static_cast<int>(depth) * 2 - 1);
-            out += std::format("    *cl2++ = offsetof(struct Custom, bpl1mod); "
-                               "*cl2++ = {};\n", lace_mod);
-            out += std::format("    *cl2++ = offsetof(struct Custom, bpl2mod); "
-                               "*cl2++ = {};\n", lace_mod);
-            out += std::format("    const UBYTE* planes_even[{}];\n", depth);
-            out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
-            out += std::format("        planes_even[i] = (const UBYTE*){}_planes"
-                               " + {} * i + {};\n",
-                               sym, bpr, bpr * depth);  // one interleaved row later
-        }
+        // Interleaved interlace: mod skips other field's interleaved row,
+        // -8 compensates FMODE=3 overread.
+        auto lace_mod = static_cast<int>(bpr) * (static_cast<int>(depth) * 2 - 1)
+                      - (need_fmode3 ? 8 : 0);
+        out += std::format("    *cl2++ = offsetof(struct Custom, bpl1mod); "
+                           "*cl2++ = {};\n", lace_mod);
+        out += std::format("    *cl2++ = offsetof(struct Custom, bpl2mod); "
+                           "*cl2++ = {};\n", lace_mod);
+        // Even field starts one interleaved row (depth*bpr) into the data,
+        // plus the per-plane offset within that row.
+        out += std::format("    const UBYTE* planes_even[{}];\n", depth);
+        out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
+        out += std::format("        planes_even[i] = (const UBYTE*){}_planes"
+                           " + {} * i + {};\n",
+                           sym, bpr, bpr * depth);
         out += std::format("    cl2 = copSetPlanes(cl2, planes_even, {});\n", depth);
         // Palette already set via CPU; copper just sets bank 0
         {
