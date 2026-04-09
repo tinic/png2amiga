@@ -611,6 +611,20 @@ function loadPalette() {
         const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/)
         if (m) colors.push(`rgb(${m[1]},${m[2]},${m[3]})`)
       }
+    } else if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'FORM') {
+      // IFF: scan for CMAP chunk
+      let pos = 12
+      while (pos + 8 <= bytes.length) {
+        const id = String.fromCharCode(...bytes.slice(pos, pos + 4))
+        const size = (bytes[pos+4] << 24) | (bytes[pos+5] << 16) | (bytes[pos+6] << 8) | bytes[pos+7]
+        pos += 8
+        if (id === 'CMAP') {
+          for (let i = 0; i + 2 < size && pos + i + 2 <= bytes.length; i += 3)
+            colors.push(`rgb(${bytes[pos+i]},${bytes[pos+i+1]},${bytes[pos+i+2]})`)
+          break
+        }
+        pos += size + (size & 1)  // chunks are word-aligned
+      }
     } else {
       // Try hex text (one RRGGBB per line)
       for (const line of text.split('\n')) {
