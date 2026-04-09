@@ -36,6 +36,13 @@ watch(wasmLoading, (loading) => {
         const type = example.file.endsWith('.jpg') || example.file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
         const blob = new Blob([buf], { type })
         imageUrl.value = URL.createObjectURL(blob)
+        // Decode dimensions so resize presets work for the default example.
+        const img = new Image()
+        img.onload = () => {
+          imageWidth.value = img.width
+          imageHeight.value = img.height
+        }
+        img.src = imageUrl.value
       })
   }
 })
