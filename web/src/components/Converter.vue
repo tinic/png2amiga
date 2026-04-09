@@ -120,8 +120,8 @@ const showDepthSlider = computed(() => {
   return !isHamMode(options.mode) && !isEhbMode(options.mode) && !isAtariMode(options.mode)
 })
 
-// Raw export tooltip with format layout
-const rawTooltip = computed(() => {
+// Raw export tooltip with format layout (HTML for fixed-width font)
+const rawTooltipHtml = computed(() => {
   const w = lastWidth.value
   const h = lastHeight.value
   const d = options.depth || defaultDepth(options.mode)
@@ -152,7 +152,7 @@ const rawTooltip = computed(() => {
   }
   lines.push(``)
   lines.push(`${w}x${h}, ${d}bpl, ${aga ? 'AGA' : 'OCS'}`)
-  return lines.join('\n')
+  return `<pre style="margin:0;font-size:0.7rem;line-height:1.3">${lines.join('\n')}</pre>`
 })
 
 // Whether HAM controls should be shown
@@ -757,7 +757,7 @@ async function loadExample(example) {
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
                 title="Download standalone AmigaOS viewer source (.cpp) — compile with m68k-amiga-elf-gcc." />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
-                :title="rawTooltip" />
+                v-tooltip.top="{ value: rawTooltipHtml, escape: false }" />
             </div>
             <Button label="Reset" icon="pi pi-refresh" severity="secondary" outlined class="w-full" @click="resetOptions"
               title="Reset all parameters to defaults." />
