@@ -11,6 +11,7 @@
 #include "log.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
+#include "palette_locks.hpp"
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
@@ -134,6 +135,10 @@ struct Config {
     int crop_w = 0;                    // 0 = no crop
     int crop_h = 0;
     bool crop_auto = false;            // auto-crop to mode aspect ratio
+
+    // Palette index manipulation
+    std::vector<api::LockSpec> locks;  // --lock-index <id> <rgbhex>
+    std::vector<api::PinSpec>  pins;   // --pin-index-at <id> <x> <y>
 };
 
 void print_usage() {
@@ -190,6 +195,14 @@ void print_usage() {
         "Cropping:\n"
         "  --crop <x,y,w,h>               Manual crop region (pixels)\n"
         "  --crop-auto                     Auto-crop to mode aspect ratio (center)\n"
+        "\n"
+        "Palette index manipulation (lores/hires/EHB/Atari only):\n"
+        "  --lock-index <id> <rgbhex>      Lock palette slot to a specific color\n"
+        "                                    e.g. --lock-index 0 000000 (force black at 0)\n"
+        "                                    repeatable; locks override implicit color 0 = black\n"
+        "  --pin-index-at <id> <x> <y>     After dither, swap whatever index pixel (x,y)\n"
+        "                                    landed at with slot <id>. Repeatable.\n"
+        "                                    Pin targets must not be locked.\n"
         "\n"
         "C header output:\n"
         "  --symbol <name>                 Base symbol name (default: from filename)\n"
@@ -272,6 +285,55 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             config.output_path = std::string(argv[++i]);
+            continue;
+        }
+
+        // --lock-index <id> <rgbhex>: lock palette slot to a specific color.
+        if (arg == "--lock-index" && i + 2 < argc) {
+            int idx = std::atoi(argv[++i]);
+            auto hex = std::string(argv[++i]);
+            // Strip leading '#' or '0x'/'0X'
+            if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
+            if (hex.size() > 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X'))
+                hex.erase(0, 2);
+            // Expand 3-digit hex to 6 (e.g. "f0c" -> "ff00cc")
+            if (hex.size() == 3) {
+                std::string expanded;
+                for (char c : hex) { expanded.push_back(c); expanded.push_back(c); }
+                hex = expanded;
+            }
+            if (hex.size() != 6) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--lock-index color must be a 3- or 6-digit hex value (e.g. f0c or ff00cc)"}};
+            }
+            auto parse_byte = [](std::string_view s) -> int {
+                int v = 0;
+                for (char c : s) {
+                    v <<= 4;
+                    if (c >= '0' && c <= '9') v |= (c - '0');
+                    else if (c >= 'a' && c <= 'f') v |= (c - 'a' + 10);
+                    else if (c >= 'A' && c <= 'F') v |= (c - 'A' + 10);
+                    else return -1;
+                }
+                return v;
+            };
+            int r = parse_byte(std::string_view(hex).substr(0, 2));
+            int g = parse_byte(std::string_view(hex).substr(2, 2));
+            int b = parse_byte(std::string_view(hex).substr(4, 2));
+            if (r < 0 || g < 0 || b < 0) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--lock-index color must be a hex value (e.g. ff00cc)"}};
+            }
+            config.locks.push_back({idx, r, g, b});
+            continue;
+        }
+
+        // --pin-index-at <id> <x> <y>: pin palette slot to source pixel.
+        if (arg == "--pin-index-at" && i + 3 < argc) {
+            int idx = std::atoi(argv[++i]);
+            int x = std::atoi(argv[++i]);
+            int y = std::atoi(argv[++i]);
+            config.pins.push_back({idx, x, y});
             continue;
         }
 
@@ -1163,6 +1225,12 @@ int main(int argc, char* argv[]) {
 
     // --- HAM modes ---
     if (amiga::is_ham(config->mode)) {
+        if (!config->locks.empty() || !config->pins.empty()) {
+            std::println(stderr, "Error: --lock-index / --pin-index-at "
+                                 "are not supported in HAM modes "
+                                 "(palette is dynamic per pixel)");
+            return 1;
+        }
         auto ham_params = amiga::get_mode_params(config->mode);
         auto quality_str = config->ham_quality == ham::Quality::fast ? "fast" : "optimal";
         auto ham_dither = config->dither_explicit
@@ -1360,6 +1428,11 @@ int main(int argc, char* argv[]) {
 
         // --- EHB with copper ---
         if (config->copper) {
+            if (!config->locks.empty() || !config->pins.empty()) {
+                std::println(stderr, "Error: --lock-index / --pin-index-at "
+                                     "are not supported with EHB + --copper");
+                return 1;
+            }
             auto cpl = config->copper_changes > 0
                 ? static_cast<std::size_t>(config->copper_changes)
                 : copper::max_changes_per_line(5, false, config->hires, chipset);
@@ -1532,7 +1605,21 @@ int main(int argc, char* argv[]) {
         // --- EHB without copper ---
         std::println("Mode:   EHB (Extra Half-Brite)");
 
+        // Validate locks/pins for EHB (target must be 0-31)
+        if (auto v = palette_locks::validate_locks(config->locks, 32); !v) {
+            std::println(stderr, "{}", v.error().message);
+            return 1;
+        }
+        bool reserve_zero_ehb = !config->palette_file.empty() ? false : true;
+        if (auto v = palette_locks::validate_pins(config->pins, config->locks, 32,
+                                                  image->width(), image->height(),
+                                                  reserve_zero_ehb); !v) {
+            std::println(stderr, "{}", v.error().message);
+            return 1;
+        }
+
         Palette base_pal;
+        std::vector<bool> base_locked(32, false);
         if (!config->palette_file.empty()) {
             auto loaded = palette_io::load_palette(config->palette_file);
             if (!loaded) {
@@ -1544,19 +1631,29 @@ int main(int argc, char* argv[]) {
             if (base_pal.colors.size() > 32)
                 base_pal.colors.resize(32);
             snap_palette(base_pal, chipset, config->mode);
+            // Apply locks on top of user palette
+            for (auto& lock : config->locks) {
+                auto idx = static_cast<std::size_t>(lock.index);
+                if (idx < base_pal.colors.size()) {
+                    base_pal.colors[idx] = palette_locks::to_color(lock, chipset, config->mode);
+                    base_locked[idx] = true;
+                }
+            }
             std::println("Palette: {} colors loaded from {}",
                          base_pal.size(), config->palette_file);
         } else {
-            // 31 colors + black at index 0 = 32 base colors
-            auto quantized = auto_quantize(*image, 31, chipset);
+            // 32 base colors total: locks + reserved black at 0 + quantized fill
+            auto qcount = palette_locks::quant_count(32, config->locks, true);
+            auto quantized = auto_quantize(*image, qcount, chipset);
             if (!quantized) {
                 std::println(stderr, "Quantize error: {}",
                              quantized.error().message);
                 return 1;
             }
-            base_pal = *std::move(quantized);
-            base_pal.colors.insert(base_pal.colors.begin(),
-                                   Color3f{0.0f, 0.0f, 0.0f});
+            auto assembled = palette_locks::assemble_locked_palette(
+                *quantized, config->locks, 32, true, chipset, config->mode);
+            base_pal = std::move(assembled.palette);
+            base_locked = std::move(assembled.locked);
         }
 
         // Build full 64-color EHB palette
@@ -1578,6 +1675,45 @@ int main(int argc, char* argv[]) {
                      dither_name(dith.method), dith.strength);
 
         auto dither_result = dither::apply(*image, ehb_pal.colors, dith);
+
+        // Apply EHB pin-index swaps. Pins act on the BASE 32 only;
+        // half-brite copies (32-63) auto-track via re-derivation.
+        for (auto& pin : config->pins) {
+            auto target = static_cast<std::size_t>(pin.index);
+            auto pixel_offset = static_cast<std::size_t>(pin.y) * image->width() +
+                                static_cast<std::size_t>(pin.x);
+            if (pixel_offset >= dither_result.indices.size()) {
+                std::println(stderr, "--pin-index-at {}: pixel out of bounds",
+                             pin.index);
+                return 1;
+            }
+            auto src = static_cast<std::size_t>(dither_result.indices[pixel_offset]);
+            if (src >= 32) {
+                std::println(stderr,
+                    "--pin-index-at {}: source pixel ({},{}) dithered to "
+                    "half-brite slot {} (EHB pins must land on a base color, slots 0-31)",
+                    pin.index, pin.x, pin.y, src);
+                return 1;
+            }
+            if (src == target) { base_locked[target] = true; continue; }
+            if (base_locked[target]) {
+                std::println(stderr, "--pin-index-at {}: target is locked", pin.index);
+                return 1;
+            }
+            std::swap(base_pal.colors[src], base_pal.colors[target]);
+            auto src_u8 = static_cast<std::uint8_t>(src);
+            auto tgt_u8 = static_cast<std::uint8_t>(target);
+            auto src_hb = static_cast<std::uint8_t>(src + 32);
+            auto tgt_hb = static_cast<std::uint8_t>(target + 32);
+            for (auto& idx : dither_result.indices) {
+                if (idx == src_u8) idx = tgt_u8;
+                else if (idx == tgt_u8) idx = src_u8;
+                else if (idx == src_hb) idx = tgt_hb;
+                else if (idx == tgt_hb) idx = src_hb;
+            }
+            base_locked[target] = true;
+            ehb_pal = palette::make_ehb_palette(base_pal.colors);
+        }
 
         // Encode to 6 bitplanes
         auto planes = bitplane::encode(dither_result.indices,
@@ -1702,6 +1838,12 @@ int main(int argc, char* argv[]) {
 
     // --- Copper palette mode ---
     if (config->copper) {
+        if (!config->locks.empty() || !config->pins.empty()) {
+            std::println(stderr, "Error: --lock-index / --pin-index-at "
+                                 "are not supported with --copper "
+                                 "(per-scanline palettes change at runtime)");
+            return 1;
+        }
         if (!config->output_path.empty() &&
             (ends_with(config->output_path, ".iff") ||
              ends_with(config->output_path, ".ilbm"))) {
@@ -1871,8 +2013,25 @@ int main(int argc, char* argv[]) {
 
     // Build palette
     auto max_colors = std::size_t{1} << config->depth;
+    auto is_atari_std = amiga::is_atari(config->mode);
+    bool user_pal_std = !config->palette_file.empty();
+    auto reserve_zero_std = !user_pal_std && (has_transparency || !is_atari_std);
+
+    // Validate locks/pins
+    if (auto v = palette_locks::validate_locks(config->locks, max_colors); !v) {
+        std::println(stderr, "{}", v.error().message);
+        return 1;
+    }
+    if (auto v = palette_locks::validate_pins(config->pins, config->locks, max_colors,
+                                              image->width(), image->height(),
+                                              reserve_zero_std); !v) {
+        std::println(stderr, "{}", v.error().message);
+        return 1;
+    }
+
     Palette pal;
-    if (!config->palette_file.empty()) {
+    std::vector<bool> std_locked(max_colors, false);
+    if (user_pal_std) {
         auto loaded = palette_io::load_palette(config->palette_file);
         if (!loaded) {
             std::println(stderr, "Palette load error: {}", loaded.error().message);
@@ -1882,6 +2041,14 @@ int main(int argc, char* argv[]) {
         if (pal.colors.size() > max_colors)
             pal.colors.resize(max_colors);
         snap_palette(pal, chipset, config->mode);
+        // Apply locks on top of user palette
+        for (auto& lock : config->locks) {
+            auto idx = static_cast<std::size_t>(lock.index);
+            if (idx < pal.colors.size()) {
+                pal.colors[idx] = palette_locks::to_color(lock, chipset, config->mode);
+                std_locked[idx] = true;
+            }
+        }
         std::println("Palette: {} colors (loaded from {})",
                      pal.size(), config->palette_file);
     } else if (amiga::is_atari_hi(config->mode)) {
@@ -1889,22 +2056,20 @@ int main(int argc, char* argv[]) {
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
         std::println("Palette: 2 colors (monochrome)");
     } else {
-        // Amiga: always reserve index 0 for black (border/background color).
-        // Atari: use full palette (no border register tied to index 0).
-        // Transparency: also reserves index 0 for transparent (black).
-        auto is_atari = amiga::is_atari(config->mode);
-        auto reserve_zero = has_transparency || !is_atari;
-        auto quant_n = reserve_zero ? (max_colors > 1 ? max_colors - 1 : 1) : max_colors;
-        auto quantized = auto_quantize(*image, quant_n, chipset);
+        auto qcount = palette_locks::quant_count(max_colors, config->locks, reserve_zero_std);
+        auto quantized = auto_quantize(*image, qcount, chipset);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;
         }
-        pal = *std::move(quantized);
-        if (reserve_zero)
-            pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
         // STF: snap OCS brute-force result to 9-bit precision
-        if (amiga::is_stf(config->mode)) snap_palette(pal, chipset, config->mode);
+        if (amiga::is_stf(config->mode))
+            snap_palette(*quantized, chipset, config->mode);
+        auto assembled = palette_locks::assemble_locked_palette(
+            *quantized, config->locks, max_colors, reserve_zero_std,
+            chipset, config->mode);
+        pal = std::move(assembled.palette);
+        std_locked = std::move(assembled.locked);
         std::println("Palette: {} colors (auto, {})",
                      pal.size(),
                      amiga::is_stf(config->mode) ? "STF 9-bit" :
@@ -1935,6 +2100,17 @@ int main(int argc, char* argv[]) {
             if (transparency_mask[i]) {
                 dither_result.indices[i] = 0;
             }
+        }
+    }
+
+    // Apply pin-index swaps (post-quantization, post-dither).
+    if (!config->pins.empty()) {
+        auto pin_result = palette_locks::apply_pins(
+            pal, dither_result.indices, std_locked, config->pins,
+            image->width(), image->height());
+        if (!pin_result) {
+            std::println(stderr, "{}", pin_result.error().message);
+            return 1;
         }
     }
 

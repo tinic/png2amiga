@@ -30,6 +30,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/cheader.cpp
     src/palette_io.cpp
     src/copper.cpp
+    src/palette_locks.cpp
     src/api.cpp
 )
 

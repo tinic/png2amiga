@@ -7,6 +7,24 @@
 
 namespace png2amiga::api {
 
+// Lock a palette slot to a specific color (sRGB 0-255), pre-quantization.
+// The quantizer fills the remaining slots, and the locked color is reachable
+// by the dither phase. Has no effect on HAM modes (palette is dynamic) or
+// copper modes (per-scanline palettes).
+struct LockSpec {
+    int index;       // palette slot, 0..max_colors-1
+    int r, g, b;     // sRGB 0-255
+};
+
+// Pin a palette slot to whatever color the source pixel at (x, y) ends up
+// at after quantization+dithering. Implemented as a post-dither index swap:
+// the index pixel(x,y) holds is swapped (palette + index map) with `index`.
+// Pin targets must NOT be locked. Has no effect on HAM/copper modes.
+struct PinSpec {
+    int index;       // target palette slot
+    int x, y;        // source pixel coordinates
+};
+
 struct Options {
     std::string mode = "lores";         // lores, hires, ham4, ham5, ham6, ham7, ham8, ehb
     std::string chipset;                // "ocs", "aga", or "" for auto
@@ -62,6 +80,10 @@ struct Options {
     int crop_w = 0;                     // 0 = no crop
     int crop_h = 0;
     bool crop_auto = false;             // auto-crop to mode aspect ratio (center)
+
+    // Palette index manipulation (lores/hires/EHB/Atari only)
+    std::vector<LockSpec> locks;
+    std::vector<PinSpec>  pins;
 };
 
 struct ConvertResult {
