@@ -80,6 +80,8 @@ Options parse_js_options(val js_opts) {
         opts.alpha_dither = js_opts["alphaDither"].as<std::string>();
     if (js_opts.hasOwnProperty("alphaDitherStrength"))
         opts.alpha_dither_strength = js_opts["alphaDitherStrength"].as<float>();
+    if (js_opts.hasOwnProperty("maskInvert"))
+        opts.mask_invert = js_opts["maskInvert"].as<bool>();
     return opts;
 }
 
@@ -255,6 +257,50 @@ val js_convert_viewer(val input_array, val js_opts) {
     return obj;
 }
 
+// JS API: convertMask(Uint8Array, options) -> { data: Uint8Array(PNG), width, height, error }
+val js_convert_mask(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_mask(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("hasTransparency", result.hasTransparency);
+    obj.set("error", result.error);
+
+    if (!result.data.empty())
+        obj.set("data", make_uint8_array(result.data));
+
+    return obj;
+}
+
+// JS API: convertMaskRaw(Uint8Array, options) -> { data: Uint8Array, width, height, error }
+val js_convert_mask_raw(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_mask_raw(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("hasTransparency", result.hasTransparency);
+    obj.set("error", result.error);
+
+    if (!result.data.empty())
+        obj.set("data", make_uint8_array(result.data));
+
+    return obj;
+}
+
 EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convert", &js_convert);
     function("convertRGBA", &js_convert_rgba);
@@ -263,4 +309,6 @@ EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convertViewer", &js_convert_viewer);
     function("convertDegas", &js_convert_degas);
     function("convertRaw", &js_convert_raw);
+    function("convertMask", &js_convert_mask);
+    function("convertMaskRaw", &js_convert_mask_raw);
 }

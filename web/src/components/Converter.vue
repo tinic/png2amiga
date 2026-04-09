@@ -19,7 +19,7 @@ import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 import Panel from 'primevue/panel'
 
-const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw } = useWasm()
+const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw } = useWasm()
 const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
@@ -510,6 +510,48 @@ async function downloadRaw() {
   converting.value = false
 }
 
+async function downloadMaskPNG() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const opts = buildWasmOptions()
+    opts.maskInvert = !!options.maskInvert
+    const result = await convertMask(imageBytes.value, opts)
+    if (result.error) { errorMsg.value = result.error; return }
+    const blob = new Blob([result.data], { type: 'image/png' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '-mask.png'
+    a.click()
+    URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format: 'mask-png', mode: options.mode, exportCount })
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
+}
+
+async function downloadMaskRaw() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const opts = buildWasmOptions()
+    opts.maskInvert = !!options.maskInvert
+    const result = await convertMaskRaw(imageBytes.value, opts)
+    if (result.error) { errorMsg.value = result.error; return }
+    const blob = new Blob([result.data], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '-mask.raw'
+    a.click()
+    URL.revokeObjectURL(url)
+    exportCount++
+    track('export', { format: 'mask-raw', mode: options.mode, exportCount })
+  } catch (e) { errorMsg.value = e.message }
+  converting.value = false
+}
+
 async function compileAndDownload(format) {
   if (!imageBytes.value) return
   converting.value = true
@@ -820,6 +862,21 @@ async function loadExample(example) {
                 <div class="col-3">
                   <InputNumber v-model="options.alphaDitherStrength" :min="0" :max="3.0" :step="0.05"
                     :minFractionDigits="2" :maxFractionDigits="2" class="w-full input-sm" />
+                </div>
+              </div>
+
+              <!-- Mask export -->
+              <div class="border-top-1 surface-border pt-2 mt-1">
+                <label class="block text-xs text-color-secondary font-semibold mb-1">Mask Export</label>
+                <div class="flex align-items-center gap-2 mb-2">
+                  <input type="checkbox" v-model="options.maskInvert" id="maskInvert" />
+                  <label for="maskInvert" class="text-xs text-color-secondary" title="Invert mask polarity. Default: white=opaque, black=transparent. Inverted: white=transparent, black=opaque.">Invert (1=transparent)</label>
+                </div>
+                <div class="flex gap-2">
+                  <Button label="mask png" icon="pi pi-download" size="small" class="flex-1" :disabled="!imageBytes || converting" @click="downloadMaskPNG"
+                    title="Download 1-bit transparency mask as PNG (black & white)." />
+                  <Button label="mask raw" icon="pi pi-download" size="small" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadMaskRaw"
+                    title="Download raw 1-bitplane mask data (word-aligned, no header)." />
                 </div>
               </div>
             </div>

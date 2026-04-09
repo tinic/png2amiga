@@ -74,5 +74,13 @@ export function useWasm() {
     return call('convertRaw', imageBytes, options)
   }
 
-  return { loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw }
+  function convertMask(imageBytes, options) {
+    return call('convertMask', imageBytes, options)
+  }
+
+  function convertMaskRaw(imageBytes, options) {
+    return call('convertMaskRaw', imageBytes, options)
+  }
+
+  return { loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw }
 }

@@ -85,6 +85,7 @@ echo "Launching fs-uae ($MODEL: ${CHIP}K chip, ${SLOW}K slow, ${FAST}K fast${NTS
     --window_width=800 \
     --window_height=600 \
     --zoom=full+border \
+    --floppy_drive_speed=0 \
     --align-x=0 --align-y=0 \
     --theme=none \
     $NTSC \

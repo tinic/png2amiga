@@ -53,6 +53,9 @@ struct Options {
     // C header output
     std::string symbol_name;            // base name for C symbols (default: "image")
 
+    // Mask export
+    bool mask_invert = false;           // invert mask polarity (default: 1=opaque, 0=transparent)
+
     // Cropping
     int crop_x = 0;
     int crop_y = 0;
@@ -116,5 +119,24 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
 ConvertResult convert_palette(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options);
+
+// Convert raw image data and return the 1-bit transparency mask.
+// Output format depends on caller:
+//   - convert_mask: returns PNG bytes (1-bit B/W)
+//   - convert_mask_raw: returns raw 1-bitplane data (word-aligned)
+//   - convert_mask_iff: returns IFF ILBM (1 bitplane, B/W palette)
+// White (1) = opaque, black (0) = transparent (or inverted with mask_invert).
+// Returns empty data if source has no transparency.
+ConvertResult convert_mask(const std::uint8_t* input_data,
+                           std::size_t input_size,
+                           const Options& options);
+
+ConvertResult convert_mask_raw(const std::uint8_t* input_data,
+                               std::size_t input_size,
+                               const Options& options);
+
+ConvertResult convert_mask_iff(const std::uint8_t* input_data,
+                               std::size_t input_size,
+                               const Options& options);
 
 } // namespace png2amiga::api

@@ -124,6 +124,10 @@ struct Config {
     int copper_changes = 0;            // 0 = auto (based on chipset/depth)
     bool fade_in = false;              // 16-step fade-in from black
 
+    // Mask export
+    std::string mask_path;             // output path for transparency mask
+    bool mask_invert = false;          // invert mask polarity
+
     // Cropping
     int crop_x = 0;
     int crop_y = 0;
@@ -180,6 +184,8 @@ void print_usage() {
         "  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)\n"
         "  --alpha-dither <method>         Dither alpha (e.g. checker, bayer4x4)\n"
         "  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)\n"
+        "  --mask <file>                   Export transparency mask (.png/.iff/.raw)\n"
+        "  --mask-invert                   Invert mask (1=transparent, 0=opaque)\n"
         "\n"
         "Cropping:\n"
         "  --crop <x,y,w,h>               Manual crop region (pixels)\n"
@@ -256,6 +262,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--fade-in") {
             config.fade_in = true;
+            continue;
+        }
+
+        if (arg == "--mask-invert") {
+            config.mask_invert = true;
             continue;
         }
 
@@ -385,6 +396,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
             }
             else if (arg == "--palette") {
                 config.palette_file = std::string(val);
+            }
+            else if (arg == "--mask") {
+                config.mask_path = std::string(val);
             }
             else if (arg == "--crop") {
                 // Parse "x,y,w,h" format
@@ -668,6 +682,92 @@ std::vector<bool> scale_mask(const std::vector<bool>& mask,
         }
     }
     return dst;
+}
+
+// ---------------------------------------------------------------------------
+// Save transparency mask to file (PNG, IFF, or raw 1-bitplane)
+// ---------------------------------------------------------------------------
+
+void save_mask(std::string_view path, const std::vector<bool>& tmask,
+               std::size_t w, std::size_t h, bool invert, bool interlace) {
+    if (tmask.empty()) {
+        std::println(stderr, "Mask: no transparency in source image");
+        return;
+    }
+
+    // Build B/W image from mask
+    // Default: white (1) = opaque, black (0) = transparent
+    // Inverted: white (1) = transparent, black (0) = opaque
+    auto build_image = [&]() {
+        Image img(w, h);
+        for (std::size_t i = 0; i < w * h; ++i) {
+            bool transparent = (i < tmask.size()) && tmask[i];
+            bool white = invert ? transparent : !transparent;
+            float v = white ? 1.0f : 0.0f;
+            img.pixels()[i] = Color3f{v, v, v};
+        }
+        return img;
+    };
+
+    auto build_indices = [&]() {
+        std::vector<std::uint8_t> indices(w * h, 0);
+        for (std::size_t i = 0; i < w * h; ++i) {
+            bool transparent = (i < tmask.size()) && tmask[i];
+            bool set = invert ? transparent : !transparent;
+            indices[i] = set ? 1 : 0;
+        }
+        return indices;
+    };
+
+    auto path_str = std::string(path);
+
+    if (ends_with(path, ".png")) {
+        auto img = build_image();
+        auto result = png_io::save(path, img);
+        if (!result) {
+            std::println(stderr, "Mask PNG write error: {}", result.error().message);
+            return;
+        }
+        std::println("Mask:   {} ({}x{} PNG)", path, w, h);
+    } else if (ends_with(path, ".iff") || ends_with(path, ".ilbm")) {
+        auto indices = build_indices();
+        auto planes = bitplane::encode(indices, w, h, 1);
+        if (!planes) {
+            std::println(stderr, "Mask encode error: {}", planes.error().message);
+            return;
+        }
+        std::vector<Color3f> mask_palette = {
+            Color3f{0.0f, 0.0f, 0.0f},
+            Color3f{1.0f, 1.0f, 1.0f},
+        };
+        iff::IffOptions iff_opts;
+        iff_opts.interlace = interlace;
+        auto result = iff::save_ilbm(path, *planes, mask_palette,
+                                     amiga::Mode::lores, iff_opts);
+        if (!result) {
+            std::println(stderr, "Mask IFF write error: {}", result.error().message);
+            return;
+        }
+        std::println("Mask:   {} ({}x{} IFF, 1 bitplane)", path, w, h);
+    } else if (ends_with(path, ".raw")) {
+        auto indices = build_indices();
+        auto planes = bitplane::encode(indices, w, h, 1);
+        if (!planes) {
+            std::println(stderr, "Mask encode error: {}", planes.error().message);
+            return;
+        }
+        std::ofstream file(path_str, std::ios::binary);
+        if (!file) {
+            std::println(stderr, "Mask: failed to open {}", path);
+            return;
+        }
+        file.write(reinterpret_cast<const char*>(planes->data.data()),
+                   static_cast<std::streamsize>(planes->data.size()));
+        std::println("Mask:   {} ({}x{} raw, {} bytes)", path, w, h,
+                     planes->data.size());
+    } else {
+        std::println(stderr, "Mask: unsupported extension for '{}' (use .png, .iff, or .raw)", path);
+    }
 }
 
 // Save preview PNG with pixel aspect scaling and optional transparency
@@ -1239,6 +1339,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Mask export (HAM mode)
+        if (!config->mask_path.empty())
+            save_mask(config->mask_path, transparency_mask,
+                      target_w, target_h, config->mask_invert, config->interlace);
+
         return 0;
     }
 
@@ -1415,6 +1520,12 @@ int main(int argc, char* argv[]) {
                     return 1;
                 }
             }
+
+            // Mask export (EHB copper mode)
+            if (!config->mask_path.empty())
+                save_mask(config->mask_path, transparency_mask,
+                          target_w, target_h, config->mask_invert, config->interlace);
+
             return 0;
         }
 
@@ -1581,6 +1692,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Mask export (EHB mode)
+        if (!config->mask_path.empty())
+            save_mask(config->mask_path, transparency_mask,
+                      target_w, target_h, config->mask_invert, config->interlace);
+
         return 0;
     }
 
@@ -1736,6 +1852,11 @@ int main(int argc, char* argv[]) {
                 std::println("PNG:    {}", config->output_path);
             }
         }
+
+        // Mask export (copper mode)
+        if (!config->mask_path.empty())
+            save_mask(config->mask_path, transparency_mask,
+                      target_w, target_h, config->mask_invert, config->interlace);
 
         return 0;
     }
@@ -1942,6 +2063,11 @@ int main(int argc, char* argv[]) {
             std::println("PNG:    {}", config->output_path);
         }
     }
+
+    // Mask export (standard bitplane mode)
+    if (!config->mask_path.empty())
+        save_mask(config->mask_path, transparency_mask,
+                  target_w, target_h, config->mask_invert, config->interlace);
 
     return 0;
 }

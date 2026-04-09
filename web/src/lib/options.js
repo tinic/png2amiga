@@ -156,6 +156,8 @@ export function defaultOptions() {
     copperChanges: 0,
     // Symbol name for C header export (empty = auto from filename)
     symbolName: '',
+    // Mask export
+    maskInvert: false,
   }
   for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
   return opts

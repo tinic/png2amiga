@@ -55,6 +55,12 @@ self.onmessage = async (e) => {
       case 'convertRaw':
         result = Module.convertRaw(args[0], args[1])
         break
+      case 'convertMask':
+        result = Module.convertMask(args[0], args[1])
+        break
+      case 'convertMaskRaw':
+        result = Module.convertMaskRaw(args[0], args[1])
+        break
       default:
         throw new Error(`Unknown function: ${fn}`)
     }

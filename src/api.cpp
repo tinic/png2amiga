@@ -1176,4 +1176,150 @@ ConvertResult convert_palette(const std::uint8_t* input_data,
     return make_result(*std::move(pal_data), *result);
 }
 
+// ---------------------------------------------------------------------------
+// Mask export helpers
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Build a 1-bit B/W Image from the transparency mask.
+// Default: white (1.0) = opaque pixel, black (0.0) = transparent pixel.
+// With mask_invert: inverted.
+Image mask_to_image(const std::vector<bool>& tmask,
+                    std::size_t w, std::size_t h, bool invert) {
+    Image img(w, h);
+    for (std::size_t i = 0; i < w * h; ++i) {
+        bool transparent = (i < tmask.size()) && tmask[i];
+        bool white = invert ? transparent : !transparent;
+        float v = white ? 1.0f : 0.0f;
+        img.pixels()[i] = Color3f{v, v, v};
+    }
+    return img;
+}
+
+// Build pixel indices for 1-bitplane encoding from mask.
+// Index 1 = white (opaque), index 0 = black (transparent), or inverted.
+std::vector<std::uint8_t> mask_to_indices(const std::vector<bool>& tmask,
+                                           std::size_t w, std::size_t h,
+                                           bool invert) {
+    std::vector<std::uint8_t> indices(w * h, 0);
+    for (std::size_t i = 0; i < w * h; ++i) {
+        bool transparent = (i < tmask.size()) && tmask[i];
+        bool set = invert ? transparent : !transparent;
+        indices[i] = set ? 1 : 0;
+    }
+    return indices;
+}
+
+ConvertResult make_mask_result(std::vector<std::uint8_t> data,
+                               const PipelineResult& p) {
+    ConvertResult r;
+    r.data = std::move(data);
+    r.width = static_cast<int>(p.rendered.width());
+    r.height = static_cast<int>(p.rendered.height());
+    r.depth = 1;
+    r.colors = 2;
+    r.hasTransparency = p.has_transparency;
+    return r;
+}
+
+} // namespace
+
+ConvertResult convert_mask(const std::uint8_t* input_data,
+                           std::size_t input_size,
+                           const Options& options) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+
+    if (!result->has_transparency) {
+        ConvertResult r;
+        r.width = static_cast<int>(result->rendered.width());
+        r.height = static_cast<int>(result->rendered.height());
+        r.hasTransparency = false;
+        r.error = "No transparency in source image";
+        return r;
+    }
+
+    auto mask_img = mask_to_image(result->transparency_mask,
+                                  result->rendered.width(),
+                                  result->rendered.height(),
+                                  options.mask_invert);
+
+    auto png = png_io::encode(mask_img);
+    if (!png) return make_error(png.error().message);
+
+    return make_mask_result(*std::move(png), *result);
+}
+
+ConvertResult convert_mask_raw(const std::uint8_t* input_data,
+                               std::size_t input_size,
+                               const Options& options) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+
+    if (!result->has_transparency) {
+        ConvertResult r;
+        r.width = static_cast<int>(result->rendered.width());
+        r.height = static_cast<int>(result->rendered.height());
+        r.hasTransparency = false;
+        r.error = "No transparency in source image";
+        return r;
+    }
+
+    auto indices = mask_to_indices(result->transparency_mask,
+                                   result->rendered.width(),
+                                   result->rendered.height(),
+                                   options.mask_invert);
+
+    auto planes = bitplane::encode(indices,
+                                   result->rendered.width(),
+                                   result->rendered.height(),
+                                   1); // 1 bitplane
+    if (!planes) return make_error(planes.error().message);
+
+    return make_mask_result(std::move(planes->data), *result);
+}
+
+ConvertResult convert_mask_iff(const std::uint8_t* input_data,
+                               std::size_t input_size,
+                               const Options& options) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+
+    if (!result->has_transparency) {
+        ConvertResult r;
+        r.width = static_cast<int>(result->rendered.width());
+        r.height = static_cast<int>(result->rendered.height());
+        r.hasTransparency = false;
+        r.error = "No transparency in source image";
+        return r;
+    }
+
+    auto indices = mask_to_indices(result->transparency_mask,
+                                   result->rendered.width(),
+                                   result->rendered.height(),
+                                   options.mask_invert);
+
+    auto planes = bitplane::encode(indices,
+                                   result->rendered.width(),
+                                   result->rendered.height(),
+                                   1);
+    if (!planes) return make_error(planes.error().message);
+
+    // B/W palette: index 0 = black, index 1 = white
+    std::vector<Color3f> mask_palette = {
+        Color3f{0.0f, 0.0f, 0.0f},
+        Color3f{1.0f, 1.0f, 1.0f},
+    };
+
+    iff::IffOptions iff_opts;
+    iff_opts.interlace = result->interlace;
+
+    auto iff_data = iff::write_ilbm(*planes, mask_palette,
+                                    amiga::Mode::lores, iff_opts);
+    if (!iff_data) return make_error(iff_data.error().message);
+
+    return make_mask_result(*std::move(iff_data), *result);
+}
+
 } // namespace png2amiga::api
