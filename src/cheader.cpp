@@ -562,18 +562,20 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += "\n";
         }
         out += "};\n";
-        out += "// Patch color values at recorded offsets using 68000-friendly\n";
-        out += "// inline asm. Each offset points to the color VALUE word in the\n";
-        out += "// copper list. src[off] = original, dst[off] = faded.\n";
-        out += "static void fadeApply(const USHORT* src, USHORT* dst,\n";
-        out += "                      const USHORT* offsets, int count, int step) {\n";
-        out += "    const UBYTE* lut = &fadeLUT[step];  // column for this step\n";
-        out += "    for (int i = 0; i < count; i++) {\n";
-        out += "        UWORD off = offsets[i];\n";
-        out += "        UWORD c = src[off];\n";
-        out += "        dst[off] = (UWORD)((lut[((c>>8)&0xF)<<4]<<8) | "
+        out += "// Copy copper list while fading color register values.\n";
+        out += "// Single pass — no separate CopyMem needed.\n";
+        out += "static void fadeBuild(const USHORT* src, USHORT* dst, int step) {\n";
+        out += "    const UBYTE* lut = &fadeLUT[step];\n";
+        out += "    while (!(src[0] == 0xFFFF && src[1] == 0xFFFE)) {\n";
+        out += "        dst[0] = src[0];\n";
+        out += "        if ((src[0] & 1) == 0 && src[0] >= 0x0180 && src[0] <= 0x01BE) {\n";
+        out += "            UWORD c = src[1];\n";
+        out += "            dst[1] = (UWORD)((lut[((c>>8)&0xF)<<4]<<8) | "
                "(lut[((c>>4)&0xF)<<4]<<4) | lut[(c&0xF)<<4]);\n";
+        out += "        } else dst[1] = src[1];\n";
+        out += "        src += 2; dst += 2;\n";
         out += "    }\n";
+        out += "    dst[0] = 0xFFFF; dst[1] = 0xFFFE;\n";
         out += "}\n\n";
     }
 
@@ -943,19 +945,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Precompute all 16 fade steps as separate copper lists in chip RAM.
         // During fade, just swap cop1lc — zero CPU chip RAM access per frame.
         out += "    USHORT* fade_cops[16] = {0};\n";
-        out += "    // Find color register value positions\n";
-        // Estimate max offsets: palette (×2 for AGA LOCT) + copper changes (×2) + margin
-        auto max_offsets = (pal_count * 2) + (height * options.copper_changes_per_line * 2) + 256;
-        out += std::format("    USHORT* fade_off = (USHORT*)AllocMem({}, 0);\n",
-                           max_offsets * 2);
-        out += "    int fade_cnt = 0;\n";
-        out += "    { USHORT* p = copper1;\n";
-        out += "      while (!(p[0] == 0xFFFF && p[1] == 0xFFFE)) {\n";
-        out += "        if ((p[0] & 1) == 0 && p[0] >= 0x0180 && p[0] <= 0x01BE)\n";
-        out += "            fade_off[fade_cnt++] = (USHORT)(((ULONG)(p+1) - (ULONG)copper1) >> 1);\n";
-        out += "        p += 2;\n";
-        out += "      }\n";
-        out += "    }\n";
         out += "    // Allocate as many fade copies as chip RAM allows\n";
         out += "    int fade_steps = 0;\n";
         out += "    for (int s = 0; s < 15; s++) {\n";
@@ -965,14 +954,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        fade_steps = s + 1;\n";
         out += "    }\n";
         out += "    fade_cops[fade_steps] = copper1;  // last = full brightness\n";
-        out += "    // Build faded copies: distribute steps 0..14 evenly across available slots\n";
+        out += "    // Build faded copies in a single pass (no CopyMem needed)\n";
         out += "    for (int s = 0; s < fade_steps; s++) {\n";
-        out += "        int step = s * 15 / fade_steps;  // map to 0..14\n";
-        out += "        CopyMem(copper1, fade_cops[s], cop_len);\n";
-        out += "        fadeApply(copper1, fade_cops[s], fade_off, fade_cnt, step);\n";
+        out += "        int step = s * 15 / fade_steps;  // distribute 0..14 evenly\n";
+        out += "        fadeBuild(copper1, fade_cops[s], step);\n";
         out += "    }\n";
         out += "    fade_steps++;  // include the full-brightness entry\n";
-        out += std::format("    FreeMem(fade_off, {});\n", max_offsets * 2);
         // Fade-in
         out += "    // Fade-in: one cop1lc write per frame\n";
         out += "    custom->cop1lc = (ULONG)fade_cops[0];\n";
