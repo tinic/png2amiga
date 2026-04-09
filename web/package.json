@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && cd ../service/html/assets && gzip -9 -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true",
+    "build": "vite build && cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true",
     "preview": "vite preview"
   },
   "dependencies": {
