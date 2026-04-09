@@ -1050,7 +1050,71 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
-    return make_result(std::move(result->planes.data), *result);
+    auto chipset = resolve_chipset(options.chipset, result->mode);
+    bool aga = (chipset == amiga::Chipset::aga);
+
+    // Raw format: bitplanes + palette + copper data (all big-endian)
+    std::vector<std::uint8_t> raw = std::move(result->planes.data);
+
+    // Append palette (2 bytes/color, 0x0RGB)
+    for (auto& c : result->palette) {
+        auto rgb12 = aga ? palette::linear_to_aga_hilo(c).hi
+                         : palette::linear_to_ocs(c);
+        raw.push_back(static_cast<std::uint8_t>(rgb12 >> 8));
+        raw.push_back(static_cast<std::uint8_t>(rgb12 & 0xFF));
+    }
+    // AGA: append lo nibble palette
+    if (aga) {
+        for (auto& c : result->palette) {
+            auto lo = palette::linear_to_aga_hilo(c).lo;
+            raw.push_back(static_cast<std::uint8_t>(lo >> 8));
+            raw.push_back(static_cast<std::uint8_t>(lo & 0xFF));
+        }
+    }
+
+    // Append copper changes (reg:UWORD + color:UWORD per entry, per scanline)
+    if (result->copper && !result->scanline_changes.empty()) {
+        auto cpl = result->changes_per_line;
+        for (auto& line : result->scanline_changes) {
+            for (std::size_t s = 0; s < cpl; ++s) {
+                if (s < line.size()) {
+                    auto hi = aga ? palette::linear_to_aga_hilo(line[s].color).hi
+                                  : palette::linear_to_ocs(line[s].color);
+                    raw.push_back(0);
+                    raw.push_back(line[s].reg);
+                    raw.push_back(static_cast<std::uint8_t>(hi >> 8));
+                    raw.push_back(static_cast<std::uint8_t>(hi & 0xFF));
+                } else {
+                    // Sentinel: unused slot
+                    raw.push_back(0xFF);
+                    raw.push_back(0xFF);
+                    raw.push_back(0x00);
+                    raw.push_back(0x00);
+                }
+            }
+        }
+        // AGA: append lo nibble copper changes
+        if (aga) {
+            for (auto& line : result->scanline_changes) {
+                for (std::size_t s = 0; s < cpl; ++s) {
+                    if (s < line.size()) {
+                        auto lo = palette::linear_to_aga_hilo(line[s].color).lo;
+                        raw.push_back(0);
+                        raw.push_back(line[s].reg);
+                        raw.push_back(static_cast<std::uint8_t>(lo >> 8));
+                        raw.push_back(static_cast<std::uint8_t>(lo & 0xFF));
+                    } else {
+                        raw.push_back(0xFF);
+                        raw.push_back(0xFF);
+                        raw.push_back(0x00);
+                        raw.push_back(0x00);
+                    }
+                }
+            }
+        }
+    }
+
+    return make_result(std::move(raw), *result);
 }
 
 ConvertResult convert_palette(const std::uint8_t* input_data,

@@ -672,6 +672,77 @@ std::vector<bool> scale_mask(const std::vector<bool>& mask,
 
 // Save preview PNG with pixel aspect scaling and optional transparency
 // Display preview in terminal and optionally save to file
+// Save raw bitplane data + palette + copper changes to a binary file.
+void save_raw(std::string_view path,
+              const bitplane::BitplaneData& planes,
+              std::span<const Color3f> palette,
+              amiga::Chipset chipset,
+              const std::vector<std::vector<copper::CopperChange>>* copper = nullptr,
+              std::size_t cpl = 0) {
+    bool aga = (chipset == amiga::Chipset::aga);
+    auto path_str = std::string(path);
+    std::ofstream file(path_str, std::ios::binary);
+    if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
+
+    // Bitplanes
+    file.write(reinterpret_cast<const char*>(planes.data.data()),
+               static_cast<std::streamsize>(planes.data.size()));
+
+    // Palette (big-endian 0x0RGB)
+    for (auto& c : palette) {
+        auto hi = aga ? palette::linear_to_aga_hilo(c).hi : palette::linear_to_ocs(c);
+        auto buf = std::array<std::uint8_t, 2>{
+            static_cast<std::uint8_t>(hi >> 8), static_cast<std::uint8_t>(hi & 0xFF)};
+        file.write(reinterpret_cast<const char*>(buf.data()), 2);
+    }
+    if (aga) {
+        for (auto& c : palette) {
+            auto lo = palette::linear_to_aga_hilo(c).lo;
+            auto buf = std::array<std::uint8_t, 2>{
+                static_cast<std::uint8_t>(lo >> 8), static_cast<std::uint8_t>(lo & 0xFF)};
+            file.write(reinterpret_cast<const char*>(buf.data()), 2);
+        }
+    }
+
+    // Copper changes (UWORD reg + UWORD color per entry, cpl entries per line)
+    if (copper && !copper->empty()) {
+        for (auto& line : *copper) {
+            for (std::size_t s = 0; s < cpl; ++s) {
+                std::array<std::uint8_t, 4> buf;
+                if (s < line.size()) {
+                    auto hi = aga ? palette::linear_to_aga_hilo(line[s].color).hi
+                                  : palette::linear_to_ocs(line[s].color);
+                    buf = {0, line[s].reg,
+                           static_cast<std::uint8_t>(hi >> 8),
+                           static_cast<std::uint8_t>(hi & 0xFF)};
+                } else {
+                    buf = {0xFF, 0xFF, 0x00, 0x00};
+                }
+                file.write(reinterpret_cast<const char*>(buf.data()), 4);
+            }
+        }
+        if (aga) {
+            for (auto& line : *copper) {
+                for (std::size_t s = 0; s < cpl; ++s) {
+                    std::array<std::uint8_t, 4> buf;
+                    if (s < line.size()) {
+                        auto lo = palette::linear_to_aga_hilo(line[s].color).lo;
+                        buf = {0, line[s].reg,
+                               static_cast<std::uint8_t>(lo >> 8),
+                               static_cast<std::uint8_t>(lo & 0xFF)};
+                    } else {
+                        buf = {0xFF, 0xFF, 0x00, 0x00};
+                    }
+                    file.write(reinterpret_cast<const char*>(buf.data()), 4);
+                }
+            }
+        }
+    }
+
+    auto total = static_cast<std::size_t>(file.tellp());
+    std::println("Raw:    {} ({} bytes)", path, total);
+}
+
 Result<void> save_preview(std::string_view path, const Image& preview,
                           bool has_trans, const std::vector<bool>& mask,
                           amiga::Mode mode, bool hires = false,
@@ -1127,18 +1198,10 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
-                auto path_str = std::string(config->output_path);
-                std::ofstream file(path_str, std::ios::binary);
-                if (!file) {
-                    std::println(stderr, "Failed to open: {}", path_str);
-                    return 1;
-                }
-                file.write(
-                    reinterpret_cast<const char*>(ham_result->planes.data.data()),
-                    static_cast<std::streamsize>(ham_result->planes.data.size()));
-                std::println("Raw:    {} ({} bytes)",
-                             config->output_path,
-                             ham_result->planes.total_bytes());
+                save_raw(config->output_path, ham_result->planes,
+                         ham_result->base_palette, chipset,
+                         config->copper ? &ham_result->copper_changes : nullptr,
+                         ham_result->changes_per_line);
             } else if (ends_with(config->output_path, ".pal")) {
                 auto result = palette_io::save_ocs_palette(
                     config->output_path, ham_result->base_palette);
@@ -1492,16 +1555,8 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
-                auto path_str = std::string(config->output_path);
-                std::ofstream file(path_str, std::ios::binary);
-                if (!file) {
-                    std::println(stderr, "Failed to open: {}", path_str);
-                    return 1;
-                }
-                file.write(reinterpret_cast<const char*>(planes->data.data()),
-                           static_cast<std::streamsize>(planes->data.size()));
-                std::println("Raw:    {} ({} bytes)",
-                             config->output_path, planes->total_bytes());
+                save_raw(config->output_path, planes.value(),
+                         full_palette, chipset);
             } else if (ends_with(config->output_path, ".pal")) {
                 auto result = palette_io::save_ocs_palette(
                     config->output_path, full_palette);
@@ -1659,20 +1714,10 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
-                auto path_str = std::string(config->output_path);
-                std::ofstream file(path_str, std::ios::binary);
-                if (!file) {
-                    std::println(stderr, "Failed to open: {}", path_str);
-                    return 1;
-                }
-                file.write(
-                    reinterpret_cast<const char*>(
-                        copper_result->planes.data.data()),
-                    static_cast<std::streamsize>(
-                        copper_result->planes.data.size()));
-                std::println("Raw:    {} ({} bytes)",
-                             config->output_path,
-                             copper_result->planes.total_bytes());
+                save_raw(config->output_path, copper_result->planes,
+                         cmap_palette, chipset,
+                         &copper_result->scanline_changes,
+                         copper_result->changes_per_line);
             } else {
                 auto result = save_preview(config->output_path, *preview,
                                            has_transparency, transparency_mask,
@@ -1861,16 +1906,8 @@ int main(int argc, char* argv[]) {
             }
             std::println("Viewer: {}", config->output_path);
         } else if (ends_with(config->output_path, ".raw")) {
-            auto path_str = std::string(config->output_path);
-            std::ofstream file(path_str, std::ios::binary);
-            if (!file) {
-                std::println(stderr, "Failed to open: {}", path_str);
-                return 1;
-            }
-            file.write(reinterpret_cast<const char*>(planes->data.data()),
-                       static_cast<std::streamsize>(planes->data.size()));
-            std::println("Raw:    {} ({} bytes)",
-                         config->output_path, planes->total_bytes());
+            save_raw(config->output_path, planes.value(),
+                     used_palette, chipset);
         } else if (ends_with(config->output_path, ".pal")) {
             auto result = palette_io::save_ocs_palette(
                 config->output_path, used_palette);

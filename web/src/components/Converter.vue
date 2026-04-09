@@ -120,6 +120,41 @@ const showDepthSlider = computed(() => {
   return !isHamMode(options.mode) && !isEhbMode(options.mode) && !isAtariMode(options.mode)
 })
 
+// Raw export tooltip with format layout
+const rawTooltip = computed(() => {
+  const w = lastWidth.value
+  const h = lastHeight.value
+  const d = options.depth || defaultDepth(options.mode)
+  const bpr = Math.ceil(w / 16) * 2
+  const planeSize = bpr * h
+  const totalPlanes = planeSize * d
+  const colors = options.copper ? (1 << d) : (1 << d)
+  const aga = options.chipset === 'aga'
+  const palSize = colors * 2
+  const cpl = options.copper ? '~' : '0'
+  let off = 0
+  let lines = []
+  lines.push(`Raw binary format (big-endian):`)
+  lines.push(``)
+  lines.push(`Offset  Size     Content`)
+  lines.push(`------  -------  ----------------------`)
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${totalPlanes.toLocaleString().padStart(7)}  Bitplanes (${d}bpl, ${bpr}B/row, interleaved)`)
+  off += totalPlanes
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette (${colors} colors, 0x0RGB)`)
+  off += palSize
+  if (aga) {
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette lo (${colors} colors, LOCT)`)
+    off += palSize
+  }
+  if (options.copper) {
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ...      Copper (reg:u16 + color:u16 per change/line)`)
+    if (aga) lines.push(`        ...      Copper lo (LOCT, same layout)`)
+  }
+  lines.push(``)
+  lines.push(`${w}x${h}, ${d}bpl, ${aga ? 'AGA' : 'OCS'}`)
+  return lines.join('\n')
+})
+
 // Whether HAM controls should be shown
 const showHamControls = computed(() => isHamMode(options.mode))
 
@@ -722,7 +757,7 @@ async function loadExample(example) {
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
                 title="Download standalone AmigaOS viewer source (.cpp) — compile with m68k-amiga-elf-gcc." />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
-                title="Download raw interleaved bitplane data for direct DMA. Companion .pal file from CLI." />
+                :title="rawTooltip" />
             </div>
             <Button label="Reset" icon="pi pi-refresh" severity="secondary" outlined class="w-full" @click="resetOptions"
               title="Reset all parameters to defaults." />
