@@ -640,25 +640,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        if (DOSBase) {\n";
         out += "            Write(Output(), (APTR)"
                "\"This image requires AGA (A1200/A4000).\\n\", 42);\n";
-        // Print the actual values for debugging (no stdio — format into a
-        // stack buffer and emit via dos.library/Write).
-        out += "            {\n";
-        out += "                static const char hex_chars[] = \"0123456789ABCDEF\";\n";
-        out += "                char dbg[96];\n";
-        out += "                char* dp = dbg;\n";
-        out += "                const char* sp;\n";
-        out += "                for (sp = \"  graphics.library v=0x\"; *sp; ++sp) *dp++ = *sp;\n";
-        out += "                UWORD gv = GfxBase->LibNode.lib_Version;\n";
-        out += "                *dp++ = hex_chars[(gv >> 12) & 0xF];\n";
-        out += "                *dp++ = hex_chars[(gv >>  8) & 0xF];\n";
-        out += "                *dp++ = hex_chars[(gv >>  4) & 0xF];\n";
-        out += "                *dp++ = hex_chars[ gv        & 0xF];\n";
-        out += "                for (sp = \"  SetChipRev=0x\"; *sp; ++sp) *dp++ = *sp;\n";
-        out += "                for (int i = 7; i >= 0; --i)\n";
-        out += "                    *dp++ = hex_chars[(chiprev >> (i*4)) & 0xF];\n";
-        out += "                *dp++ = '\\n';\n";
-        out += "                Write(Output(), (APTR)dbg, (LONG)(dp - dbg));\n";
-        out += "            }\n";
         out += "            Delay(150);\n";
         out += "            CloseLibrary(DOSBase);\n";
         out += "        }\n";
