@@ -280,6 +280,7 @@ struct PipelineResult {
 
     // Copper mode
     bool copper = false;
+    bool aga = false;
     std::vector<std::vector<Color3f>> scanline_palettes;
     std::vector<std::vector<copper::CopperChange>> scanline_changes;
     std::size_t copper_num_colors{};
@@ -413,6 +414,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     auto chipset = resolve_chipset(options.chipset, mode);
+    bool is_aga = (chipset == amiga::Chipset::aga);
 
     // --- HAM modes: use dedicated HAM encoder ---
     if (amiga::is_ham(mode)) {
@@ -465,6 +467,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = options.interlace;
         if (options.copper) {
             result.copper = true;
+            result.aga = is_aga;
             result.scanline_palettes = std::move(ham_result->scanline_palettes);
             result.scanline_changes = std::move(ham_result->copper_changes);
             result.changes_per_line = ham_result->changes_per_line;
@@ -635,6 +638,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
             result.interlace = options.interlace;
             result.copper = true;
+            result.aga = is_aga;
             result.scanline_palettes = std::move(copper_result->scanline_palettes);
             result.scanline_changes = std::move(copper_result->scanline_changes);
             result.copper_num_colors = copper_result->num_colors;
@@ -886,6 +890,18 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.colors = static_cast<int>(p.palette.size());
     r.copperChanges = p.copper_changes;
     r.totalColors = count_unique_colors(p.rendered);
+    r.planeBytes = static_cast<int>(p.planes.total_bytes());
+    if (p.copper && !p.scanline_changes.empty()) {
+        auto h = p.rendered.height();
+        auto cpl = p.changes_per_line;
+        auto pal_bytes = p.palette.size() * 2;  // 2 bytes/color (hi nibbles)
+        auto cop_data_bytes = h * cpl * 4;       // reg(2) + color(2) per change
+        if (p.aga) {
+            pal_bytes *= 2;       // hi + lo nibbles
+            cop_data_bytes *= 2;  // hi + lo per change
+        }
+        r.copperBytes = static_cast<int>(pal_bytes + cop_data_bytes);
+    }
     r.quantError = p.quant_error;
     r.hasTransparency = p.has_transparency;
     return r;

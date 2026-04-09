@@ -67,6 +67,8 @@ self.onmessage = async (e) => {
       colors: result.colors,
       copperChanges: result.copperChanges,
       totalColors: result.totalColors,
+      planeBytes: result.planeBytes,
+      copperBytes: result.copperBytes,
       quantError: result.quantError,
       hasTransparency: result.hasTransparency,
       error: result.error,

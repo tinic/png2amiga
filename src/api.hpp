@@ -67,6 +67,8 @@ struct ConvertResult {
     int colors{};                       // number of palette colors
     float copperChanges{};              // avg actual color changes per line (0 if no copper)
     int totalColors{};                  // unique colors in rendered output
+    int planeBytes{};                   // raw bitplane data size
+    int copperBytes{};                  // copper list size (0 if no copper)
     float quantError{};                 // perceptual encoding error
     bool hasTransparency{};             // source image had alpha channel
     std::string error;                  // error message (empty on success)
