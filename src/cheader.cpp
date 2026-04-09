@@ -1137,13 +1137,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         std::string msg;
         msg += "\\n";
         msg += "\\033[1;33m";  // bold yellow
-        msg += " _ __  _ __   __ _ ___   __ _ _ __ ___ (_) __ _  __ _\\n";
-        msg += "| '_ \\\\| '_ \\\\ / _` |__ \\\\ / _` | '_ ` _ \\\\| |/ _` |/ _` |\\n";
-        msg += "| |_) | | | | (_| |__) | (_| | | | | | | | (_| | (_| |\\n";
-        msg += "| .__/|_| |_|\\\\__, |___/ \\\\__,_|_| |_| |_|_|\\\\__, |\\\\__,_|\\n";
-        msg += "|_|           |___/                          |___/\\n";
+        msg += "                 ___            _\\n";
+        msg += "  _ __ _ _  __ _|_  )__ _ _ __ (_)__ _ __ _\\n";
+        msg += " | '_ \\\\ ' \\\\/ _` |/ // _` | '  \\\\| / _` / _` |\\n";
+        msg += " | .__/_||_\\\\__, /___\\\\__,_|_|_|_|_\\\\__, \\\\__,_|\\n";
+        msg += " |_|       |___/                 |___/\\n";
         msg += "\\033[0m";
         msg += "\\n";
+        msg += std::format("  {}\\n", sym);
         msg += std::format("  {}x{}, {}bpl, {} colors, {}\\n",
                            planes.width, planes.height, planes.depth,
                            palette.size(), chipset_str);
