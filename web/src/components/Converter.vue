@@ -155,12 +155,12 @@ const rawTooltipHtml = computed(() => {
     const cpl = Math.round(copPerLine) || '?'
     const copSize = h * cpl * 4
     const copSizeStr = copSize ? copSize.toLocaleString().padStart(7) : '    ...'
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper`)
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper${aga ? ' hi' : ''}`)
     lines.push(`                 ((u16:reg + u16:col) * ${cpl} mods/line, ${h} lines)`)
     if (copSize) off += copSize
     if (aga) {
       lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper lo`)
-      lines.push(`                 (LOCT, same layout)`)
+      lines.push(`                 ((u16:reg + u16:col) * ${cpl} mods/line, ${h} lines)`)
       if (copSize) off += copSize
     }
   }
