@@ -767,7 +767,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
     }
 
-    bool do_fade = options.fade_in && !is_lace;
+    bool do_fade = options.fade_in && !is_lace && !is_ham;
 
     // Set palette via copper list.
     // AGA >32 colors: BPLCON3 bank switching.
