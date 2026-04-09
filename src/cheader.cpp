@@ -1108,7 +1108,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Wait for left mouse button
     out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
 
-    // Fade-out: reverse 15→0, then free
+    // Fade-out: reverse 15→0, then disable display and free
     if (do_fade) {
         out += "    // Fade-out\n";
         out += "    for (int fade = 14; fade >= 0; fade--) {\n";
@@ -1116,9 +1116,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        custom->cop1lc = (ULONG)fade_cops[fade];\n";
         out += "    }\n";
         out += "    WaitVbl();\n";
-        // Switch back to copper1 before freeing fade lists
-        out += "    custom->cop1lc = (ULONG)copper1;\n";
-        out += "    WaitVbl();\n";
+        // Disable display before freeing — screen is already black
+        out += "    custom->dmacon = DMAF_COPPER | DMAF_RASTER;\n";
         out += std::format("    for (int s = 0; s < 15; s++) FreeMem(fade_cops[s], {});\n\n",
                            cop_size);
     }
