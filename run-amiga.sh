@@ -16,7 +16,12 @@ case "$(uname -s)" in
 esac
 
 EXE2ADF="$TOOLCHAIN/$PLATFORM/exe2adf"
-FSUAE="$TOOLCHAIN/$PLATFORM/fs-uae/fs-uae"
+# Prefer brew fs-uae (3.x, better overscan/debug support) over bundled
+if command -v fs-uae &>/dev/null; then
+    FSUAE="fs-uae"
+else
+    FSUAE="$TOOLCHAIN/$PLATFORM/fs-uae/fs-uae"
+fi
 
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <file.exe|file.cpp|file.c>"
@@ -79,6 +84,9 @@ echo "Launching fs-uae ($MODEL: ${CHIP}K chip, ${SLOW}K slow, ${FAST}K fast${NTS
     --fast_memory="$FAST" \
     --window_width=800 \
     --window_height=600 \
+    --zoom=full+border \
+    --align-x=0 --align-y=0 \
+    --theme=none \
     $NTSC \
     2>/dev/null &
 

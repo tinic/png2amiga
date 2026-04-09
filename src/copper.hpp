@@ -68,17 +68,17 @@ constexpr std::size_t max_changes_per_line(std::size_t depth, bool is_ham,
     // Copper changes written at end-of-display (past DDFSTOP).
     if (chipset == amiga::Chipset::aga) {
         if (is_ham) {
-            if (depth == 6) return 6;   // HAM6 AGA
-            if (depth == 8) return 3;   // HAM8 AGA
+            if (depth == 6) return 7;   // HAM6 AGA
+            if (depth == 8) return 4;   // HAM8 AGA
         }
-        if (depth >= 6) return 3;
-        if (depth >= 3) return 6;
+        if (depth >= 6) return 4;
+        if (depth >= 3) return 7;
         if (depth == 2) return 4;
         return 2;  // 1bpl
     }
     // OCS
-    if (is_ham) return 14;  // HAM6 OCS
-    if (depth >= 5) return 14;
+    if (is_ham) return 16;  // HAM6 OCS
+    if (depth >= 5) return 16;
     if (depth == 4) return 16;
     if (depth == 3) return 8;
     if (depth == 2) return 4;
