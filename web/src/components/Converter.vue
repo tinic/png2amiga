@@ -152,7 +152,7 @@ const rawTooltipHtml = computed(() => {
   }
   lines.push(``)
   lines.push(`${w}x${h}, ${d}bpl, ${aga ? 'AGA' : 'OCS'}`)
-  return `<pre style="margin:0;font-size:0.7rem;line-height:1.3">${lines.join('\n')}</pre>`
+  return `<pre style="margin:0;font-size:0.7rem;line-height:1.3;white-space:pre">${lines.join('\n')}</pre>`
 })
 
 // Whether HAM controls should be shown
@@ -803,6 +803,10 @@ async function loadExample(example) {
 </template>
 
 <style>
+/* PrimeVue tooltip: allow wide content for raw format table */
+.p-tooltip {
+  max-width: none !important;
+}
 /* Global: PrimeVue teleports overlays to body, outside scoped styles */
 .p-select-overlay .p-select-option,
 .p-select-overlay .p-select-option-group {
