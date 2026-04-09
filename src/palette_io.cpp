@@ -206,9 +206,21 @@ Result<Palette> parse_iff_cmap(std::span<const std::uint8_t> data) {
         auto chunk_size = read_u32_be(data.data() + pos + 4);
         pos += 8;
 
+        // Bound the untrusted chunk_size against the remaining file so
+        // neither (pos += chunk_size) nor the CMAP reader walks past the
+        // buffer. A hostile IFF could claim chunk_size = 0xFFFFFFFF to
+        // wrap pos (on 32-bit / WASM) or allocate a huge colors vector.
+        if (chunk_size > data.size() - pos) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_png,
+                "IFF chunk size exceeds file",
+            }};
+        }
+
         if (std::strcmp(chunk_id, "CMAP") == 0) {
-            // Read RGB triplets
-            auto num_colors = chunk_size / 3;
+            // Read RGB triplets. Cap at 256 entries (max palette size)
+            // so a malicious CMAP can't allocate a huge vector.
+            auto num_colors = std::min(chunk_size / 3, std::uint32_t{256});
             for (std::uint32_t i = 0; i < num_colors && pos + 2 < data.size(); ++i) {
                 auto r = data[pos++];
                 auto g = data[pos++];
@@ -218,7 +230,9 @@ Result<Palette> parse_iff_cmap(std::span<const std::uint8_t> data) {
             break;  // Found CMAP, done
         }
 
-        // Skip to next chunk (chunks are padded to even size)
+        // Skip to next chunk (chunks are padded to even size). chunk_size
+        // is already bounded against remaining file above, so addition
+        // is safe.
         pos += chunk_size;
         if (chunk_size % 2 != 0) ++pos;
     }
@@ -331,6 +345,17 @@ Result<std::vector<std::uint8_t>> read_file(std::string_view path) {
         return std::unexpected{Error{
             ErrorCode::invalid_png,
             "Palette file is empty: " + path_str,
+        }};
+    }
+    // Cap at 16 MB. Real palette files are at most a few KB (OCS .pal is
+    // 64 bytes, .gpl is < 10 KB, IFF with copper palettes maybe 64 KB).
+    // A 16 MB cap leaves plenty of room while bounding DoS from a hostile
+    // file pointing the tool at a huge blob.
+    constexpr std::streamoff kMaxPaletteSize = 16 * 1024 * 1024;
+    if (size > kMaxPaletteSize) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_png,
+            "Palette file too large: " + path_str,
         }};
     }
 

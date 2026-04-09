@@ -135,23 +135,28 @@ const showDepthSlider = computed(() => {
   return !isHamMode(options.mode) && !isEhbMode(options.mode) && !isAtariMode(options.mode)
 })
 
-// Raw export tooltip with format layout (HTML for fixed-width font)
+// Raw export tooltip with format layout (HTML for fixed-width font).
+// SAFETY: PrimeVue's v-tooltip below uses escape:false so this string is
+// inserted as raw HTML. Every interpolation MUST be numeric/bool and is
+// coerced via Number() / Boolean() below so a future regression that
+// smuggles a string with HTML special characters can't turn into XSS.
 const rawTooltipHtml = computed(() => {
-  const w = lastWidth.value
-  const h = lastHeight.value
-  const d = options.depth || defaultDepth(options.mode)
-  const dd = defaultDepth(options.mode)
+  const n = (v) => Number(v) || 0
+  const w = n(lastWidth.value)
+  const h = n(lastHeight.value)
+  const d = n(options.depth || defaultDepth(options.mode))
+  const dd = n(defaultDepth(options.mode))
   const bpr = Math.ceil(w / 16) * 2
   // Use the actual chipset reported by the encoder, not the user's option,
   // because mode-driven chipset (e.g. HAM7/8 force AGA) may override.
-  const aga = lastAga.value
+  const aga = Boolean(lastAga.value)
   const colors = 1 << (isHamMode(options.mode) ? dd - 2 : d)
-  const pb = lastPlaneBytes.value
-  const cb = lastCopperBytes.value
+  const pb = n(lastPlaneBytes.value)
+  const cb = n(lastCopperBytes.value)
   const palSize = colors * 2
   // .raw uses fixed [h][cpl] grid with sentinels for unused/skipped slots.
   // copPerPass = h * cpl * 4. cpl reported by the encoder (post auto-stretch).
-  const cpl = lastChangesPerLine.value
+  const cpl = n(lastChangesPerLine.value)
   const copPerPass = aga && cb ? cb / 2 : cb
   let off = 0
   let lines = []

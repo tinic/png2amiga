@@ -291,6 +291,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
         // --lock-index <id> <rgbhex>: lock palette slot to a specific color.
         if (arg == "--lock-index" && i + 2 < argc) {
             int idx = std::atoi(argv[++i]);
+            if (idx < 0 || idx > 255) {
+                return std::unexpected{Error{ErrorCode::invalid_depth,
+                    "--lock-index id must be 0..255"}};
+            }
             auto hex = std::string(argv[++i]);
             // Strip leading '#' or '0x'/'0X'
             if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
@@ -333,6 +337,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
             int idx = std::atoi(argv[++i]);
             int x = std::atoi(argv[++i]);
             int y = std::atoi(argv[++i]);
+            if (idx < 0 || idx > 255 || x < 0 || y < 0) {
+                return std::unexpected{Error{ErrorCode::invalid_depth,
+                    "--pin-index-at id must be 0..255 and x/y >= 0"}};
+            }
             config.pins.push_back({idx, x, y});
             continue;
         }
@@ -369,7 +377,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.hires = config.hires || mp.is_hires;
             }
             else if (arg == "--depth") {
-                config.depth = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
+                int d = std::atoi(std::string(val).c_str());
+                if (d < 1 || d > 8) {
+                    return std::unexpected{Error{ErrorCode::invalid_depth,
+                        "--depth must be 1..8"}};
+                }
+                config.depth = static_cast<std::size_t>(d);
             }
             else if (arg == "--chipset") {
                 if (val == "ocs") config.chipset = amiga::Chipset::ocs;
@@ -437,10 +450,20 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.preprocess.white_point = std::stof(std::string(val));
             }
             else if (arg == "--width") {
-                config.width = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
+                int v = std::atoi(std::string(val).c_str());
+                if (v <= 0 || v > 32768) {
+                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                        "--width must be 1..32768"}};
+                }
+                config.width = static_cast<std::size_t>(v);
             }
             else if (arg == "--height") {
-                config.height = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
+                int v = std::atoi(std::string(val).c_str());
+                if (v <= 0 || v > 32768) {
+                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                        "--height must be 1..32768"}};
+                }
+                config.height = static_cast<std::size_t>(v);
             }
             else if (arg == "--symbol") {
                 config.symbol_name = std::string(val);
@@ -474,15 +497,19 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     parsed[idx++] = std::atoi(token.c_str());
                     pos = (comma == std::string::npos) ? s.size() : comma + 1;
                 }
-                if (idx == 4) {
-                    config.crop_x = parsed[0];
-                    config.crop_y = parsed[1];
-                    config.crop_w = parsed[2];
-                    config.crop_h = parsed[3];
-                } else {
+                if (idx != 4) {
                     return std::unexpected{Error{ErrorCode::invalid_dimensions,
                         "Crop format must be x,y,w,h (e.g. 10,20,300,200)"}};
                 }
+                if (parsed[0] < 0 || parsed[1] < 0 ||
+                    parsed[2] <= 0 || parsed[3] <= 0) {
+                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                        "Crop x/y must be >= 0 and w/h must be > 0"}};
+                }
+                config.crop_x = parsed[0];
+                config.crop_y = parsed[1];
+                config.crop_w = parsed[2];
+                config.crop_h = parsed[3];
             }
             else {
                 return std::unexpected{Error{ErrorCode::unsupported_mode,

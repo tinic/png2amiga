@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -43,6 +44,18 @@ Result<Image> load(std::string_view path) {
         return std::unexpected{Error{
             ErrorCode::invalid_png,
             std::string("Failed to load: ") + stbi_failure_reason(),
+        }};
+    }
+
+    // Reject pathological dimensions before they overflow size_t under
+    // 32-bit (WASM) or exhaust memory under 64-bit. 32K × 32K is already
+    // 4 GB of RGBA pixels — plenty more than any real input.
+    constexpr int kMaxDimension = 32768;
+    if (w <= 0 || h <= 0 || w > kMaxDimension || h > kMaxDimension) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("Image dimensions out of range: {}x{} (max {}x{})",
+                        w, h, kMaxDimension, kMaxDimension),
         }};
     }
 

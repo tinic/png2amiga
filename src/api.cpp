@@ -159,6 +159,18 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     if (!raw)
         return std::unexpected{Error{ErrorCode::invalid_png, "Failed to decode image"}};
 
+    // Reject pathological dimensions before they overflow size_t under
+    // 32-bit (WASM) or exhaust memory under 64-bit.
+    constexpr int kMaxDimension = 32768;
+    if (w <= 0 || h <= 0 || w > kMaxDimension || h > kMaxDimension) {
+        stbi_image_free(raw);
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("Image dimensions out of range: {}x{} (max {}x{})",
+                        w, h, kMaxDimension, kMaxDimension),
+        }};
+    }
+
     auto width = static_cast<std::size_t>(w);
     auto height = static_cast<std::size_t>(h);
     auto pixel_count = width * height;
