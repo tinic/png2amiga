@@ -1125,7 +1125,60 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (is_lace) {
         out += std::format("    FreeMem(copper2, {});\n", cop_size);
     }
-    out += "    CloseLibrary((struct Library*)GfxBase);\n";
+    out += "    CloseLibrary((struct Library*)GfxBase);\n\n";
+
+    // Print exit message with image stats
+    {
+        auto chipset_str = options.aga ? "AGA 24-bit" : "OCS 12-bit";
+        auto total_bytes = planes.total_bytes();
+        bool has_cop = options.copper_changes && !options.copper_changes->empty();
+
+        // Build the message as a C string literal
+        std::string msg;
+        msg += "\\n";
+        msg += "\\033[1;33m";  // bold yellow
+        msg += " _ __  _ __   __ _ ___   __ _ _ __ ___ (_) __ _  __ _\\n";
+        msg += "| '_ \\\\| '_ \\\\ / _` |__ \\\\ / _` | '_ ` _ \\\\| |/ _` |/ _` |\\n";
+        msg += "| |_) | | | | (_| |__) | (_| | | | | | | | (_| | (_| |\\n";
+        msg += "| .__/|_| |_|\\\\__, |___/ \\\\__,_|_| |_| |_|_|\\\\__, |\\\\__,_|\\n";
+        msg += "|_|           |___/                          |___/\\n";
+        msg += "\\033[0m";
+        msg += "\\n";
+        msg += std::format("  {}x{}, {}bpl, {} colors, {}\\n",
+                           planes.width, planes.height, planes.depth,
+                           palette.size(), chipset_str);
+        msg += std::format("  {} bytes bitplane data\\n", total_bytes);
+        if (has_cop)
+            msg += std::format("  Copper: {} changes/line\\n",
+                               options.copper_changes_per_line);
+        msg += "\\n";
+        msg += "  \\033[36mhttps://www.png2amiga.app\\033[0m\\n";
+        msg += "\\n";
+
+        // Use DOSBase->Write(Output(), msg, len) via proto/dos.h
+        // The viewer already has access to AmigaOS headers.
+        out += "    // Exit message\n";
+        out += "    { struct Library* DOSBase = OpenLibrary((CONST_STRPTR)\"dos.library\", 0);\n";
+        out += "      if (DOSBase) {\n";
+        out += "        static const char msg[] = \"" + msg + "\";\n";
+        out += "        BPTR fh = Output();\n";
+        out += std::format("        if (fh) Write(fh, (APTR)msg, {});\n",
+                           // Count actual bytes (unescape \\n → \n, \\033 → \033, \\\\ → \\)
+                           [&]() {
+                               std::size_t len = 0;
+                               for (std::size_t i = 0; i < msg.size(); ++i) {
+                                   if (msg[i] == '\\' && i + 1 < msg.size()) {
+                                       if (msg[i+1] == 'n' || msg[i+1] == '\\') { ++i; }
+                                       else if (msg[i+1] == '0') { i += 3; }  // \033
+                                   }
+                                   ++len;
+                               }
+                               return len;
+                           }());
+        out += "        CloseLibrary(DOSBase);\n";
+        out += "    } }\n\n";
+    }
+
     out += "    return 0;\n";
     out += "}\n";
 
