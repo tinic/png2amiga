@@ -143,12 +143,12 @@ const rawTooltipHtml = computed(() => {
   lines.push(`0x${off.toString(16).padStart(4,'0')}  ${totalPlanes.toLocaleString().padStart(7)}  Bitplanes`)
   lines.push(`                 (${d}bpl, ${bpr}B/row, interleaved)`)
   off += totalPlanes
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette`)
-  lines.push(`                 (${colors} colors, 0x0RGB)`)
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette${aga ? ' hi' : ''}`)
+  lines.push(`                 (${colors} * u16, ${aga ? 'hi nibbles 0x0RGB' : '0x0RGB'})`)
   off += palSize
   if (aga) {
     lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette lo`)
-    lines.push(`                 (${colors} colors, LOCT)`)
+    lines.push(`                 (${colors} * u16, lo nibbles 0x0RGB)`)
     off += palSize
   }
   if (options.copper) {
@@ -156,11 +156,11 @@ const rawTooltipHtml = computed(() => {
     const copSize = h * cpl * 4
     const copSizeStr = copSize ? copSize.toLocaleString().padStart(7) : '    ...'
     lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper${aga ? ' hi' : ''}`)
-    lines.push(`                 ((u16:reg + u16:col) * ${cpl} mods/line, ${h} lines)`)
+    lines.push(`                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
     if (copSize) off += copSize
     if (aga) {
       lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper lo`)
-      lines.push(`                 ((u16:reg + u16:col) * ${cpl} mods/line, ${h} lines)`)
+      lines.push(`                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
       if (copSize) off += copSize
     }
   }
