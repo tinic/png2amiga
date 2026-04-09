@@ -292,6 +292,12 @@ struct PipelineResult {
     bool hires = false;
     bool interlace;
 
+    // Per-pixel palette indices, populated only for modes with a single
+    // global palette (lores/hires/EHB without copper). Empty for HAM and
+    // copper modes where the palette varies. Used by the PNG encoder to
+    // emit a palettized PNG-8 instead of full RGB.
+    std::vector<std::uint8_t> indices;
+
     // Copper mode
     bool copper = false;
     bool aga = false;
@@ -830,6 +836,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.rendered = *std::move(preview);
         result.planes = *std::move(planes);
         result.palette = std::move(full_palette);
+        result.indices = std::move(dither_result.indices);
         result.mode = mode;
         result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
         result.interlace = options.interlace;
@@ -1033,6 +1040,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.rendered = *std::move(preview);
     result.planes = *std::move(planes);
     result.palette = std::move(used_palette);
+    result.indices = std::move(dither_result.indices);
     result.mode = mode;
     result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
     result.interlace = options.interlace;
@@ -1098,7 +1106,18 @@ ConvertResult convert(const std::uint8_t* input_data, std::size_t input_size,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
-    auto png = png_io::encode(result->rendered);
+    // Use palettized PNG for modes with a single global palette
+    // (much smaller file). Falls back to RGB for HAM/copper which have
+    // dynamic palettes per pixel/scanline.
+    Result<std::vector<std::uint8_t>> png;
+    if (!result->indices.empty() && !result->palette.empty()) {
+        int trans = result->has_transparency ? 0 : -1;
+        png = png_io::encode_palettized(
+            result->indices, result->palette,
+            result->rendered.width(), result->rendered.height(), trans);
+    } else {
+        png = png_io::encode(result->rendered);
+    }
     if (!png) return make_error(png.error().message);
 
     return make_result(*std::move(png), *result);
