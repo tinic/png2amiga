@@ -945,13 +945,20 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Precompute all 16 fade steps as separate copper lists in chip RAM.
         // During fade, just swap cop1lc — zero CPU chip RAM access per frame.
         out += "    USHORT* fade_cops[16] = {0};\n";
-        out += "    // Allocate as many fade copies as chip RAM allows\n";
+        out += "    // Single alloc for all fade copies, carve into slices\n";
         out += "    int fade_steps = 0;\n";
-        out += "    for (int s = 0; s < 15; s++) {\n";
-        out += std::format("        fade_cops[s] = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
+        out += "    USHORT* fade_block = 0;\n";
+        out += "    { // Try largest block first, shrink if needed\n";
+        out += "      int want = 15;\n";
+        out += "      while (want > 0) {\n";
+        out += std::format("          fade_block = (USHORT*)AllocMem((ULONG)want * {}, MEMF_CHIP);\n",
                            cop_size);
-        out += "        if (!fade_cops[s]) break;\n";
-        out += "        fade_steps = s + 1;\n";
+        out += "          if (fade_block) { fade_steps = want; break; }\n";
+        out += "          want--;\n";
+        out += "      }\n";
+        out += "      for (int s = 0; s < fade_steps; s++)\n";
+        out += std::format("          fade_cops[s] = (USHORT*)((UBYTE*)fade_block + (ULONG)s * {});\n",
+                           cop_size);
         out += "    }\n";
         out += "    fade_cops[fade_steps] = copper1;  // last = full brightness\n";
         out += "    // Build faded copies in a single pass (no CopyMem needed)\n";
@@ -960,6 +967,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        fadeBuild(copper1, fade_cops[s], step);\n";
         out += "    }\n";
         out += "    fade_steps++;  // include the full-brightness entry\n";
+        out += "    // Debug: blue = build done\n";
+        out += "    custom->color[0] = 0x00F;\n";
         // Fade-in
         out += "    // Fade-in: one cop1lc write per frame\n";
         out += "    custom->cop1lc = (ULONG)fade_cops[0];\n";
@@ -1105,7 +1114,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    }\n";
         out += "    WaitVbl();\n";
         out += "    custom->dmacon = DMAF_COPPER | DMAF_RASTER;\n";
-        out += std::format("    for (int s = 0; s < fade_steps - 1; s++) FreeMem(fade_cops[s], {});\n\n",
+        out += std::format("    if (fade_block) FreeMem(fade_block, (ULONG)(fade_steps-1) * {});\n\n",
                            cop_size);
     }
 
