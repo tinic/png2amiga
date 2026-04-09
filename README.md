@@ -8,6 +8,8 @@ PNG/JPEG to Commodore Amiga and Atari ST/STE graphics converter. Produces IFF IL
 
 **[Try it in your browser at png2amiga.app](https://www.png2amiga.app)** — live preview via WebAssembly, compile to Amiga executables server-side.
 
+[![png2amiga.app web interface](docs/screenshot.png)](https://www.png2amiga.app)
+
 Built for Amiga and Atari demo scene production. All color operations use [OKLab](https://bottosson.github.io/posts/oklab/) perceptual color space. Multithreaded native CLI + WASM web app. Sister project to [png2c64](https://github.com/tinic/png2c64).
 
 ## Features
