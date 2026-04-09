@@ -845,9 +845,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Copper changes per scanline
     if (has_copper) {
         bool aga_banks = (pal_count > 32);
-        // Write palette changes at end of visible display (H=0xDF, past DDFSTOP).
-        // This gives ~100 free color clocks (end-of-line + HBLANK + before next
-        // DDFSTRT) instead of ~40 from HBLANK alone.
+        // Write palette changes right after the last bitplane fetch completes.
+        // Encoded byte 0xDD = binary 11011101, which puts the copper WAIT H
+        // comparator at 0x6E * 2 = 0xDC (= 220 color clocks). For hires
+        // FMODE=3, DDFSTOP is 0xD4 = 212 and the 64-bit fetch overread
+        // extends ~8 CCK past DDFSTOP, so the last fetch completes right
+        // around 220. Waking at 220 reclaims the ~2 CCK of dead time that
+        // the previous H=0xDE/222 position left on the table — visible in
+        // the e9k-debugger copper overlay. For non-FMODE=3 modes the fetch
+        // ends even earlier (no overread), so 0xDD is still safe.
         // Line 0's changes are written inline (before display starts, no WAIT).
         //
         // The hi/lo entry tables are flat variable-length arrays; per-line
@@ -938,7 +944,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        if (line == 256) {\n";
         out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
         out += "        }\n";
-        out += "        *cl++ = ((line & 0xFF) << 8) | 0xDF;\n";
+        out += "        *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
         out += "        *cl++ = 0xfffe;\n";
         emit_copper_changes("y", aga_banks);
         out += "    }\n\n";
