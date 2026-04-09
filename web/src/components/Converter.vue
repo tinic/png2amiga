@@ -594,7 +594,7 @@ function resetOptions() {
 function loadPalette() {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.gpl,.hex,.txt,.pal'
+  input.accept = '.gpl,.hex,.txt,.pal,.iff,.ilbm,.lbm'
   input.onchange = async () => {
     const file = input.files[0]
     if (!file) return
