@@ -64,17 +64,26 @@ struct CopperResult {
     float total_error{};
 
     // Worst-case copper MOVE instructions emitted per scanline (post-clustering).
-    // Used by callers to budget-check against MAX_MOVES_PER_LINE.
+    // Used by callers to budget-check against max_moves_budget().
     std::size_t max_moves_per_line{};
 };
 
 // ---------------------------------------------------------------------------
-// MOVE budget per scanline (empirically measured at hires-8 + FMODE=3 + copper).
-// Tightest worst case: 18 MOVE instructions fit in the post-DDFSTOP gap before
-// the next line's bitplane DMA starts. We use 18 directly: 17 production worst
-// case + 1 marker MOVE was confirmed to fit; 17 + 2 markers overran by 1 MOVE.
+// Copper instruction budget per scanline — the number of copper instructions
+// (MOVEs + WAITs) that fit in the post-DDFSTOP gap before the next line's
+// bitplane DMA resumes.
+//
+// The gap is determined by DDFSTOP + horizontal blank, both of which are a
+// function of the display window width (320 for lores, 640 for hires — same
+// horizontal area, same DDFSTOP). Depth, chipset, and FMODE do not change
+// the location of DDFSTOP, so the budget is a single constant across modes.
+//
+// Empirically measured on real AGA hardware with e9k-debugger overlay: 15.
+// This total includes the per-line WAIT that gates the copper on the
+// appropriate scanline, so the MOVE budget for palette changes is 15 - 1 = 14.
 // ---------------------------------------------------------------------------
-inline constexpr std::size_t MAX_MOVES_PER_LINE = 18;
+inline constexpr std::size_t COPPER_SLOTS_PER_LINE = 15;
+inline constexpr std::size_t MOVE_BUDGET_PER_LINE = COPPER_SLOTS_PER_LINE - 1;
 
 // ---------------------------------------------------------------------------
 // Compute the MOVE count emitted for one scanline given its sorted change list,
@@ -125,31 +134,25 @@ constexpr std::size_t moves_for_line(
 }
 
 // ---------------------------------------------------------------------------
-// Maximum copper changes per line (empirically tested DMA limits).
+// Maximum copper changes per line — static per chipset, derived from the
+// 14-MOVE budget and the worst-case per-change cost:
+//
+//   OCS: 1 MOVE per change (no LOCT, no bank switching)   → K = 14
+//   AGA: 4 MOVEs per change (worst case = unsaturated bank-switching at d8,
+//        each change in its own bank)                      → K = 14 / 4 = 3
+//
+// The real hardware budget is mode-independent (DDFSTOP is fixed by display
+// width, not depth/FMODE/chipset). Previous per-depth tables were extrapolated
+// from incomplete data and produced values that overshot on real AGA hardware
+// for deep modes. Users can override via --copper-changes.
 // ---------------------------------------------------------------------------
 
-constexpr std::size_t max_changes_per_line(std::size_t depth, bool is_ham,
-                                           [[maybe_unused]] bool is_hires,
-                                           amiga::Chipset chipset) noexcept {
-    // Hardware-tested conservative limits (worst-case BPLCON3 + LOCT).
-    // Copper changes written at end-of-display (past DDFSTOP).
-    if (chipset == amiga::Chipset::aga) {
-        if (is_ham) {
-            if (depth == 6) return 7;   // HAM6 AGA
-            if (depth == 8) return 4;   // HAM8 AGA
-        }
-        if (depth >= 6) return 4;
-        if (depth >= 3) return 7;
-        if (depth == 2) return 4;
-        return 2;  // 1bpl
-    }
-    // OCS
-    if (is_ham) return 16;  // HAM6 OCS
-    if (depth >= 5) return 16;
-    if (depth == 4) return 16;
-    if (depth == 3) return 8;
-    if (depth == 2) return 4;
-    return 2;  // 1bpl
+constexpr std::size_t max_changes_per_line(
+    [[maybe_unused]] std::size_t depth,
+    [[maybe_unused]] bool is_ham,
+    [[maybe_unused]] bool is_hires,
+    amiga::Chipset chipset) noexcept {
+    return chipset == amiga::Chipset::aga ? 3 : 14;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +168,6 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::size_t depth,
                                    const dither::Settings& dither_settings,
                                    amiga::Chipset chipset = amiga::Chipset::ocs,
-                                   bool is_ham = false,
-                                   bool is_hires = false,
                                    std::size_t override_changes = 0,  // 0 = auto
                                    const std::vector<Color3f>* user_palette = nullptr);
 

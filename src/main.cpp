@@ -1475,7 +1475,7 @@ int main(int argc, char* argv[]) {
 
             // Copper encoder optimizes 32 base colors per scanline (depth=5)
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
-                false, config->hires, static_cast<std::size_t>(config->copper_changes));
+                static_cast<std::size_t>(config->copper_changes));
             if (!copper_result) {
                 std::println(stderr, "Copper encode error: {}",
                              copper_result.error().message);
@@ -1901,7 +1901,7 @@ int main(int argc, char* argv[]) {
                      dither_name(dith.method), dith.strength);
 
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
-            false, config->hires, static_cast<std::size_t>(config->copper_changes));
+            static_cast<std::size_t>(config->copper_changes));
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);

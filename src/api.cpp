@@ -575,7 +575,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             dith.error_clamp = options.error_clamp;
 
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
-                                                       false, compound_hires,
                                                        static_cast<std::size_t>(options.copper_changes));
             if (!copper_result) return std::unexpected{copper_result.error()};
 
@@ -905,7 +904,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         }
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
-                                                     false, compound_hires,
                                                      static_cast<std::size_t>(options.copper_changes),
                                                      copper_user_pal.empty() ? nullptr : &copper_user_pal);
         if (!copper_result) return std::unexpected{copper_result.error()};
@@ -1311,7 +1309,7 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                 // 0xFFFF sentinel — same convention as end-of-line padding.
                 // A consumer that walks the table and skips 0xFFFF entries
                 // honors the encoder's MOVE budget; without this, naive
-                // consumers could exceed MAX_MOVES_PER_LINE on some lines.
+                // consumers could exceed MOVE_BUDGET_PER_LINE on some lines.
                 bool active = s < line.size() &&
                               !(aga && line[s].skip_hi);
                 if (active) {

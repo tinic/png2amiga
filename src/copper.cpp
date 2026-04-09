@@ -194,8 +194,6 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::size_t depth,
                                    const dither::Settings& dither_settings,
                                    amiga::Chipset chipset,
-                                   bool is_ham,
-                                   bool is_hires,
                                    std::size_t override_changes,
                                    const std::vector<Color3f>* user_palette) {
     if (depth < 1 || depth > 8) {
@@ -218,29 +216,35 @@ Result<CopperResult> encode_copper(const Image& image,
     auto num_colors = std::size_t{1} << depth;
     auto max_swappable = num_colors > 1 ? num_colors - 1 : std::size_t{0};  // slot 0 reserved
 
-    // Auto mode: try a stretch K first, fall back to the empirical safe K if
-    // the resulting per-line MOVE count exceeds the hardware budget. This lets
-    // us deliver more changes per line on the typical case where bank-clustered
-    // changes fit in the post-DDFSTOP gap, while guaranteeing the safe baseline
-    // when they don't. Recurse with explicit override_changes so the orchestration
-    // only runs once.
-    if (override_changes == 0) {
-        auto safe_k = std::min(
-            max_changes_per_line(depth, is_ham, is_hires, chipset), max_swappable);
-        auto stretch_k = std::min(safe_k + 1, max_swappable);
-        if (stretch_k > safe_k) {
+    // --copper-changes is a pure user escape hatch and bypasses the budget
+    // check entirely — the user is telling us "emit exactly this K, I know
+    // what I'm doing".
+    auto base_k = std::min(
+        max_changes_per_line(depth, false, false, chipset), max_swappable);
+
+    // Auto mode stretch: the static AGA base K=3 leaves 2 MOVEs of headroom
+    // (worst case 4*3=12 vs 14 budget). Walk K down from K+3 to K+1, return
+    // the first encoding that fits the 14-MOVE budget, else fall back to
+    // base K. Per the budget math:
+    //   d<=5: K+3=6 worst 2*6+2 = 14  → fits (≤32 colors, exactly at limit)
+    //   d6:   K+3=6 worst 2*6+4 = 16  → fails, K+2=5 worst 2*5+4 = 14 → fits
+    //   d7:   K+3=6 worst 4*6   = 24  → fails, K+2/K+1 depend on clustering
+    //   d8:   same as d7 (8 banks, K<=B unsaturated)
+    // OCS base K=14 already saturates the budget (1 MOVE per change), no room.
+    if (override_changes == 0 && chipset == amiga::Chipset::aga) {
+        for (std::size_t bump = 3; bump >= 1; --bump) {
+            auto stretch_k = base_k + bump;
+            if (stretch_k > max_swappable) continue;
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
-                                         is_ham, is_hires, stretch_k, user_palette);
-            if (stretch && stretch->max_moves_per_line <= MAX_MOVES_PER_LINE) {
-                return stretch;
-            }
+                                         stretch_k, user_palette);
+            if (!stretch) return std::unexpected{stretch.error()};
+            if (stretch->max_moves_per_line <= MOVE_BUDGET_PER_LINE) return stretch;
+            // Stretch overshot — try the next-smaller bump, or fall through.
         }
-        // Stretch overran or wasn't possible — use the safe baseline.
-        return encode_copper(image, depth, dither_settings, chipset,
-                             is_ham, is_hires, safe_k, user_palette);
     }
 
-    auto changes_per_line = std::min(override_changes, max_swappable);
+    auto changes_per_line = std::min(
+        override_changes == 0 ? base_k : override_changes, max_swappable);
 
     // Step 1: Base palette — user-provided or auto-quantized
     std::vector<Color3f> base_pal;
