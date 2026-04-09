@@ -156,7 +156,7 @@ const rawTooltipHtml = computed(() => {
     const copSize = h * cpl * 4
     const copSizeStr = copSize ? copSize.toLocaleString().padStart(7) : '    ...'
     lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper`)
-    lines.push(`                 (${cpl} changes/line, ${h} lines)`)
+    lines.push(`                 ((u16:reg + u16:col) * ${cpl} mods/line, ${h} lines)`)
     if (copSize) off += copSize
     if (aga) {
       lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper lo`)
