@@ -894,13 +894,10 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     if (p.copper && !p.scanline_changes.empty()) {
         auto h = p.rendered.height();
         auto cpl = p.changes_per_line;
-        auto pal_bytes = p.palette.size() * 2;  // 2 bytes/color (hi nibbles)
-        auto cop_data_bytes = h * cpl * 4;       // reg(2) + color(2) per change
-        if (p.aga) {
-            pal_bytes *= 2;       // hi + lo nibbles
-            cop_data_bytes *= 2;  // hi + lo per change
-        }
-        r.copperBytes = static_cast<int>(pal_bytes + cop_data_bytes);
+        // Just per-scanline change data (palette counted separately in JS)
+        auto cop_data_bytes = h * cpl * 4;  // reg(2) + color(2) per change
+        if (p.aga) cop_data_bytes *= 2;     // hi + lo per change
+        r.copperBytes = static_cast<int>(cop_data_bytes);
     }
     r.quantError = p.quant_error;
     r.hasTransparency = p.has_transparency;
