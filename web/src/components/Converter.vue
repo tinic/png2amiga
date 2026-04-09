@@ -49,6 +49,8 @@ const sizeOverride = ref(false)
 const lastWidth = ref(320)
 const lastHeight = ref(160)
 const lastCopPerLine = ref(0)
+const lastPlaneBytes = ref(0)
+const lastCopperBytes = ref(0)
 const imageHasAlpha = ref(false)
 const pageLoadTime = Date.now()
 
@@ -128,21 +130,23 @@ const rawTooltipHtml = computed(() => {
   const d = options.depth || defaultDepth(options.mode)
   const dd = defaultDepth(options.mode)
   const bpr = Math.ceil(w / 16) * 2
-  const planeSize = bpr * h
-  const totalPlanes = planeSize * d
-  const colors = 1 << (isHamMode(options.mode) ? dd - 2 : d)
   const aga = options.chipset === 'aga'
+  const colors = 1 << (isHamMode(options.mode) ? dd - 2 : d)
+  const pb = lastPlaneBytes.value
+  const cb = lastCopperBytes.value
   const palSize = colors * 2
-  const copPerLine = options.copper ? lastCopPerLine.value : 0
+  // Copper data per pass = cb for OCS, cb/2 per pass for AGA (hi+lo)
+  const copPerPass = aga && cb ? cb / 2 : cb
+  const cpl = h > 0 && copPerPass > 0 ? Math.round(copPerPass / h / 4) : 0
   let off = 0
   let lines = []
   lines.push(`Raw binary format (big-endian):`)
   lines.push(``)
   lines.push(`Offset  Size     Content`)
   lines.push(`------  -------  ----------------------------`)
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${totalPlanes.toLocaleString().padStart(7)}  Bitplanes`)
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${pb.toLocaleString().padStart(7)}  Bitplanes`)
   lines.push(`                 (${d}bpl, ${bpr}B/row, interleaved)`)
-  off += totalPlanes
+  off += pb
   lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette${aga ? ' hi' : ''}`)
   lines.push(`                 (${colors} * u16, ${aga ? 'hi nibbles 0x0RGB' : '0x0RGB'})`)
   off += palSize
@@ -151,17 +155,14 @@ const rawTooltipHtml = computed(() => {
     lines.push(`                 (${colors} * u16, lo nibbles 0x0RGB)`)
     off += palSize
   }
-  if (options.copper) {
-    const cpl = Math.round(copPerLine) || '?'
-    const copSize = h * cpl * 4
-    const copSizeStr = copSize ? copSize.toLocaleString().padStart(7) : '    ...'
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper${aga ? ' hi' : ''}`)
+  if (cb > 0) {
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper${aga ? ' hi' : ''}`)
     lines.push(`                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
-    if (copSize) off += copSize
+    off += copPerPass
     if (aga) {
-      lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copSizeStr}  Copper lo`)
+      lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper lo`)
       lines.push(`                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
-      if (copSize) off += copSize
+      off += copPerPass
     }
   }
   lines.push(`------  -------  ----------------------------`)
@@ -311,6 +312,8 @@ function doConvert() {
       lastWidth.value = result.width
       lastHeight.value = result.height
       lastCopPerLine.value = result.copperChanges || 0
+      lastPlaneBytes.value = result.planeBytes || 0
+      lastCopperBytes.value = result.copperBytes || 0
       imageHasAlpha.value = !!result.hasTransparency
 
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
