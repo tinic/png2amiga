@@ -553,6 +553,7 @@ function loadPalette() {
     const buf = await file.arrayBuffer()
     const bytes = new Uint8Array(buf)
     paletteData.value = bytes
+    options.copper = false  // copper not compatible with custom palette
     // Parse colors for preview
     const text = new TextDecoder().decode(bytes)
     const colors = []
@@ -733,7 +734,7 @@ async function loadExample(example) {
               </div>
 
               <!-- Copper (not available for interlace or Atari) -->
-              <div v-if="!isInterlaceMode(options.mode) && !isAtariMode(options.mode)" class="grid align-items-center">
+              <div v-if="!isInterlaceMode(options.mode) && !isAtariMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Enable per-scanline copper palette changes. Each row gets its own optimal palette via the copper.">Copper</label>
                 <div class="col-8">
                   <ToggleSwitch v-model="options.copper" />
