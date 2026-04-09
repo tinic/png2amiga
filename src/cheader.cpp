@@ -478,10 +478,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             auto& line = changes[y];
             for (std::size_t s = 0; s < cpl; ++s) {
                 if (s < line.size()) {
-                    auto hi = options.aga
-                        ? palette::linear_to_aga_hilo(line[s].color).hi
-                        : palette::linear_to_ocs(line[s].color);
-                    out += std::format("{{{},0x{:04X}}}", line[s].reg, hi);
+                    // Nibble-skip: if the encoder marked skip_hi, emit 0xFFFF
+                    // sentinel so the viewer's existing skip path drops the
+                    // hi-pass write. Only meaningful for AGA (LOCT exists).
+                    if (options.aga && line[s].skip_hi) {
+                        out += "{0xFFFF,0x0000}";
+                    } else {
+                        auto hi = options.aga
+                            ? palette::linear_to_aga_hilo(line[s].color).hi
+                            : palette::linear_to_ocs(line[s].color);
+                        out += std::format("{{{},0x{:04X}}}", line[s].reg, hi);
+                    }
                 } else {
                     out += "{0xFFFF,0x0000}";
                 }
@@ -797,8 +804,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Lines 1+ are written at end of the previous line.
         auto emit_copper_changes = [&](const std::string& y_expr, bool aga) {
             if (aga) {
-                // High nibbles with bank switching
-                out += "        { int cur_bank = 0;\n";
+                // High nibbles with bank switching.
+                // Force first BPLCON3 unconditionally so the lingering LOCT=1
+                // from the previous line's lo pass gets cleared. Subsequent
+                // BPLCON3 writes happen only when the bank changes.
+                // No per-scanline BPLCON3 reset at the end — saves 1 MOVE.
+                out += "        { int cur_bank = -1;  // sentinel: forces first BPLCON3\n";
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper[{}][s].reg;\n", sym, y_expr);
                 out += "            if (reg == 0xFFFF) continue;\n";
@@ -812,8 +823,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                        " + (reg % 32) * 2;\n";
                 out += std::format("            *cl++ = {}_copper[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
-                // Low nibbles (LOCT=1)
-                out += "        cur_bank = 0;\n";
+                // Low nibbles (LOCT=1) — force first BPLCON3 LOCT
+                out += "        cur_bank = -1;  // sentinel: forces first BPLCON3 LOCT\n";
                 out += std::format("        for (int s = 0; s < {}; s++) {{\n", cpl);
                 out += std::format("            UWORD reg = {}_copper_lo[{}][s].reg;\n", sym, y_expr);
                 out += "            if (reg == 0xFFFF) continue;\n";
@@ -822,16 +833,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "                *cl++ = 0x0106;\n";
                 out += "                *cl++ = (UWORD)((bank << 13) | 0x0200);\n";
                 out += "                cur_bank = bank;\n";
-                out += "            } else if (s == 0) {\n";
-                out += "                *cl++ = 0x0106;\n";
-                out += "                *cl++ = (UWORD)((bank << 13) | 0x0200);\n";
                 out += "            }\n";
                 out += "            *cl++ = offsetof(struct Custom, color)"
                        " + (reg % 32) * 2;\n";
                 out += std::format("            *cl++ = {}_copper_lo[{}][s].color;\n", sym, y_expr);
                 out += "        }\n";
-                // Reset to bank 0, LOCT=0
-                out += "        *cl++ = 0x0106; *cl++ = 0x0000;\n";
                 out += "        }\n";
             } else if (options.aga) {
                 // AGA <=32 colors: no bank switching but need LOCT

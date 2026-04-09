@@ -33,6 +33,13 @@ namespace png2amiga::copper {
 struct CopperChange {
     std::uint8_t reg;       // palette register index (0..N-1)
     Color3f color;          // new color value
+
+    // Nibble-skip optimization for AGA: when the new color shares its high
+    // 4-bit nibble (per channel) with the slot's previous value, the LOCT=0
+    // (high) write is unnecessary — only the LOCT=1 (low) write is needed.
+    // The viewer skips writes where the hi-table entry's reg is 0xFFFF.
+    // Set by the encoder; ignored on OCS where LOCT does not exist.
+    bool skip_hi = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -55,7 +62,67 @@ struct CopperResult {
     std::size_t changes_per_line{};     // K budget (max per line)
     float avg_changes_per_line{};       // actual average changes made
     float total_error{};
+
+    // Worst-case copper MOVE instructions emitted per scanline (post-clustering).
+    // Used by callers to budget-check against MAX_MOVES_PER_LINE.
+    std::size_t max_moves_per_line{};
 };
+
+// ---------------------------------------------------------------------------
+// MOVE budget per scanline (empirically measured at hires-8 + FMODE=3 + copper).
+// Tightest worst case: 18 MOVE instructions fit in the post-DDFSTOP gap before
+// the next line's bitplane DMA starts. We use 18 directly: 17 production worst
+// case + 1 marker MOVE was confirmed to fit; 17 + 2 markers overran by 1 MOVE.
+// ---------------------------------------------------------------------------
+inline constexpr std::size_t MAX_MOVES_PER_LINE = 18;
+
+// ---------------------------------------------------------------------------
+// Compute the MOVE count emitted for one scanline given its sorted change list,
+// matching the viewer's emission strategy ("force first BPLCON3 per pass, no
+// per-scanline reset"). Accounts for the nibble-skip optimization: changes
+// with skip_hi=true are dropped from the hi pass entirely (their bank also
+// disappears from the hi pass count if it had no other live entries).
+//
+// Formulas:
+//   OCS:                  K MOVEs (no LOCT)
+//   AGA <=32 colors:      (K - K_skip_hi) + 2 + K  (hi loop + LOCT on/off + lo loop)
+//   AGA bank-switching:   (B_hi + K_hi) + (B_lo + K)
+//                         where B_hi = distinct banks among non-skipped hi entries
+//                               K_hi = number of non-skipped hi entries
+//                               B_lo = distinct banks across all entries
+// ---------------------------------------------------------------------------
+constexpr std::size_t moves_for_line(
+    const std::vector<CopperChange>& changes,
+    bool aga, bool aga_banks) noexcept {
+    if (changes.empty()) return 0;
+    if (!aga) return changes.size();  // OCS: K MOVEs
+
+    std::size_t k = changes.size();
+    std::size_t k_skip_hi = 0;
+    for (auto& ch : changes) if (ch.skip_hi) ++k_skip_hi;
+    std::size_t k_hi = k - k_skip_hi;
+
+    if (!aga_banks) {
+        // AGA <=32: hi-color writes (skipped honored) + LOCT on/off + lo-color writes
+        return k_hi + 2 + k;
+    }
+
+    // AGA bank-switching: count distinct banks in sorted changes for both passes
+    int prev_bank_hi = -1;
+    std::size_t banks_hi = 0;
+    for (auto& ch : changes) {
+        if (ch.skip_hi) continue;
+        int b = static_cast<int>(ch.reg / 32);
+        if (b != prev_bank_hi) { ++banks_hi; prev_bank_hi = b; }
+    }
+    int prev_bank_lo = -1;
+    std::size_t banks_lo = 0;
+    for (auto& ch : changes) {
+        int b = static_cast<int>(ch.reg / 32);
+        if (b != prev_bank_lo) { ++banks_lo; prev_bank_lo = b; }
+    }
+    return banks_hi + k_hi + banks_lo + k;
+}
 
 // ---------------------------------------------------------------------------
 // Maximum copper changes per line (empirically tested DMA limits).

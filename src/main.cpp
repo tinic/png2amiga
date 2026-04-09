@@ -1433,10 +1433,6 @@ int main(int argc, char* argv[]) {
                                      "are not supported with EHB + --copper");
                 return 1;
             }
-            auto cpl = config->copper_changes > 0
-                ? static_cast<std::size_t>(config->copper_changes)
-                : copper::max_changes_per_line(5, false, config->hires, chipset);
-            std::println("Mode:   EHB + Copper ({} changes/line)", cpl);
 
             dither::Settings dith;
             dith.method = config->dither_method;
@@ -1454,6 +1450,9 @@ int main(int argc, char* argv[]) {
                              copper_result.error().message);
                 return 1;
             }
+            std::println("Mode:   EHB + Copper ({} changes/line, max {} MOVEs/line)",
+                         copper_result->changes_per_line,
+                         copper_result->max_moves_per_line);
 
             // Re-dither each scanline against its 64-color EHB palette
             auto w = image->width();
@@ -1851,13 +1850,6 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        auto max_swap = ((std::size_t{1} << config->depth) > 1)
-            ? (std::size_t{1} << config->depth) - 1 : std::size_t{0};
-        auto cpl = config->copper_changes > 0
-            ? std::min(static_cast<std::size_t>(config->copper_changes), max_swap)
-            : std::min(copper::max_changes_per_line(config->depth, false, config->hires, chipset), max_swap);
-        std::println("Mode:   Copper (max {} changes/line)", cpl);
-
         // Force transparent pixels to black before encoding
         if (has_transparency) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
@@ -1879,6 +1871,11 @@ int main(int argc, char* argv[]) {
                          copper_result.error().message);
             return 1;
         }
+        // Print actual cpl after orchestration (auto mode may have stretched
+        // or fallen back).
+        std::println("Mode:   Copper ({} changes/line, max {} MOVEs/line)",
+                     copper_result->changes_per_line,
+                     copper_result->max_moves_per_line);
 
         // Apply transparency mask: transparent pixels → index 0
         if (has_transparency) {

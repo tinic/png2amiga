@@ -217,9 +217,30 @@ Result<CopperResult> encode_copper(const Image& image,
 
     auto num_colors = std::size_t{1} << depth;
     auto max_swappable = num_colors > 1 ? num_colors - 1 : std::size_t{0};  // slot 0 reserved
-    auto changes_per_line = (override_changes > 0)
-        ? std::min(override_changes, max_swappable)
-        : std::min(max_changes_per_line(depth, is_ham, is_hires, chipset), max_swappable);
+
+    // Auto mode: try a stretch K first, fall back to the empirical safe K if
+    // the resulting per-line MOVE count exceeds the hardware budget. This lets
+    // us deliver more changes per line on the typical case where bank-clustered
+    // changes fit in the post-DDFSTOP gap, while guaranteeing the safe baseline
+    // when they don't. Recurse with explicit override_changes so the orchestration
+    // only runs once.
+    if (override_changes == 0) {
+        auto safe_k = std::min(
+            max_changes_per_line(depth, is_ham, is_hires, chipset), max_swappable);
+        auto stretch_k = std::min(safe_k + 1, max_swappable);
+        if (stretch_k > safe_k) {
+            auto stretch = encode_copper(image, depth, dither_settings, chipset,
+                                         is_ham, is_hires, stretch_k, user_palette);
+            if (stretch && stretch->max_moves_per_line <= MAX_MOVES_PER_LINE) {
+                return stretch;
+            }
+        }
+        // Stretch overran or wasn't possible — use the safe baseline.
+        return encode_copper(image, depth, dither_settings, chipset,
+                             is_ham, is_hires, safe_k, user_palette);
+    }
+
+    auto changes_per_line = std::min(override_changes, max_swappable);
 
     // Step 1: Base palette — user-provided or auto-quantized
     std::vector<Color3f> base_pal;
@@ -318,11 +339,25 @@ Result<CopperResult> encode_copper(const Image& image,
 
             if (swap.error_reduction <= 0.0f) break;
 
+            // Nibble-skip optimization (AGA only): if the new color shares its
+            // high 4-bit nibble with the slot's previous value, the LOCT=0 (high)
+            // write is unnecessary. The viewer detects skip_hi via a 0xFFFF
+            // sentinel in the hi-table reg field.
+            bool skip_hi_flag = false;
+            if (chipset == amiga::Chipset::aga) {
+                auto old_hilo = palette::linear_to_aga_hilo(current_pal[swap.slot]);
+                auto new_hilo = palette::linear_to_aga_hilo(swap.new_color);
+                skip_hi_flag = (old_hilo.hi == new_hilo.hi);
+            }
+
             // Apply the swap
             swapped[swap.slot] = true;
             current_pal[swap.slot] = swap.new_color;
-            changes.push_back(CopperChange{static_cast<std::uint8_t>(swap.slot),
-                                          swap.new_color});
+            changes.push_back(CopperChange{
+                static_cast<std::uint8_t>(swap.slot),
+                swap.new_color,
+                skip_hi_flag,
+            });
         }
 
         // Sort changes by register index (bank 0 first) to minimize
@@ -416,6 +451,15 @@ Result<CopperResult> encode_copper(const Image& image,
         ? static_cast<float>(total_changes) / static_cast<float>(height)
         : 0.0f;
 
+    // Compute worst-case MOVE count per scanline (post-bank-clustering).
+    // The viewer's emission strategy determines the formula; see moves_for_line.
+    bool aga = (chipset == amiga::Chipset::aga);
+    bool aga_banks = aga && num_colors > 32;
+    std::size_t max_moves = 0;
+    for (auto& ch : scanline_changes) {
+        max_moves = std::max(max_moves, moves_for_line(ch, aga, aga_banks));
+    }
+
     return CopperResult{
         *std::move(planes),
         std::move(base_pal),
@@ -425,6 +469,7 @@ Result<CopperResult> encode_copper(const Image& image,
         changes_per_line,
         avg_changes,
         total_error,
+        max_moves,
     };
 }
 
