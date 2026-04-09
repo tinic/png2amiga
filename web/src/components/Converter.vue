@@ -557,12 +557,8 @@ function loadPalette() {
       }
     }
     paletteColors.value = colors
-    // Store as hex text for WASM (paletteFile expects file content)
-    options.paletteFile = colors.map(c => {
-      const m = c.match(/(\d+)/g)
-      if (m) return m.slice(0, 3).map(v => parseInt(v).toString(16).padStart(2, '0')).join('')
-      return c.replace('#', '')
-    }).join('\n')
+    // Pass raw file bytes to WASM for auto-format detection
+    options.paletteData = bytes
   }
   input.click()
 }
@@ -570,7 +566,7 @@ function loadPalette() {
 function clearPalette() {
   paletteData.value = null
   paletteColors.value = []
-  options.paletteFile = ''
+  options.paletteData = null
 }
 
 function dismissHint() {

@@ -53,6 +53,13 @@ Options parse_js_options(val js_opts) {
         opts.height = js_opts["height"].as<int>();
     if (js_opts.hasOwnProperty("paletteFile"))
         opts.palette_file = js_opts["paletteFile"].as<std::string>();
+    if (js_opts.hasOwnProperty("paletteData")) {
+        auto arr = js_opts["paletteData"];
+        auto len = arr["length"].as<std::size_t>();
+        opts.palette_data.resize(len);
+        val view = val(typed_memory_view(len, opts.palette_data.data()));
+        view.call<void>("set", arr);
+    }
     if (js_opts.hasOwnProperty("symbolName"))
         opts.symbol_name = js_opts["symbolName"].as<std::string>();
     if (js_opts.hasOwnProperty("copperChanges"))

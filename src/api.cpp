@@ -30,6 +30,19 @@ namespace png2amiga::api {
 namespace {
 
 
+// Load palette from inline data or file path
+Result<Palette> load_user_palette(const Options& opts) {
+    if (!opts.palette_data.empty())
+        return palette_io::load_palette_from_memory(opts.palette_data);
+    if (!opts.palette_file.empty())
+        return palette_io::load_palette(opts.palette_file);
+    return std::unexpected{Error{ErrorCode::unsupported_mode, "No palette"}};
+}
+
+bool has_user_palette(const Options& opts) {
+    return !opts.palette_data.empty() || !opts.palette_file.empty();
+}
+
 amiga::Mode parse_mode(const std::string& s) {
     if (s == "lores") return amiga::Mode::lores;
     if (s == "lores-lace") return amiga::Mode::lores_interlace;
@@ -659,8 +672,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Reserve index 0 for transparency when needed.
         auto ehb_base = has_transparency ? std::size_t{31} : std::size_t{32};
         Palette base_pal;
-        if (!options.palette_file.empty()) {
-            auto loaded = palette_io::load_palette(options.palette_file);
+        if (has_user_palette(options)) {
+            auto loaded = load_user_palette(options);
             if (!loaded) return std::unexpected{loaded.error()};
             base_pal = *std::move(loaded);
             if (base_pal.colors.size() > ehb_base)

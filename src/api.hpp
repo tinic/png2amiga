@@ -35,6 +35,7 @@ struct Options {
 
     // Palette
     std::string palette_file;           // load palette from file (empty = auto)
+    std::vector<std::uint8_t> palette_data; // inline palette data (empty = auto)
 
     // HAM encoding
     std::string ham_quality = "optimal"; // fast, optimal
