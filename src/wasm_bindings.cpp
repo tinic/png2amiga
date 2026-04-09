@@ -55,6 +55,8 @@ Options parse_js_options(val js_opts) {
         opts.palette_file = js_opts["paletteFile"].as<std::string>();
     if (js_opts.hasOwnProperty("symbolName"))
         opts.symbol_name = js_opts["symbolName"].as<std::string>();
+    if (js_opts.hasOwnProperty("copperChanges"))
+        opts.copper_changes = js_opts["copperChanges"].as<int>();
     if (js_opts.hasOwnProperty("cropX"))
         opts.crop_x = js_opts["cropX"].as<int>();
     if (js_opts.hasOwnProperty("cropY"))

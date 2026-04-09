@@ -52,6 +52,8 @@ const lastCopPerLine = ref(0)
 const lastPlaneBytes = ref(0)
 const lastCopperBytes = ref(0)
 const imageHasAlpha = ref(false)
+const paletteData = ref(null)    // raw palette file bytes (Uint8Array)
+const paletteColors = ref([])    // parsed CSS color strings for preview
 const pageLoadTime = Date.now()
 
 // Loupe (4x zoom with drag-to-pan)
@@ -178,6 +180,27 @@ const availableModes = computed(() => modesForChipset(options.chipset))
 
 // Current depth max for the slider
 const depthMax = computed(() => maxDepth(options.mode, options.chipset))
+
+// Copper changes max for current mode
+const copperMax = computed(() => {
+  const d = options.depth || defaultDepth(options.mode)
+  const ham = isHamMode(options.mode)
+  const aga = options.chipset === 'aga'
+  // Mirror the C++ max_changes_per_line logic
+  if (aga) {
+    if (ham) return d === 8 ? 4 : 7
+    if (d >= 6) return 4
+    if (d >= 3) return 7
+    if (d === 2) return 4
+    return 2
+  }
+  if (ham) return 16
+  if (d >= 5) return 16
+  if (d === 4) return 16
+  if (d === 3) return 8
+  if (d === 2) return 4
+  return 2
+})
 
 // Effective chipset label for status line
 const statusChipset = computed(() => {
@@ -493,7 +516,61 @@ async function compileAndDownload(format) {
 
 function resetOptions() {
   Object.assign(options, defaultOptions())
+  clearPalette()
   track('reset')
+}
+
+function loadPalette() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.gpl,.hex,.txt,.pal'
+  input.onchange = async () => {
+    const file = input.files[0]
+    if (!file) return
+    const buf = await file.arrayBuffer()
+    const bytes = new Uint8Array(buf)
+    paletteData.value = bytes
+    // Parse colors for preview
+    const text = new TextDecoder().decode(bytes)
+    const colors = []
+    if (text.startsWith('GIMP Palette')) {
+      // GPL format
+      for (const line of text.split('\n')) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/)
+        if (m) colors.push(`rgb(${m[1]},${m[2]},${m[3]})`)
+      }
+    } else {
+      // Try hex text (one RRGGBB per line)
+      for (const line of text.split('\n')) {
+        const m = line.trim().match(/^#?([0-9a-fA-F]{6})$/)
+        if (m) colors.push(`#${m[1]}`)
+      }
+    }
+    if (colors.length === 0) {
+      // Binary .pal: 2 bytes per color, big-endian 0x0RGB
+      for (let i = 0; i + 1 < bytes.length; i += 2) {
+        const w = (bytes[i] << 8) | bytes[i + 1]
+        const r = ((w >> 8) & 0xF) * 17
+        const g = ((w >> 4) & 0xF) * 17
+        const b = (w & 0xF) * 17
+        colors.push(`rgb(${r},${g},${b})`)
+      }
+    }
+    paletteColors.value = colors
+    // Store as hex text for WASM (paletteFile expects file content)
+    options.paletteFile = colors.map(c => {
+      const m = c.match(/(\d+)/g)
+      if (m) return m.slice(0, 3).map(v => parseInt(v).toString(16).padStart(2, '0')).join('')
+      return c.replace('#', '')
+    }).join('\n')
+  }
+  input.click()
+}
+
+function clearPalette() {
+  paletteData.value = null
+  paletteColors.value = []
+  options.paletteFile = ''
 }
 
 function dismissHint() {
@@ -779,6 +856,56 @@ async function loadExample(example) {
             </div>
             <Button label="Reset" icon="pi pi-refresh" severity="secondary" outlined class="w-full" @click="resetOptions"
               title="Reset all parameters to defaults." />
+
+            <!-- Advanced section -->
+            <Panel header="Advanced" toggleable collapsed class="mt-2">
+              <!-- Custom palette -->
+              <div v-if="!isHamMode(options.mode)" class="mb-3">
+                <label class="block text-xs text-color-secondary font-semibold mb-1">Custom Palette</label>
+                <div class="flex gap-2 align-items-center">
+                  <Button label="Load" icon="pi pi-upload" size="small" severity="secondary" @click="loadPalette" :disabled="converting" />
+                  <Button v-if="paletteData" label="Clear" icon="pi pi-times" size="small" severity="secondary" text @click="clearPalette" />
+                  <span v-if="paletteData" class="text-xs text-color-secondary">{{ paletteColors.length }} colors</span>
+                </div>
+                <div v-if="paletteColors.length" class="flex flex-wrap gap-1 mt-1">
+                  <div v-for="(c, i) in paletteColors" :key="i"
+                    :style="{ background: c, width: '12px', height: '12px', borderRadius: '2px' }"
+                    :title="`#${i}: ${c}`" />
+                </div>
+                <div v-if="isEhbMode(options.mode) && paletteColors.length && paletteColors.length !== 32"
+                  class="text-xs text-red-400 mt-1">EHB requires exactly 32 colors</div>
+              </div>
+
+              <!-- Crop -->
+              <div class="mb-3">
+                <label class="block text-xs text-color-secondary font-semibold mb-1">Crop</label>
+                <div class="flex gap-2 align-items-center mb-1">
+                  <label class="text-xs" style="width:1.5rem">X</label>
+                  <InputNumber v-model="options.cropX" :min="0" :max="9999" class="flex-1 input-sm" :disabled="options.cropAuto" />
+                  <label class="text-xs" style="width:1.5rem">Y</label>
+                  <InputNumber v-model="options.cropY" :min="0" :max="9999" class="flex-1 input-sm" :disabled="options.cropAuto" />
+                </div>
+                <div class="flex gap-2 align-items-center mb-1">
+                  <label class="text-xs" style="width:1.5rem">W</label>
+                  <InputNumber v-model="options.cropW" :min="0" :max="9999" class="flex-1 input-sm" :disabled="options.cropAuto" placeholder="0 = full" />
+                  <label class="text-xs" style="width:1.5rem">H</label>
+                  <InputNumber v-model="options.cropH" :min="0" :max="9999" class="flex-1 input-sm" :disabled="options.cropAuto" placeholder="0 = full" />
+                </div>
+                <div class="flex align-items-center gap-2">
+                  <input type="checkbox" v-model="options.cropAuto" id="cropAuto" />
+                  <label for="cropAuto" class="text-xs text-color-secondary">Auto-crop to mode aspect ratio</label>
+                </div>
+              </div>
+
+              <!-- Copper changes override -->
+              <div v-if="options.copper" class="mb-3">
+                <label class="block text-xs text-color-secondary font-semibold mb-1">Copper Changes/Line</label>
+                <div class="flex gap-2 align-items-center">
+                  <InputNumber v-model="options.copperChanges" :min="0" :max="copperMax" class="flex-1 input-sm" placeholder="0 = auto" />
+                  <span class="text-xs text-color-secondary">max: {{ copperMax }}</span>
+                </div>
+              </div>
+            </Panel>
           </div>
 
         </div>

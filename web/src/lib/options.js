@@ -152,6 +152,8 @@ export function defaultOptions() {
     cropW: 0,
     cropH: 0,
     cropAuto: false,
+    // Copper override (0 = auto)
+    copperChanges: 0,
     // Symbol name for C header export (empty = auto from filename)
     symbolName: '',
   }

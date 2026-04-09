@@ -42,6 +42,7 @@ struct Options {
 
     // Copper palette (per-scanline palette changes)
     bool copper = false;                // use per-scanline copper palettes
+    int copper_changes = 0;             // override changes/line (0 = auto)
 
     // Transparency
     float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)

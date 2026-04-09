@@ -438,7 +438,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         Result<ham::HamResult> ham_result;
         if (options.copper) {
-            ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts, compound_hires);
+            ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts,
+                                                  compound_hires,
+                                                  static_cast<std::size_t>(options.copper_changes));
         } else {
             ham_result = ham::encode_ham(*image, mode, chipset, ham_opts);
         }
@@ -509,7 +511,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             dith.error_clamp = options.error_clamp;
 
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
-                                                       false, compound_hires);
+                                                       false, compound_hires,
+                                                       static_cast<std::size_t>(options.copper_changes));
             if (!copper_result) return std::unexpected{copper_result.error()};
 
             // Now re-dither each scanline against its 64-color EHB palette
@@ -740,7 +743,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.error_clamp = options.error_clamp;
 
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
-                                                     false, compound_hires);
+                                                     false, compound_hires,
+                                                     static_cast<std::size_t>(options.copper_changes));
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,
