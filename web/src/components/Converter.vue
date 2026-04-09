@@ -305,22 +305,24 @@ function setSizePreset(scale) {
   options.height = Math.max(2, Math.round(imageHeight.value * scale))
 }
 
-// Aspect-ratio lock: when enabled, editing width or height keeps the
-// other field proportional to the source image's aspect ratio.
+// Aspect-ratio lock: when enabled, committing width or height keeps the
+// other field proportional to the source image's aspect ratio. Sync only
+// fires on blur or Enter — not per-keystroke — so the user sees stable
+// intermediate values while typing.
 const aspectLocked = ref(true)
 
-function onWidthInput(value) {
+function onWidthCommit() {
   if (!aspectLocked.value) return
-  if (!imageWidth.value || !imageHeight.value || !value) return
+  if (!imageWidth.value || !imageHeight.value || !options.width) return
   const aspect = imageHeight.value / imageWidth.value
-  options.height = Math.max(2, Math.round(value * aspect))
+  options.height = Math.max(2, Math.round(options.width * aspect))
 }
 
-function onHeightInput(value) {
+function onHeightCommit() {
   if (!aspectLocked.value) return
-  if (!imageWidth.value || !imageHeight.value || !value) return
+  if (!imageWidth.value || !imageHeight.value || !options.height) return
   const aspect = imageWidth.value / imageHeight.value
-  options.width = Math.max(16, Math.round(value * aspect / 16) * 16)
+  options.width = Math.max(16, Math.round(options.height * aspect / 16) * 16)
 }
 
 // Build the options object to pass to WASM (matches wasm_bindings.cpp field names)
@@ -916,19 +918,23 @@ async function loadExample(example) {
                 </div>
               </div>
               <template v-if="sizeOverride && !isAtariMode(options.mode)">
-                <div class="resize-fields">
+                <div class="resize-fields" :class="{ unlinked: !aspectLocked }">
                   <label class="resize-label text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
                   <div class="resize-input">
                     <InputNumber v-model="options.width" :min="16" :step="16"
-                                 @input="(e) => onWidthInput(e.value)"
+                                 @blur="() => onWidthCommit()"
+                                 @keyup.enter="() => onWidthCommit()"
                                  class="w-full input-sm" />
                   </div>
+                  <div class="resize-bracket top"></div>
                   <label class="resize-label text-xs text-color-secondary font-semibold" title="Output height in pixels.">Height</label>
                   <div class="resize-input">
                     <InputNumber v-model="options.height" :min="2" :step="2"
-                                 @input="(e) => onHeightInput(e.value)"
+                                 @blur="() => onHeightCommit()"
+                                 @keyup.enter="() => onHeightCommit()"
                                  class="w-full input-sm" />
                   </div>
+                  <div class="resize-bracket bot"></div>
                   <Button class="aspect-lock"
                           severity="secondary" text
                           :icon="aspectLocked ? 'pi pi-link' : 'pi pi-unlink'"
@@ -1178,10 +1184,17 @@ async function loadExample(example) {
   min-width: 0 !important;
 }
 
-/* Resize fields: 3-column grid with chain-lock button spanning both rows */
+/* Resize fields: 3-column grid with chain-lock button spanning both rows.
+ * Bracket lines connect the lock button to both the Width and Height
+ * inputs so users can tell at a glance which fields the lock affects.
+ *
+ *   Width  [320] ┐
+ *                 ├─ 🔗
+ *   Height [213] ┘
+ */
 .resize-fields {
   display: grid;
-  grid-template-columns: 33.33% 1fr auto;
+  grid-template-columns: 33.33% 1fr 0.5rem auto;
   grid-template-rows: auto auto;
   column-gap: 0.5rem;
   row-gap: 0.25rem;
@@ -1193,8 +1206,29 @@ async function loadExample(example) {
 .resize-fields .resize-input {
   grid-column: 2;
 }
-.resize-fields .aspect-lock {
+/* Bracket arms: a thin column of border between input and lock button */
+.resize-fields .resize-bracket {
   grid-column: 3;
+  width: 0.5rem;
+  height: 100%;
+  border-color: var(--p-content-border-color, #4b5563);
+  border-style: solid;
+  border-width: 0;
+}
+.resize-fields .resize-bracket.top {
+  grid-row: 1;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-top-right-radius: 4px;
+}
+.resize-fields .resize-bracket.bot {
+  grid-row: 2;
+  border-bottom-width: 1px;
+  border-right-width: 1px;
+  border-bottom-right-radius: 4px;
+}
+.resize-fields .aspect-lock {
+  grid-column: 4;
   grid-row: 1 / span 2;
   align-self: center;
 }
@@ -1204,6 +1238,11 @@ async function loadExample(example) {
 }
 :deep(.aspect-lock .p-button-icon) {
   font-size: 0.85rem;
+}
+/* Dim the brackets when the lock is unlinked */
+.resize-fields.unlinked .resize-bracket {
+  border-color: var(--p-content-border-color, #4b5563);
+  opacity: 0.25;
 }
 
 .preview-col {
