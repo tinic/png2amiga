@@ -266,11 +266,17 @@ function doConvert() {
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
       info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
       if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg cop/line`
-      // Size stats: disk = bitplanes + copper data, chip = + WAITs/setup
+      // Size stats
       const pb = result.planeBytes || 0
       const cb = result.copperBytes || 0
-      const diskBytes = pb + cb
-      const chipBytes = pb + (cb ? cb + result.height * 4 + 256 : 0)
+      const depth = result.depth || 0
+      const colors = result.colors || 0
+      // Disk: bitplanes + palette + copper data (compressed)
+      const diskBytes = pb + colors * 2 + cb
+      // Chip RAM: bitplanes + copper list (setup + bpl ptrs + palette + changes + WAITs)
+      const baseCop = 128 + depth * 8 + colors * 4  // display setup + bpl ptrs + palette
+      const copChanges = cb ? cb + result.height * 4 : 0  // copper data + WAITs per line
+      const chipBytes = pb + baseCop + copChanges
       if (pb > 0) {
         const fmt = (b) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
         info += `, disk: ${fmt(diskBytes)}, chip: ${fmt(chipBytes)}`
