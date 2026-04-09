@@ -942,7 +942,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    ULONG cop_len = (ULONG)cl - (ULONG)copper1 + 4;\n";
         // Precompute all 16 fade steps as separate copper lists in chip RAM.
         // During fade, just swap cop1lc — zero CPU chip RAM access per frame.
-        out += "    USHORT* fade_cops[16];\n";
+        out += "    USHORT* fade_cops[16] = {0};\n";
         out += "    // Find color register value positions\n";
         // Estimate max offsets: palette (×2 for AGA LOCT) + copper changes (×2) + margin
         auto max_offsets = (pal_count * 2) + (height * options.copper_changes_per_line * 2) + 256;
