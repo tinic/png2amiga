@@ -285,6 +285,17 @@ watch(sizeOverride, (on) => {
   }
 })
 
+// When a new image is loaded while resize override is active, drop the
+// stale dimensions so the new image gets its natural defaults computed
+// by the encoder. The post-convert hook below repopulates the inputs
+// with the new auto-sized values once the conversion completes.
+watch(imageBytes, () => {
+  if (sizeOverride.value) {
+    options.width = 0
+    options.height = 0
+  }
+})
+
 // Resize presets: scale source dimensions and write into width/height.
 // Width is rounded to a 16-pixel boundary (Amiga bitplane requirement).
 // Only callable when sizeOverride is already on (UI hides the buttons otherwise).
@@ -386,6 +397,15 @@ function doConvert() {
       lastMaxMovesPerLine.value = result.maxMovesPerLine || 0
       lastAga.value = !!result.aga
       imageHasAlpha.value = !!result.hasTransparency
+
+      // If we're in size-override mode but width/height got reset to 0
+      // (a new image just loaded), populate the inputs with the freshly
+      // computed natural defaults for the new image. Triggers one more
+      // (idempotent) convert via the deep options watcher.
+      if (sizeOverride.value && (!options.width || !options.height)) {
+        options.width = result.width
+        options.height = result.height
+      }
 
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
       info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
