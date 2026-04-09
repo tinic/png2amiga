@@ -207,6 +207,26 @@ const statusChipset = computed(() => {
   return effectiveChipset(options.mode, options.chipset).toUpperCase()
 })
 
+// Palette mismatch warnings
+const paletteMismatchDepth = computed(() => {
+  if (!paletteColors.value.length) return ''
+  const d = options.depth || defaultDepth(options.mode)
+  const maxColors = 1 << d
+  const n = paletteColors.value.length
+  if (isEhbMode(options.mode)) {
+    if (n !== 32) return `EHB needs 32 colors, palette has ${n}`
+    return ''
+  }
+  if (n > maxColors) return `Palette has ${n} colors, depth ${d} supports ${maxColors}`
+  return ''
+})
+
+const paletteMismatchMode = computed(() => {
+  if (!paletteColors.value.length) return ''
+  if (isHamMode(options.mode)) return 'Custom palette not supported for HAM'
+  return ''
+})
+
 // Update depth when mode changes — only clamp, don't reset
 watch(() => options.mode, (mode, oldMode) => {
   const max = maxDepth(mode, options.chipset)
@@ -671,14 +691,14 @@ async function loadExample(example) {
               </div>
 
               <div class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Amiga graphics mode. Lores: 320px, Hires: 640px, HAM: Hold-And-Modify, EHB: Extra Half-Brite.">Mode</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Amiga graphics mode. Lores: 320px, Hires: 640px, HAM: Hold-And-Modify, EHB: Extra Half-Brite.">Mode<i v-if="paletteMismatchMode" class="pi pi-exclamation-triangle ml-1" style="color:#f59e0b;font-size:0.7rem" :title="paletteMismatchMode" /></label>
                 <div class="col-8">
                   <Select v-model="options.mode" :options="availableModes" optionValue="value" optionLabel="label" class="w-full" />
                 </div>
               </div>
 
               <div v-if="showDepthSlider" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Number of bitplanes (1-8). More planes = more colors but more chip RAM.">Depth</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Number of bitplanes (1-8). More planes = more colors but more chip RAM.">Depth<i v-if="paletteMismatchDepth" class="pi pi-exclamation-triangle ml-1" style="color:#f59e0b;font-size:0.7rem" :title="paletteMismatchDepth" /></label>
                 <div class="col-5">
                   <Slider v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full" />
                 </div>
