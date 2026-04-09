@@ -276,6 +276,7 @@ watch(sizeOverride, (on) => {
 function buildWasmOptions() {
   const opts = { ...options }
   if (opts.alphaDither === 'none') opts.alphaDither = ''
+  if (!opts.paletteData) delete opts.paletteData
   // Pass compound mode string as-is — C++ decompose_mode_options handles it
   return opts
 }
