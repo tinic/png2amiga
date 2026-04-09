@@ -280,16 +280,11 @@ watch(sizeOverride, (on) => {
 
 // Resize presets: scale source dimensions and write into width/height.
 // Width is rounded to a 16-pixel boundary (Amiga bitplane requirement).
-async function setSizePreset(scale) {
+// Only callable when sizeOverride is already on (UI hides the buttons otherwise).
+function setSizePreset(scale) {
   if (!imageWidth.value || !imageHeight.value) return
-  const w = Math.max(16, Math.round(imageWidth.value * scale / 16) * 16)
-  const h = Math.max(2, Math.round(imageHeight.value * scale))
-  if (!sizeOverride.value) {
-    sizeOverride.value = true
-    await nextTick()  // wait for the watcher above to populate defaults
-  }
-  options.width = w
-  options.height = h
+  options.width = Math.max(16, Math.round(imageWidth.value * scale / 16) * 16)
+  options.height = Math.max(2, Math.round(imageHeight.value * scale))
 }
 
 // Build the options object to pass to WASM (matches wasm_bindings.cpp field names)
@@ -860,20 +855,25 @@ async function loadExample(example) {
               <!-- Resize override (not for Atari — fixed resolution) -->
               <div v-if="!isAtariMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold">Resize</label>
-                <div class="col-8 flex align-items-center gap-2">
+                <div class="col-8">
                   <ToggleSwitch v-model="sizeOverride" />
-                  <Button size="small" severity="secondary" text class="size-preset"
-                          :disabled="!imageBytes" @click="setSizePreset(1)"
-                          v-tooltip.top="'Same as source'">100%</Button>
-                  <Button size="small" severity="secondary" text class="size-preset"
-                          :disabled="!imageBytes" @click="setSizePreset(0.5)"
-                          v-tooltip.top="'Half of source'">50%</Button>
-                  <Button size="small" severity="secondary" text class="size-preset"
-                          :disabled="!imageBytes" @click="setSizePreset(0.25)"
-                          v-tooltip.top="'Quarter of source'">25%</Button>
                 </div>
               </div>
               <template v-if="sizeOverride && !isAtariMode(options.mode)">
+                <div class="grid align-items-center">
+                  <label class="col-4 text-xs text-color-secondary font-semibold">Preset</label>
+                  <div class="col-8 flex align-items-center gap-2">
+                    <Button size="small" severity="secondary" text class="size-preset"
+                            :disabled="!imageBytes" @click="setSizePreset(1)"
+                            v-tooltip.top="'Same as source'">100%</Button>
+                    <Button size="small" severity="secondary" text class="size-preset"
+                            :disabled="!imageBytes" @click="setSizePreset(0.5)"
+                            v-tooltip.top="'Half of source'">50%</Button>
+                    <Button size="small" severity="secondary" text class="size-preset"
+                            :disabled="!imageBytes" @click="setSizePreset(0.25)"
+                            v-tooltip.top="'Quarter of source'">25%</Button>
+                  </div>
+                </div>
                 <div class="grid align-items-center">
                   <label class="col-4 text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
                   <div class="col-8">
