@@ -753,6 +753,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
         result.interlace = options.interlace;
         result.copper = true;
+        result.aga = is_aga;
         result.scanline_palettes = std::move(copper_result->scanline_palettes);
         result.scanline_changes = std::move(copper_result->scanline_changes);
         result.copper_num_colors = copper_result->num_colors;
