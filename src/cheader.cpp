@@ -611,16 +611,24 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    if (!GfxBase) return 0;\n\n";
 
     // Check if AGA is required but not present.
-    // Query the Lisa chip revision bits directly via GfxBase->ChipRevBits0
-    // — the authoritative hardware-level check. The older `lib_Version
-    // < 39` heuristic was unreliable because v39 shipped with OS 3.0 on
-    // ECS A3000s and can also be installed on plain ECS machines via
-    // kickstart upgrades.
+    //
+    // Query GfxBase->ChipRevBits0, but look for the ALICE bit, not LISA.
+    // Alice is the AGA Agnus replacement and is the defining AGA chip —
+    // GFXF_AA_ALICE is set on every AGA machine (A1200/A4000/CD32), while
+    // GFXF_AA_LISA alone is fragile and has been observed to fail on
+    // real A1200s. Canonical refs: jvaltane howtocode, lysator mirror.
+    //
+    // ChipRevBits0 is populated automatically by SetPatch in the
+    // startup-sequence on V39+, so for a DOS-launched exe (we print
+    // errors via Write()) the field is already valid when main() runs.
+    // Gate with lib_Version >= 39 to also reject pre-OS-3.0 which
+    // doesn't have the field at all.
     bool requires_aga = (pal_count > 32) || (depth > 6) ||
                         (is_hires && depth > 4);
     if (requires_aga) {
-        out += "    // AGA detection: GFXF_AA_LISA bit is only set when the Lisa chip is present\n";
-        out += "    if (!(GfxBase->ChipRevBits0 & GFXF_AA_LISA)) {\n";
+        out += "    // AGA detection: require graphics.library v39+ AND the Alice chip\n";
+        out += "    if (GfxBase->LibNode.lib_Version < 39 ||\n";
+        out += "        !(GfxBase->ChipRevBits0 & GFXF_AA_ALICE)) {\n";
         out += "        struct Library* DOSBase = OpenLibrary("
                "(CONST_STRPTR)\"dos.library\", 0);\n";
         out += "        if (DOSBase) {\n";
