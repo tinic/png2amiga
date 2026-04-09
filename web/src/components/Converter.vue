@@ -305,6 +305,24 @@ function setSizePreset(scale) {
   options.height = Math.max(2, Math.round(imageHeight.value * scale))
 }
 
+// Aspect-ratio lock: when enabled, editing width or height keeps the
+// other field proportional to the source image's aspect ratio.
+const aspectLocked = ref(true)
+
+function onWidthInput(value) {
+  if (!aspectLocked.value) return
+  if (!imageWidth.value || !imageHeight.value || !value) return
+  const aspect = imageHeight.value / imageWidth.value
+  options.height = Math.max(2, Math.round(value * aspect))
+}
+
+function onHeightInput(value) {
+  if (!aspectLocked.value) return
+  if (!imageWidth.value || !imageHeight.value || !value) return
+  const aspect = imageWidth.value / imageHeight.value
+  options.width = Math.max(16, Math.round(value * aspect / 16) * 16)
+}
+
 // Build the options object to pass to WASM (matches wasm_bindings.cpp field names)
 function buildWasmOptions() {
   const opts = { ...options }
@@ -898,17 +916,24 @@ async function loadExample(example) {
                 </div>
               </div>
               <template v-if="sizeOverride && !isAtariMode(options.mode)">
-                <div class="grid align-items-center">
-                  <label class="col-4 text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
-                  <div class="col-8">
-                    <InputNumber v-model="options.width" :min="16" :step="16" class="w-full input-sm" />
+                <div class="resize-fields">
+                  <label class="resize-label text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
+                  <div class="resize-input">
+                    <InputNumber v-model="options.width" :min="16" :step="16"
+                                 @input="(e) => onWidthInput(e.value)"
+                                 class="w-full input-sm" />
                   </div>
-                </div>
-                <div class="grid align-items-center">
-                  <label class="col-4 text-xs text-color-secondary font-semibold" title="Output height in pixels.">Height</label>
-                  <div class="col-8">
-                    <InputNumber v-model="options.height" :min="2" :step="2" class="w-full input-sm" />
+                  <label class="resize-label text-xs text-color-secondary font-semibold" title="Output height in pixels.">Height</label>
+                  <div class="resize-input">
+                    <InputNumber v-model="options.height" :min="2" :step="2"
+                                 @input="(e) => onHeightInput(e.value)"
+                                 class="w-full input-sm" />
                   </div>
+                  <Button class="aspect-lock"
+                          severity="secondary" text
+                          :icon="aspectLocked ? 'pi pi-link' : 'pi pi-unlink'"
+                          v-tooltip.top="aspectLocked ? 'Aspect ratio locked — click to unlink' : 'Aspect ratio unlinked — click to lock'"
+                          @click="aspectLocked = !aspectLocked" />
                 </div>
               </template>
             </div>
@@ -1151,6 +1176,34 @@ async function loadExample(example) {
   font-size: 0.65rem;
   padding: 0.15rem 0.35rem !important;
   min-width: 0 !important;
+}
+
+/* Resize fields: 3-column grid with chain-lock button spanning both rows */
+.resize-fields {
+  display: grid;
+  grid-template-columns: 33.33% 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+  align-items: center;
+}
+.resize-fields .resize-label {
+  grid-column: 1;
+}
+.resize-fields .resize-input {
+  grid-column: 2;
+}
+.resize-fields .aspect-lock {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+:deep(.aspect-lock) {
+  padding: 0.4rem 0.5rem !important;
+  min-width: 0 !important;
+}
+:deep(.aspect-lock .p-button-icon) {
+  font-size: 0.85rem;
 }
 
 .preview-col {
