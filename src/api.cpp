@@ -1260,7 +1260,15 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
         auto cpl = result->changes_per_line;
         for (auto& line : result->scanline_changes) {
             for (std::size_t s = 0; s < cpl; ++s) {
-                if (s < line.size()) {
+                // Slot is "active" if it has a real change AND (for AGA) the
+                // hi pass isn't nibble-skipped. Inactive slots emit the
+                // 0xFFFF sentinel — same convention as end-of-line padding.
+                // A consumer that walks the table and skips 0xFFFF entries
+                // honors the encoder's MOVE budget; without this, naive
+                // consumers could exceed MAX_MOVES_PER_LINE on some lines.
+                bool active = s < line.size() &&
+                              !(aga && line[s].skip_hi);
+                if (active) {
                     auto hi = aga ? palette::linear_to_aga_hilo(line[s].color).hi
                                   : palette::linear_to_ocs(line[s].color);
                     raw.push_back(0);
@@ -1268,7 +1276,7 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                     raw.push_back(static_cast<std::uint8_t>(hi >> 8));
                     raw.push_back(static_cast<std::uint8_t>(hi & 0xFF));
                 } else {
-                    // Sentinel: unused slot
+                    // Sentinel: unused or nibble-skipped slot
                     raw.push_back(0xFF);
                     raw.push_back(0xFF);
                     raw.push_back(0x00);
