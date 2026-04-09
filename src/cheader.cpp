@@ -956,24 +956,24 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        p += 2;\n";
         out += "      }\n";
         out += "    }\n";
-        out += "    // Build 16 faded copies (step 15 = copper1 itself)\n";
-        out += "    fade_cops[15] = copper1;\n";
-        out += "    int fade_ok = 1;\n";
+        out += "    // Allocate as many fade copies as chip RAM allows\n";
+        out += "    int fade_steps = 0;\n";
         out += "    for (int s = 0; s < 15; s++) {\n";
         out += std::format("        fade_cops[s] = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
                            cop_size);
-        out += "        if (!fade_cops[s]) { fade_ok = 0; break; }\n";
+        out += "        if (!fade_cops[s]) break;\n";
+        out += "        fade_steps = s + 1;\n";
+        out += "    }\n";
+        out += "    fade_cops[fade_steps] = copper1;  // last = full brightness\n";
+        out += "    // Build faded copies: distribute steps 0..14 evenly across available slots\n";
+        out += "    for (int s = 0; s < fade_steps; s++) {\n";
+        out += "        int step = s * 15 / fade_steps;  // map to 0..14\n";
         out += "        CopyMem(copper1, fade_cops[s], cop_len);\n";
-        out += "        fadeApply(copper1, fade_cops[s], fade_off, fade_cnt, s);\n";
+        out += "        fadeApply(copper1, fade_cops[s], fade_off, fade_cnt, step);\n";
         out += "    }\n";
-        out += "    if (!fade_ok) {\n";
-        out += "        // Not enough chip RAM for fade — free what we got, skip fade\n";
-        out += "        for (int s = 0; s < 15; s++) if (fade_cops[s]) "
-               "{ FreeMem(fade_cops[s], " + std::to_string(cop_size) + "); fade_cops[s] = 0; }\n";
-        out += "        for (int s = 0; s < 16; s++) fade_cops[s] = copper1;\n";
-        out += "    }\n";
+        out += "    fade_steps++;  // include the full-brightness entry\n";
         out += std::format("    FreeMem(fade_off, {});\n", max_offsets * 2);
-        // Fade-in: start with black copper list, sync to VBL before enabling
+        // Fade-in
         out += "    // Fade-in: one cop1lc write per frame\n";
         out += "    custom->cop1lc = (ULONG)fade_cops[0];\n";
         out += "    custom->copjmp1 = 0x7fff;\n";
@@ -981,7 +981,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    WaitVbl();  // sync so copper starts at frame top\n";
         out += "    custom->dmacon = DMAF_SETCLR | DMAF_MASTER | "
                "DMAF_RASTER | DMAF_COPPER;\n";
-        out += "    for (int fade = 1; fade <= 15; fade++) {\n";
+        out += "    for (int fade = 1; fade < fade_steps; fade++) {\n";
         out += "        WaitVbl();\n";
         out += "        custom->cop1lc = (ULONG)fade_cops[fade];\n";
         out += "    }\n\n";
@@ -1109,17 +1109,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Wait for left mouse button
     out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
 
-    // Fade-out: reverse 15→0, then disable display and free
+    // Fade-out: reverse, then disable display and free
     if (do_fade) {
         out += "    // Fade-out\n";
-        out += "    for (int fade = 14; fade >= 0; fade--) {\n";
+        out += "    for (int fade = fade_steps - 2; fade >= 0; fade--) {\n";
         out += "        WaitVbl();\n";
         out += "        custom->cop1lc = (ULONG)fade_cops[fade];\n";
         out += "    }\n";
         out += "    WaitVbl();\n";
-        // Disable display before freeing — screen is already black
         out += "    custom->dmacon = DMAF_COPPER | DMAF_RASTER;\n";
-        out += std::format("    for (int s = 0; s < 15; s++) FreeMem(fade_cops[s], {});\n\n",
+        out += std::format("    for (int s = 0; s < fade_steps - 1; s++) FreeMem(fade_cops[s], {});\n\n",
                            cop_size);
     }
 
