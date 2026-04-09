@@ -764,14 +764,14 @@ async function loadExample(example) {
             <div v-if="!isAtariMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button v-if="!options.copper" label="iff" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadIFF"
+              <Button v-if="!options.copper" label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
                 title="Download as IFF ILBM (Deluxe Paint, Personal Paint, WinUAE compatible)." />
-              <Button label="exe" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
-                title="Download compiled AmigaOS executable. Click left mouse button to exit." />
-              <Button label="adf" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
+              <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
             <div v-if="!isAtariMode(options.mode)" class="flex gap-2">
+              <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
+                title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
                 title="Download standalone AmigaOS viewer source (.cpp) — compile with m68k-amiga-elf-gcc." />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
