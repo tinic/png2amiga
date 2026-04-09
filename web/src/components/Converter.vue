@@ -855,14 +855,9 @@ async function loadExample(example) {
               <!-- Resize override (not for Atari — fixed resolution) -->
               <div v-if="!isAtariMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold">Resize</label>
-                <div class="col-8">
+                <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="sizeOverride" />
-                </div>
-              </div>
-              <template v-if="sizeOverride && !isAtariMode(options.mode)">
-                <div class="grid align-items-center">
-                  <label class="col-4 text-xs text-color-secondary font-semibold">Preset</label>
-                  <div class="col-8 flex align-items-center gap-2">
+                  <template v-if="sizeOverride">
                     <Button size="small" severity="secondary" text class="size-preset"
                             :disabled="!imageBytes" @click="setSizePreset(1)"
                             v-tooltip.top="'Same as source'">100%</Button>
@@ -872,8 +867,10 @@ async function loadExample(example) {
                     <Button size="small" severity="secondary" text class="size-preset"
                             :disabled="!imageBytes" @click="setSizePreset(0.25)"
                             v-tooltip.top="'Quarter of source'">25%</Button>
-                  </div>
+                  </template>
                 </div>
+              </div>
+              <template v-if="sizeOverride && !isAtariMode(options.mode)">
                 <div class="grid align-items-center">
                   <label class="col-4 text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
                   <div class="col-8">
