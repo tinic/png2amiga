@@ -1600,6 +1600,12 @@ int main(int argc, char* argv[]) {
             : std::min(copper::max_changes_per_line(config->depth, false, config->hires, chipset), max_swap);
         std::println("Mode:   Copper (max {} changes/line)", cpl);
 
+        // Force transparent pixels to black before encoding
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
         dither::Settings dith;
         dith.method = config->dither_method;
         dith.strength = config->dither_strength;

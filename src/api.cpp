@@ -728,6 +728,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // --- Copper palette mode ---
     if (options.copper && !amiga::is_ham(mode) && mode != amiga::Mode::ehb) {
+        // Force transparent pixels to black before encoding
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
         dither::Settings dith;
         dith.method = parse_dither(options.dither);
         dith.strength = options.dither_strength;
