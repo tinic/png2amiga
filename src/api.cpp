@@ -611,7 +611,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     all_indices[y * w + x] = best_k;
                     total_error += best_d;
 
-                    // Error diffusion: propagate to neighbors
+                    // Error diffusion: propagate to neighbors using the
+                    // kernel for the chosen method (floyd-steinberg,
+                    // atkinson, sierra-lite, stucki, jarvis).
                     if (use_diffusion) {
                         auto chosen_lab = pal_lab[best_k];
                         color_space::OKLab qerr = {
@@ -619,17 +621,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             (pixel_lab.a - chosen_lab.a) * dith.strength,
                             (pixel_lab.b - chosen_lab.b) * dith.strength,
                         };
-                        // Floyd-Steinberg weights: right 7/16, below-left 3/16, below 5/16, below-right 1/16
-                        auto spread = [&](std::size_t nx, std::size_t ny, float wt) {
-                            if (nx < image->width() && ny < h) {
-                                auto& e = err_buf[ny * image->width() + nx];
-                                e.L += qerr.L * wt; e.a += qerr.a * wt; e.b += qerr.b * wt;
+                        auto kernel = dither::error_diffusion_kernel(dith.method);
+                        for (auto& [kdx, kdy, kw] : kernel) {
+                            auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                            auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                            if (nx >= 0 && static_cast<std::size_t>(nx) < image->width() &&
+                                ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                                auto& e = err_buf[static_cast<std::size_t>(ny) * image->width() +
+                                                  static_cast<std::size_t>(nx)];
+                                e.L += qerr.L * kw;
+                                e.a += qerr.a * kw;
+                                e.b += qerr.b * kw;
                             }
-                        };
-                        spread(x + 1, y, 7.0f / 16.0f);
-                        if (x > 0) spread(x - 1, y + 1, 3.0f / 16.0f);
-                        spread(x, y + 1, 5.0f / 16.0f);
-                        spread(x + 1, y + 1, 1.0f / 16.0f);
+                        }
                     }
                 }
             }

@@ -68,80 +68,8 @@ constexpr OKLab oklab_clamp(OKLab e, float max_mag) noexcept {
 // Error diffusion kernels (same as dither.cpp)
 // ===========================================================================
 
-struct DiffusionEntry {
-    int dx;
-    int dy;
-    float weight;
-};
-
-constexpr std::array floyd_steinberg_kernel = {
-    DiffusionEntry{ 1, 0, 7.0f / 16.0f},
-    DiffusionEntry{-1, 1, 3.0f / 16.0f},
-    DiffusionEntry{ 0, 1, 5.0f / 16.0f},
-    DiffusionEntry{ 1, 1, 1.0f / 16.0f},
-};
-
-constexpr std::array atkinson_kernel = {
-    DiffusionEntry{ 1, 0, 1.0f / 8.0f},
-    DiffusionEntry{ 2, 0, 1.0f / 8.0f},
-    DiffusionEntry{-1, 1, 1.0f / 8.0f},
-    DiffusionEntry{ 0, 1, 1.0f / 8.0f},
-    DiffusionEntry{ 1, 1, 1.0f / 8.0f},
-    DiffusionEntry{ 0, 2, 1.0f / 8.0f},
-};
-
-constexpr std::array sierra_lite_kernel = {
-    DiffusionEntry{ 1, 0, 2.0f / 4.0f},
-    DiffusionEntry{-1, 1, 1.0f / 4.0f},
-    DiffusionEntry{ 0, 1, 1.0f / 4.0f},
-};
-
-constexpr std::array stucki_kernel = {
-    DiffusionEntry{ 1, 0, 8.0f / 42.0f},
-    DiffusionEntry{ 2, 0, 4.0f / 42.0f},
-    DiffusionEntry{-2, 1, 2.0f / 42.0f},
-    DiffusionEntry{-1, 1, 4.0f / 42.0f},
-    DiffusionEntry{ 0, 1, 8.0f / 42.0f},
-    DiffusionEntry{ 1, 1, 4.0f / 42.0f},
-    DiffusionEntry{ 2, 1, 2.0f / 42.0f},
-    DiffusionEntry{-2, 2, 1.0f / 42.0f},
-    DiffusionEntry{-1, 2, 2.0f / 42.0f},
-    DiffusionEntry{ 0, 2, 4.0f / 42.0f},
-    DiffusionEntry{ 1, 2, 2.0f / 42.0f},
-    DiffusionEntry{ 2, 2, 1.0f / 42.0f},
-};
-
-constexpr std::array jarvis_kernel = {
-    DiffusionEntry{ 1, 0, 7.0f / 48.0f},
-    DiffusionEntry{ 2, 0, 5.0f / 48.0f},
-    DiffusionEntry{-2, 1, 3.0f / 48.0f},
-    DiffusionEntry{-1, 1, 5.0f / 48.0f},
-    DiffusionEntry{ 0, 1, 7.0f / 48.0f},
-    DiffusionEntry{ 1, 1, 5.0f / 48.0f},
-    DiffusionEntry{ 2, 1, 3.0f / 48.0f},
-    DiffusionEntry{-2, 2, 1.0f / 48.0f},
-    DiffusionEntry{-1, 2, 3.0f / 48.0f},
-    DiffusionEntry{ 0, 2, 5.0f / 48.0f},
-    DiffusionEntry{ 1, 2, 3.0f / 48.0f},
-    DiffusionEntry{ 2, 2, 1.0f / 48.0f},
-};
-
-std::span<const DiffusionEntry> get_diffusion_kernel(dither::Method method) {
-    switch (method) {
-    case dither::Method::floyd_steinberg:
-        return floyd_steinberg_kernel;
-    case dither::Method::atkinson:
-        return atkinson_kernel;
-    case dither::Method::sierra_lite:
-        return sierra_lite_kernel;
-    case dither::Method::stucki:
-        return stucki_kernel;
-    case dither::Method::jarvis:
-        return jarvis_kernel;
-    default:
-        return floyd_steinberg_kernel;
-    }
-}
+// Error-diffusion kernels are defined publicly in dither.cpp/dither.hpp;
+// use dither::error_diffusion_kernel(method) directly.
 
 // Is the dither method an error-diffusion method (vs ordered or none)?
 bool is_error_diffusion(dither::Method m) {
@@ -647,7 +575,7 @@ Result<HamResult> encode_ham_generic(
         // quantization step, not the HAM encoding itself. Trying to diffuse
         // during HAM encoding causes horizontal banding because HAM's
         // sequential pixel dependency conflicts with error propagation.
-        auto kernel = get_diffusion_kernel(opts.dither_method);
+        auto kernel = dither::error_diffusion_kernel(opts.dither_method);
         auto strength = opts.dither_strength;
         auto error_clamp_val = opts.error_clamp;
 
@@ -897,7 +825,7 @@ Result<HamResult> encode_ham_copper_generic(
     Image dithered_image(0, 0);
     if (use_error_diffusion) {
         dithered_image = Image(w, h);
-        auto kernel = get_diffusion_kernel(opts.dither_method);
+        auto kernel = dither::error_diffusion_kernel(opts.dither_method);
         auto strength = opts.dither_strength;
         auto error_clamp_val = opts.error_clamp;
         std::vector<OKLab> error_buf(w * h, OKLab{0, 0, 0});

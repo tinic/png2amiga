@@ -1510,14 +1510,19 @@ int main(int argc, char* argv[]) {
                             (pixel_lab.L - cl.L) * dith.strength,
                             (pixel_lab.a - cl.a) * dith.strength,
                             (pixel_lab.b - cl.b) * dith.strength};
-                        auto sp = [&](std::size_t nx, std::size_t ny, float wt) {
-                            if (nx < w && ny < h) {
-                                auto& e = err_buf[ny * w + nx];
-                                e.L += qe.L * wt; e.a += qe.a * wt; e.b += qe.b * wt;
+                        auto kernel = dither::error_diffusion_kernel(dith.method);
+                        for (auto& [kdx, kdy, kw] : kernel) {
+                            auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                            auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                            if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
+                                ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                                auto& e = err_buf[static_cast<std::size_t>(ny) * w +
+                                                  static_cast<std::size_t>(nx)];
+                                e.L += qe.L * kw;
+                                e.a += qe.a * kw;
+                                e.b += qe.b * kw;
                             }
-                        };
-                        sp(x+1, y, 7.f/16); if (x>0) sp(x-1, y+1, 3.f/16);
-                        sp(x, y+1, 5.f/16); sp(x+1, y+1, 1.f/16);
+                        }
                     }
                 }
             }
