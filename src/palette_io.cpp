@@ -23,6 +23,7 @@ namespace {
 enum class Format : unsigned char {
     gimp_gpl,
     iff_cmap,
+    ocs_binary,
     text_hex,
     unknown,
 };
@@ -43,6 +44,19 @@ Format detect_format(std::span<const std::uint8_t> data) {
     // IFF: starts with "FORM"
     if (data[0] == 'F' && data[1] == 'O' && data[2] == 'R' && data[3] == 'M')
         return Format::iff_cmap;
+
+    // OCS binary .pal: even size, all words have top nibble 0 (0x0RGB),
+    // and contains non-printable bytes (distinguishes from hex text).
+    if (data.size() >= 2 && data.size() % 2 == 0 && data.size() <= 512) {
+        bool looks_binary = false;
+        bool valid_ocs = true;
+        for (std::size_t i = 0; i < data.size(); i += 2) {
+            if (data[i] & 0xF0) valid_ocs = false;  // top nibble must be 0
+            if (data[i] < 0x20 || data[i] > 0x7E) looks_binary = true;
+        }
+        if (valid_ocs && looks_binary)
+            return Format::ocs_binary;
+    }
 
     // Fallback: try text hex (lines of hex colors)
     return Format::text_hex;
@@ -328,6 +342,25 @@ Result<std::vector<std::uint8_t>> read_file(std::string_view path) {
     return data;
 }
 
+// ---------------------------------------------------------------------------
+// OCS binary .pal: 2 bytes per color, big-endian 0x0RGB
+// ---------------------------------------------------------------------------
+
+Result<Palette> parse_ocs_binary(std::span<const std::uint8_t> data) {
+    Palette pal;
+    for (std::size_t i = 0; i + 1 < data.size(); i += 2) {
+        auto w = static_cast<std::uint16_t>((data[i] << 8) | data[i + 1]);
+        pal.colors.push_back(palette::ocs_to_linear(w));
+    }
+    if (pal.colors.empty()) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_png,
+            "Binary palette file is empty",
+        }};
+    }
+    return pal;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -348,6 +381,8 @@ Result<Palette> load_palette_from_memory(std::span<const std::uint8_t> data) {
         return parse_gimp_gpl(data);
     case Format::iff_cmap:
         return parse_iff_cmap(data);
+    case Format::ocs_binary:
+        return parse_ocs_binary(data);
     case Format::text_hex:
         return parse_text_hex(data);
     case Format::unknown:
