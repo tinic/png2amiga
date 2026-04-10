@@ -416,6 +416,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     bool need_fmode3 = ((depth > 6) && has_copper) ||
                        (is_hires && depth > 4);
 
+    // Bank-swap CAP: AGA depth <= 5, non-HAM, non-interlace with copper.
+    // Uses BPLCON3 bank ping-pong to write next line's palette into a
+    // non-displayed bank during the full scanline, not just post-DDFSTOP.
+    bool use_bank_swap = options.aga && depth <= 5 && !is_ham
+        && !options.interlace && has_copper && options.scanline_palettes
+        && options.scanline_palettes->size() >= height;
+
     out += std::format("// {}x{}, {} bitplanes, CAMG 0x{:04X}\n",
                        width, height, depth, camg);
     // 8-byte alignment when FMODE=3 (64-bit DMA fetch); 2-byte otherwise.
@@ -469,8 +476,104 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "};\n\n";
     }
 
-    // --- Copper list (if present) ---
-    if (has_copper) {
+    // --- Copper data tables ---
+    if (use_bank_swap) {
+        // ---- Bank-swap CAP data ----
+        // Two full init palettes (bank 0 = line 0, bank 1 = line 1) and
+        // per-line 2-stride diffs: diff(palette[y-1], palette[y+1]).
+        auto& sp = *options.scanline_palettes;
+
+        auto emit_full_pal = [&](const char* suffix, std::size_t line_idx) {
+            auto& pal = sp[line_idx];
+            out += std::format("static const UWORD {}_bs_{}_hi[{}] = {{",
+                               sym, suffix, pal_count);
+            for (std::size_t i = 0; i < pal_count; ++i) {
+                if (i % 8 == 0) out += "\n    ";
+                auto c = i < pal.size() ? pal[i] : Color3f{};
+                out += std::format("0x{:04X}", palette::linear_to_aga_hilo(c).hi);
+                if (i + 1 < pal_count) out += ",";
+            }
+            out += "\n};\n";
+            out += std::format("static const UWORD {}_bs_{}_lo[{}] = {{",
+                               sym, suffix, pal_count);
+            for (std::size_t i = 0; i < pal_count; ++i) {
+                if (i % 8 == 0) out += "\n    ";
+                auto c = i < pal.size() ? pal[i] : Color3f{};
+                out += std::format("0x{:04X}", palette::linear_to_aga_hilo(c).lo);
+                if (i + 1 < pal_count) out += ",";
+            }
+            out += "\n};\n\n";
+        };
+        emit_full_pal("bank0", 0);
+        if (height > 1) emit_full_pal("bank1", 1);
+
+        // Compute 2-line stride diffs for the per-scanline bank-swap writes.
+        // During line y: write to non-displayed bank to prepare palette[y+1].
+        // That bank currently holds palette[y-1], so we write the registers
+        // that differ between palette[y-1] and palette[y+1].
+        // y=0: 0 changes (bank 1 already initialized for line 1)
+        // y=height-1: 0 changes (no line y+1)
+        struct BsDiff { std::uint8_t reg; std::uint16_t hi; std::uint16_t lo; };
+        std::vector<std::vector<BsDiff>> bs_diffs(height);
+        std::vector<std::size_t> bs_n(height, 0);
+
+        for (std::size_t y = 1; y + 1 < height; ++y) {
+            auto& old_pal = sp[y - 1];
+            auto& new_pal = sp[y + 1];
+            for (std::size_t r = 0; r < pal_count; ++r) {
+                auto old_c = r < old_pal.size() ? old_pal[r] : Color3f{};
+                auto new_c = r < new_pal.size() ? new_pal[r] : Color3f{};
+                auto oh = palette::linear_to_aga_hilo(old_c);
+                auto nh = palette::linear_to_aga_hilo(new_c);
+                if (oh.hi != nh.hi || oh.lo != nh.lo) {
+                    bs_diffs[y].push_back({static_cast<std::uint8_t>(r),
+                                           nh.hi, nh.lo});
+                }
+            }
+            bs_n[y] = bs_diffs[y].size();
+        }
+
+        out += "struct CopperEntry { UWORD reg; UWORD color; };\n\n";
+
+        // Per-line count array
+        out += std::format("static const UBYTE {}_bs_n[{}] = {{\n    ",
+                           sym, height);
+        for (std::size_t y = 0; y < height; ++y) {
+            out += std::format("{}", bs_n[y]);
+            if (y + 1 < height) out += ",";
+            if ((y + 1) % 16 == 0) out += "\n    ";
+        }
+        out += "\n};\n\n";
+
+        // Flat hi/lo entry arrays
+        std::size_t total_bs = 0;
+        for (auto v : bs_n) total_bs += v;
+
+        auto emit_bs_array = [&](const char* suffix, auto field_fn) {
+            out += std::format(
+                "static const struct CopperEntry {}_bs_{}[{}] = {{\n",
+                sym, suffix, std::max(total_bs, std::size_t{1}));
+            if (total_bs == 0) {
+                out += "    {0,0}\n";
+            } else {
+                std::size_t emitted = 0;
+                for (std::size_t y = 0; y < height; ++y) {
+                    if (bs_n[y] == 0) continue;
+                    out += "    ";
+                    for (auto& d : bs_diffs[y]) {
+                        out += std::format("{{{},0x{:04X}}}",
+                                           d.reg, field_fn(d));
+                        if (++emitted < total_bs) out += ",";
+                    }
+                    out += std::format("  /* y={} */\n", y);
+                }
+            }
+            out += "};\n\n";
+        };
+        emit_bs_array("hi", [](const BsDiff& d) { return d.hi; });
+        emit_bs_array("lo", [](const BsDiff& d) { return d.lo; });
+
+    } else if (has_copper) {
         auto& changes = *options.copper_changes;
         auto cpl = options.copper_changes_per_line;
         auto ch_height = changes.size();
@@ -478,8 +581,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Variable-length per-scanline storage. Each line emits only its
         // *real* hi/lo entries; per-line count arrays say how many. The
         // viewer walks running pointers advanced by the count per line.
-        // Drops the prior fixed [H][cpl] grid + 0xFFFF sentinel scheme,
-        // which wasted bytes on padding and nibble-skip placeholders.
 
         // Precompute per-line counts (hi: skip slots flagged skip_hi; lo: all)
         std::vector<std::size_t> n_hi(ch_height), n_lo(ch_height);
@@ -659,30 +760,31 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    WaitVbl();\n\n";
 
     // Calculate copper list size: display setup + bitplane ptrs + colors + copper changes + end
-    auto cop_size = 128 + depth * 4 * 2 + pal_count * 4;
-    if (pal_count > 32) {
-        // AGA >32: double writes (LOCT high + low) + BPLCON3 per bank + reset
-        auto num_banks = (pal_count + 31) / 32;
-        cop_size += pal_count * 4;  // double the color writes (LOCT=1 pass)
-        cop_size += static_cast<std::size_t>((num_banks * 2 + 1) * 4);  // BPLCON3 switches
-    } else if (options.aga) {
-        // AGA <=32: LOCT=1 pass + BPLCON3 switches (2 for LOCT on/off)
-        cop_size += pal_count * 4 + 8;
-    }
-    if (has_copper) {
-        cop_size += height * options.copper_changes_per_line * 8 + height * 4;
-        if (options.aga) {
-            // AGA LOCT per scanline: BPLCON3 LOCT=1 + N color writes + BPLCON3 LOCT=0
-            cop_size += height * (8 + options.copper_changes_per_line * 4);
-            if (pal_count > 32) {
-                // Extra bank switches per scanline for hi pass
-                cop_size += height * 8;
-            }
+    auto cop_size = 128 + depth * 4 * 2;
+    if (use_bank_swap) {
+        // Bank-swap init: 2 banks × (BPLCON3 + pal_count hi + BPLCON3 + pal_count lo) + reset
+        cop_size += (2 * (2 + pal_count * 2) + 1) * 4;
+        // Per-scanline: WAIT + BPLCON3(bank) + up to pal_count hi + BPLCON3(LOCT) + pal_count lo
+        cop_size += height * (4 + 4 + pal_count * 4 + 4 + pal_count * 4);
+    } else {
+        cop_size += pal_count * 4;
+        if (pal_count > 32) {
+            auto num_banks = (pal_count + 31) / 32;
+            cop_size += pal_count * 4;
+            cop_size += static_cast<std::size_t>((num_banks * 2 + 1) * 4);
+        } else if (options.aga) {
+            cop_size += pal_count * 4 + 8;
         }
-        // Line 0 copper changes emitted separately (before display)
-        cop_size += options.copper_changes_per_line * 4;
-        if (options.aga)
-            cop_size += 8 + options.copper_changes_per_line * 4;
+        if (has_copper) {
+            cop_size += height * options.copper_changes_per_line * 8 + height * 4;
+            if (options.aga) {
+                cop_size += height * (8 + options.copper_changes_per_line * 4);
+                if (pal_count > 32) cop_size += height * 8;
+            }
+            cop_size += options.copper_changes_per_line * 4;
+            if (options.aga)
+                cop_size += 8 + options.copper_changes_per_line * 4;
+        }
     }
     cop_size += 128;  // padding for blank-below, 256-boundary WAITs, end markers
 
@@ -792,63 +894,130 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                        sym, bpr);
     out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
 
-    // Set palette via copper list.
-    // AGA >32 colors: BPLCON3 bank switching.
-    // For HAM modes: skip LOCT write — the nibble-copy (0xN → 0xNN)
-    //   matches what the encoder computes (palette::quantize_to_ocs).
-    // For standard modes: LOCT double-write zeroes low nibbles to prevent
-    //   the auto-copy artifact that makes bright colors overshoot.
-    if (pal_count > 32) {
-        auto num_banks = (pal_count + 31) / 32;
-        out += std::format("    // AGA palette: {} colors, {} banks\n",
-                           pal_count, num_banks);
-        for (std::size_t bank = 0; bank < static_cast<std::size_t>(num_banks); ++bank) {
-            auto base = bank * 32;
-            auto count = std::min(std::size_t{32}, pal_count - base);
-            auto bank_bits = static_cast<unsigned>(bank << 13);
+    // --- Palette setup + per-scanline copper changes ---
+    if (use_bank_swap) {
+        // Bank-swap CAP: initialize both palette banks, then per-scanline
+        // ping-pong writes to the non-displayed bank.
+        out += "    // Bank-swap CAP: initialize bank 0 (line 0) and bank 1 (line 1)\n";
 
-            // High nibbles (LOCT=0)
-            out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
-                               "  // bank {}\n", bank_bits, bank);
-            out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
-            out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
-            out += std::format("        *cl++ = {}_palette[{} + i];\n", sym, base);
-            out += "    }\n";
-
-            // Low nibbles (LOCT=1) — skip during fade, full precision on final step
-            if (options.aga) {
-                    out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
-                                   "  // bank {}, LOCT=1\n",
-                                   bank_bits | 0x0200, bank);
-                out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
-                out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
-                out += std::format("        *cl++ = {}_palette_lo[{} + i];\n", sym, base);
-                out += "    }\n";
-                }
-        }
-        // Reset to bank 0, LOCT=0
-        out += "    *cl++ = 0x0106; *cl++ = 0x0000;\n\n";
-    } else {
-        // <=32 colors: write directly (no bank switching)
+        // Bank 0: full palette for line 0
+        out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // BPLCON3: bank 0, LOCT=0\n";
         out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
         out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
-        out += std::format("        *cl++ = {}_palette[i];\n", sym);
+        out += std::format("        *cl++ = {}_bs_bank0_hi[i];\n", sym);
         out += "    }\n";
-        if (options.aga) {
-            // During fade: skip LOCT (12-bit precision is fine for a 16-step fade)
-            // On final step or no-fade: write full 24-bit lo nibbles
-            out += "    *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
+        out += "    *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
+        out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+        out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+        out += std::format("        *cl++ = {}_bs_bank0_lo[i];\n", sym);
+        out += "    }\n";
+
+        // Bank 1: full palette for line 1
+        if (height > 1) {
+            out += "    *cl++ = 0x0106; *cl++ = 0x2000;  // bank 1, LOCT=0\n";
             out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
             out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
-            out += std::format("        *cl++ = {}_palette_lo[i];\n", sym);
+            out += std::format("        *cl++ = {}_bs_bank1_hi[i];\n", sym);
             out += "    }\n";
-            out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+            out += "    *cl++ = 0x0106; *cl++ = 0x2200;  // bank 1, LOCT=1\n";
+            out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+            out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+            out += std::format("        *cl++ = {}_bs_bank1_lo[i];\n", sym);
+            out += "    }\n";
         }
-        out += "\n";
+
+        // Leave BPLCON3 at bank 0 so Lisa latches bank 0 for line 0
+        out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // bank 0, LOCT=0\n\n";
+
+        // Per-scanline bank-swap loop.
+        // During line y: switch BPLCON3 to the non-displayed bank and write
+        // that bank's updates (preparing palette[y+1]). The ping-pong means
+        // BPLCON3 ends each line pointing at the NEXT line's display bank.
+        out += std::format("    const struct CopperEntry* p_hi = {}_bs_hi;\n", sym);
+        out += std::format("    const struct CopperEntry* p_lo = {}_bs_lo;\n\n", sym);
+
+        out += std::format("    for (int y = 0; y < {}; y++) {{\n", height);
+        // WAIT — line 0 doesn't need one (copper is already positioned before display)
+        out += "        if (y > 0) {\n";
+        out += std::format("            USHORT line = y + {};\n", y_start);
+        out += "            if (line == 256) {\n";
+        out += "                *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
+        out += "            }\n";
+        out += "            *cl++ = ((line & 0xFF) << 8) | 0x09;\n";
+        out += "            *cl++ = 0xfffe;\n";
+        out += "        }\n";
+        // Switch to non-displayed bank for writes
+        out += "        int wb = (y + 1) & 1;  // write bank\n";
+        out += "        *cl++ = 0x0106;\n";
+        out += "        *cl++ = (UWORD)(wb << 13);  // LOCT=0 (hi nibbles)\n";
+        // Hi entries
+        out += std::format("        int n = {}_bs_n[y];\n", sym);
+        out += "        for (int s = 0; s < n; s++) {\n";
+        out += "            *cl++ = offsetof(struct Custom, color) + p_hi->reg * 2;\n";
+        out += "            *cl++ = p_hi->color;\n";
+        out += "            p_hi++;\n";
+        out += "        }\n";
+        // LOCT=1 + lo entries (only if there are entries)
+        out += "        if (n > 0) {\n";
+        out += "            *cl++ = 0x0106;\n";
+        out += "            *cl++ = (UWORD)((wb << 13) | 0x0200);\n";
+        out += "            for (int s = 0; s < n; s++) {\n";
+        out += "                *cl++ = offsetof(struct Custom, color) + p_lo->reg * 2;\n";
+        out += "                *cl++ = p_lo->color;\n";
+        out += "                p_lo++;\n";
+        out += "            }\n";
+        out += "        }\n";
+        out += "    }\n\n";
+
+    } else {
+        // --- Standard palette + copper (non-bank-swap) ---
+        // Set palette via copper list.
+        if (pal_count > 32) {
+            auto num_banks = (pal_count + 31) / 32;
+            out += std::format("    // AGA palette: {} colors, {} banks\n",
+                               pal_count, num_banks);
+            for (std::size_t bank = 0; bank < static_cast<std::size_t>(num_banks); ++bank) {
+                auto base = bank * 32;
+                auto count = std::min(std::size_t{32}, pal_count - base);
+                auto bank_bits = static_cast<unsigned>(bank << 13);
+
+                out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
+                                   "  // bank {}\n", bank_bits, bank);
+                out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
+                out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+                out += std::format("        *cl++ = {}_palette[{} + i];\n", sym, base);
+                out += "    }\n";
+
+                if (options.aga) {
+                    out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
+                                       "  // bank {}, LOCT=1\n",
+                                       bank_bits | 0x0200, bank);
+                    out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
+                    out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+                    out += std::format("        *cl++ = {}_palette_lo[{} + i];\n", sym, base);
+                    out += "    }\n";
+                }
+            }
+            out += "    *cl++ = 0x0106; *cl++ = 0x0000;\n\n";
+        } else {
+            out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+            out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+            out += std::format("        *cl++ = {}_palette[i];\n", sym);
+            out += "    }\n";
+            if (options.aga) {
+                out += "    *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
+                out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+                out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+                out += std::format("        *cl++ = {}_palette_lo[i];\n", sym);
+                out += "    }\n";
+                out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+            }
+            out += "\n";
+        }
     }
 
-    // Copper changes per scanline
-    if (has_copper) {
+    // Copper changes per scanline (non-bank-swap only)
+    if (has_copper && !use_bank_swap) {
         bool aga_banks = (pal_count > 32);
         // Write palette changes right after the last bitplane fetch completes.
         // Encoded byte 0xDD = binary 11011101, which puts the copper WAIT H
