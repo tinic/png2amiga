@@ -137,6 +137,9 @@ struct Config {
     int crop_h = 0;
     bool crop_auto = false;            // auto-crop to mode aspect ratio
 
+    // Output
+    bool preview = false;              // show terminal image preview (iTerm2)
+
     // Palette index manipulation
     std::vector<api::LockSpec> locks;  // --lock-index <id> <rgbhex>
     std::vector<api::PinSpec>  pins;   // --pin-index-at <id> <x> <y>
@@ -224,6 +227,7 @@ void print_usage() {
         "  --symbol <name>                 Base symbol name (default: from filename)\n"
         "\n"
         "Output:\n"
+        "  --preview                       Show iTerm2 inline image preview\n"
         "  .png extension -> preview PNG image\n"
         "  .iff extension -> IFF ILBM Amiga image file\n"
         "  .h extension   -> C header with UWORD bitplane arrays\n"
@@ -284,6 +288,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--match-range") {
             config.match_range = true;
+            continue;
+        }
+
+        if (arg == "--preview") {
+            config.preview = true;
             continue;
         }
 
@@ -1356,7 +1365,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (ham_preview)
-            show_terminal_preview(*ham_preview, config->mode, config->hires, config->interlace);
+            if (config->preview) show_terminal_preview(*ham_preview, config->mode, config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -1615,7 +1624,7 @@ int main(int argc, char* argv[]) {
                          copper_result->avg_changes_per_line,
                          total_error);
 
-            show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
+            if (config->preview) show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
 
             // Use base palette for CMAP
             std::vector<Color3f> cmap_palette = copper_result->base_palette;
@@ -1801,7 +1810,7 @@ int main(int argc, char* argv[]) {
                      planes->depth, planes->total_bytes(),
                      count_unique_colors(*preview), dither_result.total_error);
 
-        show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+        if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -1972,7 +1981,7 @@ int main(int argc, char* argv[]) {
                      copper_result->avg_changes_per_line,
                      copper_result->total_error);
 
-        show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+        if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -2202,7 +2211,7 @@ int main(int argc, char* argv[]) {
                  count_unique_colors(*preview), dither_result.total_error);
 
     // Terminal preview
-    show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+    if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
     // Output
     if (!config->output_path.empty()) {
