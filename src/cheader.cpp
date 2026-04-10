@@ -930,27 +930,36 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // bank 0, LOCT=0\n\n";
 
         // Per-scanline bank-swap loop.
-        // During line y: switch BPLCON3 to the non-displayed bank and write
-        // that bank's updates (preparing palette[y+1]). The ping-pong means
-        // BPLCON3 ends each line pointing at the NEXT line's display bank.
+        // The writes for line Y+1 happen at the END of line Y (post-DDFSTOP,
+        // H=0xDD). After DDFSTOP the bitplane DMA stops and the copper has
+        // free bus access through HBLANK and into the early part of line Y+1
+        // (before DDFSTRT). This gives ~52 copper slots — far more than the
+        // 14-MOVE post-DDFSTOP-only budget of the non-bank-swap path.
+        //
+        // The BPLCON3 bank switch (1 MOVE) makes subsequent COLOR writes
+        // target the non-displayed bank. The ping-pong leaves BPLCON3
+        // pointing at the correct display bank for the NEXT line when
+        // Lisa latches at line start.
+        //
+        // Line 0: WAIT at (y_start - 1, 0xDD) — one line before display.
+        //         Write palette[1] diffs into bank 1 (display bank for line 1).
+        // Line y: WAIT at (y + y_start - 1, 0xDD) — end of previous line.
+        //         Write palette[y+1] diffs into bank((y+1)&1).
         out += std::format("    const struct CopperEntry* p_hi = {}_bs_hi;\n", sym);
         out += std::format("    const struct CopperEntry* p_lo = {}_bs_lo;\n\n", sym);
 
         out += std::format("    for (int y = 0; y < {}; y++) {{\n", height);
-        // WAIT at the start of each display line. Even y=0 needs a WAIT —
-        // without it the BPLCON3 bank switch runs before Lisa latches the
-        // init's bank 0, making the first visible line show bank 1.
-        out += std::format("        USHORT line = y + {};\n", y_start);
+        // WAIT at post-DDFSTOP (H=0xDD) of the PREVIOUS scanline
+        out += std::format("        USHORT line = y + {} - 1;\n", y_start);
         out += "        if (line == 256) {\n";
         out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
         out += "        }\n";
-        // WAIT past DDFSTRT (0x38 = CCK 56) so Lisa has already latched
-        // the display bank from BPLCON3 before we switch to the write bank.
-        // H=0x81 (HP=0x40, CCK ~128) is safely past any DDFSTRT.
-        out += "        *cl++ = ((line & 0xFF) << 8) | 0x81;\n";
+        out += "        *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
         out += "        *cl++ = 0xfffe;\n";
-        // Switch to non-displayed bank for writes
-        out += "        int wb = (y + 1) & 1;  // write bank\n";
+        // Switch to non-displayed bank for writes.
+        // After the writes, BPLCON3 = write bank, which IS the display
+        // bank for line y+1 — exactly what Lisa should latch.
+        out += "        int wb = (y + 1) & 1;  // write bank = next display bank\n";
         out += "        *cl++ = 0x0106;\n";
         out += "        *cl++ = (UWORD)(wb << 13);  // LOCT=0 (hi nibbles)\n";
         // Hi entries
