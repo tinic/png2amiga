@@ -649,4 +649,82 @@ Result<Palette> quantize(const Image& image, std::size_t max_colors,
     return median_cut(image.pixels(), max_colors);
 }
 
+// ===========================================================================
+// Dither-aware palette refinement
+// ===========================================================================
+
+Result<Palette> refine_with_dither(
+    const Image& image,
+    const Palette& initial_palette,
+    const dither::Settings& dither_settings,
+    amiga::Chipset chipset,
+    std::size_t max_iterations,
+    const std::vector<bool>& locked) {
+
+    if (dither_settings.method == dither::Method::none)
+        return initial_palette;  // nothing to refine against
+
+    auto pal = initial_palette;
+    auto num_colors = pal.colors.size();
+    if (num_colors < 2) return pal;
+
+    bool is_ocs = (chipset != amiga::Chipset::aga);
+
+    for (std::size_t iter = 0; iter < max_iterations; ++iter) {
+        // Run the ditherer with the current palette
+        auto dith = dither::apply(image, pal.colors, dither_settings);
+
+        // Accumulate centroids in OKLab from pixels actually assigned
+        // by the ditherer (not nearest-color — the ditherer may have
+        // pushed them elsewhere via error diffusion or threshold bias).
+        struct Acc { double L{}, a{}, b{}; std::size_t n{}; };
+        std::vector<Acc> acc(num_colors);
+
+        for (std::size_t y = 0; y < image.height(); ++y) {
+            for (std::size_t x = 0; x < image.width(); ++x) {
+                auto idx = dith.indices[y * image.width() + x];
+                if (idx >= num_colors) continue;
+                auto lab = color_space::linear_to_oklab(image[x, y]);
+                acc[idx].L += static_cast<double>(lab.L);
+                acc[idx].a += static_cast<double>(lab.a);
+                acc[idx].b += static_cast<double>(lab.b);
+                acc[idx].n++;
+            }
+        }
+
+        // Update palette: move each unlocked slot to its cluster centroid
+        bool changed = false;
+        for (std::size_t k = 0; k < num_colors; ++k) {
+            if (!locked.empty() && k < locked.size() && locked[k]) continue;
+            if (acc[k].n == 0) continue;
+
+            auto dn = static_cast<double>(acc[k].n);
+            auto lab = color_space::OKLab{
+                static_cast<float>(acc[k].L / dn),
+                static_cast<float>(acc[k].a / dn),
+                static_cast<float>(acc[k].b / dn),
+            };
+            auto new_color = color_space::oklab_to_linear(lab).clamped();
+            if (is_ocs) new_color = palette::quantize_to_ocs(new_color);
+
+            // Check convergence (OCS: exact comparison is fine; AGA: epsilon)
+            auto& old_color = pal.colors[k];
+            if (is_ocs) {
+                auto oh = palette::linear_to_ocs(old_color);
+                auto nh = palette::linear_to_ocs(new_color);
+                if (oh != nh) { old_color = new_color; changed = true; }
+            } else {
+                auto d = oklab_dist_sq(
+                    color_space::linear_to_oklab(old_color),
+                    color_space::linear_to_oklab(new_color));
+                if (d > 1e-10f) { old_color = new_color; changed = true; }
+            }
+        }
+
+        if (!changed) break;
+    }
+
+    return pal;
+}
+
 } // namespace png2amiga::quantize

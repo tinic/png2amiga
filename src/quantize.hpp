@@ -1,9 +1,12 @@
 #pragma once
 
+#include "amiga.hpp"
+#include "dither.hpp"
 #include "types.hpp"
 
 #include <cstddef>
 #include <span>
+#include <vector>
 
 namespace png2amiga::quantize {
 
@@ -46,5 +49,31 @@ Result<Palette> quantize(const Image& image,
 
 Palette median_cut(std::span<const Color3f> colors,
                    std::size_t max_colors);
+
+// ---------------------------------------------------------------------------
+// Dither-aware palette refinement.
+//
+// Standard k-means assigns each pixel to its nearest palette color. But
+// with dithering, the assignment depends on accumulated error from
+// neighbors — the ditherer may push a pixel to a non-nearest entry. The
+// "optimal" palette for dithered output is different from the one that
+// minimizes per-pixel nearest-color error.
+//
+// This pass iterates:
+//   1. Run the selected dithering method with the current palette
+//   2. For each palette slot, compute the centroid (in OKLab) of all
+//      pixels actually assigned to it by the ditherer
+//   3. Update the palette, snap to chipset precision, repeat
+//
+// Locked slots (e.g., color 0 = black) are never moved.
+// ---------------------------------------------------------------------------
+
+Result<Palette> refine_with_dither(
+    const Image& image,
+    const Palette& initial_palette,
+    const dither::Settings& dither_settings,
+    amiga::Chipset chipset,
+    std::size_t max_iterations = 4,
+    const std::vector<bool>& locked = {});
 
 } // namespace png2amiga::quantize

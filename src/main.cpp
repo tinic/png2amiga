@@ -121,6 +121,9 @@ struct Config {
     dither::Method alpha_dither = dither::Method::none;  // none = use threshold
     float alpha_dither_strength = 1.0f; // strength for alpha dither (independent)
 
+    // Palette refinement
+    int refine_iterations = 4;         // dither-aware palette refinement iterations (0=off)
+
     // Copper palette
     bool copper = false;               // per-scanline palette changes
     int copper_changes = 0;            // 0 = auto (based on chipset/depth)
@@ -187,6 +190,8 @@ void print_usage() {
         "                                  stucki|jarvis (default: floyd-steinberg)\n"
         "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
         "  --error-clamp <float>           Max error per channel (default: 0.12)\n"
+        "  --refine <0-32>                Dither-aware palette refinement iterations\n"
+        "                                  (default: 4, 0 = off)\n"
         "\n"
         "Palette:\n"
         "  --palette <file>                Load palette from file (GIMP .gpl, IFF, hex text)\n"
@@ -458,6 +463,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
             }
             else if (arg == "--error-clamp") {
                 config.error_clamp = std::stof(std::string(val));
+            }
+            else if (arg == "--refine") {
+                config.refine_iterations = std::stoi(std::string(val));
             }
             else if (arg == "--brightness") {
                 config.preprocess.brightness = std::stof(std::string(val));
@@ -2153,12 +2161,31 @@ int main(int argc, char* argv[]) {
 
     // Apply dithering
     auto pal_size = std::min(pal.size(), max_colors);
-    std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
     dither::Settings dith;
     dith.method = config->dither_method;
     dith.strength = config->dither_strength;
     dith.error_clamp = config->error_clamp;
+
+    // Dither-aware palette refinement: iteratively run the ditherer,
+    // recompute each slot's centroid from the pixels actually assigned
+    // to it, and update the palette. Converges to a palette that's
+    // optimal for the dithered output, not just nearest-color assignment.
+    if (config->refine_iterations > 0 && config->palette_file.empty()) {
+        auto refined = quantize::refine_with_dither(
+            *image,
+            Palette{"refined", {pal.colors.begin(),
+                                pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
+            dith, chipset,
+            static_cast<std::size_t>(config->refine_iterations),
+            std_locked);
+        if (refined) {
+            pal.colors = std::move(refined->colors);
+            pal_size = pal.colors.size();
+        }
+    }
+
+    std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
     std::println("Dither: {} (strength: {:.2f})",
                  dither_name(dith.method), dith.strength);
