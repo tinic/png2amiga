@@ -1738,8 +1738,6 @@ int main(int argc, char* argv[]) {
 
         // Build full 64-color EHB palette
         auto ehb_pal = palette::make_ehb_palette(base_pal.colors);
-        std::println("Palette: {} base + {} half-brite = {} colors",
-                     base_pal.size(), base_pal.size(), ehb_pal.size());
 
         if (config->match_range) {
             preprocess::match_palette_range(*image, ehb_pal);
@@ -1751,6 +1749,13 @@ int main(int argc, char* argv[]) {
         dith.strength = config->dither_strength;
         dith.error_clamp = config->error_clamp;
 
+        // Note: dither-aware refinement is skipped for EHB because the
+        // hardware-derived half-brite colors (sRGB DAC halving) create a
+        // non-linear constraint that the linear centroid approach can't
+        // capture correctly.
+
+        std::println("Palette: {} base + {} half-brite = {} colors",
+                     base_pal.size(), base_pal.size(), ehb_pal.size());
         std::println("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
 

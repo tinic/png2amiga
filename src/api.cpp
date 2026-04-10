@@ -1016,6 +1016,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // Limit palette span to max_colors
     auto pal_size = std::min(pal.size(), max_colors);
+
+    // Dither-aware palette refinement (auto-palette only, 4 iterations)
+    if (!has_user_palette(options) && dith.method != dither::Method::none) {
+        auto refined = quantize::refine_with_dither(
+            *image,
+            Palette{"refined", {pal.colors.begin(),
+                                pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
+            dith, chipset, 4, locked_mask);
+        if (refined) {
+            pal.colors = std::move(refined->colors);
+            pal_size = pal.colors.size();
+        }
+    }
+
     std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
     dither::DitherResult dither_result;

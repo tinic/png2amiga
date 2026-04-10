@@ -270,6 +270,7 @@ Result<CopperResult> encode_copper(const Image& image,
         base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});
         while (base_pal.size() < num_colors)
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
+
     }
 
     // Step 2: Process scanlines — accumulate palette changes
