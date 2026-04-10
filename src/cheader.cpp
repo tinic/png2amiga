@@ -944,7 +944,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        if (line == 256) {\n";
         out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
         out += "        }\n";
-        out += "        *cl++ = ((line & 0xFF) << 8) | 0x09;\n";
+        // WAIT past DDFSTRT (0x38 = CCK 56) so Lisa has already latched
+        // the display bank from BPLCON3 before we switch to the write bank.
+        // H=0x81 (HP=0x40, CCK ~128) is safely past any DDFSTRT.
+        out += "        *cl++ = ((line & 0xFF) << 8) | 0x81;\n";
         out += "        *cl++ = 0xfffe;\n";
         // Switch to non-displayed bank for writes
         out += "        int wb = (y + 1) & 1;  // write bank\n";
