@@ -937,15 +937,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    const struct CopperEntry* p_lo = {}_bs_lo;\n\n", sym);
 
         out += std::format("    for (int y = 0; y < {}; y++) {{\n", height);
-        // WAIT — line 0 doesn't need one (copper is already positioned before display)
-        out += "        if (y > 0) {\n";
-        out += std::format("            USHORT line = y + {};\n", y_start);
-        out += "            if (line == 256) {\n";
-        out += "                *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
-        out += "            }\n";
-        out += "            *cl++ = ((line & 0xFF) << 8) | 0x09;\n";
-        out += "            *cl++ = 0xfffe;\n";
+        // WAIT at the start of each display line. Even y=0 needs a WAIT —
+        // without it the BPLCON3 bank switch runs before Lisa latches the
+        // init's bank 0, making the first visible line show bank 1.
+        out += std::format("        USHORT line = y + {};\n", y_start);
+        out += "        if (line == 256) {\n";
+        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
         out += "        }\n";
+        out += "        *cl++ = ((line & 0xFF) << 8) | 0x09;\n";
+        out += "        *cl++ = 0xfffe;\n";
         // Switch to non-displayed bank for writes
         out += "        int wb = (y + 1) & 1;  // write bank\n";
         out += "        *cl++ = 0x0106;\n";
