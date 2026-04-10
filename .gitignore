@@ -11,3 +11,4 @@ web/dist/
 *.o
 *.d
 test_output/
+.DS_Store
