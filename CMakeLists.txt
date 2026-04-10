@@ -68,6 +68,15 @@ else()
     target_link_libraries(png2amiga PRIVATE stb)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
+    if(MINGW)
+        # std::print's terminal helpers (__open_terminal, __write_to_terminal)
+        # live in libstdc++exp.a on MinGW rather than the main libstdc++.a.
+        # Must come AFTER object files in the link line, so use
+        # target_link_libraries (not CMAKE_EXE_LINKER_FLAGS, which is positioned
+        # before objects and won't pull any symbols from a static archive).
+        target_link_libraries(png2amiga PRIVATE -lstdc++exp)
+    endif()
+
     enable_testing()
 
     # Basic build test: verify the binary runs and shows help
