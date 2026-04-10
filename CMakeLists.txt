@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga LANGUAGES C CXX)
+project(png2amiga VERSION 1.0.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -13,6 +13,37 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
+
+# Capture the total commit count as a monotonically increasing build number.
+# Re-runs of cmake pick up new commits; CI runs cmake fresh each time so the
+# released binary always carries the right number. Falls back to 0 if git is
+# unavailable (source tarball, no .git dir, etc).
+set(PNG2AMIGA_BUILD_NUMBER 0)
+find_package(Git QUIET)
+if(Git_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-list --count HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE PNG2AMIGA_BUILD_NUMBER
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT PNG2AMIGA_BUILD_NUMBER)
+        set(PNG2AMIGA_BUILD_NUMBER 0)
+    endif()
+endif()
+set(PNG2AMIGA_VERSION_FULL "${PROJECT_VERSION}.${PNG2AMIGA_BUILD_NUMBER}")
+message(STATUS "png2amiga version: ${PNG2AMIGA_VERSION_FULL}")
+
+# Generate src/version.hpp from version.hpp.in. Single source of truth for the
+# version string — bump PROJECT_VERSION in the project() call above; the build
+# number is auto-derived. The generated header lands in build/generated/ and is
+# added to both the CLI and WASM include paths below.
+configure_file(
+    ${CMAKE_SOURCE_DIR}/src/version.hpp.in
+    ${CMAKE_BINARY_DIR}/generated/version.hpp
+    @ONLY
+)
 
 add_subdirectory(third_party)
 
@@ -40,7 +71,10 @@ if(EMSCRIPTEN)
         ${PNG2AMIGA_CORE_SOURCES}
         src/wasm_bindings.cpp
     )
-    target_include_directories(png2amiga_wasm PRIVATE src ${CMAKE_SOURCE_DIR}/third_party)
+    target_include_directories(png2amiga_wasm PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
     target_link_libraries(png2amiga_wasm PRIVATE stb)
     target_compile_options(png2amiga_wasm PRIVATE -O3 -msimd128 -flto)
     target_link_options(png2amiga_wasm PRIVATE
@@ -64,7 +98,10 @@ else()
         src/main.cpp
         ${PNG2AMIGA_CORE_SOURCES}
     )
-    target_include_directories(png2amiga PRIVATE src ${CMAKE_SOURCE_DIR}/third_party)
+    target_include_directories(png2amiga PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
     target_link_libraries(png2amiga PRIVATE stb)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 

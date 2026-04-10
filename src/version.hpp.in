@@ -1,0 +1,16 @@
+#pragma once
+
+// Generated from src/version.hpp.in by CMake. Bump PROJECT_VERSION in
+// CMakeLists.txt to change the semver part; the build number tracks the
+// total number of commits and is captured automatically.
+
+namespace png2amiga {
+
+inline constexpr const char* version       = "@PNG2AMIGA_VERSION_FULL@";
+inline constexpr const char* version_semver = "@PROJECT_VERSION@";
+inline constexpr int version_major  = @PROJECT_VERSION_MAJOR@;
+inline constexpr int version_minor  = @PROJECT_VERSION_MINOR@;
+inline constexpr int version_patch  = @PROJECT_VERSION_PATCH@;
+inline constexpr int version_build  = @PNG2AMIGA_BUILD_NUMBER@;
+
+} // namespace png2amiga

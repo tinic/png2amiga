@@ -17,6 +17,7 @@
 #include "quantize.hpp"
 #include "scale.hpp"
 #include "types.hpp"
+#include "version.hpp"
 
 #include <cctype>
 #include <cmath>
@@ -141,10 +142,18 @@ struct Config {
     std::vector<api::PinSpec>  pins;   // --pin-index-at <id> <x> <y>
 };
 
+void print_version() {
+    std::println("png2amiga {}", png2amiga::version);
+}
+
 void print_usage() {
     std::println(stderr,
-        "Usage: png2amiga [options] input.[png|jpg] [-o output.png|output.iff|output.h]\n"
+        "png2amiga {}\n"
         "\n"
+        "Usage: png2amiga [options] input.[png|jpg] [-o output.png|output.iff|output.h]\n"
+        "\n",
+        png2amiga::version);
+    std::println(stderr,
         "Modes:\n"
         "  --mode <mode>                   Graphics mode (default: lores)\n"
         "         lores, lores-lace, hires, hires-lace,\n"
@@ -254,6 +263,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--help" || arg == "-h") {
             print_usage();
+            std::exit(0);
+        }
+
+        if (arg == "--version" || arg == "-V") {
+            print_version();
             std::exit(0);
         }
 
