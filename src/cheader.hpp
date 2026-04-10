@@ -49,11 +49,6 @@ struct CHeaderOptions {
     // Copper: per-scanline register changes (nullptr = no copper)
     const std::vector<std::vector<copper::CopperChange>>* copper_changes = nullptr;
     std::size_t copper_changes_per_line = 0;
-
-    // Full per-scanline palettes (needed for bank-swap mode).
-    // When non-null and bank-swap conditions are met (AGA, depth <= 5,
-    // non-HAM, non-interlace), the viewer uses ping-pong bank switching.
-    const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr;
 };
 
 // ---------------------------------------------------------------------------

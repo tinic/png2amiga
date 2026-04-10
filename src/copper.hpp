@@ -86,28 +86,6 @@ inline constexpr std::size_t COPPER_SLOTS_PER_LINE = 15;
 inline constexpr std::size_t MOVE_BUDGET_PER_LINE = COPPER_SLOTS_PER_LINE - 1;
 
 // ---------------------------------------------------------------------------
-// Bank-swap CAP mode (AGA, depth <= 5, non-HAM).
-//
-// Ping-pongs between two 32-color palette banks via BPLCON3. Palette
-// writes for the NEXT line target the non-displayed bank during the
-// CURRENT line's full scanline (not just the post-DDFSTOP gap), because
-// Lisa latches the display-bank at line start and ignores mid-line
-// BPLCON3 changes for pixel lookup.
-//
-// Budget: 52 copper slots/line at 5bpp AGA lores (empirically counted).
-// Per-line overhead: 1 WAIT + 2 BPLCON3 (bank switch + LOCT toggle) = 3.
-// Each 24-bit color change: 2 MOVEs (hi + lo nibble) → K_max = 24.
-// ---------------------------------------------------------------------------
-inline constexpr std::size_t BANK_SWAP_SLOTS_PER_LINE = 52;
-inline constexpr std::size_t BANK_SWAP_MAX_CHANGES =
-    (BANK_SWAP_SLOTS_PER_LINE - 3) / 2;  // 24
-
-constexpr bool is_bank_swap_eligible(
-    amiga::Chipset chipset, std::size_t depth, bool is_ham) noexcept {
-    return chipset == amiga::Chipset::aga && depth <= 5 && !is_ham;
-}
-
-// ---------------------------------------------------------------------------
 // Compute the MOVE count emitted for one scanline given its sorted change list,
 // matching the viewer's emission strategy ("force first BPLCON3 per pass, no
 // per-scanline reset"). Accounts for the nibble-skip optimization: changes

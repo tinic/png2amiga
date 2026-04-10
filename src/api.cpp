@@ -1262,8 +1262,6 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
-        if (!result->scanline_palettes.empty())
-            ch_opts.scanline_palettes = &result->scanline_palettes;
     }
     auto viewer = cheader::generate_viewer(
         planes, result->palette, result->mode, ch_opts);

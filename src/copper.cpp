@@ -219,19 +219,19 @@ Result<CopperResult> encode_copper(const Image& image,
     // --copper-changes is a pure user escape hatch and bypasses the budget
     // check entirely — the user is telling us "emit exactly this K, I know
     // what I'm doing".
-    bool bank_swap = is_bank_swap_eligible(chipset, depth, false);
-
     auto base_k = std::min(
         max_changes_per_line(depth, false, false, chipset), max_swappable);
 
-    if (override_changes == 0 && bank_swap) {
-        // Bank-swap mode: full scanline available for writes (52 slots).
-        // K is limited only by BANK_SWAP_MAX_CHANGES (24 at 24-bit) and
-        // the number of swappable registers. No retry needed.
-        base_k = std::min(BANK_SWAP_MAX_CHANGES, max_swappable);
-    } else if (override_changes == 0 && chipset == amiga::Chipset::aga) {
-        // Non-bank-swap AGA (depth > 5 or HAM): K+3 retry against the
-        // post-DDFSTOP 14-MOVE budget.
+    // Auto mode stretch: the static AGA base K=3 leaves 2 MOVEs of headroom
+    // (worst case 4*3=12 vs 14 budget). Walk K down from K+3 to K+1, return
+    // the first encoding that fits the 14-MOVE budget, else fall back to
+    // base K. Per the budget math:
+    //   d<=5: K+3=6 worst 2*6+2 = 14  → fits (≤32 colors, exactly at limit)
+    //   d6:   K+3=6 worst 2*6+4 = 16  → fails, K+2=5 worst 2*5+4 = 14 → fits
+    //   d7:   K+3=6 worst 4*6   = 24  → fails, K+2/K+1 depend on clustering
+    //   d8:   same as d7 (8 banks, K<=B unsaturated)
+    // OCS base K=14 already saturates the budget (1 MOVE per change), no room.
+    if (override_changes == 0 && chipset == amiga::Chipset::aga) {
         for (std::size_t bump = 3; bump >= 1; --bump) {
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
@@ -239,6 +239,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                          stretch_k, user_palette);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= MOVE_BUDGET_PER_LINE) return stretch;
+            // Stretch overshot — try the next-smaller bump, or fall through.
         }
     }
 

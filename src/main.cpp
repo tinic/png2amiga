@@ -1401,7 +1401,6 @@ int main(int argc, char* argv[]) {
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
-                    ch_opts.scanline_palettes = &ham_result->scanline_palettes;
                 }
 
                 auto result = cheader::save(
@@ -1428,7 +1427,6 @@ int main(int argc, char* argv[]) {
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
-                    ch_opts.scanline_palettes = &ham_result->scanline_palettes;
                 }
 
                 pad_planes_to_mode(ham_result->planes, config->mode, config->hires);
@@ -1652,7 +1650,6 @@ int main(int argc, char* argv[]) {
                     ch_opts.fade_in = config->fade_in;
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line = copper_result->changes_per_line;
-                    ch_opts.scanline_palettes = &copper_result->scanline_palettes;
 
                     pad_planes_to_mode(planes.value(), config->mode, config->hires);
                     auto result = cheader::save_viewer(
@@ -2018,7 +2015,6 @@ int main(int argc, char* argv[]) {
                 ch_opts.fade_in = config->fade_in;
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
-                ch_opts.scanline_palettes = &copper_result->scanline_palettes;
 
                 auto result = cheader::save(
                     config->output_path, copper_result->planes,
@@ -2041,7 +2037,6 @@ int main(int argc, char* argv[]) {
                 ch_opts2.fade_in = config->fade_in;
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
-                ch_opts2.scanline_palettes = &copper_result->scanline_palettes;
 
                 pad_planes_to_mode(copper_result->planes, config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
