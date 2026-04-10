@@ -102,7 +102,7 @@ jobs:
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -static"
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -static -lstdc++exp"
 
       - name: Build
         run: cmake --build build --parallel
