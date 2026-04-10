@@ -2181,7 +2181,7 @@ int main(int argc, char* argv[]) {
             *image,
             Palette{"refined", {pal.colors.begin(),
                                 pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
-            dith, chipset,
+            dith, chipset, config->mode,
             static_cast<std::size_t>(config->refine_iterations),
             std_locked);
         if (refined) {

@@ -73,6 +73,7 @@ Result<Palette> refine_with_dither(
     const Palette& initial_palette,
     const dither::Settings& dither_settings,
     amiga::Chipset chipset,
+    amiga::Mode mode = amiga::Mode::lores,
     std::size_t max_iterations = 4,
     const std::vector<bool>& locked = {});
 

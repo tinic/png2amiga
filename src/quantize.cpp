@@ -658,17 +658,26 @@ Result<Palette> refine_with_dither(
     const Palette& initial_palette,
     const dither::Settings& dither_settings,
     amiga::Chipset chipset,
+    amiga::Mode mode,
     std::size_t max_iterations,
     const std::vector<bool>& locked) {
 
     if (dither_settings.method == dither::Method::none)
         return initial_palette;  // nothing to refine against
 
+    // STF 9-bit gamut (512 colors) is too coarse for centroid-based
+    // refinement — the brute-force quantizer already finds the optimal
+    // discrete palette, and snapping continuous centroids to 9-bit can
+    // collapse nearby colors to the same value.
+    if (amiga::is_stf(mode))
+        return initial_palette;
+
     auto pal = initial_palette;
     auto num_colors = pal.colors.size();
     if (num_colors < 2) return pal;
 
-    bool is_ocs = (chipset != amiga::Chipset::aga);
+    bool is_stf = amiga::is_stf(mode);
+    bool snap_to_discrete = (chipset != amiga::Chipset::aga) || is_stf;
 
     for (std::size_t iter = 0; iter < max_iterations; ++iter) {
         // Run the ditherer with the current palette
@@ -705,13 +714,16 @@ Result<Palette> refine_with_dither(
                 static_cast<float>(acc[k].b / dn),
             };
             auto new_color = color_space::oklab_to_linear(lab).clamped();
-            if (is_ocs) new_color = palette::quantize_to_ocs(new_color);
+            if (is_stf) new_color = palette::quantize_to_stf(new_color);
+            else if (snap_to_discrete) new_color = palette::quantize_to_ocs(new_color);
 
-            // Check convergence (OCS: exact comparison is fine; AGA: epsilon)
+            // Check convergence (discrete: exact comparison; AGA: epsilon)
             auto& old_color = pal.colors[k];
-            if (is_ocs) {
-                auto oh = palette::linear_to_ocs(old_color);
-                auto nh = palette::linear_to_ocs(new_color);
+            if (snap_to_discrete) {
+                auto oh = is_stf ? palette::linear_to_stf(old_color)
+                                 : palette::linear_to_ocs(old_color);
+                auto nh = is_stf ? palette::linear_to_stf(new_color)
+                                 : palette::linear_to_ocs(new_color);
                 if (oh != nh) { old_color = new_color; changed = true; }
             } else {
                 auto d = oklab_dist_sq(

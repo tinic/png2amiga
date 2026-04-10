@@ -1023,7 +1023,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             *image,
             Palette{"refined", {pal.colors.begin(),
                                 pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
-            dith, chipset, 4, locked_mask);
+            dith, chipset, mode, 4, locked_mask);
         if (refined) {
             pal.colors = std::move(refined->colors);
             pal_size = pal.colors.size();
