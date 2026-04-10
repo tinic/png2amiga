@@ -163,7 +163,13 @@ void print_usage() {
         "         stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
-        "  --copper                        Per-scanline copper palettes\n"
+        "  --copper                        Copper-Augmented Palette (CAP):\n"
+        "                                  per-scanline palette swaps via the\n"
+        "                                  copper, picked greedily by OKLab\n"
+        "                                  error reduction\n"
+        "  --copper-changes <0-16>         CAP swaps per line (0 = auto, picks the\n"
+        "                                  worst-case K that fits the 14-MOVE\n"
+        "                                  budget; auto mode also tries K+1..K+3)\n"
         "\n"
         "HAM encoding:\n"
         "  --ham-quality fast|optimal      HAM encoding quality (default: optimal)\n"
@@ -1331,7 +1337,7 @@ int main(int argc, char* argv[]) {
             float avg_ch = ham_result->copper_changes.size() > 0
                 ? static_cast<float>(total_ch) / static_cast<float>(ham_result->copper_changes.size())
                 : 0.0f;
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}",
                          ham_result->planes.depth, ham_result->planes.total_bytes(),
                          ham_unique, avg_ch, ham_result->total_error);
         } else {
@@ -1492,7 +1498,7 @@ int main(int argc, char* argv[]) {
                              copper_result.error().message);
                 return 1;
             }
-            std::println("Mode:   EHB + Copper ({} changes/line, max {} MOVEs/line)",
+            std::println("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line)",
                          copper_result->changes_per_line,
                          copper_result->max_moves_per_line);
 
@@ -1594,7 +1600,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}",
                          planes->depth, planes->total_bytes(),
                          count_unique_colors(rendered),
                          copper_result->avg_changes_per_line,
@@ -1922,7 +1928,7 @@ int main(int argc, char* argv[]) {
         }
         // Print actual cpl after orchestration (auto mode may have stretched
         // or fallen back).
-        std::println("Mode:   Copper ({} changes/line, max {} MOVEs/line)",
+        std::println("Mode:   CAP ({} changes/line, max {} MOVEs/line)",
                      copper_result->changes_per_line,
                      copper_result->max_moves_per_line);
 
@@ -1951,7 +1957,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg cop/line, error: {:.4f}",
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}",
                      copper_result->planes.depth, copper_result->planes.total_bytes(),
                      count_unique_colors(*preview),
                      copper_result->avg_changes_per_line,

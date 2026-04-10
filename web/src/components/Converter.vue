@@ -419,7 +419,7 @@ function doConvert() {
 
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
       info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
-      if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg cop/line`
+      if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg CAP/line`
       // Size stats
       const pb = result.planeBytes || 0
       const cb = result.copperBytes || 0  // per-scanline copper change data in .raw output
@@ -861,11 +861,12 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Copper (not available for interlace or Atari) -->
+              <!-- Copper-Augmented Palette (not available for interlace or Atari) -->
               <div v-if="!isInterlaceMode(options.mode) && !isAtariMode(options.mode) && !paletteData" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Enable per-scanline copper palette changes. Each row gets its own optimal palette via the copper.">Copper</label>
-                <div class="col-8">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette.">Copper</label>
+                <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
+                  <span class="text-xs" style="color: #888;">Copper-Augmented Palette</span>
                 </div>
               </div>
 
@@ -1067,9 +1068,9 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Copper changes override -->
+              <!-- CAP changes override -->
               <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">
-                <label class="block text-xs text-color-secondary font-semibold mb-1">Copper Changes/Line</label>
+                <label class="block text-xs text-color-secondary font-semibold mb-1" title="Copper-Augmented Palette swaps per scanline. 0 = auto: backend picks the worst-case K that fits the 14-MOVE budget, plus a K+3 retry path. Higher values bypass the budget check and may overshoot real hardware.">CAP Changes/Line</label>
                 <div class="flex gap-2 align-items-center">
                   <InputNumber v-model="options.copperChanges" :min="0" :max="copperMax" class="flex-1 input-sm" placeholder="0 = auto" />
                   <span class="text-xs text-color-secondary">max: {{ copperMax }}</span>

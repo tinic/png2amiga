@@ -29,11 +29,18 @@ Built for Amiga and Atari demo scene production. All color operations use [OKLab
 - STE Medium (640x200, 4 colors, 12-bit palette)
 - Degas Elite .PI1/.PI2 output
 
-**Copper Per-Scanline Palettes**
-- Change palette registers every scanline via the Copper coprocessor
-- Empirically tested DMA limits per mode/depth/chipset
-- Works with all standard and HAM modes
+**Copper-Augmented Palette (CAP)**
+- Reuses palette registers across scanlines via the Copper coprocessor — each
+  row gets its own per-line variant of the base palette, picked greedily by
+  perceptual (OKLab) error reduction
+- Hardware-measured 14 MOVE-instruction-per-line budget (single number across
+  modes, derived from the post-DDFSTOP DMA gap)
+- Static worst-case K per chipset: 14 swaps/line on OCS, 3 on AGA — plus an
+  opportunistic K+3 retry that lifts d3-d5 to K=6 and d6 to K=5 when bank
+  clustering allows it to fit
+- Works with standard, HAM, and EHB modes
 - AGA bank switching for >32 color palettes (sorted by bank to minimize DMA)
+- AGA nibble-skip optimization on the LOCT pass
 
 **Image Processing**
 - 22 dithering methods (16 ordered + 6 error diffusion, all in OKLab perceptual space)
@@ -97,7 +104,7 @@ cd web && npm install && npm run dev
 # HAM8 hires interlace on AGA
 ./build/png2amiga --mode ham8-hires-lace --chipset aga input.png output.iff
 
-# Copper per-scanline palettes
+# Copper-Augmented Palette (CAP) — per-scanline palette swaps
 ./build/png2amiga --mode lores --depth 5 --copper input.png output.cpp
 
 # Hires with 5 bitplanes (AGA, FMODE=3)
@@ -143,22 +150,36 @@ cd web && npm install && npm run dev
 | `ste-low` | 320x200 | 4 (fixed) | 16 | 12-bit (4096 colors) |
 | `ste-med` | 640x200 | 2 (fixed) | 4 | 12-bit (4096 colors) |
 
-## Copper DMA Budget (Empirically Tested)
+## CAP Hardware Budget
 
-| Mode | Depth | Chipset | Max Changes/Line |
-|------|-------|---------|-----------------|
-| Lores | 1-5 | OCS | 1<<depth |
-| Lores | 5 | AGA | 16 |
-| Lores | 6 | AGA | 8 |
-| Lores | 7-8 | AGA | 4 |
-| Hires | 5 | AGA | 16 |
-| Hires | 6 | AGA | 8 |
-| Hires | 7-8 | AGA | 4 |
-| HAM6 | 6 | OCS | 8 |
-| HAM6 | 6 | AGA (lores) | 8 |
-| HAM6 | 6 | AGA (hires) | 4 |
-| HAM8 | 8 | AGA (lores) | 4 |
-| HAM8 | 8 | AGA (hires) | 8 |
+The Copper-Augmented Palette technique is bounded by the post-DDFSTOP DMA gap
+on every scanline — empirically measured at **15 copper instructions per line
+total** (including the per-line WAIT), which leaves **14 MOVE instructions**
+for actual palette writes. The number is mode-independent because DDFSTOP is
+fixed by the display window width (320 lores / 640 hires) and not by depth
+or FMODE.
+
+**Static safe K (auto mode baseline)**, derived from the worst-case per-change
+cost for that chipset:
+
+| Chipset | Worst case per change | Safe K |
+|---------|-----------------------|--------|
+| OCS | 1 MOVE (no LOCT, no banks) | **14** |
+| AGA | 4 MOVEs (banked, K ≤ banks) | **3** |
+
+**Auto-mode K+3 retry** then opportunistically encodes at K+3, K+2, K+1 and
+keeps the highest one whose worst-case post-clustering MOVE count fits the
+14-MOVE budget. Empirical results across the example images:
+
+| Depth | K achieved on AGA | Notes |
+|-------|--------------------|-------|
+| d3-d5 | **6** (100%) | ≤32 colors, no banks: `2K+2 = 14` exactly |
+| d6 | **5** (100%) | 2 banks saturated: `2K+2B = 14` exactly |
+| d7-d8 | 3-4 (~56% hit K=4) | 4-8 banks, depends on bank clustering |
+
+`--copper-changes N` is a pure user escape hatch and bypasses the budget
+check entirely — set it past the safe value if you want to experiment with
+configurations that may overshoot real hardware.
 
 ## FMODE=3 (64-bit Fetch)
 
