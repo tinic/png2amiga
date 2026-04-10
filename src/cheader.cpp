@@ -287,6 +287,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     bool is_hires = options.hires;
     auto camg = make_camg(mode, is_hires, options.interlace);
 
+    // Fade-in is only supported for progressive non-HAM displays. Interlace
+    // would need a separate fade loop per field; HAM's modify-R/G/B bits
+    // carry absolute values so fading the base palette would corrupt pixels.
+    bool do_fade = options.fade_in && !options.interlace && !is_ham;
+
     // Palette count (EHB: only 32 base colors)
     auto pal_count = palette.size();
     if (mode == amiga::Mode::ehb && pal_count > 32) pal_count = 32;
@@ -570,7 +575,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    return cl;\n";
     out += "}\n\n";
 
-    if (options.fade_in) {
+    if (do_fade) {
         // Precomputed nibble×step/15 table (256 bytes). No multiply needed.
         out += "static const UBYTE fadeLUT[256] = {\n";
         for (int nibble = 0; nibble < 16; ++nibble) {
@@ -784,8 +789,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
                        sym, bpr);
     out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
-
-    bool do_fade = options.fade_in && !is_lace && !is_ham;
 
     // Set palette via copper list.
     // AGA >32 colors: BPLCON3 bank switching.

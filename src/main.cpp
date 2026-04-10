@@ -1261,6 +1261,12 @@ int main(int argc, char* argv[]) {
                                  "(palette is dynamic per pixel)");
             return 1;
         }
+        if (config->fade_in) {
+            std::println(stderr, "Error: --fade-in is not supported in HAM modes "
+                                 "(HAM modify bits carry absolute R/G/B values, "
+                                 "so fading the base palette would corrupt the image)");
+            return 1;
+        }
         auto ham_params = amiga::get_mode_params(config->mode);
         auto quality_str = config->ham_quality == ham::Quality::fast ? "fast" : "optimal";
         auto ham_dither = config->dither_explicit
