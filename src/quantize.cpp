@@ -679,35 +679,54 @@ Result<Palette> refine_with_dither(
     bool is_stf = amiga::is_stf(mode);
     bool snap_to_discrete = (chipset != amiga::Chipset::aga) || is_stf;
 
+    auto w = image.width();
+    auto h = image.height();
+
     for (std::size_t iter = 0; iter < max_iterations; ++iter) {
         // Run the ditherer with the current palette
         auto dith = dither::apply(image, pal.colors, dither_settings);
 
-        // Accumulate centroids in OKLab from pixels actually assigned
-        // by the ditherer (not nearest-color — the ditherer may have
-        // pushed them elsewhere via error diffusion or threshold bias).
-        struct Acc { double L{}, a{}, b{}; std::size_t n{}; };
+        // Spatial Color Quantization: weight each pixel's contribution to
+        // its cluster centroid by how many of its 4-neighbors share the
+        // same palette assignment. Pixels in contiguous same-color regions
+        // pull harder on the centroid; isolated single-pixel "islands"
+        // pull less. This naturally pushes the palette toward colors that
+        // serve large visual regions and away from scattered outliers.
+        //
+        // Weight = 1.0 + matching_neighbors * 0.5
+        //   0 matching neighbors → weight 1.0  (isolated pixel)
+        //   4 matching neighbors → weight 3.0  (interior of region)
+        struct Acc { double L{}, a{}, b{}, w{}; };
         std::vector<Acc> acc(num_colors);
 
-        for (std::size_t y = 0; y < image.height(); ++y) {
-            for (std::size_t x = 0; x < image.width(); ++x) {
-                auto idx = dith.indices[y * image.width() + x];
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto idx = dith.indices[y * w + x];
                 if (idx >= num_colors) continue;
+
+                // Count 4-neighbors with the same assignment
+                int neighbors = 0;
+                if (x > 0     && dith.indices[y * w + (x - 1)] == idx) ++neighbors;
+                if (x + 1 < w && dith.indices[y * w + (x + 1)] == idx) ++neighbors;
+                if (y > 0     && dith.indices[(y - 1) * w + x] == idx) ++neighbors;
+                if (y + 1 < h && dith.indices[(y + 1) * w + x] == idx) ++neighbors;
+
+                double weight = 1.0 + static_cast<double>(neighbors) * 0.5;
                 auto lab = color_space::linear_to_oklab(image[x, y]);
-                acc[idx].L += static_cast<double>(lab.L);
-                acc[idx].a += static_cast<double>(lab.a);
-                acc[idx].b += static_cast<double>(lab.b);
-                acc[idx].n++;
+                acc[idx].L += static_cast<double>(lab.L) * weight;
+                acc[idx].a += static_cast<double>(lab.a) * weight;
+                acc[idx].b += static_cast<double>(lab.b) * weight;
+                acc[idx].w += weight;
             }
         }
 
-        // Update palette: move each unlocked slot to its cluster centroid
+        // Update palette: move each unlocked slot to its weighted centroid
         bool changed = false;
         for (std::size_t k = 0; k < num_colors; ++k) {
             if (!locked.empty() && k < locked.size() && locked[k]) continue;
-            if (acc[k].n == 0) continue;
+            if (acc[k].w < 1e-9) continue;
 
-            auto dn = static_cast<double>(acc[k].n);
+            auto dn = acc[k].w;
             auto lab = color_space::OKLab{
                 static_cast<float>(acc[k].L / dn),
                 static_cast<float>(acc[k].a / dn),
