@@ -32,11 +32,17 @@ enum class Method : unsigned char {
     bayer4x2,         // Bayer 4 wide x 2 tall (hires)
     bayer2x4,         // Bayer 2 wide x 4 tall (interlace)
 
-    // Lines
+    // Horizontal lines
     line2,            // 1x2 alternating rows
     line_checker,     // 2x2 line-biased
     line4,            // 1x4 horizontal gradient
     line8,            // 1x8 horizontal gradient
+
+    // Vertical lines
+    vline2,           // 2x1 alternating columns
+    vline_checker,    // 2x2 column-biased
+    vline4,           // 4x1 vertical gradient
+    vline8,           // 8x1 finest vertical gradient
 
     // Additional ordered dithering
     halftone8x8,      // 45-degree clustered dot halftone (newspaper look)
@@ -105,6 +111,7 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::line_checker:
     case Method::line4:
     case Method::line8:
+    case Method::vline2: case Method::vline_checker: case Method::vline4: case Method::vline8:
     case Method::v4x2: case Method::bayer4x2: case Method::bayer2x4:
     case Method::halftone8x8:
     case Method::diagonal8x8:

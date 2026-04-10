@@ -72,6 +72,10 @@ export const DITHER_METHODS = [
     { value: 'line-checker',  label: 'Line Checker' },
     { value: 'line4',         label: 'Line 4' },
     { value: 'line8',         label: 'Line 8' },
+    { value: 'vline2',        label: 'VLine 2' },
+    { value: 'vline-checker', label: 'VLine Checker' },
+    { value: 'vline4',        label: 'VLine 4' },
+    { value: 'vline8',        label: 'VLine 8' },
   ]},
   { group: 'Error Diffusion', items: [
     { value: 'floyd-steinberg', label: 'Floyd-Steinberg' },

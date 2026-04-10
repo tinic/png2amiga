@@ -179,6 +179,7 @@ void print_usage() {
         "  --dither <method>               none|bayer2x2|bayer4x4|bayer8x8|\n"
         "                                  checker|h2x4|clustered-dot|\n"
         "                                  line2|line-checker|line4|line8|\n"
+        "                                  vline2|vline-checker|vline4|vline8|\n"
         "                                  floyd-steinberg|atkinson|sierra-lite|\n"
         "                                  stucki|jarvis (default: floyd-steinberg)\n"
         "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
@@ -239,6 +240,10 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "h2x4") return dither::Method::h2x4;
     if (s == "clustered-dot") return dither::Method::clustered_dot;
     if (s == "line2") return dither::Method::line2;
+    if (s == "vline2") return dither::Method::vline2;
+    if (s == "vline-checker") return dither::Method::vline_checker;
+    if (s == "vline4") return dither::Method::vline4;
+    if (s == "vline8") return dither::Method::vline8;
     if (s == "line-checker") return dither::Method::line_checker;
     if (s == "line4") return dither::Method::line4;
     if (s == "v4x2") return dither::Method::v4x2;
@@ -680,6 +685,10 @@ const char* dither_name(dither::Method m) {
     case dither::Method::h2x4: return "h2x4";
     case dither::Method::clustered_dot: return "clustered-dot";
     case dither::Method::line2: return "line2";
+    case dither::Method::vline2: return "vline2";
+    case dither::Method::vline_checker: return "vline-checker";
+    case dither::Method::vline4: return "vline4";
+    case dither::Method::vline8: return "vline8";
     case dither::Method::line_checker: return "line-checker";
     case dither::Method::line4: return "line4";
     case dither::Method::v4x2: return "v4x2";

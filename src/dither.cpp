@@ -107,6 +107,39 @@ constexpr auto make_line2() noexcept {
     }};
 }
 
+constexpr auto make_vline2() noexcept {
+    // 2x1 alternating columns (vertical lines — transpose of line2)
+    return std::array<std::array<float, 2>, 1>{{
+        {{-0.25f, 0.25f}},
+    }};
+}
+
+constexpr auto make_vline_checker() noexcept {
+    // 2x2 column-biased: columns have large threshold difference,
+    // rows get subtle offset — produces vertical lines with pixel variation
+    // (transpose of line_checker)
+    return std::array<std::array<float, 2>, 2>{{
+        {{-0.35f,  0.15f}},
+        {{-0.15f,  0.35f}},
+    }};
+}
+
+constexpr auto make_vline4() noexcept {
+    // 4x1 vertical gradient (transpose of line4)
+    return std::array<std::array<float, 4>, 1>{{
+        {{-0.375f, -0.125f, 0.125f, 0.375f}},
+    }};
+}
+
+constexpr auto make_vline8() noexcept {
+    // 8x1 finest vertical gradient (transpose of line8)
+    constexpr std::array<int, 8> raw = {0, 4, 2, 6, 1, 5, 3, 7};
+    std::array<std::array<float, 8>, 1> m{};
+    for (std::size_t x = 0; x < 8; ++x)
+        m[0][x] = (static_cast<float>(raw[x]) + 0.5f) / 8.0f - 0.5f;
+    return m;
+}
+
 constexpr auto make_line_checker() noexcept {
     // 2x2 line-biased: rows have large threshold difference,
     // columns get subtle offset — produces horizontal lines with pixel variation
@@ -182,6 +215,10 @@ constexpr auto bayer4x2_mat = make_bayer4x2();
 constexpr auto bayer2x4_mat = make_bayer2x4();
 constexpr auto clustered_mat = make_clustered_dot();
 constexpr auto line2_mat = make_line2();
+constexpr auto vline2_mat = make_vline2();
+constexpr auto vline_checker_mat = make_vline_checker();
+constexpr auto vline4_mat = make_vline4();
+constexpr auto vline8_mat = make_vline8();
 constexpr auto line_checker_mat = make_line_checker();
 constexpr auto line4_mat = make_line4();
 constexpr auto line8_mat = make_line8();
@@ -630,6 +667,18 @@ DitherResult apply(const Image& image,
     case Method::line2:
         return apply_ordered(image, line2_mat, pal_span,
                              settings.strength);
+    case Method::vline2:
+        return apply_ordered(image, vline2_mat, pal_span,
+                             settings.strength);
+    case Method::vline_checker:
+        return apply_ordered(image, vline_checker_mat, pal_span,
+                             settings.strength);
+    case Method::vline4:
+        return apply_ordered(image, vline4_mat, pal_span,
+                             settings.strength);
+    case Method::vline8:
+        return apply_ordered(image, vline8_mat, pal_span,
+                             settings.strength);
     case Method::line_checker:
         return apply_ordered(image, line_checker_mat, pal_span,
                              settings.strength);
@@ -712,6 +761,10 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
     case Method::bayer2x4:      return bayer2x4_mat[y % 4][x % 2];
     case Method::clustered_dot: return clustered_mat[y % 4][x % 4];
     case Method::line2:         return line2_mat[y % 2][0];
+    case Method::vline2:        return vline2_mat[0][x % 2];
+    case Method::vline_checker: return vline_checker_mat[y % 2][x % 2];
+    case Method::vline4:        return vline4_mat[0][x % 4];
+    case Method::vline8:        return vline8_mat[0][x % 8];
     case Method::line_checker:  return line_checker_mat[y % 2][x % 2];
     case Method::line4:         return line4_mat[y % 4][0];
     case Method::line8:         return line8_mat[y % 8][0];
