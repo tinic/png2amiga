@@ -469,6 +469,41 @@ Result<CopperResult> encode_copper(const Image& image,
         }
     }
 
+    // --- Vertical palette smoothing ---
+    // Anti-alias palette transitions between scanlines by blending each
+    // register's color with its vertical neighbors in OKLab. This prevents
+    // the harsh "band" effect when a register snaps from one color to
+    // another across a single scanline boundary.
+    // Kernel: 5-tap [0.1, 0.2, 0.4, 0.2, 0.1] — gentle, preserves detail.
+    {
+        constexpr float kw[] = {0.1f, 0.2f, 0.4f, 0.2f, 0.1f};
+        constexpr int krad = 2;
+        bool is_ocs = (chipset != amiga::Chipset::aga);
+
+        auto smoothed = scanline_palettes;  // copy
+        for (std::size_t r = 1; r < num_colors; ++r) {  // skip reg 0 (black)
+            for (std::size_t y = 0; y < height; ++y) {
+                float sL = 0, sa = 0, sb = 0, sw = 0;
+                for (int d = -krad; d <= krad; ++d) {
+                    auto ny = static_cast<int>(y) + d;
+                    if (ny < 0 || static_cast<std::size_t>(ny) >= height) continue;
+                    auto lab = color_space::linear_to_oklab(
+                        scanline_palettes[static_cast<std::size_t>(ny)][r]);
+                    float w = kw[d + krad];
+                    sL += lab.L * w;
+                    sa += lab.a * w;
+                    sb += lab.b * w;
+                    sw += w;
+                }
+                auto blended = color_space::oklab_to_linear(
+                    color_space::OKLab{sL / sw, sa / sw, sb / sw}).clamped();
+                if (is_ocs) blended = palette::quantize_to_ocs(blended);
+                smoothed[y][r] = blended;
+            }
+        }
+        scanline_palettes = std::move(smoothed);
+    }
+
     // Reset dithering state for this iteration
     total_error = 0.0f;
     if (use_diffusion) {
