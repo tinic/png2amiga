@@ -35,11 +35,12 @@ struct CopperChange {
     Color3f color;          // new color value
 
     // Nibble-skip optimization for AGA: when the new color shares its high
-    // 4-bit nibble (per channel) with the slot's previous value, the LOCT=0
-    // (high) write is unnecessary — only the LOCT=1 (low) write is needed.
-    // The viewer skips writes where the hi-table entry's reg is 0xFFFF.
+    // (or low) 4-bit nibble (per channel) with the slot's previous value,
+    // that LOCT pass's write is unnecessary. The viewer skips writes where
+    // the table entry's reg is 0xFFFF.
     // Set by the encoder; ignored on OCS where LOCT does not exist.
     bool skip_hi = false;
+    bool skip_lo = false;
 
     // Average X position of pixels using this register on the scanline.
     // Used for spatial sorting: leftmost swaps first so reducing K drops
@@ -94,16 +95,13 @@ inline constexpr std::size_t MOVE_BUDGET_PER_LINE = COPPER_SLOTS_PER_LINE - 1;
 // Compute the MOVE count emitted for one scanline given its sorted change list,
 // matching the viewer's emission strategy ("force first BPLCON3 per pass, no
 // per-scanline reset"). Accounts for the nibble-skip optimization: changes
-// with skip_hi=true are dropped from the hi pass entirely (their bank also
-// disappears from the hi pass count if it had no other live entries).
+// with skip_hi/skip_lo=true are dropped from their respective passes (their
+// bank also disappears from the pass count if no other live entries remain).
 //
 // Formulas:
 //   OCS:                  K MOVEs (no LOCT)
-//   AGA <=32 colors:      (K - K_skip_hi) + 2 + K  (hi loop + LOCT on/off + lo loop)
-//   AGA bank-switching:   (B_hi + K_hi) + (B_lo + K)
-//                         where B_hi = distinct banks among non-skipped hi entries
-//                               K_hi = number of non-skipped hi entries
-//                               B_lo = distinct banks across all entries
+//   AGA <=32 colors:      K_hi + 2 + K_lo  (hi loop + LOCT on/off + lo loop)
+//   AGA bank-switching:   (B_hi + K_hi) + (B_lo + K_lo)
 // ---------------------------------------------------------------------------
 constexpr std::size_t moves_for_line(
     const std::vector<CopperChange>& changes,
@@ -111,17 +109,20 @@ constexpr std::size_t moves_for_line(
     if (changes.empty()) return 0;
     if (!aga) return changes.size();  // OCS: K MOVEs
 
+    std::size_t k_skip_hi = 0, k_skip_lo = 0;
+    for (auto& ch : changes) {
+        if (ch.skip_hi) ++k_skip_hi;
+        if (ch.skip_lo) ++k_skip_lo;
+    }
     std::size_t k = changes.size();
-    std::size_t k_skip_hi = 0;
-    for (auto& ch : changes) if (ch.skip_hi) ++k_skip_hi;
     std::size_t k_hi = k - k_skip_hi;
+    std::size_t k_lo = k - k_skip_lo;
 
     if (!aga_banks) {
-        // AGA <=32: hi-color writes (skipped honored) + LOCT on/off + lo-color writes
-        return k_hi + 2 + k;
+        return k_hi + 2 + k_lo;
     }
 
-    // AGA bank-switching: count distinct banks in sorted changes for both passes
+    // AGA bank-switching: count distinct banks in non-skipped entries per pass
     int prev_bank_hi = -1;
     std::size_t banks_hi = 0;
     for (auto& ch : changes) {
@@ -132,10 +133,11 @@ constexpr std::size_t moves_for_line(
     int prev_bank_lo = -1;
     std::size_t banks_lo = 0;
     for (auto& ch : changes) {
+        if (ch.skip_lo) continue;
         int b = static_cast<int>(ch.reg / 32);
         if (b != prev_bank_lo) { ++banks_lo; prev_bank_lo = b; }
     }
-    return banks_hi + k_hi + banks_lo + k;
+    return banks_hi + k_hi + banks_lo + k_lo;
 }
 
 // ---------------------------------------------------------------------------

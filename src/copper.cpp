@@ -387,10 +387,12 @@ Result<CopperResult> encode_copper(const Image& image,
             // write is unnecessary. The viewer detects skip_hi via a 0xFFFF
             // sentinel in the hi-table reg field.
             bool skip_hi_flag = false;
+            bool skip_lo_flag = false;
             if (chipset == amiga::Chipset::aga) {
                 auto old_hilo = palette::linear_to_aga_hilo(current_pal[swap.slot]);
                 auto new_hilo = palette::linear_to_aga_hilo(swap.new_color);
                 skip_hi_flag = (old_hilo.hi == new_hilo.hi);
+                skip_lo_flag = (old_hilo.lo == new_hilo.lo);
             }
 
             // Apply the swap
@@ -400,6 +402,7 @@ Result<CopperResult> encode_copper(const Image& image,
                 static_cast<std::uint8_t>(swap.slot),
                 swap.new_color,
                 skip_hi_flag,
+                skip_lo_flag,
             });
         }
 

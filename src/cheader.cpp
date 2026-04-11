@@ -481,12 +481,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Drops the prior fixed [H][cpl] grid + 0xFFFF sentinel scheme,
         // which wasted bytes on padding and nibble-skip placeholders.
 
-        // Precompute per-line counts (hi: skip slots flagged skip_hi; lo: all)
+        // Precompute per-line counts (skip slots flagged skip_hi / skip_lo)
         std::vector<std::size_t> n_hi(ch_height), n_lo(ch_height);
         for (std::size_t y = 0; y < ch_height; ++y) {
             for (auto& ch : changes[y]) {
                 if (!(options.aga && ch.skip_hi)) ++n_hi[y];
-                ++n_lo[y];
+                if (!(options.aga && ch.skip_lo)) ++n_lo[y];
             }
         }
 
@@ -549,6 +549,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                     if (n_lo[y] == 0) continue;
                     out += "    ";
                     for (auto& ch : changes[y]) {
+                        if (options.aga && ch.skip_lo) continue;
                         auto aga = palette::linear_to_aga_hilo(ch.color);
                         out += std::format("{{{},0x{:04X}}}", ch.reg, aga.lo);
                         ++emitted;
