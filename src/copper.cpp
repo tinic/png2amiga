@@ -200,7 +200,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    amiga::Chipset chipset,
                                    std::size_t override_changes,
                                    const std::vector<Color3f>* user_palette,
-                                   bool reserve_color0) {
+                                   bool reserve_color0,
+                                   const std::vector<std::pair<std::size_t, Color3f>>& locked) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -243,7 +244,7 @@ Result<CopperResult> encode_copper(const Image& image,
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
-                                         stretch_k, user_palette, reserve_color0);
+                                         stretch_k, user_palette, reserve_color0, locked);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= MOVE_BUDGET_PER_LINE) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
@@ -280,6 +281,12 @@ Result<CopperResult> encode_copper(const Image& image,
         while (base_pal.size() < num_colors)
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
 
+    }
+
+    // Apply locked palette slots (e.g., for blitter objects)
+    for (auto& [idx, color] : locked) {
+        if (idx < base_pal.size())
+            base_pal[idx] = color;
     }
 
     // Step 2: Iterative two-pass predict+dither loop.
@@ -373,6 +380,12 @@ Result<CopperResult> encode_copper(const Image& image,
         changes.reserve(changes_per_line);
         std::vector<bool> swapped(num_colors, false);
         if (reserve_color0) swapped[0] = true;  // don't swap COLOR00
+        for (auto& [idx, color] : locked) {
+            if (idx < num_colors) {
+                swapped[idx] = true;  // don't swap locked slots
+                current_pal[idx] = color;  // enforce locked color each line
+            }
+        }
 
         for (std::size_t s = 0; s < changes_per_line; ++s) {
             // Precompute current palette in OKLab

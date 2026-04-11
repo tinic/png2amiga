@@ -887,11 +887,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // --- Copper palette mode ---
     if (options.copper && !amiga::is_ham(mode) && mode != amiga::Mode::ehb) {
-        if (!options.locks.empty() || !options.pins.empty()) {
+        if (!options.pins.empty()) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "--lock-index / --pin-index-at are not supported with --copper "
-                "(per-scanline palettes change at runtime)",
+                "--pin-index-at is not supported with --copper",
             }};
         }
         // Force transparent pixels to black before encoding
@@ -915,10 +914,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 copper_user_pal = std::move(tmp.colors);
             }
         }
+        // Build locked slot list for copper from --lock-index specs
+        std::vector<std::pair<std::size_t, Color3f>> copper_locks;
+        for (auto& lock : options.locks) {
+            auto idx = static_cast<std::size_t>(lock.index);
+            copper_locks.emplace_back(idx,
+                palette_locks::to_color(lock, chipset, mode));
+        }
+
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
                                                      static_cast<std::size_t>(options.copper_changes),
                                                      copper_user_pal.empty() ? nullptr : &copper_user_pal,
-                                                     options.reserve_color0);
+                                                     options.reserve_color0, copper_locks);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,

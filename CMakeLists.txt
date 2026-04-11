@@ -374,15 +374,14 @@ else()
     )
     set_tests_properties("pin-index-ham-rejected" PROPERTIES WILL_FAIL TRUE)
 
-    # Copper rejects locks
+    # Copper supports locks (fixed palette slots for blitter objects)
     add_test(
-        NAME "lock-index-copper-rejected"
+        NAME "lock-index-copper-accepted"
         COMMAND png2amiga --mode lores --depth 5 --copper
                 --lock-index 0 ff0000
                 ${CMAKE_SOURCE_DIR}/test.png
-                ${CMAKE_BINARY_DIR}/test_reject_copper_lock.png
+                -o ${CMAKE_BINARY_DIR}/test_copper_lock.png
     )
-    set_tests_properties("lock-index-copper-rejected" PROPERTIES WILL_FAIL TRUE)
 
     # Out-of-range lock index (depth 5 → max_colors 32, index 32 invalid)
     add_test(

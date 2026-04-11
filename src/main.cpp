@@ -1943,10 +1943,9 @@ int main(int argc, char* argv[]) {
 
     // --- Copper palette mode ---
     if (config->copper) {
-        if (!config->locks.empty() || !config->pins.empty()) {
-            std::println(stderr, "Error: --lock-index / --pin-index-at "
-                                 "are not supported with --copper "
-                                 "(per-scanline palettes change at runtime)");
+        if (!config->pins.empty()) {
+            std::println(stderr, "Error: --pin-index-at "
+                                 "is not supported with --copper");
             return 1;
         }
         if (!config->output_path.empty() &&
@@ -1970,8 +1969,17 @@ int main(int argc, char* argv[]) {
         std::println("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
 
+        // Build locked slot list from --lock-index specs
+        std::vector<std::pair<std::size_t, Color3f>> copper_locks;
+        for (auto& lock : config->locks) {
+            auto idx = static_cast<std::size_t>(lock.index);
+            copper_locks.emplace_back(idx,
+                palette_locks::to_color(lock, chipset, config->mode));
+        }
+
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
-            static_cast<std::size_t>(config->copper_changes));
+            static_cast<std::size_t>(config->copper_changes), nullptr,
+            config->reserve_color0, copper_locks);
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);
