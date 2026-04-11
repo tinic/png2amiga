@@ -948,10 +948,19 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    for (int y = 1; y < {}; y++) {{\n", height);
         out += std::format("        USHORT line = y - 1 + {};\n", y_start);
         out += "        if (line == 256) {\n";
-        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
+        out += "            // VP[8] boundary: WAIT for end of line 255, then\n";
+        out += "            // emit changes without a per-line WAIT (copper is\n";
+        out += "            // already at the right position).\n";
+        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
+        out += "        } else if (line > 256) {\n";
+        out += "            // Past boundary: use HP-only WAIT (VP mask=0).\n";
+        out += "            // Ignores 8-bit VP entirely — just syncs to the\n";
+        out += "            // horizontal position once per line.\n";
+        out += "            *cl++ = 0x00DD; *cl++ = 0x00FE;\n";
+        out += "        } else {\n";
+        out += "            *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
+        out += "            *cl++ = 0xfffe;\n";
         out += "        }\n";
-        out += "        *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
-        out += "        *cl++ = 0xfffe;\n";
         emit_copper_changes("y", aga_banks);
         out += "    }\n\n";
     }
