@@ -949,6 +949,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("        USHORT line = y - 1 + {};\n", y_start);
         out += "        if (line == 256) {\n";
         out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
+        out += "            // Pad with NOPs so the copper doesn't read the next\n";
+        out += "            // WAIT until VPOS wraps from 0xFF to 0x00 (line 256).\n";
+        out += "            // 0xFFDF fires at HPOS ~$DE, line ends at ~$E3: ~5 clks.\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
+        out += "            *cl++ = 0x01FE; *cl++ = 0x0000;\n";
         out += "        }\n";
         out += "        *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
         out += "        *cl++ = 0xfffe;\n";
