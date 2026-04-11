@@ -422,21 +422,30 @@ Result<CopperResult> encode_copper(const Image& image,
                 column_error[x] = column_error[x] * col_decay + best_d;
             }
         }
+    }
 
-        // Dither this scanline with the effective palette
+    // ===================================================================
+    // Pass 2: Dither with the predetermined per-scanline palettes.
+    //
+    // Now that every scanline's effective palette is known, error diffusion
+    // can flow correctly across scanline boundaries — each row dithers
+    // against its own palette, and the error propagated to the next row
+    // is applied against that row's (different) palette.
+    //
+    // In the old single-pass approach, swaps and dithering were interleaved
+    // so error from scanline Y (palette A) bled into scanline Y+1 (palette
+    // B) without the ditherer knowing the palette had changed.
+    // ===================================================================
+
+    for (std::size_t y = 0; y < height; ++y) {
+        auto row = image.row(y);
+        auto& pal = scanline_palettes[y];
+
         std::vector<color_space::OKLab> pal_lab(num_colors);
-        for (std::size_t i = 0; i < num_colors; ++i) {
-            pal_lab[i] = color_space::linear_to_oklab(current_pal[i]);
-        }
+        for (std::size_t i = 0; i < num_colors; ++i)
+            pal_lab[i] = color_space::linear_to_oklab(pal[i]);
 
         if (use_diffusion) {
-            // Full 2D error diffusion with serpentine scanning.
-            // The error (target - actual in OKLab) is palette-independent,
-            // so cross-scanline propagation works even though the copper
-            // palette changes per row.
-            // Kernel is selected from dither_settings.method, so all
-            // error-diffusion methods (floyd-steinberg, atkinson,
-            // sierra-lite, stucki, jarvis) take effect in copper mode.
             auto kernel = dither::error_diffusion_kernel(dither_settings.method);
             bool reverse = (y % 2 == 1);
             auto ec = dither_settings.error_clamp;
@@ -445,13 +454,11 @@ Result<CopperResult> encode_copper(const Image& image,
                 std::size_t x = reverse ? (width - 1 - step) : step;
                 auto pixel_lab = color_space::linear_to_oklab(row[x]);
 
-                // Add accumulated error from previous pixels/rows
                 auto& e = err_buf[y * width + x];
                 pixel_lab.L += std::clamp(e.L, -ec, ec);
                 pixel_lab.a += std::clamp(e.a, -ec, ec);
                 pixel_lab.b += std::clamp(e.b, -ec, ec);
 
-                // Find nearest color in this scanline's palette
                 float best_d = std::numeric_limits<float>::max();
                 std::size_t best_k = 0;
                 for (std::size_t k = 0; k < num_colors; ++k) {
@@ -464,9 +471,6 @@ Result<CopperResult> encode_copper(const Image& image,
                 all_indices[y * width + x] = static_cast<std::uint8_t>(best_k);
                 total_error += best_d;
 
-                // Error against ORIGINAL pixel (not adjusted). This prevents
-                // error-on-error cascading across copper palette changes.
-                // Same approach as abc's dithering implementation.
                 auto orig_lab = color_space::linear_to_oklab(row[x]);
                 color_space::OKLab qerr = {
                     (orig_lab.L - pal_lab[best_k].L) * str,
