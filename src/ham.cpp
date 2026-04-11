@@ -79,6 +79,7 @@ bool is_error_diffusion(dither::Method m) {
     case dither::Method::sierra_lite:
     case dither::Method::stucki:
     case dither::Method::jarvis:
+    case dither::Method::ostromoukhov:
         return true;
     default:
         return false;

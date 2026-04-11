@@ -270,6 +270,7 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "sierra-lite") return dither::Method::sierra_lite;
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
+    if (s == "ostromoukhov") return dither::Method::ostromoukhov;
     return std::unexpected{Error{ErrorCode::unsupported_mode,
         "Unknown dither method: " + std::string(s)}};
 }
@@ -723,6 +724,7 @@ const char* dither_name(dither::Method m) {
     case dither::Method::sierra_lite: return "sierra-lite";
     case dither::Method::stucki: return "stucki";
     case dither::Method::jarvis: return "jarvis";
+    case dither::Method::ostromoukhov: return "ostromoukhov";
     }
     return "unknown";
 }

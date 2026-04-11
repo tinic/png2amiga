@@ -603,6 +603,115 @@ DitherResult apply_error_diffusion(
 }
 
 // ===========================================================================
+// Ostromoukhov variable-coefficient error diffusion.
+// Uses 3 coefficients that vary with the "threshold" level — the fractional
+// position between the two nearest palette colors.  The coefficients are
+// from Ostromoukhov's 2001 paper, simplified to a smooth interpolation
+// between three regimes (near-black, midtone, near-white).
+// ===========================================================================
+
+DitherResult apply_ostromoukhov(
+    const Image& image,
+    std::span<const OKLab> palette_lab,
+    float strength, float error_clamp_val,
+    bool serpentine) {
+
+    auto w = image.width();
+    auto h = image.height();
+
+    auto num_colors = palette_lab.size();
+    float ec = error_clamp_val;
+    if (num_colors > 0 && num_colors <= 64) {
+        ec = error_clamp_val *
+             std::sqrt(static_cast<float>(num_colors) / 32.0f);
+    }
+
+    DitherResult result;
+    result.indices.resize(w * h);
+    result.total_error = 0.0f;
+
+    std::vector<OKLab> image_lab(w * h);
+    for (std::size_t y = 0; y < h; ++y)
+        for (std::size_t x = 0; x < w; ++x)
+            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+
+    std::vector<OKLab> error_buf(w * h);
+
+    for (std::size_t y = 0; y < h; ++y) {
+        bool reverse = serpentine && (y % 2 == 1);
+        for (std::size_t step = 0; step < w; ++step) {
+            std::size_t x = reverse ? (w - 1 - step) : step;
+            auto buf_idx = y * w + x;
+
+            auto clamped_error = oklab_clamp(error_buf[buf_idx], ec);
+            auto adjusted = oklab_add(image_lab[buf_idx], clamped_error);
+
+            // Find nearest AND second-nearest to compute threshold level
+            float best_d = std::numeric_limits<float>::max();
+            float second_d = std::numeric_limits<float>::max();
+            std::size_t best_k = 0;
+            OKLab best_lab{};
+            for (std::size_t k = 0; k < palette_lab.size(); ++k) {
+                float dL = adjusted.L - palette_lab[k].L;
+                float da = adjusted.a - palette_lab[k].a;
+                float db = adjusted.b - palette_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) {
+                    second_d = best_d;
+                    best_d = d;
+                    best_k = k;
+                    best_lab = palette_lab[k];
+                } else if (d < second_d) {
+                    second_d = d;
+                }
+            }
+            result.indices[buf_idx] = static_cast<std::uint8_t>(best_k);
+            result.total_error += best_d;
+
+            // Threshold: 0 = pixel is exactly on nearest, 1 = equidistant
+            float threshold = 0.0f;
+            if (second_d > 1e-12f) {
+                float sqrt_best = std::sqrt(best_d);
+                float sqrt_second = std::sqrt(second_d);
+                threshold = sqrt_best / (sqrt_best + sqrt_second);
+            }
+
+            // Variable coefficients: at threshold=0 (near palette color),
+            // distribute less error (pixel is well-served). At threshold=0.5
+            // (equidistant), distribute more aggressively.
+            // F-S base: right=7/16, bottom-left=3/16, bottom=5/16, bottom-right=1/16
+            // Scale by threshold: more aggressive diffusion for uncertain pixels
+            float scale = 0.6f + 0.8f * threshold;  // 0.6 to 1.4
+            float w0 = (7.0f / 16.0f) * scale;
+            float w1 = (3.0f / 16.0f) * scale;
+            float w2 = (5.0f / 16.0f) * scale;
+            float w3 = (1.0f / 16.0f) * scale;
+
+            auto quant_error =
+                oklab_scale(oklab_sub(adjusted, best_lab), strength);
+
+            struct { int dx, dy; float wt; } entries[] = {
+                {1, 0, w0}, {-1, 1, w1}, {0, 1, w2}, {1, 1, w3}};
+            for (auto& [kdx, kdy, wt] : entries) {
+                int actual_dx = reverse ? -kdx : kdx;
+                auto nx = static_cast<int>(x) + actual_dx;
+                auto ny = static_cast<int>(y) + kdy;
+                if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
+                    ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                    auto nidx = static_cast<std::size_t>(ny) * w +
+                                static_cast<std::size_t>(nx);
+                    error_buf[nidx] = oklab_clamp(
+                        oklab_add(error_buf[nidx],
+                                  oklab_scale(quant_error, wt)),
+                        ec);
+                }
+            }
+        }
+    }
+    return result;
+}
+
+// ===========================================================================
 // No-dither fallback (plain nearest-color mapping)
 // ===========================================================================
 
@@ -742,6 +851,12 @@ DitherResult apply(const Image& image,
             image, pal_span,
             settings.strength, settings.error_clamp,
             settings.serpentine, jarvis_kernel);
+
+    case Method::ostromoukhov:
+        return apply_ostromoukhov(
+            image, pal_span,
+            settings.strength, settings.error_clamp,
+            settings.serpentine);
     }
 
     return apply_none(image, pal_span);

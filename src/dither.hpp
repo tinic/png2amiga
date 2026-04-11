@@ -58,6 +58,9 @@ enum class Method : unsigned char {
     sierra_lite,
     stucki,
     jarvis,
+
+    // Advanced error diffusion
+    ostromoukhov,     // variable-coefficient error diffusion
 };
 
 // ---------------------------------------------------------------------------

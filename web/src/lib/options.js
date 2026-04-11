@@ -83,6 +83,7 @@ export const DITHER_METHODS = [
     { value: 'sierra-lite',     label: 'Sierra Lite' },
     { value: 'stucki',          label: 'Stucki' },
     { value: 'jarvis',          label: 'Jarvis' },
+    { value: 'ostromoukhov',    label: 'Ostromoukhov' },
   ]},
 ]
 
@@ -126,13 +127,13 @@ export const DIFFUSION_SLIDERS = [
 
 export const EXAMPLES = [
   { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
-  { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'floyd-steinberg', copper: true } },
+  { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'ostromoukhov', copper: true } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'checker', alphaThreshold: 0 } },
   { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
-  { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'floyd-steinberg', copper: true } },
+  { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'ostromoukhov', copper: true } },
   { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 1.2, brightness: -0.05, contrast: 0.9, gamma: 1.0, copper: true } },
-  { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'floyd-steinberg', copper: true } },
+  { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'ostromoukhov', copper: true } },
 ]
 
 export function defaultOptions() {
@@ -190,7 +191,7 @@ export function isAtariMode(mode) {
   return mode.startsWith('stf-') || mode.startsWith('ste-')
 }
 
-const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis'])
+const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis', 'ostromoukhov'])
 
 export function isErrorDiffusion(dither) {
   return ERROR_DIFFUSION.has(dither)
