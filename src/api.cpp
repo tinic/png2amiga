@@ -122,6 +122,13 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "sierra-lite") return dither::Method::sierra_lite;
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
+    if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "ign") return dither::Method::ign;
+    if (s == "white-noise") return dither::Method::white_noise;
+    if (s == "r2") return dither::Method::r2_sequence;
+    if (s == "crosshatch") return dither::Method::crosshatch;
+    if (s == "radial") return dither::Method::radial;
+    if (s == "value-noise") return dither::Method::value_noise;
     return dither::Method::floyd_steinberg;
 }
 

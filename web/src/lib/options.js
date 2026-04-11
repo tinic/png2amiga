@@ -84,12 +84,12 @@ export const DITHER_METHODS = [
     { value: 'vline8',        label: 'VLine 8' },
   ]},
   { group: 'Error Diffusion', items: [
+    { value: 'ostromoukhov',    label: 'Ostromoukhov' },
     { value: 'floyd-steinberg', label: 'Floyd-Steinberg' },
     { value: 'atkinson',        label: 'Atkinson' },
     { value: 'sierra-lite',     label: 'Sierra Lite' },
     { value: 'stucki',          label: 'Stucki' },
     { value: 'jarvis',          label: 'Jarvis' },
-    { value: 'ostromoukhov',    label: 'Ostromoukhov' },
   ]},
 ]
 
