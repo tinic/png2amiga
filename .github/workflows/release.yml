@@ -6,6 +6,10 @@ on:
       - "v*"
   workflow_dispatch:
 
+# Least-privilege: read-only by default, release job elevates to write
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     name: Build Linux (x86_64)
