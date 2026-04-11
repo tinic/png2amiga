@@ -271,6 +271,12 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
     if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "ign") return dither::Method::ign;
+    if (s == "white-noise") return dither::Method::white_noise;
+    if (s == "r2") return dither::Method::r2_sequence;
+    if (s == "crosshatch") return dither::Method::crosshatch;
+    if (s == "radial") return dither::Method::radial;
+    if (s == "value-noise") return dither::Method::value_noise;
     return std::unexpected{Error{ErrorCode::unsupported_mode,
         "Unknown dither method: " + std::string(s)}};
 }
@@ -725,6 +731,12 @@ const char* dither_name(dither::Method m) {
     case dither::Method::stucki: return "stucki";
     case dither::Method::jarvis: return "jarvis";
     case dither::Method::ostromoukhov: return "ostromoukhov";
+    case dither::Method::ign: return "ign";
+    case dither::Method::white_noise: return "white-noise";
+    case dither::Method::r2_sequence: return "r2";
+    case dither::Method::crosshatch: return "crosshatch";
+    case dither::Method::radial: return "radial";
+    case dither::Method::value_noise: return "value-noise";
     }
     return "unknown";
 }

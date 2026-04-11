@@ -824,6 +824,34 @@ DitherResult apply(const Image& image,
     case Method::blue_noise:
         return apply_ordered(image, blue_noise_mat, pal_span,
                              settings.strength);
+    case Method::ign:
+    case Method::white_noise:
+    case Method::r2_sequence:
+    case Method::crosshatch:
+    case Method::radial:
+    case Method::value_noise: {
+        // Analytical threshold methods — compute per-pixel, no matrix
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        auto method = settings.method;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto pixel_lab = color_space::linear_to_oklab(image[x, y]);
+                float thr = ordered_threshold(method, x, y);
+                pixel_lab.L += thr * settings.strength * 0.15f;
+                pixel_lab.a += thr * settings.strength * 0.03f;
+                pixel_lab.b += thr * settings.strength * 0.03f;
+                auto [idx, chosen, dist_sq] =
+                    find_nearest_oklab(pixel_lab, pal_span);
+                r.indices[y * w + x] = static_cast<std::uint8_t>(idx);
+                r.total_error += dist_sq;
+            }
+        }
+        return r;
+    }
 
     // Error diffusion
     case Method::floyd_steinberg:
@@ -898,6 +926,82 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
     case Method::hex8x8:       return hex8x8_mat[y % 8][x % 8];
     case Method::hex5x5:       return hex5x5_mat[y % 5][x % 5];
     case Method::blue_noise:   return blue_noise_mat[y % 64][x % 64];
+    case Method::ign: {
+        // Jimenez 2014 Interleaved Gradient Noise
+        auto fx = static_cast<float>(x);
+        auto fy = static_cast<float>(y);
+        float v = 52.9829189f * std::fmod(0.06711056f * fx + 0.00583715f * fy, 1.0f);
+        return std::fmod(v, 1.0f) - 0.5f;
+    }
+    case Method::white_noise: {
+        // Integer hash (Wang) for pure random noise
+        auto seed = static_cast<std::uint32_t>(y * 65537 + x);
+        seed = (seed ^ 61u) ^ (seed >> 16u);
+        seed *= 9u;
+        seed ^= seed >> 4u;
+        seed *= 0x27d4eb2du;
+        seed ^= seed >> 15u;
+        return static_cast<float>(seed & 0xFFFFu) / 65536.0f - 0.5f;
+    }
+    case Method::r2_sequence: {
+        // Martin Roberts R2: generalized golden ratio for 2D
+        constexpr float phi1 = 0.7548776662f;  // 1/plastic number
+        constexpr float phi2 = 0.5698402910f;  // 1/plastic^2
+        float v = std::fmod(static_cast<float>(x) * phi1 +
+                            static_cast<float>(y) * phi2 + 0.5f, 1.0f);
+        return v - 0.5f;
+    }
+    case Method::crosshatch: {
+        // Overlaid line patterns at 0°, 45°, 90°, 135° — threshold is
+        // the minimum distance to any line, giving pen-and-ink texture
+        auto fx = static_cast<float>(x);
+        auto fy = static_cast<float>(y);
+        float d0 = std::fmod(fy, 8.0f) / 8.0f;                          // horizontal
+        float d1 = std::fmod(fx, 8.0f) / 8.0f;                          // vertical
+        float d2 = std::fmod((fx + fy) * 0.7071f, 8.0f) / 8.0f;         // 45°
+        float d3 = std::fmod((fx - fy + 512.0f) * 0.7071f, 8.0f) / 8.0f; // 135°
+        // Triangle wave each to [0,1]
+        d0 = 1.0f - std::abs(d0 * 2.0f - 1.0f);
+        d1 = 1.0f - std::abs(d1 * 2.0f - 1.0f);
+        d2 = 1.0f - std::abs(d2 * 2.0f - 1.0f);
+        d3 = 1.0f - std::abs(d3 * 2.0f - 1.0f);
+        // Progressive reveal: horizontal first, then +vertical, +diagonals
+        float t = std::min({d0, d0 * 0.5f + d1 * 0.5f,
+                            d0 * 0.3f + d1 * 0.3f + d2 * 0.4f,
+                            d0 * 0.25f + d1 * 0.25f + d2 * 0.25f + d3 * 0.25f});
+        return t - 0.5f;
+    }
+    case Method::radial: {
+        // Concentric circles — threshold based on distance from center
+        auto fx = static_cast<float>(x) - 160.0f;  // assume 320 wide
+        auto fy = static_cast<float>(y) - 128.0f;  // assume 256 tall
+        float r = std::sqrt(fx * fx + fy * fy);
+        float v = std::fmod(r * 0.15f, 1.0f);
+        return (1.0f - std::abs(v * 2.0f - 1.0f)) - 0.5f;
+    }
+    case Method::value_noise: {
+        // 2D value noise: hash at integer grid + bilinear interpolation
+        auto hash = [](int ix, int iy) -> float {
+            auto s = static_cast<std::uint32_t>(ix * 374761393 + iy * 668265263 + 1013904223);
+            s = (s ^ (s >> 13u)) * 1274126177u;
+            return static_cast<float>(s & 0xFFFFu) / 65536.0f;
+        };
+        constexpr float scale = 0.125f;  // noise cell size = 8 pixels
+        float fx = static_cast<float>(x) * scale;
+        float fy = static_cast<float>(y) * scale;
+        int ix = static_cast<int>(std::floor(fx));
+        int iy = static_cast<int>(std::floor(fy));
+        float tx = fx - static_cast<float>(ix);
+        float ty = fy - static_cast<float>(iy);
+        // Smoothstep for less blocky interpolation
+        tx = tx * tx * (3.0f - 2.0f * tx);
+        ty = ty * ty * (3.0f - 2.0f * ty);
+        float v00 = hash(ix, iy), v10 = hash(ix + 1, iy);
+        float v01 = hash(ix, iy + 1), v11 = hash(ix + 1, iy + 1);
+        float v = v00 * (1 - tx) * (1 - ty) + v10 * tx * (1 - ty) +
+                  v01 * (1 - tx) * ty + v11 * tx * ty;
+        return v - 0.5f;
+    }
     default:                    return 0.0f;
     }
 }

@@ -51,6 +51,12 @@ enum class Method : unsigned char {
     hex8x8,           // non-rectangular hexagonal tiling
     hex5x5,           // non-rectangular slanted square tiling
     blue_noise,       // 64x64 blue noise (film-grain look, no visible pattern)
+    ign,              // Interleaved Gradient Noise (analytical, no LUT)
+    white_noise,      // pure random hash per pixel (film grain)
+    r2_sequence,      // Martin Roberts R2 low-discrepancy sequence
+    crosshatch,       // pen-and-ink crosshatching
+    radial,           // concentric circles (engraving look)
+    value_noise,      // coherent noise (organic clumping)
 
     // Error diffusion
     floyd_steinberg,
@@ -122,6 +128,12 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::hex8x8:
     case Method::hex5x5:
     case Method::blue_noise:
+    case Method::ign:
+    case Method::white_noise:
+    case Method::r2_sequence:
+    case Method::crosshatch:
+    case Method::radial:
+    case Method::value_noise:
         return true;
     default:
         return false;

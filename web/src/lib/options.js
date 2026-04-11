@@ -66,6 +66,12 @@ export const DITHER_METHODS = [
     { value: 'hex8x8',        label: 'Hexagonal 8x8' },
     { value: 'hex5x5',        label: 'Hexagonal 5x5' },
     { value: 'blue-noise',    label: 'Blue Noise' },
+    { value: 'ign',           label: 'IGN (Gradient Noise)' },
+    { value: 'white-noise',  label: 'White Noise' },
+    { value: 'r2',           label: 'R2 Sequence' },
+    { value: 'crosshatch',   label: 'Crosshatch' },
+    { value: 'radial',       label: 'Radial' },
+    { value: 'value-noise',  label: 'Value Noise' },
   ]},
   { group: 'Lines', items: [
     { value: 'line2',         label: 'Line 2' },
