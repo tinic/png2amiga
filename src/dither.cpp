@@ -535,6 +535,16 @@ DitherResult apply_error_diffusion(
     auto w = image.width();
     auto h = image.height();
 
+    // Adapt error clamp to palette granularity: fewer colors have larger
+    // quantization errors — tighter clamping prevents overshooting past
+    // sparse palette entries.  32 colors keeps the caller's default.
+    auto num_colors = palette_lab.size();
+    float ec = error_clamp_val;
+    if (num_colors > 0 && num_colors <= 64) {
+        ec = error_clamp_val *
+             std::sqrt(static_cast<float>(num_colors) / 32.0f);
+    }
+
     DitherResult result;
     result.indices.resize(w * h);
     result.total_error = 0.0f;
@@ -558,8 +568,7 @@ DitherResult apply_error_diffusion(
             auto buf_idx = y * w + x;
 
             // Add accumulated error to the original pixel
-            auto clamped_error = oklab_clamp(error_buf[buf_idx],
-                                             error_clamp_val);
+            auto clamped_error = oklab_clamp(error_buf[buf_idx], ec);
             auto adjusted = oklab_add(image_lab[buf_idx], clamped_error);
 
             // Find nearest palette color
@@ -584,7 +593,7 @@ DitherResult apply_error_diffusion(
                     error_buf[nidx] = oklab_clamp(
                         oklab_add(error_buf[nidx],
                                   oklab_scale(quant_error, weight)),
-                        error_clamp_val);
+                        ec);
                 }
             }
         }
