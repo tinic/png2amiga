@@ -1107,7 +1107,7 @@ async function loadExample(example) {
         </div>
 
         <div v-else class="flex flex-column gap-2">
-          <div class="preview-container surface-card border-round-lg overflow-hidden relative"
+          <div class="preview-container surface-card border-round-lg overflow-auto relative"
                @pointerdown="loupePointerDown" @pointermove="loupePointerMove" @pointerup="loupePointerUp"
                :class="{ 'loupe-active': loupeActive }"
           >
