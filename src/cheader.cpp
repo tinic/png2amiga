@@ -948,14 +948,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    for (int y = 1; y < {}; y++) {{\n", height);
         out += std::format("        USHORT line = y - 1 + {};\n", y_start);
         out += "        if (line == 256) {\n";
-        out += "            // Cross the VP[8] boundary. After this WAIT fires at\n";
-        out += "            // the end of line 255, emit this scanline's changes\n";
-        out += "            // WITHOUT a WAIT — the copper is already at the right\n";
-        out += "            // vertical position. A WAIT for VP=0 would fire\n";
-        out += "            // immediately (0xFF >= 0x00) before VPOS wraps.\n";
-        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;\n";
-        emit_copper_changes("y", aga_banks);
-        out += "            continue;\n";
+        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
         out += "        }\n";
         out += "        *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
         out += "        *cl++ = 0xfffe;\n";
