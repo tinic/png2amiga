@@ -469,39 +469,98 @@ Result<CopperResult> encode_copper(const Image& image,
         }
     }
 
-    // --- Vertical palette smoothing ---
-    // Anti-alias palette transitions between scanlines by blending each
-    // register's color with its vertical neighbors in OKLab. This prevents
-    // the harsh "band" effect when a register snaps from one color to
-    // another across a single scanline boundary.
-    // Kernel: 5-tap [0.1, 0.2, 0.4, 0.2, 0.1] — gentle, preserves detail.
-    {
-        constexpr float kw[] = {0.1f, 0.2f, 0.4f, 0.2f, 0.1f};
-        constexpr int krad = 2;
-        bool is_ocs = (chipset != amiga::Chipset::aga);
+    // --- Vertical palette dithering ---
+    // At low bitplane depths (≤4), each palette register covers a wide color
+    // range.  When a copper swap changes a register between scanlines the
+    // boundary is a visible horizontal band.  Fix: spread the transition over
+    // several lines by alternating old/new color in a 1-D Bayer pattern.
+    // The eye averages the alternating lines into a smooth gradient — using
+    // only real palette colors, no intermediate blends that would hit OCS
+    // 12-bit quantization artefacts.
+    if (depth <= 4 && chipset != amiga::Chipset::aga) {
+        // Golden ratio (R1) sequence: fract(y·φ + ½).  Never repeats,
+        // optimal gap-filling at any prefix length — no periodicity
+        // artefacts unlike Bayer-8 which tiles every 8 lines.
+        constexpr float phi = 0.6180339887f;  // (√5 − 1) / 2
+        // Scale with depth: fewer colors → bigger swings, wider bands.
+        // max_spread is the LONGEST transition (used for the smallest color
+        // changes).  As the perceptual distance grows, effective_spread
+        // shrinks linearly toward 2, so distant colors nearly hard-switch
+        // instead of creating ugly stripes.
+        int gap = 5 - static_cast<int>(depth);
+        int max_spread = 6 + gap * 3;           // d1:18 d2:15 d3:12 d4:9
+        constexpr float hard_switch_de2 = 0.50f;
+        float merge_de2 = 0.01f + static_cast<float>(gap) * 0.02f;
 
-        auto smoothed = scanline_palettes;  // copy
-        for (std::size_t r = 1; r < num_colors; ++r) {  // skip reg 0 (black)
-            for (std::size_t y = 0; y < height; ++y) {
-                float sL = 0, sa = 0, sb = 0, sw = 0;
-                for (int d = -krad; d <= krad; ++d) {
-                    auto ny = static_cast<int>(y) + d;
-                    if (ny < 0 || static_cast<std::size_t>(ny) >= height) continue;
-                    auto lab = color_space::linear_to_oklab(
-                        scanline_palettes[static_cast<std::size_t>(ny)][r]);
-                    float w = kw[d + krad];
-                    sL += lab.L * w;
-                    sa += lab.a * w;
-                    sb += lab.b * w;
-                    sw += w;
+        for (std::size_t r = 1; r < num_colors; ++r) {
+            Color3f committed = scanline_palettes[0][r];
+            Color3f candidate = committed;
+            int candidate_count = 0;
+
+            for (std::size_t y = 1; y < height; ++y) {
+                Color3f ideal = scanline_palettes[y][r];
+
+                if (ideal == committed) {
+                    candidate = committed;
+                    candidate_count = 0;
+                    continue;
                 }
-                auto blended = color_space::oklab_to_linear(
-                    color_space::OKLab{sL / sw, sa / sw, sb / sw}).clamped();
-                if (is_ocs) blended = palette::quantize_to_ocs(blended);
-                smoothed[y][r] = blended;
+
+                // Track how long the candidate has been active
+                if (ideal == candidate) {
+                    candidate_count++;
+                } else {
+                    // Gradual drift (close to previous candidate)?  Keep ramping.
+                    auto c_lab = color_space::linear_to_oklab(candidate);
+                    auto i_lab = color_space::linear_to_oklab(ideal);
+                    float dd = (c_lab.L - i_lab.L) * (c_lab.L - i_lab.L) +
+                               (c_lab.a - i_lab.a) * (c_lab.a - i_lab.a) +
+                               (c_lab.b - i_lab.b) * (c_lab.b - i_lab.b);
+                    if (dd < merge_de2 && candidate != committed) {
+                        candidate = ideal;
+                        candidate_count++;
+                    } else {
+                        candidate = ideal;
+                        candidate_count = 1;
+                    }
+                }
+
+                // Distance committed → candidate
+                auto com_lab = color_space::linear_to_oklab(committed);
+                auto can_lab = color_space::linear_to_oklab(candidate);
+                float dL = com_lab.L - can_lab.L;
+                float da = com_lab.a - can_lab.a;
+                float db = com_lab.b - can_lab.b;
+                float dist = dL * dL + da * da + db * db;
+
+                if (dist >= hard_switch_de2) {
+                    committed = candidate;
+                    candidate_count = 0;
+                    scanline_palettes[y][r] = committed;
+                    continue;
+                }
+
+                // Effective spread: close colors → long transition,
+                // distant colors → short (almost hard-switch).
+                float norm = dist / hard_switch_de2;  // 0..1
+                int eff_spread = std::max(2, static_cast<int>(
+                    static_cast<float>(max_spread) * (1.0f - norm)));
+
+                float ramp = std::min(
+                    1.0f,
+                    static_cast<float>(candidate_count) /
+                        static_cast<float>(eff_spread));
+                float threshold = std::fmod(
+                    static_cast<float>(y) * phi + 0.5f, 1.0f);
+                scanline_palettes[y][r] =
+                    (ramp > threshold) ? candidate : committed;
+
+                if (candidate_count >= eff_spread) {
+                    committed = candidate;
+                    candidate_count = 0;
+                }
             }
         }
-        scanline_palettes = std::move(smoothed);
     }
 
     // Reset dithering state for this iteration
