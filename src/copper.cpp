@@ -128,14 +128,6 @@ SwapCandidate find_best_swap(
         }
 
         auto reduction = static_cast<float>(stats[k].total_error - new_error);
-
-        // Hysteresis: require the swap to reduce this slot's error by at
-        // least 1%. Prevents register churn where a slot bounces between
-        // two similar shades for marginal gains, wasting copper MOVEs.
-        if (stats[k].total_error > 0.001 &&
-            reduction < static_cast<float>(stats[k].total_error) * 0.01f)
-            continue;
-
         if (reduction > best.error_reduction) {
             auto linear = color_space::oklab_to_linear(centroid).clamped();
             // Snap to chipset precision
