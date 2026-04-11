@@ -509,6 +509,7 @@ Result<HamResult> encode_ham_generic(
     auto base_pal = choose_ham_palette(image, num_base_colors, chipset);
 
     constexpr int ham_refine_iters = 2;
+    constexpr std::size_t refine_row_step = 4;  // subsample: every 4th row
     auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1);
     for (int ri = 0; ri < ham_refine_iters; ++ri) {
         std::vector<SRGBColor> ref_srgb(base_pal.size());
@@ -520,7 +521,7 @@ Result<HamResult> encode_ham_generic(
         struct SetAcc { double L{}, a{}, b{}; double count{}; };
         std::vector<SetAcc> acc(num_base_colors);
 
-        for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t y = 0; y < h; y += refine_row_step) {
             SRGBColor start = ref_srgb[0];
             auto row = image.row(y);
             auto scanline = encode_scanline_greedy(
