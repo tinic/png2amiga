@@ -176,7 +176,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    const dither::Settings& dither_settings,
                                    amiga::Chipset chipset = amiga::Chipset::ocs,
                                    std::size_t override_changes = 0,  // 0 = auto
-                                   const std::vector<Color3f>* user_palette = nullptr);
+                                   const std::vector<Color3f>* user_palette = nullptr,
+                                   bool reserve_color0 = true);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.

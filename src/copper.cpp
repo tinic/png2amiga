@@ -97,10 +97,9 @@ SwapCandidate find_best_swap(
     // For each slot, compute what happens if we replace it with its
     // assigned pixels' centroid (the ideal color for that cluster).
     // The slot with the highest error reduction wins.
-    // Skip slot 0 — it's COLOR00 (background/border color)
     SwapCandidate best{0, {}, -1.0f};
 
-    for (std::size_t k = 1; k < num_colors; ++k) {
+    for (std::size_t k = 0; k < num_colors; ++k) {
         if (stats[k].count < 0.001) continue;
         if (!excluded.empty() && excluded[k]) continue;
 
@@ -200,7 +199,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    const dither::Settings& dither_settings,
                                    amiga::Chipset chipset,
                                    std::size_t override_changes,
-                                   const std::vector<Color3f>* user_palette) {
+                                   const std::vector<Color3f>* user_palette,
+                                   bool reserve_color0) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -219,7 +219,9 @@ Result<CopperResult> encode_copper(const Image& image,
     }
 
     auto num_colors = std::size_t{1} << depth;
-    auto max_swappable = num_colors > 1 ? num_colors - 1 : std::size_t{0};  // slot 0 reserved
+    auto max_swappable = reserve_color0
+        ? (num_colors > 1 ? num_colors - 1 : std::size_t{0})
+        : num_colors;
 
     // --copper-changes is a pure user escape hatch and bypasses the budget
     // check entirely — the user is telling us "emit exactly this K, I know
@@ -241,7 +243,7 @@ Result<CopperResult> encode_copper(const Image& image,
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
-                                         stretch_k, user_palette);
+                                         stretch_k, user_palette, reserve_color0);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= MOVE_BUDGET_PER_LINE) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
@@ -261,18 +263,20 @@ Result<CopperResult> encode_copper(const Image& image,
         while (base_pal.size() < num_colors)
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
     } else {
-        // Auto-quantize: N-1 colors + black at index 0
         auto algo = (chipset == amiga::Chipset::aga)
             ? quantize::Algorithm::median_cut
             : quantize::Algorithm::ocs_bruteforce;
-        auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
+        auto reserve = reserve_color0
+            ? ((num_colors > 1) ? num_colors - 1 : std::size_t{1})
+            : num_colors;
         auto base_result = quantize::quantize(image, reserve, algo);
         if (!base_result) return std::unexpected{base_result.error()};
         base_pal = std::move(base_result->colors);
         if (chipset != amiga::Chipset::aga) {
             for (auto& c : base_pal) c = palette::quantize_to_ocs(c);
         }
-        base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});
+        if (reserve_color0)
+            base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});
         while (base_pal.size() < num_colors)
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
 
@@ -368,6 +372,7 @@ Result<CopperResult> encode_copper(const Image& image,
         std::vector<CopperChange> changes;
         changes.reserve(changes_per_line);
         std::vector<bool> swapped(num_colors, false);
+        if (reserve_color0) swapped[0] = true;  // don't swap COLOR00
 
         for (std::size_t s = 0; s < changes_per_line; ++s) {
             // Precompute current palette in OKLab

@@ -1068,6 +1068,14 @@ async function loadExample(example) {
                 </div>
               </div>
 
+              <!-- Reserve color 0 -->
+              <div class="pt-3 mt-3 border-top-1 surface-border">
+                <div class="flex align-items-center gap-2">
+                  <input type="checkbox" v-model="options.reserveColor0" id="reserveColor0" />
+                  <label for="reserveColor0" class="text-xs text-color-secondary" title="Reserve palette index 0 for black (Amiga border/background color). Disable to use all palette slots for image colors.">Reserve color 0 for black</label>
+                </div>
+              </div>
+
               <!-- CAP changes override -->
               <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1" title="Copper-Augmented Palette swaps per scanline. 0 = auto: backend picks the worst-case K that fits the 14-MOVE budget, plus a K+3 retry path. Higher values bypass the budget check and may overshoot real hardware.">CAP Changes/Line</label>

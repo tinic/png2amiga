@@ -128,6 +128,7 @@ struct Config {
     bool copper = false;               // per-scanline palette changes
     int copper_changes = 0;            // 0 = auto (based on chipset/depth)
     bool fade_in = false;              // 16-step fade-in from black
+    bool reserve_color0 = true;        // reserve index 0 for black (border)
 
     // Mask export
     std::string mask_path;             // output path for transparency mask
@@ -308,6 +309,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+
+        if (arg == "--no-reserve-color0") {
+            config.reserve_color0 = false;
+            continue;
+        }
 
         if (arg == "--crop-auto") {
             config.crop_auto = true;
@@ -1704,7 +1710,7 @@ int main(int argc, char* argv[]) {
             std::println(stderr, "{}", v.error().message);
             return 1;
         }
-        bool reserve_zero_ehb = !config->palette_file.empty() ? false : true;
+        bool reserve_zero_ehb = !config->palette_file.empty() ? false : config->reserve_color0;
         if (auto v = palette_locks::validate_pins(config->pins, config->locks, 32,
                                                   image->width(), image->height(),
                                                   reserve_zero_ehb); !v) {
@@ -2113,7 +2119,8 @@ int main(int argc, char* argv[]) {
     auto max_colors = std::size_t{1} << config->depth;
     auto is_atari_std = amiga::is_atari(config->mode);
     bool user_pal_std = !config->palette_file.empty();
-    auto reserve_zero_std = !user_pal_std && (has_transparency || !is_atari_std);
+    auto reserve_zero_std = !user_pal_std && config->reserve_color0 &&
+                             (has_transparency || !is_atari_std);
 
     // Validate locks/pins
     if (auto v = palette_locks::validate_locks(config->locks, max_colors); !v) {

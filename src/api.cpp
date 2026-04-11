@@ -586,7 +586,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             dith.error_clamp = options.error_clamp;
 
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
-                                                       static_cast<std::size_t>(options.copper_changes));
+                                                       static_cast<std::size_t>(options.copper_changes),
+                                                       nullptr, options.reserve_color0);
             if (!copper_result) return std::unexpected{copper_result.error()};
 
             // Now re-dither each scanline against its 64-color EHB palette
@@ -916,7 +917,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
                                                      static_cast<std::size_t>(options.copper_changes),
-                                                     copper_user_pal.empty() ? nullptr : &copper_user_pal);
+                                                     copper_user_pal.empty() ? nullptr : &copper_user_pal,
+                                                     options.reserve_color0);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,
@@ -971,8 +973,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto is_atari = amiga::is_atari(mode);
     bool user_pal = has_user_palette(options);
     // With custom palette: use as-is, no forced black at index 0.
-    // Without: reserve index 0 for black (Amiga border/background).
-    auto reserve_zero = !user_pal && (has_transparency || !is_atari);
+    // Without: reserve index 0 for black (Amiga border/background),
+    // unless the user explicitly disabled it.
+    auto reserve_zero = !user_pal && options.reserve_color0 &&
+                        (has_transparency || !is_atari);
 
     // Validate locks/pins (no-op for HAM/copper paths above which return earlier).
     // Locks override the implicit reserve-zero rule when index 0 is locked.

@@ -81,6 +81,9 @@ struct Options {
     int crop_h = 0;
     bool crop_auto = false;             // auto-crop to mode aspect ratio (center)
 
+    // Advanced
+    bool reserve_color0 = true;         // reserve index 0 for black (border/background)
+
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
     std::vector<PinSpec>  pins;

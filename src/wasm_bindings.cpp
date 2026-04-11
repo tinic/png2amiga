@@ -64,6 +64,8 @@ Options parse_js_options(val js_opts) {
         opts.symbol_name = js_opts["symbolName"].as<std::string>();
     if (js_opts.hasOwnProperty("copperChanges"))
         opts.copper_changes = js_opts["copperChanges"].as<int>();
+    if (js_opts.hasOwnProperty("reserveColor0"))
+        opts.reserve_color0 = js_opts["reserveColor0"].as<bool>();
     if (js_opts.hasOwnProperty("cropX"))
         opts.crop_x = js_opts["cropX"].as<int>();
     if (js_opts.hasOwnProperty("cropY"))

@@ -171,6 +171,8 @@ export function defaultOptions() {
     symbolName: '',
     // Mask export
     maskInvert: false,
+    // Advanced
+    reserveColor0: true,
   }
   for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
   return opts
