@@ -897,6 +897,7 @@ std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
     case Method::sierra_lite:     return sierra_lite_kernel;
     case Method::stucki:          return stucki_kernel;
     case Method::jarvis:          return jarvis_kernel;
+    case Method::ostromoukhov:    return floyd_steinberg_kernel;  // F-S base kernel
     default:                      return {};
     }
 }

@@ -591,6 +591,10 @@ Result<CopperResult> encode_copper(const Image& image,
 
         if (use_diffusion) {
             auto kernel = dither::error_diffusion_kernel(dither_settings.method);
+            // Ostromoukhov uses F-S kernel with variable scaling
+            bool is_ostro = (dither_settings.method == dither::Method::ostromoukhov);
+            if (is_ostro)
+                kernel = dither::error_diffusion_kernel(dither::Method::floyd_steinberg);
             bool reverse = (y % 2 == 1);
             // Adaptive error clamp: tighter for fewer colors (same
             // formula as dither.cpp apply_error_diffusion)
@@ -609,16 +613,30 @@ Result<CopperResult> encode_copper(const Image& image,
                 pixel_lab.b += std::clamp(e.b, -ec, ec);
 
                 float best_d = std::numeric_limits<float>::max();
+                float second_d = std::numeric_limits<float>::max();
                 std::size_t best_k = 0;
                 for (std::size_t k = 0; k < num_colors; ++k) {
                     float dL = pixel_lab.L - pal_lab[k].L;
                     float da = pixel_lab.a - pal_lab[k].a;
                     float db = pixel_lab.b - pal_lab[k].b;
                     float d = dL * dL + da * da + db * db;
-                    if (d < best_d) { best_d = d; best_k = k; }
+                    if (d < best_d) {
+                        second_d = best_d;
+                        best_d = d; best_k = k;
+                    } else if (d < second_d) {
+                        second_d = d;
+                    }
                 }
                 all_indices[y * width + x] = static_cast<std::uint8_t>(best_k);
                 total_error += best_d;
+
+                // Ostromoukhov: scale diffusion by threshold level
+                float ostro_scale = 1.0f;
+                if (is_ostro && second_d > 1e-12f) {
+                    float threshold = std::sqrt(best_d) /
+                        (std::sqrt(best_d) + std::sqrt(second_d));
+                    ostro_scale = 0.6f + 0.8f * threshold;
+                }
 
                 auto orig_lab = color_space::linear_to_oklab(row[x]);
                 color_space::OKLab qerr = {
@@ -633,9 +651,9 @@ Result<CopperResult> encode_copper(const Image& image,
                         ny >= 0 && static_cast<std::size_t>(ny) < height) {
                         auto idx = static_cast<std::size_t>(ny) * width +
                                    static_cast<std::size_t>(nx);
-                        err_buf[idx].L += qerr.L * kw;
-                        err_buf[idx].a += qerr.a * kw;
-                        err_buf[idx].b += qerr.b * kw;
+                        err_buf[idx].L += qerr.L * kw * ostro_scale;
+                        err_buf[idx].a += qerr.a * kw * ostro_scale;
+                        err_buf[idx].b += qerr.b * kw * ostro_scale;
                     }
                 }
             }
