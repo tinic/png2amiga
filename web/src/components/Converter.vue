@@ -1107,16 +1107,14 @@ async function loadExample(example) {
         </div>
 
         <div v-else class="flex flex-column gap-2">
-          <div class="preview-outer relative">
-            <div class="preview-container surface-card border-round-lg overflow-auto"
-                 @pointerdown="loupePointerDown" @pointermove="loupePointerMove" @pointerup="loupePointerUp"
-                 :class="{ 'loupe-active': loupeActive }"
-            >
-              <div class="canvas-wrap relative" :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
-                <canvas ref="canvasRef" class="preview-canvas" />
-                <div v-if="converting" class="overlay flex align-items-center justify-content-center">
-                  <ProgressSpinner style="width: 2rem; height: 2rem" />
-                </div>
+          <div class="preview-container surface-card border-round-lg overflow-hidden relative"
+               @pointerdown="loupePointerDown" @pointermove="loupePointerMove" @pointerup="loupePointerUp"
+               :class="{ 'loupe-active': loupeActive }"
+          >
+            <div class="canvas-wrap relative" :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
+              <canvas ref="canvasRef" class="preview-canvas" />
+              <div v-if="converting" class="overlay flex align-items-center justify-content-center">
+                <ProgressSpinner style="width: 2rem; height: 2rem" />
               </div>
             </div>
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
@@ -1331,7 +1329,6 @@ async function loadExample(example) {
   position: absolute;
   top: 0.4rem;
   right: 0.4rem;
-  z-index: 10;
   width: 1.75rem;
   height: 1.75rem;
   border: none;
