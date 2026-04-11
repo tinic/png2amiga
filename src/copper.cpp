@@ -278,8 +278,19 @@ Result<CopperResult> encode_copper(const Image& image,
 
     }
 
-    // Step 2: Process scanlines — accumulate palette changes
-    std::vector<Color3f> current_pal = base_pal;
+    // Step 2: Iterative two-pass predict+dither loop.
+    //
+    // Iteration 1: pass 1 predicts per-scanline palettes using raw-pixel
+    //              error for column priority; pass 2 dithers with those
+    //              palettes and measures DITHERED per-column error.
+    // Iteration 2: pass 1 re-predicts using the dithered error map from
+    //              iteration 1 as column weights — swaps now target where
+    //              the ditherer actually struggled, not just where raw
+    //              pixel-to-palette distance was high.
+    //
+    // The feedback loop closes the gap between "what the optimizer thinks
+    // matters" and "what the dithered output actually looks like."
+
     std::vector<std::uint8_t> all_indices(width * height);
     std::vector<std::vector<CopperChange>> scanline_changes(height);
     std::vector<std::vector<Color3f>> scanline_palettes(height);
@@ -287,11 +298,7 @@ Result<CopperResult> encode_copper(const Image& image,
 
     bool use_diffusion = dither_settings.method != dither::Method::none &&
                          !dither::is_ordered(dither_settings.method);
-    // Cross-scanline error buffer. Even though the palette changes per row,
-    // the error (target - actual in OKLab) is palette-independent and valid
-    // for correcting future pixels against any palette.
     std::vector<color_space::OKLab> err_buf;
-    if (use_diffusion) err_buf.resize(width * height);
 
     // Precompute all rows in OKLab for neighbor lookups
     std::vector<std::vector<color_space::OKLab>> all_lab(height);
@@ -302,28 +309,32 @@ Result<CopperResult> encode_copper(const Image& image,
             all_lab[y][x] = color_space::linear_to_oklab(row[x]);
     }
 
-    // Per-column error accumulator for spatial prioritization.
-    // Columns that have been poorly served by the palette across previous
-    // scanlines get a weight boost so the greedy swap preferentially
-    // picks colors that help those columns.
+    constexpr float col_decay = 0.85f;
+    constexpr float col_scale = 2.0f;
+    constexpr int predict_dither_iterations = 2;
+
+    // Column error seeded as zeros for iteration 1; fed back from
+    // dithered output for iteration 2+.
     std::vector<float> column_error(width, 0.0f);
-    constexpr float col_decay = 0.85f;   // decay per scanline (keep history)
-    constexpr float col_scale = 2.0f;    // how much to boost high-error columns
+
+    for (int pd_iter = 0; pd_iter < predict_dither_iterations; ++pd_iter) {
+
+    // --- Pass 1: predict per-scanline palettes ---
+    std::vector<Color3f> current_pal = base_pal;
+    // Reset column error accumulator for this pass (seeded from previous
+    // iteration's dithered feedback, or zeros on first iteration)
+    auto pass1_column_error = column_error;
 
     for (std::size_t y = 0; y < height; ++y) {
         auto row = image.row(y);
 
-        // Compute column weights from accumulated error.
-        // Weight = 1.0 + normalized_column_error * col_scale.
-        // Normalization: divide by the max column error to keep weights
-        // in a reasonable range.
         std::vector<float> col_weights(width, 1.0f);
         float max_col_err = 0.0f;
         for (std::size_t x = 0; x < width; ++x)
-            max_col_err = std::max(max_col_err, column_error[x]);
+            max_col_err = std::max(max_col_err, pass1_column_error[x]);
         if (max_col_err > 1e-6f) {
             for (std::size_t x = 0; x < width; ++x)
-                col_weights[x] = 1.0f + (column_error[x] / max_col_err) * col_scale;
+                col_weights[x] = 1.0f + (pass1_column_error[x] / max_col_err) * col_scale;
         }
 
         // Build neighbor rows with weights for smoothing.
@@ -419,13 +430,18 @@ Result<CopperResult> encode_copper(const Image& image,
                     float d = dL * dL + da * da + db * db;
                     if (d < best_d) best_d = d;
                 }
-                column_error[x] = column_error[x] * col_decay + best_d;
+                pass1_column_error[x] = pass1_column_error[x] * col_decay + best_d;
             }
         }
     }
 
-    // ===================================================================
-    // Pass 2: Dither with the predetermined per-scanline palettes.
+    // Reset dithering state for this iteration
+    total_error = 0.0f;
+    if (use_diffusion) {
+        err_buf.assign(width * height, color_space::OKLab{0, 0, 0});
+    }
+
+    // --- Pass 2: Dither with the predetermined per-scanline palettes ---
     //
     // Now that every scanline's effective palette is known, error diffusion
     // can flow correctly across scanline boundaries — each row dithers
@@ -495,6 +511,28 @@ Result<CopperResult> encode_copper(const Image& image,
                        all_indices, y * width, total_error);
         }
     }
+
+    // --- Feedback: compute per-column dithered error for next iteration ---
+    if (pd_iter + 1 < predict_dither_iterations) {
+        std::fill(column_error.begin(), column_error.end(), 0.0f);
+        for (std::size_t y = 0; y < height; ++y) {
+            auto& pal = scanline_palettes[y];
+            std::vector<color_space::OKLab> pal_lab_fb(num_colors);
+            for (std::size_t i = 0; i < num_colors; ++i)
+                pal_lab_fb[i] = color_space::linear_to_oklab(pal[i]);
+            for (std::size_t x = 0; x < width; ++x) {
+                auto idx = all_indices[y * width + x];
+                auto& pixel = all_lab[y][x];
+                auto& chosen = pal_lab_fb[idx];
+                float dL = pixel.L - chosen.L;
+                float da = pixel.a - chosen.a;
+                float db = pixel.b - chosen.b;
+                column_error[x] += dL * dL + da * da + db * db;
+            }
+        }
+    }
+
+    } // end predict_dither_iterations loop
 
     // Encode to bitplanes
     auto planes = bitplane::encode(all_indices, width, height, depth);
