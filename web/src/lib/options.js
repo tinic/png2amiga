@@ -131,6 +131,7 @@ export const EXAMPLES = [
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'checker', alphaThreshold: 0 } },
   { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'checker', ditherStrength: 0.5 } },
   { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'floyd-steinberg', copper: true } },
+  { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 1.2, brightness: -0.05, contrast: 0.9, gamma: 1.0, copper: true } },
 ]
 
 export function defaultOptions() {
