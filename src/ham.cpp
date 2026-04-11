@@ -501,8 +501,60 @@ Result<HamResult> encode_ham_generic(
 
     auto data_bits = num_bitplanes - 2;
 
-    // Select base palette
+    // Select base palette and refine it for HAM encoding.
+    // The initial median-cut palette is optimal for nearest-color matching
+    // but not for HAM, where only SET operations use the palette directly.
+    // Refine: encode with greedy HAM, identify which pixels actually use SET,
+    // recompute palette centroids from those pixels' TARGET colors, repeat.
     auto base_pal = choose_ham_palette(image, num_base_colors, chipset);
+
+    constexpr int ham_refine_iters = 2;
+    auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1);
+    for (int ri = 0; ri < ham_refine_iters; ++ri) {
+        std::vector<SRGBColor> ref_srgb(base_pal.size());
+        for (std::size_t i = 0; i < base_pal.size(); ++i)
+            ref_srgb[i] = linear_to_srgb8(base_pal.colors[i]);
+        HamPrecomp ref_pre{std::span<const Color3f>{base_pal.colors}, data_bits};
+
+        // Per-slot accumulators for SET targets
+        struct SetAcc { double L{}, a{}, b{}; double count{}; };
+        std::vector<SetAcc> acc(num_base_colors);
+
+        for (std::size_t y = 0; y < h; ++y) {
+            SRGBColor start = ref_srgb[0];
+            auto row = image.row(y);
+            auto scanline = encode_scanline_greedy(
+                row, start, ref_pre, std::span<const SRGBColor>{ref_srgb});
+            for (std::size_t x = 0; x < w; ++x) {
+                auto val = scanline.values[x];
+                auto ctrl = val >> data_bits;
+                if (ctrl == 0) {  // SET operation
+                    auto slot = static_cast<std::size_t>(val & data_mask);
+                    auto lab = color_space::linear_to_oklab(row[x]);
+                    acc[slot].L += static_cast<double>(lab.L);
+                    acc[slot].a += static_cast<double>(lab.a);
+                    acc[slot].b += static_cast<double>(lab.b);
+                    acc[slot].count += 1.0;
+                }
+            }
+        }
+
+        bool changed = false;
+        for (std::size_t k = 1; k < num_base_colors; ++k) {
+            if (acc[k].count < 1.0) continue;
+            auto new_lab = color_space::OKLab{
+                static_cast<float>(acc[k].L / acc[k].count),
+                static_cast<float>(acc[k].a / acc[k].count),
+                static_cast<float>(acc[k].b / acc[k].count)};
+            auto new_color = palette::quantize_to_ocs(
+                color_space::oklab_to_linear(new_lab).clamped());
+            if (new_color != base_pal.colors[k]) {
+                base_pal.colors[k] = new_color;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
 
     // Precompute sRGB versions
     std::vector<SRGBColor> base_srgb(base_pal.size());
