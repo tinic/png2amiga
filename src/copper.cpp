@@ -46,12 +46,15 @@ SwapCandidate find_best_swap(
     std::span<const std::span<const color_space::OKLab>> rows_lab,
     std::span<const float> weights,
     amiga::Chipset chipset,
-    const std::vector<bool>& excluded = {}) {
+    const std::vector<bool>& excluded = {},
+    std::span<const float> column_weights = {}) {
 
     auto num_colors = current_pal.size();
     auto width = rows[0].size();
 
-    // Assign each pixel to nearest palette color and track per-slot error
+    // Assign each pixel to nearest palette color and track per-slot error.
+    // Column weights boost pixels in high-error vertical regions so copper
+    // moves preferentially fix persistent problem areas.
     struct SlotStats {
         double sum_L{}, sum_a{}, sum_b{};
         double total_error{};
@@ -65,8 +68,7 @@ SwapCandidate find_best_swap(
     std::vector<float> pixel_weights(total_pixels);
 
     for (std::size_t r = 0; r < rows.size(); ++r) {
-        auto w = weights[r];
-        auto wd = static_cast<double>(w);
+        auto row_w = weights[r];
         auto& rl = rows_lab[r];
         auto base = r * width;
         for (std::size_t x = 0; x < width; ++x) {
@@ -79,6 +81,9 @@ SwapCandidate find_best_swap(
                 float d = dL * dL + da * da + db * db;
                 if (d < best_d) { best_d = d; best_k = k; }
             }
+            float col_w = column_weights.empty() ? 1.0f : column_weights[x];
+            float w = row_w * col_w;
+            auto wd = static_cast<double>(w);
             assignments[base + x] = static_cast<std::uint8_t>(best_k);
             pixel_weights[base + x] = w;
             stats[best_k].sum_L += static_cast<double>(rl[x].L) * wd;
@@ -297,8 +302,29 @@ Result<CopperResult> encode_copper(const Image& image,
             all_lab[y][x] = color_space::linear_to_oklab(row[x]);
     }
 
+    // Per-column error accumulator for spatial prioritization.
+    // Columns that have been poorly served by the palette across previous
+    // scanlines get a weight boost so the greedy swap preferentially
+    // picks colors that help those columns.
+    std::vector<float> column_error(width, 0.0f);
+    constexpr float col_decay = 0.85f;   // decay per scanline (keep history)
+    constexpr float col_scale = 2.0f;    // how much to boost high-error columns
+
     for (std::size_t y = 0; y < height; ++y) {
         auto row = image.row(y);
+
+        // Compute column weights from accumulated error.
+        // Weight = 1.0 + normalized_column_error * col_scale.
+        // Normalization: divide by the max column error to keep weights
+        // in a reasonable range.
+        std::vector<float> col_weights(width, 1.0f);
+        float max_col_err = 0.0f;
+        for (std::size_t x = 0; x < width; ++x)
+            max_col_err = std::max(max_col_err, column_error[x]);
+        if (max_col_err > 1e-6f) {
+            for (std::size_t x = 0; x < width; ++x)
+                col_weights[x] = 1.0f + (column_error[x] / max_col_err) * col_scale;
+        }
 
         // Build neighbor rows with weights for smoothing.
         // Current row weight=1.0, neighbors decay with distance.
@@ -340,7 +366,8 @@ Result<CopperResult> encode_copper(const Image& image,
             }
 
             auto swap = find_best_swap(
-                current_pal, pal_lab, rows, rows_lab, weights, chipset, swapped);
+                current_pal, pal_lab, rows, rows_lab, weights, chipset, swapped,
+                col_weights);
 
             if (swap.error_reduction <= 0.0f) break;
 
@@ -375,6 +402,26 @@ Result<CopperResult> encode_copper(const Image& image,
         // Snapshot the effective palette for this scanline
         scanline_palettes[y] = current_pal;
         scanline_changes[y] = std::move(changes);
+
+        // Update per-column error: decay old error, add this scanline's
+        // per-pixel error against the effective palette.
+        {
+            std::vector<color_space::OKLab> pal_lab_tmp(num_colors);
+            for (std::size_t i = 0; i < num_colors; ++i)
+                pal_lab_tmp[i] = color_space::linear_to_oklab(current_pal[i]);
+            for (std::size_t x = 0; x < width; ++x) {
+                auto pixel_lab = all_lab[y][x];
+                float best_d = std::numeric_limits<float>::max();
+                for (std::size_t k = 0; k < num_colors; ++k) {
+                    float dL = pixel_lab.L - pal_lab_tmp[k].L;
+                    float da = pixel_lab.a - pal_lab_tmp[k].a;
+                    float db = pixel_lab.b - pal_lab_tmp[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) best_d = d;
+                }
+                column_error[x] = column_error[x] * col_decay + best_d;
+            }
+        }
 
         // Dither this scanline with the effective palette
         std::vector<color_space::OKLab> pal_lab(num_colors);
