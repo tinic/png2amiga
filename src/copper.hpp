@@ -40,6 +40,11 @@ struct CopperChange {
     // The viewer skips writes where the hi-table entry's reg is 0xFFFF.
     // Set by the encoder; ignored on OCS where LOCT does not exist.
     bool skip_hi = false;
+
+    // Average X position of pixels using this register on the scanline.
+    // Used for spatial sorting: leftmost swaps first so reducing K drops
+    // the rightmost (least critical) swaps. Not serialized to viewer data.
+    float avg_x = 0.0f;
 };
 
 // ---------------------------------------------------------------------------
