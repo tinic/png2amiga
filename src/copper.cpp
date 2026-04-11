@@ -413,13 +413,13 @@ Result<CopperResult> encode_copper(const Image& image,
             for (std::size_t i = 0; i < num_colors; ++i)
                 pal_lab_sort[i] = color_space::linear_to_oklab(current_pal[i]);
 
-            // For each change, find the average X position of pixels on this
-            // row assigned to that register
+            // For each change, find the first (leftmost) X position on this
+            // row where a pixel is assigned to that register. The first
+            // occurrence is what matters — the copper swap must happen
+            // before that pixel is displayed.
             for (auto& ch : changes) {
-                double sum_x = 0.0;
-                double count = 0.0;
+                ch.avg_x = static_cast<float>(width);  // default: sort last
                 for (std::size_t x = 0; x < width; ++x) {
-                    // Find nearest palette color for this pixel
                     float best_d = std::numeric_limits<float>::max();
                     std::size_t best_k = 0;
                     for (std::size_t k = 0; k < num_colors; ++k) {
@@ -430,15 +430,10 @@ Result<CopperResult> encode_copper(const Image& image,
                         if (d < best_d) { best_d = d; best_k = k; }
                     }
                     if (best_k == ch.reg) {
-                        sum_x += static_cast<double>(x);
-                        count += 1.0;
+                        ch.avg_x = static_cast<float>(x);
+                        break;  // first occurrence found
                     }
                 }
-                // Store average X in a temporary — abuse skip_hi as we'll
-                // recompute it after sorting. Use a separate array instead.
-                ch.avg_x = count > 0.0
-                    ? static_cast<float>(sum_x / count)
-                    : static_cast<float>(width);  // unused regs sort last
             }
             std::sort(changes.begin(), changes.end(),
                       [](const CopperChange& a, const CopperChange& b) {
