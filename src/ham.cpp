@@ -853,7 +853,7 @@ Result<HamResult> encode_ham_copper_generic(
             num_bitplanes, true, is_hires, chipset);
     }
 
-    // Global base palette
+    // Global base palette (copper swaps refine it per-scanline)
     auto base_pal = choose_ham_palette(image, num_base_colors, chipset);
     while (base_pal.colors.size() < num_base_colors) {
         base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
