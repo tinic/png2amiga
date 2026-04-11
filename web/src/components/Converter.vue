@@ -203,7 +203,7 @@ const depthMax = computed(() => maxDepth(options.mode, options.chipset))
 // (safe default, backend picks worst-case K from the 14-MOVE budget); any
 // value above the safe K is an explicit user override and may overshoot
 // real hardware — we let people try it anyway.
-const copperMax = computed(() => 16)
+const copperMax = computed(() => 32)
 
 // Effective chipset label for status line
 const statusChipset = computed(() => {
