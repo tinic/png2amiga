@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: false
+          submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
 
       - name: Install GCC 15 and CMake
@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: false
+          submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
 
       - name: Install GCC 15 and CMake
@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: false
+          submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
 
       - name: Setup MSYS2 (UCRT64) with GCC 15

@@ -156,7 +156,7 @@ void print_usage() {
     std::println(stderr,
         "png2amiga {}\n"
         "\n"
-        "Usage: png2amiga [options] input.[png|jpg] [-o output.png|output.iff|output.h]\n"
+        "Usage: png2amiga [options] input.[png|jpg|webp] [-o output.png|output.iff|output.h]\n"
         "\n",
         png2amiga::version);
     std::println(stderr,

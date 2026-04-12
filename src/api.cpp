@@ -18,6 +18,9 @@
 #include "types.hpp"
 
 #include <stb_image.h>
+#include <webp/decode.h>
+
+#include <cstring>
 
 #include <algorithm>
 #include <cmath>
@@ -159,9 +162,23 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                                    std::size_t target_w,
                                    std::size_t target_h,
                                    std::vector<bool>* out_tmask = nullptr) {
-    int w{}, h{}, channels{};
-    auto* raw = stbi_load_from_memory(input_data,
-        static_cast<int>(input_size), &w, &h, &channels, 4);
+    int w{}, h{};
+    // Detect WebP (RIFF...WEBP) and dispatch to libwebp; else use stb_image.
+    bool is_webp_img = input_size >= 12 &&
+        std::memcmp(input_data, "RIFF", 4) == 0 &&
+        std::memcmp(input_data + 8, "WEBP", 4) == 0;
+    unsigned char* raw = nullptr;
+    if (is_webp_img) {
+        raw = WebPDecodeRGBA(input_data, input_size, &w, &h);
+    } else {
+        int channels{};
+        raw = stbi_load_from_memory(input_data,
+            static_cast<int>(input_size), &w, &h, &channels, 4);
+    }
+    auto free_raw = [&]() {
+        if (!raw) return;
+        if (is_webp_img) WebPFree(raw); else stbi_image_free(raw);
+    };
     if (!raw)
         return std::unexpected{Error{ErrorCode::invalid_png, "Failed to decode image"}};
 
@@ -169,7 +186,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     // 32-bit (WASM) or exhaust memory under 64-bit.
     constexpr int kMaxDimension = 32768;
     if (w <= 0 || h <= 0 || w > kMaxDimension || h > kMaxDimension) {
-        stbi_image_free(raw);
+        free_raw();
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
             std::format("Image dimensions out of range: {}x{} (max {}x{})",
@@ -201,7 +218,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         if (any_transparent)
             src_alpha[i] = static_cast<float>(raw[base + 3]) / 255.0f;
     }
-    stbi_image_free(raw);
+    free_raw();
 
     // Determine the effective source crop region up front so we can sample
     // the transparency mask from the cropped region rather than the full
@@ -216,7 +233,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         auto cw = static_cast<std::size_t>(options.crop_w);
         auto ch = static_cast<std::size_t>(options.crop_h);
         if (cx + cw > width || cy + ch > height || cw == 0 || ch == 0) {
-            stbi_image_free(raw);
+            free_raw();
             return std::unexpected{Error{
                 ErrorCode::invalid_dimensions,
                 std::format("Crop region {}x{}+{}+{} exceeds image {}x{}",

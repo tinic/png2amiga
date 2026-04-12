@@ -75,7 +75,7 @@ if(EMSCRIPTEN)
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga_wasm PRIVATE stb)
+    target_link_libraries(png2amiga_wasm PRIVATE stb webp_headers webpdecode webpdspdecode webputilsdecode)
     target_compile_options(png2amiga_wasm PRIVATE -O3 -msimd128 -flto)
     target_link_options(png2amiga_wasm PRIVATE
         --bind
@@ -102,7 +102,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga PRIVATE stb)
+    target_link_libraries(png2amiga PRIVATE stb webp_headers webpdecode webpdspdecode webputilsdecode)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     if(MINGW)

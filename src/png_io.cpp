@@ -3,6 +3,7 @@
 
 #include <stb_image.h>
 #include <stb_image_write.h>
+#include <webp/decode.h>
 
 #include <array>
 #include <cmath>
@@ -28,22 +29,71 @@ struct StbiFree {
 
 using StbiPtr = std::unique_ptr<stbi_uc[], StbiFree>;
 
+// Returns true if the byte buffer begins with a WebP RIFF container
+bool is_webp(const unsigned char* data, std::size_t size) noexcept {
+    return size >= 12 &&
+           std::memcmp(data, "RIFF", 4) == 0 &&
+           std::memcmp(data + 8, "WEBP", 4) == 0;
+}
+
 } // namespace
+
+// Decode image bytes (PNG, JPEG, BMP, TGA, GIF via stb_image; WebP via libwebp).
+// Returns malloc'd RGBA8 buffer (caller frees with stbi_image_free or WebPFree);
+// on failure returns nullptr and leaves an error message accessible via
+// stbi_failure_reason() for stb paths, or sets a generic message for webp.
+unsigned char* decode_rgba(const unsigned char* data, std::size_t size,
+                           int* out_w, int* out_h) noexcept {
+    if (is_webp(data, size)) {
+        auto* pixels = WebPDecodeRGBA(data, size, out_w, out_h);
+        return pixels;  // caller uses WebPFree (== free on most platforms)
+    }
+    int channels{};
+    return stbi_load_from_memory(data, static_cast<int>(size),
+                                 out_w, out_h, &channels, 4);
+}
+
+// Free a buffer returned by decode_rgba. WebP uses free(); stb uses
+// stbi_image_free() (also free() on most platforms but safer to match).
+void free_rgba(unsigned char* data, bool was_webp) noexcept {
+    if (!data) return;
+    if (was_webp) WebPFree(data);
+    else stbi_image_free(data);
+}
 
 Result<Image> load(std::string_view path) {
     auto path_str = std::string(path);
 
-    int w{};
-    int h{};
-    int channels{};
-    // Always request 4 channels (RGBA) so we catch all forms of
-    // transparency including palette tRNS chunks
-    StbiPtr data{stbi_load(path_str.c_str(), &w, &h, &channels, 4)};
+    // Read file into memory so we can detect WebP magic bytes
+    std::ifstream f(path_str, std::ios::binary);
+    if (!f) {
+        return std::unexpected{Error{
+            ErrorCode::file_not_found,
+            std::string("Cannot open: ") + path_str,
+        }};
+    }
+    f.seekg(0, std::ios::end);
+    auto file_size = static_cast<std::size_t>(f.tellg());
+    f.seekg(0, std::ios::beg);
+    std::vector<unsigned char> buf(file_size);
+    f.read(reinterpret_cast<char*>(buf.data()),
+           static_cast<std::streamsize>(file_size));
+
+    int w{}, h{};
+    bool webp = is_webp(buf.data(), buf.size());
+    auto* raw_data = decode_rgba(buf.data(), buf.size(), &w, &h);
+    // Wrap in smart pointer that uses the right free function
+    auto deleter = [webp](unsigned char* p) {
+        if (p) { if (webp) WebPFree(p); else stbi_image_free(p); }
+    };
+    std::unique_ptr<unsigned char, decltype(deleter)> data{raw_data, deleter};
 
     if (!data) {
         return std::unexpected{Error{
             ErrorCode::invalid_png,
-            std::string("Failed to load: ") + stbi_failure_reason(),
+            webp
+                ? std::string("Failed to decode WebP")
+                : std::string("Failed to load: ") + stbi_failure_reason(),
         }};
     }
 

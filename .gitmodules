@@ -1,3 +1,6 @@
 [submodule "third_party/vscode-amiga-debug"]
 	path = third_party/vscode-amiga-debug
 	url = https://github.com/BartmanAbyss/vscode-amiga-debug.git
+[submodule "third_party/libwebp"]
+	path = third_party/libwebp
+	url = https://chromium.googlesource.com/webm/libwebp
