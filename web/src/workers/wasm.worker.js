@@ -79,6 +79,7 @@ self.onmessage = async (e) => {
       planeBytes: result.planeBytes,
       copperBytes: result.copperBytes,
       quantError: result.quantError,
+      psnr: result.psnr,
       hasTransparency: result.hasTransparency,
       error: result.error,
     }

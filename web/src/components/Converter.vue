@@ -449,6 +449,7 @@ function doConvert() {
         info += `, disk: ${fmt(diskBytes)}, chip: ${fmt(chipBytes)}`
       }
       if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
+      if (result.psnr != null && isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`
       resultInfo.value = info
 
       const convertMs = performance.now() - convertStart
