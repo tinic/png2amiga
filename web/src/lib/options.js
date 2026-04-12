@@ -144,7 +144,7 @@ export function defaultOptions() {
     depth: 5,
     interlace: false,
     copper: false,
-    dither: 'checker',
+    dither: 'ostromoukhov',
     width: 0,
     height: 0,
     // HAM
