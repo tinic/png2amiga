@@ -67,6 +67,7 @@ enum class Method : unsigned char {
 
     // Advanced error diffusion
     ostromoukhov,     // variable-coefficient error diffusion
+    gilbert,          // Gilbert space-filling-curve error diffusion
 };
 
 // ---------------------------------------------------------------------------

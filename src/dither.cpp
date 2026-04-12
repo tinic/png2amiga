@@ -649,6 +649,232 @@ DitherResult apply_error_diffusion(
 // between three regimes (near-black, midtone, near-white).
 // ===========================================================================
 
+// ===========================================================================
+// Gilbert-curve error diffusion
+//
+// Instead of scanning row-by-row, walk a generalized Hilbert (Červený's
+// "Gilbert") space-filling curve that covers any W×H rectangle. At each
+// step, quantize the current pixel and diffuse the error to the NEXT
+// few pixels on the curve. Because the curve has O(1) spatial locality
+// everywhere, the error propagates along a locally-coherent path and
+// the directional hatching artifacts you see with raster-order FS on
+// flat regions disappear.
+//
+// Curve generation follows Červený's recursive subdivision
+// (https://github.com/jakubcerveny/gilbert).  We store the visit order
+// as a flat list of (x, y) pairs, then walk it linearly for diffusion.
+// ===========================================================================
+
+namespace {
+
+inline int sgn(int v) noexcept { return (v > 0) - (v < 0); }
+
+// Recursive subdivision. (x, y) is the starting cell; a = (ax, ay) is the
+// major axis vector; b = (bx, by) is the minor axis vector. Each emitted
+// coordinate is pushed onto `out`.
+void gilbert_recurse(int x, int y, int ax, int ay, int bx, int by,
+                     std::vector<std::pair<int, int>>& out);
+
+void gilbert_emit_row(int x, int y, int ax, int ay,
+                      std::vector<std::pair<int, int>>& out) {
+    int dax = sgn(ax), day = sgn(ay);
+    int len = std::abs(ax) + std::abs(ay);
+    for (int i = 0; i < len; ++i) {
+        out.emplace_back(x, y);
+        x += dax; y += day;
+    }
+}
+
+void gilbert_recurse(int x, int y, int ax, int ay, int bx, int by,
+                     std::vector<std::pair<int, int>>& out) {
+    int w = std::abs(ax) + std::abs(ay);
+    int h = std::abs(bx) + std::abs(by);
+
+    if (h == 0) return;
+    if (h == 1) { gilbert_emit_row(x, y, ax, ay, out); return; }
+    if (w == 1) { gilbert_emit_row(x, y, bx, by, out); return; }
+
+    int dax = sgn(ax), day = sgn(ay);
+    int dbx = sgn(bx), dby = sgn(by);
+
+    int ax2 = ax / 2, ay2 = ay / 2;
+    int bx2 = bx / 2, by2 = by / 2;
+    int w2 = std::abs(ax2) + std::abs(ay2);
+    int h2 = std::abs(bx2) + std::abs(by2);
+
+    if (2 * w > 3 * h) {
+        // Prefer horizontal split
+        if ((w2 % 2) && w > 2) { ax2 += dax; ay2 += day; }
+        gilbert_recurse(x, y, ax2, ay2, bx, by, out);
+        gilbert_recurse(x + ax2, y + ay2, ax - ax2, ay - ay2, bx, by, out);
+    } else {
+        // Prefer vertical split
+        if ((h2 % 2) && h > 2) { bx2 += dbx; by2 += dby; }
+        gilbert_recurse(x, y, bx2, by2, ax2, ay2, out);
+        gilbert_recurse(x + bx2, y + by2, ax, ay,
+                        bx - bx2, by - by2, out);
+        gilbert_recurse(x + (ax - dax) + (bx2 - dbx),
+                        y + (ay - day) + (by2 - dby),
+                        -bx2, -by2, -(ax - ax2), -(ay - ay2), out);
+    }
+}
+
+std::vector<std::pair<int, int>> gilbert_curve(int w, int h) {
+    std::vector<std::pair<int, int>> out;
+    out.reserve(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+    if (w >= h) gilbert_recurse(0, 0, w, 0, 0, h, out);
+    else        gilbert_recurse(0, 0, 0, h, w, 0, out);
+    return out;
+}
+
+} // namespace
+
+DitherResult apply_gilbert(
+    const Image& image,
+    std::span<const OKLab> palette_lab,
+    float strength, float error_clamp_val) {
+
+    auto w = image.width();
+    auto h = image.height();
+
+    DitherResult result;
+    result.indices.resize(w * h);
+    result.total_error = 0.0f;
+
+    auto curve = gilbert_curve(static_cast<int>(w), static_cast<int>(h));
+
+    std::vector<OKLab> image_lab(w * h);
+    for (std::size_t y = 0; y < h; ++y)
+        for (std::size_t x = 0; x < w; ++x)
+            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+
+    // Flatness map: 1.0 in smooth regions, 0.0 at edges. Error diffusion
+    // on a space-filling curve tends to produce curve-following patterns
+    // in flat regions (because the error doesn't have anywhere to "escape"
+    // laterally). Adding blue-noise perturbation in flat regions breaks
+    // those patterns without disturbing edges where accuracy matters most.
+    //
+    // Gradient is the sum of |L - neighbor.L| over 4-neighbors, in the
+    // OKLab L channel only (banding is primarily a luminance phenomenon).
+    // Threshold 0.03 (≈ 8 8-bit levels) — above this, the region is
+    // treated as edge and gets no noise injection.
+    std::vector<float> flatness(w * h, 1.0f);
+    {
+        constexpr float grad_thresh = 0.015f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                float L = image_lab[y * w + x].L;
+                float g = 0.0f;
+                if (x > 0)     g += std::abs(L - image_lab[y * w + (x - 1)].L);
+                if (x + 1 < w) g += std::abs(L - image_lab[y * w + (x + 1)].L);
+                if (y > 0)     g += std::abs(L - image_lab[(y - 1) * w + x].L);
+                if (y + 1 < h) g += std::abs(L - image_lab[(y + 1) * w + x].L);
+                float f = 1.0f - std::min(g / grad_thresh, 1.0f);
+                flatness[y * w + x] = f;
+            }
+        }
+    }
+
+    // Blue-noise amplitude scales with palette spacing. For a 32-color
+    // palette the average OKLab nearest-neighbor distance is ~0.05; we
+    // inject up to ±(amp * 0.5) of perturbation in flat regions, enough
+    // to shift the nearest-color decision occasionally but not dominate.
+    float noise_amp = 0.0f;
+    if (palette_lab.size() >= 2) {
+        // Rough average nearest-neighbor distance
+        float total_nn = 0.0f;
+        for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+            float best = std::numeric_limits<float>::max();
+            for (std::size_t j = 0; j < palette_lab.size(); ++j) {
+                if (i == j) continue;
+                float dL = palette_lab[i].L - palette_lab[j].L;
+                float da = palette_lab[i].a - palette_lab[j].a;
+                float db = palette_lab[i].b - palette_lab[j].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best) best = d;
+            }
+            total_nn += std::sqrt(best);
+        }
+        noise_amp = 0.15f * (total_nn / static_cast<float>(palette_lab.size()));
+    }
+
+    // Error accumulator per pixel index
+    std::vector<OKLab> error_buf(w * h);
+
+    // Diffusion weights along the curve: most of the error goes to the
+    // immediate next cell (spatially adjacent on the curve), with a small
+    // tail to a few more. FS's pyramidal weights assume a 2D kernel shape,
+    // which is a poor fit for 1D curve diffusion. Biasing toward the
+    // next cell keeps the error local (where it belongs) and avoids
+    // spreading error across distant, unrelated pixels when the curve
+    // loops around.
+    //
+    // 12/16 + 3/16 + 1/16 = 16/16 = 1.0 (same total as FS).
+    constexpr std::array<float, 3> weights = {
+        12.0f / 16.0f, 3.0f / 16.0f, 1.0f / 16.0f,
+    };
+
+    auto num_colors = palette_lab.size();
+    float ec = error_clamp_val;
+    if (num_colors > 0 && num_colors <= 64) {
+        ec = error_clamp_val *
+             std::sqrt(static_cast<float>(num_colors) / 32.0f);
+    }
+
+    for (std::size_t i = 0; i < curve.size(); ++i) {
+        auto [x, y] = curve[i];
+        auto idx = static_cast<std::size_t>(y) * w + static_cast<std::size_t>(x);
+
+        auto clamped = oklab_clamp(error_buf[idx], ec);
+        auto target = oklab_add(image_lab[idx], clamped);
+
+        // Blue-noise perturbation in flat regions only. The noise is
+        // applied to the NEAREST-COLOR LOOKUP target but NOT to the
+        // propagated error — otherwise noise accumulates along the
+        // curve instead of cancelling out. This is the key insight from
+        // nQuant's GilbertCurve + BlueNoise combination.
+        auto lookup = target;
+        if (noise_amp > 0.0f && flatness[idx] > 0.0f) {
+            auto ux = static_cast<std::size_t>(x) & 63;
+            auto uy = static_cast<std::size_t>(y) & 63;
+            float n = blue_noise_mat[uy][ux] * 2.0f * flatness[idx] * noise_amp;
+            lookup.L += n;
+            lookup.a += n;
+            lookup.b += n;
+        }
+
+        // Find nearest palette entry (using perturbed lookup)
+        float best_d = std::numeric_limits<float>::max();
+        std::size_t best_k = 0;
+        OKLab best_lab{};
+        for (std::size_t k = 0; k < palette_lab.size(); ++k) {
+            float dL = lookup.L - palette_lab[k].L;
+            float da = lookup.a - palette_lab[k].a;
+            float db = lookup.b - palette_lab[k].b;
+            float d = dL * dL + da * da + db * db;
+            if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
+        }
+        result.indices[idx] = static_cast<std::uint8_t>(best_k);
+        result.total_error += best_d;
+
+        // Error propagation uses the UNPERTURBED target, so blue noise
+        // doesn't compound through the diffusion chain.
+        auto err = oklab_sub(target, best_lab);
+        auto scaled = oklab_scale(err, strength);
+
+        // Distribute to next 4 cells along the curve
+        for (std::size_t k = 0; k < weights.size() && i + 1 + k < curve.size(); ++k) {
+            auto [nx, ny] = curve[i + 1 + k];
+            auto nidx = static_cast<std::size_t>(ny) * w +
+                        static_cast<std::size_t>(nx);
+            auto w_e = oklab_scale(scaled, weights[k]);
+            error_buf[nidx] = oklab_clamp(oklab_add(error_buf[nidx], w_e), ec);
+        }
+    }
+
+    return result;
+}
+
 DitherResult apply_ostromoukhov(
     const Image& image,
     std::span<const OKLab> palette_lab,
@@ -934,6 +1160,11 @@ DitherResult apply(const Image& image,
             image, pal_span,
             settings.strength, settings.error_clamp,
             settings.serpentine);
+
+    case Method::gilbert:
+        return apply_gilbert(
+            image, pal_span,
+            settings.strength, settings.error_clamp);
     }
 
     return apply_none(image, pal_span);

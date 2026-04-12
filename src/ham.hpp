@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace png2amiga::ham {
@@ -88,6 +89,9 @@ struct HamOptions {
     // Palette diversity (0 = off, 1-5 = remove near-duplicate base colors,
     // re-seed from worst-served pixels). Experimental.
     int palette_diversity = 0;
+
+    // Base palette quantizer (empty = median-cut, "pnn" = PNN agglomerative).
+    std::string quantizer;
 };
 
 // ---------------------------------------------------------------------------

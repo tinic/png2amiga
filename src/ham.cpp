@@ -251,13 +251,28 @@ HamPixelResult encode_ham_pixel(
 
 Palette choose_ham_palette(const Image& image, std::size_t num_colors,
                            amiga::Chipset chipset,
-                           int palette_diversity) {
+                           int palette_diversity,
+                           std::string_view quantizer) {
     // Quantize N-1 colors, reserve index 0 for black (border/HAM start).
     // Diversity is applied AFTER OCS snap so the SSE objective reflects the
     // actual discrete palette HAM6 will use. (Running it inside median_cut
     // would evaluate against the continuous palette that HAM never sees.)
     auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
-    auto pal = quantize::median_cut(image.pixels(), reserve, /*diversity=*/0);
+
+    // Quantizer selection:
+    //   - explicit "pnn": PNN agglomerative in OKLab
+    //   - explicit "median-cut": median-cut + k-means
+    //   - empty / auto: PNN for AGA (HAM8), median-cut otherwise.
+    //     Benchmarks showed PNN wins ~10-13% on HAM8 across fantasy/photo/
+    //     space3 but regresses on HAM6 OCS, so only opt in for AGA.
+    bool use_pnn;
+    if (quantizer == "pnn")             use_pnn = true;
+    else if (quantizer == "median-cut") use_pnn = false;
+    else                                use_pnn = (chipset == amiga::Chipset::aga);
+
+    auto pal = use_pnn
+        ? quantize::pnn_quantize(image.pixels(), reserve, /*diversity=*/0)
+        : quantize::median_cut(image.pixels(), reserve, /*diversity=*/0);
 
     bool is_ocs = (chipset != amiga::Chipset::aga);
     if (is_ocs) {
@@ -516,7 +531,7 @@ Result<HamResult> encode_ham_generic(
     // but not for HAM, where only SET operations use the palette directly.
     // Refine: encode with greedy HAM, identify which pixels actually use SET,
     // recompute palette centroids from those pixels' TARGET colors, repeat.
-    auto base_pal = choose_ham_palette(image, num_base_colors, chipset, opts.palette_diversity);
+    auto base_pal = choose_ham_palette(image, num_base_colors, chipset, opts.palette_diversity, opts.quantizer);
 
     // Refinement only helps HAM6 (many pixels use SET due to 4-bit modify
     // precision).  For HAM8, MODIFY is precise enough that SET usage
@@ -869,7 +884,7 @@ Result<HamResult> encode_ham_copper_generic(
     }
 
     // Global base palette
-    auto base_pal = choose_ham_palette(image, num_base_colors, chipset, opts.palette_diversity);
+    auto base_pal = choose_ham_palette(image, num_base_colors, chipset, opts.palette_diversity, opts.quantizer);
     while (base_pal.colors.size() < num_base_colors) {
         base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
     }

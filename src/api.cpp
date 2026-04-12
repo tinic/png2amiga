@@ -121,6 +121,7 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
     if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "gilbert") return dither::Method::gilbert;
     if (s == "ign") return dither::Method::ign;
     if (s == "white-noise") return dither::Method::white_noise;
     if (s == "r2") return dither::Method::r2_sequence;
@@ -509,6 +510,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.dither_strength = options.dither_strength;
         ham_opts.error_clamp = options.error_clamp;
         ham_opts.palette_diversity = options.palette_diversity;
+        ham_opts.quantizer = options.quantizer;
 
         // Force transparent pixels to black BEFORE HAM encoding so the
         // encoder handles color transitions correctly at transparency edges.

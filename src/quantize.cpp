@@ -648,6 +648,255 @@ Palette median_cut(std::span<const Color3f> colors,
 }
 
 // ===========================================================================
+// Pairwise Nearest Neighbor quantization (Equitz 1989, Kurz/Thyssen)
+//
+// Agglomerative clustering with Ward-linkage merge cost in OKLab:
+//
+//     cost(i, j) = (w_i * w_j / (w_i + w_j)) * ||c_i - c_j||²
+//
+// Starting from a histogram of the input image, we repeatedly merge the
+// pair with lowest merge cost until `max_colors` clusters remain.
+// Published results have PNN beating median-cut at low palette counts
+// (≤32) at the cost of higher runtime — but since our typical N is
+// 16–64 and histogram bins top out at ~4096 (OCS) or 32768 (coarse AGA
+// grid), the O(B²) init is fast enough.
+//
+// Nearest-neighbor pointers plus lazy heap validation give O(B²) init
+// and O((B-N)·B) merges in the worst case.
+// ===========================================================================
+
+Palette pnn_quantize(std::span<const Color3f> colors,
+                     std::size_t max_colors,
+                     int palette_diversity,
+                     bool snap_to_ocs) {
+
+    if (max_colors == 0) max_colors = 1;
+    if (colors.empty()) {
+        return Palette{"pnn", {Color3f{0.0f, 0.0f, 0.0f}}};
+    }
+
+    // Each cluster stores a weighted centroid in OKLab AND a "representative"
+    // that the cost function uses. For continuous PNN these are identical.
+    // For OCS PNN the representative is the OCS color nearest the weighted
+    // centroid, so every merge cost and the final palette respect the
+    // discrete 12-bit gamut.
+    struct Cluster {
+        // Weighted sums (in OKLab); centroid = sum / weight
+        double sum_L{}, sum_a{}, sum_b{};
+        float weight{};
+        OKLab rep{};          // representative: either centroid or OCS-snapped
+        std::size_t nn{};
+        float nn_cost{};
+        bool alive{};
+    };
+    std::vector<Cluster> clusters;
+
+    auto refresh_rep = [&](Cluster& c) {
+        auto w = static_cast<double>(c.weight);
+        OKLab centroid{
+            static_cast<float>(c.sum_L / w),
+            static_cast<float>(c.sum_a / w),
+            static_cast<float>(c.sum_b / w),
+        };
+        if (snap_to_ocs) {
+            auto rgb = color_space::oklab_to_linear(centroid).clamped();
+            rgb = palette::quantize_to_ocs(rgb);
+            c.rep = color_space::linear_to_oklab(rgb);
+        } else {
+            c.rep = centroid;
+        }
+    };
+
+    if (snap_to_ocs) {
+        // Initialize one cluster per distinct OCS color that the image uses.
+        // Max 4096 clusters, cheap O(B²).
+        auto& lut = ocs_lut();
+        std::array<std::uint32_t, 4096> hist{};
+        std::array<double, 4096> sum_L{}, sum_a{}, sum_b{};
+        for (auto& pixel : colors) {
+            auto ocs = palette::linear_to_ocs(pixel);
+            auto lab = color_space::linear_to_oklab(pixel);
+            ++hist[ocs];
+            sum_L[ocs] += static_cast<double>(lab.L);
+            sum_a[ocs] += static_cast<double>(lab.a);
+            sum_b[ocs] += static_cast<double>(lab.b);
+        }
+        clusters.reserve(4096);
+        for (std::uint16_t i = 0; i < 4096; ++i) {
+            if (hist[i] == 0) continue;
+            Cluster c{};
+            c.sum_L  = sum_L[i];
+            c.sum_a  = sum_a[i];
+            c.sum_b  = sum_b[i];
+            c.weight = static_cast<float>(hist[i]);
+            c.rep    = lut.oklab[i];  // OCS color exactly
+            c.alive  = true;
+            c.nn_cost = std::numeric_limits<float>::max();
+            clusters.push_back(c);
+        }
+    } else {
+        // Continuous-space histogram: 24³ = 13824 bins in OKLab.
+        constexpr std::size_t BINS = 24;
+        constexpr float L_min = 0.0f, L_max = 1.0f;
+        constexpr float a_min = -0.5f, a_max = 0.5f;
+        constexpr float b_min = -0.5f, b_max = 0.5f;
+        constexpr float L_scale = static_cast<float>(BINS) / (L_max - L_min);
+        constexpr float a_scale = static_cast<float>(BINS) / (a_max - a_min);
+        constexpr float b_scale = static_cast<float>(BINS) / (b_max - b_min);
+
+        struct Bin {
+            double L{}, a{}, b{};
+            std::uint32_t weight{};
+        };
+        std::vector<Bin> hist(BINS * BINS * BINS);
+        for (auto& pixel : colors) {
+            auto lab = color_space::linear_to_oklab(pixel);
+            auto iL = static_cast<std::size_t>(
+                std::clamp((lab.L - L_min) * L_scale, 0.0f,
+                           static_cast<float>(BINS - 1)));
+            auto ia = static_cast<std::size_t>(
+                std::clamp((lab.a - a_min) * a_scale, 0.0f,
+                           static_cast<float>(BINS - 1)));
+            auto ib = static_cast<std::size_t>(
+                std::clamp((lab.b - b_min) * b_scale, 0.0f,
+                           static_cast<float>(BINS - 1)));
+            auto& bin = hist[(iL * BINS + ia) * BINS + ib];
+            bin.L += static_cast<double>(lab.L);
+            bin.a += static_cast<double>(lab.a);
+            bin.b += static_cast<double>(lab.b);
+            ++bin.weight;
+        }
+        clusters.reserve(1024);
+        for (auto& bin : hist) {
+            if (bin.weight == 0) continue;
+            Cluster c{};
+            c.sum_L  = bin.L;
+            c.sum_a  = bin.a;
+            c.sum_b  = bin.b;
+            c.weight = static_cast<float>(bin.weight);
+            c.rep    = OKLab{
+                static_cast<float>(bin.L / bin.weight),
+                static_cast<float>(bin.a / bin.weight),
+                static_cast<float>(bin.b / bin.weight),
+            };
+            c.alive  = true;
+            c.nn_cost = std::numeric_limits<float>::max();
+            clusters.push_back(c);
+        }
+    }
+
+    auto merge_cost = [](const Cluster& a, const Cluster& b) {
+        float d = oklab_dist_sq(a.rep, b.rep);
+        float w = (a.weight * b.weight) / (a.weight + b.weight);
+        return w * d;
+    };
+
+    // If we already have few enough clusters, return them directly
+    if (clusters.size() <= max_colors) {
+        Palette result;
+        result.name = "pnn";
+        for (auto& c : clusters) {
+            result.colors.push_back(
+                color_space::oklab_to_linear(c.rep).clamped());
+        }
+        std::sort(result.colors.begin(), result.colors.end(),
+                  [](const Color3f& a, const Color3f& b) {
+                      return color_space::linear_to_oklab(a).L <
+                             color_space::linear_to_oklab(b).L;
+                  });
+        if (palette_diversity > 0)
+            apply_palette_diversity(result, colors, palette_diversity, false);
+        return result;
+    }
+
+    // Initialize each cluster's nearest neighbor (O(B²) one-time).
+    auto update_nn = [&](std::size_t i) {
+        float best = std::numeric_limits<float>::max();
+        std::size_t best_j = i;
+        for (std::size_t j = 0; j < clusters.size(); ++j) {
+            if (j == i || !clusters[j].alive) continue;
+            float c = merge_cost(clusters[i], clusters[j]);
+            if (c < best) { best = c; best_j = j; }
+        }
+        clusters[i].nn = best_j;
+        clusters[i].nn_cost = best;
+    };
+
+    for (std::size_t i = 0; i < clusters.size(); ++i) update_nn(i);
+
+    std::size_t alive_count = clusters.size();
+    while (alive_count > max_colors) {
+        // Find alive cluster with lowest merge cost
+        std::size_t best_i = 0;
+        float best_c = std::numeric_limits<float>::max();
+        for (std::size_t i = 0; i < clusters.size(); ++i) {
+            if (!clusters[i].alive) continue;
+            if (clusters[i].nn_cost < best_c) {
+                best_c = clusters[i].nn_cost;
+                best_i = i;
+            }
+        }
+        auto j = clusters[best_i].nn;
+        if (!clusters[j].alive || j == best_i) {
+            // Stale pointer; refresh and retry
+            update_nn(best_i);
+            continue;
+        }
+
+        // Merge j into best_i. Accumulate weighted sums (not weighted
+        // reps — reps are snapped discrete values and don't compose).
+        auto& a = clusters[best_i];
+        auto& b = clusters[j];
+        a.sum_L  += b.sum_L;
+        a.sum_a  += b.sum_a;
+        a.sum_b  += b.sum_b;
+        a.weight += b.weight;
+        refresh_rep(a);
+        b.alive = false;
+        --alive_count;
+
+        // Any cluster whose NN was best_i or j needs its NN recomputed.
+        // best_i itself also needs a new NN.
+        update_nn(best_i);
+        for (std::size_t i = 0; i < clusters.size(); ++i) {
+            if (!clusters[i].alive || i == best_i) continue;
+            if (clusters[i].nn == best_i || clusters[i].nn == j) {
+                update_nn(i);
+            } else {
+                // Check if best_i (with its updated centroid) is now closer
+                // than its current nn.
+                float c = merge_cost(clusters[i], clusters[best_i]);
+                if (c < clusters[i].nn_cost) {
+                    clusters[i].nn = best_i;
+                    clusters[i].nn_cost = c;
+                }
+            }
+        }
+    }
+
+    // Collect surviving clusters
+    Palette result;
+    result.name = "pnn";
+    for (auto& c : clusters) {
+        if (!c.alive) continue;
+        result.colors.push_back(
+            color_space::oklab_to_linear(c.rep).clamped());
+    }
+
+    // Sort by perceptual luminance for consistent ordering
+    std::sort(result.colors.begin(), result.colors.end(),
+              [](const Color3f& a, const Color3f& b) {
+                  return color_space::linear_to_oklab(a).L <
+                         color_space::linear_to_oklab(b).L;
+              });
+
+    if (palette_diversity > 0)
+        apply_palette_diversity(result, colors, palette_diversity, false);
+
+    return result;
+}
+
+// ===========================================================================
 // Palette diversity pass — inspired by ham_convert's diversity option.
 //
 // Iteratively replaces the two closest palette entries (in OKLab) with the
@@ -954,6 +1203,12 @@ Result<Palette> quantize(const Image& image, std::size_t max_colors,
     case Algorithm::ocs_bruteforce:
         return ocs_bruteforce_quantize(image.pixels(), max_colors,
                                        palette_diversity);
+    case Algorithm::pnn:
+        // Continuous-space PNN for AGA, OCS-snapped PNN for OCS/STF.
+        // Detection via an OCS snap test isn't available here, so the
+        // caller selects snap via the helper overload. Default: continuous.
+        return pnn_quantize(image.pixels(), max_colors, palette_diversity,
+                            /*snap_to_ocs=*/false);
     }
 
     return median_cut(image.pixels(), max_colors, palette_diversity);

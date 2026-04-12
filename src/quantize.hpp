@@ -22,6 +22,7 @@ namespace png2amiga::quantize {
 enum class Algorithm : unsigned char {
     median_cut,     // Median-cut: fast, good general quality
     ocs_bruteforce, // OCS: histogram + k-means over all 4096 OCS colors
+    pnn,            // Pairwise Nearest Neighbor (agglomerative, OKLab)
 };
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,22 @@ Result<Palette> quantize(const Image& image,
 Palette median_cut(std::span<const Color3f> colors,
                    std::size_t max_colors,
                    int palette_diversity = 0);
+
+// ---------------------------------------------------------------------------
+// Pairwise Nearest Neighbor quantization (direct interface)
+//
+// Agglomerative clustering in OKLab space. Each starting cluster is a
+// histogram bin; at each step the pair of clusters with the lowest joint
+// variance merge cost (Ward's linkage) is merged until `max_colors` remain.
+//
+// Better than median-cut at low palette counts (≤32). Slower than
+// median-cut but comparable to ocs_bruteforce.
+// ---------------------------------------------------------------------------
+
+Palette pnn_quantize(std::span<const Color3f> colors,
+                     std::size_t max_colors,
+                     int palette_diversity = 0,
+                     bool snap_to_ocs = false);
 
 // ---------------------------------------------------------------------------
 // Palette diversity pass (ham_convert-inspired).

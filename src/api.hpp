@@ -56,6 +56,8 @@ struct Options {
     std::vector<std::uint8_t> palette_data; // inline palette data (empty = auto)
     int palette_diversity = 0;          // 0 = off, 1-5 = remove near-duplicate
                                         // colors, re-seed from worst-served pixels
+    std::string quantizer;              // "", "auto" = auto-select, or
+                                        // "median-cut", "ocs-bruteforce", "pnn"
 
     // HAM encoding
     int ham_beam = 16;                   // beam width for DP search (1-256)

@@ -105,6 +105,10 @@ struct Config {
     // poorly-served image regions.
     int palette_diversity = 0;
 
+    // Quantizer selection (empty = auto: OCS brute-force for OCS, median-cut
+    // for AGA). "pnn" uses Pairwise Nearest Neighbor (experimental).
+    std::string quantizer;
+
     // Dithering
     dither::Method dither_method = dither::Method::floyd_steinberg;
     bool dither_explicit = false;       // true if user passed --dither
@@ -276,6 +280,7 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
     if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "gilbert") return dither::Method::gilbert;
     if (s == "ign") return dither::Method::ign;
     if (s == "white-noise") return dither::Method::white_noise;
     if (s == "r2") return dither::Method::r2_sequence;
@@ -455,6 +460,17 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
                 if (config.palette_diversity < 0) config.palette_diversity = 0;
                 if (config.palette_diversity > 9) config.palette_diversity = 9;
+            }
+            else if (arg == "--quantizer") {
+                config.quantizer = std::string(val);
+                if (config.quantizer != "" && config.quantizer != "auto" &&
+                    config.quantizer != "median-cut" &&
+                    config.quantizer != "ocs-bruteforce" &&
+                    config.quantizer != "pnn") {
+                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                        "Unknown quantizer: " + config.quantizer +
+                        " (use auto, median-cut, ocs-bruteforce, pnn)"}};
+                }
             }
             else if (arg == "--copper-changes") {
                 config.copper_changes = std::atoi(std::string(val).c_str());
@@ -740,6 +756,7 @@ const char* dither_name(dither::Method m) {
     case dither::Method::stucki: return "stucki";
     case dither::Method::jarvis: return "jarvis";
     case dither::Method::ostromoukhov: return "ostromoukhov";
+    case dither::Method::gilbert: return "gilbert";
     case dither::Method::ign: return "ign";
     case dither::Method::white_noise: return "white-noise";
     case dither::Method::r2_sequence: return "r2";
@@ -765,15 +782,27 @@ amiga::Chipset effective_chipset(const Config& cfg) {
 // Quantize palette: OCS uses brute-force, AGA uses median-cut
 Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
                               amiga::Chipset chipset,
-                              int palette_diversity = 0) {
-    if (chipset == amiga::Chipset::aga) {
-        return quantize::quantize(image, max_colors,
-                                  quantize::Algorithm::median_cut,
-                                  palette_diversity);
+                              int palette_diversity = 0,
+                              std::string_view quantizer = {}) {
+    // PNN with chipset-aware snap: OCS → OCS-snapped PNN, AGA → continuous.
+    if (quantizer == "pnn") {
+        auto pal = quantize::pnn_quantize(image.pixels(), max_colors,
+                                          palette_diversity,
+                                          /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+        return pal;
     }
-    return quantize::quantize(image, max_colors,
-                              quantize::Algorithm::ocs_bruteforce,
-                              palette_diversity);
+    quantize::Algorithm algo;
+    if (quantizer == "median-cut") {
+        algo = quantize::Algorithm::median_cut;
+    } else if (quantizer == "ocs-bruteforce") {
+        algo = quantize::Algorithm::ocs_bruteforce;
+    } else {
+        // auto
+        algo = (chipset == amiga::Chipset::aga)
+            ? quantize::Algorithm::median_cut
+            : quantize::Algorithm::ocs_bruteforce;
+    }
+    return quantize::quantize(image, max_colors, algo, palette_diversity);
 }
 
 // Snap palette to chipset/mode precision
@@ -1359,6 +1388,7 @@ int main(int argc, char* argv[]) {
         ham_opts.dither_strength = config->dither_strength;
         ham_opts.error_clamp = config->error_clamp;
         ham_opts.palette_diversity = config->palette_diversity;
+        ham_opts.quantizer = config->quantizer;
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
@@ -1760,7 +1790,7 @@ int main(int argc, char* argv[]) {
         } else {
             // 32 base colors total: locks + reserved black at 0 + quantized fill
             auto qcount = palette_locks::quant_count(32, config->locks, true);
-            auto quantized = auto_quantize(*image, qcount, chipset, config->palette_diversity);
+            auto quantized = auto_quantize(*image, qcount, chipset, config->palette_diversity, config->quantizer);
             if (!quantized) {
                 std::println(stderr, "Quantize error: {}",
                              quantized.error().message);
@@ -2192,7 +2222,7 @@ int main(int argc, char* argv[]) {
         std::println("Palette: 2 colors (monochrome)");
     } else {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, reserve_zero_std);
-        auto quantized = auto_quantize(*image, qcount, chipset, config->palette_diversity);
+        auto quantized = auto_quantize(*image, qcount, chipset, config->palette_diversity, config->quantizer);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;
