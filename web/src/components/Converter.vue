@@ -1084,7 +1084,7 @@ async function loadExample(example) {
 
               <!-- Palette diversity (experimental) -->
               <div class="pt-3 mt-3 border-top-1 surface-border">
-                <label class="block text-xs text-color-secondary font-semibold mb-1" title="Experimental. Removes near-duplicate palette entries and re-seeds them from poorly-served image regions. 0 = off, 1 = conservative, 9 = aggressive. Results plateau around 5.">
+                <label class="block text-xs text-color-secondary font-semibold mb-3" title="Experimental. Removes near-duplicate palette entries and re-seeds them from poorly-served image regions. 0 = off, 1 = conservative, 9 = aggressive. Results plateau around 5.">
                   Palette Diversity
                   <span class="text-color-secondary font-normal">({{ options.paletteDiversity }})</span>
                 </label>
