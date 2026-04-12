@@ -108,14 +108,21 @@ let exportCount = 0
 
 // Flatten dither methods for grouped Select component.
 // HAM8 (AGA only) has 6-bit MODIFY channels and 24-bit base palette,
-// so the error-diffusion pre-dither is a no-op.  Hide it.
+// so the error-diffusion pre-dither is a no-op — hide the whole group.
+// HAM6 supports F-S/Atkinson/etc. but Ostromoukhov falls back to F-S
+// in HAM's inline pre-dither (variable coefficients can't be applied
+// to the chipset-precision quantization), so hide it specifically.
 const groupedDitherOptions = computed(() => {
-  const hide_diffusion = hamType(options.mode) === 'ham8'
+  const ht = hamType(options.mode)
+  const hide_diffusion = ht === 'ham8'
+  const hide_ostro = ht === 'ham6'
   return DITHER_METHODS
     .filter(g => !(hide_diffusion && g.group === 'Error Diffusion'))
     .map(g => ({
       label: g.group,
-      items: g.items.map(d => ({ value: d.value, label: d.label }))
+      items: g.items
+        .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
+        .map(d => ({ value: d.value, label: d.label }))
     }))
 })
 
@@ -248,6 +255,9 @@ watch(() => options.mode, (mode, oldMode) => {
   // reset to ordered/none
   if (hamType(mode) === 'ham8' && isErrorDiffusion(options.dither))
     options.dither = 'none'
+  // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
+  if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov')
+    options.dither = 'floyd-steinberg'
   track('mode-change', { from: oldMode, to: mode })
 })
 
