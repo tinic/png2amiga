@@ -92,6 +92,12 @@ struct HamOptions {
 
     // Base palette quantizer (empty = median-cut, "pnn" = PNN agglomerative).
     std::string quantizer;
+
+    // Triple-pixel refinement (experimental).
+    // After the main DP produces a scanline, slide a 3-pixel window and
+    // re-optimize with a wider beam to catch fringe lag that 1-pixel DP
+    // misses. beam_k = 0 disables. Typical values: 16-32.
+    std::size_t triple_beam = 0;
 };
 
 // ---------------------------------------------------------------------------

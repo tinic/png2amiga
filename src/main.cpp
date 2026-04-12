@@ -100,6 +100,9 @@ struct Config {
     // HAM encoding
     std::size_t ham_beam = 16;
 
+    // HAM triple-pixel refinement post-pass (0 = off, typical 16-32)
+    std::size_t ham_triple = 0;
+
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
     // poorly-served image regions.
@@ -455,6 +458,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.ham_beam = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
                 if (config.ham_beam < 1) config.ham_beam = 1;
                 if (config.ham_beam > 256) config.ham_beam = 256;
+            }
+            else if (arg == "--ham-triple") {
+                config.ham_triple = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
+                if (config.ham_triple > 256) config.ham_triple = 256;
             }
             else if (arg == "--palette-diversity") {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
@@ -1389,6 +1396,7 @@ int main(int argc, char* argv[]) {
         ham_opts.error_clamp = config->error_clamp;
         ham_opts.palette_diversity = config->palette_diversity;
         ham_opts.quantizer = config->quantizer;
+        ham_opts.triple_beam = config->ham_triple;
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
