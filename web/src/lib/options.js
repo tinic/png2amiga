@@ -180,10 +180,13 @@ export function defaultOptions() {
 
 // --- Helper functions ---
 
-// Extract base HAM type from compound mode (ham6, ham8, or null)
+// Extract base HAM type from compound mode (ham4..ham8, or null)
 export function hamType(mode) {
   if (mode.startsWith('ham8')) return 'ham8'
+  if (mode.startsWith('ham7')) return 'ham7'
   if (mode.startsWith('ham6')) return 'ham6'
+  if (mode.startsWith('ham5')) return 'ham5'
+  if (mode.startsWith('ham4')) return 'ham4'
   return null
 }
 

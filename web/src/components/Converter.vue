@@ -107,9 +107,11 @@ let firstConvertTracked = false
 let exportCount = 0
 
 // Flatten dither methods for grouped Select component.
-// HAM8 has 6-bit modify channels (~lossless), so error diffusion is useless.
+// HAM7/HAM8 (AGA only) have 5/6-bit MODIFY channels and 24-bit base
+// palette, so the error-diffusion pre-dither is a no-op.  Hide them.
 const groupedDitherOptions = computed(() => {
-  const hide_diffusion = hamType(options.mode) === 'ham8'
+  const ht = hamType(options.mode)
+  const hide_diffusion = ht === 'ham7' || ht === 'ham8'
   return DITHER_METHODS
     .filter(g => !(hide_diffusion && g.group === 'Error Diffusion'))
     .map(g => ({
@@ -243,8 +245,10 @@ watch(() => options.mode, (mode, oldMode) => {
   }
   // Copper not compatible with interlace
   if (isInterlaceMode(mode)) options.copper = false
-  // HAM8: error diffusion is useless (6-bit ≈ lossless), reset to ordered/none
-  if (hamType(mode) === 'ham8' && isErrorDiffusion(options.dither))
+  // HAM7/HAM8: error diffusion is useless (5-6 bit modify ≈ lossless),
+  // reset to ordered/none
+  const ht = hamType(mode)
+  if ((ht === 'ham7' || ht === 'ham8') && isErrorDiffusion(options.dither))
     options.dither = 'none'
   track('mode-change', { from: oldMode, to: mode })
 })
