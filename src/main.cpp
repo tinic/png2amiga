@@ -100,6 +100,11 @@ struct Config {
     // HAM encoding
     std::size_t ham_beam = 16;
 
+    // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
+    // aggressive removal of near-duplicate palette entries, re-seeded from
+    // poorly-served image regions.
+    int palette_diversity = 0;
+
     // Dithering
     dither::Method dither_method = dither::Method::floyd_steinberg;
     bool dither_explicit = false;       // true if user passed --dither
@@ -179,6 +184,7 @@ void print_usage() {
         "\n"
         "HAM encoding:\n"
         "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
+        "  --palette-diversity <0-9>       Remove near-duplicate palette entries (experimental)\n"
         "\n"
         "Dithering:\n"
         "  --dither <method>               none|bayer2x2|bayer4x4|bayer8x8|\n"
@@ -444,6 +450,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.ham_beam = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
                 if (config.ham_beam < 1) config.ham_beam = 1;
                 if (config.ham_beam > 256) config.ham_beam = 256;
+            }
+            else if (arg == "--palette-diversity") {
+                config.palette_diversity = std::atoi(std::string(val).c_str());
+                if (config.palette_diversity < 0) config.palette_diversity = 0;
+                if (config.palette_diversity > 9) config.palette_diversity = 9;
             }
             else if (arg == "--copper-changes") {
                 config.copper_changes = std::atoi(std::string(val).c_str());
@@ -753,13 +764,16 @@ amiga::Chipset effective_chipset(const Config& cfg) {
 
 // Quantize palette: OCS uses brute-force, AGA uses median-cut
 Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
-                              amiga::Chipset chipset) {
+                              amiga::Chipset chipset,
+                              int palette_diversity = 0) {
     if (chipset == amiga::Chipset::aga) {
         return quantize::quantize(image, max_colors,
-                                  quantize::Algorithm::median_cut);
+                                  quantize::Algorithm::median_cut,
+                                  palette_diversity);
     }
     return quantize::quantize(image, max_colors,
-                              quantize::Algorithm::ocs_bruteforce);
+                              quantize::Algorithm::ocs_bruteforce,
+                              palette_diversity);
 }
 
 // Snap palette to chipset/mode precision
@@ -1344,6 +1358,7 @@ int main(int argc, char* argv[]) {
         ham_opts.dither_method = ham_dither;
         ham_opts.dither_strength = config->dither_strength;
         ham_opts.error_clamp = config->error_clamp;
+        ham_opts.palette_diversity = config->palette_diversity;
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
@@ -1536,7 +1551,8 @@ int main(int argc, char* argv[]) {
 
             // Copper encoder optimizes 32 base colors per scanline (depth=5)
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
-                static_cast<std::size_t>(config->copper_changes));
+                static_cast<std::size_t>(config->copper_changes),
+                nullptr, true, {}, config->palette_diversity);
             if (!copper_result) {
                 std::println(stderr, "Copper encode error: {}",
                              copper_result.error().message);
@@ -1744,7 +1760,7 @@ int main(int argc, char* argv[]) {
         } else {
             // 32 base colors total: locks + reserved black at 0 + quantized fill
             auto qcount = palette_locks::quant_count(32, config->locks, true);
-            auto quantized = auto_quantize(*image, qcount, chipset);
+            auto quantized = auto_quantize(*image, qcount, chipset, config->palette_diversity);
             if (!quantized) {
                 std::println(stderr, "Quantize error: {}",
                              quantized.error().message);
@@ -1982,7 +1998,7 @@ int main(int argc, char* argv[]) {
 
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
             static_cast<std::size_t>(config->copper_changes), nullptr,
-            config->reserve_color0, copper_locks);
+            config->reserve_color0, copper_locks, config->palette_diversity);
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);
@@ -2176,7 +2192,7 @@ int main(int argc, char* argv[]) {
         std::println("Palette: 2 colors (monochrome)");
     } else {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, reserve_zero_std);
-        auto quantized = auto_quantize(*image, qcount, chipset);
+        auto quantized = auto_quantize(*image, qcount, chipset, config->palette_diversity);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;

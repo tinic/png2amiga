@@ -508,6 +508,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.dither_method = parse_dither(options.dither);
         ham_opts.dither_strength = options.dither_strength;
         ham_opts.error_clamp = options.error_clamp;
+        ham_opts.palette_diversity = options.palette_diversity;
 
         // Force transparent pixels to black BEFORE HAM encoding so the
         // encoder handles color transitions correctly at transparency edges.
@@ -608,7 +609,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
                                                        static_cast<std::size_t>(options.copper_changes),
-                                                       nullptr, options.reserve_color0);
+                                                       nullptr, options.reserve_color0,
+                                                       {}, options.palette_diversity);
             if (!copper_result) return std::unexpected{copper_result.error()};
 
             // Now re-dither each scanline against its 64-color EHB palette
@@ -792,7 +794,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         } else {
             auto qcount = palette_locks::quant_count(32, options.locks, reserve_zero_ehb);
             auto quantized = quantize::quantize(*image, qcount,
-                                                quantize_algo(chipset));
+                                                quantize_algo(chipset),
+                                                options.palette_diversity);
             if (!quantized) return std::unexpected{quantized.error()};
             auto assembled = palette_locks::assemble_locked_palette(
                 *quantized, options.locks, 32, reserve_zero_ehb, chipset, mode);
@@ -952,7 +955,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
                                                      static_cast<std::size_t>(options.copper_changes),
                                                      copper_user_pal.empty() ? nullptr : &copper_user_pal,
-                                                     options.reserve_color0, copper_locks);
+                                                     options.reserve_color0, copper_locks,
+                                                     options.palette_diversity);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,
@@ -1048,7 +1052,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto qcount = palette_locks::quant_count(max_colors, options.locks,
                                                  reserve_zero);
         auto quantized = quantize::quantize(*image, qcount,
-                                            quantize_algo(chipset, mode));
+                                            quantize_algo(chipset, mode),
+                                            options.palette_diversity);
         if (!quantized) return std::unexpected{quantized.error()};
         if (amiga::is_stf(mode)) snap_to_chipset(*quantized, chipset, mode);
         auto assembled = palette_locks::assemble_locked_palette(

@@ -88,7 +88,19 @@ struct WeightedOcs {
 };
 
 Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
-                                std::size_t max_colors) {
+                                std::size_t max_colors,
+                                int palette_diversity = 0);
+
+// Forward declaration — the diversity pass is defined after median_cut.
+// (Also exposed publicly as quantize::diversify_palette.)
+void apply_palette_diversity(Palette& palette,
+                             std::span<const Color3f> pixels,
+                             int diversity_level,
+                             bool snap_to_ocs);
+
+Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
+                                std::size_t max_colors,
+                                int palette_diversity) {
     if (max_colors == 0) max_colors = 1;
     if (pixels.empty()) {
         return Palette{"ocs-optimal", {Color3f{0.0f, 0.0f, 0.0f}}};
@@ -177,6 +189,13 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
     result.colors.reserve(max_colors);
     for (auto ocs : palette_ocs) {
         result.colors.push_back(lut.linear[ocs]);
+    }
+
+    // Optional palette diversity pass (remove near-duplicates, re-seed from
+    // worst-served pixels). Snap back to OCS precision after each move.
+    if (palette_diversity > 0) {
+        apply_palette_diversity(result, pixels, palette_diversity,
+                                /*snap_to_ocs=*/true);
     }
 
     // Sort by perceptual luminance
@@ -428,7 +447,8 @@ std::vector<color_space::OKLab> wu_quantize_oklab(
 // ===========================================================================
 
 Palette median_cut(std::span<const Color3f> colors,
-                   std::size_t max_colors) {
+                   std::size_t max_colors,
+                   int palette_diversity) {
     if (max_colors == 0) max_colors = 1;
     if (colors.empty()) {
         return Palette{"quantized", {Color3f{0.0f, 0.0f, 0.0f}}};
@@ -609,6 +629,14 @@ Palette median_cut(std::span<const Color3f> colors,
         result.colors[i] = color_space::oklab_to_linear(centroids[i]).clamped();
     }
 
+    // Optional palette diversity pass: remove near-duplicate entries and
+    // re-seed them from image regions that are poorly served by the current
+    // palette. Operates on the full (non-subsampled) pixel array.
+    if (palette_diversity > 0) {
+        apply_palette_diversity(result, colors, palette_diversity,
+                                /*snap_to_ocs=*/false);
+    }
+
     // Sort palette by perceptual luminance (OKLab L) for consistent ordering
     std::sort(result.colors.begin(), result.colors.end(),
               [](const Color3f& a, const Color3f& b) {
@@ -620,11 +648,292 @@ Palette median_cut(std::span<const Color3f> colors,
 }
 
 // ===========================================================================
+// Palette diversity pass — inspired by ham_convert's diversity option.
+//
+// Iteratively replaces the two closest palette entries (in OKLab) with the
+// image pixel that is currently worst-served by the palette (the pixel with
+// the largest min-distance to any entry). After each swap, run a few
+// k-means iterations restricted to a small neighborhood around the swapped
+// entry so the rest of the palette stays stable.
+//
+// Level 0: skip. Level N runs up to N swap rounds. The pass is conservative:
+// a swap is only committed if the candidate pixel is more distant from the
+// existing palette than the closest-pair distance — otherwise the swap
+// would create a new near-duplicate.
+// ===========================================================================
+
+namespace {
+
+std::pair<std::size_t, std::size_t> find_closest_pair(
+    std::span<const color_space::OKLab> pal_lab, float& out_dist) {
+
+    float best = std::numeric_limits<float>::max();
+    std::size_t ia = 0, ib = 1;
+    for (std::size_t i = 0; i < pal_lab.size(); ++i) {
+        for (std::size_t j = i + 1; j < pal_lab.size(); ++j) {
+            float d = oklab_dist_sq(pal_lab[i], pal_lab[j]);
+            if (d < best) { best = d; ia = i; ib = j; }
+        }
+    }
+    out_dist = best;
+    return {ia, ib};
+}
+
+// Compute total weighted SSE (sum over samples of squared distance to nearest
+// palette entry). Used as the objective for greedy swap acceptance.
+float palette_total_sse(
+    std::span<const color_space::OKLab> samples_lab,
+    std::span<const color_space::OKLab> pal_lab) {
+
+    float total = 0.0f;
+    for (auto& s : samples_lab) {
+        float best = std::numeric_limits<float>::max();
+        for (auto& pc : pal_lab) {
+            float d = oklab_dist_sq(s, pc);
+            if (d < best) best = d;
+        }
+        total += best;
+    }
+    return total;
+}
+
+// Run a few k-means iterations in OKLab, keeping entries mutable. Returns
+// the refined palette (copy).
+std::vector<color_space::OKLab> kmeans_refine(
+    std::span<const color_space::OKLab> samples_lab,
+    std::vector<color_space::OKLab> centroids,
+    int iterations) {
+
+    auto n = centroids.size();
+    std::vector<std::size_t> assignments(samples_lab.size());
+    for (int iter = 0; iter < iterations; ++iter) {
+        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
+            float best = std::numeric_limits<float>::max();
+            std::size_t bk = 0;
+            for (std::size_t k = 0; k < n; ++k) {
+                float d = oklab_dist_sq(samples_lab[i], centroids[k]);
+                if (d < best) { best = d; bk = k; }
+            }
+            assignments[i] = bk;
+        }
+        struct Acc { double L{}, a{}, b{}; std::size_t n{}; };
+        std::vector<Acc> acc(n);
+        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
+            auto& A = acc[assignments[i]];
+            A.L += static_cast<double>(samples_lab[i].L);
+            A.a += static_cast<double>(samples_lab[i].a);
+            A.b += static_cast<double>(samples_lab[i].b);
+            ++A.n;
+        }
+        bool changed = false;
+        for (std::size_t k = 0; k < n; ++k) {
+            if (acc[k].n == 0) continue;
+            auto dn = static_cast<double>(acc[k].n);
+            color_space::OKLab nlab{
+                static_cast<float>(acc[k].L / dn),
+                static_cast<float>(acc[k].a / dn),
+                static_cast<float>(acc[k].b / dn),
+            };
+            if (oklab_dist_sq(nlab, centroids[k]) > 1e-12f) {
+                changed = true;
+                centroids[k] = nlab;
+            }
+        }
+        if (!changed) break;
+    }
+    return centroids;
+}
+
+void apply_palette_diversity(Palette& palette,
+                             std::span<const Color3f> pixels,
+                             int diversity_level,
+                             bool snap_to_ocs) {
+
+    if (diversity_level <= 0 || palette.colors.size() < 3 || pixels.empty())
+        return;
+
+    // Subsample large images for responsiveness
+    std::vector<Color3f> work(pixels.begin(), pixels.end());
+    constexpr std::size_t max_samples = 131072;
+    if (work.size() > max_samples) {
+        auto stride = work.size() / max_samples;
+        std::vector<Color3f> sampled;
+        sampled.reserve(max_samples);
+        for (std::size_t i = 0; i < work.size(); i += stride)
+            sampled.push_back(work[i]);
+        work = std::move(sampled);
+    }
+
+    std::vector<color_space::OKLab> samples_lab(work.size());
+    for (std::size_t i = 0; i < work.size(); ++i)
+        samples_lab[i] = color_space::linear_to_oklab(work[i]);
+
+    // Working palette in OKLab
+    std::vector<color_space::OKLab> pal_lab(palette.colors.size());
+    for (std::size_t i = 0; i < palette.colors.size(); ++i)
+        pal_lab[i] = color_space::linear_to_oklab(palette.colors[i]);
+
+    // Current best SSE
+    float best_sse = palette_total_sse(samples_lab, pal_lab);
+
+    // Cluster-assignment error accumulation: find the cluster with highest
+    // total SSE — that's where we should reseed a centroid.
+    auto find_worst_cluster_centroid = [&](std::vector<color_space::OKLab>& out_centroid) -> bool {
+        struct Acc { double L{}, a{}, b{}, err{}; std::size_t n{}; };
+        std::vector<Acc> acc(pal_lab.size());
+        for (auto& s : samples_lab) {
+            float best = std::numeric_limits<float>::max();
+            std::size_t bk = 0;
+            for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                float d = oklab_dist_sq(s, pal_lab[k]);
+                if (d < best) { best = d; bk = k; }
+            }
+            acc[bk].L += static_cast<double>(s.L);
+            acc[bk].a += static_cast<double>(s.a);
+            acc[bk].b += static_cast<double>(s.b);
+            acc[bk].err += static_cast<double>(best);
+            ++acc[bk].n;
+        }
+        // Pick cluster with largest total error, then split it: new centroid
+        // at the pixel farthest from the cluster's current centroid.
+        std::size_t worst_k = 0; double worst_err = -1.0;
+        for (std::size_t k = 0; k < acc.size(); ++k) {
+            if (acc[k].err > worst_err) { worst_err = acc[k].err; worst_k = k; }
+        }
+        if (acc[worst_k].n < 2) return false;
+        // Find farthest sample assigned to worst_k
+        float fd = -1.0f; std::size_t fi = 0;
+        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
+            // Recompute assignment (cheap enough for a single pass)
+            float bd = std::numeric_limits<float>::max();
+            std::size_t bk = 0;
+            for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                float d = oklab_dist_sq(samples_lab[i], pal_lab[k]);
+                if (d < bd) { bd = d; bk = k; }
+            }
+            if (bk == worst_k && bd > fd) { fd = bd; fi = i; }
+        }
+        out_centroid.clear();
+        out_centroid.push_back(samples_lab[fi]);
+        return true;
+    };
+
+    // Diversity threshold: for each level, allow closer pairs to be merged.
+    // Level 1 = very conservative (only merge near-identical pairs), level 5
+    // = aggressive (merge pairs up to 2x the average nearest-neighbor dist).
+    float avg_nn = 0.0f;
+    {
+        for (std::size_t i = 0; i < pal_lab.size(); ++i) {
+            float best = std::numeric_limits<float>::max();
+            for (std::size_t j = 0; j < pal_lab.size(); ++j) {
+                if (i == j) continue;
+                float d = oklab_dist_sq(pal_lab[i], pal_lab[j]);
+                if (d < best) best = d;
+            }
+            avg_nn += std::sqrt(best);
+        }
+        avg_nn /= static_cast<float>(pal_lab.size());
+    }
+    // Threshold: allow closer pairs to be merged at higher diversity levels.
+    //   level 1  →  0.35 * avg_nn  (very conservative: only near-duplicates)
+    //   level 5  →  0.95 * avg_nn  (merge pairs up to the average)
+    //   level 9  →  1.55 * avg_nn  (merge pairs 50% wider than average)
+    float merge_threshold_dist =
+        avg_nn * (0.2f + 0.15f * static_cast<float>(diversity_level));
+    float merge_threshold_sq = merge_threshold_dist * merge_threshold_dist;
+
+    // Swap budget scales with level so high settings actually get to try
+    // more merges (low levels cap out quickly once the threshold is met).
+    //   level 1  →  ~N swaps
+    //   level 5  →  ~3N
+    //   level 9  →  ~5N
+    std::size_t max_swaps =
+        (palette.colors.size() *
+         (1 + static_cast<std::size_t>(std::max(0, diversity_level - 1)) / 2)) * 2;
+    std::size_t committed = 0;
+
+    for (std::size_t attempt = 0; attempt < max_swaps; ++attempt) {
+        float pair_dist_sq = 0.0f;
+        auto [ia, ib] = find_closest_pair(pal_lab, pair_dist_sq);
+        if (pair_dist_sq > merge_threshold_sq) break;  // nothing close enough
+
+        // Candidate palette: merge ia and ib into their midpoint, reseed ib
+        // from the worst-served cluster centroid.
+        auto candidate = pal_lab;
+        candidate[ia] = color_space::OKLab{
+            (pal_lab[ia].L + pal_lab[ib].L) * 0.5f,
+            (pal_lab[ia].a + pal_lab[ib].a) * 0.5f,
+            (pal_lab[ia].b + pal_lab[ib].b) * 0.5f,
+        };
+        std::vector<color_space::OKLab> reseed;
+        if (!find_worst_cluster_centroid(reseed)) break;
+        candidate[ib] = reseed[0];
+
+        // Re-converge with k-means (5 iterations is plenty when starting
+        // from a near-optimal palette).
+        auto refined = kmeans_refine(samples_lab, candidate, 5);
+
+        // Optionally snap each entry to OCS precision for OCS modes, so the
+        // SSE we measure reflects what the hardware will actually display.
+        if (snap_to_ocs) {
+            for (auto& c : refined) {
+                auto rgb = color_space::oklab_to_linear(c).clamped();
+                rgb = palette::quantize_to_ocs(rgb);
+                c = color_space::linear_to_oklab(rgb);
+            }
+        }
+
+        // Guard against OCS collisions: if the refined palette ends up with
+        // fewer unique colors than we started with, the "improvement" came
+        // from losing a palette slot, which hurts the final dithered output.
+        auto count_unique_ocs =
+            [](std::span<const color_space::OKLab> p) {
+                std::vector<std::uint16_t> ocs;
+                ocs.reserve(p.size());
+                for (auto& c : p) {
+                    auto rgb = color_space::oklab_to_linear(c).clamped();
+                    ocs.push_back(palette::linear_to_ocs(rgb));
+                }
+                std::sort(ocs.begin(), ocs.end());
+                ocs.erase(std::unique(ocs.begin(), ocs.end()), ocs.end());
+                return ocs.size();
+            };
+
+        if (snap_to_ocs &&
+            count_unique_ocs(refined) < count_unique_ocs(pal_lab)) {
+            // Refuse the swap: it would collapse colors.
+            break;
+        }
+
+        float new_sse = palette_total_sse(samples_lab, refined);
+        if (new_sse < best_sse) {
+            best_sse = new_sse;
+            pal_lab = std::move(refined);
+            ++committed;
+        } else {
+            // The merge didn't help; stop — further swaps are unlikely to help.
+            break;
+        }
+    }
+
+    if (committed == 0) return;
+
+    // Write back the refined palette
+    for (std::size_t i = 0; i < palette.colors.size(); ++i) {
+        auto rgb = color_space::oklab_to_linear(pal_lab[i]).clamped();
+        if (snap_to_ocs) rgb = palette::quantize_to_ocs(rgb);
+        palette.colors[i] = rgb;
+    }
+}
+
+} // namespace
+
+// ===========================================================================
 // quantize() entry point
 // ===========================================================================
 
 Result<Palette> quantize(const Image& image, std::size_t max_colors,
-                         Algorithm algo) {
+                         Algorithm algo, int palette_diversity) {
     if (max_colors == 0 || max_colors > 256) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -641,12 +950,24 @@ Result<Palette> quantize(const Image& image, std::size_t max_colors,
 
     switch (algo) {
     case Algorithm::median_cut:
-        return median_cut(image.pixels(), max_colors);
+        return median_cut(image.pixels(), max_colors, palette_diversity);
     case Algorithm::ocs_bruteforce:
-        return ocs_bruteforce_quantize(image.pixels(), max_colors);
+        return ocs_bruteforce_quantize(image.pixels(), max_colors,
+                                       palette_diversity);
     }
 
-    return median_cut(image.pixels(), max_colors);
+    return median_cut(image.pixels(), max_colors, palette_diversity);
+}
+
+// ===========================================================================
+// Public wrapper for the diversity pass
+// ===========================================================================
+
+void diversify_palette(Palette& palette,
+                       std::span<const Color3f> pixels,
+                       int diversity_level,
+                       bool snap_to_ocs) {
+    apply_palette_diversity(palette, pixels, diversity_level, snap_to_ocs);
 }
 
 // ===========================================================================

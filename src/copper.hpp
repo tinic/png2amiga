@@ -180,7 +180,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    bool reserve_color0 = true,
                                    // Locked palette slots: fixed colors that copper
                                    // must never swap (e.g., for blitter objects).
-                                   const std::vector<std::pair<std::size_t, Color3f>>& locked = {});
+                                   const std::vector<std::pair<std::size_t, Color3f>>& locked = {},
+                                   int palette_diversity = 0);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.

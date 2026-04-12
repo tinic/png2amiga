@@ -201,7 +201,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::size_t override_changes,
                                    const std::vector<Color3f>* user_palette,
                                    bool reserve_color0,
-                                   const std::vector<std::pair<std::size_t, Color3f>>& locked) {
+                                   const std::vector<std::pair<std::size_t, Color3f>>& locked,
+                                   int palette_diversity) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -244,7 +245,8 @@ Result<CopperResult> encode_copper(const Image& image,
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
-                                         stretch_k, user_palette, reserve_color0, locked);
+                                         stretch_k, user_palette, reserve_color0,
+                                         locked, palette_diversity);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= MOVE_BUDGET_PER_LINE) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
@@ -275,6 +277,14 @@ Result<CopperResult> encode_copper(const Image& image,
         base_pal = std::move(base_result->colors);
         if (chipset != amiga::Chipset::aga) {
             for (auto& c : base_pal) c = palette::quantize_to_ocs(c);
+        }
+        if (palette_diversity > 0) {
+            Palette tmp;
+            tmp.colors = base_pal;
+            quantize::diversify_palette(tmp, image.pixels(),
+                                        palette_diversity,
+                                        chipset != amiga::Chipset::aga);
+            base_pal = std::move(tmp.colors);
         }
         if (reserve_color0)
             base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});

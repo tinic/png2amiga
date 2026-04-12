@@ -84,6 +84,10 @@ struct HamOptions {
     dither::Method dither_method = dither::Method::none;  // none = no dithering (default)
     float dither_strength = 1.0f;
     float error_clamp = 0.12f;
+
+    // Palette diversity (0 = off, 1-5 = remove near-duplicate base colors,
+    // re-seed from worst-served pixels). Experimental.
+    int palette_diversity = 0;
 };
 
 // ---------------------------------------------------------------------------

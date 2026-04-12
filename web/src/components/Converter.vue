@@ -1082,6 +1082,15 @@ async function loadExample(example) {
                 </div>
               </div>
 
+              <!-- Palette diversity (experimental) -->
+              <div class="pt-3 mt-3 border-top-1 surface-border">
+                <label class="block text-xs text-color-secondary font-semibold mb-1" title="Experimental. Removes near-duplicate palette entries and re-seeds them from poorly-served image regions. 0 = off, 1 = conservative, 9 = aggressive. Results plateau around 5.">
+                  Palette Diversity
+                  <span class="text-color-secondary font-normal">({{ options.paletteDiversity }})</span>
+                </label>
+                <Slider v-model="options.paletteDiversity" :min="0" :max="9" :step="1" class="w-full" />
+              </div>
+
               <!-- CAP changes override -->
               <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1" title="Copper-Augmented Palette swaps per scanline. 0 = auto: backend picks the worst-case K that fits the 14-MOVE budget, plus a K+3 retry path. Higher values bypass the budget check and may overshoot real hardware.">CAP Changes/Line</label>

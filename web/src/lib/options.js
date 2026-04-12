@@ -167,6 +167,7 @@ export function defaultOptions() {
     maskInvert: false,
     // Advanced
     reserveColor0: true,
+    paletteDiversity: 0,
   }
   for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
   return opts

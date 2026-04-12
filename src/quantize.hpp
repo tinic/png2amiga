@@ -36,7 +36,8 @@ enum class Algorithm : unsigned char {
 
 Result<Palette> quantize(const Image& image,
                          std::size_t max_colors,
-                         Algorithm algo = Algorithm::median_cut);
+                         Algorithm algo = Algorithm::median_cut,
+                         int palette_diversity = 0);
 
 // ---------------------------------------------------------------------------
 // Median-cut quantization (direct interface)
@@ -48,7 +49,27 @@ Result<Palette> quantize(const Image& image,
 // ---------------------------------------------------------------------------
 
 Palette median_cut(std::span<const Color3f> colors,
-                   std::size_t max_colors);
+                   std::size_t max_colors,
+                   int palette_diversity = 0);
+
+// ---------------------------------------------------------------------------
+// Palette diversity pass (ham_convert-inspired).
+//
+// Iteratively finds the closest pair of palette entries in OKLab and, if
+// they are closer than a level-dependent threshold, merges one to the
+// midpoint and reseeds the other from the cluster with highest total error.
+// Runs k-means refinement after each candidate swap. Only commits the swap
+// if it lowers global palette SSE and does not collapse palette slots to
+// the same discrete color (when snap_to_ocs is true).
+//
+// diversity_level: 0 = off, 1 = conservative, 5 = aggressive.
+// snap_to_ocs: if true, snap each refined entry to OCS 12-bit precision.
+// ---------------------------------------------------------------------------
+
+void diversify_palette(Palette& palette,
+                       std::span<const Color3f> pixels,
+                       int diversity_level,
+                       bool snap_to_ocs);
 
 // ---------------------------------------------------------------------------
 // Dither-aware palette refinement.
