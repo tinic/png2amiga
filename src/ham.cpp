@@ -79,7 +79,6 @@ bool is_error_diffusion(dither::Method m) {
     case dither::Method::sierra_lite:
     case dither::Method::stucki:
     case dither::Method::jarvis:
-    case dither::Method::ostromoukhov:
         return true;
     default:
         return false;
@@ -256,10 +255,13 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
     auto pal = quantize::median_cut(image.pixels(), reserve);
 
-    // Always quantize HAM base palette to OCS 12-bit precision.
-    (void)chipset;
-    for (auto& color : pal.colors) {
-        color = palette::quantize_to_ocs(color);
+    // Snap to chipset precision: HAM6 is always OCS 12-bit; HAM7/HAM8
+    // run on AGA with 24-bit base palette (no quantization needed — AGA
+    // can reproduce any sRGB8 color exactly).
+    if (chipset != amiga::Chipset::aga) {
+        for (auto& color : pal.colors) {
+            color = palette::quantize_to_ocs(color);
+        }
     }
 
     // Prepend black at index 0
@@ -509,8 +511,10 @@ Result<HamResult> encode_ham_generic(
     // recompute palette centroids from those pixels' TARGET colors, repeat.
     auto base_pal = choose_ham_palette(image, num_base_colors, chipset);
 
-    constexpr int ham_refine_iters = 2;
-    constexpr std::size_t refine_row_step = 4;  // subsample: every 4th row
+    // Refinement only helps HAM6 (many pixels use SET due to 4-bit modify
+    // precision).  For HAM7/HAM8, MODIFY is precise enough that SET usage
+    // drops to a small biased sample, and refinement actively hurts quality.
+    int ham_refine_iters = (data_bits <= 4) ? 2 : 0;
     auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1);
     for (int ri = 0; ri < ham_refine_iters; ++ri) {
         std::vector<SRGBColor> ref_srgb(base_pal.size());
@@ -522,7 +526,7 @@ Result<HamResult> encode_ham_generic(
         struct SetAcc { double L{}, a{}, b{}; double count{}; };
         std::vector<SetAcc> acc(num_base_colors);
 
-        for (std::size_t y = 0; y < h; y += refine_row_step) {
+        for (std::size_t y = 0; y < h; ++y) {
             SRGBColor start = ref_srgb[0];
             auto row = image.row(y);
             auto scanline = encode_scanline_greedy(
@@ -548,8 +552,11 @@ Result<HamResult> encode_ham_generic(
                 static_cast<float>(acc[k].L / acc[k].count),
                 static_cast<float>(acc[k].a / acc[k].count),
                 static_cast<float>(acc[k].b / acc[k].count)};
-            auto new_color = palette::quantize_to_ocs(
-                color_space::oklab_to_linear(new_lab).clamped());
+            auto new_color_linear = color_space::oklab_to_linear(new_lab).clamped();
+            // Match base palette precision: OCS for HAM6, AGA for HAM7/HAM8
+            auto new_color = (chipset != amiga::Chipset::aga)
+                ? palette::quantize_to_ocs(new_color_linear)
+                : new_color_linear;
             if (new_color != base_pal.colors[k]) {
                 base_pal.colors[k] = new_color;
                 changed = true;
@@ -653,10 +660,11 @@ Result<HamResult> encode_ham_generic(
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
 
-                // Quantize to chipset precision
-                // HAM modify channels are always limited by data_bits precision.
-                // HAM6: 4-bit = OCS 12-bit, HAM8: 6-bit ≈ lossless → skip.
-                auto quantized = palette::quantize_to_ocs(adjusted);
+                // Quantize to match HAM modify precision.
+                // HAM6 (data_bits=4): OCS 12-bit. HAM7/HAM8 on AGA: skip
+                // quantization since 5/6-bit modify is nearly lossless.
+                auto quantized = (chipset != amiga::Chipset::aga)
+                    ? palette::quantize_to_ocs(adjusted) : adjusted;
                 dithered_image[x, y] = quantized;
 
                 // Compute and distribute error
@@ -855,7 +863,7 @@ Result<HamResult> encode_ham_copper_generic(
             num_bitplanes, true, is_hires, chipset);
     }
 
-    // Global base palette (copper swaps refine it per-scanline)
+    // Global base palette
     auto base_pal = choose_ham_palette(image, num_base_colors, chipset);
     while (base_pal.colors.size() < num_base_colors) {
         base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
@@ -897,7 +905,8 @@ Result<HamResult> encode_ham_copper_generic(
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
-                auto quantized = palette::quantize_to_ocs(adjusted);
+                auto quantized = (chipset != amiga::Chipset::aga)
+                    ? palette::quantize_to_ocs(adjusted) : adjusted;
                 dithered_image[x, y] = quantized;
                 auto actual_lab = color_space::linear_to_oklab(quantized);
                 auto quant_error = oklab_scale(
