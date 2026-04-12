@@ -437,9 +437,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // We need source dimensions to compute the target size.
     // Peek at the source image dimensions first.
-    int peek_w{}, peek_h{}, peek_ch{};
-    if (!stbi_info_from_memory(input_data, static_cast<int>(input_size),
-                                &peek_w, &peek_h, &peek_ch)) {
+    int peek_w{}, peek_h{};
+    bool peek_is_webp = input_size >= 12 &&
+        std::memcmp(input_data, "RIFF", 4) == 0 &&
+        std::memcmp(input_data + 8, "WEBP", 4) == 0;
+    bool peek_ok = peek_is_webp
+        ? (WebPGetInfo(input_data, input_size, &peek_w, &peek_h) != 0)
+        : (stbi_info_from_memory(input_data, static_cast<int>(input_size),
+                                 &peek_w, &peek_h, nullptr) != 0);
+    if (!peek_ok) {
         return std::unexpected{Error{ErrorCode::invalid_png,
             "Failed to read image dimensions"}};
     }
