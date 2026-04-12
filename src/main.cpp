@@ -1335,8 +1335,14 @@ int main(int argc, char* argv[]) {
         }
         auto ham_params = amiga::get_mode_params(config->mode);
         auto quality_str = config->ham_quality == ham::Quality::fast ? "fast" : "optimal";
+        // HAM6 benefits from error diffusion (4-bit MODIFY causes visible
+        // quantization); HAM8's 6-bit MODIFY is near-lossless, so default
+        // to no dither.  User can override with --dither.
+        auto ham_default_dither = (config->mode == amiga::Mode::ham6)
+            ? dither::Method::floyd_steinberg
+            : dither::Method::none;
         auto ham_dither = config->dither_explicit
-            ? config->dither_method : dither::Method::none;
+            ? config->dither_method : ham_default_dither;
         std::println("Mode:   HAM{} (quality: {}, beam: {}, dither: {})",
                      ham_params.bitplane_depth,
                      quality_str, config->ham_beam,
@@ -1345,10 +1351,7 @@ int main(int argc, char* argv[]) {
         ham::HamOptions ham_opts;
         ham_opts.quality = config->ham_quality;
         ham_opts.beam_width = config->ham_beam;
-        // HAM defaults to no dither (error diffusion hurts HAM quality).
-        // User can still override with --dither.
-        ham_opts.dither_method = config->dither_explicit
-            ? config->dither_method : dither::Method::none;
+        ham_opts.dither_method = ham_dither;
         ham_opts.dither_strength = config->dither_strength;
         ham_opts.error_clamp = config->error_clamp;
 
