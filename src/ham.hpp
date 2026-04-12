@@ -24,7 +24,7 @@ namespace png2amiga::ham {
 // Base palette has 2^(N-2) entries. Modify operations use (N-2)-bit
 // precision per channel, expanded to 8-bit sRGB via bit replication.
 //
-// Supported depths: 4 (HAM4), 5 (HAM5), 6 (HAM6), 7 (HAM7), 8 (HAM8)
+// Supported modes: HAM6 (OCS, 6 bitplanes) and HAM8 (AGA, 8 bitplanes)
 // ---------------------------------------------------------------------------
 
 // HAM operation codes (stored in the top 2 bits)
@@ -114,7 +114,7 @@ struct HamResult {
 // ---------------------------------------------------------------------------
 // Encode an image using HAM with the specified mode
 //
-// Supports any HAM mode (ham4 through ham8). Selects an optimal base palette
+// Supports HAM6 (OCS) and HAM8 (AGA). Selects an optimal base palette
 // of 2^(depth-2) colors, then encodes each scanline.
 //
 // With Quality::fast, uses greedy per-pixel selection.

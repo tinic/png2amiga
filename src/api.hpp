@@ -26,7 +26,7 @@ struct PinSpec {
 };
 
 struct Options {
-    std::string mode = "lores";         // lores, hires, ham4, ham5, ham6, ham7, ham8, ehb
+    std::string mode = "lores";         // lores, hires, ham6, ham8, ehb
     std::string chipset;                // "ocs", "aga", or "" for auto
     int depth = 5;                      // bitplane depth (1-8, mode-dependent)
     bool interlace = false;             // set LACE bit in CAMG

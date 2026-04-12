@@ -255,9 +255,9 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
     auto pal = quantize::median_cut(image.pixels(), reserve);
 
-    // Snap to chipset precision: HAM6 is always OCS 12-bit; HAM7/HAM8
-    // run on AGA with 24-bit base palette (no quantization needed — AGA
-    // can reproduce any sRGB8 color exactly).
+    // Snap to chipset precision: HAM6 is OCS 12-bit; HAM8 runs on AGA
+    // with 24-bit base palette (no quantization needed — AGA can
+    // reproduce any sRGB8 color exactly).
     if (chipset != amiga::Chipset::aga) {
         for (auto& color : pal.colors) {
             color = palette::quantize_to_ocs(color);
@@ -512,7 +512,7 @@ Result<HamResult> encode_ham_generic(
     auto base_pal = choose_ham_palette(image, num_base_colors, chipset);
 
     // Refinement only helps HAM6 (many pixels use SET due to 4-bit modify
-    // precision).  For HAM7/HAM8, MODIFY is precise enough that SET usage
+    // precision).  For HAM8, MODIFY is precise enough that SET usage
     // drops to a small biased sample, and refinement actively hurts quality.
     int ham_refine_iters = (data_bits <= 4) ? 2 : 0;
     auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1);
@@ -553,7 +553,7 @@ Result<HamResult> encode_ham_generic(
                 static_cast<float>(acc[k].a / acc[k].count),
                 static_cast<float>(acc[k].b / acc[k].count)};
             auto new_color_linear = color_space::oklab_to_linear(new_lab).clamped();
-            // Match base palette precision: OCS for HAM6, AGA for HAM7/HAM8
+            // Match base palette precision: OCS for HAM6, AGA for HAM8
             auto new_color = (chipset != amiga::Chipset::aga)
                 ? palette::quantize_to_ocs(new_color_linear)
                 : new_color_linear;
@@ -661,8 +661,8 @@ Result<HamResult> encode_ham_generic(
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
 
                 // Quantize to match HAM modify precision.
-                // HAM6 (data_bits=4): OCS 12-bit. HAM7/HAM8 on AGA: skip
-                // quantization since 5/6-bit modify is nearly lossless.
+                // HAM6 (data_bits=4): OCS 12-bit. HAM8 on AGA: skip
+                // quantization since 6-bit modify is nearly lossless.
                 auto quantized = (chipset != amiga::Chipset::aga)
                     ? palette::quantize_to_ocs(adjusted) : adjusted;
                 dithered_image[x, y] = quantized;

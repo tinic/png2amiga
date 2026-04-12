@@ -748,7 +748,7 @@ const char* dither_name(dither::Method m) {
 }
 
 // Determine effective chipset: auto-detect from mode if not specified.
-// Modes requiring >6 bitplanes (HAM7, HAM8) force AGA regardless.
+// Modes requiring >6 bitplanes (HAM8) force AGA regardless.
 // All other modes default to OCS but can be overridden with --chipset aga
 // (e.g., HAM6 on AGA gives 24-bit base palette precision).
 amiga::Chipset effective_chipset(const Config& cfg) {
