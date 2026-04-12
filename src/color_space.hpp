@@ -1,10 +1,14 @@
 #pragma once
 
 #include "types.hpp"
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <span>
+#include <vector>
 
 namespace png2amiga::color_space {
 
@@ -173,6 +177,87 @@ inline float perceptual_distance_sq(Color3f a, Color3f b) noexcept {
     float da = (la.a - lb.a) * WEIGHT_A;
     float db = (la.b - lb.b) * WEIGHT_B;
     return dL * dL + da * da + db * db;
+}
+
+// Compute PSNR in 8-bit sRGB space between two images after a small
+// Gaussian blur (σ≈1.5).  For dithered output, the blur simulates
+// viewing-distance / eye-optics averaging: the high-frequency dither
+// pattern integrates out, leaving the perceived color close to the
+// original.  Plain PSNR would punish the deliberate dither noise.
+// Returns dB (higher is better); +inf for identical images.
+inline float compute_psnr_blurred(std::span<const Color3f> original,
+                                   std::span<const Color3f> rendered,
+                                   std::size_t width,
+                                   std::size_t height) noexcept {
+    auto n = width * height;
+    if (n == 0 || original.size() < n || rendered.size() < n)
+        return 0.0f;
+
+    // 7-tap Gaussian, σ=1.5
+    constexpr std::array<float, 7> kernel = {
+        0.0369f, 0.1110f, 0.2167f, 0.2708f, 0.2167f, 0.1110f, 0.0369f};
+    constexpr int krad = 3;
+
+    // Separable blur: horizontal pass, then vertical
+    auto blur = [&](std::span<const Color3f> src, std::vector<Color3f>& dst) {
+        std::vector<Color3f> tmp(n);
+        // Horizontal
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                Color3f acc{0, 0, 0};
+                float wsum = 0;
+                for (int k = -krad; k <= krad; ++k) {
+                    auto xi = static_cast<int>(x) + k;
+                    if (xi < 0 || static_cast<std::size_t>(xi) >= width) continue;
+                    float w = kernel[static_cast<std::size_t>(k + krad)];
+                    auto& p = src[y * width + static_cast<std::size_t>(xi)];
+                    acc.r += p.r * w;
+                    acc.g += p.g * w;
+                    acc.b += p.b * w;
+                    wsum += w;
+                }
+                acc.r /= wsum; acc.g /= wsum; acc.b /= wsum;
+                tmp[y * width + x] = acc;
+            }
+        }
+        // Vertical
+        dst.resize(n);
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                Color3f acc{0, 0, 0};
+                float wsum = 0;
+                for (int k = -krad; k <= krad; ++k) {
+                    auto yi = static_cast<int>(y) + k;
+                    if (yi < 0 || static_cast<std::size_t>(yi) >= height) continue;
+                    float w = kernel[static_cast<std::size_t>(k + krad)];
+                    auto& p = tmp[static_cast<std::size_t>(yi) * width + x];
+                    acc.r += p.r * w;
+                    acc.g += p.g * w;
+                    acc.b += p.b * w;
+                    wsum += w;
+                }
+                acc.r /= wsum; acc.g /= wsum; acc.b /= wsum;
+                dst[y * width + x] = acc;
+            }
+        }
+    };
+
+    std::vector<Color3f> a_blur, b_blur;
+    blur(original, a_blur);
+    blur(rendered, b_blur);
+
+    double sum_sq = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        auto a = linear_to_srgb(a_blur[i]).clamped();
+        auto b = linear_to_srgb(b_blur[i]).clamped();
+        double dr = static_cast<double>(a.r - b.r) * 255.0;
+        double dg = static_cast<double>(a.g - b.g) * 255.0;
+        double db_ = static_cast<double>(a.b - b.b) * 255.0;
+        sum_sq += dr * dr + dg * dg + db_ * db_;
+    }
+    if (sum_sq < 1e-12) return std::numeric_limits<float>::infinity();
+    double mse = sum_sq / (static_cast<double>(n) * 3.0);
+    return static_cast<float>(10.0 * std::log10(255.0 * 255.0 / mse));
 }
 
 } // namespace png2amiga::color_space

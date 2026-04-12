@@ -1377,19 +1377,24 @@ int main(int argc, char* argv[]) {
                              ham_result->base_palette, data_bits);
         int ham_unique = ham_preview ? count_unique_colors(*ham_preview) : 0;
 
+        float ham_psnr = ham_preview
+            ? color_space::compute_psnr_blurred(image->pixels(),
+                                                ham_preview->pixels(),
+                                                image->width(), image->height())
+            : 0.0f;
         if (config->copper && !ham_result->copper_changes.empty()) {
             std::size_t total_ch = 0;
             for (auto& ch : ham_result->copper_changes) total_ch += ch.size();
             float avg_ch = ham_result->copper_changes.size() > 0
                 ? static_cast<float>(total_ch) / static_cast<float>(ham_result->copper_changes.size())
                 : 0.0f;
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}",
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
                          ham_result->planes.depth, ham_result->planes.total_bytes(),
-                         ham_unique, avg_ch, ham_result->total_error);
+                         ham_unique, avg_ch, ham_result->total_error, ham_psnr);
         } else {
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                          ham_result->planes.depth, ham_result->planes.total_bytes(),
-                         ham_unique, ham_result->total_error);
+                         ham_unique, ham_result->total_error, ham_psnr);
         }
 
         if (ham_preview)
@@ -1646,11 +1651,13 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}",
+            float ehb_psnr = color_space::compute_psnr_blurred(
+                image->pixels(), rendered.pixels(), w, h);
+            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
                          planes->depth, planes->total_bytes(),
                          count_unique_colors(rendered),
                          copper_result->avg_changes_per_line,
-                         total_error);
+                         total_error, ehb_psnr);
 
             if (config->preview) show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
 
@@ -1839,9 +1846,12 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
+        float ehb_psnr = color_space::compute_psnr_blurred(
+            image->pixels(), preview->pixels(),
+            image->width(), image->height());
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                      planes->depth, planes->total_bytes(),
-                     count_unique_colors(*preview), dither_result.total_error);
+                     count_unique_colors(*preview), dither_result.total_error, ehb_psnr);
 
         if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
@@ -2016,11 +2026,14 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}",
+        float cop_psnr = color_space::compute_psnr_blurred(
+            image->pixels(), preview->pixels(),
+            image->width(), image->height());
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
                      copper_result->planes.depth, copper_result->planes.total_bytes(),
                      count_unique_colors(*preview),
                      copper_result->avg_changes_per_line,
-                     copper_result->total_error);
+                     copper_result->total_error, cop_psnr);
 
         if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
@@ -2267,9 +2280,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}",
+    float std_psnr = color_space::compute_psnr_blurred(
+        image->pixels(), preview->pixels(),
+        image->width(), image->height());
+    std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                  planes->depth, planes->total_bytes(),
-                 count_unique_colors(*preview), dither_result.total_error);
+                 count_unique_colors(*preview), dither_result.total_error, std_psnr);
 
     // Terminal preview
     if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);

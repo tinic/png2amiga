@@ -102,7 +102,8 @@ struct ConvertResult {
     int changesPerLine{};               // K used by encoder (post auto-stretch)
     int maxMovesPerLine{};              // worst-case copper MOVEs per scanline
     bool aga{};                         // chipset is AGA (true ⇒ palette has hi+lo halves)
-    float quantError{};                 // perceptual encoding error
+    float quantError{};                 // perceptual encoding error (OKLab ΔE² sum)
+    float psnr{};                       // PSNR in dB (Gaussian-blurred sRGB)
     bool hasTransparency{};             // source image had alpha channel
     std::string error;                  // error message (empty on success)
 };

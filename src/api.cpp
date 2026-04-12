@@ -346,6 +346,7 @@ struct PipelineResult {
     std::vector<bool> transparency_mask;
     float copper_changes{};
     float quant_error{};
+    float psnr{};
 };
 
 // Round height. Only force even for interlace (fields must be equal).
@@ -557,6 +558,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
         result.quant_error = ham_result->total_error;
+        result.psnr = color_space::compute_psnr_blurred(
+            image->pixels(), result.rendered.pixels(),
+            image->width(), image->height());
         return result;
     }
 
@@ -730,6 +734,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.transparency_mask = tmask;
             result.copper_changes = copper_result->avg_changes_per_line;
             result.quant_error = total_error;
+            result.psnr = color_space::compute_psnr_blurred(
+                image->pixels(), result.rendered.pixels(),
+                image->width(), image->height());
             return result;
         }
 
@@ -882,6 +889,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
         result.quant_error = dither_result.total_error;
+        result.psnr = color_space::compute_psnr_blurred(
+            image->pixels(), result.rendered.pixels(),
+            image->width(), image->height());
         return result;
     }
 
@@ -959,6 +969,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         result.copper_changes = copper_result->avg_changes_per_line;
         result.quant_error = copper_result->total_error;
+        result.psnr = color_space::compute_psnr_blurred(
+            image->pixels(), result.rendered.pixels(),
+            image->width(), image->height());
         return result;
     }
 
@@ -1108,6 +1121,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
     }
     result.quant_error = dither_result.total_error;
+    result.psnr = color_space::compute_psnr_blurred(
+        image->pixels(), result.rendered.pixels(),
+        image->width(), image->height());
     return result;
 }
 
@@ -1152,6 +1168,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         r.maxMovesPerLine = static_cast<int>(p.max_moves_per_line);
     }
     r.quantError = p.quant_error;
+    r.psnr = p.psnr;
     r.hasTransparency = p.has_transparency;
     return r;
 }
