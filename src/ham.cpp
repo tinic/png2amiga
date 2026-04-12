@@ -612,17 +612,9 @@ Result<HamResult> encode_ham_generic(
                 };
             }
 
-            ScanlineResult scanline;
             std::span<const Color3f> dithered_span{dithered_row};
-
-            if (opts.quality == Quality::optimal) {
-                scanline = encode_scanline_dp(
-                    dithered_span, start, pre, srgb_span,
-                    opts.beam_width);
-            } else {
-                scanline = encode_scanline_greedy(
-                    dithered_span, start, pre, srgb_span);
-            }
+            auto scanline = encode_scanline_dp(
+                dithered_span, start, pre, srgb_span, opts.beam_width);
 
             std::copy(scanline.values.begin(), scanline.values.end(),
                       ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
@@ -694,35 +686,20 @@ Result<HamResult> encode_ham_generic(
             SRGBColor start = base_srgb[0];
             auto row = dithered_image.row(y);
 
-            ScanlineResult scanline;
-            if (opts.quality == Quality::optimal) {
-                scanline = encode_scanline_dp(
-                    row, start, pre, srgb_span, opts.beam_width);
-            } else {
-                scanline = encode_scanline_greedy(
-                    row, start, pre, srgb_span);
-            }
+            auto scanline = encode_scanline_dp(
+                row, start, pre, srgb_span, opts.beam_width);
 
             std::copy(scanline.values.begin(), scanline.values.end(),
                       ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
             total_error += scanline.error;
         }
     } else {
-        // Non-dithered encoding path (original algorithm)
+        // Non-dithered encoding path
         for (std::size_t y = 0; y < h; ++y) {
             SRGBColor start = base_srgb[0];
             auto row = image.row(y);
-
-            ScanlineResult scanline;
-
-            if (opts.quality == Quality::optimal) {
-                scanline = encode_scanline_dp(
-                    row, start, pre, srgb_span,
-                    opts.beam_width);
-            } else {
-                scanline = encode_scanline_greedy(
-                    row, start, pre, srgb_span);
-            }
+            auto scanline = encode_scanline_dp(
+                row, start, pre, srgb_span, opts.beam_width);
 
             std::copy(scanline.values.begin(), scanline.values.end(),
                       ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
@@ -981,19 +958,15 @@ Result<HamResult> encode_ham_copper_generic(
                 };
             }
             std::span<const Color3f> dr{dithered_row};
-            ScanlineResult scanline = (opts.quality == Quality::optimal)
-                ? encode_scanline_dp(dr, start, line_pre, srgb_span,
-                                     opts.beam_width)
-                : encode_scanline_greedy(dr, start, line_pre, srgb_span);
+            auto scanline = encode_scanline_dp(dr, start, line_pre,
+                                               srgb_span, opts.beam_width);
             std::copy(scanline.values.begin(), scanline.values.end(),
                       ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
             total_error += scanline.error;
         } else {
             // No dithering
-            ScanlineResult scanline = (opts.quality == Quality::optimal)
-                ? encode_scanline_dp(row, start, line_pre, srgb_span,
-                                     opts.beam_width)
-                : encode_scanline_greedy(row, start, line_pre, srgb_span);
+            auto scanline = encode_scanline_dp(row, start, line_pre,
+                                               srgb_span, opts.beam_width);
             std::copy(scanline.values.begin(), scanline.values.end(),
                       ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
             total_error += scanline.error;

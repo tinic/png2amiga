@@ -74,21 +74,11 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
 }
 
 // ---------------------------------------------------------------------------
-// HAM encoding quality mode
-// ---------------------------------------------------------------------------
-
-enum class Quality : std::uint8_t {
-    fast,       // Greedy per-pixel (original algorithm)
-    optimal,    // DP beam search (better quality, slower)
-};
-
-// ---------------------------------------------------------------------------
 // HAM encoding options
 // ---------------------------------------------------------------------------
 
 struct HamOptions {
-    Quality quality = Quality::optimal;
-    std::size_t beam_width = 48;    // beam search width for DP mode
+    std::size_t beam_width = 48;    // beam search width for DP
 
     // Dithering (error diffusion applied during HAM encoding)
     dither::Method dither_method = dither::Method::none;  // none = no dithering (default)
@@ -117,10 +107,8 @@ struct HamResult {
 // Supports HAM6 (OCS) and HAM8 (AGA). Selects an optimal base palette
 // of 2^(depth-2) colors, then encodes each scanline.
 //
-// With Quality::fast, uses greedy per-pixel selection.
-// With Quality::optimal, uses DP beam search for globally better scanline
-// encoding — considers all reachable color states at each pixel position
-// and prunes to the top beam_width candidates by cumulative error.
+// Uses DP beam search: considers all reachable color states at each pixel
+// position and prunes to the top beam_width candidates by cumulative error.
 // ---------------------------------------------------------------------------
 
 Result<HamResult> encode_ham(const Image& image,

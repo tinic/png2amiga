@@ -63,11 +63,6 @@ amiga::Mode parse_mode(const std::string& s) {
     return amiga::Mode::lores;
 }
 
-ham::Quality parse_ham_quality(const std::string& s) {
-    if (s == "fast") return ham::Quality::fast;
-    return ham::Quality::optimal;  // default to optimal
-}
-
 amiga::Chipset resolve_chipset(const std::string& s, amiga::Mode mode) {
     auto params = amiga::get_mode_params(mode);
     if (params.bitplane_depth > 6) return amiga::Chipset::aga;
@@ -483,7 +478,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
 
         ham::HamOptions ham_opts;
-        ham_opts.quality = parse_ham_quality(options.ham_quality);
         ham_opts.beam_width = static_cast<std::size_t>(
             std::clamp(options.ham_beam, 1, 256));
 

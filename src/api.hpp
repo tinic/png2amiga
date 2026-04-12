@@ -56,8 +56,7 @@ struct Options {
     std::vector<std::uint8_t> palette_data; // inline palette data (empty = auto)
 
     // HAM encoding
-    std::string ham_quality = "optimal"; // fast, optimal
-    int ham_beam = 16;                   // beam width for DP mode (1-256)
+    int ham_beam = 16;                   // beam width for DP search (1-256)
 
     // Copper palette (per-scanline palette changes)
     bool copper = false;                // use per-scanline copper palettes

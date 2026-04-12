@@ -100,11 +100,6 @@ export const ALPHA_DITHER_METHODS = [
   { value: 'checker',     label: 'Checker' },
 ]
 
-export const HAM_QUALITY = [
-  { value: 'fast',    label: 'Fast (greedy)' },
-  { value: 'optimal', label: 'Optimal (beam search)' },
-]
-
 export const SLIDERS = [
   { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 3.0, step: 0.05, default: 1.0,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
@@ -153,7 +148,6 @@ export function defaultOptions() {
     width: 0,
     height: 0,
     // HAM
-    hamQuality: 'optimal',
     hamBeam: 16,
     // Alpha
     alphaThreshold: 0,

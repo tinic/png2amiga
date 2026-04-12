@@ -4,7 +4,7 @@ import { useWasm } from '../composables/useWasm.js'
 import { useImageUpload } from '../composables/useImageUpload.js'
 import { track } from '../lib/analytics.js'
 import {
-  MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, HAM_QUALITY,
+  MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
   SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion, isInterlaceMode,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
@@ -873,16 +873,9 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- HAM options (inline) -->
+              <!-- HAM beam width (DP search) -->
               <template v-if="showHamControls">
                 <div class="grid align-items-center">
-                  <label class="col-4 text-xs text-color-secondary font-semibold" title="HAM quality: fast = greedy per-pixel, optimal = DP beam search for minimum perceptual error.">Quality</label>
-                  <div class="col-8">
-                    <Select v-model="options.hamQuality" :options="HAM_QUALITY" optionValue="value" optionLabel="label" class="w-full" />
-                  </div>
-                </div>
-
-                <div v-if="options.hamQuality === 'optimal'" class="grid align-items-center">
                   <label class="col-4 text-xs text-color-secondary font-semibold" title="Beam width for DP search. Higher = better quality, slower. Range 1-256.">Beam</label>
                   <div class="col-5">
                     <Slider v-model="options.hamBeam" :min="1" :max="256" :step="1" class="w-full" />

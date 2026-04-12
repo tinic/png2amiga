@@ -23,8 +23,6 @@ Options parse_js_options(val js_opts) {
         opts.dither_strength = js_opts["ditherStrength"].as<float>();
     if (js_opts.hasOwnProperty("errorClamp"))
         opts.error_clamp = js_opts["errorClamp"].as<float>();
-    if (js_opts.hasOwnProperty("hamQuality"))
-        opts.ham_quality = js_opts["hamQuality"].as<std::string>();
     if (js_opts.hasOwnProperty("hamBeam"))
         opts.ham_beam = js_opts["hamBeam"].as<int>();
     if (js_opts.hasOwnProperty("copper"))

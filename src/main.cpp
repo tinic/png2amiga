@@ -98,7 +98,6 @@ struct Config {
     bool match_range = false;
 
     // HAM encoding
-    ham::Quality ham_quality = ham::Quality::optimal;
     std::size_t ham_beam = 16;
 
     // Dithering
@@ -179,7 +178,6 @@ void print_usage() {
         "                                  budget; auto mode also tries K+1..K+3)\n"
         "\n"
         "HAM encoding:\n"
-        "  --ham-quality fast|optimal      HAM encoding quality (default: optimal)\n"
         "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
         "\n"
         "Dithering:\n"
@@ -441,12 +439,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (val == "aga") config.chipset = amiga::Chipset::aga;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown chipset: " + std::string(val) + " (use ocs or aga)"}};
-            }
-            else if (arg == "--ham-quality") {
-                if (val == "fast") config.ham_quality = ham::Quality::fast;
-                else if (val == "optimal") config.ham_quality = ham::Quality::optimal;
-                else return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "Unknown HAM quality: " + std::string(val) + " (use fast or optimal)"}};
             }
             else if (arg == "--ham-beam") {
                 config.ham_beam = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
@@ -1334,7 +1326,6 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         auto ham_params = amiga::get_mode_params(config->mode);
-        auto quality_str = config->ham_quality == ham::Quality::fast ? "fast" : "optimal";
         // HAM6 benefits from error diffusion (4-bit MODIFY causes visible
         // quantization); HAM8's 6-bit MODIFY is near-lossless, so default
         // to no dither.  User can override with --dither.
@@ -1343,13 +1334,12 @@ int main(int argc, char* argv[]) {
             : dither::Method::none;
         auto ham_dither = config->dither_explicit
             ? config->dither_method : ham_default_dither;
-        std::println("Mode:   HAM{} (quality: {}, beam: {}, dither: {})",
+        std::println("Mode:   HAM{} (beam: {}, dither: {})",
                      ham_params.bitplane_depth,
-                     quality_str, config->ham_beam,
+                     config->ham_beam,
                      dither_name(ham_dither));
 
         ham::HamOptions ham_opts;
-        ham_opts.quality = config->ham_quality;
         ham_opts.beam_width = config->ham_beam;
         ham_opts.dither_method = ham_dither;
         ham_opts.dither_strength = config->dither_strength;

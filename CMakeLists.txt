@@ -175,7 +175,7 @@ else()
     # --- HAM6 greedy (fast) ---
     add_test(
         NAME "ham6-fast"
-        COMMAND png2amiga --mode ham6 --ham-quality fast
+        COMMAND png2amiga --mode ham6
                 ${CMAKE_SOURCE_DIR}/test.png
                 ${CMAKE_BINARY_DIR}/test_ham6_fast.iff
     )
@@ -183,7 +183,7 @@ else()
     # --- HAM6 DP optimal ---
     add_test(
         NAME "ham6-optimal"
-        COMMAND png2amiga --mode ham6 --ham-quality optimal --ham-beam 32
+        COMMAND png2amiga --mode ham6 --ham-beam 32
                 ${CMAKE_SOURCE_DIR}/test.png
                 ${CMAKE_BINARY_DIR}/test_ham6_optimal.iff
     )
@@ -191,7 +191,7 @@ else()
     # --- HAM6 DP optimal with preview PNG ---
     add_test(
         NAME "ham6-optimal-png"
-        COMMAND png2amiga --mode ham6 --ham-quality optimal --ham-beam 16
+        COMMAND png2amiga --mode ham6 --ham-beam 16
                 ${CMAKE_SOURCE_DIR}/test.png
                 ${CMAKE_BINARY_DIR}/test_ham6_optimal.png
     )
@@ -199,7 +199,7 @@ else()
     # --- HAM8 DP optimal ---
     add_test(
         NAME "ham8-optimal"
-        COMMAND png2amiga --mode ham8 --ham-quality optimal --ham-beam 16
+        COMMAND png2amiga --mode ham8 --ham-beam 16
                 ${CMAKE_SOURCE_DIR}/test.png
                 ${CMAKE_BINARY_DIR}/test_ham8_optimal.iff
     )
@@ -217,7 +217,7 @@ else()
     # --- HAM6 dithered (greedy, Floyd-Steinberg) ---
     add_test(
         NAME "ham6-dithered-fast"
-        COMMAND png2amiga --mode ham6 --ham-quality fast --dither floyd-steinberg
+        COMMAND png2amiga --mode ham6 --dither floyd-steinberg
                 ${CMAKE_SOURCE_DIR}/test.png
                 ${CMAKE_BINARY_DIR}/test_ham6_dithered_fast.png
     )
@@ -225,7 +225,7 @@ else()
     # --- HAM6 dithered (DP optimal, Floyd-Steinberg) ---
     add_test(
         NAME "ham6-dithered-optimal"
-        COMMAND png2amiga --mode ham6 --ham-quality optimal --ham-beam 16
+        COMMAND png2amiga --mode ham6 --ham-beam 16
                 --dither floyd-steinberg
                 ${CMAKE_SOURCE_DIR}/test.png
                 ${CMAKE_BINARY_DIR}/test_ham6_dithered_optimal.png
@@ -234,7 +234,7 @@ else()
     # --- HAM8 dithered (greedy, Atkinson) ---
     add_test(
         NAME "ham8-dithered-atkinson"
-        COMMAND png2amiga --mode ham8 --ham-quality fast --dither atkinson
+        COMMAND png2amiga --mode ham8 --dither atkinson
                 ${CMAKE_SOURCE_DIR}/test.png
                 ${CMAKE_BINARY_DIR}/test_ham8_dithered_atkinson.iff
     )
