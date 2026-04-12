@@ -414,6 +414,34 @@ NearestResult find_nearest_oklab(OKLab pixel_lab,
 // Ordered dithering
 // ===========================================================================
 
+// Find nearest + second-nearest palette entries.
+struct NearestPair {
+    std::size_t idxA;    // nearest
+    std::size_t idxB;    // second-nearest
+    float distA;          // OKLab ΔE² to nearest
+    float distB;          // OKLab ΔE² to second-nearest
+};
+
+NearestPair find_nearest_pair(OKLab pixel,
+                               std::span<const OKLab> palette_lab) noexcept {
+    float best = std::numeric_limits<float>::max();
+    float second = std::numeric_limits<float>::max();
+    std::size_t bi = 0, si = 0;
+    for (std::size_t k = 0; k < palette_lab.size(); ++k) {
+        float dL = pixel.L - palette_lab[k].L;
+        float da = pixel.a - palette_lab[k].a;
+        float db = pixel.b - palette_lab[k].b;
+        float d = dL * dL + da * da + db * db;
+        if (d < best) {
+            second = best; si = bi;
+            best = d; bi = k;
+        } else if (d < second) {
+            second = d; si = k;
+        }
+    }
+    return {bi, si, best, second};
+}
+
 template <std::size_t W, std::size_t H>
 DitherResult apply_ordered(const Image& image,
                            const std::array<std::array<float, W>, H>& matrix,
@@ -430,19 +458,30 @@ DitherResult apply_ordered(const Image& image,
         for (std::size_t x = 0; x < w; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(image[x, y]);
 
-            float threshold = matrix[y % H][x % W];
+            auto np = find_nearest_pair(pixel_lab, palette_lab);
 
-            // Apply threshold bias in OKLab space.
-            // L channel gets larger bias (luminance is most perceptually
-            // significant). Chroma channels get subtle bias.
-            pixel_lab.L += threshold * strength * 0.15f;
-            pixel_lab.a += threshold * strength * 0.03f;
-            pixel_lab.b += threshold * strength * 0.03f;
+            // Fraction t ∈ [0, 0.5]: 0 means pixel is exactly on A,
+            // 0.5 means pixel is equidistant between A and B.
+            float total = np.distA + np.distB;
+            float t = (total > 1e-12f)
+                ? (std::sqrt(np.distA) /
+                   (std::sqrt(np.distA) + std::sqrt(np.distB)))
+                : 0.0f;
 
-            auto [idx, chosen, dist_sq] =
-                find_nearest_oklab(pixel_lab, palette_lab);
+            // Bayer threshold in [0, 1): shift from [-0.5, 0.5).
+            float thr = matrix[y % H][x % W] + 0.5f;
+            // Strength scales the dithering amount.  strength=0 picks
+            // always A (pure nearest-color); strength=1 picks B with
+            // probability t (correct perceptual blend).
+            bool use_b = (thr < t * strength);
+
+            auto idx = use_b ? np.idxB : np.idxA;
+            auto chosen = palette_lab[idx];
+            float dL = pixel_lab.L - chosen.L;
+            float da = pixel_lab.a - chosen.a;
+            float db = pixel_lab.b - chosen.b;
             result.indices[y * w + x] = static_cast<std::uint8_t>(idx);
-            result.total_error += dist_sq;
+            result.total_error += dL * dL + da * da + db * db;
         }
     }
 
@@ -830,7 +869,9 @@ DitherResult apply(const Image& image,
     case Method::crosshatch:
     case Method::radial:
     case Method::value_noise: {
-        // Analytical threshold methods — compute per-pixel, no matrix
+        // Analytical threshold methods — same "nearest vs second-nearest"
+        // palette selection as matrix-based ordered dithering, but with
+        // per-pixel analytical threshold (IGN, R2, white noise, etc.).
         auto w = image.width();
         auto h = image.height();
         DitherResult r;
@@ -840,14 +881,22 @@ DitherResult apply(const Image& image,
         for (std::size_t y = 0; y < h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
                 auto pixel_lab = color_space::linear_to_oklab(image[x, y]);
-                float thr = ordered_threshold(method, x, y);
-                pixel_lab.L += thr * settings.strength * 0.15f;
-                pixel_lab.a += thr * settings.strength * 0.03f;
-                pixel_lab.b += thr * settings.strength * 0.03f;
-                auto [idx, chosen, dist_sq] =
-                    find_nearest_oklab(pixel_lab, pal_span);
+                auto np = find_nearest_pair(pixel_lab, pal_span);
+                float total = np.distA + np.distB;
+                float t = (total > 1e-12f)
+                    ? (std::sqrt(np.distA) /
+                       (std::sqrt(np.distA) + std::sqrt(np.distB)))
+                    : 0.0f;
+                // ordered_threshold returns value in [-0.5, 0.5)
+                float thr = ordered_threshold(method, x, y) + 0.5f;
+                bool use_b = (thr < t * settings.strength);
+                auto idx = use_b ? np.idxB : np.idxA;
+                auto chosen = pal_span[idx];
+                float dL = pixel_lab.L - chosen.L;
+                float da = pixel_lab.a - chosen.a;
+                float db = pixel_lab.b - chosen.b;
                 r.indices[y * w + x] = static_cast<std::uint8_t>(idx);
-                r.total_error += dist_sq;
+                r.total_error += dL * dL + da * da + db * db;
             }
         }
         return r;
