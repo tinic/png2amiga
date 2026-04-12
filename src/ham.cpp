@@ -750,22 +750,37 @@ std::vector<HamSwap> find_ham_swaps(
     auto w = row.size();
     std::vector<HamSwap> swaps;
 
-    for (std::size_t s = 0; s < changes_per_line; ++s) {
-        // Encode with current palette to measure error and find weak spots
-        std::vector<SRGBColor> pal_srgb(num_base_colors);
-        for (std::size_t i = 0; i < num_base_colors; ++i) {
-            pal_srgb[i] = linear_to_srgb8(current_pal[i]);
+    // Helper: encode the row with a given palette and return total HAM error.
+    // Used to verify a candidate swap actually reduces error before committing.
+    auto measure_row_error = [&](std::span<const Color3f> pal) -> float {
+        std::vector<SRGBColor> ps(num_base_colors);
+        for (std::size_t i = 0; i < num_base_colors; ++i)
+            ps[i] = linear_to_srgb8(pal[i]);
+        HamPrecomp pre{pal, data_bits};
+        SRGBColor p = ps.empty() ? SRGBColor{0, 0, 0} : ps[0];
+        float err = 0.0f;
+        for (std::size_t x = 0; x < w; ++x) {
+            auto r = encode_ham_pixel(p, row[x], pre,
+                                      std::span<const SRGBColor>{ps});
+            err += r.error;
+            p = r.result_color;
         }
+        return err;
+    };
+
+    for (std::size_t s = 0; s < changes_per_line; ++s) {
+        std::vector<SRGBColor> pal_srgb(num_base_colors);
+        for (std::size_t i = 0; i < num_base_colors; ++i)
+            pal_srgb[i] = linear_to_srgb8(current_pal[i]);
 
         SRGBColor prev = pal_srgb.empty()
             ? SRGBColor{0, 0, 0} : pal_srgb[0];
 
-        // Track per-slot SET usage count and per-pixel error
         std::vector<std::size_t> set_count(num_base_colors, 0);
         float worst_pixel_error = 0.0f;
         Color3f worst_pixel_target{};
+        float base_err = 0.0f;
 
-        // Build precomp for current palette state
         HamPrecomp swap_pre{
             std::span<const Color3f>{current_pal.data(), num_base_colors},
             data_bits};
@@ -775,21 +790,18 @@ std::vector<HamSwap> find_ham_swaps(
                 prev, row[x], swap_pre,
                 std::span<const SRGBColor>{pal_srgb});
             auto [control, data_idx] = split_ham_value(result.value, data_bits);
-            if (control == 0) {
-                auto idx = data_idx;
-                set_count[idx]++;
-            }
+            if (control == 0) set_count[data_idx]++;
             if (result.error > worst_pixel_error) {
                 worst_pixel_error = result.error;
                 worst_pixel_target = row[x];
             }
+            base_err += result.error;
             prev = result.result_color;
         }
 
-        if (worst_pixel_error < 1e-6f) break;  // already perfect
+        if (worst_pixel_error < 1e-6f) break;
 
-        // Replace the least-used SET slot with the worst pixel's target.
-        // Skip slot 0 — it's the background/border color (COLOR00).
+        // Candidate: replace the least-used SET slot with the worst pixel's target.
         std::size_t min_slot = 1;
         std::size_t min_count = std::numeric_limits<std::size_t>::max();
         for (std::size_t k = 1; k < num_base_colors; ++k) {
@@ -799,13 +811,22 @@ std::vector<HamSwap> find_ham_swaps(
             }
         }
 
-        auto new_color = worst_pixel_target;
-        // Always OCS-quantize: copper changes are written as 12-bit in the viewer,
-        // so the encoder must use the same precision for pixel-exact match.
-        (void)chipset;
-        new_color = palette::quantize_to_ocs(new_color);
+        auto new_color = (chipset != amiga::Chipset::aga)
+            ? palette::quantize_to_ocs(worst_pixel_target)
+            : worst_pixel_target;
 
+        // Trial the swap: commit only if it reduces total row error.
+        // Prevents the regression where a greedy swap happens to hurt quality.
+        auto old_color = current_pal[min_slot];
         current_pal[min_slot] = new_color;
+        float trial_err = measure_row_error(
+            std::span<const Color3f>{current_pal.data(), num_base_colors});
+        // Allow ties (trial_err == base_err) — sometimes a swap is neutral
+        // on this line but helps visual coherence across lines.
+        if (trial_err > base_err) {
+            current_pal[min_slot] = old_color;
+            break;  // net regression — further swaps unlikely to help
+        }
         swaps.push_back({min_slot, new_color});
     }
 
