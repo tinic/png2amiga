@@ -33,41 +33,43 @@ struct SwapCandidate {
     float error_reduction;  // how much error this swap saves
 };
 
-// Find the best single swap for a scanline.
-// current_pal: the current palette (in linear RGB)
-// current_lab: precomputed OKLab of current palette
-// rows: scanline pixels (current + optional neighbors for smoothing)
-// rows_lab: precomputed OKLab of row pixels
-// weights: per-row weight (1.0 for current, less for neighbors)
-SwapCandidate find_best_swap(
-    std::span<const Color3f> current_pal,
+// Per-slot cluster stats (weighted sums + error) from a pass of
+// nearest-color assignment. Caller-owned so we can cache across multiple
+// find_best_swap calls within a row and only touch the slots a swap
+// actually invalidates.
+struct SlotStats {
+    double sum_L{}, sum_a{}, sum_b{};
+    double total_error{};
+    double count{};
+};
+
+struct SwapScratch {
+    std::vector<SlotStats> stats;
+    std::vector<std::uint8_t> assignments;
+    std::vector<float> pixel_weights;
+    std::vector<float> best_dist;  // per-pixel squared distance to its slot
+    std::uint64_t valid_for_swap_count = 0;  // sentinel: 0 = invalid
+};
+
+// Build assignments + per-slot stats from scratch. Called once per row;
+// subsequent swaps within the same row update incrementally via
+// refresh_swap_scratch.
+void build_swap_scratch(
+    SwapScratch& sc,
     std::span<const color_space::OKLab> current_lab,
-    std::span<const std::span<const Color3f>> rows,
     std::span<const std::span<const color_space::OKLab>> rows_lab,
     std::span<const float> weights,
-    amiga::Chipset chipset,
-    const std::vector<bool>& excluded = {},
-    std::span<const float> column_weights = {}) {
+    std::size_t width,
+    std::span<const float> column_weights) {
 
-    auto num_colors = current_pal.size();
-    auto width = rows[0].size();
+    auto num_colors = current_lab.size();
+    auto total_pixels = rows_lab.size() * width;
+    sc.stats.assign(num_colors, {});
+    sc.assignments.assign(total_pixels, 0);
+    sc.pixel_weights.assign(total_pixels, 0.0f);
+    sc.best_dist.assign(total_pixels, 0.0f);
 
-    // Assign each pixel to nearest palette color and track per-slot error.
-    // Column weights boost pixels in high-error vertical regions so copper
-    // moves preferentially fix persistent problem areas.
-    struct SlotStats {
-        double sum_L{}, sum_a{}, sum_b{};
-        double total_error{};
-        double count{};
-    };
-    std::vector<SlotStats> stats(num_colors);
-
-    // Cache assignments and weighted OKLab values for reuse
-    auto total_pixels = rows.size() * width;
-    std::vector<std::uint8_t> assignments(total_pixels);
-    std::vector<float> pixel_weights(total_pixels);
-
-    for (std::size_t r = 0; r < rows.size(); ++r) {
+    for (std::size_t r = 0; r < rows_lab.size(); ++r) {
         auto row_w = weights[r];
         auto& rl = rows_lab[r];
         auto base = r * width;
@@ -84,15 +86,124 @@ SwapCandidate find_best_swap(
             float col_w = column_weights.empty() ? 1.0f : column_weights[x];
             float w = row_w * col_w;
             auto wd = static_cast<double>(w);
-            assignments[base + x] = static_cast<std::uint8_t>(best_k);
-            pixel_weights[base + x] = w;
-            stats[best_k].sum_L += static_cast<double>(rl[x].L) * wd;
-            stats[best_k].sum_a += static_cast<double>(rl[x].a) * wd;
-            stats[best_k].sum_b += static_cast<double>(rl[x].b) * wd;
-            stats[best_k].total_error += static_cast<double>(best_d) * wd;
-            stats[best_k].count += wd;
+            sc.assignments[base + x] = static_cast<std::uint8_t>(best_k);
+            sc.pixel_weights[base + x] = w;
+            sc.best_dist[base + x] = best_d;
+            auto& s = sc.stats[best_k];
+            s.sum_L += static_cast<double>(rl[x].L) * wd;
+            s.sum_a += static_cast<double>(rl[x].a) * wd;
+            s.sum_b += static_cast<double>(rl[x].b) * wd;
+            s.total_error += static_cast<double>(best_d) * wd;
+            s.count += wd;
         }
     }
+}
+
+// After the palette slot `changed_slot` was replaced with a new color,
+// refresh only the pixels that need re-evaluation:
+//   (a) pixels previously assigned to `changed_slot` — their old slot is
+//       now a different color, so they might prefer a different slot.
+//   (b) pixels whose current slot is distant but the NEW `changed_slot`
+//       color is now their nearest.
+// For speed we use `best_dist` to skip (b) whenever the new color is
+// farther than the pixel's current distance — common when replacing a
+// barely-used slot with something that serves a nearby pixel better.
+void refresh_swap_scratch(
+    SwapScratch& sc,
+    std::span<const color_space::OKLab> current_lab,
+    std::span<const std::span<const color_space::OKLab>> rows_lab,
+    std::size_t width,
+    std::uint8_t changed_slot) {
+
+    auto num_colors = current_lab.size();
+    auto& new_lab = current_lab[changed_slot];
+
+    for (std::size_t r = 0; r < rows_lab.size(); ++r) {
+        auto& rl = rows_lab[r];
+        auto base = r * width;
+        for (std::size_t x = 0; x < width; ++x) {
+            auto idx = base + x;
+            float d_to_new;
+            {
+                float dL = rl[x].L - new_lab.L;
+                float da = rl[x].a - new_lab.a;
+                float db = rl[x].b - new_lab.b;
+                d_to_new = dL * dL + da * da + db * db;
+            }
+
+            bool was_in_changed = sc.assignments[idx] == changed_slot;
+            if (!was_in_changed && d_to_new >= sc.best_dist[idx]) {
+                // New color doesn't beat current assignment — nothing to do.
+                continue;
+            }
+
+            // Remove old stats contribution
+            auto wd = static_cast<double>(sc.pixel_weights[idx]);
+            auto& old_stat = sc.stats[sc.assignments[idx]];
+            old_stat.sum_L -= static_cast<double>(rl[x].L) * wd;
+            old_stat.sum_a -= static_cast<double>(rl[x].a) * wd;
+            old_stat.sum_b -= static_cast<double>(rl[x].b) * wd;
+            old_stat.total_error -= static_cast<double>(sc.best_dist[idx]) * wd;
+            old_stat.count -= wd;
+
+            // Recompute nearest for this pixel against the full palette
+            // (needed only for case (a); for (b) we could take the shortcut
+            // "new is better than old" but re-running full nearest-color
+            // is simpler and correct when the old slot is gone).
+            float best_d = std::numeric_limits<float>::max();
+            std::size_t best_k = 0;
+            if (was_in_changed) {
+                for (std::size_t k = 0; k < num_colors; ++k) {
+                    float dL = rl[x].L - current_lab[k].L;
+                    float da = rl[x].a - current_lab[k].a;
+                    float db = rl[x].b - current_lab[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) { best_d = d; best_k = k; }
+                }
+            } else {
+                // The new color beats the old assignment.
+                best_d = d_to_new;
+                best_k = changed_slot;
+            }
+
+            sc.assignments[idx] = static_cast<std::uint8_t>(best_k);
+            sc.best_dist[idx] = best_d;
+            auto& new_stat = sc.stats[best_k];
+            new_stat.sum_L += static_cast<double>(rl[x].L) * wd;
+            new_stat.sum_a += static_cast<double>(rl[x].a) * wd;
+            new_stat.sum_b += static_cast<double>(rl[x].b) * wd;
+            new_stat.total_error += static_cast<double>(best_d) * wd;
+            new_stat.count += wd;
+        }
+    }
+}
+
+// Find the best single swap for a scanline.
+// current_pal: the current palette (in linear RGB)
+// current_lab: precomputed OKLab of current palette
+// rows: scanline pixels (current + optional neighbors for smoothing)
+// rows_lab: precomputed OKLab of row pixels
+// weights: per-row weight (1.0 for current, less for neighbors)
+SwapCandidate find_best_swap(
+    std::span<const Color3f> current_pal,
+    std::span<const color_space::OKLab> current_lab,
+    std::span<const std::span<const Color3f>> rows,
+    std::span<const std::span<const color_space::OKLab>> rows_lab,
+    std::span<const float> weights,
+    amiga::Chipset chipset,
+    SwapScratch& sc,
+    const std::vector<bool>& excluded = {},
+    std::span<const float> column_weights = {}) {
+
+    (void)rows;
+    (void)current_lab;
+    (void)weights;
+    (void)column_weights;
+    auto num_colors = current_pal.size();
+    auto width = rows_lab[0].size();
+    auto& stats = sc.stats;
+    auto& assignments = sc.assignments;
+    auto& pixel_weights = sc.pixel_weights;
 
     // For each slot, compute what happens if we replace it with its
     // assigned pixels' centroid (the ideal color for that cluster).
@@ -113,7 +224,7 @@ SwapCandidate find_best_swap(
 
         // Error with the centroid — use cached assignments
         double new_error = 0.0;
-        for (std::size_t r = 0; r < rows.size(); ++r) {
+        for (std::size_t r = 0; r < rows_lab.size(); ++r) {
             auto& rl = rows_lab[r];
             auto base = r * width;
             for (std::size_t x = 0; x < width; ++x) {
@@ -397,16 +508,23 @@ Result<CopperResult> encode_copper(const Image& image,
             }
         }
 
-        for (std::size_t s = 0; s < changes_per_line; ++s) {
-            // Precompute current palette in OKLab
-            std::vector<color_space::OKLab> pal_lab(num_colors);
-            for (std::size_t i = 0; i < num_colors; ++i) {
-                pal_lab[i] = color_space::linear_to_oklab(current_pal[i]);
-            }
+        // Hoist pal_lab out and build the per-row swap scratch ONCE. Each
+        // inner swap iteration only mutates ONE palette slot, so we
+        // update pal_lab in place and incrementally refresh only the
+        // assignments for pixels affected by the swap — big win for
+        // high-color modes (e.g. lores8 AGA, 256 colors: full-rebuild
+        // dropped from ~4.7 B ops to ~300 M).
+        std::vector<color_space::OKLab> pal_lab(num_colors);
+        for (std::size_t i = 0; i < num_colors; ++i) {
+            pal_lab[i] = color_space::linear_to_oklab(current_pal[i]);
+        }
+        SwapScratch sc;
+        build_swap_scratch(sc, pal_lab, rows_lab, weights, width, col_weights);
 
+        for (std::size_t s = 0; s < changes_per_line; ++s) {
             auto swap = find_best_swap(
-                current_pal, pal_lab, rows, rows_lab, weights, chipset, swapped,
-                col_weights);
+                current_pal, pal_lab, rows, rows_lab, weights, chipset, sc,
+                swapped, col_weights);
 
             if (swap.error_reduction <= 0.0f) break;
 
@@ -423,9 +541,12 @@ Result<CopperResult> encode_copper(const Image& image,
                 skip_lo_flag = (old_hilo.lo == new_hilo.lo);
             }
 
-            // Apply the swap
+            // Apply the swap (update pal_lab and scratch incrementally)
             swapped[swap.slot] = true;
             current_pal[swap.slot] = swap.new_color;
+            pal_lab[swap.slot] = color_space::linear_to_oklab(swap.new_color);
+            refresh_swap_scratch(sc, pal_lab, rows_lab, width,
+                                 static_cast<std::uint8_t>(swap.slot));
             changes.push_back(CopperChange{
                 static_cast<std::uint8_t>(swap.slot),
                 swap.new_color,
@@ -439,10 +560,9 @@ Result<CopperResult> encode_copper(const Image& image,
         // drops the rightmost (least critical leftward) swaps first, giving
         // predictable hand-tuning behavior.
         {
-            // Compute current palette in OKLab for nearest-color lookup
-            std::vector<color_space::OKLab> pal_lab_sort(num_colors);
-            for (std::size_t i = 0; i < num_colors; ++i)
-                pal_lab_sort[i] = color_space::linear_to_oklab(current_pal[i]);
+            // Reuse the pal_lab we already maintain (up-to-date with the
+            // swaps we just applied) instead of rebuilding it from scratch.
+            auto& pal_lab_sort = pal_lab;
 
             // For each change, find the first (leftmost) X position on this
             // row where a pixel is assigned to that register. The first
@@ -477,23 +597,19 @@ Result<CopperResult> encode_copper(const Image& image,
         scanline_changes[y] = std::move(changes);
 
         // Update per-column error: decay old error, add this scanline's
-        // per-pixel error against the effective palette.
-        {
-            std::vector<color_space::OKLab> pal_lab_tmp(num_colors);
-            for (std::size_t i = 0; i < num_colors; ++i)
-                pal_lab_tmp[i] = color_space::linear_to_oklab(current_pal[i]);
-            for (std::size_t x = 0; x < width; ++x) {
-                auto pixel_lab = all_lab[y][x];
-                float best_d = std::numeric_limits<float>::max();
-                for (std::size_t k = 0; k < num_colors; ++k) {
-                    float dL = pixel_lab.L - pal_lab_tmp[k].L;
-                    float da = pixel_lab.a - pal_lab_tmp[k].a;
-                    float db = pixel_lab.b - pal_lab_tmp[k].b;
-                    float d = dL * dL + da * da + db * db;
-                    if (d < best_d) best_d = d;
-                }
-                pass1_column_error[x] = pass1_column_error[x] * col_decay + best_d;
+        // per-pixel error against the effective palette. Reuse the
+        // hoisted pal_lab (already reflects all swaps applied this row).
+        for (std::size_t x = 0; x < width; ++x) {
+            auto pixel_lab = all_lab[y][x];
+            float best_d = std::numeric_limits<float>::max();
+            for (std::size_t k = 0; k < num_colors; ++k) {
+                float dL = pixel_lab.L - pal_lab[k].L;
+                float da = pixel_lab.a - pal_lab[k].a;
+                float db = pixel_lab.b - pal_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) best_d = d;
             }
+            pass1_column_error[x] = pass1_column_error[x] * col_decay + best_d;
         }
     }
 
