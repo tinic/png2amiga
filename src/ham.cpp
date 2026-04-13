@@ -480,6 +480,9 @@ void prune_beam(std::vector<BeamState>& candidates,
         return;
     }
 
+    // partial_sort's heap selection outperforms nth_element for small N
+    // (tested: beam candidates are ~300, heap locality wins over
+    //  nth_element's quickselect swaps).
     std::partial_sort(
         candidates.begin(),
         candidates.begin() + static_cast<std::ptrdiff_t>(beam_width),
@@ -1330,84 +1333,111 @@ Result<HamResult> encode_ham_copper_generic(
     // Use pre-dithered image for error diffusion, original for other modes
     const Image& encode_image = use_error_diffusion ? dithered_image : image;
 
+    // Pass 1 (sequential): compute per-row palette state + copper changes.
+    // Each row's find_ham_swaps mutates current_pal based on the previous
+    // row's state, so this must be a serial dependency chain. It's cheap
+    // compared to the beam search that follows.
     for (std::size_t y = 0; y < h; ++y) {
         auto row = encode_image.row(y);
-        // For interlace, route field 1 (even rows) and field 2 (odd rows)
-        // through their own palette state so K swaps cover only one row of diff.
         auto& pal_for_row = (is_lace && (y & 1)) ? current_pal_f2 : current_pal;
 
-        // Find best K swaps (modifies palette in-place). Skip for initial
-        // rows in interlace so each field's first displayed line uses the base
-        // palette only.
         auto row_k = (y < opts.skip_initial_swap_rows)
             ? std::size_t{0} : changes_per_line;
         auto swaps = find_ham_swaps(row, pal_for_row, num_base_colors,
                                     data_bits, row_k, chipset);
 
-        // Record as CopperChange
         std::vector<copper::CopperChange> line_changes;
         for (auto& [slot, color] : swaps) {
             line_changes.push_back({
                 static_cast<std::uint8_t>(slot), color});
         }
         all_changes[y] = std::move(line_changes);
-        scanline_palettes[y] = pal_for_row;
-
-        // Precompute sRGB + OKLab for this scanline's palette
-        std::vector<SRGBColor> pal_srgb(num_base_colors);
-        for (std::size_t i = 0; i < num_base_colors; ++i) {
-            pal_srgb[i] = linear_to_srgb8(pal_for_row[i]);
-        }
-        std::span<const SRGBColor> srgb_span{pal_srgb};
-        SRGBColor start = pal_srgb.empty()
-            ? SRGBColor{0, 0, 0} : pal_srgb[0];
-
-        // Rebuild precomp for this scanline's (potentially modified) palette
-        HamPrecomp line_pre{
-            std::span<const Color3f>{pal_for_row.data(), num_base_colors},
-            data_bits};
-
-        // Encode scanline (error diffusion already handled by pre-dither)
-        if (use_ordered) {
-            // Ordered dithering with correct Y coordinate
-            std::vector<Color3f> dithered_row(w);
-            for (std::size_t x = 0; x < w; ++x) {
-                auto lab = color_space::linear_to_oklab(row[x]);
-                float threshold = dither::ordered_threshold(
-                    opts.dither_method, x, y);
-                lab.L += threshold * opts.dither_strength * 0.15f;
-                lab.a += threshold * opts.dither_strength * 0.03f;
-                lab.b += threshold * opts.dither_strength * 0.03f;
-                auto linear = color_space::oklab_to_linear(lab);
-                dithered_row[x] = {
-                    std::clamp(linear.r, 0.0f, 1.0f),
-                    std::clamp(linear.g, 0.0f, 1.0f),
-                    std::clamp(linear.b, 0.0f, 1.0f),
-                };
-            }
-            std::span<const Color3f> dr{dithered_row};
-            auto scanline = encode_scanline_dp(dr, start, line_pre,
-                                               srgb_span, opts.beam_width);
-            if (opts.triple_beam > 0) {
-                refine_triple(scanline.values, dr, start, line_pre,
-                              srgb_span, opts.triple_beam);
-            }
-            std::copy(scanline.values.begin(), scanline.values.end(),
-                      ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-            total_error += scanline.error;
-        } else {
-            // No dithering
-            auto scanline = encode_scanline_dp(row, start, line_pre,
-                                               srgb_span, opts.beam_width);
-            if (opts.triple_beam > 0) {
-                refine_triple(scanline.values, row, start, line_pre,
-                              srgb_span, opts.triple_beam);
-            }
-            std::copy(scanline.values.begin(), scanline.values.end(),
-                      ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-            total_error += scanline.error;
-        }
+        scanline_palettes[y] = pal_for_row;  // snapshot after swaps
     }
+
+    // Pass 2 (parallel): encode each scanline. With Pass 1 done, every
+    // row's palette is known and the DP beam search is independent across
+    // rows. On Apple Silicon (8 perf cores) this typically scales near-
+    // linearly for large images.
+    std::atomic<std::size_t> next_y{0};
+    std::atomic<double> atomic_err{0.0};
+
+    auto worker = [&]() {
+        while (true) {
+            auto y = next_y.fetch_add(1);
+            if (y >= h) break;
+            auto row = encode_image.row(y);
+            auto& pal_for_row = scanline_palettes[y];
+
+            // Precompute sRGB for this scanline's palette.
+            std::vector<SRGBColor> pal_srgb(num_base_colors);
+            for (std::size_t i = 0; i < num_base_colors; ++i) {
+                pal_srgb[i] = linear_to_srgb8(pal_for_row[i]);
+            }
+            std::span<const SRGBColor> srgb_span{pal_srgb};
+            SRGBColor start = pal_srgb.empty()
+                ? SRGBColor{0, 0, 0} : pal_srgb[0];
+
+            HamPrecomp line_pre{
+                std::span<const Color3f>{pal_for_row.data(), num_base_colors},
+                data_bits};
+
+            float err;
+            if (use_ordered) {
+                std::vector<Color3f> dithered_row(w);
+                for (std::size_t x = 0; x < w; ++x) {
+                    auto lab = color_space::linear_to_oklab(row[x]);
+                    float threshold = dither::ordered_threshold(
+                        opts.dither_method, x, y);
+                    lab.L += threshold * opts.dither_strength * 0.15f;
+                    lab.a += threshold * opts.dither_strength * 0.03f;
+                    lab.b += threshold * opts.dither_strength * 0.03f;
+                    auto linear = color_space::oklab_to_linear(lab);
+                    dithered_row[x] = {
+                        std::clamp(linear.r, 0.0f, 1.0f),
+                        std::clamp(linear.g, 0.0f, 1.0f),
+                        std::clamp(linear.b, 0.0f, 1.0f),
+                    };
+                }
+                std::span<const Color3f> dr{dithered_row};
+                auto scanline = encode_scanline_dp(dr, start, line_pre,
+                                                   srgb_span, opts.beam_width);
+                if (opts.triple_beam > 0) {
+                    refine_triple(scanline.values, dr, start, line_pre,
+                                  srgb_span, opts.triple_beam);
+                }
+                std::copy(scanline.values.begin(), scanline.values.end(),
+                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
+                err = scanline.error;
+            } else {
+                auto scanline = encode_scanline_dp(row, start, line_pre,
+                                                   srgb_span, opts.beam_width);
+                if (opts.triple_beam > 0) {
+                    refine_triple(scanline.values, row, start, line_pre,
+                                  srgb_span, opts.triple_beam);
+                }
+                std::copy(scanline.values.begin(), scanline.values.end(),
+                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
+                err = scanline.error;
+            }
+            double old = atomic_err.load(std::memory_order_relaxed);
+            while (!atomic_err.compare_exchange_weak(
+                old, old + static_cast<double>(err))) {}
+        }
+    };
+
+#ifndef __EMSCRIPTEN__
+    auto n_threads = std::max<unsigned>(1,
+        std::thread::hardware_concurrency());
+    if (n_threads > h) n_threads = static_cast<unsigned>(h);
+    std::vector<std::jthread> threads;
+    threads.reserve(n_threads);
+    for (unsigned i = 0; i < n_threads; ++i) threads.emplace_back(worker);
+    threads.clear();  // join on destruction
+#else
+    worker();
+#endif
+    total_error += static_cast<float>(atomic_err.load());
 
     auto planes = bitplane::encode(ham_values, w, h, num_bitplanes);
     if (!planes) return std::unexpected{planes.error()};
