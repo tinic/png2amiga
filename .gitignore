@@ -12,3 +12,4 @@ web/dist/
 *.d
 test_output/
 .DS_Store
+fantasy.cpp
