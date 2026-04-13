@@ -117,7 +117,13 @@ const groupedDitherOptions = computed(() => {
   // HAM6: Ostromoukhov's variable-coefficient kernel degrades to F-S
   // in the pre-dither pass, so hide it to avoid confusion.
   const hide_ostro = ht === 'ham6'
+  // HAM modes: the C64-lineage non-square patterns (h2x4/v4x2/bayer4x2/
+  // bayer2x4) target C64 multicolor pixel ratios, not Amiga square
+  // pixels. They don't crash but produce mis-proportioned dither for
+  // HAM — hide to avoid user confusion.
+  const hide_nonsquare = ht !== null
   return DITHER_METHODS
+    .filter(g => !(hide_nonsquare && g.group === 'Non-square'))
     .map(g => ({
       label: g.group,
       items: g.items
