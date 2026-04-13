@@ -76,6 +76,11 @@ constexpr OKLab oklab_clamp(OKLab e, float max_mag) noexcept {
 // use dither::error_diffusion_kernel(method) directly.
 
 // Is the dither method an error-diffusion method (vs ordered or none)?
+// Ostromoukhov is included: its variable-coefficient logic doesn't apply
+// to the HAM pre-dither pass (which quantizes against a fixed grid, not
+// a sparse palette), but dither::error_diffusion_kernel() returns the
+// F-S base kernel for it, which gives sensible pre-dither behavior
+// rather than silently falling back to no-dither.
 bool is_error_diffusion(dither::Method m) {
     switch (m) {
     case dither::Method::floyd_steinberg:
@@ -83,6 +88,7 @@ bool is_error_diffusion(dither::Method m) {
     case dither::Method::sierra_lite:
     case dither::Method::stucki:
     case dither::Method::jarvis:
+    case dither::Method::ostromoukhov:
         return true;
     default:
         return false;

@@ -114,9 +114,10 @@ let exportCount = 0
 // to the chipset-precision quantization), so hide it specifically.
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
-  // HAM6: Ostromoukhov's variable-coefficient kernel degrades to F-S
-  // in the pre-dither pass, so hide it to avoid confusion.
-  const hide_ostro = ht === 'ham6'
+  // HAM: Ostromoukhov's variable-coefficient kernel degrades to plain
+  // F-S in the pre-dither pass (both HAM6 and HAM8), so hide it to
+  // avoid confusion.
+  const hide_ostro = ht !== null
   // HAM modes: the C64-lineage non-square patterns (h2x4/v4x2/bayer4x2/
   // bayer2x4) target C64 multicolor pixel ratios, not Amiga square
   // pixels. They don't crash but produce mis-proportioned dither for
