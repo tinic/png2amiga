@@ -345,7 +345,7 @@ inline OKLab cached_srgb_to_oklab(SRGBColor c) {
     std::uint32_t slot = (key * 2654435761u) & (kHamOklabCacheSize - 1);
     auto& e = g_ham_oklab_cache[slot];
     if (e.gen == g_ham_oklab_gen && e.key == key) return e.lab;
-    OKLab lab = color_space::linear_to_oklab(srgb8_to_linear(c));
+    OKLab lab = color_space::srgb8_to_oklab(c.r, c.g, c.b);
     e.key = key;
     e.gen = g_ham_oklab_gen;
     e.lab = lab;
@@ -394,58 +394,78 @@ void expand_ham(
     auto trv = reduce_to_bits(target_srgb.r, data_bits);
     auto tgv = reduce_to_bits(target_srgb.g, data_bits);
 
+    // Precompute per-channel LMS partials from prev. MODIFY-BLUE varies
+    // only the b channel, MODIFY-RED only r, etc. — caching the fixed two
+    // channels' LMS contribution avoids 6 of 9 mults per iteration.
+    auto& lms_t = color_space::detail::srgb_lms_lut();
+    auto lms_prev_r = lms_t[0][prev.r];
+    auto lms_prev_g = lms_t[1][prev.g];
+    auto lms_prev_b = lms_t[2][prev.b];
+
     // MODIFY BLUE (control = 01) — focused around target
     auto lo_b = std::max(0, static_cast<int>(tbv) - kModifyDpRadius);
     auto hi_b = std::min(nmax, static_cast<int>(tbv) + kModifyDpRadius + 1);
-    for (int bv = lo_b; bv < hi_b; ++bv) {
-        SRGBColor modified{prev.r, prev.g,
-            pre.expand_lut[static_cast<std::size_t>(bv)]};
-        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
-        float dL = target_lab.L - lab.L;
-        float da = target_lab.a - lab.a;
-        float db = target_lab.b - lab.b;
-        float err = dL * dL + da * da + db * db;
-        candidates.push_back({
-            modified, prev_error + err,
-            make_ham_value(0b01, static_cast<std::uint8_t>(bv), data_bits),
-            parent_idx,
-        });
+    {
+        auto rg_lms = lms_prev_r + lms_prev_g;
+        for (int bv = lo_b; bv < hi_b; ++bv) {
+            auto b8 = pre.expand_lut[static_cast<std::size_t>(bv)];
+            SRGBColor modified{prev.r, prev.g, b8};
+            auto lab = color_space::lms_cbrt_to_oklab(
+                color_space::fast_cbrt4(rg_lms + lms_t[2][b8]));
+            float dL = target_lab.L - lab.L;
+            float da = target_lab.a - lab.a;
+            float db = target_lab.b - lab.b;
+            float err = dL * dL + da * da + db * db;
+            candidates.push_back({
+                modified, prev_error + err,
+                make_ham_value(0b01, static_cast<std::uint8_t>(bv), data_bits),
+                parent_idx,
+            });
+        }
     }
 
     // MODIFY RED (control = 10)
     auto lo_r = std::max(0, static_cast<int>(trv) - kModifyDpRadius);
     auto hi_r = std::min(nmax, static_cast<int>(trv) + kModifyDpRadius + 1);
-    for (int rv = lo_r; rv < hi_r; ++rv) {
-        SRGBColor modified{
-            pre.expand_lut[static_cast<std::size_t>(rv)], prev.g, prev.b};
-        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
-        float dL = target_lab.L - lab.L;
-        float da = target_lab.a - lab.a;
-        float db = target_lab.b - lab.b;
-        float err = dL * dL + da * da + db * db;
-        candidates.push_back({
-            modified, prev_error + err,
-            make_ham_value(0b10, static_cast<std::uint8_t>(rv), data_bits),
-            parent_idx,
-        });
+    {
+        auto gb_lms = lms_prev_g + lms_prev_b;
+        for (int rv = lo_r; rv < hi_r; ++rv) {
+            auto r8 = pre.expand_lut[static_cast<std::size_t>(rv)];
+            SRGBColor modified{r8, prev.g, prev.b};
+            auto lab = color_space::lms_cbrt_to_oklab(
+                color_space::fast_cbrt4(lms_t[0][r8] + gb_lms));
+            float dL = target_lab.L - lab.L;
+            float da = target_lab.a - lab.a;
+            float db = target_lab.b - lab.b;
+            float err = dL * dL + da * da + db * db;
+            candidates.push_back({
+                modified, prev_error + err,
+                make_ham_value(0b10, static_cast<std::uint8_t>(rv), data_bits),
+                parent_idx,
+            });
+        }
     }
 
     // MODIFY GREEN (control = 11)
     auto lo_g = std::max(0, static_cast<int>(tgv) - kModifyDpRadius);
     auto hi_g = std::min(nmax, static_cast<int>(tgv) + kModifyDpRadius + 1);
-    for (int gv = lo_g; gv < hi_g; ++gv) {
-        SRGBColor modified{prev.r,
-            pre.expand_lut[static_cast<std::size_t>(gv)], prev.b};
-        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
-        float dL = target_lab.L - lab.L;
-        float da = target_lab.a - lab.a;
-        float db = target_lab.b - lab.b;
-        float err = dL * dL + da * da + db * db;
-        candidates.push_back({
-            modified, prev_error + err,
-            make_ham_value(0b11, static_cast<std::uint8_t>(gv), data_bits),
-            parent_idx,
-        });
+    {
+        auto rb_lms = lms_prev_r + lms_prev_b;
+        for (int gv = lo_g; gv < hi_g; ++gv) {
+            auto g8 = pre.expand_lut[static_cast<std::size_t>(gv)];
+            SRGBColor modified{prev.r, g8, prev.b};
+            auto lab = color_space::lms_cbrt_to_oklab(
+                color_space::fast_cbrt4(rb_lms + lms_t[1][g8]));
+            float dL = target_lab.L - lab.L;
+            float da = target_lab.a - lab.a;
+            float db = target_lab.b - lab.b;
+            float err = dL * dL + da * da + db * db;
+            candidates.push_back({
+                modified, prev_error + err,
+                make_ham_value(0b11, static_cast<std::uint8_t>(gv), data_bits),
+                parent_idx,
+            });
+        }
     }
 }
 

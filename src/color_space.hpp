@@ -111,6 +111,7 @@ struct OKLab {
 
 // Fast cube root via IEEE 754 bit hack + one Halley iteration.
 // ~6-7 significant digits — full float precision recovery.
+[[gnu::always_inline]]
 inline float fast_cbrt(float x) noexcept {
     if (x == 0.0f) return 0.0f;
     float sign = 1.0f;
@@ -127,20 +128,118 @@ inline float fast_cbrt(float x) noexcept {
     return sign * y;
 }
 
+// 4-lane SIMD cube root (lane 3 is padding). Assumes non-negative inputs
+// — the hot callers of linear_to_oklab feed LMS values from sRGB-linear
+// colors, which are always ≥ 0 after the srgb_to_linear LUT.
+using f32x4 [[gnu::vector_size(16)]] = float;
+using u32x4 [[gnu::vector_size(16)]] = std::uint32_t;
+
+[[gnu::always_inline]]
+inline f32x4 fast_cbrt4(f32x4 x) noexcept {
+    // Extract sign and work on |x|; the IEEE-754 bit hack initial guess is
+    // only valid for positive finite inputs. Restore sign at the end so
+    // we match the scalar version's odd-function behavior for negatives
+    // (callers like error diffusion occasionally feed negatives).
+    u32x4 sign_mask = {0x80000000u, 0x80000000u, 0x80000000u, 0x80000000u};
+    u32x4 xbits = std::bit_cast<u32x4>(x);
+    u32x4 sign = xbits & sign_mask;
+    u32x4 absbits = xbits & ~sign_mask;
+    // Initial guess: i/3 + magic. GCC/Clang lower per-lane int divide by 3
+    // to a multiply-high with magic constant even on targets without HW divide.
+    u32x4 three = {3u, 3u, 3u, 3u};
+    u32x4 off = {0x2a508bfeu, 0x2a508bfeu, 0x2a508bfeu, 0x2a508bfeu};
+    u32x4 i = absbits / three + off;
+    f32x4 absx = std::bit_cast<f32x4>(absbits);
+    f32x4 y = std::bit_cast<f32x4>(i);
+    // Halley iteration (cubically convergent). Guard against absx=0 — the
+    // initial guess is non-zero, Halley would converge toward 0 but we want
+    // cbrt(0) = 0 exactly to match the scalar version.
+    f32x4 y3 = y * y * y;
+    f32x4 two = {2.0f, 2.0f, 2.0f, 2.0f};
+    y *= (y3 + two * absx) / (two * y3 + absx);
+    // Zero-guard: where absx == 0, force result to 0.
+    f32x4 zero = {0.0f, 0.0f, 0.0f, 0.0f};
+    u32x4 nonzero_mask = (absbits != 0);
+    y = std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) & nonzero_mask);
+    (void)zero;
+    // Reapply sign.
+    return std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) | sign);
+}
+
+[[gnu::always_inline]]
 inline OKLab linear_to_oklab(Color3f c) noexcept {
-    float l = 0.4122214708f * c.r + 0.5363325363f * c.g + 0.0514459929f * c.b;
-    float m = 0.2119034982f * c.r + 0.6806995451f * c.g + 0.1073969566f * c.b;
-    float s = 0.0883024619f * c.r + 0.2817188376f * c.g + 0.6299787005f * c.b;
-
-    float l_ = fast_cbrt(l);
-    float m_ = fast_cbrt(m);
-    float s_ = fast_cbrt(s);
-
+    // LMS matrix applied as column-vec linear combinations of (r, g, b).
+    // Pack LMS into a single f32x4 (lane 3 ignored) so the cbrt can SIMD.
+    f32x4 lms =
+        f32x4{0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f} * c.r +
+        f32x4{0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f} * c.g +
+        f32x4{0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f} * c.b;
+    f32x4 lms_ = fast_cbrt4(lms);
     return {
-        0.2104542553f * l_ + 0.7936177850f * m_ - 0.0040720468f * s_,
-        1.9779984951f * l_ - 2.4285922050f * m_ + 0.4505937099f * s_,
-        0.0259040371f * l_ + 0.7827717662f * m_ - 0.8086757660f * s_,
+        0.2104542553f * lms_[0] + 0.7936177850f * lms_[1] - 0.0040720468f * lms_[2],
+        1.9779984951f * lms_[0] - 2.4285922050f * lms_[1] + 0.4505937099f * lms_[2],
+        0.0259040371f * lms_[0] + 0.7827717662f * lms_[1] - 0.8086757660f * lms_[2],
     };
+}
+
+// ---------------------------------------------------------------------------
+// Fast 8-bit sRGB → OKLab path.
+//
+// HAM's DP beam search calls linear_to_oklab(srgb8_to_linear(rgb)) tens of
+// millions of times per conversion, always with 8-bit sRGB inputs. We
+// fold the sRGB→linear LUT and the linear→LMS matrix multiply into a single
+// per-channel LUT of LMS contributions:
+//
+//   LMS(r, g, b) = srgb_lms_r[r] + srgb_lms_g[g] + srgb_lms_b[b]
+//
+// Each entry is an f32x4 (L, M, S, pad). One load+add per channel replaces
+// an sRGB-linearize lookup and a 3-column matrix-vector multiply. The
+// remaining cbrt + final matrix stays the same shape.
+// ---------------------------------------------------------------------------
+
+namespace detail {
+inline const std::array<std::array<f32x4, 256>, 3>& srgb_lms_lut() noexcept {
+    static const auto lut = [] {
+        std::array<std::array<f32x4, 256>, 3> t{};
+        for (int i = 0; i < 256; ++i) {
+            float linear = srgb_to_linear(static_cast<float>(i) / 255.0f);
+            auto idx = static_cast<std::size_t>(i);
+            t[0][idx] = f32x4{0.4122214708f, 0.2119034982f,
+                              0.0883024619f, 0.0f} * linear;
+            t[1][idx] = f32x4{0.5363325363f, 0.6806995451f,
+                              0.2817188376f, 0.0f} * linear;
+            t[2][idx] = f32x4{0.0514459929f, 0.1073969566f,
+                              0.6299787005f, 0.0f} * linear;
+        }
+        return t;
+    }();
+    return lut;
+}
+}  // namespace detail
+
+// LMS (as f32x4, lane 3 unused) for an 8-bit sRGB color. Splits per channel
+// so callers with one varying channel can cache the other two.
+[[gnu::always_inline]]
+inline f32x4 srgb8_to_lms(std::uint8_t r, std::uint8_t g,
+                          std::uint8_t b) noexcept {
+    auto& t = detail::srgb_lms_lut();
+    return t[0][r] + t[1][g] + t[2][b];
+}
+
+// Convert cbrt(LMS) to OKLab (final matrix). Shared between variants.
+[[gnu::always_inline]]
+inline OKLab lms_cbrt_to_oklab(f32x4 lms_) noexcept {
+    return {
+        0.2104542553f * lms_[0] + 0.7936177850f * lms_[1] - 0.0040720468f * lms_[2],
+        1.9779984951f * lms_[0] - 2.4285922050f * lms_[1] + 0.4505937099f * lms_[2],
+        0.0259040371f * lms_[0] + 0.7827717662f * lms_[1] - 0.8086757660f * lms_[2],
+    };
+}
+
+[[gnu::always_inline]]
+inline OKLab srgb8_to_oklab(std::uint8_t r, std::uint8_t g,
+                            std::uint8_t b) noexcept {
+    return lms_cbrt_to_oklab(fast_cbrt4(srgb8_to_lms(r, g, b)));
 }
 
 constexpr Color3f oklab_to_linear(OKLab lab) noexcept {
