@@ -1,8 +1,7 @@
 #include "degas.hpp"
-#include "palette.hpp"
+#include "color_space.hpp"
 
 #include <fstream>
-#include <format>
 
 namespace png2amiga::degas {
 

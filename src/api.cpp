@@ -233,7 +233,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         auto cy = static_cast<std::size_t>(options.crop_y);
         auto cw = static_cast<std::size_t>(options.crop_w);
         auto ch = static_cast<std::size_t>(options.crop_h);
-        if (cx + cw > width || cy + ch > height || cw == 0 || ch == 0) {
+        if (cx + cw > width || cy + ch > height) {
             free_raw();
             return std::unexpected{Error{
                 ErrorCode::invalid_dimensions,

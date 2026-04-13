@@ -8,7 +8,6 @@
 #include "dither.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
-#include "log.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
@@ -728,17 +727,6 @@ std::string base64_encode(std::span<const std::uint8_t> data) {
 
 void iterm2_display(const Image& image, unsigned scale = 2) {
     auto png = png_io::encode(image);
-    if (!png) return;
-    auto encoded = base64_encode(*png);
-    std::println("\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-                 png->size(), image.width() * scale, image.height() * scale,
-                 encoded);
-}
-
-[[maybe_unused]]
-void iterm2_display_with_mask(const Image& image, const std::vector<bool>& mask,
-                              unsigned scale = 2) {
-    auto png = png_io::encode(image, mask);
     if (!png) return;
     auto encoded = base64_encode(*png);
     std::println("\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",

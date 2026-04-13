@@ -1,6 +1,5 @@
 #include "cheader.hpp"
 #include "color_space.hpp"
-#include "iff.hpp"
 #include "palette.hpp"
 #include "version.hpp"
 
