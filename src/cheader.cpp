@@ -947,8 +947,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    // Per-scanline copper palette changes (end of previous line)\n";
         out += std::format("    for (int y = 1; y < {}; y++) {{\n", height);
         out += std::format("        USHORT line = y - 1 + {};\n", y_start);
-        // No boundary cross needed: the copper's WAIT comparison handles
-        // the VP wrap from $FF to $00 (line 255 to 256) correctly.
+        // Crossing line 256: emit the 0xFFDF WAIT-all-bits-set instruction
+        // so subsequent WAITs can compare against the wrapped VPOS[7:0].
+        // Without this, the copper's 8-bit VP comparator never catches up
+        // past line 255 on real hardware (and on some emulators the image
+        // just goes black once the per-line WAITs stop firing).
+        out += "        if (line == 256) {\n";
+        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
+        out += "        }\n";
         out += "        *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
         out += "        *cl++ = 0xfffe;\n";
         emit_copper_changes("y", aga_banks);
@@ -963,7 +969,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto last_line = y_start + (is_lace
             ? static_cast<int>(height / 2)
             : static_cast<int>(height));
-        // No boundary cross needed — copper handles VP wrap correctly.
+        // Emit boundary cross only if we didn't already pass line 256 in
+        // the per-scanline copper loop above (has_copper path).
+        if (last_line >= 256 && !has_copper) {
+            out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
+                   "  // cross 256 boundary\n";
+        }
         out += std::format("    *cl++ = ({}<<8)|1; *cl++ = 0xfffe;"
                            "  // WAIT line {}\n",
                            last_line >= 256 ? (last_line & 0xFF) : last_line,
@@ -1071,7 +1082,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Blank below image in even field
         {
             auto last_line = y_start + static_cast<int>(height / 2);
-            // No boundary cross — copper handles VP wrap correctly
+            // Emit boundary cross when crossing line 256 so the 8-bit VP
+            // comparator's wrapped value matches what the WAIT asks for.
+            if (last_line >= 256) {
+                out += "    *cl2++ = 0xFFDF; *cl2++ = 0xFFFE;"
+                       "  // cross 256 boundary\n";
+            }
             out += std::format("    *cl2++ = ({}<<8)|1; *cl2++ = 0xfffe;\n",
                                last_line >= 256 ? (last_line & 0xFF) : last_line);
             out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
