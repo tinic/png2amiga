@@ -256,8 +256,6 @@ watch(() => options.mode, (mode, oldMode) => {
   } else if (options.depth > max) {
     options.depth = max
   }
-  // Copper not compatible with interlace
-  if (isInterlaceMode(mode)) options.copper = false
   // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
   if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov')
     options.dither = 'floyd-steinberg'
@@ -877,8 +875,8 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Copper-Augmented Palette (not available for interlace or Atari) -->
-              <div v-if="!isInterlaceMode(options.mode) && !isAtariMode(options.mode) && !paletteData" class="grid align-items-center">
+              <!-- Copper-Augmented Palette (not available for Atari) -->
+              <div v-if="!isAtariMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette.">Copper</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />

@@ -512,6 +512,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.palette_diversity = options.palette_diversity;
         ham_opts.quantizer = options.quantizer;
         ham_opts.greedy = options.ham_fast;
+        ham_opts.skip_initial_swap_rows = options.interlace ? 2 : 0;
 
         // Force transparent pixels to black BEFORE HAM encoding so the
         // encoder handles color transitions correctly at transparency edges.
@@ -610,10 +611,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             dith.strength = options.dither_strength;
             dith.error_clamp = options.error_clamp;
 
+            std::size_t skip_initial = options.interlace ? 2 : 0;
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
                                                        static_cast<std::size_t>(options.copper_changes),
                                                        nullptr, options.reserve_color0,
-                                                       {}, options.palette_diversity);
+                                                       {}, options.palette_diversity,
+                                                       skip_initial, options.interlace);
             if (!copper_result) return std::unexpected{copper_result.error()};
 
             // Now re-dither each scanline against its 64-color EHB palette
@@ -955,11 +958,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 palette_locks::to_color(lock, chipset, mode));
         }
 
+        std::size_t skip_initial_lace = options.interlace ? 2 : 0;
         auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
                                                      static_cast<std::size_t>(options.copper_changes),
                                                      copper_user_pal.empty() ? nullptr : &copper_user_pal,
                                                      options.reserve_color0, copper_locks,
-                                                     options.palette_diversity);
+                                                     options.palette_diversity,
+                                                     skip_initial_lace, options.interlace);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         auto preview = copper::render_copper(copper_result->planes,
