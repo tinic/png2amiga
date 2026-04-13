@@ -42,8 +42,12 @@ struct IffOptions {
     bool interlace = false;         // set LACE bit in CAMG
     bool has_transparency = false;  // BMHD masking=2, transparentColor=0
 
-    // Copper palette: per-scanline palettes written as custom COPL chunk.
-    // If non-empty, a COPL chunk is appended after CAMG.
+    // Per-line palette changes (sliced / Dynamic HiRes / Sliced HAM).
+    // If non-empty, a standard PCHG chunk (Vigna 1991) is written after
+    // CAMG. Only registers whose RGB444 value differs from the previous
+    // scanline are emitted, so the chunk stays compact even when the
+    // full palette changes per-line.
+    //
     // Each inner vector has num_colors entries (linear RGB).
     const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr;
 };

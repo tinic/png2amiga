@@ -192,31 +192,125 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     write_u32(out, 4);
     write_u32(out, camg);
 
-    // --- COPL chunk (copper palette) ---
-    // Custom chunk: for each scanline, N entries of 2-byte big-endian
-    // OCS 12-bit colors (0x0RGB). Total size = height * N * 2 bytes.
+    // --- PCHG chunk (per-line palette changes) ---
+    // Standard Amiga "Palette CHanGes" IFF extension (Sebastiano Vigna,
+    // 1991). Readable by PCHG-aware viewers (Recoil, IrfanView IFF
+    // plugin, ViewTek, etc.) and by hand-rolled Copper loaders.
+    //
+    // We emit the 12-bit variant (flag PCHGB_12BIT). Each scanline's
+    // palette is diffed against the previous scanline — the first
+    // scanline is diffed against the CMAP (which stores line 0's
+    // palette). Only changed registers are written, keeping the chunk
+    // compact even with per-line full-palette swaps.
     if (options.scanline_palettes &&
         !options.scanline_palettes->empty()) {
         auto& scan_pals = *options.scanline_palettes;
+        auto height = planes.height;
         auto colors_per_line = scan_pals[0].size();
-        auto copl_size = static_cast<std::uint32_t>(
-            planes.height * colors_per_line * 2);
 
-        write_id(out, "COPL");
-        write_u32(out, copl_size);
-
-        for (std::size_t y = 0; y < planes.height; ++y) {
-            auto& pal = (y < scan_pals.size()) ? scan_pals[y] : scan_pals[0];
+        // Build per-line change lists (register, 12-bit RGB).
+        struct Change { std::uint8_t reg; std::uint16_t rgb12; };
+        std::vector<std::vector<Change>> line_changes(height);
+        std::vector<std::uint16_t> prev(colors_per_line);
+        // Initial state = line 0's palette (matches CMAP). This means
+        // line 0 emits no changes (CMAP already provides it). We start
+        // diffing from line 1 against line 0.
+        if (!scan_pals.empty()) {
+            auto& pal0 = scan_pals[0];
             for (std::size_t i = 0; i < colors_per_line; ++i) {
-                auto color = (i < pal.size()) ? pal[i] : Color3f{};
-                write_u16(out, palette::linear_to_ocs(color));
+                auto c = (i < pal0.size()) ? pal0[i] : Color3f{};
+                prev[i] = palette::linear_to_ocs(c);
+            }
+        }
+        std::size_t changed_lines = 0;
+        std::uint16_t min_reg = 0xFFFF, max_reg = 0;
+        std::uint16_t max_per_line = 0;
+        std::uint32_t total = 0;
+        for (std::size_t y = 0; y < height; ++y) {
+            auto& pal = (y < scan_pals.size()) ? scan_pals[y] : scan_pals[0];
+            auto& chgs = line_changes[y];
+            for (std::size_t i = 0; i < colors_per_line; ++i) {
+                auto c = (i < pal.size()) ? pal[i] : Color3f{};
+                auto rgb = palette::linear_to_ocs(c);
+                if (rgb != prev[i]) {
+                    chgs.push_back({static_cast<std::uint8_t>(i), rgb});
+                    prev[i] = rgb;
+                }
+            }
+            if (!chgs.empty()) {
+                ++changed_lines;
+                if (chgs.front().reg < min_reg) min_reg = chgs.front().reg;
+                if (chgs.back().reg > max_reg)  max_reg = chgs.back().reg;
+                auto sz = static_cast<std::uint16_t>(chgs.size());
+                if (sz > max_per_line) max_per_line = sz;
+                total += static_cast<std::uint32_t>(chgs.size());
+            }
+        }
+        if (min_reg == 0xFFFF) min_reg = 0;
+
+        write_id(out, "PCHG");
+        auto pchg_size_off = out.size();
+        write_u32(out, 0);  // placeholder
+        auto pchg_start = out.size();
+
+        // PCHGHeader (20 bytes, all big-endian)
+        write_u16(out, 0);              // Compression: 0 = none
+        write_u16(out, 1);              // Flags: bit 0 = PCHGB_12BIT
+        write_u16(out, 0);              // StartLine = 0
+        write_u16(out, static_cast<std::uint16_t>(height));  // LineCount
+        write_u16(out, static_cast<std::uint16_t>(changed_lines));
+        write_u16(out, min_reg);
+        write_u16(out, max_reg);
+        write_u16(out, max_per_line);
+        write_u32(out, total);
+
+        // LineMask: ceil(LineCount/32) ULONGs, bit N set if line N has
+        // any changes. Bit order: bit 31 of word 0 = line 0.
+        auto mask_words = (height + 31) / 32;
+        std::vector<std::uint32_t> mask(mask_words, 0);
+        for (std::size_t y = 0; y < height; ++y) {
+            if (!line_changes[y].empty()) {
+                mask[y / 32] |= (1u << (31 - (y % 32)));
+            }
+        }
+        for (auto w : mask) write_u32(out, w);
+
+        // Per-changed-line data: SmallLineChanges, grouped by register
+        // range 0..15 (count16) and 16..31 (count32), each followed by
+        // SmallPaletteChange entries.
+        //   SmallPaletteChange: high nibble = register within group,
+        //                       low 12 bits = RGB444 (RRRRGGGGBBBB).
+        // Registers 32+ are not expressible in the 12-bit PCHG variant;
+        // we clip silently (rare for our HAM6/EHB/lores cases).
+        for (std::size_t y = 0; y < height; ++y) {
+            auto& chgs = line_changes[y];
+            if (chgs.empty()) continue;
+            std::uint8_t count16 = 0, count32 = 0;
+            for (auto& c : chgs) {
+                if (c.reg < 16) ++count16;
+                else if (c.reg < 32) ++count32;
+            }
+            write_u8(out, count16);
+            write_u8(out, count32);
+            // Group 0..15 first, then 16..31
+            for (auto& c : chgs) {
+                if (c.reg >= 16) continue;
+                std::uint16_t entry = static_cast<std::uint16_t>(
+                    (c.reg << 12) | (c.rgb12 & 0x0FFF));
+                write_u16(out, entry);
+            }
+            for (auto& c : chgs) {
+                if (c.reg < 16 || c.reg >= 32) continue;
+                std::uint16_t entry = static_cast<std::uint16_t>(
+                    (static_cast<std::uint16_t>(c.reg - 16) << 12) |
+                    (c.rgb12 & 0x0FFF));
+                write_u16(out, entry);
             }
         }
 
-        // Pad COPL to even length (already even: height * N * 2)
-        if (copl_size % 2 != 0) {
-            write_u8(out, 0);
-        }
+        auto pchg_size = static_cast<std::uint32_t>(out.size() - pchg_start);
+        patch_u32(out, pchg_size_off, pchg_size);
+        if (pchg_size % 2 != 0) write_u8(out, 0);  // even-pad
     }
 
     // --- BODY chunk ---

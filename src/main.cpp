@@ -2009,12 +2009,7 @@ int main(int argc, char* argv[]) {
                                  "is not supported with --copper");
             return 1;
         }
-        if (!config->output_path.empty() &&
-            (ends_with(config->output_path, ".iff") ||
-             ends_with(config->output_path, ".ilbm"))) {
-            std::println(stderr, "Error: IFF output is not supported with copper mode");
-            return 1;
-        }
+        // IFF output with copper is now supported via the PCHG chunk.
 
         // Force transparent pixels to black before encoding
         if (has_transparency) {
