@@ -1391,12 +1391,12 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         auto ham_params = amiga::get_mode_params(config->mode);
-        // HAM6 benefits from error diffusion (4-bit MODIFY causes visible
-        // quantization); HAM8's 6-bit MODIFY is near-lossless, so default
-        // to no dither.  User can override with --dither.
-        auto ham_default_dither = (config->mode == amiga::Mode::ham6)
-            ? dither::Method::floyd_steinberg
-            : dither::Method::none;
+        // Both HAM6 and HAM8 default to Floyd-Steinberg. HAM8's 6-bit
+        // MODIFY still introduces visible banding on smooth gradients
+        // (~4 sRGB-value-per-step), and FS improves blurred PSNR by
+        // +0.1 to +0.7 dB on all test images. User can disable with
+        // `--dither none`.
+        auto ham_default_dither = dither::Method::floyd_steinberg;
         auto ham_dither = config->dither_explicit
             ? config->dither_method : ham_default_dither;
         std::println("Mode:   HAM{} (beam: {}, dither: {})",
