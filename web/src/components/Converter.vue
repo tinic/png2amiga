@@ -1021,8 +1021,10 @@ async function loadExample(example) {
             <div v-if="!isAtariMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button v-if="!options.copper" label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
-                title="Download as IFF ILBM (Deluxe Paint, Personal Paint, WinUAE compatible)." />
+              <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
+                :title="options.copper
+                  ? 'Download as IFF ILBM with standard PCHG chunk for per-line palette (readable by Recoil, ViewTek, OS3.5+ ilbm.datatype).'
+                  : 'Download as IFF ILBM (Deluxe Paint, Personal Paint, WinUAE compatible).'" />
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
