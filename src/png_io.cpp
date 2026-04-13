@@ -19,11 +19,10 @@
 extern "C" unsigned char* stbi_zlib_compress(unsigned char* data, int data_len,
                                              int* out_len, int quality);
 
-// Tell stb_image_write to use the fastest zlib compression level. Output
-// PNGs are previews / intermediate frames, not archival — we prioritize
-// throughput over file size. Default is 8; setting to 1 roughly halves
-// save time with ~2× file-size growth, negligible for our use cases.
-extern "C" int stbi_write_png_compression_level;
+// stbi_write_png_compression_level is already declared by stb_image_write.h
+// (global C variable). We set it to 1 at startup to prioritize throughput
+// over file size — output PNGs are previews / intermediate frames, not
+// archival. Default is 8; level 1 is roughly 2× faster with ~2× size.
 
 namespace png2amiga::png_io {
 
