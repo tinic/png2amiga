@@ -1,5 +1,7 @@
 build/
 build-wasm/
+build-asan/
+build-tsan/
 service/toolchain/
 .cache/
 .claude/
