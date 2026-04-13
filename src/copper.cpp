@@ -313,7 +313,9 @@ Result<CopperResult> encode_copper(const Image& image,
                                    const std::vector<Color3f>* user_palette,
                                    bool reserve_color0,
                                    const std::vector<std::pair<std::size_t, Color3f>>& locked,
-                                   int palette_diversity) {
+                                   int palette_diversity,
+                                   std::size_t skip_initial_swap_rows,
+                                   bool is_lace) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -340,7 +342,8 @@ Result<CopperResult> encode_copper(const Image& image,
     // check entirely — the user is telling us "emit exactly this K, I know
     // what I'm doing".
     auto base_k = std::min(
-        max_changes_per_line(depth, false, false, chipset), max_swappable);
+        max_changes_per_line(depth, false, false, chipset, is_lace), max_swappable);
+    auto move_budget = is_lace ? MOVE_BUDGET_PER_LINE_LACE : MOVE_BUDGET_PER_LINE;
 
     // Auto mode stretch: the static AGA base K=3 leaves 2 MOVEs of headroom
     // (worst case 4*3=12 vs 14 budget). Walk K down from K+3 to K+1, return
@@ -357,9 +360,10 @@ Result<CopperResult> encode_copper(const Image& image,
             if (stretch_k > max_swappable) continue;
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
                                          stretch_k, user_palette, reserve_color0,
-                                         locked, palette_diversity);
+                                         locked, palette_diversity,
+                                         skip_initial_swap_rows, is_lace);
             if (!stretch) return std::unexpected{stretch.error()};
-            if (stretch->max_moves_per_line <= MOVE_BUDGET_PER_LINE) return stretch;
+            if (stretch->max_moves_per_line <= move_budget) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
         }
     }
@@ -452,13 +456,18 @@ Result<CopperResult> encode_copper(const Image& image,
     for (int pd_iter = 0; pd_iter < predict_dither_iterations; ++pd_iter) {
 
     // --- Pass 1: predict per-scanline palettes ---
-    std::vector<Color3f> current_pal = base_pal;
+    // For interlace, each field has its own palette state since field 1
+    // (rows 0,2,4,...) and field 2 (rows 1,3,5,...) accumulate independently.
+    // The per-field K-swap budget then only has to cover one row's diff.
+    std::vector<Color3f> current_pal_f1 = base_pal;
+    std::vector<Color3f> current_pal_f2 = base_pal;
     // Reset column error accumulator for this pass (seeded from previous
     // iteration's dithered feedback, or zeros on first iteration)
     auto pass1_column_error = column_error;
 
     for (std::size_t y = 0; y < height; ++y) {
         auto row = image.row(y);
+        auto& current_pal = (is_lace && (y & 1)) ? current_pal_f2 : current_pal_f1;
 
         std::vector<float> col_weights(width, 1.0f);
         float max_col_err = 0.0f;
@@ -521,7 +530,13 @@ Result<CopperResult> encode_copper(const Image& image,
         SwapScratch sc;
         build_swap_scratch(sc, pal_lab, rows_lab, weights, width, col_weights);
 
-        for (std::size_t s = 0; s < changes_per_line; ++s) {
+        // Skip swap-finding for initial rows (interlace: row 0 is field 1's
+        // first displayed line and row 1 is field 2's — neither has a prior
+        // scanline on which to pre-apply palette changes, so both must display
+        // with the base palette as-is).
+        auto this_row_changes = (y < skip_initial_swap_rows)
+            ? std::size_t{0} : changes_per_line;
+        for (std::size_t s = 0; s < this_row_changes; ++s) {
             auto swap = find_best_swap(
                 current_pal, pal_lab, rows, rows_lab, weights, chipset, sc,
                 swapped, col_weights);

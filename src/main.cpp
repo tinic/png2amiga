@@ -1057,12 +1057,10 @@ int main(int argc, char* argv[]) {
     }
 
     // --- Validate mode combinations ---
-    if (config->copper && config->interlace) {
-        std::println(stderr,
-            "Error: --copper is not compatible with interlace modes "
-            "(copper WAITs conflict with field switching)");
-        return 1;
-    }
+    // (copper + interlace is supported: field 1 gets scanline_palettes
+    // for even image rows, field 2 for odd rows. Each field's copper
+    // list emits WAITs at the same VPOS values; only the referenced
+    // row differs.)
 
     // --- Validate mode + depth against chipset ---
     {
@@ -1401,6 +1399,7 @@ int main(int argc, char* argv[]) {
         ham_opts.quantizer = config->quantizer;
         ham_opts.triple_beam = config->ham_triple;
         ham_opts.greedy = config->ham_fast;
+        ham_opts.skip_initial_swap_rows = config->interlace ? 2 : 0;
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
@@ -1484,6 +1483,8 @@ int main(int argc, char* argv[]) {
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
+                    if (!ham_result->scanline_palettes.empty())
+                        ch_opts.copper_scanline_palettes = &ham_result->scanline_palettes;
                 }
 
                 auto result = cheader::save(
@@ -1510,6 +1511,8 @@ int main(int argc, char* argv[]) {
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
+                    if (!ham_result->scanline_palettes.empty())
+                        ch_opts.copper_scanline_palettes = &ham_result->scanline_palettes;
                 }
 
                 pad_planes_to_mode(ham_result->planes, config->mode, config->hires);
@@ -1592,9 +1595,13 @@ int main(int argc, char* argv[]) {
                          dither_name(dith.method), dith.strength);
 
             // Copper encoder optimizes 32 base colors per scanline (depth=5)
+            // Interlace: skip swaps on rows 0 and 1 (each field's first
+            // displayed line must show base palette only).
+            std::size_t skip_initial = config->interlace ? 2 : 0;
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
                 static_cast<std::size_t>(config->copper_changes),
-                nullptr, true, {}, config->palette_diversity);
+                nullptr, true, {}, config->palette_diversity,
+                skip_initial, config->interlace);
             if (!copper_result) {
                 std::println(stderr, "Copper encode error: {}",
                              copper_result.error().message);
@@ -1736,6 +1743,7 @@ int main(int argc, char* argv[]) {
                     ch_opts.fade_in = config->fade_in;
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line = copper_result->changes_per_line;
+                    ch_opts.copper_scanline_palettes = &copper_result->scanline_palettes;
 
                     pad_planes_to_mode(planes.value(), config->mode, config->hires);
                     auto result = cheader::save_viewer(
@@ -2033,9 +2041,11 @@ int main(int argc, char* argv[]) {
                 palette_locks::to_color(lock, chipset, config->mode));
         }
 
+        std::size_t skip_initial_lace = config->interlace ? 2 : 0;
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
             static_cast<std::size_t>(config->copper_changes), nullptr,
-            config->reserve_color0, copper_locks, config->palette_diversity);
+            config->reserve_color0, copper_locks, config->palette_diversity,
+            skip_initial_lace, config->interlace);
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);

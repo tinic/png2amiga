@@ -1232,7 +1232,8 @@ Result<HamResult> encode_ham_copper_generic(
         changes_per_line = override_changes;
     } else {
         changes_per_line = copper::max_changes_per_line(
-            num_bitplanes, true, is_hires, chipset);
+            num_bitplanes, true, is_hires, chipset,
+            opts.skip_initial_swap_rows > 0);
     }
 
     // Global base palette
@@ -1242,6 +1243,11 @@ Result<HamResult> encode_ham_copper_generic(
     }
 
     std::vector<Color3f> current_pal = base_pal.colors;
+    // For interlace, each field accumulates palette swaps independently so a
+    // single per-line K-swap budget covers one row's diff (vs cumulative two
+    // rows when fields share state).
+    bool is_lace = opts.skip_initial_swap_rows > 0;
+    std::vector<Color3f> current_pal_f2 = base_pal.colors;
     std::vector<std::uint8_t> ham_values(w * h);
     std::vector<std::vector<Color3f>> scanline_palettes(h);
     std::vector<std::vector<copper::CopperChange>> all_changes(h);
@@ -1306,10 +1312,17 @@ Result<HamResult> encode_ham_copper_generic(
 
     for (std::size_t y = 0; y < h; ++y) {
         auto row = encode_image.row(y);
+        // For interlace, route field 1 (even rows) and field 2 (odd rows)
+        // through their own palette state so K swaps cover only one row of diff.
+        auto& pal_for_row = (is_lace && (y & 1)) ? current_pal_f2 : current_pal;
 
-        // Find best K swaps (modifies current_pal in-place)
-        auto swaps = find_ham_swaps(row, current_pal, num_base_colors,
-                                    data_bits, changes_per_line, chipset);
+        // Find best K swaps (modifies palette in-place). Skip for initial
+        // rows in interlace so each field's first displayed line uses the base
+        // palette only.
+        auto row_k = (y < opts.skip_initial_swap_rows)
+            ? std::size_t{0} : changes_per_line;
+        auto swaps = find_ham_swaps(row, pal_for_row, num_base_colors,
+                                    data_bits, row_k, chipset);
 
         // Record as CopperChange
         std::vector<copper::CopperChange> line_changes;
@@ -1318,12 +1331,12 @@ Result<HamResult> encode_ham_copper_generic(
                 static_cast<std::uint8_t>(slot), color});
         }
         all_changes[y] = std::move(line_changes);
-        scanline_palettes[y] = current_pal;
+        scanline_palettes[y] = pal_for_row;
 
         // Precompute sRGB + OKLab for this scanline's palette
         std::vector<SRGBColor> pal_srgb(num_base_colors);
         for (std::size_t i = 0; i < num_base_colors; ++i) {
-            pal_srgb[i] = linear_to_srgb8(current_pal[i]);
+            pal_srgb[i] = linear_to_srgb8(pal_for_row[i]);
         }
         std::span<const SRGBColor> srgb_span{pal_srgb};
         SRGBColor start = pal_srgb.empty()
@@ -1331,7 +1344,7 @@ Result<HamResult> encode_ham_copper_generic(
 
         // Rebuild precomp for this scanline's (potentially modified) palette
         HamPrecomp line_pre{
-            std::span<const Color3f>{current_pal.data(), num_base_colors},
+            std::span<const Color3f>{pal_for_row.data(), num_base_colors},
             data_bits};
 
         // Encode scanline (error diffusion already handled by pre-dither)

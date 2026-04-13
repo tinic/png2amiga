@@ -49,6 +49,10 @@ struct CHeaderOptions {
     // Copper: per-scanline register changes (nullptr = no copper)
     const std::vector<std::vector<copper::CopperChange>>* copper_changes = nullptr;
     std::size_t copper_changes_per_line = 0;
+    // Optional: per-scanline effective palette. When `interlace` is set we
+    // rebuild the diffs so each field sees transitions between the rows it
+    // actually draws (row y ← row y-2) rather than the default row y-1.
+    const std::vector<std::vector<Color3f>>* copper_scanline_palettes = nullptr;
 };
 
 // ---------------------------------------------------------------------------

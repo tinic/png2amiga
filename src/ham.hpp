@@ -106,6 +106,11 @@ struct HamOptions {
     // channel). ~20-40× faster than DP, ~1 dB PSNR loss. For realtime /
     // preview use cases where latency matters more than peak quality.
     bool greedy = false;
+
+    // Number of initial rows that must display with the base palette only
+    // (no copper swaps). For interlace, rows 0 and 1 are each field's first
+    // displayed line with no prior scanline to schedule a pre-display WAIT on.
+    std::size_t skip_initial_swap_rows = 0;
 };
 
 // ---------------------------------------------------------------------------

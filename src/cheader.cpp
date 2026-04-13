@@ -412,6 +412,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Computed up here so it gates both the data array's 8-byte alignment
     // and the BPLxMOD/FMODE register writes later in the copper list.
     bool has_copper = options.copper_changes && !options.copper_changes->empty();
+    bool is_lace = options.interlace;
     bool need_fmode3 = ((depth > 6) && has_copper) ||
                        (is_hires && depth > 4);
 
@@ -470,8 +471,74 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // --- Copper list (if present) ---
     if (has_copper) {
-        auto& changes = *options.copper_changes;
         auto cpl = options.copper_changes_per_line;
+
+        // For interlace, we rebuild the per-row change lists: each field
+        // visits every other row (field 1: 0,2,4,...; field 2: 1,3,5,...),
+        // so row y's effective transition is from row y-2 — not the default
+        // row y-1 sequential encoding. We pick the K registers whose color
+        // magnitude differs most between scanline_palettes[y-2] and [y].
+        std::vector<std::vector<copper::CopperChange>> lace_changes;
+        const std::vector<std::vector<copper::CopperChange>>* changes_ptr =
+            options.copper_changes;
+        if (is_lace && options.copper_scanline_palettes
+                && !options.copper_scanline_palettes->empty()) {
+            auto& pals = *options.copper_scanline_palettes;
+            auto H = pals.size();
+            lace_changes.resize(H);
+            // Base palette (written at frame start for both fields).
+            std::vector<Color3f> base_pal(palette.begin(), palette.end());
+            for (std::size_t y = 0; y < H; ++y) {
+                // For each field's pre-display:
+                //   Field 1 loads base palette then applies row 0's diffs.
+                //   Field 2 loads base palette then applies row 1's diffs.
+                // So rows 0 and 1 both diff against the base palette.
+                // Rows >=2 diff against row y-2 (the previous row in the same
+                // field — field 1: 0,2,4,...; field 2: 1,3,5,...).
+                const auto& pal_prev = (y < 2) ? base_pal : pals[y - 2];
+                auto& pal_cur = pals[y];
+                auto n_regs = std::min(pal_prev.size(), pal_cur.size());
+                // Candidates: every register whose color changed.
+                struct Cand {
+                    std::uint8_t reg;
+                    float dist;
+                    Color3f color;
+                };
+                std::vector<Cand> cands;
+                cands.reserve(n_regs);
+                for (std::size_t r = 0; r < n_regs; ++r) {
+                    auto dr = pal_cur[r].r - pal_prev[r].r;
+                    auto dg = pal_cur[r].g - pal_prev[r].g;
+                    auto db = pal_cur[r].b - pal_prev[r].b;
+                    auto d2 = dr*dr + dg*dg + db*db;
+                    if (d2 > 0.0f) {
+                        cands.push_back({static_cast<std::uint8_t>(r),
+                                         d2, pal_cur[r]});
+                    }
+                }
+                // Keep top-K by distance.
+                if (cands.size() > cpl) {
+                    std::partial_sort(cands.begin(),
+                                      cands.begin() + static_cast<std::ptrdiff_t>(cpl),
+                                      cands.end(),
+                                      [](auto& a, auto& b) { return a.dist > b.dist; });
+                    cands.resize(cpl);
+                }
+                // Sort by register for stable bank emission.
+                std::sort(cands.begin(), cands.end(),
+                          [](auto& a, auto& b) { return a.reg < b.reg; });
+                auto& out_changes = lace_changes[y];
+                out_changes.reserve(cands.size());
+                for (auto& c : cands) {
+                    copper::CopperChange ch{};
+                    ch.reg = c.reg;
+                    ch.color = c.color;
+                    out_changes.push_back(ch);
+                }
+            }
+            changes_ptr = &lace_changes;
+        }
+        auto& changes = *changes_ptr;
         auto ch_height = changes.size();
 
         // Variable-length per-scanline storage. Each line emits only its
@@ -507,6 +574,27 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         };
         emit_count_array("hi", n_hi);
         if (options.aga) emit_count_array("lo", n_lo);
+
+        // Per-line prefix-sum offset arrays. Enables O(1) random access
+        // into the flat entry array for a given image row — needed for
+        // interlace, where field 1 walks even rows (0, 2, 4, ...) and
+        // field 2 walks odd rows (1, 3, 5, ...), so the two fields can't
+        // share a single sequentially-advancing pointer.
+        auto emit_offset_array = [&](const char* suffix,
+                                     const std::vector<std::size_t>& counts) {
+            out += std::format("static const USHORT {}_copper_off_{}[{}] = {{\n    ",
+                               sym, suffix, ch_height);
+            std::size_t acc = 0;
+            for (std::size_t y = 0; y < ch_height; ++y) {
+                out += std::format("{}", acc);
+                if (y + 1 < ch_height) out += ",";
+                if ((y + 1) % 16 == 0) out += "\n    ";
+                acc += counts[y];
+            }
+            out += "\n};\n\n";
+        };
+        emit_offset_array("hi", n_hi);
+        if (options.aga) emit_offset_array("lo", n_lo);
 
         // Flat hi-entry array
         std::size_t total_hi = 0;
@@ -691,7 +779,6 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    USHORT* cl = copper1;\n\n";
 
     // Display setup — use standard Amiga display parameters
-    bool is_lace = options.interlace;
     auto y_start = 44;
     // For interlace: display window is per-field (half total height)
     // disp_height no longer needed — using fixed PAL diwstop (0x2CC1)
@@ -722,8 +809,21 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += std::format("    *cl++ = offsetof(struct Custom, diwstrt); "
                        "*cl++ = ({}<<8)|0x81;  // VSTART={}, HSTART=$81\n",
                        y_start, y_start);
-    out += "    *cl++ = offsetof(struct Custom, diwstop); "
-           "*cl++ = (0x2C<<8)|0xC1;  // VSTOP=300, HSTOP=$C1 (full PAL)\n";
+    {
+        // Close DIWSTOP V at exactly the image bottom so the display window
+        // ends there. Stops bitplane DMA at the hardware level — much more
+        // reliable than waiting for a copper bplcon0=0 MOVE to fight FMODE=3
+        // timing in the blank-below area (HAM8 lace AGA failed without this).
+        // diwstop V encoding: V8 = ~V7. Using the low byte of last_line gives
+        // the correct stop V because last_line >= 256 sets V7=0 → V8=1
+        // → total = 256+byte; last_line < 256 has V7=1 → V8=0 → total = byte.
+        auto field_lines = is_lace ? height / 2 : height;
+        auto last_line = y_start + static_cast<int>(field_lines);
+        auto stop_v = last_line & 0xFF;
+        out += std::format("    *cl++ = offsetof(struct Custom, diwstop); "
+                           "*cl++ = ({}<<8)|0xC1;  // VSTOP={}, HSTOP=$C1\n",
+                           stop_v, last_line);
+    }
 
     // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed
     // for >6 plane modes and hires-5+). Always emit when FMODE=3 is needed;
@@ -848,8 +948,82 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     // Copper changes per scanline
+    bool aga_banks = options.aga && (pal_count > 32);
+
+    // Emit a block of palette changes from the precomputed per-row
+    // tables. Accepts the destination list variable name ("cl" or "cl2")
+    // and a C expression that evaluates to the image-row index — so
+    // interlace can have field 1 reference even rows and field 2
+    // reference odd rows, sharing the same static tables.
+    auto emit_copper_changes = [&](const std::string& cl_var,
+                                   const std::string& row_expr,
+                                   bool use_aga_banks) {
+        if (!has_copper) return;
+        out += "        {\n";
+        out += std::format(
+            "          const struct CopperEntry* p_hi = "
+            "{0}_copper_hi + {0}_copper_off_hi[{1}];\n",
+            sym, row_expr);
+        if (options.aga) {
+            out += std::format(
+                "          const struct CopperEntry* p_lo = "
+                "{0}_copper_lo + {0}_copper_off_lo[{1}];\n",
+                sym, row_expr);
+        }
+        out += std::format(
+            "          int n_hi = {}_copper_n_hi[{}];\n", sym, row_expr);
+        if (options.aga)
+            out += std::format(
+                "          int n_lo = {}_copper_n_lo[{}];\n", sym, row_expr);
+
+        if (use_aga_banks) {
+            out += "          int cur_bank = -1;\n";
+            out += "          for (int s = 0; s < n_hi; s++) {\n";
+            out += "            UWORD reg = p_hi[s].reg;\n";
+            out += "            int bank = reg / 32;\n";
+            out += "            if (bank != cur_bank) {\n";
+            out += std::format("                *{0}++ = 0x0106;\n", cl_var);
+            out += std::format("                *{0}++ = (UWORD)(bank << 13);\n", cl_var);
+            out += "                cur_bank = bank;\n";
+            out += "            }\n";
+            out += std::format("            *{0}++ = offsetof(struct Custom, color)"
+                               " + (reg % 32) * 2;\n", cl_var);
+            out += std::format("            *{0}++ = p_hi[s].color;\n", cl_var);
+            out += "          }\n";
+            out += "          cur_bank = -1;\n";
+            out += "          for (int s = 0; s < n_lo; s++) {\n";
+            out += "            UWORD reg = p_lo[s].reg;\n";
+            out += "            int bank = reg / 32;\n";
+            out += "            if (bank != cur_bank) {\n";
+            out += std::format("                *{0}++ = 0x0106;\n", cl_var);
+            out += std::format("                *{0}++ = (UWORD)((bank << 13) | 0x0200);\n", cl_var);
+            out += "                cur_bank = bank;\n";
+            out += "            }\n";
+            out += std::format("            *{0}++ = offsetof(struct Custom, color)"
+                               " + (reg % 32) * 2;\n", cl_var);
+            out += std::format("            *{0}++ = p_lo[s].color;\n", cl_var);
+            out += "          }\n";
+        } else if (options.aga) {
+            out += "          for (int s = 0; s < n_hi; s++) {\n";
+            out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
+            out += std::format("            *{0}++ = p_hi[s].color;\n", cl_var);
+            out += "          }\n";
+            out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x0200;  // LOCT=1\n", cl_var);
+            out += "          for (int s = 0; s < n_lo; s++) {\n";
+            out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_lo[s].reg * 2;\n", cl_var);
+            out += std::format("            *{0}++ = p_lo[s].color;\n", cl_var);
+            out += "          }\n";
+            out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x0000;  // LOCT=0\n", cl_var);
+        } else {
+            out += "          for (int s = 0; s < n_hi; s++) {\n";
+            out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
+            out += std::format("            *{0}++ = p_hi[s].color;\n", cl_var);
+            out += "          }\n";
+        }
+        out += "        }\n";
+    };
+
     if (has_copper) {
-        bool aga_banks = (pal_count > 32);
         // Write palette changes right after the last bitplane fetch completes.
         // Encoded byte 0xDD = binary 11011101, which puts the copper WAIT H
         // comparator at 0x6E * 2 = 0xDC (= 220 color clocks). For hires
@@ -859,105 +1033,57 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // the previous H=0xDE/222 position left on the table — visible in
         // the e9k-debugger copper overlay. For non-FMODE=3 modes the fetch
         // ends even earlier (no overread), so 0xDD is still safe.
-        // Line 0's changes are written inline (before display starts, no WAIT).
-        //
-        // The hi/lo entry tables are flat variable-length arrays; per-line
-        // count arrays say how many entries belong to each line. Two running
-        // pointers (p_hi, p_lo) walk the data, advanced by the count per line.
-        out += std::format("    const struct CopperEntry* p_hi = {}_copper_hi;\n", sym);
-        if (options.aga)
-            out += std::format("    const struct CopperEntry* p_lo = {}_copper_lo;\n", sym);
+        // Line 0: write changes before display starts (no WAIT).
+        // In interlace mode, field 1 renders even image rows (0, 2, 4, ...)
+        // so row 0's changes go here; field 2 renders odd rows so its
+        // first pre-display write is row 1's changes (emitted in cl2).
+        if (!is_lace) {
+            out += "    // Line 0 copper changes (before display)\n";
+            emit_copper_changes("cl", "0", aga_banks);
+        }
 
-        auto emit_copper_changes = [&](const std::string& y_expr, bool aga) {
-            if (aga) {
-                // High nibbles with bank switching.
-                // Force first BPLCON3 unconditionally (cur_bank=-1 sentinel)
-                // so the lingering LOCT=1 from the previous line's lo pass
-                // gets cleared. Subsequent BPLCON3 writes happen only when
-                // the bank changes. No per-scanline BPLCON3 reset — saves 1 MOVE.
-                out += "        { int cur_bank = -1;\n";
-                out += std::format("          int n_hi = {}_copper_n_hi[{}];\n", sym, y_expr);
-                out += "          for (int s = 0; s < n_hi; s++) {\n";
-                out += "            UWORD reg = p_hi->reg;\n";
-                out += "            int bank = reg / 32;\n";
-                out += "            if (bank != cur_bank) {\n";
-                out += "                *cl++ = 0x0106;\n";
-                out += "                *cl++ = (UWORD)(bank << 13);\n";
-                out += "                cur_bank = bank;\n";
-                out += "            }\n";
-                out += "            *cl++ = offsetof(struct Custom, color)"
-                       " + (reg % 32) * 2;\n";
-                out += "            *cl++ = p_hi->color;\n";
-                out += "            p_hi++;\n";
-                out += "          }\n";
-                // Low nibbles (LOCT=1) — force first BPLCON3 LOCT
-                out += "          cur_bank = -1;\n";
-                out += std::format("          int n_lo = {}_copper_n_lo[{}];\n", sym, y_expr);
-                out += "          for (int s = 0; s < n_lo; s++) {\n";
-                out += "            UWORD reg = p_lo->reg;\n";
-                out += "            int bank = reg / 32;\n";
-                out += "            if (bank != cur_bank) {\n";
-                out += "                *cl++ = 0x0106;\n";
-                out += "                *cl++ = (UWORD)((bank << 13) | 0x0200);\n";
-                out += "                cur_bank = bank;\n";
-                out += "            }\n";
-                out += "            *cl++ = offsetof(struct Custom, color)"
-                       " + (reg % 32) * 2;\n";
-                out += "            *cl++ = p_lo->color;\n";
-                out += "            p_lo++;\n";
-                out += "          }\n";
-                out += "        }\n";
-            } else if (options.aga) {
-                // AGA <=32 colors: no bank switching but need LOCT
-                out += "        {\n";
-                out += std::format("          int n_hi = {}_copper_n_hi[{}];\n", sym, y_expr);
-                out += "          for (int s = 0; s < n_hi; s++) {\n";
-                out += "            *cl++ = offsetof(struct Custom, color) + p_hi->reg * 2;\n";
-                out += "            *cl++ = p_hi->color;\n";
-                out += "            p_hi++;\n";
-                out += "          }\n";
-                // LOCT: write low nibbles
-                out += "          *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
-                out += std::format("          int n_lo = {}_copper_n_lo[{}];\n", sym, y_expr);
-                out += "          for (int s = 0; s < n_lo; s++) {\n";
-                out += "            *cl++ = offsetof(struct Custom, color) + p_lo->reg * 2;\n";
-                out += "            *cl++ = p_lo->color;\n";
-                out += "            p_lo++;\n";
-                out += "          }\n";
-                out += "          *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
-                out += "        }\n";
-            } else {
-                // OCS: simple writes
-                out += "        {\n";
-                out += std::format("          int n_hi = {}_copper_n_hi[{}];\n", sym, y_expr);
-                out += "          for (int s = 0; s < n_hi; s++) {\n";
-                out += "            *cl++ = offsetof(struct Custom, color) + p_hi->reg * 2;\n";
-                out += "            *cl++ = p_hi->color;\n";
-                out += "            p_hi++;\n";
-                out += "          }\n";
-                out += "        }\n";
-            }
-        };
-
-        // Line 0: write changes before display starts (no WAIT)
-        out += "    // Line 0 copper changes (before display)\n";
-        emit_copper_changes("0", aga_banks);
-
+        // Per-scanline copper palette changes. One WAIT per visible
+        // scanline of the field. For non-interlace each VPOS line maps
+        // 1:1 to an image row. For interlace, field 1 maps VPOS y-1+ys
+        // to image row 2*(y-1)+2 (i.e. y scans rows 2,4,...), because
+        // line 0 was written pre-display; field 2 scans odd rows 1,3,...
+        // starting from pre-display row 1.
         out += "    // Per-scanline copper palette changes (end of previous line)\n";
-        out += std::format("    for (int y = 1; y < {}; y++) {{\n", height);
-        out += std::format("        USHORT line = y - 1 + {};\n", y_start);
-        // Crossing line 256: emit the 0xFFDF WAIT-all-bits-set instruction
-        // so subsequent WAITs can compare against the wrapped VPOS[7:0].
-        // Without this, the copper's 8-bit VP comparator never catches up
-        // past line 255 on real hardware (and on some emulators the image
-        // just goes black once the per-line WAITs stop firing).
-        out += "        if (line == 256) {\n";
-        out += "            *cl++ = 0xFFDF; *cl++ = 0xFFFE;  // cross 256 boundary\n";
-        out += "        }\n";
-        out += "        *cl++ = ((line & 0xFF) << 8) | 0xDD;\n";
-        out += "        *cl++ = 0xfffe;\n";
-        emit_copper_changes("y", aga_banks);
-        out += "    }\n\n";
+        // In interlace, the Agnus VPOS counter runs at 2x the per-field rate
+        // seen by diwstrt. diwstrt V=y_start places display start at physical
+        // VPOS y_start*2 (field 1) / y_start*2+1 (field 2), and each image row
+        // consumes 2 VPOS within a field. Progressive uses 1 VPOS per row.
+        auto per_line_loop = [&](const std::string& cl_var,
+                                 const std::string& row_expr,
+                                 std::size_t rows_in_field,
+                                 int vpos_step,
+                                 int vpos_first) {
+            out += std::format("    for (int y = 1; y < {}; y++) {{\n",
+                               rows_in_field);
+            out += std::format("        USHORT line = (y - 1) * {} + {};\n",
+                               vpos_step, vpos_first);
+            // Interlace needs the WAIT HP pushed later (0xE3 = HPOS 226) —
+            // with 0xDD (220) the MOVEs land inside the last ~16 lores pixels
+            // of the scanline still being drawn. Progressive keeps 0xDD.
+            // Special case: at line==255 use 0xFFDF instead — this specific
+            // pattern activates the copper's "past 0xFF" state so subsequent
+            // WAITs with wrapped vp values (vp=256, 258 ...) match correctly.
+            auto hp_byte = is_lace ? "0xE3" : "0xDD";
+            out += std::format("        if (line == 255) {{\n"
+                               "            *{0}++ = 0xFFDF;\n"
+                               "        }} else {{\n"
+                               "            *{0}++ = ((line & 0xFF) << 8) | {1};\n"
+                               "        }}\n",
+                               cl_var, hp_byte);
+            out += std::format("        *{0}++ = 0xfffe;\n", cl_var);
+            emit_copper_changes(cl_var, row_expr, aga_banks);
+            out += "    }\n\n";
+        };
+        if (is_lace) {
+            per_line_loop("cl", "(y * 2)", height / 2, 1, y_start);
+        } else {
+            per_line_loop("cl", "y", height, 1, y_start);
+        }
     }
 
     // Blank below image: 0 bitplanes, keep LACE if interlaced
@@ -965,12 +1091,18 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         ? "(1<<9)/*COLOR*/|(1<<2)/*LACE*/"
         : "(1<<9)/*COLOR*/";
     {
-        auto last_line = y_start + (is_lace
+        auto vpos_stride = 1;
+        auto vpos_y_start = y_start;
+        auto field_lines = is_lace
             ? static_cast<int>(height / 2)
-            : static_cast<int>(height));
-        // Emit boundary cross only if we didn't already pass line 256 in
-        // the per-scanline copper loop above (has_copper path).
-        if (last_line >= 256 && !has_copper) {
+            : static_cast<int>(height);
+        auto last_line = vpos_y_start + field_lines * vpos_stride;
+        auto loop_max_line = vpos_y_start + (field_lines - 2) * vpos_stride;
+        // If the per-line loop already emitted 0xFFDF (loop reached line=255
+        // or beyond), don't emit it here — a second 0xFFDF after we've passed
+        // vp=0xFF hangs forever. Only emit in blank-below when loop is too
+        // short to have emitted one itself.
+        if (last_line >= 256 && (!has_copper || loop_max_line < 255)) {
             out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
                    "  // cross 256 boundary\n";
         }
@@ -1045,7 +1177,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
         out += std::format("    *cl2++ = offsetof(struct Custom, diwstrt); "
                            "*cl2++ = ({}<<8)|0x81;\n", y_start);
-        out += "    *cl2++ = offsetof(struct Custom, diwstop); *cl2++ = (0x2C<<8)|0xC1;\n";
+        {
+            auto field_lines = height / 2;
+            auto last_line = y_start + static_cast<int>(field_lines);
+            auto stop_v = last_line & 0xFF;
+            out += std::format("    *cl2++ = offsetof(struct Custom, diwstop); "
+                               "*cl2++ = ({}<<8)|0xC1;  // VSTOP={}\n",
+                               stop_v, last_line);
+        }
         if (need_fmode3)
             out += "    *cl2++ = 0x01fc; *cl2++ = 0x0003;\n";
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
@@ -1070,25 +1209,77 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                            " + {} * i + {};\n",
                            sym, bpr, bpr * depth);
         out += std::format("    cl2 = copSetPlanes(cl2, planes_even, {});\n", depth);
-        // Palette already set via CPU; copper just sets bank 0
-        {
-            auto write_count = std::min(pal_count, std::size_t{32});
-            out += std::format("    for (int i = 0; i < {}; i++) {{\n", write_count);
+        // Field 2 palette init — must mirror field 1's setup so AGA banks
+        // and LOCT bytes are loaded for HAM8 etc. Otherwise field 2's color
+        // registers retain stale values from field 1's per-line writes.
+        if (pal_count > 32) {
+            auto num_banks = (pal_count + 31) / 32;
+            for (std::size_t bank = 0; bank < static_cast<std::size_t>(num_banks); ++bank) {
+                auto base = bank * 32;
+                auto count = std::min(std::size_t{32}, pal_count - base);
+                auto bank_bits = static_cast<unsigned>(bank << 13);
+
+                out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
+                                   "  // bank {}\n", bank_bits, bank);
+                out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
+                out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
+                out += std::format("        *cl2++ = {}_palette[{} + i];\n", sym, base);
+                out += "    }\n";
+
+                if (options.aga) {
+                    out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
+                                       "  // bank {}, LOCT=1\n",
+                                       bank_bits | 0x0200, bank);
+                    out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
+                    out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
+                    out += std::format("        *cl2++ = {}_palette_lo[{} + i];\n", sym, base);
+                    out += "    }\n";
+                }
+            }
+            out += "    *cl2++ = 0x0106; *cl2++ = 0x0000;\n\n";
+        } else {
+            out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
             out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
             out += std::format("        *cl2++ = {}_palette[i];\n", sym);
             out += "    }\n";
+            if (options.aga) {
+                out += "    *cl2++ = 0x0106; *cl2++ = 0x0200;  // LOCT=1\n";
+                out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+                out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
+                out += std::format("        *cl2++ = {}_palette_lo[i];\n", sym);
+                out += "    }\n";
+                out += "    *cl2++ = 0x0106; *cl2++ = 0x0000;  // LOCT=0\n";
+            }
+        }
+
+        // Field 2 per-scanline palette changes (odd image rows 1, 3, 5, ...)
+        if (has_copper) {
+            out += "    // Field 2 per-scanline palette changes\n";
+            out += std::format("    for (int y = 1; y < {}; y++) {{\n", height / 2);
+            out += std::format("        USHORT line = (y - 1) + {};\n",
+                               y_start);
+            out += "        if (line == 255) {\n";
+            out += "            *cl2++ = 0xFFDF;  // activates past-0xFF state\n";
+            out += "        } else {\n";
+            out += "            *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n";
+            out += "        }\n";
+            out += "        *cl2++ = 0xfffe;\n";
+            emit_copper_changes("cl2", "(y * 2 + 1)", aga_banks);
+            out += "    }\n\n";
         }
         // Blank below image in even field
         {
-            auto last_line = y_start + static_cast<int>(height / 2);
-            // Emit boundary cross when crossing line 256 so the 8-bit VP
-            // comparator's wrapped value matches what the WAIT asks for.
-            if (last_line >= 256) {
+            auto field_lines = static_cast<int>(height / 2);
+            auto last_line = y_start + field_lines;
+            auto loop_max_line = y_start + field_lines - 2;
+            if (last_line >= 256 && (!has_copper || loop_max_line < 255)) {
                 out += "    *cl2++ = 0xFFDF; *cl2++ = 0xFFFE;"
                        "  // cross 256 boundary\n";
             }
-            out += std::format("    *cl2++ = ({}<<8)|1; *cl2++ = 0xfffe;\n",
-                               last_line >= 256 ? (last_line & 0xFF) : last_line);
+            out += std::format("    *cl2++ = ({}<<8)|1; *cl2++ = 0xfffe;"
+                               "  // WAIT line {}\n",
+                               last_line >= 256 ? (last_line & 0xFF) : last_line,
+                               last_line);
             out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
                    "*cl2++ = {};\n", blank_expr);
         }

@@ -87,9 +87,15 @@ struct CopperResult {
 // Empirically measured on real AGA hardware with e9k-debugger overlay: 15.
 // This total includes the per-line WAIT that gates the copper on the
 // appropriate scanline, so the MOVE budget for palette changes is 15 - 1 = 14.
+//
+// Interlace shifts the per-line WAIT HP from 0xDD (HPOS 220) to 0xE3 (HPOS
+// 226) so MOVEs land past the active-display right edge. That steals 6 CCK
+// (1.5 MOVEs) of post-display gap, so the safe per-line MOVE budget drops
+// from 14 to 13.
 // ---------------------------------------------------------------------------
 inline constexpr std::size_t COPPER_SLOTS_PER_LINE = 15;
 inline constexpr std::size_t MOVE_BUDGET_PER_LINE = COPPER_SLOTS_PER_LINE - 1;
+inline constexpr std::size_t MOVE_BUDGET_PER_LINE_LACE = COPPER_SLOTS_PER_LINE - 2;
 
 // ---------------------------------------------------------------------------
 // Compute the MOVE count emitted for one scanline given its sorted change list,
@@ -158,8 +164,13 @@ constexpr std::size_t max_changes_per_line(
     [[maybe_unused]] std::size_t depth,
     [[maybe_unused]] bool is_ham,
     [[maybe_unused]] bool is_hires,
-    amiga::Chipset chipset) noexcept {
-    return chipset == amiga::Chipset::aga ? 3 : 14;
+    amiga::Chipset chipset,
+    bool is_lace = false) noexcept {
+    if (chipset == amiga::Chipset::aga) return 3;
+    // OCS: 14 MOVEs/line normally; interlace loses ~1.5 CCK of post-display
+    // gap because the per-line WAIT is pushed to HPOS 226 (vs 220), so one
+    // fewer MOVE fits safely.
+    return is_lace ? 13 : 14;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +192,16 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // Locked palette slots: fixed colors that copper
                                    // must never swap (e.g., for blitter objects).
                                    const std::vector<std::pair<std::size_t, Color3f>>& locked = {},
-                                   int palette_diversity = 0);
+                                   int palette_diversity = 0,
+                                   // Number of initial rows that display with
+                                   // base palette only (no swaps). Needed for
+                                   // interlace: row 0 and row 1 are each field's
+                                   // first visible line with no prior scanline
+                                   // to schedule a pre-display WAIT on.
+                                   std::size_t skip_initial_swap_rows = 0,
+                                   // Interlace: reduces per-line MOVE budget by
+                                   // 1 (HP=226 vs 220 → less post-display gap).
+                                   bool is_lace = false);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.
