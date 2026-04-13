@@ -100,8 +100,9 @@ struct Config {
     // HAM encoding
     std::size_t ham_beam = 16;
 
-    // HAM triple-pixel refinement post-pass (0 = off, typical 16-32)
-    std::size_t ham_triple = 0;
+    // HAM triple-pixel refinement post-pass. 0 = off, 16 default
+    // (sweet spot — plateau past that).
+    std::size_t ham_triple = 16;
 
     // HAM greedy encoder (skip DP beam search, ~20× faster, ~1 dB worse).
     bool ham_fast = false;
