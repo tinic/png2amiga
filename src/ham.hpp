@@ -98,6 +98,12 @@ struct HamOptions {
     // re-optimize with a wider beam to catch fringe lag that 1-pixel DP
     // misses. beam_k = 0 disables. Typical values: 16-32.
     std::size_t triple_beam = 0;
+
+    // Greedy encoder — bypasses the DP beam search entirely. Each pixel
+    // picks the locally best HAM op (nearest SET + best single MODIFY per
+    // channel). ~20-40× faster than DP, ~1 dB PSNR loss. For realtime /
+    // preview use cases where latency matters more than peak quality.
+    bool greedy = false;
 };
 
 // ---------------------------------------------------------------------------

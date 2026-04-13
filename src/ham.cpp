@@ -265,13 +265,14 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
 
     // Quantizer selection:
     //   - explicit "pnn": PNN agglomerative in OKLab
-    //   - explicit "median-cut": median-cut + k-means
+    //   - explicit "median-cut" / "fast": median-cut + k-means
     //   - empty / auto: PNN for AGA (HAM8), median-cut otherwise.
     //     Benchmarks showed PNN wins ~10-13% on HAM8 across fantasy/photo/
     //     space3 but regresses on HAM6 OCS, so only opt in for AGA.
     bool use_pnn;
     if (quantizer == "pnn")             use_pnn = true;
     else if (quantizer == "median-cut") use_pnn = false;
+    else if (quantizer == "fast")       use_pnn = false;
     else                                use_pnn = (chipset == amiga::Chipset::aga);
 
     auto pal = use_pnn
@@ -353,7 +354,7 @@ inline OKLab cached_srgb_to_oklab(SRGBColor c) {
 // would produce a color farther from target than the bit-projection itself.
 // Eliminates ~70% of MODIFY evaluations for HAM8 with no measurable
 // quality loss.
-constexpr int kModifyDpRadius = 8;
+constexpr int kModifyDpRadius = 2;
 
 void expand_ham(
     SRGBColor prev,
@@ -956,11 +957,21 @@ Result<HamResult> encode_ham_generic(
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
 
-                // Quantize to match HAM modify precision.
-                // HAM6 (data_bits=4): OCS 12-bit. HAM8 on AGA: skip
-                // quantization since 6-bit modify is nearly lossless.
-                auto quantized = (chipset != amiga::Chipset::aga)
-                    ? palette::quantize_to_ocs(adjusted) : adjusted;
+                // Quantize to match HAM MODIFY precision. HAM uses
+                // `data_bits` per channel for MODIFY ops (4 for HAM6,
+                // 6 for HAM8). Quantizing to exactly that grid gives
+                // the ditherer something meaningful to diffuse — the
+                // previous OCS-only quantization was a no-op on AGA,
+                // which is why HAM8 was showing banding regardless of
+                // --dither.
+                auto srgb_adj = linear_to_srgb8(adjusted);
+                srgb_adj.r = expand_to_8bit(
+                    reduce_to_bits(srgb_adj.r, data_bits), data_bits);
+                srgb_adj.g = expand_to_8bit(
+                    reduce_to_bits(srgb_adj.g, data_bits), data_bits);
+                srgb_adj.b = expand_to_8bit(
+                    reduce_to_bits(srgb_adj.b, data_bits), data_bits);
+                auto quantized = srgb8_to_linear(srgb_adj);
                 dithered_image[x, y] = quantized;
 
                 // Compute and distribute error
@@ -985,23 +996,44 @@ Result<HamResult> encode_ham_generic(
             }
         }
 
-        // Now encode HAM on the pre-dithered image (no further dithering)
-        for (std::size_t y = 0; y < h; ++y) {
-            SRGBColor start = base_srgb[0];
-            auto row = dithered_image.row(y);
-
-            auto scanline = encode_scanline_dp(
-                row, start, pre, srgb_span, opts.beam_width);
-
-            if (opts.triple_beam > 0) {
-                refine_triple(scanline.values, row, start, pre,
-                              srgb_span, opts.triple_beam);
+        // Now encode HAM on the pre-dithered image (no further dithering).
+        // Parallelized the same way as the non-dithered path.
+        std::atomic<std::size_t> next_y_ed{0};
+        std::atomic<double> atomic_err_ed{0.0};
+        auto worker_ed = [&]() {
+            while (true) {
+                auto y = next_y_ed.fetch_add(1);
+                if (y >= h) break;
+                SRGBColor start = base_srgb[0];
+                auto row = dithered_image.row(y);
+                auto scanline = opts.greedy
+                    ? encode_scanline_greedy(row, start, pre, srgb_span)
+                    : encode_scanline_dp(row, start, pre,
+                                         srgb_span, opts.beam_width);
+                if (!opts.greedy && opts.triple_beam > 0) {
+                    refine_triple(scanline.values, row, start, pre,
+                                  srgb_span, opts.triple_beam);
+                }
+                std::copy(scanline.values.begin(), scanline.values.end(),
+                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
+                double old = atomic_err_ed.load(std::memory_order_relaxed);
+                while (!atomic_err_ed.compare_exchange_weak(
+                    old, old + static_cast<double>(scanline.error))) {}
             }
-
-            std::copy(scanline.values.begin(), scanline.values.end(),
-                      ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-            total_error += scanline.error;
+        };
+#ifndef __EMSCRIPTEN__
+        {
+            auto n = std::max<unsigned>(1, std::thread::hardware_concurrency());
+            if (n > h) n = static_cast<unsigned>(h);
+            std::vector<std::jthread> threads;
+            threads.reserve(n);
+            for (unsigned i = 0; i < n; ++i) threads.emplace_back(worker_ed);
+            threads.clear();
         }
+#else
+        worker_ed();
+#endif
+        total_error += static_cast<float>(atomic_err_ed.load());
     } else {
         // Non-dithered encoding path — parallelized across scanlines.
         std::atomic<std::size_t> next_y{0};
@@ -1013,9 +1045,11 @@ Result<HamResult> encode_ham_generic(
                 if (y >= h) break;
                 SRGBColor start = base_srgb[0];
                 auto row = image.row(y);
-                auto scanline = encode_scanline_dp(
-                    row, start, pre, srgb_span, opts.beam_width);
-                if (opts.triple_beam > 0) {
+                auto scanline = opts.greedy
+                    ? encode_scanline_greedy(row, start, pre, srgb_span)
+                    : encode_scanline_dp(row, start, pre,
+                                         srgb_span, opts.beam_width);
+                if (!opts.greedy && opts.triple_beam > 0) {
                     refine_triple(scanline.values, row, start, pre,
                                   srgb_span, opts.triple_beam);
                 }

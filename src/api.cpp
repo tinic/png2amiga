@@ -511,6 +511,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.error_clamp = options.error_clamp;
         ham_opts.palette_diversity = options.palette_diversity;
         ham_opts.quantizer = options.quantizer;
+        ham_opts.greedy = options.ham_fast;
 
         // Force transparent pixels to black BEFORE HAM encoding so the
         // encoder handles color transitions correctly at transparency edges.

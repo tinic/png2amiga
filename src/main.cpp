@@ -103,6 +103,9 @@ struct Config {
     // HAM triple-pixel refinement post-pass (0 = off, typical 16-32)
     std::size_t ham_triple = 0;
 
+    // HAM greedy encoder (skip DP beam search, ~20× faster, ~1 dB worse).
+    bool ham_fast = false;
+
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
     // poorly-served image regions.
@@ -334,6 +337,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--copper") {
             config.copper = true;
+            continue;
+        }
+
+        if (arg == "--ham-fast") {
+            config.ham_fast = true;
             continue;
         }
 
@@ -1397,6 +1405,7 @@ int main(int argc, char* argv[]) {
         ham_opts.palette_diversity = config->palette_diversity;
         ham_opts.quantizer = config->quantizer;
         ham_opts.triple_beam = config->ham_triple;
+        ham_opts.greedy = config->ham_fast;
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {

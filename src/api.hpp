@@ -59,6 +59,9 @@ struct Options {
     std::string quantizer;              // "", "auto" = auto-select, or
                                         // "median-cut", "ocs-bruteforce", "pnn"
 
+    // HAM greedy encoder (realtime profile)
+    bool ham_fast = false;
+
     // HAM encoding
     int ham_beam = 16;                   // beam width for DP search (1-256)
 

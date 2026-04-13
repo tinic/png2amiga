@@ -36,37 +36,65 @@ constexpr float catmull_rom(float x) noexcept {
 
 using KernelFn = float (*)(float);
 
+// Precomputed kernel weights for one destination column (horizontal) or row
+// (vertical). Same weights apply to every row/column of the source — the
+// naive loop was recomputing them per-pixel.
+struct KernelRow {
+    int first;                 // first source index (already clamped)
+    int count;                 // number of taps
+    std::vector<float> w;      // normalized weights, summed to 1
+};
+
+std::vector<KernelRow> build_kernel_rows(std::size_t src_size,
+                                         std::size_t dst_size,
+                                         KernelFn kernel_fn) {
+    float ratio = static_cast<float>(src_size) / static_cast<float>(dst_size);
+    float filter_scale = std::max(1.0f, ratio * 0.75f);
+    int support = static_cast<int>(std::ceil(2.0f * filter_scale));
+    int src_last = static_cast<int>(src_size) - 1;
+
+    std::vector<KernelRow> rows(dst_size);
+    for (std::size_t i = 0; i < dst_size; ++i) {
+        float src_center = (static_cast<float>(i) + 0.5f) * ratio - 0.5f;
+        int center = static_cast<int>(std::floor(src_center));
+        int lo = std::max(0, center - support);
+        int hi = std::min(src_last, center + support);
+
+        auto& r = rows[i];
+        r.first = lo;
+        r.count = hi - lo + 1;
+        r.w.resize(static_cast<std::size_t>(r.count));
+        float wsum = 0.0f;
+        for (int k = 0; k < r.count; ++k) {
+            int sx = lo + k;
+            float dist = (src_center - static_cast<float>(sx)) / filter_scale;
+            float w = kernel_fn(dist);
+            r.w[static_cast<std::size_t>(k)] = w;
+            wsum += w;
+        }
+        if (wsum > 0.0f) {
+            float inv = 1.0f / wsum;
+            for (auto& w : r.w) w *= inv;
+        }
+    }
+    return rows;
+}
+
 Image scale_horizontal(const Image& src, std::size_t dst_width,
                         KernelFn kernel_fn) {
     auto src_w = src.width();
     auto src_h = src.height();
     Image dst(dst_width, src_h);
 
-    float ratio = static_cast<float>(src_w) / static_cast<float>(dst_width);
-    // Widen kernel when downscaling to integrate all source pixels
-    float filter_scale = std::max(1.0f, ratio * 0.75f);
-    int support = static_cast<int>(std::ceil(2.0f * filter_scale));
+    auto rows = build_kernel_rows(src_w, dst_width, kernel_fn);
 
     for (std::size_t y = 0; y < src_h; ++y) {
         for (std::size_t x = 0; x < dst_width; ++x) {
-            float src_x = (static_cast<float>(x) + 0.5f) * ratio - 0.5f;
-            auto center = static_cast<int>(std::floor(src_x));
-
+            const auto& r = rows[x];
             Color3f sum{};
-            float weight_sum = 0.0f;
-
-            for (int k = -support; k <= support; ++k) {
-                int sx = center + k;
-                sx = std::clamp(sx, 0, static_cast<int>(src_w) - 1);
-
-                float dist = (src_x - static_cast<float>(sx)) / filter_scale;
-                float w = kernel_fn(dist);
-                sum += src[static_cast<std::size_t>(sx), y] * w;
-                weight_sum += w;
-            }
-
-            if (weight_sum > 0.0f) {
-                sum *= 1.0f / weight_sum;
+            for (int k = 0; k < r.count; ++k) {
+                auto sx = static_cast<std::size_t>(r.first + k);
+                sum += src[sx, y] * r.w[static_cast<std::size_t>(k)];
             }
             dst[x, y] = sum;
         }
@@ -81,30 +109,15 @@ Image scale_vertical(const Image& src, std::size_t dst_height,
     auto src_h = src.height();
     Image dst(src_w, dst_height);
 
-    float ratio = static_cast<float>(src_h) / static_cast<float>(dst_height);
-    float filter_scale = std::max(1.0f, ratio * 0.75f);
-    int support = static_cast<int>(std::ceil(2.0f * filter_scale));
+    auto rows = build_kernel_rows(src_h, dst_height, kernel_fn);
 
     for (std::size_t y = 0; y < dst_height; ++y) {
-        float src_y = (static_cast<float>(y) + 0.5f) * ratio - 0.5f;
-        auto center = static_cast<int>(std::floor(src_y));
-
+        const auto& r = rows[y];
         for (std::size_t x = 0; x < src_w; ++x) {
             Color3f sum{};
-            float weight_sum = 0.0f;
-
-            for (int k = -support; k <= support; ++k) {
-                int sy = center + k;
-                sy = std::clamp(sy, 0, static_cast<int>(src_h) - 1);
-
-                float dist = (src_y - static_cast<float>(sy)) / filter_scale;
-                float w = kernel_fn(dist);
-                sum += src[x, static_cast<std::size_t>(sy)] * w;
-                weight_sum += w;
-            }
-
-            if (weight_sum > 0.0f) {
-                sum *= 1.0f / weight_sum;
+            for (int k = 0; k < r.count; ++k) {
+                auto sy = static_cast<std::size_t>(r.first + k);
+                sum += src[x, sy] * r.w[static_cast<std::size_t>(k)];
             }
             dst[x, y] = sum;
         }

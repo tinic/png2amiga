@@ -114,10 +114,10 @@ let exportCount = 0
 // to the chipset-precision quantization), so hide it specifically.
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
-  const hide_diffusion = ht === 'ham8'
+  // HAM6: Ostromoukhov's variable-coefficient kernel degrades to F-S
+  // in the pre-dither pass, so hide it to avoid confusion.
   const hide_ostro = ht === 'ham6'
   return DITHER_METHODS
-    .filter(g => !(hide_diffusion && g.group === 'Error Diffusion'))
     .map(g => ({
       label: g.group,
       items: g.items
@@ -251,10 +251,6 @@ watch(() => options.mode, (mode, oldMode) => {
   }
   // Copper not compatible with interlace
   if (isInterlaceMode(mode)) options.copper = false
-  // HAM8: error diffusion is useless (6-bit modify ≈ lossless),
-  // reset to ordered/none
-  if (hamType(mode) === 'ham8' && isErrorDiffusion(options.dither))
-    options.dither = 'none'
   // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
   if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov')
     options.dither = 'floyd-steinberg'

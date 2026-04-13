@@ -19,9 +19,21 @@
 extern "C" unsigned char* stbi_zlib_compress(unsigned char* data, int data_len,
                                              int* out_len, int quality);
 
+// Tell stb_image_write to use the fastest zlib compression level. Output
+// PNGs are previews / intermediate frames, not archival — we prioritize
+// throughput over file size. Default is 8; setting to 1 roughly halves
+// save time with ~2× file-size growth, negligible for our use cases.
+extern "C" int stbi_write_png_compression_level;
+
 namespace png2amiga::png_io {
 
 namespace {
+
+// One-shot initializer to lower the PNG compression level at startup.
+struct LowerPngCompression {
+    LowerPngCompression() noexcept { stbi_write_png_compression_level = 1; }
+};
+[[maybe_unused]] inline LowerPngCompression g_lower_png_compression{};
 
 struct StbiFree {
     void operator()(stbi_uc* p) const noexcept { stbi_image_free(p); }
