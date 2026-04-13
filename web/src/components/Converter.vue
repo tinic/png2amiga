@@ -884,19 +884,6 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- HAM beam width (DP search) -->
-              <template v-if="showHamControls">
-                <div class="grid align-items-center">
-                  <label class="col-4 text-xs text-color-secondary font-semibold" title="Beam width for DP search. Higher = better quality, slower. Range 1-256.">Beam</label>
-                  <div class="col-5">
-                    <Slider v-model="options.hamBeam" :min="1" :max="256" :step="1" class="w-full" />
-                  </div>
-                  <div class="col-3">
-                    <InputNumber v-model="options.hamBeam" :min="1" :max="256" :step="1" class="w-full input-sm" />
-                  </div>
-                </div>
-              </template>
-
               <!-- Resize override (not for Atari — fixed resolution) -->
               <div v-if="!isAtariMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold">Resize</label>
@@ -1084,6 +1071,18 @@ async function loadExample(example) {
                   <label for="reserveColor0" class="text-xs text-color-secondary" title="Reserve palette index 0 for black (Amiga border/background color). Disable to use all palette slots for image colors.">Reserve color 0 for black</label>
                 </div>
               </div>
+
+              <!-- HAM beam width (DP search) — advanced: quality plateaus
+                   quickly past ~8, default 16 is fine for almost any image. -->
+              <template v-if="showHamControls">
+                <div class="pt-3 mt-3 border-top-1 surface-border">
+                  <label class="block text-xs text-color-secondary font-semibold mb-1" title="Beam width for DP search. Higher = marginally better quality, slower. Range 1-256 (default 16). In practice quality plateaus past ~8.">HAM Beam Width</label>
+                  <div class="flex gap-2 align-items-center">
+                    <Slider v-model="options.hamBeam" :min="1" :max="256" :step="1" class="flex-1" />
+                    <InputNumber v-model="options.hamBeam" :min="1" :max="256" :step="1" class="input-sm" style="width: 4rem" />
+                  </div>
+                </div>
+              </template>
 
               <!-- Palette diversity (experimental) -->
               <div class="pt-3 mt-3 border-top-1 surface-border">
