@@ -4,6 +4,7 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 #include <webp/decode.h>
+#include <spng.h>
 
 #include <array>
 #include <cmath>
@@ -47,29 +48,74 @@ bool is_webp(const unsigned char* data, std::size_t size) noexcept {
            std::memcmp(data + 8, "WEBP", 4) == 0;
 }
 
+// PNG magic bytes.
+bool is_png(const unsigned char* data, std::size_t size) noexcept {
+    static const unsigned char sig[8] = {0x89, 0x50, 0x4E, 0x47,
+                                         0x0D, 0x0A, 0x1A, 0x0A};
+    return size >= 8 && std::memcmp(data, sig, 8) == 0;
+}
+
+// Decode PNG via libspng → RGBA8 buffer (malloc'd, caller uses free()).
+// Returns nullptr on failure; stb_image is used as a fallback for any PNG
+// libspng rejects (should be rare — spng handles the full spec).
+unsigned char* decode_png_spng(const unsigned char* data, std::size_t size,
+                               int* out_w, int* out_h) noexcept {
+    spng_ctx* ctx = spng_ctx_new(0);
+    if (!ctx) return nullptr;
+    // Limit ridiculous image sizes to prevent OOM.
+    spng_set_image_limits(ctx, 1U << 16, 1U << 16);
+    spng_set_png_buffer(ctx, data, size);
+
+    struct spng_ihdr ihdr{};
+    if (spng_get_ihdr(ctx, &ihdr) != 0) { spng_ctx_free(ctx); return nullptr; }
+
+    std::size_t out_size = 0;
+    if (spng_decoded_image_size(ctx, SPNG_FMT_RGBA8, &out_size) != 0) {
+        spng_ctx_free(ctx);
+        return nullptr;
+    }
+    auto* pixels = static_cast<unsigned char*>(std::malloc(out_size));
+    if (!pixels) { spng_ctx_free(ctx); return nullptr; }
+
+    // SPNG_DECODE_TRNS applies tRNS chunks; _GAMMA we skip — we rely on
+    // sRGB interpretation downstream regardless of gamma tags.
+    int err = spng_decode_image(ctx, pixels, out_size, SPNG_FMT_RGBA8,
+                                SPNG_DECODE_TRNS);
+    spng_ctx_free(ctx);
+    if (err != 0) { std::free(pixels); return nullptr; }
+
+    *out_w = static_cast<int>(ihdr.width);
+    *out_h = static_cast<int>(ihdr.height);
+    return pixels;
+}
+
 } // namespace
 
-// Decode image bytes (PNG, JPEG, BMP, TGA, GIF via stb_image; WebP via libwebp).
-// Returns malloc'd RGBA8 buffer (caller frees with stbi_image_free or WebPFree);
-// on failure returns nullptr and leaves an error message accessible via
-// stbi_failure_reason() for stb paths, or sets a generic message for webp.
+// Decode image bytes. PNG via libspng (~3× faster than stb_image), with
+// stb_image as a fallback for uncommon PNG variants; other formats
+// (JPEG, BMP, TGA, GIF) via stb_image; WebP via libwebp.
+// Returns malloc'd RGBA8 buffer; on failure returns nullptr.
 unsigned char* decode_rgba(const unsigned char* data, std::size_t size,
                            int* out_w, int* out_h) noexcept {
     if (is_webp(data, size)) {
-        auto* pixels = WebPDecodeRGBA(data, size, out_w, out_h);
-        return pixels;  // caller uses WebPFree (== free on most platforms)
+        return WebPDecodeRGBA(data, size, out_w, out_h);
+    }
+    if (is_png(data, size)) {
+        if (auto* pixels = decode_png_spng(data, size, out_w, out_h))
+            return pixels;
+        // Fall through to stb_image if libspng rejected the PNG.
     }
     int channels{};
     return stbi_load_from_memory(data, static_cast<int>(size),
                                  out_w, out_h, &channels, 4);
 }
 
-// Free a buffer returned by decode_rgba. WebP uses free(); stb uses
-// stbi_image_free() (also free() on most platforms but safer to match).
+// Free a buffer returned by decode_rgba.
+// WebP uses WebPFree; stb uses stbi_image_free; libspng uses std::free.
 void free_rgba(unsigned char* data, bool was_webp) noexcept {
     if (!data) return;
     if (was_webp) WebPFree(data);
-    else stbi_image_free(data);
+    else std::free(data);  // stbi_image_free and our spng path both use free()
 }
 
 Result<Image> load(std::string_view path) {
