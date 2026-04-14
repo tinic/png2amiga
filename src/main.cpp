@@ -3350,17 +3350,28 @@ int main(int argc, char* argv[]) {
                 std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i8086)",
                              config->output_path);
             } else if (want_c16 && (config->mode == amiga::Mode::ega_320 ||
-                                    config->mode == amiga::Mode::ega_640)) {
+                                    config->mode == amiga::Mode::ega_640 ||
+                                    config->mode == amiga::Mode::ega_hi)) {
                 // EGA planar → plane-sequential bytes (Layout::standard).
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
-                // CGA-compat IRGB encoding (b4=I, b2=R, b1=G, b0=B). The
-                // encoder already locks palette slot i = kCgaHw[i] for
-                // ega_320/ega_640 at 200-line scan.
                 std::vector<std::uint8_t> pal_bytes;
                 pal_bytes.reserve(16);
-                for (std::size_t i = 0; i < 16; ++i) {
-                    pal_bytes.push_back(static_cast<std::uint8_t>(
-                        (i & 0x07) | ((i & 0x08) << 1)));
+                if (config->mode == amiga::Mode::ega_hi) {
+                    // ega_hi (mode 10h, 350-line): full 6-bit IrgbIRGB
+                    // gamut via palette::linear_to_ega → ega_to_hw.
+                    for (auto& c : used_palette) {
+                        auto rrggbb = palette::linear_to_ega(c);
+                        pal_bytes.push_back(palette::ega_to_hw(rrggbb));
+                    }
+                    while (pal_bytes.size() < 16) pal_bytes.push_back(0);
+                } else {
+                    // ega_320/640 (200-line): CGA-compat IRGB — the 5154
+                    // gates ATC bits 5/3 off at 15.75 kHz. Palette locked
+                    // to kCgaHw by main.cpp so slot i = IRGB color i.
+                    for (std::size_t i = 0; i < 16; ++i) {
+                        pal_bytes.push_back(static_cast<std::uint8_t>(
+                            (i & 0x07) | ((i & 0x08) << 1)));
+                    }
                 }
                 cheader_dos_c::Options opts{.symbol_name = symbol};
                 auto result = cheader_dos_c::save(

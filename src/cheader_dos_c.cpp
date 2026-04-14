@@ -112,6 +112,32 @@ static void __attribute__((unused))
 blit_b800(const unsigned char *src, unsigned short size) {
     blit_seg(0xB800, src, size);
 }
+
+/* Blit `size` bytes from a __far source (seg:off) to `dst_seg`:0 via
+ * REP MOVSB. Used for ega_hi / other >64 KB modes where the plane data
+ * lives in its own far segment (via the .farrodata.*NN linker bins).
+ * The __far pointer is passed as a 32-bit long — seg in high 16 bits,
+ * offset in low 16 bits — so we load DS:SI directly from it. */
+static void __attribute__((unused))
+blit_seg_far(unsigned short dst_seg, const unsigned char __far *src,
+             unsigned short size) {
+    unsigned long src_fp = (unsigned long)src;
+    unsigned short src_off = (unsigned short)src_fp;
+    unsigned short src_seg = (unsigned short)(src_fp >> 16);
+    __asm__ volatile (
+        "pushw %%ds\n\t"
+        "pushw %%es\n\t"
+        "movw  %%bx, %%es\n\t"
+        "movw  %%dx, %%ds\n\t"      /* DS = source segment */
+        "xorw  %%di, %%di\n\t"
+        "cld\n\t"
+        "rep movsb\n\t"
+        "popw  %%es\n\t"
+        "popw  %%ds\n\t"
+        : "+S"(src_off), "+c"(size)
+        : "b"(dst_seg), "d"(src_seg)
+        : "di", "cc", "memory");
+}
 )C_";
 
 // Per-mode video setup. Returns the mode-setup code block (between
@@ -240,59 +266,77 @@ std::string generate_cga_text(std::span<const std::uint8_t> char_attr,
 
 namespace {
 
-// EGA planar viewer (ega_320 = mode 0Dh, ega_640 = mode 0Eh). On IBM
-// EGA at 200-line scan the card gates off ATC bits 5 and 3 (secondary
-// r'/b'), leaving only 16 IRGB colors — which is why main.cpp locks
-// the palette to kCgaHw and cheader_dos::encode_palette produces
-// CGA-compat IRGB bytes (b4=I, b2=R, b1=G, b0=B).
+// EGA planar viewer (ega_320 = mode 0Dh, ega_640 = mode 0Eh, ega_hi =
+// mode 10h). At 200-line scan (0Dh/0Eh) the card gates ATC bits 5 and 3
+// off, leaving only 16 IRGB colors — main.cpp locks to kCgaHw and emits
+// CGA-compat IRGB bytes. At 350-line (10h) all 6 ATC output pins drive,
+// so the palette is image-adaptive 16-of-64 via ega_histogram.
 //
-// For VGA hardware emulating mode 0Dh/0Eh, the DAC is ALSO populated
-// with kCgaHw-equivalent RGB triples so the same ATC values produce
-// the same on-screen colors. On real EGA the DAC writes are ignored
-// (no DAC chip), so they're harmless.
-//
-// Target: -march=i80286 -Os (works on 286+, since EGA wasn't common
-// below 286; will also compile with -march=i8086 if 8088 support is
-// desired — 286 instructions are only used if gcc chooses to emit them).
+// Memory layout:
+//   ega_320: 4 × 8000 bytes  = 32 KB total → tiny model
+//   ega_640: 4 × 16000 bytes = 64 KB      → small model (2 × 32KB data segs)
+//   ega_hi : 4 × 28000 bytes = 112 KB     → small model + far data sections
+//                                           (one 64KB "bin" per plane via the
+//                                           .farrodata.*NN linker-script
+//                                           trick in ia16-elf-gcc)
 std::string generate_ega_graphics(amiga::Mode mode,
                                   std::size_t width, std::size_t height,
                                   std::span<const std::uint8_t> planes,
                                   std::span<const std::uint8_t> palette,
                                   std::string_view sym) {
     std::size_t plane_bytes = planes.size() / 4;
+    // Planes >28 KB total don't fit in one data segment — route via far
+    // bins. ega_hi (112 KB) always does; ega_320/640 stay in near data.
+    bool far_planes = planes.size() > 60000;
     std::string out;
     out.reserve(planes.size() * 6 + 4096);
+    const char* mode_label =
+        (mode == amiga::Mode::ega_320) ? "ega-320 (mode 0Dh, 200-line)" :
+        (mode == amiga::Mode::ega_640) ? "ega-640 (mode 0Eh, 200-line)" :
+                                         "ega-hi (mode 10h, 350-line)";
     out += std::format(
-        "/* Mode: {} ({} x {} at 200-line, CGA-compat 16 IRGB)\n"
+        "/* Mode: {} ({} x {})\n"
         " * Symbol: {}\n"
         " * Build: ia16-elf-gcc -march=i80286 -mcmodel=small -Os \\\n"
         " *             -o viewer.exe viewer.c\n"
-        " * -mcmodel=small (separate code + data segments) is required\n"
-        " * because 4 × plane-bytes of rodata won't fit the combined\n"
-        " * code+data segment of the default tiny (.COM) model.\n"
         " */\n",
-        mode == amiga::Mode::ega_320 ? "ega-320 (mode 0Dh)"
-                                     : "ega-640 (mode 0Eh)",
-        width, height, sym);
+        mode_label, width, height, sym);
     out += kPreamble;
-    // 4 plane arrays instead of one concatenated array. A single 64000-
-    // byte array for ega_640 overflows the 16-bit data-segment limit
-    // (can't fit code + stack + 64K rodata in one 64KB segment); per-
-    // plane arrays stay under 16 KB each and leave room for everything.
+    // Plane storage. Near (default rodata) for ega_320/640 — both fit in
+    // one 64 KB data segment. Far bins for ega_hi — 4 × 28 KB exceeds
+    // 64 KB so we route each plane into its own 64 KB "bin" via named
+    // sections .farrodata.<sym>_NN where NN is 00/01/02/03 octal.
+    // Access is through far pointers loaded into DS:SI by the blit asm.
     for (std::size_t p = 0; p < 4; ++p) {
-        out += std::format(
-            "\n/* EGA bitplane {}. */\n"
-            "static const unsigned char {}_plane{}[{}] = {{\n",
-            p, sym, p, plane_bytes);
+        if (far_planes) {
+            out += std::format(
+                "\n/* EGA bitplane {} (far, linker-script bin {:02o}). */\n"
+                "__attribute__((section(\".farrodata.{}_{:02o}\")))\n"
+                "const __far unsigned char {}_plane{}[{}] = {{\n",
+                p, p, sym, p, sym, p, plane_bytes);
+        } else {
+            out += std::format(
+                "\n/* EGA bitplane {}. */\n"
+                "static const unsigned char {}_plane{}[{}] = {{\n",
+                p, sym, p, plane_bytes);
+        }
         out += emit_byte_array(
             planes.subspan(p * plane_bytes, plane_bytes));
         out += "};\n";
     }
-    out += std::format(
-        "\nstatic const unsigned char *const {}_planes[4] = {{\n"
-        "    {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
-        "}};\n\n",
-        sym, sym, sym, sym, sym);
+    if (far_planes) {
+        out += std::format(
+            "\nstatic const unsigned char __far *const {}_planes[4] = {{\n"
+            "    {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
+            "}};\n\n",
+            sym, sym, sym, sym, sym);
+    } else {
+        out += std::format(
+            "\nstatic const unsigned char *const {}_planes[4] = {{\n"
+            "    {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
+            "}};\n\n",
+            sym, sym, sym, sym, sym);
+    }
     // 16-byte ATC palette (CGA-compat IRGB: b4=I, b2=R, b1=G, b0=B).
     out += std::format(
         "/* 16 ATC palette bytes (CGA-IRGB). */\n"
@@ -330,14 +374,17 @@ std::string generate_ega_graphics(amiga::Mode mode,
         "    /* Blit 4 planes via sequencer map-mask (port 0x3C4 idx 2). */\n"
         "    for (unsigned p = 0; p < 4; ++p) {{\n"
         "        outw(0x3C4, (unsigned short)(0x0002 | ((1u << p) << 8)));\n"
-        "        blit_seg(0xA000, {}_planes[p], {}u);\n"
+        "        {}(0xA000, {}_planes[p], {}u);\n"
         "    }}\n"
         "    (void)wait_key();\n"
         "    set_mode(0x03);\n"
         "    return 0;\n"
         "}}\n",
-        mode == amiga::Mode::ega_320 ? 0x0D : 0x0E,
-        sym, sym, plane_bytes);
+        (mode == amiga::Mode::ega_320) ? 0x0D :
+        (mode == amiga::Mode::ega_640) ? 0x0E : 0x10,
+        sym,
+        far_planes ? "blit_seg_far" : "blit_seg",
+        sym, plane_bytes);
     return out;
 }
 
@@ -721,21 +768,24 @@ generate(amiga::Mode mode,
         }
         return generate_vga_modey(raw_frame, palette, sym);
     }
-    if (mode == Mode::ega_320 || mode == Mode::ega_640) {
-        std::size_t expected = (mode == Mode::ega_320)
-            ? 4 * 320 * 200 / 8    // 4 planes × 8000 bytes
-            : 4 * 640 * 200 / 8;   // 4 planes × 16000 bytes
+    if (mode == Mode::ega_320 || mode == Mode::ega_640 ||
+        mode == Mode::ega_hi) {
+        std::size_t expected =
+            (mode == Mode::ega_320) ? 4 * 320 * 200 / 8 :  // 32000
+            (mode == Mode::ega_640) ? 4 * 640 * 200 / 8 :  // 64000
+                                      4 * 640 * 350 / 8;   // 112000 (ega_hi)
         if (raw_frame.size() != expected) {
             return std::unexpected{Error{
                 ErrorCode::invalid_dimensions,
                 std::format("cheader_dos_c: {} expects {} plane bytes, got {}",
-                    mode == Mode::ega_320 ? "ega_320" : "ega_640",
+                    (mode == Mode::ega_320) ? "ega_320" :
+                    (mode == Mode::ega_640) ? "ega_640" : "ega_hi",
                     expected, raw_frame.size())}};
         }
         if (palette.size() != 16) {
             return std::unexpected{Error{
                 ErrorCode::invalid_dimensions,
-                "cheader_dos_c: EGA modes need 16-byte ATC palette"}};
+                "cheader_dos_c: EGA planar modes need 16-byte ATC palette"}};
         }
         return generate_ega_graphics(mode, width, height, raw_frame,
                                      palette, sym);
