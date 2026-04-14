@@ -115,4 +115,13 @@ Result<Palette> refine_with_dither(
     std::size_t max_iterations = 4,
     const std::vector<bool>& locked = {});
 
+// ---------------------------------------------------------------------------
+// EGA histogram quantizer: pick K distinct slots directly from the 64-entry
+// IrgbIRGB gamut. K-means++ seeding over the histogram, then Lloyd refinement
+// that re-assigns each bucket to its nearest picked slot and snaps centroids
+// back to the closest still-available EGA entry. Much better slot utilization
+// than continuous median-cut + post-snap, which collapses ~30% of slots.
+// ---------------------------------------------------------------------------
+Palette ega_histogram(const Image& image, std::size_t K);
+
 } // namespace png2amiga::quantize

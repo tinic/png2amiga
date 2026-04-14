@@ -20,13 +20,35 @@ const ALL_MODES = [
   { value: 'ste-low',          label: 'STE Low (320x200, 16 colors)',  chipset: 'ste' },
   { value: 'ste-med',          label: 'STE Medium (640x200, 4 colors)',chipset: 'ste' },
   { value: 'ste-hi',           label: 'STE High (640x400, mono)',      chipset: 'ste' },
+  // IBM PC VGA.
+  { value: 'vga-13h',          label: 'Mode 13h (320x200, 256 colors)',chipset: 'vga' },
+  { value: 'vga-modex',        label: 'Mode X (320x240, 256 colors)',  chipset: 'vga' },
+  { value: 'vga-modey',        label: 'Mode Y (320x200, 256 colors)',  chipset: 'vga' },
+  { value: 'vga-10h',          label: 'Mode 10h (640x350, 16 colors)', chipset: 'vga' },
+  { value: 'vga-12h',          label: 'Mode 12h (640x480, 16 colors)', chipset: 'vga' },
+  // IBM PC EGA (fixed 64-color IrgbIRGB gamut, 16 active slots).
+  { value: 'ega-320',          label: 'EGA 320x200 (16 colors)',       chipset: 'ega' },
+  { value: 'ega-640',          label: 'EGA 640x200 (16 colors)',       chipset: 'ega' },
+  { value: 'ega-hi',           label: 'EGA 640x350 (16 colors)',       chipset: 'ega' },
+  { value: 'ega-text80x350',   label: 'EGA Text 80x350 (8x14 font)',   chipset: 'ega' },
+  // IBM PC CGA.
+  { value: 'cga-320',          label: 'CGA 320x200 (4 colors)',        chipset: 'cga' },
+  { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
+  { value: 'cga-composite',    label: 'CGA Composite (160x200)',       chipset: 'cga' },
+  { value: 'cga-text80x100',   label: 'CGA Text 80x100 (8x8 font)',    chipset: 'cga' },
+  { value: 'cga-text80x200',   label: 'CGA Text 80x200 (8x8 font)',    chipset: 'cga' },
 ]
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset) {
   if (chipset === 'stf') return ALL_MODES.filter(m => m.chipset === 'stf')
   if (chipset === 'ste') return ALL_MODES.filter(m => m.chipset === 'ste')
-  return ALL_MODES.filter(m => (chipset === 'aga' || m.chipset === 'ocs') && m.chipset !== 'stf' && m.chipset !== 'ste')
+  if (chipset === 'vga') return ALL_MODES.filter(m => m.chipset === 'vga')
+  if (chipset === 'ega') return ALL_MODES.filter(m => m.chipset === 'ega')
+  if (chipset === 'cga') return ALL_MODES.filter(m => m.chipset === 'cga')
+  return ALL_MODES.filter(m =>
+    (chipset === 'aga' || m.chipset === 'ocs') &&
+    !['stf', 'ste', 'vga', 'ega', 'cga'].includes(m.chipset))
 }
 
 export const MODES = ALL_MODES
@@ -36,6 +58,9 @@ export const CHIPSETS = [
   { value: 'aga',  label: 'Amiga AGA (24-bit)' },
   { value: 'stf',  label: 'Atari STF (9-bit)' },
   { value: 'ste',  label: 'Atari STE (12-bit)' },
+  { value: 'vga',  label: 'IBM PC VGA (18-bit DAC)' },
+  { value: 'ega',  label: 'IBM PC EGA (6-bit IrgbIRGB)' },
+  { value: 'cga',  label: 'IBM PC CGA (fixed palette)' },
 ]
 
 export const DITHER_METHODS = [
@@ -165,6 +190,9 @@ export function defaultOptions() {
     symbolName: '',
     // Mask export
     maskInvert: false,
+    // DOS modes: preserve source aspect in the fixed hardware buffer
+    // (letterbox/pillarbox) instead of stretching to fill.
+    nativePar: false,
     // Advanced
     reserveColor0: true,
     paletteDiversity: 0,
@@ -194,6 +222,38 @@ export function isAtariMode(mode) {
   return mode.startsWith('stf-') || mode.startsWith('ste-')
 }
 
+export function isVgaMode(mode) { return mode.startsWith('vga-') }
+export function isEgaMode(mode) { return mode.startsWith('ega-') }
+export function isCgaMode(mode) { return mode.startsWith('cga-') }
+export function isDosMode(mode) {
+  return isVgaMode(mode) || isEgaMode(mode) || isCgaMode(mode)
+}
+
+// Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
+// Mirrors ModeParams::par in src/amiga.hpp. Used to CSS-stretch the preview
+// canvas so it displays with the correct aspect (native-par on the web).
+//   <1 tall pixels (e.g. EGA 640×200 = 0.417 — pixels are 2.4× taller than wide)
+//    1 square
+//   >1 wide pixels (e.g. CGA composite 160×200 = 1.667)
+const MODE_PAR = {
+  'vga-13h':    0.833,
+  'vga-modex':  1.0,
+  'vga-modey':  0.833,
+  'vga-10h':    0.730,
+  'vga-12h':    1.0,
+  'ega-320':    0.833,
+  'ega-640':    0.417,
+  'ega-hi':     0.730,
+  'ega-text80x350': 0.730,
+  'cga-320':    0.833,
+  'cga-640':    0.417,
+  'cga-composite': 1.667,
+  'cga-text80x100': 0.417,
+  'cga-text80x200': 0.417,
+}
+
+export function modePar(mode) { return MODE_PAR[mode] ?? 1.0 }
+
 const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis', 'ostromoukhov'])
 
 export function isErrorDiffusion(dither) {
@@ -210,6 +270,23 @@ export function isHiresMode(mode) {
 
 // Pixel display scale for preview (minimum pixel size on screen)
 export function previewScale(mode) {
+  // DOS modes have non-integer PAR (e.g. VGA 13h ~ 0.83 tall). The WASM
+  // encoder returns the raw hardware buffer (e.g. 640x350, 640x480, 640x200);
+  // we nearest-neighbor scale it on-canvas using whole factors so the
+  // preview is readable. 640-wide buffers already fill most screen widths,
+  // so don't double them; 320-wide DOS buffers double horizontally.
+  if (mode === 'cga-320' || mode === 'ega-320' ||
+      mode === 'vga-13h' || mode === 'vga-modex' || mode === 'vga-modey')
+    return { sx: 2, sy: 2 }
+  if (mode === 'cga-composite')               return { sx: 4, sy: 2 } // 160x200 → stretch
+  if (mode === 'vga-12h')                     return { sx: 1, sy: 1 }
+  // Text modes: renderer returns cols*8 × rows*cell_h; pixels already
+  // account for the scanline count so just pick a display sy that
+  // approximates 4:3 on a modern display.
+  if (mode === 'vga-10h' || mode === 'ega-hi' ||
+      mode === 'ega-text80x350') return { sx: 1, sy: 1 }
+  if (mode === 'ega-640' || mode === 'cga-640' ||
+      mode === 'cga-text80x100' || mode === 'cga-text80x200') return { sx: 1, sy: 2 }
   const hi = isHiresMode(mode) || mode.endsWith('-med') || mode.endsWith('-hi')
   const lace = isInterlaceMode(mode) || mode.endsWith('-hi')  // -hi is 640x400 square pixels
   if (hi && lace) return { sx: 1, sy: 1 }
@@ -237,6 +314,7 @@ export function decomposeMode(uiMode) {
 // Maximum bitplane depth for a given mode/chipset
 export function maxDepth(mode, chipset) {
   if (isHamMode(mode) || isEhbMode(mode) || isAtariMode(mode)) return 0
+  if (isDosMode(mode)) return 0  // DOS modes have fixed depth per hardware
   if (isHiresMode(mode)) return chipset === 'aga' ? 8 : 4
   return chipset === 'aga' ? 8 : 5
 }
@@ -250,6 +328,12 @@ export function defaultDepth(mode) {
   if (mode === 'stf-low' || mode === 'ste-low') return 4
   if (mode === 'stf-med' || mode === 'ste-med') return 2
   if (mode === 'stf-hi' || mode === 'ste-hi') return 1
+  // DOS modes: depth fixed by hardware.
+  if (mode === 'cga-640') return 1
+  if (mode === 'cga-320' || mode === 'cga-composite') return 2
+  if (mode === 'vga-13h' || mode === 'vga-modex' || mode === 'vga-modey') return 8
+  if (mode.startsWith('cga-text') || mode.startsWith('ega-text')) return 4
+  if (isEgaMode(mode) || isVgaMode(mode)) return 4
   if (isHiresMode(mode)) return 4
   return 5
 }

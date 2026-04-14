@@ -62,6 +62,9 @@ set(PNG2AMIGA_CORE_SOURCES
     src/palette_io.cpp
     src/copper.cpp
     src/palette_locks.cpp
+    src/cga_text.cpp
+    src/cheader_dos.cpp
+    src/cheader_dos_c.cpp
     src/api.cpp
 )
 

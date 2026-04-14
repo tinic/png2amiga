@@ -454,33 +454,44 @@ DitherResult apply_ordered(const Image& image,
     result.indices.resize(w * h);
     result.total_error = 0.0f;
 
+    // Perturb each pixel's OKLab by the Bayer threshold before finding the
+    // nearest palette color. Previous binary A-vs-B threshold only averaged
+    // two nearest palette entries and produced visibly muted dithering on
+    // small palettes; perturbation lets a pixel "reach" distant colors when
+    // the bias shifts it significantly, giving the classic punchy ordered-
+    // dither look that matches tools like GIMP / ImageMagick.
+    //
+    // Perturbation magnitude is tuned so strength=1 produces clearly visible
+    // dithering without drowning the original colors.
+    constexpr float kPerturbL = 0.12f;
+    constexpr float kPerturbAB = 0.06f;
+
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(image[x, y]);
 
-            auto np = find_nearest_pair(pixel_lab, palette_lab);
+            // Bayer value in [-0.5, +0.5).
+            float thr = matrix[y % H][x % W];
+            pixel_lab.L += thr * strength * kPerturbL;
+            pixel_lab.a += thr * strength * kPerturbAB;
+            pixel_lab.b += thr * strength * kPerturbAB;
 
-            // Fraction t ∈ [0, 0.5]: 0 means pixel is exactly on A,
-            // 0.5 means pixel is equidistant between A and B.
-            float total = np.distA + np.distB;
-            float t = (total > 1e-12f)
-                ? (std::sqrt(np.distA) /
-                   (std::sqrt(np.distA) + std::sqrt(np.distB)))
-                : 0.0f;
-
-            // Bayer threshold in [0, 1): shift from [-0.5, 0.5).
-            float thr = matrix[y % H][x % W] + 0.5f;
-            // Strength scales the dithering amount.  strength=0 picks
-            // always A (pure nearest-color); strength=1 picks B with
-            // probability t (correct perceptual blend).
-            bool use_b = (thr < t * strength);
-
-            auto idx = use_b ? np.idxB : np.idxA;
-            auto chosen = palette_lab[idx];
-            float dL = pixel_lab.L - chosen.L;
-            float da = pixel_lab.a - chosen.a;
-            float db = pixel_lab.b - chosen.b;
-            result.indices[y * w + x] = static_cast<std::uint8_t>(idx);
+            std::size_t best = 0;
+            float best_d = std::numeric_limits<float>::infinity();
+            for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+                float dL = pixel_lab.L - palette_lab[i].L;
+                float da = pixel_lab.a - palette_lab[i].a;
+                float db = pixel_lab.b - palette_lab[i].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best = i; }
+            }
+            auto chosen = palette_lab[best];
+            // Report error against the (unperturbed) target for metric consistency.
+            auto orig = color_space::linear_to_oklab(image[x, y]);
+            float dL = orig.L - chosen.L;
+            float da = orig.a - chosen.a;
+            float db = orig.b - chosen.b;
+            result.indices[y * w + x] = static_cast<std::uint8_t>(best);
             result.total_error += dL * dL + da * da + db * db;
         }
     }

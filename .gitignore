@@ -2,7 +2,7 @@ build/
 build-wasm/
 build-asan/
 build-tsan/
-service/toolchain/
+service/toolchain/dos/djgpp/
 .cache/
 .claude/
 web/node_modules/

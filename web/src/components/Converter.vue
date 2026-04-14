@@ -7,6 +7,7 @@ import {
   MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
   SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion, isInterlaceMode,
+  isDosMode, isVgaMode, isEgaMode, isCgaMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset, decomposeMode,
 } from '../lib/options.js'
@@ -145,9 +146,12 @@ function cycleDither(dir) {
   options.dither = vals[next]
 }
 
-// Whether depth slider should be shown (not for HAM/EHB/Atari where depth is fixed)
+// Whether depth slider should be shown. Hidden for modes where depth is
+// fixed by the target hardware: HAM (N-2 data bits), EHB (always 6),
+// Atari (mode defines depth), and all DOS modes (EGA/VGA/CGA/text — 1/2/4/8).
 const showDepthSlider = computed(() => {
-  return !isHamMode(options.mode) && !isEhbMode(options.mode) && !isAtariMode(options.mode)
+  return !isHamMode(options.mode) && !isEhbMode(options.mode) &&
+         !isAtariMode(options.mode) && !isDosMode(options.mode)
 })
 
 // Raw export tooltip with format layout (HTML for fixed-width font).
@@ -259,6 +263,12 @@ watch(() => options.mode, (mode, oldMode) => {
   // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
   if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov')
     options.dither = 'floyd-steinberg'
+  // DOS modes default to native PAR (letterbox/pillarbox into fixed buffer)
+  // so the preview shows the image at the right aspect ratio instead of
+  // stretched. Reset when entering a DOS mode from a non-DOS mode; leave
+  // alone when switching between DOS modes so the user's toggle sticks.
+  if (isDosMode(mode) && !isDosMode(oldMode)) options.nativePar = true
+  if (!isDosMode(mode)) options.nativePar = false
   track('mode-change', { from: oldMode, to: mode })
 })
 
@@ -270,7 +280,7 @@ watch(() => options.chipset, (chipset, oldChipset) => {
     options.mode = modes[0].value
     options.depth = defaultDepth(options.mode)
   }
-  if (isAtariMode(options.mode)) options.copper = false
+  if (isAtariMode(options.mode) || isDosMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
   if (max > 0 && options.depth > max) {
     options.depth = max
@@ -395,8 +405,22 @@ function doConvert() {
       const dh = result.height * sy
       canvas.width = dw
       canvas.height = dh
-      canvas.style.width = `${dw}px`
-      canvas.style.height = `${dh}px`
+      // Native-PAR preview (DOS modes only): keep the canvas backing at
+      // integer-NN upscaled resolution for sharp pixels, but CSS-stretch
+      // the displayed HEIGHT so each pixel renders with the hardware PAR.
+      //   Target CSS aspect = buffer_w * par / buffer_h (the real CRT frame)
+      // With width pinned to dw, height becomes dw * buffer_h / (buffer_w * par).
+      // PAR < 1 (tall pixels → EGA 640×200 etc.) stretches height UP;
+      // PAR > 1 (wide pixels → CGA composite) compresses height DOWN.
+      if (isDosMode(options.mode) && options.nativePar) {
+        const par = modePar(options.mode)
+        const cssH = Math.round(dw * result.height / (result.width * par))
+        canvas.style.width = `${dw}px`
+        canvas.style.height = `${cssH}px`
+      } else {
+        canvas.style.width = `${dw}px`
+        canvas.style.height = `${dh}px`
+      }
 
       const ctx = canvas.getContext('2d')
       ctx.imageSmoothingEnabled = false
@@ -875,8 +899,8 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Copper-Augmented Palette (not available for Atari) -->
-              <div v-if="!isAtariMode(options.mode) && !paletteData" class="grid align-items-center">
+              <!-- Copper-Augmented Palette (Amiga only; not for Atari/DOS) -->
+              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette.">Copper</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
@@ -884,8 +908,17 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Resize override (not for Atari — fixed resolution) -->
-              <div v-if="!isAtariMode(options.mode)" class="grid align-items-center">
+              <!-- Native PAR (DOS modes only): preserve source aspect inside the fixed
+                   hardware buffer by letterboxing/pillarboxing with black padding. -->
+              <div v-if="isDosMode(options.mode)" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on DOS hardware by letterboxing (reduce height) or pillarboxing (reduce width) inside the fixed frame. Off = stretch to fill the full buffer.">Native PAR</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.nativePar" />
+                </div>
+              </div>
+
+              <!-- Resize override (not for Atari or DOS — fixed hardware buffer) -->
+              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold">Resize</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="sizeOverride" />
@@ -1002,8 +1035,21 @@ async function loadExample(example) {
               <Button :label="options.mode.endsWith('-hi') ? 'pi3' : options.mode.endsWith('-med') ? 'pi2' : 'pi1'" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadDegas"
                 title="Download as Degas Elite file for Atari ST/STE." />
             </div>
+            <!-- IBM PC DOS export buttons: PNG preview + raw + DJGPP cpp viewer. -->
+            <div v-if="isDosMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                :title="isEgaMode(options.mode)
+                  ? 'Download raw EGA planar data: 4 bitplanes + 16-byte IrgbIRGB palette (DMA-ready for 0xA0000).'
+                  : isVgaMode(options.mode)
+                  ? 'Download raw VGA planar data: 4 bitplanes + 16×3-byte 6-bit DAC palette (feed to 0x3C9).'
+                  : 'Download raw CGA banked planar data (cga-320: 4-color 2bpp; cga-640: 2-color 1bpp).'" />
+              <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
+                title="Download a DJGPP-compilable .cpp viewer (sets video mode, loads palette, blits image, waits for key, restores text mode). Build: i586-pc-msdosdjgpp-g++ -O2 -o out.exe out.cpp" />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -1013,7 +1059,7 @@ async function loadExample(example) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"

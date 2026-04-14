@@ -90,6 +90,12 @@ struct Options {
     // Advanced
     bool reserve_color0 = true;         // reserve index 0 for black (border/background)
 
+    // IBM PC / DOS modes only. If true, preserve source aspect ratio by
+    // letterboxing or pillarboxing the image inside the fixed hardware
+    // buffer (padded with black). If false (default), stretch the image
+    // to fill the full buffer.
+    bool native_par = false;
+
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
     std::vector<PinSpec>  pins;
