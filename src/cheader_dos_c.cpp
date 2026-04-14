@@ -1,4 +1,5 @@
 #include "cheader_dos_c.hpp"
+#include "palette.hpp"
 
 #include <format>
 #include <fstream>
@@ -464,271 +465,6 @@ std::string generate_vga_13h(std::size_t width, std::size_t height,
     return out;
 }
 
-// VGA Mode Y: 320×200 planar (8bpp chunky unchained into 4 column-
-// interleaved 8K planes). Same palette+DAC as 13h; different memory
-// layout lets us do page flipping from a single 64 KB VGA bank.
-// Sequencer map-mask selects which plane the CPU writes. Total:
-// 4 × 8000 = 32000 bytes, fits tiny model (.COM).
-std::string generate_vga_modey(std::span<const std::uint8_t> planes,
-                               std::span<const std::uint8_t> palette_dac,
-                               std::string_view sym) {
-    std::size_t plane_bytes = planes.size() / 4;
-    std::string out;
-    out.reserve(planes.size() * 6 + 4096);
-    out += std::format(
-        "/* Mode: vga-modey (320x200x256, unchained planar, Mode Y)\n"
-        " * Symbol: {}\n"
-        " * Build: ia16-elf-gcc -march=i80286 -Os -o viewer.exe viewer.c\n"
-        " */\n",
-        sym);
-    out += kPreamble;
-    for (std::size_t p = 0; p < 4; ++p) {
-        out += std::format(
-            "\n/* Mode-Y plane {}: every 4th pixel column (x % 4 == {}). */\n"
-            "static const unsigned char {}_plane{}[{}] = {{\n",
-            p, p, sym, p, plane_bytes);
-        out += emit_byte_array(planes.subspan(p * plane_bytes, plane_bytes));
-        out += "};\n";
-    }
-    out += std::format(
-        "\nstatic const unsigned char *const {}_planes[4] = {{\n"
-        "    {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
-        "}};\n\n",
-        sym, sym, sym, sym, sym);
-    out += std::format(
-        "static const unsigned char {}_dac[{}] = {{\n", sym, palette_dac.size());
-    out += emit_byte_array(palette_dac);
-    out += "};\n\n";
-    out += std::format(
-        "int main(void) {{\n"
-        "    set_mode(0x13);                       /* 320x200x256 chunky */\n"
-        "    /* Sequencer memory-mode (reg 4) = 0x06:\n"
-        "     *   bit 3 = 0 → chain-4 OFF\n"
-        "     *   bit 2 = 1 → sequential addressing (odd/even OFF)\n"
-        "     *   bit 1 = 1 → extended memory enable */\n"
-        "    outw(0x3C4, 0x0604);\n"
-        "    /* Graphics Controller reg 5 (Mode): bit 4 = 0 → host odd/even\n"
-        "     * read OFF. BIOS mode 13h leaves this ON, which splits the\n"
-        "     * planes weirdly under CPU read/write. Preserve other bits. */\n"
-        "    outb(0x3CE, 0x05);\n"
-        "    outb(0x3CF, (unsigned char)(inb(0x3CF) & ~0x10));\n"
-        "    /* Graphics Controller reg 6 (Misc): bit 1 = 0 → linear CPU\n"
-        "     * addressing (no odd/even split). */\n"
-        "    outb(0x3CE, 0x06);\n"
-        "    outb(0x3CF, (unsigned char)(inb(0x3CF) & ~0x02));\n"
-        "    /* CRTC underline (reg 0x14): bit 6 = 0 → doubleword OFF */\n"
-        "    outb(0x3D4, 0x14); outb(0x3D5, 0x00);\n"
-        "    /* CRTC mode control (reg 0x17) = 0xE3 → byte addressing,\n"
-        "     * normal vertical timing (inherits mode-13h's 200-line). */\n"
-        "    outb(0x3D4, 0x17); outb(0x3D5, 0xE3);\n"
-        "    /* CRTC offset (reg 0x13) = 40: row stride = 40*2 = 80 bytes\n"
-        "     * per plane per scanline (320 pixels / 4 planes). */\n"
-        "    outb(0x3D4, 0x13); outb(0x3D5, 0x28);\n"
-        "    /* Display start = 0. */\n"
-        "    outb(0x3D4, 0x0C); outb(0x3D5, 0x00);\n"
-        "    outb(0x3D4, 0x0D); outb(0x3D5, 0x00);\n"
-        "    /* Load DAC. */\n"
-        "    outb(0x3C8, 0);\n"
-        "    for (unsigned i = 0; i < 768u; ++i)\n"
-        "        outb(0x3C9, {}_dac[i]);\n"
-        "    /* Blit 4 planes via sequencer map-mask. */\n"
-        "    for (unsigned p = 0; p < 4; ++p) {{\n"
-        "        outw(0x3C4, (unsigned short)(0x0002 | ((1u << p) << 8)));\n"
-        "        blit_seg(0xA000, {}_planes[p], {}u);\n"
-        "    }}\n"
-        "    (void)wait_key();\n"
-        "    set_mode(0x03);\n"
-        "    return 0;\n"
-        "}}\n",
-        sym, sym, plane_bytes);
-    return out;
-}
-
-// EGA text 80x200: 200 char rows × 80 cols × 2 bytes = 32000 bytes of
-// char+attr, plus 8192 bytes of custom 8x14 font (pre-shifted so row 0
-// of each glyph is the slice the encoder picked). Runs at 200-line scan
-// (5153 CGA monitor compatible) — that gates ATC bits 5 and 3 off, so
-// we use the same CGA-compat IRGB palette as ega_320/640.
-//
-// CRTC reprogramming from BIOS mode-03 (200-line, 25 rows × 8-scan):
-//   reg 0x09 Max scan line        = 0 (1 scan per char row)
-//   reg 0x06 V total low 8 bits   = 0x05 (for V total = 261 scanlines)
-//   reg 0x07 Overflow             = OR 0x01 (V total bit 8 = 1)
-//   reg 0x12 V disp end low 8     = 0xC7 (199 + 1 = 200 rows visible)
-//   reg 0x10 V retrace start low  = 0xC8 (starts right after display)
-//   reg 0x15 V blank start low    = 0xC7
-//   reg 0x16 V blank end          = 0x04
-// Keeps BIOS's horizontal timing + offset (40 = 80 bytes per plane per
-// scanline, still right since 1 scan cell × 80 chars/row = 80 bytes).
-std::string generate_ega_text_80x200(std::span<const std::uint8_t> char_attr,
-                                     std::span<const std::uint8_t> font,
-                                     std::span<const std::uint8_t> atc_palette,
-                                     std::string_view sym) {
-    std::string out;
-    out.reserve(char_attr.size() * 6 + font.size() * 6 + 4096);
-    out += std::format(
-        "/* Mode: ega-text80x200 (EGA 80x200 at 200-line, kCgaHw 16 IRGB)\n"
-        " * Symbol: {}\n"
-        " * Build: ia16-elf-gcc -march=i80286 -mcmodel=small -Os \\\n"
-        " *             -o viewer.exe viewer.c\n"
-        " */\n",
-        sym);
-    out += kPreamble;
-    out += std::format(
-        "\n/* Char+attr pairs (byte 0 = char (0,0), byte 1 = attr (0,0), ...). */\n"
-        "static const unsigned char {}_data[{}] = {{\n", sym, char_attr.size());
-    out += emit_byte_array(char_attr);
-    out += "};\n\n";
-    out += std::format(
-        "/* Custom 8x14 font, pre-shifted by encoder's scanline_offset. */\n"
-        "static const unsigned char {}_font[{}] = {{\n", sym, font.size());
-    out += emit_byte_array(font);
-    out += "};\n\n";
-    out += std::format(
-        "/* 16 ATC palette bytes (CGA-compat IRGB: b4=I, b2=R, b1=G, b0=B). */\n"
-        "static const unsigned char {}_palette[16] = {{\n", sym);
-    out += emit_byte_array(atc_palette);
-    out += "};\n\n";
-    out += std::format(
-        "int main(void) {{\n"
-        "    /* EGA BIOS reads its DIP switches once at boot and stores the\n"
-        "     * result in BIOS data area 0040:0088. Low nybble: 3/9 = ECD\n"
-        "     * (350-line), 2/8 = CD (200-line). If we're on ECD, decrement\n"
-        "     * the byte BEFORE calling mode-03 so BIOS programs the card\n"
-        "     * for 200-line output (correct H/V timing, sync polarity, and\n"
-        "     * palette registers — the 5154 ECD will auto-switch modes on\n"
-        "     * the polarity change). Trick from reenigne.org blog:\n"
-        "     * \"How to set 200-line text modes on EGA\".\n"
-        "     * Restore the original byte on exit so the next program sees\n"
-        "     * the real hardware. */\n"
-        "    unsigned char saved_88;\n"
-        "    __asm__ volatile (\n"
-        "        \"pushw %%ds\\n\\t\"\n"
-        "        \"xorw %%ax, %%ax\\n\\t\"\n"
-        "        \"movw %%ax, %%ds\\n\\t\"\n"
-        "        \"movb 0x488, %%al\\n\\t\"        /* read 0040:0088 */\n"
-        "        \"movb %%al, %%ah\\n\\t\"          /* save original */\n"
-        "        \"andb $0x0F, %%al\\n\\t\"\n"
-        "        \"cmpb $0x03, %%al\\n\\t\"\n"
-        "        \"je 11f\\n\\t\"\n"
-        "        \"cmpb $0x09, %%al\\n\\t\"\n"
-        "        \"jne 12f\\n\\t\"\n"
-        "        \"11:\\n\\t\"\n"
-        "        \"movb %%ah, %%al\\n\\t\"\n"
-        "        \"decb %%al\\n\\t\"\n"
-        "        \"movb %%al, 0x488\\n\\t\"\n"
-        "        \"12:\\n\\t\"\n"
-        "        \"movb %%ah, %%al\\n\\t\"           /* return original in AL */\n"
-        "        \"popw %%ds\\n\\t\"\n"
-        "        : \"=a\"(saved_88) : : \"cc\", \"memory\");\n"
-        "    set_mode(0x03);                       /* BIOS configures 200-line mode 03 */\n"
-        "    /* Load custom font by DIRECT PLANE-2 write. BIOS AX=1110h\n"
-        "     * freezes on 86Box's IBM-EGA BIOS emulation (probably wants\n"
-        "     * display blanked; EGAT_C test hung, EGAT_E direct-write\n"
-        "     * succeeded). Bypass the BIOS entirely using the canonical\n"
-        "     * LOST / FastDoom recipe:\n"
-        "     *   1. Save gfx-ctrl regs 5, 6 and sequencer regs 2, 4\n"
-        "     *   2. Sequencer map mask = plane 2 only\n"
-        "     *   3. Sequencer mem mode: extended + sequential (odd/even off)\n"
-        "     *   4. Gfx-ctrl write mode 0, map A000 (alpha off)\n"
-        "     *   5. Copy 256×32 font bytes to A000:0\n"
-        "     *   6. Restore saved regs\n"
-        "     */\n"
-        "    {{\n"
-        "        outb(0x3CE, 5); unsigned char old_gfx_mode = inb(0x3CF);\n"
-        "        outb(0x3CE, 6); unsigned char old_gfx_misc = inb(0x3CF);\n"
-        "        outb(0x3C4, 2); unsigned char old_seq_mask = inb(0x3C5);\n"
-        "        outb(0x3C4, 4); unsigned char old_seq_mem  = inb(0x3C5);\n"
-        "        outw(0x3C4, 0x0402);           /* map mask = plane 2 */\n"
-        "        outw(0x3C4, (unsigned short)(0x0004 |\n"
-        "            (unsigned short)((old_seq_mem & ~0x0E) | 4) << 8));\n"
-        "        outw(0x3CE, 0x0005);           /* gfx-ctrl write mode 0 */\n"
-        "        outw(0x3CE, 0x0406);           /* map A000, odd/even off */\n"
-        "        __asm__ volatile (\n"
-        "            \"pushw %%ds\\n\\t\"\n"
-        "            \"pushw %%es\\n\\t\"\n"
-        "            \"pushw %%ss\\n\\t\"\n"
-        "            \"popw  %%ds\\n\\t\"\n"
-        "            \"movw  $0xA000, %%ax\\n\\t\"\n"
-        "            \"movw  %%ax, %%es\\n\\t\"\n"
-        "            \"xorw  %%di, %%di\\n\\t\"\n"
-        "            \"movw  $8192, %%cx\\n\\t\"\n"
-        "            \"cld\\n\\t\"\n"
-        "            \"rep movsb\\n\\t\"\n"
-        "            \"popw  %%es\\n\\t\"\n"
-        "            \"popw  %%ds\\n\\t\"\n"
-        "            : : \"S\"({}_font) : \"ax\", \"cx\", \"di\", \"cc\", \"memory\");\n"
-        "        outb(0x3C4, 2); outb(0x3C5, old_seq_mask);\n"
-        "        outb(0x3C4, 4); outb(0x3C5, old_seq_mem);\n"
-        "        outb(0x3CE, 5); outb(0x3CF, old_gfx_mode);\n"
-        "        outb(0x3CE, 6); outb(0x3CF, old_gfx_misc);\n"
-        "    }}\n"
-        "    /* Populate DAC[0..7, 0x10..0x17] with the 16 kCgaHw RGB triples\n"
-        "     * (6-bit values) so VGA-emulating-EGA renders the same IRGB\n"
-        "     * colors. No-op on real EGA (no DAC chip). */\n"
-        "    static const unsigned char cga_dac[48] = {{\n"
-        "         0, 0, 0,   0, 0,42,   0,42, 0,   0,42,42,\n"
-        "        42, 0, 0,  42, 0,42,  42,21, 0,  42,42,42,\n"
-        "        21,21,21,  21,21,63,  21,63,21,  21,63,63,\n"
-        "        63,21,21,  63,21,63,  63,63,21,  63,63,63\n"
-        "    }};\n"
-        "    for (unsigned i = 0; i < 16; ++i) {{\n"
-        "        unsigned slot = (i < 8) ? i : (0x10 + (i - 8));\n"
-        "        outb(0x3C8, (unsigned char)slot);\n"
-        "        outb(0x3C9, cga_dac[i*3 + 0]);\n"
-        "        outb(0x3C9, cga_dac[i*3 + 1]);\n"
-        "        outb(0x3C9, cga_dac[i*3 + 2]);\n"
-        "    }}\n"
-        "    /* Load ATC palette regs 0..15 with CGA-compat IRGB values. */\n"
-        "    for (unsigned i = 0; i < 16; ++i) {{\n"
-        "        inb_discard(0x3DA);\n"
-        "        outb(0x3C0, (unsigned char)i);\n"
-        "        outb(0x3C0, {}_palette[i]);\n"
-        "    }}\n"
-        "    /* Disable blink via ATC mode-control reg 0x10 (bit 3 clear) so\n"
-        "     * attr bit 7 becomes bg intensity — unlocks all 16 bg colors.\n"
-        "     * Proper ATC read-then-write sequence: read with bit5=1 (video\n"
-        "     * on), write with bit5=0 (palette-access mode). */\n"
-        "    {{\n"
-        "        unsigned char v;\n"
-        "        inb_discard(0x3DA);\n"
-        "        outb(0x3C0, 0x30);                 /* index 0x10 + bit5=1 READ */\n"
-        "        v = inb(0x3C1);\n"
-        "        inb_discard(0x3DA);\n"
-        "        outb(0x3C0, 0x10);                 /* index 0x10 + bit5=0 WRITE */\n"
-        "        outb(0x3C0, (unsigned char)(v & ~0x08));\n"
-        "    }}\n"
-        "    inb_discard(0x3DA);\n"
-        "    outb(0x3C0, 0x20);                    /* re-enable video */\n"
-        "    /* Cursor off (reg 0x0A bit 5 = 1). */\n"
-        "    outb(0x3D4, 0x0A); outb(0x3D5, 0x20);\n"
-        "    /* Max scan line (reg 9) = 1 → 2-scan cells → 100 char rows\n"
-        "     * visible (200 scanlines / 2). We encode 200 rows in data so\n"
-        "     * only the top half shows; this is the proven \"EGA 200-line\n"
-        "     * text\" configuration per the Reenigne article. A true 1-scan\n"
-        "     * 80×200 needs CRTC V-total reprogramming via the overflow\n"
-        "     * register and is deferred. */\n"
-        "    outb(0x3D4, 0x09); outb(0x3D5, 0x01);\n"
-        "    /* Blit char+attr to B8000. Text mode has CPU odd/even mapping\n"
-        "     * (even = plane 0 chars, odd = plane 1 attrs). */\n"
-        "    blit_seg(0xB800, {}_data, (unsigned short)sizeof({}_data));\n"
-        "    (void)wait_key();\n"
-        "    /* Restore BIOS data area byte before mode-reset so subsequent\n"
-        "     * programs see the real monitor config. */\n"
-        "    __asm__ volatile (\n"
-        "        \"pushw %%ds\\n\\t\"\n"
-        "        \"xorw %%dx, %%dx\\n\\t\"\n"
-        "        \"movw %%dx, %%ds\\n\\t\"\n"
-        "        \"movb %%al, 0x488\\n\\t\"\n"
-        "        \"popw %%ds\\n\\t\"\n"
-        "        : : \"a\"(saved_88) : \"dx\", \"cc\", \"memory\");\n"
-        "    set_mode(0x03);                       /* BIOS mode-set resets state */\n"
-        "    return 0;\n"
-        "}}\n",
-        sym, sym, sym, sym);
-    return out;
-}
-
 // VGA planar 16-color (mode 10h on VGA, mode 12h). Unlike ega_hi these
 // drive the VGA's 18-bit DAC instead of ATC IrgbIRGB, so palette is
 // 16 × 3 RGB bytes. ATC registers stay at BIOS pass-through (reg i = i).
@@ -875,27 +611,6 @@ generate(amiga::Mode mode,
         }
         return generate_cga_text(raw_frame, 100, sym);
     }
-    if (mode == Mode::ega_text80x200) {
-        if (raw_frame.size() != 80 * 200 * 2) {
-            return std::unexpected{Error{
-                ErrorCode::invalid_dimensions,
-                std::format("cheader_dos_c: ega_text80x200 expects 32000 "
-                            "char+attr bytes, got {}", raw_frame.size())}};
-        }
-        if (palette.size() != 16) {
-            return std::unexpected{Error{
-                ErrorCode::invalid_dimensions,
-                "cheader_dos_c: ega_text80x200 needs 16-byte ATC palette"}};
-        }
-        if (options.font_data.size() != 256 * 32) {
-            return std::unexpected{Error{
-                ErrorCode::invalid_dimensions,
-                "cheader_dos_c: ega_text80x200 needs 8192-byte font_data "
-                "(256 glyphs × 32 bytes)"}};
-        }
-        return generate_ega_text_80x200(raw_frame, options.font_data,
-                                        palette, sym);
-    }
     if (mode == Mode::vga_13h) {
         if (raw_frame.size() != 64000) {
             return std::unexpected{Error{
@@ -909,20 +624,6 @@ generate(amiga::Mode mode,
                 "cheader_dos_c: vga_13h needs 768-byte DAC palette (256×3)"}};
         }
         return generate_vga_13h(width, height, raw_frame, palette, sym);
-    }
-    if (mode == Mode::vga_modey) {
-        if (raw_frame.size() != 64000) {
-            return std::unexpected{Error{
-                ErrorCode::invalid_dimensions,
-                std::format("cheader_dos_c: vga_modey expects 64000 plane "
-                            "bytes, got {}", raw_frame.size())}};
-        }
-        if (palette.size() != 768) {
-            return std::unexpected{Error{
-                ErrorCode::invalid_dimensions,
-                "cheader_dos_c: vga_modey needs 768-byte DAC palette"}};
-        }
-        return generate_vga_modey(raw_frame, palette, sym);
     }
     if (mode == Mode::ega_320 || mode == Mode::ega_640 ||
         mode == Mode::ega_hi) {
@@ -972,7 +673,7 @@ generate(amiga::Mode mode,
             ErrorCode::unsupported_mode,
             "cheader_dos_c: supported modes are cga_320 / cga_640 / "
             "cga_composite / cga_text80x100 / ega_320 / ega_640 / "
-            "vga_13h / vga_modey"}};
+            "ega_hi / vga_13h / vga_10h / vga_12h"}};
     }
     if (raw_frame.size() != 16384) {
         return std::unexpected{Error{
@@ -1028,6 +729,45 @@ save(std::string_view path,
         std::format("cannot open {} for writing", path)}};
     f << *src;
     return {};
+}
+
+std::vector<std::uint8_t>
+pack_cga_banked(std::span<const std::uint8_t> indices,
+                std::size_t width, std::size_t height,
+                amiga::Mode mode) {
+    bool is_mono = (mode == amiga::Mode::cga_640);
+    bool is_composite = amiga::is_composite(mode);
+    auto buffer_width = is_composite ? std::size_t{320} : width;
+    auto row_bytes = buffer_width / (is_mono ? 8 : 4);
+    std::vector<std::uint8_t> buf(16384, 0);
+    for (std::size_t y = 0; y < height; ++y) {
+        std::size_t bank_base = (y & 1) ? 0x2000u : 0x0000u;
+        auto row_offset = bank_base + (y >> 1) * row_bytes;
+        for (std::size_t bx = 0; bx < row_bytes; ++bx) {
+            std::uint8_t byte = 0;
+            if (is_mono) {
+                for (std::size_t p = 0; p < 8; ++p) {
+                    auto x = bx * 8 + p;
+                    byte = static_cast<std::uint8_t>(
+                        (byte << 1) | (indices[y * width + x] != 0 ? 1 : 0));
+                }
+            } else if (is_composite) {
+                auto p0 = palette::cga_composite_pattern(
+                    indices[y * width + bx * 2]);
+                auto p1 = palette::cga_composite_pattern(
+                    indices[y * width + bx * 2 + 1]);
+                byte = static_cast<std::uint8_t>((p0 << 4) | p1);
+            } else {
+                for (std::size_t p = 0; p < 4; ++p) {
+                    auto x = bx * 4 + p;
+                    auto idx = indices[y * width + x] & 0x3;
+                    byte = static_cast<std::uint8_t>((byte << 2) | idx);
+                }
+            }
+            buf[row_offset + bx] = byte;
+        }
+    }
+    return buf;
 }
 
 } // namespace png2amiga::cheader_dos_c

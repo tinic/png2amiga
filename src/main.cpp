@@ -2,7 +2,6 @@
 #include "api.hpp"
 #include "bitplane.hpp"
 #include "cheader.hpp"
-#include "cheader_dos.hpp"
 #include "cheader_dos_c.hpp"
 #include "degas.hpp"
 #include "color_space.hpp"
@@ -203,8 +202,6 @@ void print_usage() {
         "         stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi\n"
         "    IBM PC VGA:\n"
         "         vga-13h     (320x200, 256 colors, 8bpp chunky, 18-bit DAC)\n"
-        "         vga-modex   (320x240, 256 colors, 4-plane column-planar)\n"
-        "         vga-modey   (320x200, 256 colors, 4-plane column-planar)\n"
         "         vga-10h     (640x350, 16 colors, 4-plane planar, 18-bit DAC)\n"
         "         vga-12h     (640x480, 16 colors, 4-plane planar, square pixels)\n"
         "    IBM PC EGA (16 colors from fixed 64-color IrgbIRGB gamut):\n"
@@ -513,10 +510,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "ste-hi") config.mode = amiga::Mode::ste_hi;
                 else if (v == "vga" || v == "vga-13h")
                     config.mode = amiga::Mode::vga_13h;
-                else if (v == "vga-modex" || v == "mode-x")
-                    config.mode = amiga::Mode::vga_modex;
-                else if (v == "vga-modey" || v == "mode-y")
-                    config.mode = amiga::Mode::vga_modey;
                 else if (v == "vga-10h" || v == "vga-640x350")
                     config.mode = amiga::Mode::vga_10h;
                 else if (v == "vga-12h" || v == "vga-hires" ||
@@ -538,8 +531,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "cga-text80x100" || v == "cga-text-1k" ||
                          v == "cga-80x100")
                     config.mode = amiga::Mode::cga_text80x100;
-                else if (v == "ega-text80x200" || v == "ega-80x200")
-                    config.mode = amiga::Mode::ega_text80x200;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -1474,42 +1465,20 @@ void save_raw_vga_planar(std::string_view path,
                                               : "Mode 12h 4-plane planar");
 }
 
-// VGA raw output: chunky 8bpp indices + 6-bit DAC palette (3 bytes/color).
-// Mode X / Y rearrange pixels into 4 column-interleaved planes. The
-// on-disk layout is plane0 then plane1 etc., matching how you'd load it
-// into VGA memory with `outp(0x3C4, 0x02); outp(0x3C5, 1<<plane);` selects.
+// VGA Mode 13h raw output: chunky 8bpp indices + 6-bit DAC palette
+// (3 bytes/color), ready to feed into port 0x3C9 via `outp` loop.
 void save_raw_vga(std::string_view path,
                   std::span<const std::uint8_t> indices,
-                  std::size_t width, std::size_t height,
+                  std::size_t /*width*/, std::size_t /*height*/,
                   std::span<const Color3f> palette,
-                  amiga::Mode mode) {
+                  amiga::Mode /*mode*/) {
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
     if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
 
-    if (mode == amiga::Mode::vga_13h) {
-        // Chunky: raw row-major bytes.
-        file.write(reinterpret_cast<const char*>(indices.data()),
-                   static_cast<std::streamsize>(indices.size()));
-    } else {
-        // Mode X / Mode Y: 4 column-interleaved planes.
-        // Plane i collects pixels at x%4==i, stored at (x/4) + y*(width/4).
-        auto plane_w = width / 4;
-        std::vector<std::uint8_t> plane_buf(plane_w * height);
-        for (std::size_t p = 0; p < 4; ++p) {
-            for (std::size_t y = 0; y < height; ++y) {
-                for (std::size_t bx = 0; bx < plane_w; ++bx) {
-                    auto x = bx * 4 + p;
-                    plane_buf[y * plane_w + bx] = indices[y * width + x];
-                }
-            }
-            file.write(reinterpret_cast<const char*>(plane_buf.data()),
-                       static_cast<std::streamsize>(plane_buf.size()));
-        }
-    }
+    file.write(reinterpret_cast<const char*>(indices.data()),
+               static_cast<std::streamsize>(indices.size()));
 
-    // VGA palette: 3 bytes per color, 6-bit values (0..63) — ready to
-    // feed into port 0x3C9 via `outp` loop.
     for (auto& c : palette) {
         auto rgb18 = palette::linear_to_vga(c);
         std::array<std::uint8_t, 3> buf{
@@ -1521,10 +1490,7 @@ void save_raw_vga(std::string_view path,
     }
 
     auto total = static_cast<std::size_t>(file.tellp());
-    std::println("Raw:    {} ({} bytes, VGA {})", path, total,
-                 mode == amiga::Mode::vga_13h ? "Mode 13h chunky"
-                 : mode == amiga::Mode::vga_modex ? "Mode X planar"
-                 : "Mode Y planar");
+    std::println("Raw:    {} ({} bytes, VGA Mode 13h chunky)", path, total);
 }
 
 Result<void> save_preview(std::string_view path, const Image& preview,
@@ -1540,7 +1506,7 @@ Result<void> save_preview(std::string_view path, const Image& preview,
         auto params = amiga::get_mode_params(mode);
         // Text modes render their cells at 640x200 (logical display); no
         // need for 2x upscale since that's already comfortable viewing size.
-        std::size_t base_scale = amiga::is_text_graphics(mode) ? 1u : 2u;
+        std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
                                              static_cast<double>(params.par),
                                              base_scale);
@@ -1583,7 +1549,7 @@ void show_terminal_preview(const Image& preview, amiga::Mode mode,
     // DOS modes use PAR-aware nearest-neighbor (same logic as save_preview).
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
         auto params = amiga::get_mode_params(mode);
-        std::size_t base_scale = amiga::is_text_graphics(mode) ? 1u : 2u;
+        std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
                                              static_cast<double>(params.par),
                                              base_scale);
@@ -1958,7 +1924,7 @@ int main(int argc, char* argv[]) {
     // from triggering EHB. This allows a true 64-color indexed palette.
 
     // --- Text-mode graphics (glyph-matched, CGA or EGA font) ---
-    if (amiga::is_text_graphics(config->mode)) {
+    if (amiga::is_cga_text(config->mode)) {
         // Force transparent source pixels to black before glyph matching,
         // so logos / sprites with alpha cutouts don't contribute stray
         // RGBA-composite colors to the encoded output.
@@ -1975,10 +1941,7 @@ int main(int argc, char* argv[]) {
         //             hardware get loaded with these colors at startup.
         std::vector<Color3f> text_pal;
         text_pal.reserve(16);
-        // All text-graphics modes now use the kCgaHw 16-color IRGB
-        // master palette — cga_text80x100 is literally CGA hardware,
-        // and ega_text80x200 runs at EGA's 200-line scan which gates
-        // the 64-color gamut down to CGA-IRGB anyway.
+        // CGA text uses the kCgaHw 16-color IRGB master palette.
         for (std::size_t i = 0; i < 16; ++i) {
             text_pal.push_back(
                 color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
@@ -2028,25 +1991,12 @@ int main(int argc, char* argv[]) {
                                  std::ios::binary);
                 of.write(reinterpret_cast<const char*>(res->data.data()),
                          static_cast<std::streamsize>(res->data.size()));
-                // For EGA text modes, append the 16-byte IrgbIRGB palette
-                // so the consumer can load the attribute-controller palette
-                // registers (AC index 0..15, ATC palette = IrgbIRGB 6-bit).
-                std::size_t pal_bytes = 0;
-                if (amiga::is_ega_text(config->mode)) {
-                    for (auto& c : res->palette) {
-                        auto b = palette::linear_to_ega(c);
-                        of.write(reinterpret_cast<const char*>(&b), 1);
-                    }
-                    pal_bytes = 16;
-                }
-                std::println("Raw:    {} ({} bytes, {} text {}x{} char+attr"
-                             "{}; blink must be CLEARED in mode reg 0x3D8 bit 5 "
+                std::println("Raw:    {} ({} bytes, CGA text {}x{} char+attr"
+                             "; blink must be CLEARED in mode reg 0x3D8 bit 5 "
                              "so attr bit 7 becomes bg intensity, enabling "
                              "all 16 bg colors)",
-                             config->output_path, res->data.size() + pal_bytes,
-                             amiga::is_ega_text(config->mode) ? "EGA" : "CGA",
-                             res->cols, res->rows,
-                             pal_bytes ? " + 16B ATC palette" : "");
+                             config->output_path, res->data.size(),
+                             res->cols, res->rows);
             } else if (ends_with(config->output_path, ".c") &&
                        amiga::is_cga_text(config->mode)) {
                 // 16-bit C text viewer for real CGA (ia16-elf-gcc, 8088+).
@@ -2068,86 +2018,6 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {} (DOS/ia16-elf 16-bit)",
                              config->output_path);
-            } else if (ends_with(config->output_path, ".c") &&
-                       config->mode == amiga::Mode::ega_text80x200) {
-                // 16-bit C EGA text viewer: custom font via AX=1110h, CRTC
-                // reprogram for 200-row 1-scan cells, CGA-IRGB palette.
-                // Build shifted font (encoder chose scanline_offset).
-                const auto& font = palette::kFontEga8x14;
-                std::vector<std::uint8_t> shifted_font(256 * 32, 0);
-                for (std::size_t c = 0; c < 256; ++c) {
-                    for (std::size_t s = 0; s < res->cell_height_scanlines; ++s) {
-                        shifted_font[c * 32 + s] = palette::font_scanline(
-                            font, static_cast<std::uint8_t>(c),
-                            res->scanline_offset + s);
-                    }
-                }
-                // CGA-compat IRGB ATC palette (b4=I, b2=R, b1=G, b0=B).
-                std::vector<std::uint8_t> pal_bytes;
-                pal_bytes.reserve(16);
-                for (std::size_t i = 0; i < 16; ++i) {
-                    pal_bytes.push_back(static_cast<std::uint8_t>(
-                        (i & 0x07) | ((i & 0x08) << 1)));
-                }
-                cheader_dos_c::Options opts{
-                    .symbol_name = config->symbol_name.empty()
-                        ? derive_symbol_name(config->output_path)
-                        : config->symbol_name,
-                    .font_data = std::span<const std::uint8_t>(shifted_font),
-                };
-                auto result = cheader_dos_c::save(
-                    config->output_path, config->mode,
-                    res->cols, res->rows,
-                    std::span{res->data.data(), res->data.size()},
-                    pal_bytes, opts);
-                if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
-                             config->output_path);
-            } else if (ends_with(config->output_path, ".cpp") ||
-                       ends_with(config->output_path, ".c")) {
-                cheader_dos::Options dos_opts;
-                dos_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                // Pre-compute the scanline-shifted font into VGA font RAM
-                // layout (256 × 32 bytes). The viewer installs this via
-                // int 10h AX=1110h so each cell displays glyph scanlines
-                // [scanline_offset, scanline_offset + cell_h - 1], exactly
-                // what the encoder searched against.
-                const auto& font = amiga::is_ega_text(config->mode)
-                    ? palette::kFontEga8x14 : palette::kFontCga8x8;
-                std::vector<std::uint8_t> shifted_font(256 * 32, 0);
-                for (std::size_t c = 0; c < 256; ++c) {
-                    for (std::size_t s = 0; s < res->cell_height_scanlines; ++s) {
-                        shifted_font[c * 32 + s] = palette::font_scanline(
-                            font, static_cast<std::uint8_t>(c),
-                            res->scanline_offset + s);
-                    }
-                }
-                dos_opts.font_data = std::span(shifted_font);
-                dos_opts.cell_height =
-                    static_cast<std::uint8_t>(res->cell_height_scanlines);
-                // All current text-graphics modes are 200-line.
-                dos_opts.scan_lines_al = 0;
-                bitplane::BitplaneData bp_empty;
-                std::vector<Color3f> pal_vec(res->palette.begin(),
-                                              res->palette.end());
-                auto result = cheader_dos::save(
-                    config->output_path, config->mode,
-                    res->cols * 8, res->rows * res->cell_height_scanlines,
-                    bp_empty,
-                    std::span{res->data.data(), res->data.size()},
-                    pal_vec, dos_opts);
-                if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                std::println("Viewer: {} (DOS/DJGPP)", config->output_path);
             } else {
                 std::vector<bool> empty_mask;
                 auto result = save_preview(config->output_path, preview,
@@ -3330,7 +3200,7 @@ int main(int argc, char* argv[]) {
             // Amiga modes use the existing AmigaOS viewer.
             bool want_c16 = ends_with(config->output_path, ".c");
             if (want_c16 && amiga::is_cga(config->mode)) {
-                auto raw = cheader_dos::pack_cga_banked(
+                auto raw = cheader_dos_c::pack_cga_banked(
                     dither_result.indices, target_w, target_h, config->mode);
                 std::uint8_t ctrl2 =
                     static_cast<std::uint8_t>((config->cga_palette & 0x3) << 4) |
@@ -3412,11 +3282,10 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
                              config->output_path);
-            } else if (want_c16 && (config->mode == amiga::Mode::vga_13h ||
-                                    config->mode == amiga::Mode::vga_modey)) {
-                // VGA 256-color. Build 768-byte DAC from linear palette
-                // (3 bytes per entry × 256, each 6-bit). Entries past
-                // the used palette are zero-filled (black).
+            } else if (want_c16 && config->mode == amiga::Mode::vga_13h) {
+                // VGA 256-color chunky. Build 768-byte DAC from linear
+                // palette (3 bytes per entry × 256, each 6-bit). Entries
+                // past the used palette are zero-filled (black).
                 std::vector<std::uint8_t> dac(768, 0);
                 std::size_t n = std::min<std::size_t>(used_palette.size(), 256);
                 for (std::size_t i = 0; i < n; ++i) {
@@ -3425,21 +3294,8 @@ int main(int argc, char* argv[]) {
                     dac[i * 3 + 1] = static_cast<std::uint8_t>((v >>  8) & 0x3F);
                     dac[i * 3 + 2] = static_cast<std::uint8_t>( v        & 0x3F);
                 }
-                // Pixel data: 13h uses dither_result.indices directly;
-                // Mode Y unchains into 4 column-interleaved planes.
-                std::vector<std::uint8_t> raw;
-                if (config->mode == amiga::Mode::vga_13h) {
-                    raw.assign(dither_result.indices.begin(),
-                               dither_result.indices.end());
-                } else {
-                    auto plane_w = target_w / 4;
-                    raw.resize(plane_w * target_h * 4);
-                    for (std::size_t p = 0; p < 4; ++p)
-                        for (std::size_t y = 0; y < target_h; ++y)
-                            for (std::size_t bx = 0; bx < plane_w; ++bx)
-                                raw[p*plane_w*target_h + y*plane_w + bx] =
-                                    dither_result.indices[y*target_w + bx*4 + p];
-                }
+                std::vector<std::uint8_t> raw(dither_result.indices.begin(),
+                                              dither_result.indices.end());
                 cheader_dos_c::Options opts{.symbol_name = symbol};
                 auto result = cheader_dos_c::save(
                     config->output_path, config->mode,
@@ -3453,57 +3309,15 @@ int main(int argc, char* argv[]) {
                              config->output_path);
             } else if (want_c16) {
                 std::println(stderr,
-                    "16-bit C output (.c): currently supports CGA graphics, "
-                    "cga_text80x100, ega_320/640, vga_13h, vga_modey. Modes "
-                    ">64 KB (ega_hi, vga_10h/12h, modex) need Phase 2 port.");
+                    "16-bit C output (.c) supports: CGA graphics + "
+                    "text80x100, EGA 320/640/hi, VGA 13h/10h/12h.");
                 return 1;
             } else if (amiga::is_vga(config->mode) || amiga::is_ega(config->mode) ||
                 amiga::is_cga(config->mode)) {
-                cheader_dos::Options dos_opts;
-                dos_opts.symbol_name = symbol;
-                // Reuse the mode-specific raw byte stream we already build
-                // for .raw output: chunky VGA indices, banked CGA frames,
-                // text-mode char+attr pairs, etc. Planar DOS modes emit
-                // via planes.value() (now Layout::standard, plane-sequential).
-                std::vector<std::uint8_t> raw;
-                if (amiga::is_chunky(config->mode)) {
-                    // chunky VGA: indices for 13h, column-planar for mode X/Y
-                    if (config->mode == amiga::Mode::vga_13h) {
-                        raw.assign(dither_result.indices.begin(),
-                                   dither_result.indices.end());
-                    } else {
-                        auto plane_w = target_w / 4;
-                        raw.resize(plane_w * target_h * 4);
-                        for (std::size_t p = 0; p < 4; ++p)
-                            for (std::size_t y = 0; y < target_h; ++y)
-                                for (std::size_t bx = 0; bx < plane_w; ++bx)
-                                    raw[p*plane_w*target_h + y*plane_w + bx] =
-                                        dither_result.indices[y*target_w + bx*4 + p];
-                    }
-                } else if (amiga::is_cga(config->mode)) {
-                    // CGA 320/640/composite: pack into 16 KB banked frame
-                    // (cga_composite converts indices → NTSC pattern nibbles
-                    // inside pack_cga_banked).
-                    raw = cheader_dos::pack_cga_banked(
-                        dither_result.indices, target_w, target_h,
-                        config->mode);
-                }
-                // For CGA we emit only raw (banked frame); for EGA/VGA
-                // planar we emit the plane-sequential bitplane data.
-                bool use_raw = amiga::is_chunky(config->mode) ||
-                               amiga::is_cga(config->mode);
-                bitplane::BitplaneData bp_empty;
-                auto result = cheader_dos::save(
-                    config->output_path,
-                    config->mode, target_w, target_h,
-                    use_raw ? bp_empty : planes.value(),
-                    raw, used_palette, dos_opts);
-                if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                std::println("Viewer: {} (DOS/DJGPP)", config->output_path);
+                std::println(stderr,
+                    "DOS viewer output: use .c extension "
+                    "(ia16-elf-gcc, 16-bit real mode).");
+                return 1;
             } else {
                 cheader::CHeaderOptions ch_opts;
                 ch_opts.symbol_name = symbol;

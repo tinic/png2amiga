@@ -47,10 +47,10 @@ encode(const Image& image, amiga::Mode mode,
        std::span<const Color3f> palette16,
        int fixed_offset) {
 
-    if (!amiga::is_text_graphics(mode)) {
+    if (!amiga::is_cga_text(mode)) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
-            "cga_text::encode: not a text-mode graphics mode",
+            "cga_text::encode: not a CGA text-mode graphics mode",
         }};
     }
     if (!palette16.empty() && palette16.size() != 16) {
@@ -60,16 +60,11 @@ encode(const Image& image, amiga::Mode mode,
         }};
     }
 
-    // Mode-specific font + display size + cell height.
-    //   CGA 80x100 : 640x200, 8x8 font,  2-scanline rows
-    //   EGA 80x200 : 640x200, 8x14 font, 1-scanline row (EGA card, CGA monitor)
-    const palette::FontRef& font =
-        amiga::is_ega_text(mode) ? palette::kFontEga8x14
-                                 : palette::kFontCga8x8;
+    // CGA 80x100 : 640x200, 8x8 font, 2-scanline rows.
+    const palette::FontRef& font = palette::kFontCga8x8;
     const std::size_t disp_w = 640;
     const std::size_t disp_h = 200u;
-    const std::size_t cell_h =
-        (mode == amiga::Mode::cga_text80x100) ? 2u : 1u;
+    const std::size_t cell_h = 2u;
     const std::size_t cols = 80;
     const std::size_t rows = disp_h / cell_h;
 
@@ -318,8 +313,7 @@ Image render(const CgaTextResult& r) {
             pal_rgb[i] = color_space::srgb_hex_to_linear(palette::kCgaHw[i]);
         }
     }
-    palette::FontRef font = (r.font_height == 14) ? palette::kFontEga8x14
-                                                  : palette::kFontCga8x8;
+    palette::FontRef font = palette::kFontCga8x8;
     auto h = r.rows * r.cell_height_scanlines;
     Image img(r.cols * 8, h);
     for (std::size_t row = 0; row < r.rows; ++row) {

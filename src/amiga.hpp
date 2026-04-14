@@ -33,8 +33,6 @@ enum class Mode : unsigned char {
 
     // IBM PC / DOS
     vga_13h,            // VGA Mode 13h: 320x200, 8bpp chunky, 256 colors, 18-bit DAC
-    vga_modex,          // VGA Mode X:   320x240, 8bpp column-planar (4 planes), 256 colors
-    vga_modey,          // VGA Mode Y:   320x200, 8bpp column-planar (4 planes), 256 colors
 
     // VGA high-res planar: same 4-plane layout as EGA modes 10h/12h, but
     // driven by VGA's programmable 18-bit DAC — any 16 of 262144 colors.
@@ -62,16 +60,6 @@ enum class Mode : unsigned char {
                         // resolution. 16000 bytes (char+attr per cell). Fits
                         // in real CGA's 16 KB VRAM. Used in 8088 MPH's 1K-
                         // color mode, AREA 5150, many demos.
-
-    // EGA-hosted text-mode graphics: 200-line scan, 1-scanline cells →
-    // 80x200 "super-chunky" with the kCgaHw 16-color palette. Needs an
-    // EGA card (32 000 char+attr bytes don't fit real CGA's 16 KB VRAM)
-    // but targets a CGA-compatible 5153 monitor — the 200-line scan
-    // restricts EGA output to the CGA IRGB gamut anyway. The 350-line
-    // full-64-color EGA text variant was dropped: same pixel count as
-    // ega_hi graphics but with attribute-per-8x14-cell quality limits,
-    // so ega_hi is strictly better for display-only use.
-    ega_text80x200,
 };
 
 // ---------------------------------------------------------------------------
@@ -148,10 +136,6 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // Mode X at 320x240 is native 4:3.
     case Mode::vga_13h:
         return {320, 200, 8, 256, false, false, false, false, 1, 1, 0.833f};
-    case Mode::vga_modex:
-        return {320, 240, 8, 256, false, false, false, false, 1, 1, 1.0f};
-    case Mode::vga_modey:
-        return {320, 200, 8, 256, false, false, false, false, 1, 1, 0.833f};
     // VGA Mode 10h: 640x350 planar, tall-ish pixel (~0.73 PAR, same as EGA hi).
     // VGA Mode 12h: 640x480 planar, truly square (4:3 CRT, 1:1 pixel).
     case Mode::vga_10h:
@@ -183,9 +167,6 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // bg + 4-bit fg attr byte width (not a bitplane count). bitplane_depth
     // reports 16 here so the palette-handling logic uses 16 colors.
     case Mode::cga_text80x100:
-        return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
-    case Mode::ega_text80x200:
-        // EGA-hosted 80x200 CGA-style text (200-line, kCgaHw 16 IRGB).
         return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
     }
     std::unreachable();
@@ -229,8 +210,7 @@ constexpr bool is_atari_hi(Mode mode) noexcept {
 
 // Check if a mode is an IBM PC / DOS VGA mode
 constexpr bool is_vga(Mode mode) noexcept {
-    return mode == Mode::vga_13h || mode == Mode::vga_modex ||
-           mode == Mode::vga_modey || mode == Mode::vga_10h ||
+    return mode == Mode::vga_13h || mode == Mode::vga_10h ||
            mode == Mode::vga_12h;
 }
 
@@ -265,23 +245,11 @@ constexpr bool is_cga_text(Mode mode) noexcept {
     return mode == Mode::cga_text80x100;
 }
 
-// Check if the mode is an EGA text-mode graphics hack (8x14 font-per-cell).
-constexpr bool is_ega_text(Mode mode) noexcept {
-    return mode == Mode::ega_text80x200;
-}
-
-// Any glyph-per-cell text-mode graphics mode (CGA or EGA).
-constexpr bool is_text_graphics(Mode mode) noexcept {
-    return is_cga_text(mode) || is_ega_text(mode);
-}
-
 // Check if a mode uses chunky (1 byte per pixel) output instead of bitplane
-// encoding. Only VGA 256-color modes — Mode X/Y re-arrange the bytes but each
-// pixel still fits in one byte. VGA Mode 10h/12h are planar (see is_vga_planar);
-// EGA is planar like Amiga.
+// encoding. Only VGA 256-color mode 13h. VGA Mode 10h/12h are planar
+// (see is_vga_planar); EGA is planar like Amiga.
 constexpr bool is_chunky(Mode mode) noexcept {
-    return mode == Mode::vga_13h || mode == Mode::vga_modex ||
-           mode == Mode::vga_modey;
+    return mode == Mode::vga_13h;
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)

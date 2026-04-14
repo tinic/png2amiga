@@ -22,21 +22,17 @@ const ALL_MODES = [
   { value: 'ste-hi',           label: 'STE High (640x400, mono)',      chipset: 'ste' },
   // IBM PC VGA.
   { value: 'vga-13h',          label: 'Mode 13h (320x200, 256 colors)',chipset: 'vga' },
-  { value: 'vga-modex',        label: 'Mode X (320x240, 256 colors)',  chipset: 'vga' },
-  { value: 'vga-modey',        label: 'Mode Y (320x200, 256 colors)',  chipset: 'vga' },
   { value: 'vga-10h',          label: 'Mode 10h (640x350, 16 colors)', chipset: 'vga' },
   { value: 'vga-12h',          label: 'Mode 12h (640x480, 16 colors)', chipset: 'vga' },
   // IBM PC EGA (fixed 64-color IrgbIRGB gamut, 16 active slots).
   { value: 'ega-320',          label: 'EGA 320x200 (16 colors)',       chipset: 'ega' },
   { value: 'ega-640',          label: 'EGA 640x200 (16 colors)',       chipset: 'ega' },
   { value: 'ega-hi',           label: 'EGA 640x350 (16 colors)',       chipset: 'ega' },
-  { value: 'ega-text80x350',   label: 'EGA Text 80x350 (8x14 font)',   chipset: 'ega' },
   // IBM PC CGA.
   { value: 'cga-320',          label: 'CGA 320x200 (4 colors)',        chipset: 'cga' },
   { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
   { value: 'cga-composite',    label: 'CGA Composite (160x200)',       chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100 (8x8 font)',    chipset: 'cga' },
-  { value: 'cga-text80x200',   label: 'CGA Text 80x200 (8x8 font)',    chipset: 'cga' },
 ]
 
 // Filter modes available for a given chipset
@@ -237,19 +233,15 @@ export function isDosMode(mode) {
 //   >1 wide pixels (e.g. CGA composite 160×200 = 1.667)
 const MODE_PAR = {
   'vga-13h':    0.833,
-  'vga-modex':  1.0,
-  'vga-modey':  0.833,
   'vga-10h':    0.730,
   'vga-12h':    1.0,
   'ega-320':    0.833,
   'ega-640':    0.417,
   'ega-hi':     0.730,
-  'ega-text80x350': 0.730,
   'cga-320':    0.833,
   'cga-640':    0.417,
   'cga-composite': 1.667,
   'cga-text80x100': 0.417,
-  'cga-text80x200': 0.417,
 }
 
 export function modePar(mode) { return MODE_PAR[mode] ?? 1.0 }
@@ -275,18 +267,16 @@ export function previewScale(mode) {
   // we nearest-neighbor scale it on-canvas using whole factors so the
   // preview is readable. 640-wide buffers already fill most screen widths,
   // so don't double them; 320-wide DOS buffers double horizontally.
-  if (mode === 'cga-320' || mode === 'ega-320' ||
-      mode === 'vga-13h' || mode === 'vga-modex' || mode === 'vga-modey')
+  if (mode === 'cga-320' || mode === 'ega-320' || mode === 'vga-13h')
     return { sx: 2, sy: 2 }
   if (mode === 'cga-composite')               return { sx: 4, sy: 2 } // 160x200 → stretch
   if (mode === 'vga-12h')                     return { sx: 1, sy: 1 }
   // Text modes: renderer returns cols*8 × rows*cell_h; pixels already
   // account for the scanline count so just pick a display sy that
   // approximates 4:3 on a modern display.
-  if (mode === 'vga-10h' || mode === 'ega-hi' ||
-      mode === 'ega-text80x350') return { sx: 1, sy: 1 }
+  if (mode === 'vga-10h' || mode === 'ega-hi') return { sx: 1, sy: 1 }
   if (mode === 'ega-640' || mode === 'cga-640' ||
-      mode === 'cga-text80x100' || mode === 'cga-text80x200') return { sx: 1, sy: 2 }
+      mode === 'cga-text80x100') return { sx: 1, sy: 2 }
   const hi = isHiresMode(mode) || mode.endsWith('-med') || mode.endsWith('-hi')
   const lace = isInterlaceMode(mode) || mode.endsWith('-hi')  // -hi is 640x400 square pixels
   if (hi && lace) return { sx: 1, sy: 1 }
@@ -331,7 +321,7 @@ export function defaultDepth(mode) {
   // DOS modes: depth fixed by hardware.
   if (mode === 'cga-640') return 1
   if (mode === 'cga-320' || mode === 'cga-composite') return 2
-  if (mode === 'vga-13h' || mode === 'vga-modex' || mode === 'vga-modey') return 8
+  if (mode === 'vga-13h') return 8
   if (mode.startsWith('cga-text') || mode.startsWith('ega-text')) return 4
   if (isEgaMode(mode) || isVgaMode(mode)) return 4
   if (isHiresMode(mode)) return 4
