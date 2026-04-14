@@ -698,6 +698,125 @@ std::string generate_ega_text_80x200(std::span<const std::uint8_t> char_attr,
     return out;
 }
 
+// VGA planar 16-color (mode 10h on VGA, mode 12h). Unlike ega_hi these
+// drive the VGA's 18-bit DAC instead of ATC IrgbIRGB, so palette is
+// 16 × 3 RGB bytes. ATC registers stay at BIOS pass-through (reg i = i).
+//
+//   vga_10h: 640×350 → 4 × 28 KB = 112 KB → far bins
+//   vga_12h: 640×480 → 4 × 38.4 KB = 153.6 KB → far bins
+std::string generate_vga_planar(amiga::Mode mode,
+                                std::size_t width, std::size_t height,
+                                std::span<const std::uint8_t> planes,
+                                std::span<const std::uint8_t> dac48,
+                                std::string_view sym) {
+    std::size_t plane_bytes = planes.size() / 4;
+    // Two splits for oversized planes: per-array max is 32767 bytes
+    // (gcc-ia16 signed-16 limit). vga_12h's 38400 bytes per plane gets
+    // halved into 2 × 19200-byte sub-arrays. ega/vga 10h (28000 bytes
+    // per plane) fits as a single array.
+    bool split = plane_bytes > 32000;
+    std::size_t half = plane_bytes / 2;       // only used when split
+    std::size_t half_para = half / 16;        // paragraph count for seg math
+    const char* mode_label =
+        (mode == amiga::Mode::vga_10h) ? "vga-10h (640x350x16 planar)"
+                                       : "vga-12h (640x480x16 planar)";
+    std::string out;
+    out.reserve(planes.size() * 6 + 4096);
+    out += std::format(
+        "/* Mode: {} ({} x {})\n"
+        " * Symbol: {}\n"
+        " * Build: ia16-elf-gcc -march=i80286 -mcmodel=small -Os \\\n"
+        " *             -o viewer.exe viewer.c\n"
+        " */\n",
+        mode_label, width, height, sym);
+    out += kPreamble;
+    // Emit plane arrays. 4 planes, each either 1 array (~28K) or 2 halves
+    // (~19K each, routed to separate far bins).
+    std::size_t bin = 0;
+    for (std::size_t p = 0; p < 4; ++p) {
+        if (split) {
+            for (std::size_t h = 0; h < 2; ++h) {
+                std::size_t off = p * plane_bytes + h * half;
+                std::size_t sz  = half;
+                out += std::format(
+                    "\n/* Plane {} half {} (far, bin {:02o}). */\n"
+                    "__attribute__((section(\".farrodata.{}_{:02o}\")))\n"
+                    "const __far unsigned char {}_plane{}h{}[{}] = {{\n",
+                    p, h, bin, sym, bin, sym, p, h, sz);
+                out += emit_byte_array(planes.subspan(off, sz));
+                out += "};\n";
+                ++bin;
+            }
+        } else {
+            out += std::format(
+                "\n/* Plane {} (far, bin {:02o}). */\n"
+                "__attribute__((section(\".farrodata.{}_{:02o}\")))\n"
+                "const __far unsigned char {}_plane{}[{}] = {{\n",
+                p, bin, sym, bin, sym, p, plane_bytes);
+            out += emit_byte_array(
+                planes.subspan(p * plane_bytes, plane_bytes));
+            out += "};\n";
+            ++bin;
+        }
+    }
+    out += std::format(
+        "\n/* VGA DAC: 16 × 3 bytes (R,G,B, each 6-bit 0..63). */\n"
+        "static const unsigned char {}_dac[48] = {{\n", sym);
+    out += emit_byte_array(dac48);
+    out += "};\n\n";
+    out += std::format(
+        "int main(void) {{\n"
+        "    set_mode(0x{:02X});\n"
+        "    /* ATC palette pass-through (reg i = i) so raw 4-bit pixel\n"
+        "     * value → DAC index. */\n"
+        "    for (unsigned i = 0; i < 16; ++i) {{\n"
+        "        (void)inb(0x3DA);\n"
+        "        outb(0x3C0, (unsigned char)i);\n"
+        "        outb(0x3C0, (unsigned char)i);\n"
+        "    }}\n"
+        "    (void)inb(0x3DA);\n"
+        "    outb(0x3C0, 0x20);\n"
+        "    /* Load 16 × 3-byte DAC triples into slots 0..15. */\n"
+        "    outb(0x3C8, 0);\n"
+        "    for (unsigned i = 0; i < 48u; ++i)\n"
+        "        outb(0x3C9, {}_dac[i]);\n",
+        (mode == amiga::Mode::vga_10h) ? 0x10 : 0x12,
+        sym);
+    // Blit loop: per plane set map mask, then 1 or 2 blits.
+    if (split) {
+        // Each half blitted to A000:0 and A000:(half) via segment fixup
+        // (seg = 0xA000 + half/16, offset = 0).
+        out += std::format(
+            "    for (unsigned p = 0; p < 4; ++p) {{\n"
+            "        outw(0x3C4, (unsigned short)(0x0002 | ((1u << p) << 8)));\n"
+            "        switch (p) {{\n");
+        for (std::size_t p = 0; p < 4; ++p) {
+            out += std::format(
+                "        case {}: blit_seg_far(0xA000, {}_plane{}h0, {}u);\n"
+                "                 blit_seg_far((unsigned short)(0xA000 + {}u),\n"
+                "                              {}_plane{}h1, {}u); break;\n",
+                p, sym, p, half, half_para, sym, p, half);
+        }
+        out += "        }\n    }\n";
+    } else {
+        out += std::format(
+            "    static const unsigned char __far *const planes_arr[4] = {{\n"
+            "        {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
+            "    }};\n"
+            "    for (unsigned p = 0; p < 4; ++p) {{\n"
+            "        outw(0x3C4, (unsigned short)(0x0002 | ((1u << p) << 8)));\n"
+            "        blit_seg_far(0xA000, planes_arr[p], {}u);\n"
+            "    }}\n",
+            sym, sym, sym, sym, plane_bytes);
+    }
+    out +=
+        "    (void)wait_key();\n"
+        "    set_mode(0x03);\n"
+        "    return 0;\n"
+        "}\n";
+    return out;
+}
+
 } // namespace
 
 Result<std::string>
@@ -789,6 +908,26 @@ generate(amiga::Mode mode,
         }
         return generate_ega_graphics(mode, width, height, raw_frame,
                                      palette, sym);
+    }
+    if (mode == Mode::vga_10h || mode == Mode::vga_12h) {
+        std::size_t expected = (mode == Mode::vga_10h)
+            ? 4 * 640 * 350 / 8      // 112000
+            : 4 * 640 * 480 / 8;     // 153600
+        if (raw_frame.size() != expected) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                std::format("cheader_dos_c: {} expects {} plane bytes, got {}",
+                    (mode == Mode::vga_10h) ? "vga_10h" : "vga_12h",
+                    expected, raw_frame.size())}};
+        }
+        if (palette.size() != 48) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                "cheader_dos_c: VGA planar modes need 48-byte DAC palette "
+                "(16 × 3 RGB)"}};
+        }
+        return generate_vga_planar(mode, width, height, raw_frame,
+                                   palette, sym);
     }
     if (mode != Mode::cga_320 && mode != Mode::cga_640 &&
         mode != Mode::cga_composite) {

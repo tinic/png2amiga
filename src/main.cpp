@@ -3385,6 +3385,33 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
                              config->output_path);
+            } else if (want_c16 && (config->mode == amiga::Mode::vga_10h ||
+                                    config->mode == amiga::Mode::vga_12h)) {
+                // VGA planar 16-color (mode 10h / 12h). 18-bit DAC, not
+                // EGA ATC IrgbIRGB. Emit 16 × 3 RGB bytes.
+                pad_planes_to_mode(planes.value(), config->mode, config->hires);
+                std::vector<std::uint8_t> dac;
+                dac.reserve(48);
+                std::size_t n = std::min<std::size_t>(used_palette.size(), 16);
+                for (std::size_t i = 0; i < n; ++i) {
+                    auto v = palette::linear_to_vga(used_palette[i]);
+                    dac.push_back(static_cast<std::uint8_t>((v >> 16) & 0x3F));
+                    dac.push_back(static_cast<std::uint8_t>((v >>  8) & 0x3F));
+                    dac.push_back(static_cast<std::uint8_t>( v        & 0x3F));
+                }
+                while (dac.size() < 48) dac.push_back(0);
+                cheader_dos_c::Options opts{.symbol_name = symbol};
+                auto result = cheader_dos_c::save(
+                    config->output_path, config->mode,
+                    target_w, target_h,
+                    planes.value().data, dac, opts);
+                if (!result) {
+                    std::println(stderr, "Viewer write error: {}",
+                                 result.error().message);
+                    return 1;
+                }
+                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
+                             config->output_path);
             } else if (want_c16 && (config->mode == amiga::Mode::vga_13h ||
                                     config->mode == amiga::Mode::vga_modey)) {
                 // VGA 256-color. Build 768-byte DAC from linear palette
