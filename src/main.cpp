@@ -3335,10 +3335,50 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
                              config->output_path);
+            } else if (want_c16 && (config->mode == amiga::Mode::vga_13h ||
+                                    config->mode == amiga::Mode::vga_modey)) {
+                // VGA 256-color. Build 768-byte DAC from linear palette
+                // (3 bytes per entry × 256, each 6-bit). Entries past
+                // the used palette are zero-filled (black).
+                std::vector<std::uint8_t> dac(768, 0);
+                std::size_t n = std::min<std::size_t>(used_palette.size(), 256);
+                for (std::size_t i = 0; i < n; ++i) {
+                    auto v = palette::linear_to_vga(used_palette[i]);
+                    dac[i * 3 + 0] = static_cast<std::uint8_t>((v >> 16) & 0x3F);
+                    dac[i * 3 + 1] = static_cast<std::uint8_t>((v >>  8) & 0x3F);
+                    dac[i * 3 + 2] = static_cast<std::uint8_t>( v        & 0x3F);
+                }
+                // Pixel data: 13h uses dither_result.indices directly;
+                // Mode Y unchains into 4 column-interleaved planes.
+                std::vector<std::uint8_t> raw;
+                if (config->mode == amiga::Mode::vga_13h) {
+                    raw.assign(dither_result.indices.begin(),
+                               dither_result.indices.end());
+                } else {
+                    auto plane_w = target_w / 4;
+                    raw.resize(plane_w * target_h * 4);
+                    for (std::size_t p = 0; p < 4; ++p)
+                        for (std::size_t y = 0; y < target_h; ++y)
+                            for (std::size_t bx = 0; bx < plane_w; ++bx)
+                                raw[p*plane_w*target_h + y*plane_w + bx] =
+                                    dither_result.indices[y*target_w + bx*4 + p];
+                }
+                cheader_dos_c::Options opts{.symbol_name = symbol};
+                auto result = cheader_dos_c::save(
+                    config->output_path, config->mode,
+                    target_w, target_h, raw, dac, opts);
+                if (!result) {
+                    std::println(stderr, "Viewer write error: {}",
+                                 result.error().message);
+                    return 1;
+                }
+                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
+                             config->output_path);
             } else if (want_c16) {
                 std::println(stderr,
-                    "16-bit C output (.c): CGA and EGA-320/640 supported so "
-                    "far; other EGA/VGA modes not yet ported from DJGPP.");
+                    "16-bit C output (.c): currently supports CGA graphics, "
+                    "cga_text80x100, ega_320/640, vga_13h, vga_modey. Modes "
+                    ">64 KB (ega_hi, vga_10h/12h, modex) need Phase 2 port.");
                 return 1;
             } else if (amiga::is_vga(config->mode) || amiga::is_ega(config->mode) ||
                 amiga::is_cga(config->mode)) {

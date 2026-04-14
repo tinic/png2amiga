@@ -341,6 +341,149 @@ std::string generate_ega_graphics(amiga::Mode mode,
     return out;
 }
 
+// VGA Mode 13h: 320×200 chunky, 8 bits/pixel, DAC-mapped to 256 colors.
+// Linear at A000:0000, 64000 bytes exactly. Split into 2 × 32000-byte
+// halves because a single 64000-byte const array + bss + stack blows
+// past the small-model 64 KB data-segment limit; two halves leave
+// plenty of headroom. Blit the halves back-to-back to A000:0000 and
+// A000:7D00 (=32000).
+std::string generate_vga_13h(std::size_t width, std::size_t height,
+                             std::span<const std::uint8_t> pixels,
+                             std::span<const std::uint8_t> palette_dac,
+                             std::string_view sym) {
+    constexpr std::size_t kHalf = 32000;
+    std::string out;
+    out.reserve(pixels.size() * 6 + 4096);
+    out += std::format(
+        "/* Mode: vga-13h (320x200x256, chunky, linear at A000:0)\n"
+        " * Image: {} x {}\n"
+        " * Symbol: {}\n"
+        " * Build: ia16-elf-gcc -march=i80286 -mcmodel=small -Os \\\n"
+        " *             -o viewer.exe viewer.c\n"
+        " */\n",
+        width, height, sym);
+    out += kPreamble;
+    out += std::format(
+        "\n/* 320x200 chunky, first half (rows 0..99). */\n"
+        "static const unsigned char {}_data0[{}] = {{\n",
+        sym, kHalf);
+    out += emit_byte_array(pixels.subspan(0, kHalf));
+    out += "};\n\n";
+    out += std::format(
+        "/* 320x200 chunky, second half (rows 100..199). */\n"
+        "static const unsigned char {}_data1[{}] = {{\n",
+        sym, kHalf);
+    out += emit_byte_array(pixels.subspan(kHalf, pixels.size() - kHalf));
+    out += "};\n\n";
+    out += std::format(
+        "/* VGA DAC: 256 × 3 bytes (R,G,B), each 6-bit (0..63). */\n"
+        "static const unsigned char {}_dac[{}] = {{\n",
+        sym, palette_dac.size());
+    out += emit_byte_array(palette_dac);
+    out += "};\n\n";
+    // A000:7D00 (offset 32000) addresses row 100 onwards. Since 0x7D00
+    // is a byte offset < 64 KB, we can blit to segment 0xA000 + offset
+    // 0x7D00 by either (a) using a different destination segment that
+    // already advances by 32000 bytes = 0x7D00 = 2000 paragraphs, so
+    // segment 0xA000 + 0x07D0 = 0xA7D0, or (b) doing a second blit_seg
+    // to 0xA000 and fixing up DI. Easier: use segment 0xA7D0 (=0xA000
+    // + 0x07D0) with DI=0 for the second half.
+    out += std::format(
+        "int main(void) {{\n"
+        "    set_mode(0x13);\n"
+        "    outb(0x3C8, 0);\n"
+        "    for (unsigned i = 0; i < 768u; ++i)\n"
+        "        outb(0x3C9, {}_dac[i]);\n"
+        "    blit_seg(0xA000, {}_data0, {}u);\n"
+        "    blit_seg(0xA7D0, {}_data1, {}u);  /* A000:7D00 = rows 100.. */\n"
+        "    (void)wait_key();\n"
+        "    set_mode(0x03);\n"
+        "    return 0;\n"
+        "}}\n",
+        sym, sym, kHalf, sym, kHalf);
+    return out;
+}
+
+// VGA Mode Y: 320×200 planar (8bpp chunky unchained into 4 column-
+// interleaved 8K planes). Same palette+DAC as 13h; different memory
+// layout lets us do page flipping from a single 64 KB VGA bank.
+// Sequencer map-mask selects which plane the CPU writes. Total:
+// 4 × 8000 = 32000 bytes, fits tiny model (.COM).
+std::string generate_vga_modey(std::span<const std::uint8_t> planes,
+                               std::span<const std::uint8_t> palette_dac,
+                               std::string_view sym) {
+    std::size_t plane_bytes = planes.size() / 4;
+    std::string out;
+    out.reserve(planes.size() * 6 + 4096);
+    out += std::format(
+        "/* Mode: vga-modey (320x200x256, unchained planar, Mode Y)\n"
+        " * Symbol: {}\n"
+        " * Build: ia16-elf-gcc -march=i80286 -Os -o viewer.exe viewer.c\n"
+        " */\n",
+        sym);
+    out += kPreamble;
+    for (std::size_t p = 0; p < 4; ++p) {
+        out += std::format(
+            "\n/* Mode-Y plane {}: every 4th pixel column (x % 4 == {}). */\n"
+            "static const unsigned char {}_plane{}[{}] = {{\n",
+            p, p, sym, p, plane_bytes);
+        out += emit_byte_array(planes.subspan(p * plane_bytes, plane_bytes));
+        out += "};\n";
+    }
+    out += std::format(
+        "\nstatic const unsigned char *const {}_planes[4] = {{\n"
+        "    {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
+        "}};\n\n",
+        sym, sym, sym, sym, sym);
+    out += std::format(
+        "static const unsigned char {}_dac[{}] = {{\n", sym, palette_dac.size());
+    out += emit_byte_array(palette_dac);
+    out += "};\n\n";
+    out += std::format(
+        "int main(void) {{\n"
+        "    set_mode(0x13);                       /* 320x200x256 chunky */\n"
+        "    /* Sequencer memory-mode (reg 4) = 0x06:\n"
+        "     *   bit 3 = 0 → chain-4 OFF\n"
+        "     *   bit 2 = 1 → sequential addressing (odd/even OFF)\n"
+        "     *   bit 1 = 1 → extended memory enable */\n"
+        "    outw(0x3C4, 0x0604);\n"
+        "    /* Graphics Controller reg 5 (Mode): bit 4 = 0 → host odd/even\n"
+        "     * read OFF. BIOS mode 13h leaves this ON, which splits the\n"
+        "     * planes weirdly under CPU read/write. Preserve other bits. */\n"
+        "    outb(0x3CE, 0x05);\n"
+        "    outb(0x3CF, (unsigned char)(inb(0x3CF) & ~0x10));\n"
+        "    /* Graphics Controller reg 6 (Misc): bit 1 = 0 → linear CPU\n"
+        "     * addressing (no odd/even split). */\n"
+        "    outb(0x3CE, 0x06);\n"
+        "    outb(0x3CF, (unsigned char)(inb(0x3CF) & ~0x02));\n"
+        "    /* CRTC underline (reg 0x14): bit 6 = 0 → doubleword OFF */\n"
+        "    outb(0x3D4, 0x14); outb(0x3D5, 0x00);\n"
+        "    /* CRTC mode control (reg 0x17) = 0xE3 → byte addressing,\n"
+        "     * normal vertical timing (inherits mode-13h's 200-line). */\n"
+        "    outb(0x3D4, 0x17); outb(0x3D5, 0xE3);\n"
+        "    /* CRTC offset (reg 0x13) = 40: row stride = 40*2 = 80 bytes\n"
+        "     * per plane per scanline (320 pixels / 4 planes). */\n"
+        "    outb(0x3D4, 0x13); outb(0x3D5, 0x28);\n"
+        "    /* Display start = 0. */\n"
+        "    outb(0x3D4, 0x0C); outb(0x3D5, 0x00);\n"
+        "    outb(0x3D4, 0x0D); outb(0x3D5, 0x00);\n"
+        "    /* Load DAC. */\n"
+        "    outb(0x3C8, 0);\n"
+        "    for (unsigned i = 0; i < 768u; ++i)\n"
+        "        outb(0x3C9, {}_dac[i]);\n"
+        "    /* Blit 4 planes via sequencer map-mask. */\n"
+        "    for (unsigned p = 0; p < 4; ++p) {{\n"
+        "        outw(0x3C4, (unsigned short)(0x0002 | ((1u << p) << 8)));\n"
+        "        blit_seg(0xA000, {}_planes[p], {}u);\n"
+        "    }}\n"
+        "    (void)wait_key();\n"
+        "    set_mode(0x03);\n"
+        "    return 0;\n"
+        "}}\n",
+        sym, sym, plane_bytes);
+    return out;
+}
+
 } // namespace
 
 Result<std::string>
@@ -361,6 +504,34 @@ generate(amiga::Mode mode,
                             "char+attr bytes, got {}", raw_frame.size())}};
         }
         return generate_cga_text(raw_frame, 100, sym);
+    }
+    if (mode == Mode::vga_13h) {
+        if (raw_frame.size() != 64000) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                std::format("cheader_dos_c: vga_13h expects 64000 pixels, "
+                            "got {}", raw_frame.size())}};
+        }
+        if (palette.size() != 768) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                "cheader_dos_c: vga_13h needs 768-byte DAC palette (256×3)"}};
+        }
+        return generate_vga_13h(width, height, raw_frame, palette, sym);
+    }
+    if (mode == Mode::vga_modey) {
+        if (raw_frame.size() != 64000) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                std::format("cheader_dos_c: vga_modey expects 64000 plane "
+                            "bytes, got {}", raw_frame.size())}};
+        }
+        if (palette.size() != 768) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                "cheader_dos_c: vga_modey needs 768-byte DAC palette"}};
+        }
+        return generate_vga_modey(raw_frame, palette, sym);
     }
     if (mode == Mode::ega_320 || mode == Mode::ega_640) {
         std::size_t expected = (mode == Mode::ega_320)
@@ -386,7 +557,8 @@ generate(amiga::Mode mode,
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
             "cheader_dos_c: supported modes are cga_320 / cga_640 / "
-            "cga_composite / cga_text80x100 / ega_320 / ega_640"}};
+            "cga_composite / cga_text80x100 / ega_320 / ega_640 / "
+            "vga_13h / vga_modey"}};
     }
     if (raw_frame.size() != 16384) {
         return std::unexpected{Error{
