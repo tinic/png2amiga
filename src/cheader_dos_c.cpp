@@ -73,6 +73,19 @@ static unsigned char __attribute__((unused)) inb(unsigned short port) {
     __asm__ volatile ("inb %%dx, %%al" : "=a"(v) : "d"(port) : "cc");
     return v;
 }
+
+/* Read from a port and DISCARD the result, declaring %ax as a real
+ * clobber. Workaround for a gcc optimization where `(void)inb(p)`
+ * with the "=a" variant lets gcc assume %al is preserved across the
+ * asm — which silently breaks any loop that keeps its counter in %al,
+ * because `inb %dx, %al` actually writes %al with the port value.
+ * Symptom: ATC palette registers receive random status-byte bits
+ * instead of the intended palette index/value; viewer hangs in a
+ * random-walk loop until AL happens to hit the termination check. */
+static void __attribute__((unused)) inb_discard(unsigned short port) {
+    __asm__ volatile ("inb %%dx, %%al"
+                      : : "d"(port) : "ax", "cc");
+}
 /* outw for 16-bit port writes (used to set 3C4/3CE indexed regs in one op). */
 static void __attribute__((unused)) outw(unsigned short port, unsigned short v) {
     __asm__ volatile ("outw %%ax, %%dx"
@@ -365,11 +378,11 @@ std::string generate_ega_graphics(amiga::Mode mode,
         "    }}\n"
         "    /* Load ATC palette regs 0..15 (video blanked while bit 5 = 0). */\n"
         "    for (unsigned i = 0; i < 16; ++i) {{\n"
-        "        (void)inb(0x3DA);               /* reset ATC flip-flop */\n"
+        "        inb_discard(0x3DA);               /* reset ATC flip-flop */\n"
         "        outb(0x3C0, (unsigned char)i);   /* index */\n"
         "        outb(0x3C0, {}_palette[i]);      /* value */\n"
         "    }}\n"
-        "    (void)inb(0x3DA);\n"
+        "    inb_discard(0x3DA);\n"
         "    outb(0x3C0, 0x20);                 /* re-enable video */\n"
         "    /* Blit 4 planes via sequencer map-mask (port 0x3C4 idx 2). */\n"
         "    for (unsigned p = 0; p < 4; ++p) {{\n"
@@ -650,7 +663,7 @@ std::string generate_ega_text_80x200(std::span<const std::uint8_t> char_attr,
         "    }}\n"
         "    /* Load ATC palette regs 0..15 with CGA-compat IRGB values. */\n"
         "    for (unsigned i = 0; i < 16; ++i) {{\n"
-        "        (void)inb(0x3DA);\n"
+        "        inb_discard(0x3DA);\n"
         "        outb(0x3C0, (unsigned char)i);\n"
         "        outb(0x3C0, {}_palette[i]);\n"
         "    }}\n"
@@ -660,14 +673,14 @@ std::string generate_ega_text_80x200(std::span<const std::uint8_t> char_attr,
         "     * on), write with bit5=0 (palette-access mode). */\n"
         "    {{\n"
         "        unsigned char v;\n"
-        "        (void)inb(0x3DA);\n"
+        "        inb_discard(0x3DA);\n"
         "        outb(0x3C0, 0x30);                 /* index 0x10 + bit5=1 READ */\n"
         "        v = inb(0x3C1);\n"
-        "        (void)inb(0x3DA);\n"
+        "        inb_discard(0x3DA);\n"
         "        outb(0x3C0, 0x10);                 /* index 0x10 + bit5=0 WRITE */\n"
         "        outb(0x3C0, (unsigned char)(v & ~0x08));\n"
         "    }}\n"
-        "    (void)inb(0x3DA);\n"
+        "    inb_discard(0x3DA);\n"
         "    outb(0x3C0, 0x20);                    /* re-enable video */\n"
         "    /* Cursor off (reg 0x0A bit 5 = 1). */\n"
         "    outb(0x3D4, 0x0A); outb(0x3D5, 0x20);\n"
@@ -779,11 +792,11 @@ std::string generate_vga_planar(amiga::Mode mode,
         "    /* ATC palette pass-through (reg i = i) so raw 4-bit pixel\n"
         "     * value → DAC index. */\n"
         "    for (unsigned i = 0; i < 16; ++i) {{\n"
-        "        (void)inb(0x3DA);\n"
+        "        inb_discard(0x3DA);\n"
         "        outb(0x3C0, (unsigned char)i);\n"
         "        outb(0x3C0, (unsigned char)i);\n"
         "    }}\n"
-        "    (void)inb(0x3DA);\n"
+        "    inb_discard(0x3DA);\n"
         "    outb(0x3C0, 0x20);\n"
         "    /* Load 16 × 3-byte DAC triples into slots 0..15. */\n"
         "    outb(0x3C8, 0);\n"
