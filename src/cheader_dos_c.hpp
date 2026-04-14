@@ -35,6 +35,14 @@ namespace png2amiga::cheader_dos_c {
 struct Options {
     std::string symbol_name = "image";
 
+    // EGA text modes only. 256 × 32 bytes of VGA font-RAM-formatted
+    // glyph data pre-shifted by the encoder's scanline_offset (so byte
+    // `c*32 + s` holds the glyph slice that the CRTC will display at
+    // scanline `s` of cell `c`). Loaded via int 10h AX=1110h at viewer
+    // startup. Ignored for non-text modes and for CGA text (CGA has
+    // no custom-font slot).
+    std::span<const std::uint8_t> font_data = {};
+
     // CGA 320x200 4-color palette selection. Encodes directly into
     // port 0x3D9 (CGA mode-control register 2):
     //   bit 5: palette (0 = G/R/Brown, 1 = C/M/white)

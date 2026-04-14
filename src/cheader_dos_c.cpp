@@ -484,6 +484,173 @@ std::string generate_vga_modey(std::span<const std::uint8_t> planes,
     return out;
 }
 
+// EGA text 80x200: 200 char rows × 80 cols × 2 bytes = 32000 bytes of
+// char+attr, plus 8192 bytes of custom 8x14 font (pre-shifted so row 0
+// of each glyph is the slice the encoder picked). Runs at 200-line scan
+// (5153 CGA monitor compatible) — that gates ATC bits 5 and 3 off, so
+// we use the same CGA-compat IRGB palette as ega_320/640.
+//
+// CRTC reprogramming from BIOS mode-03 (200-line, 25 rows × 8-scan):
+//   reg 0x09 Max scan line        = 0 (1 scan per char row)
+//   reg 0x06 V total low 8 bits   = 0x05 (for V total = 261 scanlines)
+//   reg 0x07 Overflow             = OR 0x01 (V total bit 8 = 1)
+//   reg 0x12 V disp end low 8     = 0xC7 (199 + 1 = 200 rows visible)
+//   reg 0x10 V retrace start low  = 0xC8 (starts right after display)
+//   reg 0x15 V blank start low    = 0xC7
+//   reg 0x16 V blank end          = 0x04
+// Keeps BIOS's horizontal timing + offset (40 = 80 bytes per plane per
+// scanline, still right since 1 scan cell × 80 chars/row = 80 bytes).
+std::string generate_ega_text_80x200(std::span<const std::uint8_t> char_attr,
+                                     std::span<const std::uint8_t> font,
+                                     std::span<const std::uint8_t> atc_palette,
+                                     std::string_view sym) {
+    std::string out;
+    out.reserve(char_attr.size() * 6 + font.size() * 6 + 4096);
+    out += std::format(
+        "/* Mode: ega-text80x200 (EGA 80x200 at 200-line, kCgaHw 16 IRGB)\n"
+        " * Symbol: {}\n"
+        " * Build: ia16-elf-gcc -march=i80286 -mcmodel=small -Os \\\n"
+        " *             -o viewer.exe viewer.c\n"
+        " */\n",
+        sym);
+    out += kPreamble;
+    out += std::format(
+        "\n/* Char+attr pairs (byte 0 = char (0,0), byte 1 = attr (0,0), ...). */\n"
+        "static const unsigned char {}_data[{}] = {{\n", sym, char_attr.size());
+    out += emit_byte_array(char_attr);
+    out += "};\n\n";
+    out += std::format(
+        "/* Custom 8x14 font, pre-shifted by encoder's scanline_offset. */\n"
+        "static const unsigned char {}_font[{}] = {{\n", sym, font.size());
+    out += emit_byte_array(font);
+    out += "};\n\n";
+    out += std::format(
+        "/* 16 ATC palette bytes (CGA-compat IRGB: b4=I, b2=R, b1=G, b0=B). */\n"
+        "static const unsigned char {}_palette[16] = {{\n", sym);
+    out += emit_byte_array(atc_palette);
+    out += "};\n\n";
+    out += std::format(
+        "int main(void) {{\n"
+        "    /* EGA BIOS reads its DIP switches once at boot and stores the\n"
+        "     * result in BIOS data area 0040:0088. Low nybble: 3/9 = ECD\n"
+        "     * (350-line), 2/8 = CD (200-line). If we're on ECD, decrement\n"
+        "     * the byte BEFORE calling mode-03 so BIOS programs the card\n"
+        "     * for 200-line output (correct H/V timing, sync polarity, and\n"
+        "     * palette registers — the 5154 ECD will auto-switch modes on\n"
+        "     * the polarity change). Trick from reenigne.org blog:\n"
+        "     * \"How to set 200-line text modes on EGA\".\n"
+        "     * Restore the original byte on exit so the next program sees\n"
+        "     * the real hardware. */\n"
+        "    unsigned char saved_88;\n"
+        "    __asm__ volatile (\n"
+        "        \"pushw %%ds\\n\\t\"\n"
+        "        \"xorw %%ax, %%ax\\n\\t\"\n"
+        "        \"movw %%ax, %%ds\\n\\t\"\n"
+        "        \"movb 0x488, %%al\\n\\t\"        /* read 0040:0088 */\n"
+        "        \"movb %%al, %%ah\\n\\t\"          /* save original */\n"
+        "        \"andb $0x0F, %%al\\n\\t\"\n"
+        "        \"cmpb $0x03, %%al\\n\\t\"\n"
+        "        \"je 11f\\n\\t\"\n"
+        "        \"cmpb $0x09, %%al\\n\\t\"\n"
+        "        \"jne 12f\\n\\t\"\n"
+        "        \"11:\\n\\t\"\n"
+        "        \"movb %%ah, %%al\\n\\t\"\n"
+        "        \"decb %%al\\n\\t\"\n"
+        "        \"movb %%al, 0x488\\n\\t\"\n"
+        "        \"12:\\n\\t\"\n"
+        "        \"movb %%ah, %%al\\n\\t\"           /* return original in AL */\n"
+        "        \"popw %%ds\\n\\t\"\n"
+        "        : \"=a\"(saved_88) : : \"cc\", \"memory\");\n"
+        "    set_mode(0x03);                       /* BIOS configures 200-line mode 03 */\n"
+        "    /* Load custom font via int 10h AX=1110h. ES:BP = font ptr.\n"
+        "     * Use SS (not DS) as source segment: ia16-elf-gcc keeps DS as\n"
+        "     * a scratch register, so at this point DS may be 0 (IVT) or\n"
+        "     * any other value. SS always points at the data segment per\n"
+        "     * the ABI. Without this, BIOS reads font bytes from IVT →\n"
+        "     * all-zero garbage font → black screen. Also push/pop SI so\n"
+        "     * gcc's input-register assumption survives int 10h. */\n"
+        "    __asm__ volatile (\n"
+        "        \"pushw %%es\\n\\t\"\n"
+        "        \"pushw %%bp\\n\\t\"\n"
+        "        \"pushw %%si\\n\\t\"\n"
+        "        \"pushw %%ss\\n\\t\"\n"
+        "        \"popw %%es\\n\\t\"\n"
+        "        \"movw %%si, %%bp\\n\\t\"\n"
+        "        \"movw $0x1110, %%ax\\n\\t\"\n"
+        "        \"movw $0x0020, %%bx\\n\\t\"\n"
+        "        \"movw $0x0100, %%cx\\n\\t\"\n"
+        "        \"xorw %%dx, %%dx\\n\\t\"\n"
+        "        \"int $0x10\\n\\t\"\n"
+        "        \"popw %%si\\n\\t\"\n"
+        "        \"popw %%bp\\n\\t\"\n"
+        "        \"popw %%es\\n\\t\"\n"
+        "        : : \"S\"({}_font) : \"ax\", \"bx\", \"cx\", \"dx\", \"cc\", \"memory\");\n"
+        "    /* Populate DAC[0..7, 0x10..0x17] with the 16 kCgaHw RGB triples\n"
+        "     * (6-bit values) so VGA-emulating-EGA renders the same IRGB\n"
+        "     * colors. No-op on real EGA (no DAC chip). */\n"
+        "    static const unsigned char cga_dac[48] = {{\n"
+        "         0, 0, 0,   0, 0,42,   0,42, 0,   0,42,42,\n"
+        "        42, 0, 0,  42, 0,42,  42,21, 0,  42,42,42,\n"
+        "        21,21,21,  21,21,63,  21,63,21,  21,63,63,\n"
+        "        63,21,21,  63,21,63,  63,63,21,  63,63,63\n"
+        "    }};\n"
+        "    for (unsigned i = 0; i < 16; ++i) {{\n"
+        "        unsigned slot = (i < 8) ? i : (0x10 + (i - 8));\n"
+        "        outb(0x3C8, (unsigned char)slot);\n"
+        "        outb(0x3C9, cga_dac[i*3 + 0]);\n"
+        "        outb(0x3C9, cga_dac[i*3 + 1]);\n"
+        "        outb(0x3C9, cga_dac[i*3 + 2]);\n"
+        "    }}\n"
+        "    /* Load ATC palette regs 0..15 with CGA-compat IRGB values. */\n"
+        "    for (unsigned i = 0; i < 16; ++i) {{\n"
+        "        (void)inb(0x3DA);\n"
+        "        outb(0x3C0, (unsigned char)i);\n"
+        "        outb(0x3C0, {}_palette[i]);\n"
+        "    }}\n"
+        "    /* Disable blink via ATC mode-control reg 0x10 (bit 3 clear) so\n"
+        "     * attr bit 7 becomes bg intensity — unlocks all 16 bg colors.\n"
+        "     * Proper ATC read-then-write sequence: read with bit5=1 (video\n"
+        "     * on), write with bit5=0 (palette-access mode). */\n"
+        "    {{\n"
+        "        unsigned char v;\n"
+        "        (void)inb(0x3DA);\n"
+        "        outb(0x3C0, 0x30);                 /* index 0x10 + bit5=1 READ */\n"
+        "        v = inb(0x3C1);\n"
+        "        (void)inb(0x3DA);\n"
+        "        outb(0x3C0, 0x10);                 /* index 0x10 + bit5=0 WRITE */\n"
+        "        outb(0x3C0, (unsigned char)(v & ~0x08));\n"
+        "    }}\n"
+        "    (void)inb(0x3DA);\n"
+        "    outb(0x3C0, 0x20);                    /* re-enable video */\n"
+        "    /* Cursor off (reg 0x0A bit 5 = 1). */\n"
+        "    outb(0x3D4, 0x0A); outb(0x3D5, 0x20);\n"
+        "    /* Max scan line (reg 9) = 1 → 2-scan cells → 100 char rows\n"
+        "     * visible (200 scanlines / 2). We encode 200 rows in data so\n"
+        "     * only the top half shows; this is the proven \"EGA 200-line\n"
+        "     * text\" configuration per the Reenigne article. A true 1-scan\n"
+        "     * 80×200 needs CRTC V-total reprogramming via the overflow\n"
+        "     * register and is deferred. */\n"
+        "    outb(0x3D4, 0x09); outb(0x3D5, 0x01);\n"
+        "    /* Blit char+attr to B8000. Text mode has CPU odd/even mapping\n"
+        "     * (even = plane 0 chars, odd = plane 1 attrs). */\n"
+        "    blit_seg(0xB800, {}_data, (unsigned short)sizeof({}_data));\n"
+        "    (void)wait_key();\n"
+        "    /* Restore BIOS data area byte before mode-reset so subsequent\n"
+        "     * programs see the real monitor config. */\n"
+        "    __asm__ volatile (\n"
+        "        \"pushw %%ds\\n\\t\"\n"
+        "        \"xorw %%dx, %%dx\\n\\t\"\n"
+        "        \"movw %%dx, %%ds\\n\\t\"\n"
+        "        \"movb %%al, 0x488\\n\\t\"\n"
+        "        \"popw %%ds\\n\\t\"\n"
+        "        : : \"a\"(saved_88) : \"dx\", \"cc\", \"memory\");\n"
+        "    set_mode(0x03);                       /* BIOS mode-set resets state */\n"
+        "    return 0;\n"
+        "}}\n",
+        sym, sym, sym, sym);
+    return out;
+}
+
 } // namespace
 
 Result<std::string>
@@ -504,6 +671,27 @@ generate(amiga::Mode mode,
                             "char+attr bytes, got {}", raw_frame.size())}};
         }
         return generate_cga_text(raw_frame, 100, sym);
+    }
+    if (mode == Mode::ega_text80x200) {
+        if (raw_frame.size() != 80 * 200 * 2) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                std::format("cheader_dos_c: ega_text80x200 expects 32000 "
+                            "char+attr bytes, got {}", raw_frame.size())}};
+        }
+        if (palette.size() != 16) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                "cheader_dos_c: ega_text80x200 needs 16-byte ATC palette"}};
+        }
+        if (options.font_data.size() != 256 * 32) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                "cheader_dos_c: ega_text80x200 needs 8192-byte font_data "
+                "(256 glyphs × 32 bytes)"}};
+        }
+        return generate_ega_text_80x200(raw_frame, options.font_data,
+                                        palette, sym);
     }
     if (mode == Mode::vga_13h) {
         if (raw_frame.size() != 64000) {

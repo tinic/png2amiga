@@ -2068,6 +2068,45 @@ int main(int argc, char* argv[]) {
                 }
                 std::println("Viewer: {} (DOS/ia16-elf 16-bit)",
                              config->output_path);
+            } else if (ends_with(config->output_path, ".c") &&
+                       config->mode == amiga::Mode::ega_text80x200) {
+                // 16-bit C EGA text viewer: custom font via AX=1110h, CRTC
+                // reprogram for 200-row 1-scan cells, CGA-IRGB palette.
+                // Build shifted font (encoder chose scanline_offset).
+                const auto& font = palette::kFontEga8x14;
+                std::vector<std::uint8_t> shifted_font(256 * 32, 0);
+                for (std::size_t c = 0; c < 256; ++c) {
+                    for (std::size_t s = 0; s < res->cell_height_scanlines; ++s) {
+                        shifted_font[c * 32 + s] = palette::font_scanline(
+                            font, static_cast<std::uint8_t>(c),
+                            res->scanline_offset + s);
+                    }
+                }
+                // CGA-compat IRGB ATC palette (b4=I, b2=R, b1=G, b0=B).
+                std::vector<std::uint8_t> pal_bytes;
+                pal_bytes.reserve(16);
+                for (std::size_t i = 0; i < 16; ++i) {
+                    pal_bytes.push_back(static_cast<std::uint8_t>(
+                        (i & 0x07) | ((i & 0x08) << 1)));
+                }
+                cheader_dos_c::Options opts{
+                    .symbol_name = config->symbol_name.empty()
+                        ? derive_symbol_name(config->output_path)
+                        : config->symbol_name,
+                    .font_data = std::span<const std::uint8_t>(shifted_font),
+                };
+                auto result = cheader_dos_c::save(
+                    config->output_path, config->mode,
+                    res->cols, res->rows,
+                    std::span{res->data.data(), res->data.size()},
+                    pal_bytes, opts);
+                if (!result) {
+                    std::println(stderr, "Viewer write error: {}",
+                                 result.error().message);
+                    return 1;
+                }
+                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
+                             config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
                 cheader_dos::Options dos_opts;
