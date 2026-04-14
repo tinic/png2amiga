@@ -585,23 +585,37 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::vector<Color3f> text_pal;
         text_pal.reserve(16);
         // All text-graphics modes use kCgaHw (see main.cpp).
-        {
-            for (std::size_t i = 0; i < 16; ++i) {
-                text_pal.push_back(
-                    color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
-            }
+        for (std::size_t i = 0; i < 16; ++i) {
+            text_pal.push_back(
+                color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
         }
-        auto dith_result = dither::apply(*image, text_pal, {
-            .method = parse_dither(options.dither),
-            .strength = options.dither_strength,
-            .error_clamp = options.error_clamp,
-            .serpentine = true,
-        });
+        // Resolve the per-cell metric. `blur` and `pca` need the
+        // continuous source (pre-dither would destroy the precision
+        // their inner loops rely on); only `mse` benefits from a
+        // pre-dithered input.
+        auto cga_metric =
+            options.cga_text_metric == "mse" ? cga_text::Metric::mse
+                                             : cga_text::Metric::blur;
+        auto dith_method = parse_dither(options.dither);
         Image dithered(image->width(), image->height());
-        for (std::size_t y = 0; y < image->height(); ++y)
-            for (std::size_t x = 0; x < image->width(); ++x)
-                dithered[x, y] = text_pal[dith_result.indices[y * image->width() + x]];
-        auto res = cga_text::encode(dithered, mode, {}, text_pal);
+        if (cga_metric != cga_text::Metric::mse ||
+            dith_method == dither::Method::none) {
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    dithered[x, y] = (*image)[x, y];
+        } else {
+            auto dith_result = dither::apply(*image, text_pal, {
+                .method = dith_method,
+                .strength = options.dither_strength,
+                .error_clamp = options.error_clamp,
+                .serpentine = true,
+            });
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    dithered[x, y] = text_pal[dith_result.indices[y * image->width() + x]];
+        }
+        auto res = cga_text::encode(dithered, mode, {}, text_pal, -1,
+                                    cga_metric);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
 

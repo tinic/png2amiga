@@ -2,6 +2,8 @@
 
 #include "types.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -165,5 +167,32 @@ struct DiffusionEntry {
 // span for ordered / none. Floyd-Steinberg, Atkinson, Sierra Lite,
 // Stucki, Jarvis are supported.
 std::span<const DiffusionEntry> error_diffusion_kernel(Method method);
+
+// ---------------------------------------------------------------------------
+// Adapt error-diffusion clamp to palette size.
+//
+// The user-facing `clamp` value is squared so the response curve is
+// non-linear: small slider values give very tight clamps (cleaner output)
+// and the useful range spreads out across the full slider instead of
+// crammed into the bottom 7.5%. A slider value of 0.35 reproduces the old
+// linear default of 0.12.
+//
+// Then scaled by `sqrt(32 / N)`: looser for sparse palettes (so error can
+// traverse the larger inter-color distances and actually flip neighboring
+// pixels — a 0.03 clamp on a {black, white} palette with L distance 1.0
+// freezes dithering into a hard threshold), tighter for dense palettes
+// (avoids overshooting past intermediate colors).
+//
+// The palette-size scale is capped at 4× because mono modes can't absorb
+// chroma error — at strength > 1 the (a, b) error has positive feedback
+// and would diverge without a finite ceiling.
+// ---------------------------------------------------------------------------
+
+inline float adaptive_error_clamp(float clamp, std::size_t num_colors) noexcept {
+    float squared = clamp * clamp;
+    if (num_colors == 0) return squared;
+    float scale = std::sqrt(32.0f / static_cast<float>(num_colors));
+    return squared * std::min(scale, 4.0f);
+}
 
 } // namespace png2amiga::dither

@@ -123,7 +123,8 @@ struct Config {
     dither::Method dither_method = dither::Method::floyd_steinberg;
     bool dither_explicit = false;       // true if user passed --dither
     float dither_strength = 1.0f;
-    float error_clamp = 0.12f;
+    float error_clamp = 0.35f;
+    std::string cga_text_metric = "blur";
 
     // Chipset
     std::optional<amiga::Chipset> chipset;  // empty = auto-detect from mode
@@ -246,7 +247,13 @@ void print_usage() {
         "                                  stucki|jarvis|ostromoukhov\n"
         "                                  (default: floyd-steinberg)\n"
         "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
-        "  --error-clamp <float>           Max error per channel (default: 0.12)\n"
+        "  --error-clamp <float>           Max error per channel, squared internally\n"
+        "                                  (default: 0.35; useful range 0.0-1.0)\n"
+        "  --cga-text-metric mse|blur      CGA text mode: per-cell error metric.\n"
+        "                                    blur = Pappas-Neuhoff perceptual halftoning\n"
+        "                                           (default; ignores --dither).\n"
+        "                                    mse  = per-pixel OKLab MSE\n"
+        "                                           (pairs with --dither <method>).\n"
         "  --refine <0-32>                Dither-aware palette refinement iterations\n"
         "                                  (default: 4, 0 = off)\n"
         "\n"
@@ -609,6 +616,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
             }
             else if (arg == "--error-clamp") {
                 config.error_clamp = std::stof(std::string(val));
+            }
+            else if (arg == "--cga-text-metric") {
+                config.cga_text_metric = std::string(val);
             }
             else if (arg == "--refine") {
                 config.refine_iterations = std::stoi(std::string(val));
@@ -1946,31 +1956,40 @@ int main(int argc, char* argv[]) {
             text_pal.push_back(
                 color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
         }
-        // Pre-dither the image into text_pal so the glyph matcher sees
-        // discrete candidate colors; dither patterns emerge from the
-        // glyph bit layouts at the sub-cell pixel level.
-        auto dith = dither::apply(*image, text_pal, {
-            .method = config->dither_method,
-            .strength = config->dither_strength,
-            .error_clamp = config->error_clamp,
-            .serpentine = true,
-        });
+        // Resolve metric and decide whether to pre-dither. `mse` (default)
+        // pairs with pixel-level dither so the glyph matcher sees
+        // discrete candidates. `blur` and `pca` need the continuous
+        // source — pre-dither would collapse the precision they need.
+        auto cga_metric =
+            config->cga_text_metric == "mse" ? cga_text::Metric::mse
+                                             : cga_text::Metric::blur;
         Image dithered(image->width(), image->height());
-        for (std::size_t y = 0; y < image->height(); ++y)
-            for (std::size_t x = 0; x < image->width(); ++x)
-                dithered[x, y] = text_pal[dith.indices[y * image->width() + x]];
+        if (cga_metric != cga_text::Metric::mse ||
+            config->dither_method == dither::Method::none) {
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    dithered[x, y] = (*image)[x, y];
+        } else {
+            auto dith = dither::apply(*image, text_pal, {
+                .method = config->dither_method,
+                .strength = config->dither_strength,
+                .error_clamp = config->error_clamp,
+                .serpentine = true,
+            });
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    dithered[x, y] = text_pal[dith.indices[y * image->width() + x]];
+        }
         // Real CGA hardware has no custom-font slot (unlike EGA/VGA), so
         // the viewer can only render ROM glyph scanlines 0..(cell_h-1).
         // When emitting a 16-bit C viewer (.c → ia16-elf-gcc / 8088 XT)
-        // for a CGA text mode, constrain the encoder to offset=0. The
-        // DJGPP (.cpp) path targets EGA/VGA and supports any offset via
-        // AX=1110h custom font load.
+        // for a CGA text mode, constrain the encoder to offset=0.
         int fixed_offset = -1;
         if (amiga::is_cga_text(config->mode) &&
             ends_with(config->output_path, ".c"))
             fixed_offset = 0;
         auto res = cga_text::encode(dithered, config->mode, {}, text_pal,
-                                    fixed_offset);
+                                    fixed_offset, cga_metric);
         if (!res) {
             std::println(stderr, "CGA text encode error: {}",
                          res.error().message);

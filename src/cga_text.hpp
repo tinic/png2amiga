@@ -11,6 +11,25 @@
 
 namespace png2amiga::cga_text {
 
+// Per-cell error metric driving the brute-force glyph + (fg, bg) search.
+//
+//   mse  — sum of squared OKLab distances per sub-pixel. Optimised in
+//          parallel via the sum-decomposition trick (independent argmins
+//          for fg and bg). Default; pairs naturally with pixel-level
+//          dithering on the input (the encoder picks the dominant 2
+//          colours per cell to match a pre-dithered image).
+//
+//   blur — Pappas-Neuhoff perceptual halftoning. Both source and the
+//          rendered cell are convolved with a 3×3 binomial low-pass
+//          (≈ HVS contrast sensitivity) before MSE is taken. Encoder
+//          naturally picks checker glyphs that *look* right post-blur,
+//          replacing the manual mean-bias hack. Requires the input to
+//          be the continuous source — pre-dithering destroys the
+//          precision the metric needs, so callers should pass
+//          dither=none.
+//
+enum class Metric : std::uint8_t { mse, blur };
+
 // Glyph-matched text-mode encoding result.
 // For cga_text80x100: 80 cols × 100 rows → 16000 bytes in video RAM layout.
 // For cga_text80x200: 80 cols × 200 rows → 32000 bytes (exceeds standard
@@ -56,11 +75,12 @@ Result<CgaTextResult>
 encode(const Image& image, amiga::Mode mode,
        std::span<const std::uint8_t> restrict_chars = {},
        std::span<const Color3f> palette16 = {},
-       int fixed_offset = -1);  // -1 = search all offsets (best quality);
-                                //  ≥0 = force this scanline_offset (use when
-                                //       target hardware can't shift ROM font —
-                                //       e.g. CGA, which has no custom-font
-                                //       slot like EGA/VGA).
+       int fixed_offset = -1,        // -1 = search all offsets (best quality);
+                                     //  ≥0 = force this scanline_offset (use when
+                                     //       target hardware can't shift ROM font —
+                                     //       e.g. CGA, which has no custom-font
+                                     //       slot like EGA/VGA).
+       Metric metric = Metric::blur);// see Metric enum above.
 
 // Render a CgaTextResult back to an RGB image for preview.
 Image render(const CgaTextResult& r);

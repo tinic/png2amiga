@@ -5,7 +5,7 @@ import { useImageUpload } from '../composables/useImageUpload.js'
 import { track } from '../lib/analytics.js'
 import {
   MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
-  SLIDERS, DIFFUSION_SLIDERS, EXAMPLES,
+  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion, isInterlaceMode,
   isDosMode, isVgaMode, isEgaMode, isCgaMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
@@ -359,6 +359,14 @@ for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) {
     tweakTimer = setTimeout(() => track('setting-tweak', { key: s.key, value: val }), 500)
   })
 }
+watch(() => options.cgaTextMetric, (val) => {
+  // The blur and pca metrics need a continuous source — pre-dithering
+  // destroys the precision they need. Force dither=none whenever a
+  // perceptual metric is selected.
+  if (val !== 'mse' && options.dither !== 'none') options.dither = 'none'
+  clearTimeout(tweakTimer)
+  tweakTimer = setTimeout(() => track('setting-tweak', { key: 'cgaTextMetric', value: val }), 500)
+})
 
 // Session duration on page unload
 onBeforeUnmount(() => {
@@ -877,7 +885,22 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <div class="grid align-items-center">
+              <!-- CGA text mode only: per-cell error metric. When blur is
+                   selected the dither selector below is hidden, since blur
+                   needs the continuous source. -->
+              <div v-if="options.mode === 'cga-text80x100'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Per-cell error metric for the glyph + (fg, bg) brute-force search. Pappas-Neuhoff (perceptual blur) needs the continuous source and hides the dither selector. MSE pairs with pixel-level dither below.">
+                  Metric
+                </label>
+                <div class="col-8">
+                  <Select v-model="options.cgaTextMetric" :options="CGA_TEXT_METRICS"
+                    optionLabel="label" optionValue="value" class="w-full" />
+                </div>
+              </div>
+
+              <div v-if="!(options.mode === 'cga-text80x100' && options.cgaTextMetric !== 'mse')"
+                class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
                 <div class="col-8 flex gap-1 align-items-center">
                   <Select
@@ -1023,6 +1046,7 @@ async function loadExample(example) {
                   </div>
                 </div>
               </template>
+
             </div>
           </Panel>
 

@@ -45,7 +45,8 @@ Result<CgaTextResult>
 encode(const Image& image, amiga::Mode mode,
        std::span<const std::uint8_t> restrict_chars,
        std::span<const Color3f> palette16,
-       int fixed_offset) {
+       int fixed_offset,
+       Metric metric) {
 
     if (!amiga::is_cga_text(mode)) {
         return std::unexpected{Error{
@@ -166,134 +167,247 @@ encode(const Image& image, amiga::Mode mode,
     result.font_height = font.glyph_height;
     result.scanline_offset = static_cast<std::uint8_t>(offset);
 
+    // Pappas-Neuhoff perceptual halftoning metric: instead of per-pixel
+    // MSE between source and rendered, low-pass-filter both with a small
+    // HVS-approximating kernel and compute MSE on the blurred versions.
+    // For uniform regions this naturally rewards checker glyphs that
+    // average to the right colour after blur, exactly the way a human
+    // perceives them on a CRT — without the artefacts that pure mean-bias
+    // produced.
+    //
+    // Kernel: 3×3 binomial (≈ Gaussian σ=0.85), separable [1,2,1]/4 ⊗ [1,2,1]/4,
+    // with replicate padding at cell edges.
+    constexpr std::array<std::array<float, 3>, 3> kBlurKernel = {{
+        {1.0f/16, 2.0f/16, 1.0f/16},
+        {2.0f/16, 4.0f/16, 2.0f/16},
+        {1.0f/16, 2.0f/16, 1.0f/16},
+    }};
+
+    // Per output pixel position, list of (source-pixel-index, weight) taps
+    // — 9 entries each, with replicate padding folding edge taps onto
+    // boundary pixels (so taps may share q values; that's fine).
+    struct Tap { std::uint8_t q; float w; };
+    const std::size_t cell_n = 8 * cell_h;
+    std::vector<std::array<Tap, 9>> kernel_taps(cell_n);
+    for (std::size_t py = 0; py < cell_h; ++py) {
+        for (std::size_t px = 0; px < 8; ++px) {
+            std::size_t p_out = py * 8 + px;
+            std::size_t k = 0;
+            for (int dy = -1; dy <= 1; ++dy) {
+                int ny = std::clamp(static_cast<int>(py) + dy, 0,
+                                    static_cast<int>(cell_h) - 1);
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int nx = std::clamp(static_cast<int>(px) + dx, 0, 7);
+                    kernel_taps[p_out][k++] = {
+                        static_cast<std::uint8_t>(ny * 8 + nx),
+                        kBlurKernel[static_cast<std::size_t>(dy + 1)]
+                                   [static_cast<std::size_t>(dx + 1)]};
+                }
+            }
+        }
+    }
+
+    // Pre-compute palette dot products and norms (used in the closed-form
+    // per-pair error formula below).
+    std::array<std::array<float, 16>, 16> pal_dot{};
+    std::array<float, 16> pal_norm{};
+    for (std::size_t i = 0; i < 16; ++i) {
+        pal_norm[i] = pal.lab[i].L * pal.lab[i].L
+                    + pal.lab[i].a * pal.lab[i].a
+                    + pal.lab[i].b * pal.lab[i].b;
+        for (std::size_t j = 0; j < 16; ++j) {
+            pal_dot[i][j] = pal.lab[i].L * pal.lab[j].L
+                          + pal.lab[i].a * pal.lab[j].a
+                          + pal.lab[i].b * pal.lab[j].b;
+        }
+    }
+
+    // Per-cell brute force shared by parallel and sequential paths.
+    // Inputs:  cell_lab — 8×cell_h source OKLab values
+    // Outputs: best (ch, fg, bg, mask, err) for that cell
+    struct CellPick {
+        std::uint8_t ch, fg, bg;
+        std::uint32_t fg_mask;
+        float err;
+    };
+
+    // ---- mse: per-pixel OKLab MSE with the sum-decomposition trick ----
+    // Independent argmins over fg and bg (16+16 comparisons), so the
+    // (fg, bg) search is O(16) per candidate instead of O(256). Fast
+    // baseline; pairs naturally with a pre-dithered input image.
+    auto encode_cell_mse = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
+        std::array<std::array<float, 16>, 16> pix_d{};
+        std::array<float, 16> total_sum{};
+        for (std::size_t p = 0; p < cell_n; ++p) {
+            for (std::size_t c = 0; c < 16; ++c) {
+                auto& a = cell_lab[p]; auto& b = pal.lab[c];
+                float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                float d = dL * dL + da * da + db * db;
+                pix_d[p][c] = d;
+                total_sum[c] += d;
+            }
+        }
+        CellPick best{0, 15, 0, 0, std::numeric_limits<float>::infinity()};
+        for (auto& cand : candidates) {
+            auto fg_mask = cand.fg_mask;
+            std::array<float, 16> sum_fg{};
+            auto m = fg_mask;
+            while (m) {
+                auto p = static_cast<unsigned>(std::countr_zero(m));
+                m &= m - 1;
+                for (std::size_t c = 0; c < 16; ++c)
+                    sum_fg[c] += pix_d[p][c];
+            }
+            float min_fg = std::numeric_limits<float>::infinity();
+            float min_bg = std::numeric_limits<float>::infinity();
+            std::uint8_t fg_idx = 0, bg_idx = 0;
+            for (std::uint8_t c = 0; c < 16; ++c) {
+                if (sum_fg[c] < min_fg) { min_fg = sum_fg[c]; fg_idx = c; }
+                float sb = total_sum[c] - sum_fg[c];
+                if (sb < min_bg) { min_bg = sb; bg_idx = c; }
+            }
+            float err = min_fg + min_bg;
+            if (err < best.err) {
+                best.err = err;
+                best.ch = cand.ch;
+                best.fg = fg_idx;
+                best.bg = bg_idx;
+                best.fg_mask = fg_mask;
+            }
+        }
+        return best;
+    };
+
+    // ---- blur: Pappas-Neuhoff perceptual halftoning ----
+    // err = ||blurred(source) − blurred(rendered)||². Closed-form pair
+    // expansion: K0 − 2·K1·fg − 2·K2·bg + 2·K3·(fg·bg) + K4·||fg||² + K5·||bg||².
+    // K0 is per-cell, K1..K5 are per-candidate, per-pair is then ~9 ops.
+    auto encode_cell_blur = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
+        std::array<color_space::OKLab, 16> blurred;
+        float K0 = 0;
+        for (std::size_t p = 0; p < cell_n; ++p) {
+            color_space::OKLab b{0, 0, 0};
+            for (auto& tap : kernel_taps[p]) {
+                auto& v = cell_lab[tap.q];
+                b.L += tap.w * v.L;
+                b.a += tap.w * v.a;
+                b.b += tap.w * v.b;
+            }
+            blurred[p] = b;
+            K0 += b.L * b.L + b.a * b.a + b.b * b.b;
+        }
+        CellPick best{0, 15, 0, 0, std::numeric_limits<float>::infinity()};
+        for (auto& cand : candidates) {
+            auto fg_mask = cand.fg_mask;
+            color_space::OKLab K1{0, 0, 0};
+            color_space::OKLab K2{0, 0, 0};
+            float K3 = 0, K4 = 0, K5 = 0;
+            for (std::size_t p = 0; p < cell_n; ++p) {
+                float a = 0;
+                for (auto& tap : kernel_taps[p]) {
+                    if ((fg_mask >> tap.q) & 1u) a += tap.w;
+                }
+                float ma = 1.0f - a;
+                K1.L += blurred[p].L * a;
+                K1.a += blurred[p].a * a;
+                K1.b += blurred[p].b * a;
+                K2.L += blurred[p].L * ma;
+                K2.a += blurred[p].a * ma;
+                K2.b += blurred[p].b * ma;
+                K3 += a * ma;
+                K4 += a * a;
+                K5 += ma * ma;
+            }
+            std::array<float, 16> dot_K1, dot_K2;
+            for (std::size_t c = 0; c < 16; ++c) {
+                auto& pl = pal.lab[c];
+                dot_K1[c] = K1.L * pl.L + K1.a * pl.a + K1.b * pl.b;
+                dot_K2[c] = K2.L * pl.L + K2.a * pl.a + K2.b * pl.b;
+            }
+            for (std::uint8_t fg = 0; fg < 16; ++fg) {
+                for (std::uint8_t bg = 0; bg < 16; ++bg) {
+                    float err = K0
+                              - 2.0f * dot_K1[fg]
+                              - 2.0f * dot_K2[bg]
+                              + 2.0f * K3 * pal_dot[fg][bg]
+                              + K4 * pal_norm[fg]
+                              + K5 * pal_norm[bg];
+                    if (err < best.err) {
+                        best.err = err;
+                        best.ch = cand.ch;
+                        best.fg = fg;
+                        best.bg = bg;
+                        best.fg_mask = fg_mask;
+                    }
+                }
+            }
+        }
+        return best;
+    };
+
+    auto encode_cell = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
+        switch (metric) {
+        case Metric::blur: return encode_cell_blur(cell_lab);
+        case Metric::mse:  return encode_cell_mse(cell_lab);
+        }
+        return encode_cell_blur(cell_lab);
+    };
+
+    auto read_cell_source = [&](std::size_t col, std::size_t row,
+                                std::array<color_space::OKLab, 16>& out) {
+        for (std::size_t py = 0; py < cell_h; ++py) {
+            for (std::size_t px = 0; px < 8; ++px) {
+                auto img_x = col * 8 + px;
+                auto img_y = row * cell_h + py;
+                out[py * 8 + px] =
+                    color_space::linear_to_oklab(image[img_x, img_y]);
+            }
+        }
+    };
+
+    auto write_cell = [&](std::size_t col, std::size_t row, const CellPick& p) {
+        auto off = (row * cols + col) * 2;
+        result.data[off] = p.ch;
+        // attr: high nibble = bg, low nibble = fg. To use all 16 bg
+        // colors (not blink), the user must disable blink via bit 5 of
+        // CGA mode register (0x3D8). Our output assumes blink disabled.
+        result.data[off + 1] =
+            static_cast<std::uint8_t>((p.bg << 4) | p.fg);
+    };
+
+    // Cells are independent, dispatch via atomic counter.
     std::atomic<std::size_t> next_cell{0};
     std::atomic<double> atomic_err{0.0};
-
     auto worker = [&]() {
         while (true) {
             auto linear = next_cell.fetch_add(1);
             if (linear >= cols * rows) break;
             auto col = linear % cols;
             auto row = linear / cols;
-
-            // Pull the cell's OKLab values (8 × cell_h pixels).
-            std::array<color_space::OKLab, 16> cell_lab;  // max 8×2
-            for (std::size_t py = 0; py < cell_h; ++py) {
-                for (std::size_t px = 0; px < 8; ++px) {
-                    auto img_x = col * 8 + px;
-                    auto img_y = row * cell_h + py;
-                    cell_lab[py * 8 + px] =
-                        color_space::linear_to_oklab(image[img_x, img_y]);
-                }
-            }
-
-            std::uint8_t best_ch = 0, best_fg = 15, best_bg = 0;
-            float best_err = std::numeric_limits<float>::infinity();
-
-            // Brute-force: for each glyph candidate, try all 16×16 fg/bg
-            // pairs. For each trial, the rendered cell is 8×cell_h pixels
-            // where each pixel is fg (if pattern bit is 1) or bg.
-            //
-            // Precompute, for each pattern cell, the list of fg-mask
-            // indices and bg-mask indices, so we can compute per-trial
-            // error as sum of per-pixel distances to (lab_fg for fg bits,
-            // lab_bg for bg bits).
-            //
-            // Equivalent faster: for each pixel, compute dist² to EACH of
-            // the 16 palette entries (16 values × cell pixel count); then
-            // given pattern bits we pick either fg[i] or bg[i] per pixel
-            // and look those up.
-            std::array<std::array<float, 16>, 16> pix_d{};  // [pixel][color]
-            std::array<float, 16> total_sum{};              // [color]
-            for (std::size_t p = 0; p < 8 * cell_h; ++p) {
-                for (std::size_t c = 0; c < 16; ++c) {
-                    auto& a = cell_lab[p]; auto& b = pal.lab[c];
-                    float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                    float d = dL * dL + da * da + db * db;
-                    pix_d[p][c] = d;
-                    total_sum[c] += d;
-                }
-            }
-
-            // For each candidate pattern, find the optimal (fg, bg) pair.
-            //
-            // Trick: fg and bg partition the 8*cell_h pixels into disjoint
-            // sets. The per-trial error splits as
-            //     err(pattern, fg, bg) = Σ_{p∈fg_mask} pix_d[p][fg]
-            //                          + Σ_{p∉fg_mask} pix_d[p][bg]
-            //                          = sum_fg[fg] + sum_bg[bg]
-            // where sum_bg[c] = total_sum[c] − sum_fg[c]. The two sums are
-            // independent, so the best pair is (argmin sum_fg, argmin sum_bg)
-            // — 16 comparisons per role instead of 256 full trials.
-            //
-            // We still iterate unique cell patterns only (built once per
-            // offset outside the per-cell loop, with fg_mask precomputed).
-            // Top scanline bits high..low map to pixels 0..7 left-to-right.
-            for (auto& cand : candidates) {
-                auto fg_mask = cand.fg_mask;
-                std::array<float, 16> sum_fg{};
-                // Iterate set bits of fg_mask: each bit is one fg pixel
-                // index p in [0, 8*cell_h).
-                auto m = fg_mask;
-                while (m) {
-                    auto p = static_cast<unsigned>(std::countr_zero(m));
-                    m &= m - 1;
-                    for (std::size_t c = 0; c < 16; ++c)
-                        sum_fg[c] += pix_d[p][c];
-                }
-                float min_fg = std::numeric_limits<float>::infinity();
-                float min_bg = std::numeric_limits<float>::infinity();
-                std::uint8_t fg_idx = 0, bg_idx = 0;
-                for (std::uint8_t c = 0; c < 16; ++c) {
-                    if (sum_fg[c] < min_fg) {
-                        min_fg = sum_fg[c]; fg_idx = c;
-                    }
-                    float sb = total_sum[c] - sum_fg[c];
-                    if (sb < min_bg) {
-                        min_bg = sb; bg_idx = c;
-                    }
-                }
-                float err = min_fg + min_bg;
-                if (err < best_err) {
-                    best_err = err;
-                    best_ch = cand.ch;
-                    best_fg = fg_idx;
-                    best_bg = bg_idx;
-                }
-            }
-
-            auto off = (row * cols + col) * 2;
-            result.data[off] = best_ch;
-            // attr: high nibble = bg, low nibble = fg. To use all 16 bg
-            // colors (not blink), the user must disable blink via bit 5 of
-            // CGA mode register (0x3D8). Our output assumes blink disabled.
-            result.data[off + 1] =
-                static_cast<std::uint8_t>((best_bg << 4) | best_fg);
-
+            std::array<color_space::OKLab, 16> cell_lab;
+            read_cell_source(col, row, cell_lab);
+            auto pick = encode_cell(cell_lab);
+            write_cell(col, row, pick);
             double old = atomic_err.load(std::memory_order_relaxed);
             while (!atomic_err.compare_exchange_weak(
-                old, old + static_cast<double>(best_err))) {}
+                old, old + static_cast<double>(pick.err))) {}
         }
     };
-
 #ifdef __EMSCRIPTEN__
-        // Emscripten without -pthread has no real std::thread; constructing
-        // one aborts the WASM VM. Run the worker lambda inline on the main
-        // thread — single-threaded encode is slower but correct.
-        worker();
+    worker();
 #else
-        auto n = std::max<unsigned>(1, std::thread::hardware_concurrency());
-        std::vector<std::jthread> threads;
-        threads.reserve(n);
-        for (unsigned i = 0; i < n; ++i) threads.emplace_back(worker);
-        threads.clear();  // join on destruction
+    auto n = std::max<unsigned>(1, std::thread::hardware_concurrency());
+    std::vector<std::jthread> threads;
+    threads.reserve(n);
+    for (unsigned i = 0; i < n; ++i) threads.emplace_back(worker);
+    threads.clear();
 #endif
 
-        result.total_error = static_cast<float>(atomic_err.load());
-        for (std::size_t i = 0; i < 16; ++i) result.palette[i] = pal.rgb[i];
-        if (result.total_error < best_result.total_error) {
-            best_result = std::move(result);
-        }
+    result.total_error = static_cast<float>(atomic_err.load());
+    for (std::size_t i = 0; i < 16; ++i) result.palette[i] = pal.rgb[i];
+    if (result.total_error < best_result.total_error) {
+        best_result = std::move(result);
+    }
     }  // end scanline-offset loop
     return best_result;
 }

@@ -96,6 +96,13 @@ struct Options {
     // to fill the full buffer.
     bool native_par = false;
 
+    // CGA text mode only: per-cell error metric for the glyph + (fg, bg)
+    // brute-force search. "blur" (Pappas-Neuhoff perceptual halftoning,
+    // default) or "mse" (per-pixel OKLab; pairs with --dither). The
+    // blur metric expects a continuous source — pipeline ignores any
+    // pre-dither stage when blur is selected.
+    std::string cga_text_metric = "blur";
+
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
     std::vector<PinSpec>  pins;

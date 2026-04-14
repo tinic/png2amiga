@@ -143,9 +143,18 @@ export const SLIDERS = [
 ]
 
 export const DIFFUSION_SLIDERS = [
-  { key: 'errorClamp',    label: 'Error Clamp', min: 0,   max: 2.0, step: 0.05, default: 0.12,
-    tip: 'Max error accumulation per channel. Lower = fewer stray pixels, higher = more detail.' },
+  { key: 'errorClamp',    label: 'Error Clamp', min: 0,   max: 1.0, step: 0.025, default: 0.35,
+    tip: 'Max error accumulation per channel (squared internally). Lower = cleaner, higher = more dithering noise.' },
 ]
+
+// CGA-text-mode-only options. Shown only when mode === 'cga-text80x100'.
+export const CGA_TEXT_METRICS = [
+  { value: 'blur', label: 'Pappas-Neuhoff' },
+  { value: 'mse',  label: 'Per-pixel MSE' },
+]
+export const CGA_TEXT_DEFAULTS = {
+  cgaTextMetric: 'blur',
+}
 
 export const EXAMPLES = [
   { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
@@ -194,6 +203,7 @@ export function defaultOptions() {
     paletteDiversity: 0,
   }
   for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
+  Object.assign(opts, CGA_TEXT_DEFAULTS)
   return opts
 }
 
