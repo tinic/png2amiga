@@ -759,6 +759,15 @@ std::string generate_vga_planar(amiga::Mode mode,
             ++bin;
         }
     }
+    // Plane pointer array at file scope (matches ega_hi structure).
+    // Non-split modes only — split case dereferences each half inline.
+    if (!split) {
+        out += std::format(
+            "\nstatic const unsigned char __far *const {}_planes[4] = {{\n"
+            "    {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
+            "}};\n",
+            sym, sym, sym, sym, sym);
+    }
     out += std::format(
         "\n/* VGA DAC: 16 × 3 bytes (R,G,B, each 6-bit 0..63). */\n"
         "static const unsigned char {}_dac[48] = {{\n", sym);
@@ -800,14 +809,11 @@ std::string generate_vga_planar(amiga::Mode mode,
         out += "        }\n    }\n";
     } else {
         out += std::format(
-            "    static const unsigned char __far *const planes_arr[4] = {{\n"
-            "        {}_plane0, {}_plane1, {}_plane2, {}_plane3\n"
-            "    }};\n"
             "    for (unsigned p = 0; p < 4; ++p) {{\n"
             "        outw(0x3C4, (unsigned short)(0x0002 | ((1u << p) << 8)));\n"
-            "        blit_seg_far(0xA000, planes_arr[p], {}u);\n"
+            "        blit_seg_far(0xA000, {}_planes[p], {}u);\n"
             "    }}\n",
-            sym, sym, sym, sym, plane_bytes);
+            sym, plane_bytes);
     }
     out +=
         "    (void)wait_key();\n"
