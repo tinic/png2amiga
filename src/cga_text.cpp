@@ -100,6 +100,49 @@ encode(const Image& image, amiga::Mode mode,
     }
     const CgaPaletteLab& pal = palette16.empty() ? palette_lab() : custom;
 
+    // Pre-compute the OKLab and globally-blurred OKLab image ONCE. The
+    // blur metric (Pappas-Neuhoff) used to build a per-cell blurred
+    // buffer with replicate padding at cell edges, producing a
+    // discontinuous target at every 8-px cell boundary (see png2c64's
+    // equivalent fix for PETSCII). Blurring the full image and slicing
+    // per cell makes the target coherent across boundaries.
+    std::vector<color_space::OKLab> image_lab_flat(disp_w * disp_h);
+    for (std::size_t y = 0; y < disp_h; ++y)
+        for (std::size_t x = 0; x < disp_w; ++x)
+            image_lab_flat[y * disp_w + x] =
+                color_space::linear_to_oklab(image[x, y]);
+    std::vector<color_space::OKLab> image_blurred(disp_w * disp_h);
+    {
+        constexpr std::array<std::array<float, 3>, 3> kBlur = {{
+            {1.0f/16, 2.0f/16, 1.0f/16},
+            {2.0f/16, 4.0f/16, 2.0f/16},
+            {1.0f/16, 2.0f/16, 1.0f/16},
+        }};
+        auto iw = static_cast<int>(disp_w);
+        auto ih = static_cast<int>(disp_h);
+        for (int y = 0; y < ih; ++y) {
+            for (int x = 0; x < iw; ++x) {
+                color_space::OKLab b{0, 0, 0};
+                for (int dy = -1; dy <= 1; ++dy) {
+                    int ny = std::clamp(y + dy, 0, ih - 1);
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int nx = std::clamp(x + dx, 0, iw - 1);
+                        auto& v = image_lab_flat[
+                            static_cast<std::size_t>(ny) * disp_w +
+                            static_cast<std::size_t>(nx)];
+                        float kw = kBlur[static_cast<std::size_t>(dy + 1)]
+                                        [static_cast<std::size_t>(dx + 1)];
+                        b.L += kw * v.L;
+                        b.a += kw * v.a;
+                        b.b += kw * v.b;
+                    }
+                }
+                image_blurred[static_cast<std::size_t>(y) * disp_w +
+                              static_cast<std::size_t>(x)] = b;
+            }
+        }
+    }
+
     // Try all possible scanline offsets into the glyph (0..glyph_h - cell_h).
     // The CRTC can be programmed to start the character row at any scanline,
     // so what we emit as (char byte + attribute byte) is hardware-legal
@@ -282,18 +325,12 @@ encode(const Image& image, amiga::Mode mode,
     // err = ||blurred(source) − blurred(rendered)||². Closed-form pair
     // expansion: K0 − 2·K1·fg − 2·K2·bg + 2·K3·(fg·bg) + K4·||fg||² + K5·||bg||².
     // K0 is per-cell, K1..K5 are per-candidate, per-pair is then ~9 ops.
-    auto encode_cell_blur = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
-        std::array<color_space::OKLab, 16> blurred;
+    auto encode_cell_blur = [&](const std::array<color_space::OKLab, 16>& cell_lab,
+                                 const std::array<color_space::OKLab, 16>& blurred) -> CellPick {
+        (void)cell_lab;
         float K0 = 0;
         for (std::size_t p = 0; p < cell_n; ++p) {
-            color_space::OKLab b{0, 0, 0};
-            for (auto& tap : kernel_taps[p]) {
-                auto& v = cell_lab[tap.q];
-                b.L += tap.w * v.L;
-                b.a += tap.w * v.a;
-                b.b += tap.w * v.b;
-            }
-            blurred[p] = b;
+            auto& b = blurred[p];
             K0 += b.L * b.L + b.a * b.a + b.b * b.b;
         }
         CellPick best{0, 15, 0, 0, std::numeric_limits<float>::infinity()};
@@ -345,22 +382,25 @@ encode(const Image& image, amiga::Mode mode,
         return best;
     };
 
-    auto encode_cell = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
+    auto encode_cell = [&](const std::array<color_space::OKLab, 16>& cell_lab,
+                           const std::array<color_space::OKLab, 16>& blurred) -> CellPick {
         switch (metric) {
-        case Metric::blur: return encode_cell_blur(cell_lab);
+        case Metric::blur: return encode_cell_blur(cell_lab, blurred);
         case Metric::mse:  return encode_cell_mse(cell_lab);
         }
-        return encode_cell_blur(cell_lab);
+        return encode_cell_blur(cell_lab, blurred);
     };
 
     auto read_cell_source = [&](std::size_t col, std::size_t row,
-                                std::array<color_space::OKLab, 16>& out) {
+                                std::array<color_space::OKLab, 16>& out,
+                                std::array<color_space::OKLab, 16>& out_blurred) {
         for (std::size_t py = 0; py < cell_h; ++py) {
             for (std::size_t px = 0; px < 8; ++px) {
                 auto img_x = col * 8 + px;
                 auto img_y = row * cell_h + py;
-                out[py * 8 + px] =
-                    color_space::linear_to_oklab(image[img_x, img_y]);
+                auto flat = img_y * disp_w + img_x;
+                out[py * 8 + px] = image_lab_flat[flat];
+                out_blurred[py * 8 + px] = image_blurred[flat];
             }
         }
     };
@@ -385,8 +425,9 @@ encode(const Image& image, amiga::Mode mode,
             auto col = linear % cols;
             auto row = linear / cols;
             std::array<color_space::OKLab, 16> cell_lab;
-            read_cell_source(col, row, cell_lab);
-            auto pick = encode_cell(cell_lab);
+            std::array<color_space::OKLab, 16> blurred_cell;
+            read_cell_source(col, row, cell_lab, blurred_cell);
+            auto pick = encode_cell(cell_lab, blurred_cell);
             write_cell(col, row, pick);
             double old = atomic_err.load(std::memory_order_relaxed);
             while (!atomic_err.compare_exchange_weak(
