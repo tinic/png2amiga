@@ -574,15 +574,11 @@ DitherResult apply_error_diffusion(
     auto w = image.width();
     auto h = image.height();
 
-    // Adapt error clamp to palette granularity: fewer colors have larger
-    // quantization errors — tighter clamping prevents overshooting past
-    // sparse palette entries.  32 colors keeps the caller's default.
-    auto num_colors = palette_lab.size();
+    // `--error-clamp` applies directly. Previously scaled by
+    // sqrt(num_colors/32), which silently cut the effective clamp by
+    // 2-3× for sparse palettes (the common Amiga case, e.g. 4/8/16
+    // colours) and made tuning impossible.
     float ec = error_clamp_val;
-    if (num_colors > 0 && num_colors <= 64) {
-        ec = error_clamp_val *
-             std::sqrt(static_cast<float>(num_colors) / 32.0f);
-    }
 
     DitherResult result;
     result.indices.resize(w * h);
@@ -814,12 +810,7 @@ DitherResult apply_gilbert(
         12.0f / 16.0f, 3.0f / 16.0f, 1.0f / 16.0f,
     };
 
-    auto num_colors = palette_lab.size();
     float ec = error_clamp_val;
-    if (num_colors > 0 && num_colors <= 64) {
-        ec = error_clamp_val *
-             std::sqrt(static_cast<float>(num_colors) / 32.0f);
-    }
 
     for (std::size_t i = 0; i < curve.size(); ++i) {
         auto [x, y] = curve[i];
@@ -884,12 +875,7 @@ DitherResult apply_ostromoukhov(
     auto w = image.width();
     auto h = image.height();
 
-    auto num_colors = palette_lab.size();
     float ec = error_clamp_val;
-    if (num_colors > 0 && num_colors <= 64) {
-        ec = error_clamp_val *
-             std::sqrt(static_cast<float>(num_colors) / 32.0f);
-    }
 
     DitherResult result;
     result.indices.resize(w * h);
