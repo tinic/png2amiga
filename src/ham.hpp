@@ -79,7 +79,7 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
 // ---------------------------------------------------------------------------
 
 struct HamOptions {
-    std::size_t beam_width = 48;    // beam search width for DP
+    std::size_t beam_width = 16;    // beam search width for DP
 
     // Dithering (error diffusion applied during HAM encoding)
     dither::Method dither_method = dither::Method::none;  // none = no dithering (default)

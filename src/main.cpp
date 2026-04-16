@@ -230,7 +230,7 @@ void print_usage() {
         "                                  budget; auto mode also tries K+1..K+3)\n"
         "\n"
         "HAM encoding:\n"
-        "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
+        "  --ham-beam <1-256>              Beam width for DP search (default: 16)\n"
         "  --palette-diversity <0-9>       Remove near-duplicate palette entries (experimental)\n"
         "\n"
         "Dithering:\n"
