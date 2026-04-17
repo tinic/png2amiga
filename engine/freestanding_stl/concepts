@@ -1,0 +1,15 @@
+// Freestanding <concepts> shim. GCC's concept syntax is language-level, so
+// concept *definitions* don't need any headers. This file provides just the
+// common convenience concepts the engine uses (std::convertible_to).
+#pragma once
+#include <type_traits>
+
+namespace std {
+
+template <class From, class To>
+concept convertible_to = is_convertible_v<From, To>;
+
+template <class T, class U>
+concept same_as = is_same_v<T, U> && is_same_v<U, T>;
+
+} // namespace std

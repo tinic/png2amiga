@@ -1,0 +1,11 @@
+// Freestanding <cstddef> shim using GCC's built-in type macros.
+#pragma once
+
+using size_t    = __SIZE_TYPE__;
+using ptrdiff_t = __PTRDIFF_TYPE__;
+
+namespace std {
+using ::size_t;
+using ::ptrdiff_t;
+enum class byte : unsigned char {};
+} // namespace std

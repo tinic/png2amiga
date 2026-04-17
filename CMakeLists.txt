@@ -107,6 +107,23 @@ else()
     target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
+    # --- Asset packer sibling binary ---
+    add_executable(png2amiga-assets
+        src/assets_main.cpp
+        src/tile_pack.cpp
+        src/strip_pack.cpp
+        src/atlas_pack.cpp
+        src/cpp_writer.cpp
+        src/tileset_manifest.cpp
+        ${PNG2AMIGA_CORE_SOURCES}
+    )
+    target_include_directories(png2amiga-assets PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(png2amiga-assets PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode)
+    target_compile_options(png2amiga-assets PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+
     if(MINGW)
         # std::print's terminal helpers (__open_terminal, __write_to_terminal)
         # live in libstdc++exp.a on MinGW rather than the main libstdc++.a.
@@ -114,6 +131,7 @@ else()
         # target_link_libraries (not CMAKE_EXE_LINKER_FLAGS, which is positioned
         # before objects and won't pull any symbols from a static archive).
         target_link_libraries(png2amiga PRIVATE -lstdc++exp)
+        target_link_libraries(png2amiga-assets PRIVATE -lstdc++exp)
     endif()
 
     enable_testing()

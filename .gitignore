@@ -2,6 +2,8 @@ build/
 build-wasm/
 build-asan/
 build-tsan/
+engine/build-amiga/
+engine/build-host/
 service/toolchain/dos/djgpp/
 .cache/
 .claude/

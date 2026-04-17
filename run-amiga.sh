@@ -63,8 +63,8 @@ done
 case "$MODEL" in
     A500)
         # Stock A500: 512K chip + 512K slow (trapdoor expansion)
-        CHIP=512
-        SLOW=512
+        CHIP=1024
+        SLOW=0
         FAST=0
         ;;
     *)
