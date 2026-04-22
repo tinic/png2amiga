@@ -10,7 +10,6 @@
 #include "dither.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
-#include "cga_font.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
@@ -188,7 +187,7 @@ void print_usage() {
     std::println(stderr,
         "png2amiga {}\n"
         "\n"
-        "Usage: png2amiga [options] input.[png|jpg|webp] [-o output.png|output.iff|output.h]\n"
+        "Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]\n"
         "\n",
         png2amiga::version);
     std::println(stderr,
@@ -215,10 +214,14 @@ void print_usage() {
         "         cga-composite (160x200 effective, 16 colors via NTSC artifacting)\n"
         "    Text-mode graphics (AREA 5150 style glyph matching):\n"
         "         cga-text80x100  (CGA 8x8 font, 2-scanline cells, 80x100 cells)\n"
-        "         cga-text80x200  (CGA 8x8 font, 1-scanline cells, 80x200 cells)\n"
-        "         ega-text80x350  (EGA 8x14 font, 1-scanline cells, 80x350 cells)\n"
         "  --native-par                    Preserve source aspect on DOS hardware\n"
         "                                  (letterbox/pillarbox into the fixed buffer)\n"
+        "  --cga-palette <p>               CGA 320 palette variant: p0-low, p0-high,\n"
+        "                                  p1-low, p1-high (default: auto-pick best)\n"
+        "  --cga-bg <0..15>                CGA background color (master palette index,\n"
+        "                                  default: 0/black)\n"
+        "  --cga-text-metric <m>           CGA text-mode cell match metric:\n"
+        "                                  blur (default), mse\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
         "  --copper                        Copper-Augmented Palette (CAP):\n"
@@ -301,7 +304,8 @@ void print_usage() {
         "  .iff extension -> IFF ILBM Amiga image file\n"
         "  .h extension   -> C header with UWORD bitplane arrays\n"
         "  .raw extension -> raw interleaved bitplane data (no header)\n"
-        "  .pal extension -> OCS 12-bit palette (2 bytes/color, big-endian 0x0RGB)");
+        "  .pal extension -> OCS 12-bit palette (2 bytes/color, big-endian 0x0RGB)\n"
+        "  .pi1/.pi2/.pi3 -> Atari Degas image (requires Atari ST/STE mode)");
 }
 
 Result<dither::Method> parse_dither_method(std::string_view s) {
@@ -3073,7 +3077,8 @@ int main(int argc, char* argv[]) {
     //   - CGA: hardware-fixed palettes can't be reprogrammed.
     bool skip_refine = amiga::is_chunky(config->mode) ||
                        amiga::is_cga(config->mode) ||
-                       amiga::is_ega(config->mode);
+                       amiga::is_ega(config->mode) ||
+                       amiga::is_atari_hi(config->mode);
     if (config->refine_iterations > 0 && config->palette_file.empty() &&
         !skip_refine) {
         auto refined = quantize::refine_with_dither(

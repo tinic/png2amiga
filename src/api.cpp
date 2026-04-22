@@ -1,7 +1,6 @@
 #include "api.hpp"
 #include "amiga.hpp"
 #include "bitplane.hpp"
-#include "cga_font.hpp"
 #include "cga_text.hpp"
 #include "cheader.hpp"
 #include "cheader_dos_c.hpp"
@@ -402,6 +401,12 @@ struct PipelineResult {
     // CRTC max-scan-line register; zero for all other modes.
     std::uint8_t text_scanline_offset = 0;
     std::uint8_t text_cell_height = 0;
+
+    // CGA 320x200 (mode 4): byte the DJGPP viewer must write to port 0x3D9
+    // so the hardware matches the auto-picked palette+bg variant. Low nibble =
+    // bg color (master index), bit 4 = bright, bit 5 = palette select. 0xFF
+    // means "not a CGA-320 run" (viewer falls back to its default 0x30).
+    std::uint8_t cga_mode_ctrl2 = 0xFF;
 };
 
 // Round height. Only force even for interlace (fields must be equal).
@@ -1307,6 +1312,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     Palette pal;
     std::vector<bool> locked_mask(max_colors, false);
+    // CGA-320 only: set to the 0x3D9 mode-control-2 byte the DJGPP viewer
+    // must write to match the auto-picked palette variant (bg=0 since the
+    // API layer doesn't expose --cga-bg). 0xFF means "not set".
+    std::uint8_t cga_mode_ctrl2 = 0xFF;
     if (amiga::is_atari_hi(mode)) {
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
     } else if (mode == amiga::Mode::cga_640) {
@@ -1348,6 +1357,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         auto pal4 = palette::cga_build_palette(best, 0);
         pal.colors.assign(pal4.begin(), pal4.end());
+        // Encode picked variant into the hardware 0x3D9 byte: bit5 = palette
+        // select (p0/p1), bit4 = intensity (low/high), bits 0-3 = bg (= 0).
+        cga_mode_ctrl2 = static_cast<std::uint8_t>(static_cast<int>(best) << 4);
     } else if (user_pal) {
         auto loaded = load_user_palette(options);
         if (!loaded) return std::unexpected{loaded.error()};
@@ -1428,7 +1440,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     //     and drops PSNR by 3+ dB.
     if (!has_user_palette(options) && dith.method != dither::Method::none &&
         !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
-        !amiga::is_ega(mode)) {
+        !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             *image,
             Palette{"refined", {pal.colors.begin(),
@@ -1505,6 +1517,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.psnr = color_space::compute_psnr_blurred(
         image->pixels(), result.rendered.pixels(),
         image->width(), image->height());
+    result.cga_mode_ctrl2 = cga_mode_ctrl2;
     return result;
 }
 
@@ -1682,10 +1695,8 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
             else
                 raw = cheader_dos_c::pack_cga_banked(
                     result->indices, w, h, mode);
-            // TODO: api::Options doesn't expose the auto-picked CGA
-            // palette variant. Default cga_mode_ctrl2 (palette 1 high)
-            // may not match the encoder's choice — viewer will show
-            // wrong colors on cga_320 if encoder picked p0_*.
+            if (mode == Mode::cga_320 && result->cga_mode_ctrl2 != 0xFF)
+                opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
         } else if (mode == Mode::cga_text80x100) {
             raw = result->raw_frame;   // char+attr pairs
         } else if (mode == Mode::ega_320 || mode == Mode::ega_640 ||

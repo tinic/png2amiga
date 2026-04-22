@@ -15,3 +15,11 @@ web/dist/
 test_output/
 .DS_Store
 fantasy.cpp
+
+# Local scratch / debug artifacts (not shipped)
+/debug.png
+/ega320.png
+/ega350_test.c
+/EGA350.IMG
+/Monitor_*.png
+/engine/

@@ -755,8 +755,7 @@ Result<CopperResult> encode_copper(const Image& image,
             if (is_ostro)
                 kernel = dither::error_diffusion_kernel(dither::Method::floyd_steinberg);
             bool reverse = (y % 2 == 1);
-            auto ec = dither::adaptive_error_clamp(
-                dither_settings.error_clamp, num_colors);
+            auto ec = dither_settings.error_clamp;
             auto str = dither_settings.strength;
             for (std::size_t step = 0; step < width; ++step) {
                 std::size_t x = reverse ? (width - 1 - step) : step;

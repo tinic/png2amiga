@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.7.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.8.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -436,5 +436,72 @@ else()
                 ${CMAKE_BINARY_DIR}/test_reject_lock_hex.iff
     )
     set_tests_properties("lock-index-bad-hex" PROPERTIES WILL_FAIL TRUE)
+
+    # --- Smoke tests: new DOS / Atari / text modes encode without error ---
+    # One test per mode, PNG output so correctness is visually inspectable and
+    # the existence check guards against regressions.
+    foreach(mode_pair
+        "stf-low;stf_low"
+        "stf-med;stf_med"
+        "stf-hi;stf_hi"
+        "ste-low;ste_low"
+        "ste-med;ste_med"
+        "ste-hi;ste_hi"
+        "cga-320;cga_320"
+        "cga-640;cga_640"
+        "cga-composite;cga_composite"
+        "cga-text80x100;cga_text80x100"
+        "ega-320;ega_320"
+        "ega-640;ega_640"
+        "ega-hi;ega_hi"
+        "vga-13h;vga_13h"
+        "vga-10h;vga_10h"
+        "vga-12h;vga_12h"
+    )
+        list(GET mode_pair 0 mode_flag)
+        list(GET mode_pair 1 mode_slug)
+        add_test(
+            NAME "smoke-${mode_slug}"
+            COMMAND png2amiga --mode ${mode_flag}
+                    ${CMAKE_SOURCE_DIR}/test.png
+                    ${CMAKE_BINARY_DIR}/smoke_${mode_slug}.png
+        )
+        add_test(
+            NAME "smoke-${mode_slug}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke_${mode_slug}.png
+        )
+        set_tests_properties("smoke-${mode_slug}-exists"
+                             PROPERTIES DEPENDS "smoke-${mode_slug}")
+    endforeach()
+
+    # Degas output: .pi1 (low), .pi2 (med), .pi3 (hi).
+    add_test(
+        NAME "smoke-degas-pi1"
+        COMMAND png2amiga --mode ste-low
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/smoke.pi1
+    )
+    add_test(
+        NAME "smoke-degas-pi2"
+        COMMAND png2amiga --mode ste-med
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/smoke.pi2
+    )
+    add_test(
+        NAME "smoke-degas-pi3"
+        COMMAND png2amiga --mode ste-hi
+                ${CMAKE_SOURCE_DIR}/test.png
+                ${CMAKE_BINARY_DIR}/smoke.pi3
+    )
+    foreach(ext pi1 pi2 pi3)
+        add_test(
+            NAME "smoke-degas-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke.${ext}
+        )
+        set_tests_properties("smoke-degas-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-degas-${ext}")
+    endforeach()
 
 endif() # NOT EMSCRIPTEN
