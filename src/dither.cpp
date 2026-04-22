@@ -585,8 +585,7 @@ DitherResult apply_error_diffusion(
     auto w = image.width();
     auto h = image.height();
 
-    auto num_colors = palette_lab.size();
-    float ec = adaptive_error_clamp(error_clamp_val, num_colors);
+    float ec = error_clamp_val;
 
     DitherResult result;
     result.indices.resize(w * h);
@@ -818,8 +817,7 @@ DitherResult apply_gilbert(
         12.0f / 16.0f, 3.0f / 16.0f, 1.0f / 16.0f,
     };
 
-    auto num_colors = palette_lab.size();
-    float ec = adaptive_error_clamp(error_clamp_val, num_colors);
+    float ec = error_clamp_val;
 
     for (std::size_t i = 0; i < curve.size(); ++i) {
         auto [x, y] = curve[i];
@@ -884,8 +882,7 @@ DitherResult apply_ostromoukhov(
     auto w = image.width();
     auto h = image.height();
 
-    auto num_colors = palette_lab.size();
-    float ec = adaptive_error_clamp(error_clamp_val, num_colors);
+    float ec = error_clamp_val;
 
     DitherResult result;
     result.indices.resize(w * h);
