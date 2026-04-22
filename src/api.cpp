@@ -1,7 +1,9 @@
 #include "api.hpp"
 #include "amiga.hpp"
 #include "bitplane.hpp"
+#include "cga_text.hpp"
 #include "cheader.hpp"
+#include "cheader_dos_c.hpp"
 #include "color_space.hpp"
 #include "copper.hpp"
 #include "degas.hpp"
@@ -23,9 +25,11 @@
 #include <cstring>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <unordered_set>
 #include <vector>
 
@@ -63,6 +67,20 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "ste-med") return amiga::Mode::ste_med;
     if (s == "stf-hi") return amiga::Mode::stf_hi;
     if (s == "ste-hi") return amiga::Mode::ste_hi;
+    // IBM PC planar DOS modes. Web UI exposes only the 4-bitplane planar
+    // variants (no chunky VGA 13h / Mode X / Mode Y, no CGA composite, no
+    // glyph-matched text modes) — those require dispatch paths that aren't
+    // wired through api.cpp yet.
+    if (s == "ega-320") return amiga::Mode::ega_320;
+    if (s == "ega-640") return amiga::Mode::ega_640;
+    if (s == "ega-hi")  return amiga::Mode::ega_hi;
+    if (s == "vga-10h") return amiga::Mode::vga_10h;
+    if (s == "vga-12h") return amiga::Mode::vga_12h;
+    if (s == "vga-13h")   return amiga::Mode::vga_13h;
+    if (s == "cga-320") return amiga::Mode::cga_320;
+    if (s == "cga-640") return amiga::Mode::cga_640;
+    if (s == "cga-composite")   return amiga::Mode::cga_composite;
+    if (s == "cga-text80x100")  return amiga::Mode::cga_text80x100;
     return amiga::Mode::lores;
 }
 
@@ -77,6 +95,12 @@ quantize::Algorithm quantize_algo(amiga::Chipset chipset, amiga::Mode mode = ami
     // STF uses brute-force over 512 colors (same algorithm, different precision)
     // STE 12-bit = OCS 12-bit → same brute-force
     if (amiga::is_atari(mode)) return quantize::Algorithm::ocs_bruteforce;
+    // DOS modes: median-cut in continuous RGB, then snap to the target gamut
+    // (EGA-64, VGA 18-bit, or fixed CGA palette). EGA gets a dedicated
+    // histogram path in run_pipeline; the median-cut choice here is a
+    // fallback and matches how the CLI path in main.cpp handles VGA.
+    if (amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_cga(mode))
+        return quantize::Algorithm::median_cut;
     return chipset == amiga::Chipset::aga
         ? quantize::Algorithm::median_cut
         : quantize::Algorithm::ocs_bruteforce;
@@ -85,6 +109,10 @@ quantize::Algorithm quantize_algo(amiga::Chipset chipset, amiga::Mode mode = ami
 void snap_to_chipset(Palette& pal, amiga::Chipset chipset, amiga::Mode mode = amiga::Mode::lores) {
     if (amiga::is_stf(mode)) {
         for (auto& c : pal.colors) c = palette::quantize_to_stf(c);
+    } else if (amiga::is_ega(mode)) {
+        for (auto& c : pal.colors) c = palette::quantize_to_ega(c);
+    } else if (amiga::is_vga(mode)) {
+        for (auto& c : pal.colors) c = palette::quantize_to_vga(c);
     } else if (chipset != amiga::Chipset::aga) {
         for (auto& c : pal.colors) c = palette::quantize_to_ocs(c);
     }
@@ -360,6 +388,25 @@ struct PipelineResult {
     float copper_changes{};
     float quant_error{};
     float psnr{};
+
+    // Mode-specific raw hardware bytes — used by DOS modes that don't flow
+    // through the bitplane encoder (chunky VGA indices, CGA-banked planar
+    // frame, composite pair-packed frame, text-mode char+attr pairs).
+    // If non-empty, convert_raw emits these bytes followed by any palette
+    // bytes the mode requires (VGA DAC for chunky, none for CGA/text).
+    std::vector<std::uint8_t> raw_frame;
+
+    // Text-mode-graphics only (ega_text / cga_text). Needed by the DJGPP
+    // viewer generator to build the shifted custom font and program the
+    // CRTC max-scan-line register; zero for all other modes.
+    std::uint8_t text_scanline_offset = 0;
+    std::uint8_t text_cell_height = 0;
+
+    // CGA 320x200 (mode 4): byte the DJGPP viewer must write to port 0x3D9
+    // so the hardware matches the auto-picked palette+bg variant. Low nibble =
+    // bg color (master index), bit 4 = bright, bit 5 = palette select. 0xFF
+    // means "not a CGA-320 run" (viewer falls back to its default 0x30).
+    std::uint8_t cga_mode_ctrl2 = 0xFF;
 };
 
 // Round height. Only force even for interlace (fields must be equal).
@@ -378,9 +425,13 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     auto params = amiga::get_mode_params(mode);
     auto mode_w = params.screen_width;
     auto src_aspect = static_cast<double>(src_w) / static_cast<double>(src_h);
-    // PAR from mode params; interlace doubles vertical resolution
-    auto par = static_cast<double>(params.preview_scale_x)
-             / static_cast<double>(params.preview_scale_y);
+    // Use the authoritative float PAR from ModeParams. The integer
+    // preview_scale_x/y fields are display-only upscaling factors that
+    // approximate PAR as a ratio of small integers (1:1, 1:2, 2:1). For
+    // DOS modes the real PAR is non-integer (e.g. EGA 640×200 = 0.417,
+    // VGA 13h = 0.833, EGA-hi = 0.73) — the integer approximation was
+    // off by up to 20% and produced wrong letterbox heights.
+    auto par = static_cast<double>(params.par);
     bool interlace = options.interlace || params.is_interlaced;
     if (options.interlace && !params.is_interlaced) par *= 2.0;
 
@@ -409,10 +460,26 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     }
     // Neither: use mode default width, but don't upscale small images
     auto w = std::min(mode_w, src_w);
+    // For Amiga hires, always use the full mode width.
+    if (params.is_hires) w = mode_w;
     auto h = round_height(static_cast<double>(w) * par / src_aspect, interlace);
-    // For fixed-height modes (Atari ST), clamp to screen_height
+    // Fixed-buffer modes (Atari, VGA, EGA, CGA): by default stretch-fit the
+    // source to the full hardware buffer. With --native-par, preserve source
+    // aspect by reducing target_h (letterbox) or target_w (pillarbox).
     auto mode_h = params.screen_height;
-    if (mode_h > 0 && h > mode_h) h = mode_h;
+    if (mode_h > 0) {
+        bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
+                               amiga::is_ega(mode)   || amiga::is_cga(mode) ||
+                               amiga::is_cga_text(mode);
+        if (is_fixed_buffer && !options.native_par) {
+            h = mode_h;  // stretch to fill
+        } else if (h > mode_h) {
+            h = mode_h;
+            w = static_cast<std::size_t>(std::lround(
+                static_cast<double>(h) * src_aspect / par));
+            if (w > params.screen_width) w = params.screen_width;
+        }
+    }
     return {w, h};
 }
 
@@ -461,6 +528,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Atari modes have fixed depth
     if (amiga::is_atari(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
+    // DOS modes: depth also fixed by the hardware buffer.
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode))
+        depth = amiga::get_mode_params(mode).bitplane_depth;
 
     std::vector<bool> tmask;
     auto image = load_and_preprocess(input_data, input_size, options,
@@ -468,21 +538,33 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
 
-    // Atari: center vertically in fixed-height frame if image is shorter
-    auto mode_h = amiga::get_mode_params(mode).screen_height;
-    if (mode_h > 0 && image->height() < mode_h) {
+    // Fixed-buffer modes (Atari, VGA, EGA, CGA): center the image in the full
+    // hardware frame when either dimension is smaller than the buffer.
+    // Atari only uses vertical padding in practice; DOS modes with
+    // native_par may need pillarbox (horizontal) padding too.
+    auto mparams = amiga::get_mode_params(mode);
+    auto mode_h = mparams.screen_height;
+    auto mode_w_fixed = mparams.screen_width;
+    bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
+                           amiga::is_ega(mode)   || amiga::is_cga(mode) ||
+                           amiga::is_cga_text(mode);
+    if (mode_h > 0 && is_fixed_buffer &&
+        (image->height() < mode_h || image->width() < mode_w_fixed)) {
         auto w = image->width();
         auto h = image->height();
-        Image padded(w, mode_h);
-        auto y_off = (mode_h - h) / 2;
+        auto fw = std::max(w, mode_w_fixed);
+        auto fh = std::max(h, mode_h);
+        Image padded(fw, fh);
+        auto x_off = (fw - w) / 2;
+        auto y_off = (fh - h) / 2;
         for (std::size_t y = 0; y < h; ++y)
             for (std::size_t x = 0; x < w; ++x)
-                padded[x, y + y_off] = (*image)[x, y];
+                padded[x + x_off, y + y_off] = (*image)[x, y];
         if (has_transparency) {
-            std::vector<bool> new_mask(w * mode_h, true);
+            std::vector<bool> new_mask(fw * fh, true);
             for (std::size_t y = 0; y < h; ++y)
                 for (std::size_t x = 0; x < w; ++x)
-                    new_mask[(y + y_off) * w + x] = tmask[y * w + x];
+                    new_mask[(y + y_off) * fw + (x + x_off)] = tmask[y * w + x];
             tmask = std::move(new_mask);
         }
         *image = std::move(padded);
@@ -490,6 +572,197 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     auto chipset = resolve_chipset(options.chipset, mode);
     bool is_aga = (chipset == amiga::Chipset::aga);
+
+    // ---- IBM PC DOS: glyph-matched text modes ----
+    // Pre-dither to the 16-entry CGA master palette (so the glyph matcher
+    // sees discrete candidate colors at sub-cell resolution), then call
+    // cga_text::encode to pick (char, fg, bg) per cell. Rendered preview
+    // comes back from cga_text::render. Raw output is char+attr pairs.
+    if (amiga::is_cga_text(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        // Build fg/bg candidate palette: CGA text = fixed IRGB master,
+        // EGA text = image-adaptive 16-of-64 via the EGA histogram quantizer
+        // (same mechanism as EGA graphics modes). The 16 colors correspond
+        // to the ATC palette register load-up on real EGA hardware.
+        std::vector<Color3f> text_pal;
+        text_pal.reserve(16);
+        // All text-graphics modes use kCgaHw (see main.cpp).
+        for (std::size_t i = 0; i < 16; ++i) {
+            text_pal.push_back(
+                color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
+        }
+        // Resolve the per-cell metric. `blur` and `pca` need the
+        // continuous source (pre-dither would destroy the precision
+        // their inner loops rely on); only `mse` benefits from a
+        // pre-dithered input.
+        auto cga_metric =
+            options.cga_text_metric == "mse" ? cga_text::Metric::mse
+                                             : cga_text::Metric::blur;
+        auto dith_method = parse_dither(options.dither);
+        Image dithered(image->width(), image->height());
+        if (cga_metric != cga_text::Metric::mse ||
+            dith_method == dither::Method::none) {
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    dithered[x, y] = (*image)[x, y];
+        } else {
+            auto dith_result = dither::apply(*image, text_pal, {
+                .method = dith_method,
+                .strength = options.dither_strength,
+                .error_clamp = options.error_clamp,
+                .serpentine = true,
+            });
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    dithered[x, y] = text_pal[dith_result.indices[y * image->width() + x]];
+        }
+        auto res = cga_text::encode(dithered, mode, {}, text_pal, -1,
+                                    cga_metric);
+        if (!res) return std::unexpected{res.error()};
+        auto preview = cga_text::render(*res);
+
+        PipelineResult result;
+        result.rendered = std::move(preview);
+        result.palette = text_pal;
+        result.planes.depth = 4;  // conceptually 4-bit attr byte
+        result.mode = mode;
+        result.hires = amiga::get_mode_params(mode).is_hires;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.quant_error = res->total_error;
+        result.psnr = color_space::compute_psnr_blurred(
+            image->pixels(), result.rendered.pixels(),
+            image->width(), image->height());
+        result.raw_frame = std::move(res->data);
+        result.text_scanline_offset = res->scanline_offset;
+        result.text_cell_height =
+            static_cast<std::uint8_t>(res->cell_height_scanlines);
+        // Note: convert_raw appends the 16-byte IrgbIRGB ATC palette
+        // onto .raw output for EGA text modes — kept out of raw_frame
+        // here so convert_viewer can hand only the char+attr bytes to
+        // the DJGPP viewer generator.
+        return result;
+    }
+
+    // ---- IBM PC CGA composite (160x200 effective, 16 NTSC-artifact colors) ----
+    // The CGA composite palette is fixed (16 colors derived from the 4-bit
+    // 2bpp pixel-pair pattern). We quantize to that palette and render via
+    // palette lookup. The raw .raw output packs pattern nibbles into the
+    // banked 16KB CGAPIC frame.
+    if (mode == amiga::Mode::cga_composite) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto pal16 = palette::cga_composite_palette();
+        std::vector<Color3f> pal_vec(pal16.begin(), pal16.end());
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        auto dith_result = dither::apply(*image, pal_vec, dith);
+
+        Image rendered(image->width(), image->height());
+        for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
+            rendered.pixels()[i] = pal_vec[dith_result.indices[i]];
+
+        // Pack into banked CGAPIC layout: 16KB total, even rows in 0x0000
+        // bank, odd rows in 0x2000 bank. Each byte holds 2 composite pixels
+        // (two 4-bit patterns).
+        auto w = image->width(), h = image->height();
+        std::vector<std::uint8_t> raw(16384, 0);
+        auto row_bytes = 320u / 4u;  // 80 bytes per row (2bpp, 4 px/byte)
+        for (std::size_t y = 0; y < h; ++y) {
+            auto bank = (y & 1) ? 0x2000u : 0x0000u;
+            auto row_off = bank + (y >> 1) * row_bytes;
+            for (std::size_t bx = 0; bx < row_bytes; ++bx) {
+                auto p0 = palette::cga_composite_pattern(
+                    dith_result.indices[y * w + bx * 2]);
+                auto p1 = palette::cga_composite_pattern(
+                    dith_result.indices[y * w + bx * 2 + 1]);
+                raw[row_off + bx] = static_cast<std::uint8_t>((p0 << 4) | p1);
+            }
+        }
+
+        PipelineResult result;
+        result.rendered = std::move(rendered);
+        result.palette = std::move(pal_vec);
+        result.indices = std::move(dith_result.indices);
+        result.planes.depth = 2;  // 2bpp packed
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.quant_error = dith_result.total_error;
+        result.psnr = color_space::compute_psnr_blurred(
+            image->pixels(), result.rendered.pixels(), w, h);
+        result.raw_frame = std::move(raw);
+        return result;
+    }
+
+    // ---- IBM PC VGA 256-color chunky modes (13h, Mode X, Mode Y) ----
+    // 8bpp indices + 256 entries of 18-bit DAC palette. For Mode X / Mode Y
+    // raw_frame holds the 4 column-interleaved planes back-to-back; for
+    // Mode 13h it's the straight row-major byte array.
+    if (amiga::is_vga(mode) && amiga::is_chunky(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto max_colors = std::size_t{1} << depth;  // 256 for chunky VGA
+        auto quantized = quantize::quantize(*image, max_colors,
+                                             quantize::Algorithm::median_cut,
+                                             options.palette_diversity);
+        if (!quantized) return std::unexpected{quantized.error()};
+        for (auto& c : quantized->colors) c = palette::quantize_to_vga(c);
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        auto dith_result = dither::apply(*image, quantized->colors, dith);
+
+        auto w = image->width(), h = image->height();
+        Image rendered(w, h);
+        for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
+            rendered.pixels()[i] = quantized->colors[dith_result.indices[i]];
+
+        std::vector<std::uint8_t> raw;
+        if (mode == amiga::Mode::vga_13h) {
+            raw = dith_result.indices;
+        } else {
+            // Mode X / Mode Y: 4 column-interleaved planes.
+            auto plane_w = w / 4;
+            raw.reserve(plane_w * h * 4);
+            for (std::size_t p = 0; p < 4; ++p) {
+                for (std::size_t y = 0; y < h; ++y) {
+                    for (std::size_t bx = 0; bx < plane_w; ++bx) {
+                        raw.push_back(dith_result.indices[y * w + bx * 4 + p]);
+                    }
+                }
+            }
+        }
+
+        PipelineResult result;
+        result.rendered = std::move(rendered);
+        result.palette = quantized->colors;
+        result.indices = std::move(dith_result.indices);
+        result.planes.depth = 8;  // 8bpp chunky
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.quant_error = dith_result.total_error;
+        result.psnr = color_space::compute_psnr_blurred(
+            image->pixels(), result.rendered.pixels(), w, h);
+        result.raw_frame = std::move(raw);
+        return result;
+    }
 
     // --- HAM modes: use dedicated HAM encoder ---
     if (amiga::is_ham(mode)) {
@@ -1039,8 +1312,54 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     Palette pal;
     std::vector<bool> locked_mask(max_colors, false);
+    // CGA-320 only: set to the 0x3D9 mode-control-2 byte the DJGPP viewer
+    // must write to match the auto-picked palette variant (bg=0 since the
+    // API layer doesn't expose --cga-bg). 0xFF means "not set".
+    std::uint8_t cga_mode_ctrl2 = 0xFF;
     if (amiga::is_atari_hi(mode)) {
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
+    } else if (mode == amiga::Mode::cga_640) {
+        // CGA 2-color monochrome: fixed black + white.
+        pal.colors = {Color3f{0.0f, 0.0f, 0.0f}, Color3f{1.0f, 1.0f, 1.0f}};
+    } else if (mode == amiga::Mode::cga_320) {
+        // CGA 320x200 4-color: auto-select the hardware palette whose 4
+        // colors best cover the image. We try all four variants
+        // (p0-low green/red/brown, p0-high light-green/red/yellow,
+        //  p1-low cyan/magenta/grey, p1-high cyan/magenta/white)
+        // with the default black background and pick the one with
+        // lowest sum-of-nearest-OKLab-distance² across the image.
+        palette::CgaPalette best = palette::CgaPalette::p1_high;
+        float best_err = std::numeric_limits<float>::infinity();
+        for (auto p : {palette::CgaPalette::p0_low,
+                       palette::CgaPalette::p0_high,
+                       palette::CgaPalette::p1_low,
+                       palette::CgaPalette::p1_high}) {
+            auto pal4 = palette::cga_build_palette(p, 0);
+            std::array<color_space::OKLab, 4> pal_lab;
+            for (std::size_t i = 0; i < 4; ++i)
+                pal_lab[i] = color_space::linear_to_oklab(pal4[i]);
+            float err = 0.0f;
+            for (std::size_t y = 0; y < image->height(); ++y) {
+                for (std::size_t x = 0; x < image->width(); ++x) {
+                    auto lab = color_space::linear_to_oklab((*image)[x, y]);
+                    float d_best = std::numeric_limits<float>::infinity();
+                    for (auto& pl : pal_lab) {
+                        float dL = lab.L - pl.L;
+                        float da = lab.a - pl.a;
+                        float db = lab.b - pl.b;
+                        float d = dL*dL + da*da + db*db;
+                        if (d < d_best) d_best = d;
+                    }
+                    err += d_best;
+                }
+            }
+            if (err < best_err) { best_err = err; best = p; }
+        }
+        auto pal4 = palette::cga_build_palette(best, 0);
+        pal.colors.assign(pal4.begin(), pal4.end());
+        // Encode picked variant into the hardware 0x3D9 byte: bit5 = palette
+        // select (p0/p1), bit4 = intensity (low/high), bits 0-3 = bg (= 0).
+        cga_mode_ctrl2 = static_cast<std::uint8_t>(static_cast<int>(best) << 4);
     } else if (user_pal) {
         auto loaded = load_user_palette(options);
         if (!loaded) return std::unexpected{loaded.error()};
@@ -1056,14 +1375,39 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 locked_mask[idx] = true;
             }
         }
+    } else if (mode == amiga::Mode::ega_320 || mode == amiga::Mode::ega_640) {
+        // Same fix as main.cpp: palette order must be kCgaHw exactly so
+        // bitplane index i = kCga IRGB index i; assemble_locked_palette
+        // with reserve_color0 otherwise shifts the palette up by 1.
+        pal.colors.reserve(16);
+        for (auto hex : palette::kCgaHw)
+            pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
     } else {
         auto qcount = palette_locks::quant_count(max_colors, options.locks,
                                                  reserve_zero);
-        auto quantized = quantize::quantize(*image, qcount,
-                                            quantize_algo(chipset, mode),
-                                            options.palette_diversity);
+        Result<Palette> quantized;
+        if (amiga::is_ega(mode)) {
+            // All EGA modes on a 5154 ECD support 16 of the 64-color
+            // IrgbIRGB gamut — the monitor reads all 6 signal pins at
+            // both 15.75 kHz (200-line) and 21.85 kHz (350-line) hsync
+            // rates. Dedicated histogram quantizer picks K distinct
+            // entries; continuous median-cut + post-snap collapses ~30%
+            // of slots on typical images. Pre-snap the image to the
+            // EGA gamut first so the quantizer is consistent with it.
+            Image snapped(image->width(), image->height());
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    snapped[x, y] = palette::quantize_to_ega((*image)[x, y]);
+            quantized = quantize::ega_histogram(snapped, qcount);
+        } else {
+            quantized = quantize::quantize(*image, qcount,
+                                           quantize_algo(chipset, mode),
+                                           options.palette_diversity);
+        }
         if (!quantized) return std::unexpected{quantized.error()};
-        if (amiga::is_stf(mode)) snap_to_chipset(*quantized, chipset, mode);
+        // Snap palette to discrete gamut where applicable (STF/EGA/VGA).
+        if (amiga::is_stf(mode) || amiga::is_vga(mode))
+            snap_to_chipset(*quantized, chipset, mode);
         auto assembled = palette_locks::assemble_locked_palette(
             *quantized, options.locks, max_colors, reserve_zero, chipset, mode);
         pal = std::move(assembled.palette);
@@ -1082,8 +1426,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Limit palette span to max_colors
     auto pal_size = std::min(pal.size(), max_colors);
 
-    // Dither-aware palette refinement (auto-palette only, 4 iterations)
-    if (!has_user_palette(options) && dith.method != dither::Method::none) {
+    // Dither-aware palette refinement (auto-palette only, 4 iterations).
+    // Skip for:
+    //   - CGA modes: hardware-fixed palettes can't be reprogrammed.
+    //   - Chunky VGA (256 colors): median-cut's initial centroids are
+    //     already near-optimal against the 18-bit DAC grid, and empirically
+    //     refinement HURTS PSNR (~2 dB worse on fantasy.png) while costing
+    //     4× dither passes of extra time.
+    //   - EGA modes: ega_histogram_quantize already picks near-optimal
+    //     16-of-64 slots from the IrgbIRGB gamut with collision avoidance.
+    //     Refinement's per-iteration snap-to-gamut collapses centroids onto
+    //     the same gamut entry (reduces 16 slots → ~11 effective colors)
+    //     and drops PSNR by 3+ dB.
+    if (!has_user_palette(options) && dith.method != dither::Method::none &&
+        !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
+        !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             *image,
             Palette{"refined", {pal.colors.begin(),
@@ -1121,9 +1478,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // Encode to bitplanes (Atari uses word-interleaved layout)
+    // See main.cpp for rationale. DOS planar (EGA + VGA 10h/12h) uses
+    // Layout::standard so planes can be blitted contiguously via the
+    // sequencer map mask.
+    bool dos_planar = (amiga::is_ega(mode) || amiga::is_vga(mode))
+                      && !amiga::is_chunky(mode);
     auto bp_layout = amiga::is_atari(mode)
         ? bitplane::Layout::word_interleaved
-        : bitplane::Layout::interleaved;
+        : dos_planar ? bitplane::Layout::standard
+                     : bitplane::Layout::interleaved;
     auto planes = bitplane::encode(dither_result.indices,
                                    image->width(), image->height(),
                                    depth, bp_layout);
@@ -1154,6 +1517,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.psnr = color_space::compute_psnr_blurred(
         image->pixels(), result.rendered.pixels(),
         image->width(), image->height());
+    result.cga_mode_ctrl2 = cga_mode_ctrl2;
     return result;
 }
 
@@ -1306,6 +1670,84 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
+    // DOS modes: 16-bit C viewer via cheader_dos_c, targeting
+    // ia16-elf-gcc (real-mode 8088+; no DPMI, no 32-bit code).
+    // Build the mode-specific raw bytes + palette bytes, then call
+    // cheader_dos_c::generate which dispatches per mode.
+    if (amiga::is_vga(result->mode) || amiga::is_ega(result->mode) ||
+        amiga::is_cga(result->mode)) {
+        using amiga::Mode;
+        cheader_dos_c::Options opts;
+        if (!options.symbol_name.empty())
+            opts.symbol_name = options.symbol_name;
+
+        auto mode = result->mode;
+        std::size_t w = result->rendered.width();
+        std::size_t h = result->rendered.height();
+        std::vector<std::uint8_t> raw;
+        std::vector<std::uint8_t> palette_bytes;
+
+        if (mode == Mode::cga_320 || mode == Mode::cga_640 ||
+            mode == Mode::cga_composite) {
+            // 16 KB banked CGAPIC frame.
+            if (!result->raw_frame.empty())
+                raw = result->raw_frame;
+            else
+                raw = cheader_dos_c::pack_cga_banked(
+                    result->indices, w, h, mode);
+            if (mode == Mode::cga_320 && result->cga_mode_ctrl2 != 0xFF)
+                opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
+        } else if (mode == Mode::cga_text80x100) {
+            raw = result->raw_frame;   // char+attr pairs
+        } else if (mode == Mode::ega_320 || mode == Mode::ega_640 ||
+                   mode == Mode::ega_hi) {
+            raw = result->planes.data;
+            // EGA palette: CGA-compat IRGB for 200-line (ega_320/640),
+            // full IrgbIRGB via linear_to_ega+ega_to_hw for 350-line.
+            palette_bytes.reserve(16);
+            if (mode == Mode::ega_hi) {
+                for (auto& c : result->palette) {
+                    auto rrggbb = palette::linear_to_ega(c);
+                    palette_bytes.push_back(palette::ega_to_hw(rrggbb));
+                }
+                while (palette_bytes.size() < 16) palette_bytes.push_back(0);
+            } else {
+                for (std::size_t i = 0; i < 16; ++i)
+                    palette_bytes.push_back(static_cast<std::uint8_t>(
+                        (i & 0x07) | ((i & 0x08) << 1)));
+            }
+        } else if (mode == Mode::vga_13h) {
+            // Chunky 256-color: build 768-byte DAC.
+            palette_bytes.assign(768, 0);
+            std::size_t n = std::min<std::size_t>(result->palette.size(), 256);
+            for (std::size_t i = 0; i < n; ++i) {
+                auto v = palette::linear_to_vga(result->palette[i]);
+                palette_bytes[i * 3 + 0] = (v >> 16) & 0x3F;
+                palette_bytes[i * 3 + 1] = (v >>  8) & 0x3F;
+                palette_bytes[i * 3 + 2] =  v        & 0x3F;
+            }
+            raw.assign(result->indices.begin(), result->indices.end());
+        } else if (mode == Mode::vga_10h || mode == Mode::vga_12h) {
+            raw = result->planes.data;
+            palette_bytes.reserve(48);
+            std::size_t n = std::min<std::size_t>(result->palette.size(), 16);
+            for (std::size_t i = 0; i < n; ++i) {
+                auto v = palette::linear_to_vga(result->palette[i]);
+                palette_bytes.push_back((v >> 16) & 0x3F);
+                palette_bytes.push_back((v >>  8) & 0x3F);
+                palette_bytes.push_back( v        & 0x3F);
+            }
+            while (palette_bytes.size() < 48) palette_bytes.push_back(0);
+        } else {
+            return make_error("DOS viewer: mode not supported on ia16 path");
+        }
+
+        auto viewer = cheader_dos_c::generate(mode, w, h, raw, palette_bytes, opts);
+        if (!viewer) return make_error(viewer.error().message);
+        std::vector<std::uint8_t> bytes(viewer->begin(), viewer->end());
+        return make_result(std::move(bytes), *result);
+    }
+
     // Pad or crop bitplanes to display width for correct hardware row stride.
     auto mode = result->mode;
     auto display_w = result->hires
@@ -1362,6 +1804,59 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
 
     auto chipset = resolve_chipset(options.chipset, result->mode);
     bool aga = (chipset == amiga::Chipset::aga);
+
+    // IBM PC / DOS modes: mode-specific raw layout.
+    //   Text modes (CGA 8x8 / EGA 8x14): char+attr pairs (raw_frame). No
+    //     palette — attribute byte already encodes fg/bg from the fixed
+    //     16-entry CGA master palette.
+    //   CGA composite: 16KB banked CGAPIC frame (raw_frame), no palette.
+    //   CGA 320/640: 4 bitplanes (or 1) from bitplane encoder — palette is
+    //     fixed in hardware so we emit just the planes.
+    //   VGA 13h: 8bpp indices (raw_frame) + 256×3-byte DAC palette
+    //     (6-bit per channel).
+    //   EGA: 4 bitplanes + 16-byte IrgbIRGB palette.
+    //   VGA planar (Mode 10h / 12h): 4 planes + 16×3-byte DAC palette.
+    if (amiga::is_cga_text(result->mode) ||
+        result->mode == amiga::Mode::cga_composite ||
+        amiga::is_chunky(result->mode)) {
+        std::vector<std::uint8_t> raw = std::move(result->raw_frame);
+        if (amiga::is_chunky(result->mode)) {
+            for (auto& c : result->palette) {
+                auto v = palette::linear_to_vga(c);
+                raw.push_back(static_cast<std::uint8_t>((v >> 16) & 0x3F));
+                raw.push_back(static_cast<std::uint8_t>((v >> 8)  & 0x3F));
+                raw.push_back(static_cast<std::uint8_t>( v        & 0x3F));
+            }
+        }
+        return make_result(std::move(raw), *result);
+    }
+    if (amiga::is_ega(result->mode) || amiga::is_vga(result->mode) ||
+        amiga::is_cga(result->mode)) {
+        std::vector<std::uint8_t> raw;
+        if (amiga::is_cga(result->mode)) {
+            // CGA 320/640: pack indices into the banked 16 KB CGAPIC
+            // frame. Palette is hardware-fixed so we emit no palette bytes.
+            raw = cheader_dos_c::pack_cga_banked(
+                result->indices, result->rendered.width(),
+                result->rendered.height(), result->mode);
+        } else {
+            raw = std::move(result->planes.data);
+            if (amiga::is_ega(result->mode)) {
+                for (auto& c : result->palette) {
+                    auto e = palette::linear_to_ega(c);
+                    raw.push_back(palette::ega_to_hw(e));
+                }
+            } else if (amiga::is_vga(result->mode)) {
+                for (auto& c : result->palette) {
+                    auto v = palette::linear_to_vga(c);
+                    raw.push_back(static_cast<std::uint8_t>((v >> 16) & 0x3F));
+                    raw.push_back(static_cast<std::uint8_t>((v >> 8)  & 0x3F));
+                    raw.push_back(static_cast<std::uint8_t>( v        & 0x3F));
+                }
+            }
+        }
+        return make_result(std::move(raw), *result);
+    }
 
     // Raw format: bitplanes + palette + copper data (all big-endian)
     std::vector<std::uint8_t> raw = std::move(result->planes.data);

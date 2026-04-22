@@ -1,11 +1,30 @@
 #!/usr/bin/env python3
-"""Compile service: receives png2amiga viewer .cpp source, returns .exe or .adf.
+"""Compile service: receives png2amiga viewer .cpp source, returns an Amiga
+binary. Each compile runs inside a bubblewrap (bwrap) sandbox:
 
-Compilation runs inside a bubblewrap (bwrap) sandbox:
 - Read-only access to toolchain binaries and headers
-- Read-write access to temp directory only
+- Read-write access to a fresh temp directory only
 - No network, no access to host filesystem
-- apt install bubblewrap
+- `apt install bubblewrap`
+
+Supported `?format=` values (POST /api/compile):
+    exe — AmigaOS .exe (hunk format) via m68k-amiga-elf-gcc + elf2hunk
+    adf — Amiga bootable floppy (880 KB) via exe2adf
+
+Toolchain layout on the server (under service/toolchain/ or
+/var/www/png2amiga/service/toolchain/):
+    amiga/linux/opt/bin/m68k-amiga-elf-gcc — Amiga cross-gcc
+    amiga/linux/elf2hunk                    — Amiga hunk linker
+    amiga/linux/exe2adf                     — Amiga floppy builder
+    amiga/dh0/                              — Amiga ADF startup files
+    amiga/template/                         — Amiga C startup (gcc8_*.s/c)
+
+DOS viewers are no longer compiled server-side: the generator now emits
+a self-contained .c file (see src/cheader_dos_c.cpp) that the user
+compiles locally with ia16-elf-gcc.
+
+Dev fallback: if service/toolchain/ is absent, uses
+third_party/vscode-amiga-debug/.
 """
 
 import gzip
@@ -20,10 +39,23 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
-# Toolchain: service/toolchain/ (deployed) or third_party/vscode-amiga-debug/ (dev)
-_LOCAL_TC = os.path.join(SCRIPT_DIR, "toolchain")
-_PROJECT_TC = os.path.join(PROJECT_ROOT, "third_party", "vscode-amiga-debug")
-_TC_ROOT = _LOCAL_TC if os.path.isdir(_LOCAL_TC) else _PROJECT_TC
+# --- Amiga toolchain ---
+# Three-tier lookup:
+#   service/toolchain/amiga/         (preferred new layout, Amiga + DOS coexist)
+#   service/toolchain/               (legacy deploy layout — kept to avoid
+#                                     breaking existing production servers)
+#   third_party/vscode-amiga-debug/  (dev vendored copy)
+_LOCAL_TC_AMIGA  = os.path.join(SCRIPT_DIR, "toolchain", "amiga")
+_LEGACY_TC       = os.path.join(SCRIPT_DIR, "toolchain")
+_PROJECT_TC_AMIGA = os.path.join(PROJECT_ROOT, "third_party", "vscode-amiga-debug")
+if os.path.isdir(_LOCAL_TC_AMIGA):
+    _TC_ROOT = _LOCAL_TC_AMIGA
+elif (os.path.isdir(_LEGACY_TC) and
+      os.path.isfile(os.path.join(_LEGACY_TC, "bin", "linux",
+                                  "opt", "bin", "m68k-amiga-elf-gcc"))):
+    _TC_ROOT = _LEGACY_TC
+else:
+    _TC_ROOT = _PROJECT_TC_AMIGA
 TOOLCHAIN = os.path.join(_TC_ROOT, "bin")
 TEMPLATE = os.path.join(_TC_ROOT, "template")
 SUPPORT = os.path.join(TEMPLATE, "support")
@@ -36,12 +68,17 @@ ELF2HUNK = os.path.join(TOOLCHAIN, PLATFORM, "elf2hunk")
 EXE2ADF = os.path.join(TOOLCHAIN, PLATFORM, "exe2adf")
 DH0 = os.path.join(TOOLCHAIN, "dh0")  # startup-sequence + system commands for ADF
 
+# DOS server-side compile path (DJGPP + CWSDPMI) was removed when the
+# generator switched to ia16-elf-gcc (see src/cheader_dos_c.cpp). The
+# .c source the API now returns is compiled locally by the user with
+# `ia16-elf-gcc -march=i80286 -mcmodel=small -Os -o foo.exe foo.c`.
+
 PORT = int(os.environ.get("PORT", "3001"))
 MAX_BODY = 5 * 1024 * 1024  # 5MB max source size
 
 
 def _sandbox(cmd, tmpdir):
-    """Wrap a command in bubblewrap sandbox."""
+    """Wrap an Amiga-toolchain command in a bubblewrap sandbox."""
     return [
         "bwrap",
         "--unshare-all",
@@ -116,7 +153,7 @@ class CompileHandler(BaseHTTPRequestHandler):
         params = parse_qs(parsed.query)
         fmt = params.get("format", ["exe"])[0]
         if fmt not in ("exe", "adf"):
-            self.send_error(400, "format must be exe or adf")
+            self.send_error(400, "format must be exe | adf")
             return
 
         content_length = int(self.headers.get("Content-Length", 0))
@@ -128,6 +165,14 @@ class CompileHandler(BaseHTTPRequestHandler):
 
         try:
             result = compile_viewer(source, fmt)
+        except (RuntimeError, ValueError) as e:
+            # Missing DOS toolchain or malformed source — 400/503-ish.
+            self.send_response(503 if isinstance(e, RuntimeError) else 400)
+            self._cors_headers()
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(str(e).encode())
+            return
         except subprocess.CalledProcessError as e:
             self.send_response(500)
             self._cors_headers()
@@ -146,7 +191,7 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Internal error")
             return
 
-        ext = "adf" if fmt == "adf" else "exe"
+        ext = {"adf": "adf", "exe": "exe"}.get(fmt, "bin")
         # Gzip compress — ADF is 880KB mostly empty, exe has compressible image data
         accept = self.headers.get("Accept-Encoding", "")
         if "gzip" in accept:
@@ -185,17 +230,20 @@ class CompileHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    # Hard requirements for the Amiga path (which every deployment supports).
     for tool, path in [("gcc", GCC), ("elf2hunk", ELF2HUNK), ("exe2adf", EXE2ADF)]:
         if not os.path.isfile(path):
             print(f"Error: {tool} not found at {path}", file=sys.stderr)
             sys.exit(1)
 
     if not shutil.which("bwrap"):
-        print("Error: bubblewrap (bwrap) not found. apt install bubblewrap", file=sys.stderr)
+        print("Error: bubblewrap (bwrap) not found. apt install bubblewrap",
+              file=sys.stderr)
         sys.exit(1)
 
     server = HTTPServer(("127.0.0.1", PORT), CompileHandler)
-    print(f"Compile server listening on http://127.0.0.1:{PORT} (sandboxed)", file=sys.stderr)
+    print(f"Compile server listening on http://127.0.0.1:{PORT} (sandboxed)",
+          file=sys.stderr)
     server.serve_forever()
 
 

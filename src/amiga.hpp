@@ -30,6 +30,36 @@ enum class Mode : unsigned char {
     ste_low,            // STE 320x200, 4 bitplanes, 16 colors, 12-bit palette
     ste_med,            // STE 640x200, 2 bitplanes, 4 colors, 12-bit palette
     ste_hi,             // STE 640x400, 1 bitplane, monochrome
+
+    // IBM PC / DOS
+    vga_13h,            // VGA Mode 13h: 320x200, 8bpp chunky, 256 colors, 18-bit DAC
+
+    // VGA high-res planar: same 4-plane layout as EGA modes 10h/12h, but
+    // driven by VGA's programmable 18-bit DAC — any 16 of 262144 colors.
+    vga_10h,            // VGA Mode 10h: 640x350, 4 bitplanes, 16 colors
+    vga_12h,            // VGA Mode 12h: 640x480, 4 bitplanes, 16 colors, square pixels
+
+    // EGA (Enhanced Graphics Adapter) — 16 colors from a 64-entry IrgbIRGB
+    // palette (2-bit per channel, 4 levels: 0, 85, 170, 255). 4-plane planar.
+    ega_320,            // EGA 320x200, 4 bitplanes, 16 colors
+    ega_640,            // EGA 640x200, 4 bitplanes, 16 colors
+    ega_hi,             // EGA 640x350, 4 bitplanes, 16 colors
+
+    // CGA (Color Graphics Adapter) — fixed palettes, two-bank memory.
+    // 320x200 2bpp (4 colors), 640x200 1bpp (2 colors). --cga-palette
+    // selects which of the fixed palette variants (0/1 × low/high intensity).
+    cga_320,            // CGA 320x200, 4 colors from palette 0/1 × low/high
+    cga_640,            // CGA 640x200, monochrome (bg + 1 fg)
+    cga_composite,      // CGA 160x200, 16 colors via NTSC composite artifacting
+                        // (stored as 320x200 2bpp; pairs of 2bpp pixels form
+                        //  a 4-bit pattern that the NTSC decoder interprets
+                        //  as one of 16 colors — used by King's Quest,
+                        //  Space Quest, etc. and by the AREA 5150 demo).
+    cga_text80x100,     // CGA 80x25 text mode with CRTC hack for 2-scanline
+                        // rows: glyph-matched graphics at 80x100 "super-chunky"
+                        // resolution. 16000 bytes (char+attr per cell). Fits
+                        // in real CGA's 16 KB VRAM. Used in 8088 MPH's 1K-
+                        // color mode, AREA 5150, many demos.
 };
 
 // ---------------------------------------------------------------------------
@@ -60,6 +90,12 @@ struct ModeParams {
     // Preview pixel scaling: 1=normal, 2=double that axis
     std::size_t preview_scale_x;    // 2 for lores_interlace (wide pixels)
     std::size_t preview_scale_y;    // 2 for hires (tall pixels)
+    // Pixel aspect ratio = buffer_pixel_width / buffer_pixel_height on the
+    // target hardware display. 1.0 = square; 2.0 = wide (lores interlace);
+    // 0.5 = tall (hires); 0.833 = VGA 320x200 tall (pixel 1.2x taller than wide).
+    // Amiga modes use integer scale_x / scale_y; VGA modes set this
+    // explicitly for non-integer PAR (1.2 CRT pixel).
+    float par = 1.0f;
 };
 
 // ---------------------------------------------------------------------------
@@ -70,31 +106,68 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     //                     w    h  dp  col  ham   ehb   hi    lace  sx sy
     switch (mode) {
     case Mode::lores:
-        return {320, 0, 5, 32,  false, false, false, false, 1, 1};
+        return {320, 0, 5, 32,  false, false, false, false, 1, 1, 1.0f};
     case Mode::lores_interlace:
-        return {320, 0, 5, 32,  false, false, false, true,  2, 1}; // wide pixels
+        return {320, 0, 5, 32,  false, false, false, true,  2, 1, 2.0f};
     case Mode::hires:
-        return {640, 0, 4, 16,  false, false, true,  false, 1, 2}; // tall pixels
+        return {640, 0, 4, 16,  false, false, true,  false, 1, 2, 0.5f};
     case Mode::hires_interlace:
-        return {640, 0, 4, 16,  false, false, true,  true,  1, 1}; // square
+        return {640, 0, 4, 16,  false, false, true,  true,  1, 1, 1.0f};
     case Mode::ham6:
-        return {320, 0, 6, 16,  true,  false, false, false, 1, 1};
+        return {320, 0, 6, 16,  true,  false, false, false, 1, 1, 1.0f};
     case Mode::ham8:
-        return {320, 0, 8, 64,  true,  false, false, false, 1, 1};
+        return {320, 0, 8, 64,  true,  false, false, false, 1, 1, 1.0f};
     case Mode::ehb:
-        return {320, 0, 6, 64,  false, true,  false, false, 1, 1};
+        return {320, 0, 6, 64,  false, true,  false, false, 1, 1, 1.0f};
     // Atari ST/STE — fixed 200 lines, square pixels (low) or tall pixels (med)
     case Mode::stf_low:
-        return {320, 200, 4, 16, false, false, false, false, 2, 2};
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 1.0f};
     case Mode::stf_med:
-        return {640, 200, 2,  4, false, false, true,  false, 1, 2};
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.5f};
     case Mode::ste_low:
-        return {320, 200, 4, 16, false, false, false, false, 2, 2};
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 1.0f};
     case Mode::ste_med:
-        return {640, 200, 2,  4, false, false, true,  false, 1, 2};
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.5f};
     case Mode::stf_hi:
     case Mode::ste_hi:
-        return {640, 400, 1,  2, false, false, true,  false, 1, 1};
+        return {640, 400, 1,  2, false, false, true,  false, 1, 1, 1.0f};
+    // VGA modes: 18-bit DAC (262144 colors), 256-color modes are chunky-8bpp
+    // or Mode X / Mode Y column-planar. 320x200 displays with 1.2 tall PAR;
+    // Mode X at 320x240 is native 4:3.
+    case Mode::vga_13h:
+        return {320, 200, 8, 256, false, false, false, false, 1, 1, 0.833f};
+    // VGA Mode 10h: 640x350 planar, tall-ish pixel (~0.73 PAR, same as EGA hi).
+    // VGA Mode 12h: 640x480 planar, truly square (4:3 CRT, 1:1 pixel).
+    case Mode::vga_10h:
+        return {640, 350, 4, 16, false, false, true, false, 1, 1, 0.730f};
+    case Mode::vga_12h:
+        return {640, 480, 4, 16, false, false, true, false, 1, 1, 1.0f};
+    // EGA modes: 16-color planar, 64-color IrgbIRGB palette.
+    // 320x200 displays 1.2 tall PAR; 640x200 displays 2.4 tall (half-width
+    // of 13h); 640x350 displays ~1.37 tall (the "proper" EGA mode).
+    case Mode::ega_320:
+        return {320, 200, 4, 16, false, false, false, false, 1, 1, 0.833f};
+    case Mode::ega_640:
+        return {640, 200, 4, 16, false, false, true,  false, 1, 2, 0.417f};
+    case Mode::ega_hi:
+        return {640, 350, 4, 16, false, false, true,  false, 1, 1, 0.730f};
+    // CGA: same 1.2 PAR as VGA 13h. cga_320 is 2bpp packed, cga_640 is 1bpp.
+    case Mode::cga_320:
+        return {320, 200, 2,  4, false, false, false, false, 1, 1, 0.833f};
+    case Mode::cga_640:
+        return {640, 200, 1,  2, false, false, true,  false, 1, 2, 0.417f};
+    case Mode::cga_composite:
+        // Hardware buffer is 320x200 (2bpp packed) but each composite pixel
+        // spans 2 buffer pixels, yielding 160x200 effective resolution with
+        // 16 colors. screen_width is the effective (composite) width; the
+        // chunky-pixel stage encodes to 160x200 then we pair-pack to 320x200.
+        return {160, 200, 4, 16, false, false, false, false, 2, 1, 1.667f};
+    // CGA text-mode hacks: glyphs selected per-cell, 16 fg x 16 bg attr.
+    // Logical display is still 640x200; "depth" is conceptually the 4-bit
+    // bg + 4-bit fg attr byte width (not a bitplane count). bitplane_depth
+    // reports 16 here so the palette-handling logic uses 16 colors.
+    case Mode::cga_text80x100:
+        return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
     }
     std::unreachable();
 }
@@ -133,6 +206,50 @@ constexpr bool is_stf(Mode mode) noexcept {
 // Check if a mode is Atari monochrome high-res
 constexpr bool is_atari_hi(Mode mode) noexcept {
     return mode == Mode::stf_hi || mode == Mode::ste_hi;
+}
+
+// Check if a mode is an IBM PC / DOS VGA mode
+constexpr bool is_vga(Mode mode) noexcept {
+    return mode == Mode::vga_13h || mode == Mode::vga_10h ||
+           mode == Mode::vga_12h;
+}
+
+// Check if a mode is a VGA hires planar mode (4-plane, 16-color,
+// programmable 18-bit DAC — Mode 10h 640x350 or Mode 12h 640x480).
+constexpr bool is_vga_planar(Mode mode) noexcept {
+    return mode == Mode::vga_10h || mode == Mode::vga_12h;
+}
+
+// Check if a mode is an IBM PC / DOS EGA mode
+constexpr bool is_ega(Mode mode) noexcept {
+    return mode == Mode::ega_320 || mode == Mode::ega_640 ||
+           mode == Mode::ega_hi;
+}
+
+// Check if a mode is an IBM PC / DOS CGA mode
+constexpr bool is_cga(Mode mode) noexcept {
+    return mode == Mode::cga_320 || mode == Mode::cga_640 ||
+           mode == Mode::cga_composite ||
+           mode == Mode::cga_text80x100;
+}
+
+// Check if the mode uses NTSC composite artifacting to produce its colors.
+// Affects encoding (pixel pairs → color) and should disable ordered/error
+// dithering in ways that break the artifact pattern.
+constexpr bool is_composite(Mode mode) noexcept {
+    return mode == Mode::cga_composite;
+}
+
+// Check if the mode is a CGA text-mode graphics hack (glyph-per-cell).
+constexpr bool is_cga_text(Mode mode) noexcept {
+    return mode == Mode::cga_text80x100;
+}
+
+// Check if a mode uses chunky (1 byte per pixel) output instead of bitplane
+// encoding. Only VGA 256-color mode 13h. VGA Mode 10h/12h are planar
+// (see is_vga_planar); EGA is planar like Amiga.
+constexpr bool is_chunky(Mode mode) noexcept {
+    return mode == Mode::vga_13h;
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)

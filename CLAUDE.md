@@ -39,6 +39,10 @@ src/
   cheader.hpp/.cpp    C header output: UWORD bitplane arrays + palette for Amiga C projects
   api.hpp/.cpp        Clean API layer for CLI and future WASM frontend
   log.hpp             Logging helpers (std::print on native, no-op on WASM)
+  degas.hpp/.cpp      Atari Degas .pi1/.pi2/.pi3 writer (STF low/med/hi)
+  cga_font.hpp        IBM CGA 8x8 font (viler CGA.F08, public-domain ROM reconstruction)
+  cga_text.hpp/.cpp   CGA text-mode glyph-matching encoder (80x100 super-chunky)
+  cheader_dos_c.*     16-bit DOS C viewer generator (ia16-elf-gcc, real-mode 8088+)
 ```
 
 ## Amiga Graphics Modes
@@ -56,6 +60,38 @@ src/
 
 Height is computed from source aspect ratio (always square pixels).
 Use `--interlace` to set the LACE bit in CAMG. Override dimensions with `--width` and/or `--height`.
+
+## Atari ST/STE Modes
+
+| `--mode` | Resolution | Bitplanes | Colors | Palette precision |
+|----------|------------|-----------|--------|-------------------|
+| `stf-low` | 320×200   | 4         | 16     | 9-bit (STF) |
+| `stf-med` | 640×200   | 2         | 4      | 9-bit (STF) |
+| `stf-hi`  | 640×400   | 1         | 2 (B/W)| monochrome monitor |
+| `ste-low` | 320×200   | 4         | 16     | 12-bit (STE) |
+| `ste-med` | 640×200   | 2         | 4      | 12-bit (STE) |
+| `ste-hi`  | 640×400   | 1         | 2 (B/W)| monochrome monitor |
+
+ST/STE hi-res is hardware-locked to monochrome (white + black). Output to
+`.pi1` / `.pi2` / `.pi3` for Degas (extension determines low/med/hi).
+
+## IBM PC / DOS Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `cga-320` | 320×200  | 4      | Fixed palettes via `--cga-palette` (p0-low/high, p1-low/high); auto-picked if unset |
+| `cga-640` | 640×200  | 2      | Monochrome |
+| `cga-composite` | 160×200 effective | 16 | NTSC artifact colors from 320×200 2bpp |
+| `cga-text80x100` | 80×100 cells | 16 fg×16 bg | Glyph-matched text-mode graphics (AREA 5150 style); IBM CGA 8x8 font |
+| `ega-320` | 320×200 | 16 of 64 | 4-plane IrgbIRGB gamut |
+| `ega-640` | 640×200 | 16 of 64 | 4-plane IrgbIRGB gamut |
+| `ega-hi`  | 640×350 | 16 of 64 | 4-plane IrgbIRGB gamut (full 6-bit per-slot) |
+| `vga-13h` | 320×200 | 256    | 8bpp chunky, 18-bit DAC |
+| `vga-10h` | 640×350 | 16     | 4-plane planar, 18-bit DAC |
+| `vga-12h` | 640×480 | 16     | 4-plane planar, square pixels, 18-bit DAC |
+
+`--native-par` preserves source aspect by letterboxing/pillarboxing into the
+fixed hardware buffer (default is to stretch-fill).
 
 ## Architecture Notes
 
@@ -78,6 +114,9 @@ Use `--interlace` to set the LACE bit in CAMG. Override dimensions with `--width
 - **Palette**: OCS uses 12-bit color (4 bits/channel, 4096 possible colors). AGA uses 24-bit (8 bits/channel). Auto-palette snaps to OCS precision via nibble replication (0xN -> 0xNN).
 - **Palette I/O**: Loads palettes from GIMP .gpl (text with "GIMP Palette" header), IFF CMAP (reads CMAP chunk from any IFF file), or text hex (one RRGGBB per line). Auto-detects format from file content. Loaded colors are quantized to OCS 12-bit. Writes OCS palette as big-endian 16-bit 0x0RGB values (.pal format).
 - **Raw bitplane output**: Writes raw interleaved bitplane data with no container (.raw). For direct inclusion in assembly or bootblock projects. Companion .pal file provides the palette.
+- **DOS viewer output**: Output path ending in `.c` + an IBM PC mode emits a 16-bit freestanding C viewer compilable with `ia16-elf-gcc`. `cheader_dos_c::generate` dispatches per mode and inlines the raw hardware-layout bytes as far-data (`__far`) arrays since EGA/VGA planar frames exceed 64 KB. For CGA-320 the auto-picked palette variant is encoded into the viewer's `outb(0x3D9, ...)` so the hardware matches the encoder's choice; without that wiring the viewer would show wrong colors when the encoder picked a non-default variant.
+- **CGA text-mode graphics**: `cga-text80x100` does glyph-per-cell matching against the IBM CGA 8x8 font (`cga_font_data.inc`, viler CGA.F08, 2 KB). Per cell, picks `(char, fg, bg)` from the fixed 16-color master palette to best match the source cell. Raw output = `cols × rows × 2` bytes (standard PC text buffer, char + attr pairs); no palette appended — attribute byte carries both fg and bg indices. Metric: `--cga-text-metric blur` (default, Pappas-Neuhoff-ish blurred OKLab distance) or `mse`.
+- **Atari Degas I/O**: `.pi1` / `.pi2` / `.pi3` extension on output path writes Degas format (legacy 32-byte header + word-interleaved bitplanes) for `stf_low`/`ste_low`, `stf_med`/`ste_med`, `stf_hi`/`ste_hi` respectively. Atari uses word-interleaved bitplane layout (`bitplane::Layout::word_interleaved`), not the Amiga row-interleaved layout. ST hi-res is hardware-locked to monochrome; both `stf_hi` and `ste_hi` force `{white, black}` regardless of chipset palette precision.
 
 ## Key Design Decisions
 

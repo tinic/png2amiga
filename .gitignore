@@ -2,7 +2,7 @@ build/
 build-wasm/
 build-asan/
 build-tsan/
-service/toolchain/
+service/toolchain/dos/djgpp/
 .cache/
 .claude/
 web/node_modules/
@@ -15,3 +15,11 @@ web/dist/
 test_output/
 .DS_Store
 fantasy.cpp
+
+# Local scratch / debug artifacts (not shipped)
+/debug.png
+/ega320.png
+/ega350_test.c
+/EGA350.IMG
+/Monitor_*.png
+/engine/

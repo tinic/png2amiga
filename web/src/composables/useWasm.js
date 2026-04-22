@@ -5,38 +5,51 @@ let worker = null
 let nextId = 0
 const pending = new Map()
 
-export function useWasm() {
-  const loading = ref(true)
-  const error = ref('')
+// Shared across all useWasm() calls. `loading` flips to false once the worker
+// posts {type:'ready'} after WASM instantiation; prewarmWasm() below sets up
+// that listener before Vue mounts so the user sees live preview faster.
+const sharedLoading = ref(true)
+const sharedError = ref('')
 
-  if (!worker) {
-    worker = new WasmWorker()
-    worker.onmessage = (e) => {
-      const msg = e.data
-      if (msg.type === 'ready') {
-        loading.value = false
-        return
-      }
-      if (msg.type === 'error') {
-        error.value = msg.error
-        loading.value = false
-        return
-      }
-      const cb = pending.get(msg.id)
-      if (cb) {
-        pending.delete(msg.id)
-        if (msg.error) {
-          cb.reject(new Error(msg.error))
-        } else {
-          // Reconstruct typed arrays from transferred buffers
-          const r = msg.result
-          if (r.rgba) r.rgba = new Uint8Array(r.rgba)
-          if (r.data) r.data = new Uint8Array(r.data)
-          cb.resolve(r)
-        }
+function ensureWorker() {
+  if (worker) return
+  worker = new WasmWorker()
+  worker.onmessage = (e) => {
+    const msg = e.data
+    if (msg.type === 'ready') {
+      sharedLoading.value = false
+      return
+    }
+    if (msg.type === 'error') {
+      sharedError.value = msg.error
+      sharedLoading.value = false
+      return
+    }
+    const cb = pending.get(msg.id)
+    if (cb) {
+      pending.delete(msg.id)
+      if (msg.error) {
+        cb.reject(new Error(msg.error))
+      } else {
+        const r = msg.result
+        if (r.rgba) r.rgba = new Uint8Array(r.rgba)
+        if (r.data) r.data = new Uint8Array(r.data)
+        cb.resolve(r)
       }
     }
   }
+}
+
+// Call this as early as possible (e.g. from main.js before app.mount) so the
+// worker — and therefore the WASM fetch + streaming compile — starts in
+// parallel with Vue/PrimeVue bootstrapping, rather than after Converter.vue's
+// setup runs. Idempotent; safe to call multiple times.
+export function prewarmWasm() { ensureWorker() }
+
+export function useWasm() {
+  const loading = sharedLoading
+  const error = sharedError
+  ensureWorker()
 
   function call(fn, ...args) {
     const id = nextId++

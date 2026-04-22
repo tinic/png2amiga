@@ -1021,7 +1021,10 @@ Result<Palette> refine_with_dither(
     if (num_colors < 2) return pal;
 
     bool is_stf = amiga::is_stf(mode);
-    bool snap_to_discrete = (chipset != amiga::Chipset::aga) || is_stf;
+    bool is_vga_mode = amiga::is_vga(mode);
+    bool is_ega_mode = amiga::is_ega(mode);
+    bool snap_to_discrete = (chipset != amiga::Chipset::aga) || is_stf ||
+                            is_vga_mode || is_ega_mode;
 
     auto w = image.width();
     auto h = image.height();
@@ -1078,14 +1081,20 @@ Result<Palette> refine_with_dither(
             };
             auto new_color = color_space::oklab_to_linear(lab).clamped();
             if (is_stf) new_color = palette::quantize_to_stf(new_color);
+            else if (is_vga_mode) new_color = palette::quantize_to_vga(new_color);
+            else if (is_ega_mode) new_color = palette::quantize_to_ega(new_color);
             else if (snap_to_discrete) new_color = palette::quantize_to_ocs(new_color);
 
             // Check convergence (discrete: exact comparison; AGA: epsilon)
             auto& old_color = pal.colors[k];
             if (snap_to_discrete) {
                 auto oh = is_stf ? palette::linear_to_stf(old_color)
+                                 : is_vga_mode ? palette::linear_to_vga(old_color)
+                                 : is_ega_mode ? std::uint32_t{palette::linear_to_ega(old_color)}
                                  : palette::linear_to_ocs(old_color);
                 auto nh = is_stf ? palette::linear_to_stf(new_color)
+                                 : is_vga_mode ? palette::linear_to_vga(new_color)
+                                 : is_ega_mode ? std::uint32_t{palette::linear_to_ega(new_color)}
                                  : palette::linear_to_ocs(new_color);
                 if (oh != nh) { old_color = new_color; changed = true; }
             } else {
@@ -1099,6 +1108,125 @@ Result<Palette> refine_with_dither(
         if (!changed) break;
     }
 
+    return pal;
+}
+
+// ---------------------------------------------------------------------------
+// EGA histogram quantizer — see quantize.hpp for rationale.
+// ---------------------------------------------------------------------------
+Palette ega_histogram(const Image& image, std::size_t K) {
+    std::array<std::uint64_t, 64> hist{};
+    for (std::size_t y = 0; y < image.height(); ++y) {
+        for (std::size_t x = 0; x < image.width(); ++x) {
+            auto e = palette::linear_to_ega(image[x, y]);
+            hist[e]++;
+        }
+    }
+    std::array<color_space::OKLab, 64> gamut_lab;
+    std::array<Color3f, 64> gamut_rgb;
+    for (std::size_t i = 0; i < 64; ++i) {
+        gamut_rgb[i] = palette::ega_to_linear(static_cast<std::uint8_t>(i));
+        gamut_lab[i] = color_space::linear_to_oklab(gamut_rgb[i]);
+    }
+
+    std::vector<std::uint8_t> picked;
+    picked.reserve(K);
+
+    // Seed 1: highest-frequency non-zero bucket.
+    {
+        std::uint64_t best_count = 0; std::uint8_t best = 0;
+        for (std::size_t i = 0; i < 64; ++i) if (hist[i] > best_count) {
+            best_count = hist[i]; best = static_cast<std::uint8_t>(i);
+        }
+        picked.push_back(best);
+    }
+
+    // Seed 2..K: weighted by (count × min_d²_to_existing_picks).
+    while (picked.size() < K) {
+        std::array<double, 64> score{};
+        double total = 0;
+        for (std::size_t i = 0; i < 64; ++i) {
+            if (hist[i] == 0) continue;
+            double min_d = std::numeric_limits<double>::infinity();
+            for (auto p : picked) {
+                if (p == i) { min_d = 0; break; }
+                auto& a = gamut_lab[i]; auto& b = gamut_lab[p];
+                double dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                double d = dL*dL + da*da + db*db;
+                if (d < min_d) min_d = d;
+            }
+            score[i] = static_cast<double>(hist[i]) * min_d;
+            total += score[i];
+        }
+        if (total <= 0) break;
+        std::uint8_t best = 0; double best_s = -1;
+        for (std::size_t i = 0; i < 64; ++i) if (score[i] > best_s) {
+            best_s = score[i]; best = static_cast<std::uint8_t>(i);
+        }
+        picked.push_back(best);
+    }
+
+    // Lloyd refinement in EGA space.
+    constexpr int kMaxIters = 16;
+    for (int iter = 0; iter < kMaxIters; ++iter) {
+        struct Acc { double L{}, a{}, b{}; double w{}; };
+        std::vector<Acc> acc(picked.size());
+        for (std::size_t i = 0; i < 64; ++i) {
+            if (hist[i] == 0) continue;
+            float best_d = std::numeric_limits<float>::infinity();
+            std::size_t best_k = 0;
+            for (std::size_t k = 0; k < picked.size(); ++k) {
+                auto& a = gamut_lab[i]; auto& b = gamut_lab[picked[k]];
+                float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                float d = dL*dL + da*da + db*db;
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            auto w = static_cast<double>(hist[i]);
+            acc[best_k].L += static_cast<double>(gamut_lab[i].L) * w;
+            acc[best_k].a += static_cast<double>(gamut_lab[i].a) * w;
+            acc[best_k].b += static_cast<double>(gamut_lab[i].b) * w;
+            acc[best_k].w += w;
+        }
+        std::vector<std::uint8_t> new_picked(picked.size());
+        std::array<bool, 64> taken{};
+        bool changed = false;
+        std::vector<std::size_t> order(picked.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(),
+                  [&](auto a, auto b) { return acc[a].w > acc[b].w; });
+        for (auto k : order) {
+            if (acc[k].w == 0) {
+                if (!taken[picked[k]]) {
+                    new_picked[k] = picked[k]; taken[picked[k]] = true;
+                    continue;
+                }
+            }
+            auto cent = (acc[k].w > 0)
+                ? color_space::OKLab{
+                      static_cast<float>(acc[k].L / acc[k].w),
+                      static_cast<float>(acc[k].a / acc[k].w),
+                      static_cast<float>(acc[k].b / acc[k].w)}
+                : gamut_lab[picked[k]];
+            std::uint8_t best = 0; float best_d = std::numeric_limits<float>::infinity();
+            for (std::size_t g = 0; g < 64; ++g) {
+                if (taken[g]) continue;
+                auto& gl = gamut_lab[g];
+                float dL = cent.L - gl.L, da = cent.a - gl.a, db = cent.b - gl.b;
+                float d = dL*dL + da*da + db*db;
+                if (d < best_d) { best_d = d; best = static_cast<std::uint8_t>(g); }
+            }
+            new_picked[k] = best;
+            taken[best] = true;
+            if (best != picked[k]) changed = true;
+        }
+        picked = new_picked;
+        if (!changed) break;
+    }
+
+    Palette pal;
+    pal.name = "ega";
+    pal.colors.reserve(picked.size());
+    for (auto p : picked) pal.colors.push_back(gamut_rgb[p]);
     return pal;
 }
 
