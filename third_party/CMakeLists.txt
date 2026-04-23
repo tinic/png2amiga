@@ -7,7 +7,11 @@ add_library(miniz STATIC miniz/miniz.c)
 target_include_directories(miniz SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/miniz)
 
 add_library(spng STATIC libspng/spng.c)
-target_compile_definitions(spng PRIVATE SPNG_USE_MINIZ=1 SPNG_STATIC)
+# SPNG_STATIC must be PUBLIC: on MinGW/MSVC, spng.h without this macro
+# declares SPNG_API as __declspec(dllimport), producing __imp_spng_* symbol
+# references that the static archive can't satisfy at link time.
+target_compile_definitions(spng PRIVATE SPNG_USE_MINIZ=1)
+target_compile_definitions(spng PUBLIC SPNG_STATIC)
 target_include_directories(spng SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libspng)
 target_link_libraries(spng PRIVATE miniz)
 
