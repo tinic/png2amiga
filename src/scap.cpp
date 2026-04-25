@@ -787,8 +787,12 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     //   * --copper-changes N: total combined ≤ N, CAP gets min(N, 2),
     //     SCAP gets the rest.
     //   * Auto: combined ≤ 14, default CAP=2, SCAP=12.
-    constexpr std::size_t kMaxCombinedEhb = copper::max_changes_per_line(
-        /*depth=*/5, false, false, amiga::Chipset::ocs, false);
+    // EHB-specific: empirically OCS hblank can absorb a bit more than
+    // the conservative 14 MOVEs the regular CAP encoder targets. Bumped
+    // to 18 for EHB+SCAP — leaves SCAP at scap_share=16 by default,
+    // approaching the slot count of 19 for fuller mid-line activity.
+    // Hardware verification ongoing; reduce if any overflow shows up.
+    constexpr std::size_t kMaxCombinedEhb = 18;
     std::size_t total_budget_ehb = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombinedEhb)
         : kMaxCombinedEhb;
