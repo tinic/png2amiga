@@ -1071,20 +1071,28 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         //    override or max_changes_per_line auto-default — bounds
         //    the number of registers that need reverting on the next
         //    hblank.
-        // Adaptive per-line SCAP cap: SCAP_swaps[y] + CAP_changes[y+1]
-        // must fit hblank ceiling. cap_changes_for_next = how many
-        // CAP MOVEs line y+1 will emit in its hblank (excluding the
-        // SCAP-revert MOVEs from line y). For the last line nothing
-        // follows, so unbounded by CAP-next.
-        std::size_t cap_changes_for_next =
-            (y + 1 < height && y + 1 < copper_result->scanline_changes.size())
-            ? copper_result->scanline_changes[y + 1].size()
-            : 0u;
-        std::size_t adaptive_cap = (kHblankCeiling > cap_changes_for_next)
-            ? (kHblankCeiling - cap_changes_for_next)
-            : 0u;
-        std::size_t useful_swap_cap =
-            std::min<std::size_t>(scap_share_ehb_max, adaptive_cap);
+        // Per-line adaptive hblank tracking: model the projected
+        // hw_state at end-of-line y as we plan each SCAP swap, and
+        // count registers where projected_state[k] != cap_palettes[y+1]
+        // — that count IS line y+1's hblank load (== CAP MOVEs
+        // emitted there). A swap that targets a register CAP was
+        // already going to change costs no extra hblank; a swap that
+        // targets a "stable" register adds 1. Only refuse swaps that
+        // would push hblank past kHblankCeiling.
+        bool has_next_line = (y + 1 < height &&
+                              y + 1 < copper_result->scanline_palettes.size());
+        std::vector<Color3f> projected_state(P.begin(), P.end());
+        auto reg_diff_with_next = [&](std::size_t k) {
+            auto& a = projected_state[k];
+            auto& b = cap_palettes[y + 1][k];
+            return a.r != b.r || a.g != b.g || a.b != b.b;
+        };
+        std::size_t projected_hblank = 0;
+        if (has_next_line) {
+            for (std::size_t k = 0; k < kBaseColors; ++k)
+                if (reg_diff_with_next(k)) ++projected_hblank;
+        }
+        std::size_t useful_swap_cap = scap_share_ehb_max;
         std::size_t useful_swaps = 0;
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             std::size_t x_lo = std::min(width,
@@ -1104,20 +1112,46 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             }
             if (swap_reg >= 0 && reduction > 0.0f) {
                 auto k = static_cast<std::size_t>(swap_reg);
-                P[k] = swap_color;
-                P_eff[k] = swap_color;
-                P_eff[kBaseColors + k] = half_brite(swap_color);
-                P_eff_lab[k] = color_space::linear_to_oklab(P_eff[k]);
-                P_eff_lab[kBaseColors + k] =
-                    color_space::linear_to_oklab(P_eff[kBaseColors + k]);
-                // SCAP MOVE writes to the hardware register too.
-                hw_state[k] = swap_color;
-                line_moves[y].push_back(make_move(
-                    static_cast<std::uint8_t>(kRegBase + swap_reg),
-                    palette::linear_to_ocs(swap_color),
-                    static_cast<int>(s)));
-                ++total_moves;
-                ++useful_swaps;
+                // Project hblank impact: if the swap value differs
+                // from cap_palettes[y+1][k], hblank gets +1 (revert
+                // MOVE). If it matches OR if projected_state[k]
+                // already differed from cap_palettes[y+1][k] (CAP was
+                // going to change it anyway), the swap may even
+                // SHRINK projected_hblank.
+                int delta = 0;
+                if (has_next_line) {
+                    bool old_diff = reg_diff_with_next(k);
+                    auto& nxt = cap_palettes[y + 1][k];
+                    bool new_diff = (swap_color.r != nxt.r ||
+                                     swap_color.g != nxt.g ||
+                                     swap_color.b != nxt.b);
+                    delta = (new_diff ? 1 : 0) - (old_diff ? 1 : 0);
+                }
+                if (has_next_line &&
+                    projected_hblank + static_cast<std::size_t>(
+                        std::max(0, delta)) > kHblankCeiling) {
+                    // Would push next-line hblank over the ceiling. Skip.
+                    swap_reg = -1;
+                } else {
+                    P[k] = swap_color;
+                    P_eff[k] = swap_color;
+                    P_eff[kBaseColors + k] = half_brite(swap_color);
+                    P_eff_lab[k] = color_space::linear_to_oklab(P_eff[k]);
+                    P_eff_lab[kBaseColors + k] =
+                        color_space::linear_to_oklab(P_eff[kBaseColors + k]);
+                    hw_state[k] = swap_color;
+                    if (has_next_line) {
+                        projected_state[k] = swap_color;
+                        projected_hblank = static_cast<std::size_t>(
+                            static_cast<int>(projected_hblank) + delta);
+                    }
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(kRegBase + swap_reg),
+                        palette::linear_to_ocs(swap_color),
+                        static_cast<int>(s)));
+                    ++total_moves;
+                    ++useful_swaps;
+                }
             }
             strip_eff[s + 1] = P_eff;
             strip_eff_lab[s + 1] = P_eff_lab;
