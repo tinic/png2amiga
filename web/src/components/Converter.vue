@@ -234,11 +234,10 @@ const dpfAvailable = computed(() => {
 })
 
 // SCAP — DPF mid-line palette swaps. SCAP is an extension to CAP
-// (per-line palette evolution); CAP must be on for SCAP to add the
-// mid-line moves on top. Phase 1: OCS DPF lores only, total depth=3
-// (PF2 = 3 bitplanes; PF1 zeroed).
+// (per-line palette evolution); enabling SCAP turns CAP on too, and
+// turning CAP off cascades SCAP off. Phase 1: OCS DPF lores only,
+// total depth=3 (PF2 = 3 bitplanes; PF1 zeroed).
 const scapAvailable = computed(() => {
-  if (!options.copper) return false
   if (!options.dualPlayfield) return false
   const cs = effectiveChipset(options.mode, options.chipset)
   return cs === 'ocs' && options.mode === 'lores' && options.depth === 3
@@ -317,8 +316,8 @@ watch(() => options.dualPlayfield, (on) => {
 })
 watch(() => options.scap, (on) => {
   if (on) {
-    // SCAP is an extension to CAP — bail back if CAP is off.
-    if (!options.copper) { options.scap = false; return }
+    // SCAP is an extension to CAP — make sure CAP is on too.
+    options.copper = true
     // Banned-by-SCAP error-diffusion kernels: their full error
     // propagation breaks across SCAP's per-strip palette boundaries.
     // Only Atkinson survives. If the user is on one, switch them.

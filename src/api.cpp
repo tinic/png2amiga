@@ -1215,7 +1215,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // --- Copper palette mode ---
-    if (options.copper && !amiga::is_ham(mode) && mode != amiga::Mode::ehb) {
+    // SCAP is an extension to CAP — when both are set, the SCAP encoder
+    // owns the per-line copper stream (and adds mid-line MOVEs on top),
+    // so skip the CAP branch entirely.
+    if (options.copper && !options.scap &&
+        !amiga::is_ham(mode) && mode != amiga::Mode::ehb) {
         if (!options.pins.empty()) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
