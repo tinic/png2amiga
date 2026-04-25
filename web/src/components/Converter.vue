@@ -213,11 +213,20 @@ const rawTooltipHtml = computed(() => {
 const showHamControls = computed(() => isHamMode(options.mode))
 
 // Dual playfield: only valid for standard lores/hires Amiga modes
-// (no HAM, no EHB, no Atari/DOS). Forces depth=3 OCS / 4 AGA.
+// (no HAM, no EHB, no Atari/DOS) AND only with the matching depth for
+// the current chipset (3 for OCS = 8 PF2 colours, 4 for AGA = 16).
 const dpfAvailable = computed(() => {
   const m = options.mode
-  return !isHamMode(m) && !isEhbMode(m) &&
-         !isAtariMode(m) && !isDosMode(m)
+  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isDosMode(m)) return false
+  const cs = effectiveChipset(m, options.chipset)
+  return (cs === 'aga') ? options.depth === 4 : options.depth === 3
+})
+
+// SCAP — DPF mid-line palette swaps. Phase 1: OCS DPF lores only.
+const scapAvailable = computed(() => {
+  if (!options.dualPlayfield) return false
+  const cs = effectiveChipset(options.mode, options.chipset)
+  return cs === 'ocs' && options.mode === 'lores'
 })
 
 // Available modes for current chipset
@@ -279,15 +288,21 @@ watch(() => options.mode, (mode, oldMode) => {
   if (!isDosMode(mode)) options.nativePar = false
   // Dual playfield only applies to standard Amiga lores/hires.
   if (!dpfAvailable.value) options.dualPlayfield = false
+  if (!scapAvailable.value) options.scap = false
   track('mode-change', { from: oldMode, to: mode })
 })
 
-// DPF + Copper aren't combined (copper has its own pipeline branch in
-// api.cpp that doesn't run the DPF expansion). Force one off when the
-// other comes on so the user gets predictable behavior.
+// DPF + copper now compose (copper branch in api.cpp expands to PF2 +
+// shifts CAP register targets into the upper palette bank). Just track
+// toggles. SCAP and copper still don't combine — SCAP supplies its own
+// per-line copper stream.
 watch(() => options.dualPlayfield, (on) => {
-  if (on) options.copper = false
+  if (!scapAvailable.value) options.scap = false
   track('dpf-toggle', { enabled: on })
+})
+watch(() => options.scap, (on) => {
+  if (on) options.copper = false
+  track('scap-toggle', { enabled: on })
 })
 
 // When chipset changes, reset mode if current mode isn't available
@@ -942,19 +957,37 @@ async function loadExample(example) {
 
               <!-- Copper-Augmented Palette (Amiga only; not for Atari/DOS) -->
               <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette.">Copper</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Copper</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.copper" :disabled="options.dualPlayfield" />
+                  <ToggleSwitch v-model="options.copper" :disabled="options.scap" />
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
                 </div>
               </div>
 
-              <!-- Dual playfield (standard Amiga lores/hires only). -->
+              <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
               <div v-if="dpfAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Forces depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.dualPlayfield" />
                   <span style="color: #888; font-size: 0.625rem;">PF2 / upper color regs, PF1 zeroed</span>
+                </div>
+              </div>
+
+              <!-- SCAP — DPF mid-line palette swaps (OCS lores only, Phase 1) -->
+              <div v-if="scapAvailable" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP: mid-line palette swaps inside DPF's PF2. Each scanline gets 20 MOVEs evenly spaced across the visible area, evolving the 8-colour PF2 palette ~16 lores px at a time. OCS DPF lores only.">SCAP</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.scap" />
+                  <span style="color: #888; font-size: 0.625rem;">mid-line PF2 swaps (20/line)</span>
+                </div>
+              </div>
+
+              <!-- SCAP slot-tuning debug bundle: black base palette + yellow rulers -->
+              <div v-if="options.scap" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP slot-tuning debug bundle: forces the base-palette MOVEs to 0x0000 (line opens with PF2 black so every visible colour change is attributable to a SCAP MOVE) AND paints yellow PF1 ruler markers at every 4/8/16 px (top-quarter / top-half / full height). Pair with the ramps test image. Leave OFF for production.">SCAP debug</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.scapDebug" />
+                  <span style="color: #888; font-size: 0.625rem;">black base + yellow 4/8/16 rulers</span>
                 </div>
               </div>
 

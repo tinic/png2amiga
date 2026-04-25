@@ -8,6 +8,7 @@
 #include "cga_text.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
+#include "scap.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
 #include "palette.hpp"
@@ -164,6 +165,16 @@ struct Config {
     // shifted into upper color registers (8-15 OCS / 16-31 AGA).
     bool dual_playfield = false;
 
+    // SCAP calibration probe (DPF-only). "" disables. "a"/"b"/"c"/"d"
+    // selects which probe synthesizes the test viewer. Phase 1 only
+    // implements probe A (OCS DPF slot HPOS sweep).
+    std::string scap_probe;
+
+    // SCAP encoder: mid-line palette swaps inside the displayed area, with
+    // up to slot.capacity MOVEs per slot. OCS DPF lores only (Phase 1).
+    bool scap = false;
+    bool scap_debug = false;
+
     // Mask export
     std::string mask_path;             // output path for transparency mask
     bool mask_invert = false;          // invert mask polarity
@@ -232,6 +243,21 @@ void print_usage() {
         "                                  (upper color regs 8-15 OCS / 16-31 AGA)\n"
         "                                  with PF1 (foreground) zeroed. Forces\n"
         "                                  depth=3 (OCS) or 4 (AGA).\n"
+        "  --scap-probe <a|b|c|d>          DPF SCAP calibration probe — synthesizes\n"
+        "                                  a viewer that sweeps mid-line MOVE slots\n"
+        "                                  on real hardware to discover the slot\n"
+        "                                  table. Probe A only (OCS DPF) for now.\n"
+        "  --scap                          SCAP encoder: mid-line palette swaps\n"
+        "                                  inside the displayed area. OCS DPF lores\n"
+        "                                  only (forces --dpf, depth=3).\n"
+        "  --scap-debug                    SCAP slot-tuning debug bundle:\n"
+        "                                    * forces base-palette MOVEs to 0x0000\n"
+        "                                      (line opens with PF2 black; SCAP\n"
+        "                                      MOVEs do every visible change)\n"
+        "                                    * paints yellow PF1 ruler markers\n"
+        "                                      at every 4/8/16 px (top-quarter /\n"
+        "                                      top-half / full height)\n"
+        "                                  Pair with examples/ramps.png.\n"
         "  --copper                        Copper-Augmented Palette (CAP):\n"
         "                                  per-scanline palette swaps via the\n"
         "                                  copper, picked greedily by OKLab\n"
@@ -243,6 +269,9 @@ void print_usage() {
         "HAM encoding:\n"
         "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
         "  --palette-diversity <0-9>       Remove near-duplicate palette entries (experimental)\n"
+        "  --no-reserve-color0             Don't reserve palette index 0 for black\n"
+        "                                  (gives the encoder one extra image colour;\n"
+        "                                  loses transparency / Amiga border colour 0)\n"
         "\n"
         "Dithering:\n"
         "  --dither <method>               none|bayer2x2|bayer4x4|bayer8x8|\n"
@@ -418,6 +447,24 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--dual-playfield" || arg == "--dpf") {
             config.dual_playfield = true;
+            continue;
+        }
+
+        if (arg.starts_with("--scap-probe=")) {
+            config.scap_probe = std::string(arg.substr(13));
+            continue;
+        }
+        if (arg == "--scap-probe" && i + 1 < argc) {
+            config.scap_probe = std::string(argv[++i]);
+            continue;
+        }
+        if (arg == "--scap") {
+            config.scap = true;
+            config.dual_playfield = true;     // SCAP is always DPF-encoded
+            continue;
+        }
+        if (arg == "--scap-debug") {
+            config.scap_debug = true;
             continue;
         }
 
@@ -742,7 +789,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
     }
 
-    if (config.input_path.empty()) {
+    if (config.input_path.empty() && config.scap_probe.empty()) {
         print_usage();
         std::exit(1);
     }
@@ -1601,6 +1648,87 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // --- SCAP calibration probe path ---
+    // Synthesize the probe image + per-line copper ops directly and emit a
+    // viewer .cpp/.adf, bypassing the normal load-image-and-encode pipeline.
+    // Output extension picks .cpp (default) / .h, run through build-amiga.sh
+    // afterwards to produce an ADF.
+    if (!config->scap_probe.empty()) {
+        if (config->output_path.empty()) {
+            std::println(stderr,
+                         "Error: --scap-probe requires -o <output.cpp>");
+            return 1;
+        }
+        auto probe = config->scap_probe;
+        scap::ScapResult res;
+        if (probe == "a") {
+            auto r = scap::make_scap_probe_a_dpf_ocs(320, 256);
+            if (!r) { std::println(stderr, "Probe A error: {}",
+                                   r.error().message); return 1; }
+            res = *std::move(r);
+        } else if (probe == "b" || probe == "c" || probe == "d") {
+            std::println(stderr, "Error: --scap-probe {} not implemented yet "
+                                 "(needs Probe A slot data first)", probe);
+            return 1;
+        } else {
+            std::println(stderr,
+                         "Error: --scap-probe value must be a|b|c|d, got '{}'",
+                         probe);
+            return 1;
+        }
+
+        // Pad palette to 16 entries (DPF emit needs the full upper-register
+        // bank populated even when most are black).
+        if (res.palette.size() < 16)
+            res.palette.resize(16, Color3f{0.0f, 0.0f, 0.0f});
+
+        cheader::CHeaderOptions ch_opts;
+        ch_opts.symbol_name = config->symbol_name.empty()
+            ? std::string("scap_") + res.probe_label
+            : config->symbol_name;
+        ch_opts.aga = false;            // OCS DPF for Phase 1
+        ch_opts.dpf = true;
+        ch_opts.fade_in = false;
+        ch_opts.scap_line_moves = &res.line_moves;
+        ch_opts.scap_label = res.probe_label;
+        ch_opts.scap_anchor_hpos = res.slot_table.line_gate_hpos;
+        ch_opts.scap_total_planes = res.slot_table.total_planes;
+
+        std::println("SCAP probe: {} ({}x{}, {} planes, {} per-line ops)",
+                     res.probe_label,
+                     res.planes.width, res.planes.height,
+                     res.planes.depth,
+                     res.line_moves.empty() ? 0 : res.line_moves[0].size());
+
+        if (ends_with(config->output_path, ".cpp") ||
+            ends_with(config->output_path, ".c")) {
+            auto r = cheader::save_viewer(config->output_path, res.planes,
+                                          res.palette, amiga::Mode::lores,
+                                          ch_opts);
+            if (!r) {
+                std::println(stderr, "Viewer write error: {}",
+                             r.error().message);
+                return 1;
+            }
+            std::println("Viewer: {}", config->output_path);
+        } else if (ends_with(config->output_path, ".h")) {
+            auto r = cheader::save(config->output_path, res.planes,
+                                   res.palette, amiga::Mode::lores,
+                                   ch_opts);
+            if (!r) {
+                std::println(stderr, "Header write error: {}",
+                             r.error().message);
+                return 1;
+            }
+            std::println("Header: {}", config->output_path);
+        } else {
+            std::println(stderr,
+                         "Error: --scap-probe output must be .cpp/.c/.h");
+            return 1;
+        }
+        return 0;
+    }
+
     // --- Validate mode combinations ---
     // (copper + interlace is supported: field 1 gets scanline_palettes
     // for even image rows, field 2 for odd rows. Each field's copper
@@ -2027,14 +2155,14 @@ int main(int argc, char* argv[]) {
                          res.error().message);
             return 1;
         }
-        std::println("Encoded: {} cells ({}x{}), {} bytes, error: {:.2f}, "
-                     "CRTC scanline offset: {}",
-                     res->cols * res->rows, res->cols, res->rows,
-                     res->data.size(), res->total_error,
-                     res->scanline_offset);
-
-        // Render once: used for both terminal preview and any PNG output.
+        // Render once: used for stats line, terminal preview, and any
+        // PNG output.
         auto preview = cga_text::render(*res);
+        std::println("Encoded: {} cells ({}x{}), {} bytes, {} colors, "
+                     "error: {:.2f}, CRTC scanline offset: {}",
+                     res->cols * res->rows, res->cols, res->rows,
+                     res->data.size(), count_unique_colors(preview),
+                     res->total_error, res->scanline_offset);
 
         if (!config->output_path.empty()) {
             if (ends_with(config->output_path, ".raw")) {
@@ -2940,6 +3068,99 @@ int main(int argc, char* argv[]) {
             save_mask(config->mask_path, transparency_mask,
                       target_w, target_h, config->mask_invert, config->interlace);
 
+        return 0;
+    }
+
+    // --- SCAP (DPF mid-line palette swaps) ---
+    if (config->scap) {
+        if (!use_dpf_std || chipset != amiga::Chipset::ocs ||
+            config->mode != amiga::Mode::lores ||
+            config->interlace) {
+            std::println(stderr,
+                "Error: --scap requires --dpf with --chipset ocs, --mode lores, "
+                "no --interlace (Phase 1 limitation)");
+            return 1;
+        }
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings scap_dith;
+        scap_dith.method = config->dither_method;
+        scap_dith.strength = config->dither_strength;
+        scap_dith.error_clamp = config->error_clamp;
+        auto scap_res = scap::encode_scap_dpf_ocs(
+            *image,
+            static_cast<int>(image->width()),
+            static_cast<int>(image->height()),
+            config->reserve_color0,
+            scap_dith,
+            config->scap_debug);
+        if (!scap_res) {
+            std::println(stderr, "SCAP encode error: {}",
+                         scap_res.error().message);
+            return 1;
+        }
+        float scap_psnr = color_space::compute_psnr_blurred(
+            image->pixels(), scap_res->rendered.pixels(),
+            image->width(), image->height());
+        std::println("Mode:   SCAP (OCS DPF, {} slots, {:.1f} useful MOVEs/line)",
+                     scap_res->slot_table.slots.size(),
+                     scap_res->avg_changes_per_line);
+        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
+                     scap_res->planes.depth, scap_res->planes.total_bytes(),
+                     count_unique_colors(scap_res->rendered),
+                     scap_res->total_error, scap_psnr);
+
+        if (config->preview)
+            show_terminal_preview(scap_res->rendered, config->mode,
+                                  config->hires, config->interlace);
+
+        if (!config->output_path.empty()) {
+            if (ends_with(config->output_path, ".png")) {
+                auto r = save_preview(config->output_path,
+                                      scap_res->rendered,
+                                      has_transparency, transparency_mask,
+                                      config->mode, config->hires,
+                                      config->interlace);
+                if (!r) {
+                    std::println(stderr, "PNG write error: {}",
+                                 r.error().message);
+                    return 1;
+                }
+                std::println("PNG:    {}", config->output_path);
+            } else if (ends_with(config->output_path, ".cpp") ||
+                       ends_with(config->output_path, ".c")) {
+                cheader::CHeaderOptions ch_opts;
+                ch_opts.symbol_name = config->symbol_name.empty()
+                    ? derive_symbol_name(config->output_path)
+                    : config->symbol_name;
+                ch_opts.aga = false;
+                ch_opts.dpf = true;
+                ch_opts.fade_in = false;
+                ch_opts.scap_line_moves = &scap_res->line_moves;
+                ch_opts.scap_label = "scap_dpf_ocs";
+                ch_opts.scap_anchor_hpos =
+                    scap_res->slot_table.line_gate_hpos;
+                ch_opts.scap_total_planes =
+                    scap_res->slot_table.total_planes;
+                pad_planes_to_mode(scap_res->planes, config->mode,
+                                   config->hires);
+                auto r = cheader::save_viewer(
+                    config->output_path, scap_res->planes,
+                    scap_res->palette, config->mode, ch_opts);
+                if (!r) {
+                    std::println(stderr, "Viewer write error: {}",
+                                 r.error().message);
+                    return 1;
+                }
+                std::println("Viewer: {}", config->output_path);
+            } else {
+                std::println(stderr,
+                    "SCAP output: only .png and .cpp/.c supported (Phase 1)");
+                return 1;
+            }
+        }
         return 0;
     }
 

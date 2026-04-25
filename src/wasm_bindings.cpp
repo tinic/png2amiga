@@ -90,6 +90,10 @@ Options parse_js_options(val js_opts) {
         opts.cga_text_metric = js_opts["cgaTextMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("dualPlayfield"))
         opts.dual_playfield = js_opts["dualPlayfield"].as<bool>();
+    if (js_opts.hasOwnProperty("scap"))
+        opts.scap = js_opts["scap"].as<bool>();
+    if (js_opts.hasOwnProperty("scapDebug"))
+        opts.scap_debug = js_opts["scapDebug"].as<bool>();
     return opts;
 }
 

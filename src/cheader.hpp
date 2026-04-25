@@ -3,6 +3,7 @@
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "copper.hpp"
+#include "scap.hpp"
 #include "types.hpp"
 
 #include <cstdint>
@@ -54,6 +55,19 @@ struct CHeaderOptions {
     // rebuild the diffs so each field sees transitions between the rows it
     // actually draws (row y ← row y-2) rather than the default row y-1.
     const std::vector<std::vector<Color3f>>* copper_scanline_palettes = nullptr;
+
+    // SCAP (Super Copper-Augmented Palette): mid-line COLORxx writes at
+    // fixed horizontal slot positions, anchored by a per-line WAIT.
+    // line_moves[y] is a sequence of raw WAIT/MOVE ops emitted verbatim
+    // into the copper list for image row y. When populated, the viewer
+    // skips the CAP path entirely and installs the SCAP list as its
+    // primary copper list. Used by the calibration probe pipeline first;
+    // the production planner emits the same shape.
+    const std::vector<std::vector<scap::ScapMove>>* scap_line_moves = nullptr;
+    // Informational — included as comments in the emitted copper list.
+    std::string scap_label;
+    int scap_anchor_hpos = 0;
+    int scap_total_planes = 0;
 };
 
 // ---------------------------------------------------------------------------

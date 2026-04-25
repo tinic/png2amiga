@@ -413,6 +413,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Computed up here so it gates both the data array's 8-byte alignment
     // and the BPLxMOD/FMODE register writes later in the copper list.
     bool has_copper = options.copper_changes && !options.copper_changes->empty();
+    bool has_scap = options.scap_line_moves && !options.scap_line_moves->empty();
+    // SCAP supplies its own per-line copper ops and replaces the CAP
+    // emission path. They never compose in the same viewer.
+    if (has_scap) has_copper = false;
     bool is_lace = options.interlace;
     bool need_fmode3 = ((depth > 6) && has_copper) ||
                        (is_hires && depth > 4);
@@ -651,6 +655,88 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     // --- Copper list builder helper ---
+    // --- SCAP raw copper list (calibration / mid-line palette mode) ---
+    //
+    // line_moves[y] is a per-image-row sequence of (WAIT|MOVE) ops. Emit
+    // them as a flat UWORD array of (cmd, data) pairs in chip RAM. The
+    // viewer installs this list verbatim — no slot table indirection, no
+    // per-line count arrays. Probe ADFs use this to map HPOS to display
+    // pixel x; the production planner emits the same shape.
+    if (has_scap) {
+        auto& moves = *options.scap_line_moves;
+        // The image starts at PAL VSTART=44. When the copper list extends
+        // past line 255, the regular per-line WAIT for line 255 is replaced
+        // with the magic 0xFFDF first word — this specific transition
+        // through line 255 hp=0xDF arms the copper's past-0xFF state so
+        // subsequent WAITs at vp = (line & 0xFF) match correctly for lines
+        // >= 256. See commit 8aeedcf — a separate (0xFFDF, 0xFFFE) marker
+        // emitted AFTER line 255's normal WAITs does NOT work, because by
+        // then hpos has already advanced past 0xDF and the WAIT fires
+        // immediately without arming the comparator carry. So we patch
+        // line 255's last (end-of-line) WAIT in-place to 0xFFDF.
+        constexpr int kVStart = 44;
+
+        out += std::format("// SCAP copper list — {} (anchor=0x{:02X}, "
+                           "total_planes={})\n",
+                           options.scap_label.empty() ? "unnamed"
+                                                       : options.scap_label,
+                           options.scap_anchor_hpos,
+                           options.scap_total_planes);
+
+        std::size_t scap_total_words = 0;
+        for (auto& row : moves) scap_total_words += row.size() * 2;
+        bool needs_wrap_marker =
+            (kVStart + static_cast<int>(moves.size()) > 256) && !moves.empty();
+        if (scap_total_words == 0) scap_total_words = 2;
+
+        out += std::format("static const UWORD {}_scap_copper_list[{}] = {{\n",
+                           sym, scap_total_words);
+        std::size_t emitted = 0;
+        for (std::size_t y = 0; y < moves.size(); ++y) {
+            auto& row = moves[y];
+            int abs_vpos = kVStart + static_cast<int>(y);
+            if (row.empty()) continue;
+            // The end-of-line WAIT is the last entry in each row (8 base
+            // MOVEs + line-gate WAIT + 20 SCAP MOVEs + end-of-line WAIT).
+            // For line 255 of a wrap-crossing list, swap that WAIT's first
+            // word for 0xFFDF so the past-0xFF state arms.
+            bool patch_wrap_at_eol = needs_wrap_marker && abs_vpos == 255;
+            out += "    ";
+            for (std::size_t i = 0; i < row.size(); ++i) {
+                auto& op = row[i];
+                std::uint16_t w0 = 0, w1 = 0;
+                if (op.kind == scap::ScapOpKind::kWait) {
+                    // WAIT: ((VP & 0xFF) << 8) | (HP & 0xFE) | 1, then
+                    // 0xFFFE. The LSB of the first word is the copper
+                    // instruction-type bit — must be 1 for WAIT, else the
+                    // copper executes the word as a MOVE to register
+                    // $00xx (no-op write to interrupt regs / similar) and
+                    // the intended palette MOVE never fires.
+                    w0 = static_cast<std::uint16_t>(
+                        (static_cast<unsigned>(op.vpos) << 8) |
+                        (op.hpos & 0xFE) | 0x0001);
+                    w1 = 0xFFFE;
+                    if (patch_wrap_at_eol && i == row.size() - 1) {
+                        w0 = 0xFFDF;  // arms past-0xFF state at line 255
+                    }
+                } else {
+                    // MOVE: COLORxx register address, then OCS-12 data word.
+                    auto reg = static_cast<unsigned>(op.reg & 0x1F);
+                    w0 = static_cast<std::uint16_t>(0x0180 + reg * 2);
+                    w1 = op.rgb_ocs;
+                }
+                out += std::format("0x{:04X},0x{:04X}", w0, w1);
+                emitted += 2;
+                if (emitted < scap_total_words) out += ",";
+            }
+            out += std::format("  /* y={} (vp={}) */\n", y, abs_vpos & 0xFF);
+        }
+        if (emitted == 0) out += "    0x0000,0x0000\n";  // dummy
+        out += "};\n\n";
+        out += std::format("static const ULONG {}_scap_copper_words = {};\n\n",
+                           sym, emitted);
+    }
+
     out += "// Write bitplane pointer registers into a copper list.\n";
     out += "// BPL1PTH = $DFF0E0, each pointer pair is 4 bytes apart.\n";
     out += "static inline USHORT* copSetPlanes(USHORT* cl, "
@@ -747,8 +833,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    TakeSystem();\n";
     out += "    WaitVbl();\n\n";
 
-    // Calculate copper list size: display setup + bitplane ptrs + colors + copper changes + end
-    auto cop_size = 128 + depth * 4 * 2 + pal_count * 4;
+    // Calculate copper list size: display setup + bitplane ptrs + colors + copper changes + end.
+    // SCAP appends one UWORD pair per ScapMove = 4 bytes each. The past-0xFF
+    // wrap is patched into line 255's existing end-of-line WAIT, so no extra
+    // bytes are needed.
+    std::size_t scap_total_bytes = 0;
+    if (has_scap) {
+        for (auto& row : *options.scap_line_moves)
+            scap_total_bytes += row.size() * 4;
+    }
+    auto cop_size = 128 + depth * 4 * 2 + pal_count * 4 + scap_total_bytes;
     if (pal_count > 32) {
         // AGA >32: double writes (LOCT high + low) + BPLCON3 per bank + reset
         auto num_banks = (pal_count + 31) / 32;
@@ -1165,6 +1259,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
     }
 
+    // SCAP per-line copper ops: copy the static SCAP list into the live
+    // copper buffer verbatim. Each entry is a UWORD pair, and the encoder
+    // already inserted the past-0xFF marker if needed, so the viewer just
+    // streams it out.
+    if (has_scap) {
+        out += "    // SCAP per-line copper ops (raw WAIT/MOVE pairs)\n";
+        out += std::format(
+            "    for (ULONG i = 0; i < {0}_scap_copper_words; i++)\n"
+            "        *cl++ = {0}_scap_copper_list[i];\n\n", sym);
+    }
+
     // Blank below image: 0 bitplanes, keep LACE if interlaced
     auto blank_expr = is_lace
         ? "(1<<9)/*COLOR*/|(1<<2)/*LACE*/"
@@ -1181,7 +1286,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // or beyond), don't emit it here — a second 0xFFDF after we've passed
         // vp=0xFF hangs forever. Only emit in blank-below when loop is too
         // short to have emitted one itself.
-        if (last_line >= 256 && (!has_copper || loop_max_line < 255)) {
+        // The SCAP path bakes its own 0xFFDF marker into the static table
+        // when needed (see scap_copper_list emitter); suppress here so we
+        // don't double-emit and hang past vp=0xFF.
+        bool scap_emitted_wrap = has_scap && (last_line >= 256);
+        if (last_line >= 256 && (!has_copper || loop_max_line < 255)
+            && !scap_emitted_wrap) {
             out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
                    "  // cross 256 boundary\n";
         }

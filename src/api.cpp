@@ -9,6 +9,7 @@
 #include "degas.hpp"
 #include "dither.hpp"
 #include "ham.hpp"
+#include "scap.hpp"
 #include "iff.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
@@ -377,8 +378,13 @@ struct PipelineResult {
     bool copper = false;
     bool aga = false;
     bool dpf = false;
+    bool scap = false;
     std::vector<std::vector<Color3f>> scanline_palettes;
     std::vector<std::vector<copper::CopperChange>> scanline_changes;
+    // Populated by the SCAP planner. Each inner vector is the raw
+    // WAIT/MOVE op stream for one image scanline — fed verbatim to
+    // cheader::CHeaderOptions::scap_line_moves.
+    std::vector<std::vector<scap::ScapMove>> scap_line_moves;
     std::size_t copper_num_colors{};
     std::size_t changes_per_line{};
     std::size_t max_moves_per_line{};   // worst-case copper MOVEs/line for chip-RAM sizing
@@ -1317,6 +1323,57 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         return result;
     }
 
+    // --- SCAP (DPF mid-line palette swaps) ---
+    // Phase 1 limit: OCS DPF lores, no interlace.
+    if (options.scap) {
+        if (!options.dual_playfield ||
+            chipset != amiga::Chipset::ocs ||
+            mode != amiga::Mode::lores ||
+            options.interlace) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "SCAP requires dual_playfield + chipset=ocs + mode=lores "
+                "(no interlace) — Phase 1 limitation",
+            }};
+        }
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings scap_dith;
+        scap_dith.method = parse_dither(options.dither);
+        scap_dith.strength = options.dither_strength;
+        scap_dith.error_clamp = options.error_clamp;
+
+        auto scap_res = scap::encode_scap_dpf_ocs(
+            *image,
+            static_cast<int>(image->width()),
+            static_cast<int>(image->height()),
+            options.reserve_color0,
+            scap_dith,
+            options.scap_debug);
+        if (!scap_res) return std::unexpected{scap_res.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(scap_res->rendered);
+        result.planes = std::move(scap_res->planes);
+        result.palette = std::move(scap_res->palette);
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.dpf = true;
+        result.scap = true;
+        result.scap_line_moves = std::move(scap_res->line_moves);
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.copper_changes = scap_res->avg_changes_per_line;
+        result.quant_error = scap_res->total_error;
+        result.psnr = color_space::compute_psnr_blurred(
+            image->pixels(), result.rendered.pixels(),
+            image->width(), image->height());
+        return result;
+    }
+
     // --- Standard bitplane modes ---
 
     // Force transparent pixels to black before quantization/encoding
@@ -1854,6 +1911,13 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
+    }
+    if (result->scap && !result->scap_line_moves.empty()) {
+        ch_opts.scap_line_moves = &result->scap_line_moves;
+        ch_opts.scap_label = "scap_dpf_ocs";
+        ch_opts.scap_anchor_hpos = scap::kScap6bplOcs.line_gate_hpos;
+        ch_opts.scap_total_planes = scap::kScap6bplOcs.total_planes;
+        ch_opts.fade_in = false;  // SCAP carries its own per-line palette
     }
     auto viewer = cheader::generate_viewer(
         planes, result->palette, result->mode, ch_opts);

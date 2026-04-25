@@ -100,6 +100,28 @@ struct Options {
     // standard lores/hires modes (no HAM/EHB/copper/Atari/DOS).
     bool dual_playfield = false;
 
+    // SCAP calibration probe selector — DPF-only.
+    //   ""   : disabled (default)
+    //   "a"  : Probe A (slot HPOS sweep, OCS DPF)
+    //   "b"  : Probe B (slot capacity, OCS DPF) — placeholder
+    //   "c"  : Probe C (AGA bandwidth) — placeholder
+    //   "d"  : Probe D (at-x vs after-x mapping) — placeholder
+    // Bypasses the normal pipeline: synthesizes a calibration image plus
+    // per-line WAIT/MOVE copper ops and emits a viewer .cpp/.adf you run on
+    // real hardware. Slot tables are populated by hand from the observed
+    // results, then the production planner uses them.
+    std::string scap_probe;
+
+    // SCAP encoder — DPF-only mid-line palette swaps. Requires
+    // dual_playfield + chipset=ocs + mode=lores (no interlace) for
+    // Phase 1. Composes with copper (each line's per-strip palette
+    // chain is independent of CAP's end-of-line writes).
+    bool scap = false;
+    // SCAP slot-tuning debug bundle: forces base-palette MOVEs to
+    // 0x0000 AND paints yellow PF1 rulers at every 4/8/16 px. Always
+    // used together. Off in production.
+    bool scap_debug = false;
+
     // IBM PC / DOS modes only. If true, preserve source aspect ratio by
     // letterboxing or pillarboxing the image inside the fixed hardware
     // buffer (padded with black). If false (default), stretch the image

@@ -205,6 +205,12 @@ export function defaultOptions() {
     // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3
     // (OCS) or 4 (AGA). CAMG DBLPF flag set.
     dualPlayfield: false,
+    // SCAP — Super Copper-Augmented Palette: mid-line palette swaps
+    // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
+    scap: false,
+    // Debug: paint yellow ruler markers in PF1 at every 4/8/16 px
+    // (slot-tuning visualisation). SCAP-only.
+    scapDebug: false,
   }
   for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
   Object.assign(opts, CGA_TEXT_DEFAULTS)
