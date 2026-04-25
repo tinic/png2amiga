@@ -272,7 +272,14 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     };
     recompute_lab();
 
-    std::size_t k_min = reserve_color0 ? 1u : 0u;
+    // Force k_min=1 for DPF SCAP regardless of --reserve-color0. PF2
+    // index 0 maps to COLOR00 on OCS and COLOR08 on AGA (per BPLCON3
+    // PF2OF=011) — keeping the two in sync mid-line would require
+    // emitting two MOVEs per swap, which would shift subsequent slot
+    // positions on the bus. Frame-init + per-line CAP MOVEs (both in
+    // hblank) handle the dual-write without timing impact, so SCAP
+    // simply never picks k=0 and the planner targets k=1..7.
+    std::size_t k_min = 1u;
 
     // Stage-2 error diffusion setup. Honours the user's --dither choice
     // by pulling the diffusion kernel from dither.hpp. The buffer is
@@ -492,16 +499,17 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 // SCAP MOVE writes to the hardware register too.
                 hw_state[swap_idx] = swap_color;
 
-                auto regs = pf2_writes(swap_idx);
-                bool first = true;
-                for (int reg : regs) {
-                    if (reg < 0) continue;
-                    line_moves[y].push_back(make_move(
-                        static_cast<std::uint8_t>(reg),
-                        palette::linear_to_ocs(swap_color),
-                        first ? static_cast<int>(s) : -1));
-                    first = false;
-                }
+                // Mid-line SCAP swaps emit ONE MOVE — extra MOVEs in
+                // the chain would shift subsequent slot landing
+                // positions by ~8 lores px on hardware. Register 0 is
+                // excluded from the swap planner (k_min=1 below) so we
+                // never need to dual-write here; the chipset-mismatch
+                // for PF2 index 0 is handled by frame-init and per-line
+                // CAP MOVEs (both in hblank, no timing impact).
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(8 + swap_idx),
+                    palette::linear_to_ocs(swap_color),
+                    static_cast<int>(s)));
                 ++total_moves;
             } else {
                 line_moves[y].push_back(make_move(kFillerReg, kFillerVal,
