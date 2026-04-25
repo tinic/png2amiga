@@ -981,13 +981,21 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    }\n";
         if (options.aga) {
             // During fade: skip LOCT (12-bit precision is fine for a 16-step fade)
-            // On final step or no-fade: write full 24-bit lo nibbles
-            out += "    *cl++ = 0x0106; *cl++ = 0x0200;  // LOCT=1\n";
+            // On final step or no-fade: write full 24-bit lo nibbles. In
+            // DPF the BPLCON3 write must preserve PF2OF or PF2 collapses
+            // back to register 0 (= no offset).
+            unsigned pf2of = options.dpf ? ((depth == 8) ? 0x1000 : 0x0C00)
+                                         : 0x0000;
+            out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
+                               "  // LOCT=1\n",
+                               pf2of | 0x0200);
             out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
             out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
             out += std::format("        *cl++ = {}_palette_lo[i];\n", sym);
             out += "    }\n";
-            out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+            out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
+                               "  // LOCT=0\n",
+                               pf2of);
         } else if (options.dpf) {
             // OCS-targeted DPF viewer running on AGA: do an LOCT=1 pass
             // with the same OCS 12-bit values so each color channel nibble
@@ -1068,16 +1076,23 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += std::format("            *{0}++ = p_lo[s].color;\n", cl_var);
             out += "          }\n";
         } else if (options.aga) {
+            // BPLCON3 LOCT toggle inside the per-scanline copper. In DPF
+            // mode the write must keep PF2OF set or PF2 will collapse to
+            // register 0 starting from the line that ran this code.
+            unsigned pf2of = options.dpf ? ((depth == 8) ? 0x1000 : 0x0C00)
+                                         : 0x0000;
             out += "          for (int s = 0; s < n_hi; s++) {\n";
             out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
             out += std::format("            *{0}++ = p_hi[s].color;\n", cl_var);
             out += "          }\n";
-            out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x0200;  // LOCT=1\n", cl_var);
+            out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x{1:04X};  // LOCT=1\n",
+                               cl_var, pf2of | 0x0200);
             out += "          for (int s = 0; s < n_lo; s++) {\n";
             out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_lo[s].reg * 2;\n", cl_var);
             out += std::format("            *{0}++ = p_lo[s].color;\n", cl_var);
             out += "          }\n";
-            out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x0000;  // LOCT=0\n", cl_var);
+            out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x{1:04X};  // LOCT=0\n",
+                               cl_var, pf2of);
         } else {
             out += "          for (int s = 0; s < n_hi; s++) {\n";
             out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
@@ -1307,12 +1322,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += std::format("        *cl2++ = {}_palette[i];\n", sym);
             out += "    }\n";
             if (options.aga) {
-                out += "    *cl2++ = 0x0106; *cl2++ = 0x0200;  // LOCT=1\n";
+                unsigned pf2of = options.dpf
+                    ? ((depth == 8) ? 0x1000 : 0x0C00) : 0x0000;
+                out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
+                                   "  // LOCT=1\n", pf2of | 0x0200);
                 out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
                 out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
                 out += std::format("        *cl2++ = {}_palette_lo[i];\n", sym);
                 out += "    }\n";
-                out += "    *cl2++ = 0x0106; *cl2++ = 0x0000;  // LOCT=0\n";
+                out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
+                                   "  // LOCT=0\n", pf2of);
             }
         }
 
