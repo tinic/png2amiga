@@ -259,12 +259,14 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     std::size_t k_min = reserve_color0 ? 1u : 0u;
 
     // Stage-2 error diffusion setup. Honours the user's --dither choice
-    // by pulling the diffusion kernel (F-S, Atkinson, Sierra-Lite,
-    // Stucki, Jarvis) from dither.hpp. Wider kernels (Stucki, Jarvis,
-    // 5×3) spread residuals further than F-S's 4-neighbour cluster, so
-    // errors can flow across multiple 16-px strips before fully
-    // discharging — the original "localised dither" symptom was a
-    // hardcoded F-S kernel here that ignored the CLI choice.
+    // by pulling the diffusion kernel from dither.hpp. The buffer is
+    // a whole-image OKLab error grid (matches the EHB+CAP path in
+    // main.cpp): residuals diffuse in the perceptual space, get
+    // strength-multiplied at scatter time, and per-channel-clamped on
+    // read. Linear-RGB diffusion (the previous approach) blew up across
+    // strip palette swaps because the residual magnitude isn't
+    // perceptually proportional and DPF's tight 8-colour palette has
+    // gaps wider than the residuals could absorb.
     bool ordered = dither::is_ordered(dither_settings.method);
     bool err_diffuse =
         dither_settings.method != dither::Method::none &&
@@ -272,27 +274,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     auto kernel = err_diffuse
         ? dither::error_diffusion_kernel(dither_settings.method)
         : std::span<const dither::DiffusionEntry>{};
-    int kernel_max_dy = 0;
-    for (auto& e : kernel) kernel_max_dy = std::max(kernel_max_dy, e.dy);
     float clamp_v = dither_settings.error_clamp;
 
-    // Three row buffers — Stucki/Jarvis reach dy=2, F-S/Sierra/Atkinson
-    // cover dy=0..2 too. +4 horizontal padding so kernel writes at
-    // x+{-2..+2} can stay bounds-check-free.
-    constexpr std::size_t kPad = 4;
-    std::array<std::vector<Color3f>, 3> err_rows{
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-    };
-
-    auto clamp_err = [&](Color3f c) {
-        if (clamp_v <= 0.0f) return c;
-        c.r = std::clamp(c.r, -clamp_v, clamp_v);
-        c.g = std::clamp(c.g, -clamp_v, clamp_v);
-        c.b = std::clamp(c.b, -clamp_v, clamp_v);
-        return c;
-    };
+    std::vector<color_space::OKLab> err_buf;
+    if (err_diffuse) err_buf.assign(width * height,
+                                    color_space::OKLab{0.0f, 0.0f, 0.0f});
 
     // For each strip pick the swap that maximises error reduction.
     // base_index[pixel] is FIXED (set by the global F-S pass), so the
@@ -444,46 +430,39 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
-        // ---- Pass 2: render via error diffusion against the per-strip
-        // palette, using the user-selected kernel. Residuals propagate
-        // freely across strip boundaries (linear-RGB, palette-agnostic),
-        // so wide kernels (Stucki, Jarvis) actually spread error across
-        // many strips. Each pixel's nearest-colour lookup uses ITS
-        // strip's palette so colour rendition tracks the MOVE evolution.
+        // ---- Pass 2: render via OKLab error diffusion against the
+        // per-strip palette. Each pixel's nearest-colour lookup uses
+        // ITS strip's palette so colour rendition tracks MOVE
+        // evolution; the residual is computed in OKLab and scattered
+        // by the user's kernel into a whole-image error buffer.
         for (std::size_t x = 0; x < width; ++x) {
             std::size_t s = static_cast<std::size_t>(x_strip[x]);
             auto& pal = strip_palettes[s];
             auto& pl_lab = strip_pal_lab[s];
 
-            Color3f target = src[x, y];
+            auto pixel_lab = color_space::linear_to_oklab(src[x, y]);
             if (err_diffuse) {
-                auto& e = err_rows[0][x + kPad];
-                target.r += e.r;
-                target.g += e.g;
-                target.b += e.b;
+                auto& e = err_buf[y * width + x];
+                pixel_lab.L += std::clamp(e.L, -clamp_v, clamp_v);
+                pixel_lab.a += std::clamp(e.a, -clamp_v, clamp_v);
+                pixel_lab.b += std::clamp(e.b, -clamp_v, clamp_v);
             }
-            color_space::OKLab tgt_lab = color_space::linear_to_oklab(target);
-            // Ordered dithering: apply the per-pixel threshold bias to
-            // OKLab. Same scaling as dither.cpp (0.15 for L, 0.03 for a/b).
-            // Stage 1 only fed it to the global vs-base pass; stage 2 needs
-            // its own threshold so the per-strip nearest-colour lookup
-            // actually picks dithered indices.
             if (ordered &&
                 dither_settings.method != dither::Method::none &&
                 dither_settings.strength > 0.0f) {
                 float th = dither::ordered_threshold(
                     dither_settings.method, x, y);
-                tgt_lab.L += th * dither_settings.strength * 0.15f;
-                tgt_lab.a += th * dither_settings.strength * 0.03f;
-                tgt_lab.b += th * dither_settings.strength * 0.03f;
+                pixel_lab.L += th * dither_settings.strength * 0.15f;
+                pixel_lab.a += th * dither_settings.strength * 0.03f;
+                pixel_lab.b += th * dither_settings.strength * 0.03f;
             }
 
             float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = k_min;
             for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                float dL = tgt_lab.L - pl_lab[k].L;
-                float da = tgt_lab.a - pl_lab[k].a;
-                float db = tgt_lab.b - pl_lab[k].b;
+                float dL = pixel_lab.L - pl_lab[k].L;
+                float da = pixel_lab.a - pl_lab[k].a;
+                float db = pixel_lab.b - pl_lab[k].b;
                 float d = dL * dL + da * da + db * db;
                 if (d < best_d) { best_d = d; best_k = k; }
             }
@@ -491,29 +470,27 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             preview[x, y] = pal[best_k];
 
             if (err_diffuse) {
-                Color3f residual = clamp_err(Color3f{
-                    target.r - pal[best_k].r,
-                    target.g - pal[best_k].g,
-                    target.b - pal[best_k].b,
-                });
-                for (auto& ent : kernel) {
-                    auto target_x = static_cast<std::ptrdiff_t>(x)
-                                  + ent.dx;
-                    if (target_x < 0
-                        || target_x >= static_cast<std::ptrdiff_t>(width))
-                        continue;
-                    auto idx = static_cast<std::size_t>(target_x) + kPad;
-                    auto& buf = err_rows[static_cast<std::size_t>(ent.dy)];
-                    buf[idx].r += residual.r * ent.weight;
-                    buf[idx].g += residual.g * ent.weight;
-                    buf[idx].b += residual.b * ent.weight;
+                auto& cl = pl_lab[best_k];
+                color_space::OKLab qe{
+                    (pixel_lab.L - cl.L) * dither_settings.strength,
+                    (pixel_lab.a - cl.a) * dither_settings.strength,
+                    (pixel_lab.b - cl.b) * dither_settings.strength,
+                };
+                for (auto& [kdx, kdy, kw] : kernel) {
+                    auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                    auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                    if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
+                        ny >= 0 && static_cast<std::size_t>(ny) < height) {
+                        auto& e = err_buf[
+                            static_cast<std::size_t>(ny) * width +
+                            static_cast<std::size_t>(nx)];
+                        e.L += qe.L * kw;
+                        e.a += qe.a * kw;
+                        e.b += qe.b * kw;
+                    }
                 }
             }
         }
-        // Rotate row buffers: row[0] becomes row[1] for next y, etc.
-        // err_rows[0] (just consumed) becomes err_rows[2] (cleared).
-        std::ranges::fill(err_rows[0], Color3f{0.0f, 0.0f, 0.0f});
-        std::rotate(err_rows.begin(), err_rows.begin() + 1, err_rows.end());
 
         for (std::size_t x = 0; x < width; ++x) {
             auto& a = img_lab[y * width + x];
@@ -687,20 +664,13 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
         : std::span<const dither::DiffusionEntry>{};
     float clamp_v = dither_settings.error_clamp;
 
-    constexpr std::size_t kPad = 4;
-    std::array<std::vector<Color3f>, 3> err_rows{
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-    };
-
-    auto clamp_err = [&](Color3f c) {
-        if (clamp_v <= 0.0f) return c;
-        c.r = std::clamp(c.r, -clamp_v, clamp_v);
-        c.g = std::clamp(c.g, -clamp_v, clamp_v);
-        c.b = std::clamp(c.b, -clamp_v, clamp_v);
-        return c;
-    };
+    // Whole-image OKLab error buffer (matches the EHB+CAP pattern in
+    // main.cpp). Diffusing in the perceptual space keeps residuals
+    // proportional to perceived error and survives strip palette
+    // changes without amplifying.
+    std::vector<color_space::OKLab> err_buf;
+    if (err_diffuse) err_buf.assign(width * height,
+                                    color_space::OKLab{0.0f, 0.0f, 0.0f});
 
     auto find_best_swap_in_strip =
         [&](std::size_t y, std::size_t x_lo, std::size_t x_hi,
@@ -829,36 +799,36 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
         // ---- Stage-2 render: per-strip nearest-color lookup with
-        // optional error diffusion / ordered dither bias.
+        // OKLab error-diffusion / ordered dither bias (matches the
+        // EHB+CAP pattern in main.cpp).
         for (std::size_t x = 0; x < width; ++x) {
             std::size_t s = static_cast<std::size_t>(x_strip[x]);
             auto& pal = strip_palettes[s];
             auto& pl_lab = strip_pal_lab[s];
 
-            Color3f target = src[x, y];
+            auto pixel_lab = color_space::linear_to_oklab(src[x, y]);
             if (err_diffuse) {
-                auto& e = err_rows[0][x + kPad];
-                target.r += e.r;
-                target.g += e.g;
-                target.b += e.b;
+                auto& e = err_buf[y * width + x];
+                pixel_lab.L += std::clamp(e.L, -clamp_v, clamp_v);
+                pixel_lab.a += std::clamp(e.a, -clamp_v, clamp_v);
+                pixel_lab.b += std::clamp(e.b, -clamp_v, clamp_v);
             }
-            color_space::OKLab tgt_lab = color_space::linear_to_oklab(target);
             if (ordered &&
                 dither_settings.method != dither::Method::none &&
                 dither_settings.strength > 0.0f) {
                 float th = dither::ordered_threshold(
                     dither_settings.method, x, y);
-                tgt_lab.L += th * dither_settings.strength * 0.15f;
-                tgt_lab.a += th * dither_settings.strength * 0.03f;
-                tgt_lab.b += th * dither_settings.strength * 0.03f;
+                pixel_lab.L += th * dither_settings.strength * 0.15f;
+                pixel_lab.a += th * dither_settings.strength * 0.03f;
+                pixel_lab.b += th * dither_settings.strength * 0.03f;
             }
 
             float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = k_min;
             for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                float dL = tgt_lab.L - pl_lab[k].L;
-                float da = tgt_lab.a - pl_lab[k].a;
-                float db = tgt_lab.b - pl_lab[k].b;
+                float dL = pixel_lab.L - pl_lab[k].L;
+                float da = pixel_lab.a - pl_lab[k].a;
+                float db = pixel_lab.b - pl_lab[k].b;
                 float d = dL * dL + da * da + db * db;
                 if (d < best_d) { best_d = d; best_k = k; }
             }
@@ -866,26 +836,27 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
             preview[x, y] = pal[best_k];
 
             if (err_diffuse) {
-                Color3f residual = clamp_err(Color3f{
-                    target.r - pal[best_k].r,
-                    target.g - pal[best_k].g,
-                    target.b - pal[best_k].b,
-                });
-                for (auto& ent : kernel) {
-                    auto target_x = static_cast<std::ptrdiff_t>(x) + ent.dx;
-                    if (target_x < 0
-                        || target_x >= static_cast<std::ptrdiff_t>(width))
-                        continue;
-                    auto idx = static_cast<std::size_t>(target_x) + kPad;
-                    auto& buf = err_rows[static_cast<std::size_t>(ent.dy)];
-                    buf[idx].r += residual.r * ent.weight;
-                    buf[idx].g += residual.g * ent.weight;
-                    buf[idx].b += residual.b * ent.weight;
+                auto& cl = pl_lab[best_k];
+                color_space::OKLab qe{
+                    (pixel_lab.L - cl.L) * dither_settings.strength,
+                    (pixel_lab.a - cl.a) * dither_settings.strength,
+                    (pixel_lab.b - cl.b) * dither_settings.strength,
+                };
+                for (auto& [kdx, kdy, kw] : kernel) {
+                    auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                    auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                    if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
+                        ny >= 0 && static_cast<std::size_t>(ny) < height) {
+                        auto& e = err_buf[
+                            static_cast<std::size_t>(ny) * width +
+                            static_cast<std::size_t>(nx)];
+                        e.L += qe.L * kw;
+                        e.a += qe.a * kw;
+                        e.b += qe.b * kw;
+                    }
                 }
             }
         }
-        std::ranges::fill(err_rows[0], Color3f{0.0f, 0.0f, 0.0f});
-        std::rotate(err_rows.begin(), err_rows.begin() + 1, err_rows.end());
 
         for (std::size_t x = 0; x < width; ++x) {
             auto& a = img_lab[y * width + x];
@@ -1030,19 +1001,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         : std::span<const dither::DiffusionEntry>{};
     float clamp_v = dither_settings.error_clamp;
 
-    constexpr std::size_t kPad = 4;
-    std::array<std::vector<Color3f>, 3> err_rows{
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
-    };
-    auto clamp_err = [&](Color3f c) {
-        if (clamp_v <= 0.0f) return c;
-        c.r = std::clamp(c.r, -clamp_v, clamp_v);
-        c.g = std::clamp(c.g, -clamp_v, clamp_v);
-        c.b = std::clamp(c.b, -clamp_v, clamp_v);
-        return c;
-    };
+    // Whole-image OKLab error buffer, matching the EHB+CAP path in
+    // main.cpp. Diffusing the residual in the perceptual space (vs
+    // linear RGB) keeps error magnitudes comparable across strip
+    // palette swaps and avoids the runaway-mush we saw in the DPF
+    // F-S/Stucki/Jarvis runs. Strength is applied at scatter time so
+    // --dither-strength actually attenuates the residual.
+    std::vector<color_space::OKLab> err_buf;
+    if (err_diffuse) err_buf.assign(width * height,
+                                    color_space::OKLab{0.0f, 0.0f, 0.0f});
 
     // Greedy strip swap. We can only MOVE the 32 BASE registers; each
     // base[k] swap also redefines half-brite[k] = halve(base[k]). For
@@ -1223,36 +1190,39 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
-        // Stage-2 render across all 64 effective entries per pixel.
+        // Stage-2 render across all 64 effective entries per pixel,
+        // with the EHB+CAP-style OKLab error-diffusion / ordered-bias
+        // path (see main.cpp's `if (config->mode == ehb && copper)`).
+        // Error buffer is whole-image OKLab; clamp on read; residual
+        // gets the strength multiplier at scatter.
         for (std::size_t x = 0; x < width; ++x) {
             std::size_t s = static_cast<std::size_t>(x_strip[x]);
             auto& eff_pal = strip_eff[s];
             auto& eff_lab = strip_eff_lab[s];
 
-            Color3f target = src[x, y];
+            auto pixel_lab = color_space::linear_to_oklab(src[x, y]);
             if (err_diffuse) {
-                auto& e = err_rows[0][x + kPad];
-                target.r += e.r;
-                target.g += e.g;
-                target.b += e.b;
+                auto& e = err_buf[y * width + x];
+                pixel_lab.L += std::clamp(e.L, -clamp_v, clamp_v);
+                pixel_lab.a += std::clamp(e.a, -clamp_v, clamp_v);
+                pixel_lab.b += std::clamp(e.b, -clamp_v, clamp_v);
             }
-            color_space::OKLab tgt_lab = color_space::linear_to_oklab(target);
             if (ordered &&
                 dither_settings.method != dither::Method::none &&
                 dither_settings.strength > 0.0f) {
                 float th = dither::ordered_threshold(
                     dither_settings.method, x, y);
-                tgt_lab.L += th * dither_settings.strength * 0.15f;
-                tgt_lab.a += th * dither_settings.strength * 0.03f;
-                tgt_lab.b += th * dither_settings.strength * 0.03f;
+                pixel_lab.L += th * dither_settings.strength * 0.15f;
+                pixel_lab.a += th * dither_settings.strength * 0.03f;
+                pixel_lab.b += th * dither_settings.strength * 0.03f;
             }
 
             float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = k_min;
             for (std::size_t k = k_min; k < kEffective; ++k) {
-                float dL = tgt_lab.L - eff_lab[k].L;
-                float da = tgt_lab.a - eff_lab[k].a;
-                float db = tgt_lab.b - eff_lab[k].b;
+                float dL = pixel_lab.L - eff_lab[k].L;
+                float da = pixel_lab.a - eff_lab[k].a;
+                float db = pixel_lab.b - eff_lab[k].b;
                 float d = dL * dL + da * da + db * db;
                 if (d < best_d) { best_d = d; best_k = k; }
             }
@@ -1260,26 +1230,27 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             preview[x, y] = eff_pal[best_k];
 
             if (err_diffuse) {
-                Color3f residual = clamp_err(Color3f{
-                    target.r - eff_pal[best_k].r,
-                    target.g - eff_pal[best_k].g,
-                    target.b - eff_pal[best_k].b,
-                });
-                for (auto& ent : kernel) {
-                    auto target_x = static_cast<std::ptrdiff_t>(x) + ent.dx;
-                    if (target_x < 0
-                        || target_x >= static_cast<std::ptrdiff_t>(width))
-                        continue;
-                    auto idx = static_cast<std::size_t>(target_x) + kPad;
-                    auto& buf = err_rows[static_cast<std::size_t>(ent.dy)];
-                    buf[idx].r += residual.r * ent.weight;
-                    buf[idx].g += residual.g * ent.weight;
-                    buf[idx].b += residual.b * ent.weight;
+                auto& cl = eff_lab[best_k];
+                color_space::OKLab qe{
+                    (pixel_lab.L - cl.L) * dither_settings.strength,
+                    (pixel_lab.a - cl.a) * dither_settings.strength,
+                    (pixel_lab.b - cl.b) * dither_settings.strength,
+                };
+                for (auto& [kdx, kdy, kw] : kernel) {
+                    auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                    auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                    if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
+                        ny >= 0 && static_cast<std::size_t>(ny) < height) {
+                        auto& e = err_buf[
+                            static_cast<std::size_t>(ny) * width +
+                            static_cast<std::size_t>(nx)];
+                        e.L += qe.L * kw;
+                        e.a += qe.a * kw;
+                        e.b += qe.b * kw;
+                    }
                 }
             }
         }
-        std::ranges::fill(err_rows[0], Color3f{0.0f, 0.0f, 0.0f});
-        std::rotate(err_rows.begin(), err_rows.begin() + 1, err_rows.end());
 
         for (std::size_t x = 0; x < width; ++x) {
             auto& a = img_lab[y * width + x];
