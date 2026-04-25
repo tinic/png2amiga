@@ -503,26 +503,12 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         //    budget of 14. Slots beyond the cap emit fillers.
         std::size_t useful_swap_cap = scap_share;
         std::size_t useful_swaps = 0;
-        // Preload: slot s plans the swap for strip s+2, not s+1. The
-        // MOVE still fires at slot s's chain position, but the planner
-        // assumes any actual MOVE-landing drift up to ~16 lores px is
-        // absorbed before strip s+2 begins displaying. Strip 1 stays
-        // at the entry palette (slot 0 doesn't affect it). Slot 18
-        // would target strip 20 (off the end) — emits filler.
-        // Initialise strip_palettes[1] = entry; was previously slot 0's
-        // post-state.
-        if (1 < strip_palettes.size()) {
-            strip_palettes[1] = strip_palettes[0];
-            strip_pal_lab[1] = strip_pal_lab[0];
-        }
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
-            std::size_t x_lo = (s + 1 < table.slots.size())
+            std::size_t x_lo = std::min(width,
+                static_cast<std::size_t>(table.slots[s].pixel_x));
+            std::size_t x_hi = (s + 1 < table.slots.size())
                 ? std::min(width,
                     static_cast<std::size_t>(table.slots[s + 1].pixel_x))
-                : width;
-            std::size_t x_hi = (s + 2 < table.slots.size())
-                ? std::min(width,
-                    static_cast<std::size_t>(table.slots[s + 2].pixel_x))
                 : width;
 
             int swap_reg = -1;
@@ -558,11 +544,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 line_moves[y].push_back(make_move(kFillerReg, kFillerVal,
                                                   static_cast<int>(s)));
             }
-            // Slot s's swap takes effect for strip s+2 (preload).
-            if (s + 2 < strip_palettes.size()) {
-                strip_palettes[s + 2] = P;
-                strip_pal_lab[s + 2] = P_lab;
-            }
+            strip_palettes[s + 1] = P;
+            strip_pal_lab[s + 1] = P_lab;
         }
 
         // 4. End-of-line WAIT — release copper to the next line's section.
@@ -1111,20 +1094,12 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         }
         std::size_t useful_swap_cap = scap_share_ehb_max;
         std::size_t useful_swaps = 0;
-        // Preload: slot s plans for strip s+2 (16-px settling buffer).
-        // Strip 1 stays at the entry palette.
-        if (1 < strip_eff.size()) {
-            strip_eff[1] = strip_eff[0];
-            strip_eff_lab[1] = strip_eff_lab[0];
-        }
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
-            std::size_t x_lo = (s + 1 < table.slots.size())
+            std::size_t x_lo = std::min(width,
+                static_cast<std::size_t>(table.slots[s].pixel_x));
+            std::size_t x_hi = (s + 1 < table.slots.size())
                 ? std::min(width,
                     static_cast<std::size_t>(table.slots[s + 1].pixel_x))
-                : width;
-            std::size_t x_hi = (s + 2 < table.slots.size())
-                ? std::min(width,
-                    static_cast<std::size_t>(table.slots[s + 2].pixel_x))
                 : width;
 
             int swap_reg = -1;
@@ -1178,11 +1153,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     ++useful_swaps;
                 }
             }
-            // Preload: slot s's swap takes effect for strip s+2.
-            if (s + 2 < strip_eff.size()) {
-                strip_eff[s + 2] = P_eff;
-                strip_eff_lab[s + 2] = P_eff_lab;
-            }
+            strip_eff[s + 1] = P_eff;
+            strip_eff_lab[s + 1] = P_eff_lab;
         }
 
         // 4. End-of-line WAIT.
