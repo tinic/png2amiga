@@ -302,31 +302,52 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 float db = lab.b - P_lab[k].b;
                 cur_err[k] += static_cast<double>(dL * dL + da * da + db * db);
             }
+            std::vector<Color3f> cands;
+            cands.reserve(static_cast<std::size_t>(x_hi - x_lo) + kBaseColors);
+            std::array<bool, 4096> seen{};
+            auto ocs_key = [](const Color3f& c) {
+                int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
+                int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
+                int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
+                return static_cast<std::size_t>((r << 8) | (g << 4) | b);
+            };
+            auto add_cand = [&](Color3f c) {
+                auto cs = palette::quantize_to_ocs(c);
+                auto key = ocs_key(cs);
+                if (!seen[key]) { seen[key] = true; cands.push_back(cs); }
+            };
+            for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(src[x, y]);
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (count[k] > 0.0) {
+                    color_space::OKLab cd{
+                        static_cast<float>(sumL[k] / count[k]),
+                        static_cast<float>(suma[k] / count[k]),
+                        static_cast<float>(sumb[k] / count[k])};
+                    add_cand(color_space::oklab_to_linear(cd).clamped());
+                }
+            }
+
             out_reg = -1;
             out_reduction = 0.0f;
             for (std::size_t k = k_min; k < kBaseColors; ++k) {
                 if (count[k] < 1.0) continue;
-                color_space::OKLab centroid{
-                    static_cast<float>(sumL[k] / count[k]),
-                    static_cast<float>(suma[k] / count[k]),
-                    static_cast<float>(sumb[k] / count[k]),
-                };
-                double new_err = 0.0;
-                for (std::size_t x = x_lo; x < x_hi; ++x) {
-                    if (base_index[y * width + x] != k) continue;
-                    auto& lab = img_lab[y * width + x];
-                    float dL = lab.L - centroid.L;
-                    float da = lab.a - centroid.a;
-                    float db = lab.b - centroid.b;
-                    new_err += static_cast<double>(dL * dL + da * da + db * db);
-                }
-                float red = static_cast<float>(cur_err[k] - new_err);
-                if (red > out_reduction) {
-                    auto linear = color_space::oklab_to_linear(centroid).clamped();
-                    linear = palette::quantize_to_ocs(linear);
-                    out_reg = static_cast<int>(k);
-                    out_color = linear;
-                    out_reduction = red;
+                for (auto& cand_lin : cands) {
+                    auto cand_lab = color_space::linear_to_oklab(cand_lin);
+                    double new_err = 0.0;
+                    for (std::size_t x = x_lo; x < x_hi; ++x) {
+                        if (base_index[y * width + x] != k) continue;
+                        auto& lab = img_lab[y * width + x];
+                        float dL = lab.L - cand_lab.L;
+                        float da = lab.a - cand_lab.a;
+                        float db = lab.b - cand_lab.b;
+                        new_err += static_cast<double>(dL * dL + da * da + db * db);
+                    }
+                    float red = static_cast<float>(cur_err[k] - new_err);
+                    if (red > out_reduction) {
+                        out_reg = static_cast<int>(k);
+                        out_color = cand_lin;
+                        out_reduction = red;
+                    }
                 }
             }
         };
@@ -361,6 +382,18 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
+    constexpr int kPasses = 2;
+    for (int pass = 0; pass < kPasses; ++pass) {
+        if (pass > 0) {
+            for (std::size_t i = 0; i < indices.size(); ++i)
+                base_index[i] = indices[i];
+            for (auto& v : line_moves) v.clear();
+            if (!err_buf.empty())
+                std::fill(err_buf.begin(), err_buf.end(),
+                          color_space::OKLab{0.0f, 0.0f, 0.0f});
+            total_moves = 0;
+            total_error = 0.0;
+        }
     for (std::size_t y = 0; y < height; ++y) {
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
@@ -513,6 +546,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             total_error += static_cast<double>(dL * dL + da * da + db * db);
         }
     }
+    }  // kPasses
 
     // ---- 4. 3-plane PF2 encoding, then expand to 6-plane DPF ------------
     auto enc = bitplane::encode(indices, width, height,
@@ -708,31 +742,54 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
                 float db = lab.b - P_lab[k].b;
                 cur_err[k] += static_cast<double>(dL * dL + da * da + db * db);
             }
+            // Build candidate pool: unique OCS-quantised strip pixels +
+            // per-register centroids.
+            std::vector<Color3f> cands;
+            cands.reserve(static_cast<std::size_t>(x_hi - x_lo) + kBaseColors);
+            std::array<bool, 4096> seen{};
+            auto ocs_key = [](const Color3f& c) {
+                int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
+                int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
+                int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
+                return static_cast<std::size_t>((r << 8) | (g << 4) | b);
+            };
+            auto add_cand = [&](Color3f c) {
+                auto cs = palette::quantize_to_ocs(c);
+                auto key = ocs_key(cs);
+                if (!seen[key]) { seen[key] = true; cands.push_back(cs); }
+            };
+            for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(src[x, y]);
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (count[k] > 0.0) {
+                    color_space::OKLab cd{
+                        static_cast<float>(sumL[k] / count[k]),
+                        static_cast<float>(suma[k] / count[k]),
+                        static_cast<float>(sumb[k] / count[k])};
+                    add_cand(color_space::oklab_to_linear(cd).clamped());
+                }
+            }
+
             out_reg = -1;
             out_reduction = 0.0f;
             for (std::size_t k = k_min; k < kBaseColors; ++k) {
                 if (count[k] < 1.0) continue;
-                color_space::OKLab centroid{
-                    static_cast<float>(sumL[k] / count[k]),
-                    static_cast<float>(suma[k] / count[k]),
-                    static_cast<float>(sumb[k] / count[k]),
-                };
-                double new_err = 0.0;
-                for (std::size_t x = x_lo; x < x_hi; ++x) {
-                    if (base_index[y * width + x] != k) continue;
-                    auto& lab = img_lab[y * width + x];
-                    float dL = lab.L - centroid.L;
-                    float da = lab.a - centroid.a;
-                    float db = lab.b - centroid.b;
-                    new_err += static_cast<double>(dL * dL + da * da + db * db);
-                }
-                float red = static_cast<float>(cur_err[k] - new_err);
-                if (red > out_reduction) {
-                    auto linear = color_space::oklab_to_linear(centroid).clamped();
-                    linear = palette::quantize_to_ocs(linear);
-                    out_reg = static_cast<int>(k);
-                    out_color = linear;
-                    out_reduction = red;
+                for (auto& cand_lin : cands) {
+                    auto cand_lab = color_space::linear_to_oklab(cand_lin);
+                    double new_err = 0.0;
+                    for (std::size_t x = x_lo; x < x_hi; ++x) {
+                        if (base_index[y * width + x] != k) continue;
+                        auto& lab = img_lab[y * width + x];
+                        float dL = lab.L - cand_lab.L;
+                        float da = lab.a - cand_lab.a;
+                        float db = lab.b - cand_lab.b;
+                        new_err += static_cast<double>(dL * dL + da * da + db * db);
+                    }
+                    float red = static_cast<float>(cur_err[k] - new_err);
+                    if (red > out_reduction) {
+                        out_reg = static_cast<int>(k);
+                        out_color = cand_lin;
+                        out_reduction = red;
+                    }
                 }
             }
         };
@@ -759,6 +816,20 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
+    // Two-pass refinement: pass 0 plans against stage-1 base_index;
+    // pass 1 plans against the actual stage-2 indices we just rendered.
+    constexpr int kPasses = 2;
+    for (int pass = 0; pass < kPasses; ++pass) {
+        if (pass > 0) {
+            for (std::size_t i = 0; i < indices.size(); ++i)
+                base_index[i] = indices[i];
+            for (auto& v : line_moves) v.clear();
+            if (!err_buf.empty())
+                std::fill(err_buf.begin(), err_buf.end(),
+                          color_space::OKLab{0.0f, 0.0f, 0.0f});
+            total_moves = 0;
+            total_error = 0.0;
+        }
     for (std::size_t y = 0; y < height; ++y) {
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
@@ -889,6 +960,7 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
             total_error += static_cast<double>(dL * dL + da * da + db * db);
         }
     }
+    }  // kPasses
 
     // ---- 4. Direct N-plane encoding (no DPF expand) -------------------
     auto enc = bitplane::encode(indices, width, height,
@@ -1046,91 +1118,98 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     auto find_best_swap_in_strip =
         [&](std::size_t y, std::size_t x_lo, std::size_t x_hi,
             int& out_reg, Color3f& out_color, float& out_reduction) {
-            std::array<double, kBaseColors> sumL_b{}, suma_b{}, sumb_b{};
-            std::array<double, kBaseColors> sumL_h{}, suma_h{}, sumb_h{};
-            std::array<double, kBaseColors> count_b{}, count_h{};
             std::array<double, kBaseColors> cur_err{};
+            std::array<bool, kBaseColors> has_pixels_b{}, has_pixels_h{};
+            std::array<color_space::OKLab, kBaseColors> centroid_b{}, centroid_h{};
+            std::array<int, kBaseColors> count_b{}, count_h{};
+            std::array<color_space::OKLab, kBaseColors> sum_b{}, sum_h{};
             for (std::size_t x = x_lo; x < x_hi; ++x) {
                 auto idx = static_cast<std::size_t>(base_index[y * width + x]);
                 std::size_t k = idx & (kBaseColors - 1);
                 bool is_half = idx >= kBaseColors;
                 auto& lab = img_lab[y * width + x];
-                if (is_half) {
-                    sumL_h[k] += static_cast<double>(lab.L);
-                    suma_h[k] += static_cast<double>(lab.a);
-                    sumb_h[k] += static_cast<double>(lab.b);
-                    count_h[k] += 1.0;
-                } else {
-                    sumL_b[k] += static_cast<double>(lab.L);
-                    suma_b[k] += static_cast<double>(lab.a);
-                    sumb_b[k] += static_cast<double>(lab.b);
-                    count_b[k] += 1.0;
-                }
+                auto& sum = is_half ? sum_h[k] : sum_b[k];
+                auto& cnt = is_half ? count_h[k] : count_b[k];
+                sum.L += lab.L; sum.a += lab.a; sum.b += lab.b; cnt++;
+                (is_half ? has_pixels_h[k] : has_pixels_b[k]) = true;
                 auto& pl = P_eff_lab[idx];
                 float dL = lab.L - pl.L;
                 float da = lab.a - pl.a;
                 float db = lab.b - pl.b;
                 cur_err[k] += static_cast<double>(dL * dL + da * da + db * db);
             }
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (count_b[k] > 0) {
+                    float n = static_cast<float>(count_b[k]);
+                    centroid_b[k] = {sum_b[k].L / n, sum_b[k].a / n, sum_b[k].b / n};
+                }
+                if (count_h[k] > 0) {
+                    float n = static_cast<float>(count_h[k]);
+                    centroid_h[k] = {sum_h[k].L / n, sum_h[k].a / n, sum_h[k].b / n};
+                }
+            }
+
+            // ---- Build candidate-color pool for the strip.
+            // Unique OCS-quantised pixel colours in the strip (~16 max
+            // for a 16-px strip), plus the per-register centroids. The
+            // candidate pool is shared across registers — for each
+            // (k, candidate) pair we compute the swap reduction. This
+            // costs ~16-20× the centroid-only approach but lets the
+            // planner pick a colour that better serves k's bound pixels
+            // even when their centroid lands in a hard-to-quantise spot.
+            std::vector<Color3f> cands;
+            cands.reserve(static_cast<std::size_t>(x_hi - x_lo) + 16);
+            std::array<bool, 4096> seen{};
+            auto ocs_key = [](const Color3f& c) -> std::size_t {
+                int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
+                int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
+                int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
+                return static_cast<std::size_t>((r << 8) | (g << 4) | b);
+            };
+            auto add_cand = [&](Color3f c) {
+                auto cs = palette::quantize_to_ocs(c);
+                auto key = ocs_key(cs);
+                if (!seen[key]) { seen[key] = true; cands.push_back(cs); }
+            };
+            for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(src[x, y]);
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (count_b[k] > 0)
+                    add_cand(color_space::oklab_to_linear(centroid_b[k]).clamped());
+                if (count_h[k] > 0) {
+                    // half-brite-bound pixels want base ≈ 2*pixel in sRGB
+                    color_space::OKLab dbl{
+                        std::min(2.0f * centroid_h[k].L, 1.0f),
+                        2.0f * centroid_h[k].a, 2.0f * centroid_h[k].b};
+                    add_cand(color_space::oklab_to_linear(dbl).clamped());
+                }
+            }
+
             out_reg = -1;
             out_reduction = 0.0f;
             for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                double total_count = count_b[k] + count_h[k];
-                if (total_count < 1.0) continue;
-                // Try swapping base[k] to the OKLab centroid of base-bound
-                // pixels (most common case). For the half-brite-bound
-                // pixels we measure error against the half-of-centroid.
-                color_space::OKLab cb{
-                    static_cast<float>(sumL_b[k] / std::max(count_b[k], 1.0)),
-                    static_cast<float>(suma_b[k] / std::max(count_b[k], 1.0)),
-                    static_cast<float>(sumb_b[k] / std::max(count_b[k], 1.0)),
-                };
-                color_space::OKLab ch{
-                    static_cast<float>(sumL_h[k] / std::max(count_h[k], 1.0)),
-                    static_cast<float>(suma_h[k] / std::max(count_h[k], 1.0)),
-                    static_cast<float>(sumb_h[k] / std::max(count_h[k], 1.0)),
-                };
-                // Use the count-weighted average of (cb, 2*ch) as the new
-                // base candidate (since half-brite = halve(base), pixels
-                // currently bound to half-brite want base ≈ 2*their colour
-                // in sRGB — but we approximate in OKLab by doubling L,
-                // which is rough but cheap; refine if needed).
-                color_space::OKLab cand;
-                if (count_b[k] > 0.0 && count_h[k] > 0.0) {
-                    float wb = static_cast<float>(count_b[k] / total_count);
-                    float wh = static_cast<float>(count_h[k] / total_count);
-                    cand.L = wb * cb.L + wh * std::min(2.0f * ch.L, 1.0f);
-                    cand.a = wb * cb.a + wh * (2.0f * ch.a);
-                    cand.b = wb * cb.b + wh * (2.0f * ch.b);
-                } else if (count_b[k] > 0.0) {
-                    cand = cb;
-                } else {
-                    cand.L = std::min(2.0f * ch.L, 1.0f);
-                    cand.a = 2.0f * ch.a;
-                    cand.b = 2.0f * ch.b;
-                }
-                auto cand_lin = color_space::oklab_to_linear(cand).clamped();
-                cand_lin = palette::quantize_to_ocs(cand_lin);
-                auto cand_half = half_brite(cand_lin);
-                auto cand_lab  = color_space::linear_to_oklab(cand_lin);
-                auto cand_h_lab = color_space::linear_to_oklab(cand_half);
-                double new_err = 0.0;
-                for (std::size_t x = x_lo; x < x_hi; ++x) {
-                    auto idx = static_cast<std::size_t>(base_index[y*width + x]);
-                    if ((idx & (kBaseColors - 1)) != k) continue;
-                    auto& lab = img_lab[y * width + x];
-                    bool is_half = idx >= kBaseColors;
-                    auto& cl = is_half ? cand_h_lab : cand_lab;
-                    float dL = lab.L - cl.L;
-                    float da = lab.a - cl.a;
-                    float db = lab.b - cl.b;
-                    new_err += static_cast<double>(dL * dL + da * da + db * db);
-                }
-                float red = static_cast<float>(cur_err[k] - new_err);
-                if (red > out_reduction) {
-                    out_reg = static_cast<int>(k);
-                    out_color = cand_lin;
-                    out_reduction = red;
+                if (!has_pixels_b[k] && !has_pixels_h[k]) continue;
+                for (auto& cand_lin : cands) {
+                    auto cand_half = half_brite(cand_lin);
+                    auto cand_lab  = color_space::linear_to_oklab(cand_lin);
+                    auto cand_h_lab = color_space::linear_to_oklab(cand_half);
+                    double new_err = 0.0;
+                    for (std::size_t x = x_lo; x < x_hi; ++x) {
+                        auto idx = static_cast<std::size_t>(base_index[y*width + x]);
+                        if ((idx & (kBaseColors - 1)) != k) continue;
+                        auto& lab = img_lab[y * width + x];
+                        bool is_half = idx >= kBaseColors;
+                        auto& cl = is_half ? cand_h_lab : cand_lab;
+                        float dL = lab.L - cl.L;
+                        float da = lab.a - cl.a;
+                        float db = lab.b - cl.b;
+                        new_err += static_cast<double>(dL * dL + da * da + db * db);
+                    }
+                    float red = static_cast<float>(cur_err[k] - new_err);
+                    if (red > out_reduction) {
+                        out_reg = static_cast<int>(k);
+                        out_color = cand_lin;
+                        out_reduction = red;
+                    }
                 }
             }
         };
@@ -1156,6 +1235,27 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
+    // Two-pass refinement: first pass uses stage-1's vs-init-palette
+    // base_index for swap planning. After stage-2 actually renders the
+    // image (per-strip nearest-colour search), the FINAL pixel→effective-
+    // index mapping is what the encoder will display — re-run swap
+    // planning against THOSE indices to refine. Two iterations is
+    // enough; gains stop converging beyond that.
+    constexpr int kPasses = 2;
+    for (int pass = 0; pass < kPasses; ++pass) {
+        if (pass > 0) {
+            // Use the previous pass's stage-2 indices as the new
+            // base_index — this is the actual binding the encoder
+            // produced, so the swap planner now optimises for that.
+            for (std::size_t i = 0; i < indices.size(); ++i)
+                base_index[i] = indices[i];
+            for (auto& v : line_moves) v.clear();
+            if (!err_buf.empty())
+                std::fill(err_buf.begin(), err_buf.end(),
+                          color_space::OKLab{0.0f, 0.0f, 0.0f});
+            total_moves = 0;
+            total_error = 0.0;
+        }
     for (std::size_t y = 0; y < height; ++y) {
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
@@ -1296,6 +1396,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             total_error += static_cast<double>(dL * dL + da * da + db * db);
         }
     }
+    }  // kPasses
 
     // ---- 4. 6-plane bitplane encoding. The 6-bit index already encodes
     // half-brite as bit 5, which is exactly what the EHB hardware reads.
