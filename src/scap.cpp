@@ -403,8 +403,14 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // Line entry palette = CAP plan for this line. cap_palettes[y]
         // already reflects all per-line palette evolution decisions
         // from CAP — we layer 20 mid-line SCAP swaps on top.
+        // In debug_overlay mode, hardware actually enters every line
+        // with all PF2 registers forced to 0x0000 (zero frame-init +
+        // forced-zero per-line MOVEs), so the planner must too —
+        // otherwise the preview leaks CAP colours into strip 0 even
+        // though those swaps are never written to hardware.
         for (std::size_t k = 0; k < kBaseColors; ++k)
-            P[k] = cap_palettes[y][k];
+            P[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
+                                 : cap_palettes[y][k];
         recompute_lab();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
