@@ -233,10 +233,12 @@ const dpfAvailable = computed(() => {
   return (cs === 'aga') ? options.depth === 4 : options.depth === 3
 })
 
-// SCAP — DPF mid-line palette swaps. Phase 1: OCS DPF lores only,
-// which means total depth=3 (PF2 = 3 bitplanes; PF1 zeroed). SCAP
-// makes no sense at any other depth.
+// SCAP — DPF mid-line palette swaps. SCAP is an extension to CAP
+// (per-line palette evolution); CAP must be on for SCAP to add the
+// mid-line moves on top. Phase 1: OCS DPF lores only, total depth=3
+// (PF2 = 3 bitplanes; PF1 zeroed).
 const scapAvailable = computed(() => {
+  if (!options.copper) return false
   if (!options.dualPlayfield) return false
   const cs = effectiveChipset(options.mode, options.chipset)
   return cs === 'ocs' && options.mode === 'lores' && options.depth === 3
@@ -315,7 +317,8 @@ watch(() => options.dualPlayfield, (on) => {
 })
 watch(() => options.scap, (on) => {
   if (on) {
-    options.copper = false
+    // SCAP is an extension to CAP — bail back if CAP is off.
+    if (!options.copper) { options.scap = false; return }
     // Banned-by-SCAP error-diffusion kernels: their full error
     // propagation breaks across SCAP's per-strip palette boundaries.
     // Only Atkinson survives. If the user is on one, switch them.
@@ -324,6 +327,13 @@ watch(() => options.scap, (on) => {
     if (banned.includes(options.dither)) options.dither = 'atkinson'
   }
   track('scap-toggle', { enabled: on })
+})
+
+// Turning Copper off pulls SCAP off too — SCAP layers mid-line moves
+// on top of CAP and is meaningless without it. Disabling SCAP alone
+// only removes those mid-line moves; CAP stays on.
+watch(() => options.copper, (on) => {
+  if (!on && options.scap) options.scap = false
 })
 
 // Depth changes can invalidate DPF (requires depth=3 OCS / 4 AGA) and
@@ -988,7 +998,7 @@ async function loadExample(example) {
               <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Copper</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.copper" :disabled="options.scap" />
+                  <ToggleSwitch v-model="options.copper" />
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
                 </div>
               </div>
