@@ -2274,8 +2274,18 @@ int main(int argc, char* argv[]) {
         ham::HamOptions ham_opts;
         ham_opts.beam_width = config->ham_beam;
         ham_opts.dither_method = ham_dither;
-        ham_opts.dither_strength = config->dither_strength;
-        ham_opts.error_clamp = config->error_clamp;
+        auto ham_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = false,
+            .copper  = config->copper,
+            .chipset = chipset,
+        });
+        ham_opts.dither_strength = config->dither_strength_explicit
+                                   ? config->dither_strength : ham_tune.strength;
+        ham_opts.error_clamp = config->error_clamp_explicit
+                              ? config->error_clamp : ham_tune.error_clamp;
         ham_opts.palette_diversity = config->palette_diversity;
         ham_opts.quantizer = config->quantizer;
         ham_opts.triple_beam = config->ham_triple;

@@ -9,12 +9,13 @@ namespace png2amiga::dither_tuning {
 // Conservative default for unlisted contexts: strength=1.0,
 // error_clamp=0.35 — the pre-tuning whole-codebase baseline.
 //
-// SCAP entries assume the CAP+SCAP layered encoder (b0be343) — SCAP
-// rides on top of CAP-driven per-line palette evolution.
+// SCAP entries assume the CAP+SCAP layered encoder with two-pass
+// refinement (commit 9f51baa) — SCAP rides on top of CAP-driven
+// per-line palette evolution.
 Defaults defaults_for(const Context& ctx) {
     constexpr Defaults kFallback{1.0f, 0.35f};
 
-    // SCAP: layered on top of CAP. Tuned for the post-b0be343 encoder.
+    // ---- SCAP: layered on top of CAP. -----------------------------------
     if (ctx.scap) {
         if (ctx.dpf)        return Defaults{0.9f, 0.10f};   // 8 colours
         if (ctx.mode == amiga::Mode::ehb)
@@ -24,32 +25,56 @@ Defaults defaults_for(const Context& ctx) {
         return kFallback;
     }
 
-    // CAP (per-line palette evolution, no SCAP).
+    // ---- HAM (own dither pipeline) --------------------------------------
+    // HAM dithers via the beam-search pre-dither in ham.cpp; the strength
+    // and error_clamp still feed through but the response is muted because
+    // most of the work is the DP search itself. Sweep optima:
+    if (ctx.mode == amiga::Mode::ham6) {
+        // HAM6+CAP: st=0.8, ec=0.04 (PSNR 41.49 mean)
+        // HAM6 alone: st=1.0, ec=0.04 (PSNR 40.34 mean)
+        if (ctx.copper) return Defaults{0.8f, 0.04f};
+        return Defaults{1.0f, 0.04f};
+    }
+    if (ctx.mode == amiga::Mode::ham8) {
+        return Defaults{0.9f, 0.10f};   // PSNR 46.38 mean (AGA)
+    }
+    // HAM4/HAM5/HAM7 not in the sweep — assume their tuning follows
+    // HAM6/HAM8 by interpolation. Conservative: leave on kFallback.
+
+    // ---- CAP (per-line palette evolution, no SCAP) ----------------------
     if (ctx.copper) {
         if (ctx.mode == amiga::Mode::ehb)
-                            return Defaults{0.9f, 0.35f};
+                            return Defaults{0.9f, 0.20f};   // mean 37.83
         if (ctx.mode == amiga::Mode::lores) {
             if (ctx.chipset == amiga::Chipset::aga) {
                 switch (ctx.depth) {
-                    case 4: return Defaults{1.0f, 0.10f};
-                    case 5: return Defaults{1.0f, 0.10f};
-                    case 6: return Defaults{1.0f, 0.06f};
-                    default: break;  // depths 7-8 swept but values pending
+                    case 4: return Defaults{1.0f, 0.10f};   // mean 33.20
+                    case 5: return Defaults{1.0f, 0.10f};   // mean 37.19
+                    case 6: return Defaults{1.0f, 0.06f};   // mean 44.33
+                    case 8: return Defaults{1.0f, 0.04f};   // mean 48.14
+                    default: break;
                 }
             } else {
                 switch (ctx.depth) {
-                    case 2: return Defaults{1.0f, 0.10f};
-                    case 3: return Defaults{1.0f, 0.20f};
-                    case 4: return Defaults{1.0f, 0.04f};
-                    case 5: return Defaults{1.0f, 0.10f};
+                    case 2: return Defaults{1.0f, 0.10f};   // mean 21.76
+                    case 3: return Defaults{1.0f, 0.20f};   // mean 26.89
+                    case 4: return Defaults{1.0f, 0.04f};   // mean 30.92
+                    case 5: return Defaults{1.0f, 0.10f};   // mean 35.61
                     default: break;
                 }
+            }
+        }
+        if (ctx.mode == amiga::Mode::hires) {
+            switch (ctx.depth) {
+                case 3: return Defaults{1.0f, 0.10f};       // mean 26.48
+                case 4: return Defaults{1.0f, 0.20f};       // mean 30.68
+                default: break;
             }
         }
         return kFallback;
     }
 
-    // Standard modes (no copper, no SCAP).
+    // ---- Standard modes (no copper, no SCAP) ----------------------------
     if (ctx.mode == amiga::Mode::ehb) return Defaults{0.9f, 0.35f};
     if (ctx.mode == amiga::Mode::lores) {
         switch (ctx.depth) {
