@@ -376,6 +376,7 @@ struct PipelineResult {
     // Copper mode
     bool copper = false;
     bool aga = false;
+    bool dpf = false;
     std::vector<std::vector<Color3f>> scanline_palettes;
     std::vector<std::vector<copper::CopperChange>> scanline_changes;
     std::size_t copper_num_colors{};
@@ -531,6 +532,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // DOS modes: depth also fixed by the hardware buffer.
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
+
+    // Dual-playfield: encode the image into PF2 only with a constrained
+    // sub-depth (3 OCS / 4 AGA). The remaining planes (PF1 = foreground)
+    // are zeroed and emitted as part of the final 6 / 8-plane output.
+    bool use_dpf = options.dual_playfield &&
+                   !amiga::is_ham(mode) && mode != amiga::Mode::ehb &&
+                   !amiga::is_atari(mode) && !amiga::is_vga(mode) &&
+                   !amiga::is_ega(mode) && !amiga::is_cga(mode);
+    if (use_dpf) {
+        auto cs = (options.chipset == "aga") ? amiga::Chipset::aga
+                                             : amiga::Chipset::ocs;
+        depth = (cs == amiga::Chipset::aga) ? 4 : 3;
+    }
 
     std::vector<bool> tmask;
     auto image = load_and_preprocess(input_data, input_size, options,
@@ -1240,9 +1254,34 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                      skip_initial_lace, options.interlace);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
+        // Render preview BEFORE any DPF expansion: render_copper builds a
+        // combined palette index from all planes which would land on
+        // non-contiguous slots once PF1 zeros are interleaved.
         auto preview = copper::render_copper(copper_result->planes,
                                              copper_result->scanline_palettes);
         if (!preview) return std::unexpected{preview.error()};
+
+        // Dual-playfield expansion (copper path): same as standard branch —
+        // expand to 2N planes with PF1 zeroed, prepend pf2_base zero
+        // entries to each palette, and shift each copper write target
+        // register up by pf2_base so writes land in the upper registers.
+        if (use_dpf) {
+            auto expanded = bitplane::expand_to_dpf_pf2(copper_result->planes);
+            if (!expanded) return std::unexpected{expanded.error()};
+            copper_result->planes = *std::move(expanded);
+            auto pf2_base = std::size_t{1} << (copper_result->planes.depth / 2);
+            auto shift_palette = [&](std::vector<Color3f>& p) {
+                std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
+                shifted.insert(shifted.end(), p.begin(), p.end());
+                p = std::move(shifted);
+            };
+            for (auto& pal : copper_result->scanline_palettes)
+                shift_palette(pal);
+            for (auto& line : copper_result->scanline_changes)
+                for (auto& ch : line)
+                    ch.reg = static_cast<std::uint8_t>(ch.reg + pf2_base);
+            copper_result->num_colors += pf2_base;
+        }
 
         // Use the first scanline's palette as the nominal palette
         // (for CMAP chunk in IFF; the real palettes are in COPL)
@@ -1255,6 +1294,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.mode = mode;
         result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
         result.interlace = options.interlace;
+        result.dpf = use_dpf;
         result.copper = true;
         result.aga = is_aga;
         result.scanline_palettes = std::move(copper_result->scanline_palettes);
@@ -1495,8 +1535,29 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Build used palette vector
     std::vector<Color3f> used_palette(pal_span.begin(), pal_span.end());
 
-    // Render preview
+    // Render preview before any DPF expansion: the encoded N-plane data is
+    // what the hardware would read out of PF2, and bitplane::render gives a
+    // direct color preview. (After expansion the "combined" indices read
+    // from all planes would be non-contiguous, so render the unexpanded
+    // image then transform the planes/palette to their final DPF layout.)
     auto preview = bitplane::render(*planes, used_palette);
+
+    // Dual-playfield expansion: place the encoded N-plane image into the
+    // even hardware planes (PF2), leave the odd planes (PF1) zeroed, and
+    // shift the palette into the upper color registers so PF2 lookups land
+    // there (8-15 OCS / 16-31 AGA). Also offset the per-pixel indices so
+    // palettized PNG export keeps referencing the correct slots.
+    if (use_dpf) {
+        auto expanded = bitplane::expand_to_dpf_pf2(*planes);
+        if (!expanded) return std::unexpected{expanded.error()};
+        planes = *std::move(expanded);
+        auto pf2_base = std::size_t{1} << (planes->depth / 2);
+        std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
+        shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
+        used_palette = std::move(shifted);
+        for (auto& idx : dither_result.indices)
+            idx = static_cast<std::uint8_t>(idx + pf2_base);
+    }
     if (!preview) return std::unexpected{preview.error()};
 
     PipelineResult result;
@@ -1507,6 +1568,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.mode = mode;
     result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
     result.interlace = options.interlace;
+    result.dpf = use_dpf;
+    result.aga = is_aga;
     result.has_transparency = has_transparency;
     result.transparency_mask = tmask;
     if (has_transparency) {
@@ -1623,6 +1686,7 @@ ConvertResult convert_iff(const std::uint8_t* input_data,
 
     iff::IffOptions iff_opts;
     iff_opts.interlace = result->interlace;
+    iff_opts.dpf = result->dpf;
     if (result->copper && !result->scanline_palettes.empty()) {
         iff_opts.scanline_palettes = &result->scanline_palettes;
     }
@@ -1656,6 +1720,8 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     cheader::CHeaderOptions ch_opts;
     if (!options.symbol_name.empty())
         ch_opts.symbol_name = options.symbol_name;
+    ch_opts.dpf = result->dpf;
+    ch_opts.aga = result->aga;
     auto header = cheader::generate(
         result->planes, result->palette, result->mode, ch_opts);
     if (!header) return make_error(header.error().message);
@@ -1783,6 +1849,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     ch_opts.hires = result->hires;
     ch_opts.interlace = result->interlace;
     ch_opts.aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga);
+    ch_opts.dpf = result->dpf;
     ch_opts.fade_in = true;  // always enable fade-in for web/compile exports
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;

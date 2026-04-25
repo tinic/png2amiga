@@ -114,13 +114,14 @@ std::vector<std::uint8_t> byterun1_compress(
 // CAMG viewport mode word
 // ---------------------------------------------------------------------------
 
-std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace) {
+std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) {
     std::uint32_t camg = 0;
     auto params = amiga::get_mode_params(mode);
     if (hires)       camg |= 0x8000;  // HIRES
     if (params.is_ham) camg |= 0x0800;  // HAM
     if (params.is_ehb) camg |= 0x0080;  // EXTRA_HALFBRITE
     if (interlace)   camg |= 0x0004;  // LACE
+    if (dpf)         camg |= 0x0400;  // DBLPF (dual playfield)
     return camg;
 }
 
@@ -187,7 +188,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     }
 
     // --- CAMG chunk ---
-    auto camg = make_camg(mode, options.hires, options.interlace);
+    auto camg = make_camg(mode, options.hires, options.interlace, options.dpf);
     write_id(out, "CAMG");
     write_u32(out, 4);
     write_u32(out, camg);

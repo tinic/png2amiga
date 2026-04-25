@@ -45,6 +45,7 @@ struct CHeaderOptions {
     bool interlace = false;              // set LACE bit in CAMG
     bool aga = false;                    // AGA chipset (24-bit palette)
     bool fade_in = false;                // 16-step fade-in from black
+    bool dpf = false;                    // dual playfield (CAMG 0x0400, BPLCON0 DBLPF)
 
     // Copper: per-scanline register changes (nullptr = no copper)
     const std::vector<std::vector<copper::CopperChange>>* copper_changes = nullptr;

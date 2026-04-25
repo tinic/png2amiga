@@ -201,6 +201,10 @@ export function defaultOptions() {
     // Advanced
     reserveColor0: true,
     paletteDiversity: 0,
+    // Dual playfield: encode image into PF2 (upper color regs 8-15 OCS /
+    // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3
+    // (OCS) or 4 (AGA). CAMG DBLPF flag set.
+    dualPlayfield: false,
   }
   for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
   Object.assign(opts, CGA_TEXT_DEFAULTS)

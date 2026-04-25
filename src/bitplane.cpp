@@ -213,6 +213,50 @@ Result<EncodeResult> encode_image(const Image& image, const Palette& pal,
 // Render bitplane data to preview Image
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Dual-playfield expansion
+//
+// Input: BitplaneData with N planes (the image data, destined for PF2).
+// Output: 2N-plane data where PF1 (planes 0, 2, ..., 2N-2) is all zero and
+//         PF2 (planes 1, 3, ..., 2N-1) carries the original plane[i] data.
+// ---------------------------------------------------------------------------
+
+Result<BitplaneData> expand_to_dpf_pf2(const BitplaneData& src) {
+    if (src.depth == 0 || src.depth > 4) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_depth,
+            std::format("DPF expansion expects 1-4 source planes, got {}",
+                        src.depth),
+        }};
+    }
+    if (src.layout != Layout::interleaved) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_depth,
+            "DPF expansion currently requires interleaved layout",
+        }};
+    }
+
+    BitplaneData dst;
+    dst.width = src.width;
+    dst.height = src.height;
+    dst.depth = src.depth * 2;
+    dst.bytes_per_row = src.bytes_per_row;
+    dst.layout = Layout::interleaved;
+    dst.data.assign(dst.total_bytes(), 0);
+
+    for (std::size_t y = 0; y < src.height; ++y) {
+        for (std::size_t p = 0; p < src.depth; ++p) {
+            auto src_off = src.plane_row_offset(p, y);
+            // Map source plane p -> destination plane 2*p + 1 (PF2 slot).
+            auto dst_off = dst.plane_row_offset(p * 2 + 1, y);
+            std::copy_n(src.data.data() + src_off, src.bytes_per_row,
+                        dst.data.data() + dst_off);
+        }
+    }
+
+    return dst;
+}
+
 Result<Image> render(const BitplaneData& planes,
                      std::span<const Color3f> pal) {
     auto decoded = decode(planes);

@@ -90,6 +90,16 @@ struct Options {
     // Advanced
     bool reserve_color0 = true;         // reserve index 0 for black (border/background)
 
+    // Amiga dual playfield. When true, encode the image as PF2 of a
+    // dual-playfield display: bitplane depth is forced to 3 (OCS, 8 colors)
+    // or 4 (AGA, 16 colors), the encoded planes are placed in the even
+    // hardware bitplanes (PF2), the odd planes (PF1, foreground) are
+    // emitted as zero, and the palette is shifted into the upper color
+    // registers (8-15 OCS / 16-31 AGA) so PF2 pixels look up there. Sets
+    // the CAMG DPF flag (0x0400) and BPLCON0 DBLPF bit. Only valid for
+    // standard lores/hires modes (no HAM/EHB/copper/Atari/DOS).
+    bool dual_playfield = false;
+
     // IBM PC / DOS modes only. If true, preserve source aspect ratio by
     // letterboxing or pillarboxing the image inside the fixed hardware
     // buffer (padded with black). If false (default), stretch the image

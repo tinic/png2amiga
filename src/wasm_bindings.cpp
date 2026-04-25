@@ -88,6 +88,8 @@ Options parse_js_options(val js_opts) {
         opts.native_par = js_opts["nativePar"].as<bool>();
     if (js_opts.hasOwnProperty("cgaTextMetric"))
         opts.cga_text_metric = js_opts["cgaTextMetric"].as<std::string>();
+    if (js_opts.hasOwnProperty("dualPlayfield"))
+        opts.dual_playfield = js_opts["dualPlayfield"].as<bool>();
     return opts;
 }
 

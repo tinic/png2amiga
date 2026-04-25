@@ -41,6 +41,7 @@ struct IffOptions {
     bool hires = false;             // set HIRES bit in CAMG
     bool interlace = false;         // set LACE bit in CAMG
     bool has_transparency = false;  // BMHD masking=2, transparentColor=0
+    bool dpf = false;               // dual playfield (CAMG DBLPF 0x0400)
 
     // Per-line palette changes (sliced / Dynamic HiRes / Sliced HAM).
     // If non-empty, a standard PCHG chunk (Vigna 1991) is written after

@@ -160,6 +160,10 @@ struct Config {
     bool native_par = false;
     bool reserve_color0 = true;        // reserve index 0 for black (border)
 
+    // Dual playfield: encode image into PF2, leave PF1 zeroed, palette
+    // shifted into upper color registers (8-15 OCS / 16-31 AGA).
+    bool dual_playfield = false;
+
     // Mask export
     std::string mask_path;             // output path for transparency mask
     bool mask_invert = false;          // invert mask polarity
@@ -224,6 +228,10 @@ void print_usage() {
         "                                  blur (default), mse\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
+        "  --dual-playfield, --dpf         Dual playfield: encode image into PF2\n"
+        "                                  (upper color regs 8-15 OCS / 16-31 AGA)\n"
+        "                                  with PF1 (foreground) zeroed. Forces\n"
+        "                                  depth=3 (OCS) or 4 (AGA).\n"
         "  --copper                        Copper-Augmented Palette (CAP):\n"
         "                                  per-scanline palette swaps via the\n"
         "                                  copper, picked greedily by OKLab\n"
@@ -405,6 +413,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--native-par") {
             config.native_par = true;
+            continue;
+        }
+
+        if (arg == "--dual-playfield" || arg == "--dpf") {
+            config.dual_playfield = true;
             continue;
         }
 
@@ -1934,6 +1947,21 @@ int main(int argc, char* argv[]) {
     auto chipset = effective_chipset(*config);
     std::println("Chipset: {}", chipset == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
 
+    // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
+    // PF1 (foreground) zeroed and the palette shifted into the upper color
+    // registers. Force the encoder to depth 3 (OCS) / 4 (AGA) before any
+    // mode-specific branch picks it up.
+    bool use_dpf_std = config->dual_playfield &&
+                       !amiga::is_ham(config->mode) &&
+                       config->mode != amiga::Mode::ehb &&
+                       !amiga::is_atari(config->mode) &&
+                       !amiga::is_vga(config->mode) &&
+                       !amiga::is_ega(config->mode) &&
+                       !amiga::is_cga(config->mode);
+    if (use_dpf_std) {
+        config->depth = (chipset == amiga::Chipset::aga) ? 4 : 3;
+    }
+
     // AGA depth 6 in standard mode: set KILLEHB to prevent hardware
     // from triggering EHB. This allows a true 64-color indexed palette.
 
@@ -2769,16 +2797,46 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Use base palette for IFF CMAP
-        std::vector<Color3f> cmap_palette = copper_result->base_palette;
-
-        // Render preview using per-scanline palettes
+        // Render preview BEFORE any DPF expansion: render_copper decodes
+        // a combined index from all planes, which would land on
+        // non-contiguous slots once PF1 zeros are interleaved.
         auto preview = copper::render_copper(copper_result->planes,
                                              copper_result->scanline_palettes);
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
         }
+
+        // Dual-playfield expansion (copper path): expand to 2N planes with
+        // PF1 zeroed, prepend pf2_base zero entries to base + per-scanline
+        // palettes, and shift each copper write target register up by
+        // pf2_base so writes land in the upper color registers (8-15 OCS /
+        // 16-31 AGA).
+        if (use_dpf_std) {
+            auto expanded = bitplane::expand_to_dpf_pf2(copper_result->planes);
+            if (!expanded) {
+                std::println(stderr, "DPF expand error: {}",
+                             expanded.error().message);
+                return 1;
+            }
+            copper_result->planes = *std::move(expanded);
+            auto pf2_base = std::size_t{1} << (copper_result->planes.depth / 2);
+            auto shift_palette = [&](std::vector<Color3f>& p) {
+                std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
+                shifted.insert(shifted.end(), p.begin(), p.end());
+                p = std::move(shifted);
+            };
+            shift_palette(copper_result->base_palette);
+            for (auto& pal : copper_result->scanline_palettes)
+                shift_palette(pal);
+            for (auto& line : copper_result->scanline_changes)
+                for (auto& ch : line)
+                    ch.reg = static_cast<std::uint8_t>(ch.reg + pf2_base);
+            copper_result->num_colors += pf2_base;
+        }
+
+        // Use base palette for IFF CMAP
+        std::vector<Color3f> cmap_palette = copper_result->base_palette;
 
         float cop_psnr = color_space::compute_psnr_blurred(
             image->pixels(), preview->pixels(),
@@ -2800,6 +2858,7 @@ int main(int argc, char* argv[]) {
                 iff_opts.interlace = config->interlace;
                 iff_opts.has_transparency = has_transparency;
                 iff_opts.scanline_palettes = &copper_result->scanline_palettes;
+                iff_opts.dpf = use_dpf_std;
 
                 auto result = iff::save_ilbm(
                     config->output_path, copper_result->planes,
@@ -2821,6 +2880,7 @@ int main(int argc, char* argv[]) {
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
                 ch_opts.fade_in = config->fade_in;
+                ch_opts.dpf = use_dpf_std;
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
 
@@ -2843,6 +2903,7 @@ int main(int argc, char* argv[]) {
                 ch_opts2.interlace = config->interlace;
                 ch_opts2.aga = (chipset == amiga::Chipset::aga);
                 ch_opts2.fade_in = config->fade_in;
+                ch_opts2.dpf = use_dpf_std;
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
 
@@ -3142,11 +3203,31 @@ int main(int argc, char* argv[]) {
 
     std::vector<Color3f> used_palette(pal_span.begin(), pal_span.end());
 
-    // Render preview
+    // Render preview before any DPF expansion (combined indices read from
+    // the expanded planes would be non-contiguous).
     auto preview = bitplane::render(*planes, used_palette);
     if (!preview) {
         std::println(stderr, "Render error: {}", preview.error().message);
         return 1;
+    }
+
+    // Dual-playfield expansion: image lives in PF2 of a 2N-plane display,
+    // PF1 zeroed, palette shifted into upper color registers.
+    if (use_dpf_std) {
+        auto expanded = bitplane::expand_to_dpf_pf2(planes.value());
+        if (!expanded) {
+            std::println(stderr, "DPF expand error: {}",
+                         expanded.error().message);
+            return 1;
+        }
+        planes = *std::move(expanded);
+        auto pf2_base = std::size_t{1} << (planes->depth / 2);
+        std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
+        shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
+        used_palette = std::move(shifted);
+        for (auto& idx : dither_result.indices)
+            idx = static_cast<std::uint8_t>(idx + pf2_base);
+
     }
 
     float std_psnr = color_space::compute_psnr_blurred(
@@ -3181,6 +3262,7 @@ int main(int argc, char* argv[]) {
             iff_opts.hires = config->hires;
                 iff_opts.interlace = config->interlace;
             iff_opts.has_transparency = has_transparency;
+            iff_opts.dpf = use_dpf_std;
 
             auto result = iff::save_ilbm(
                 config->output_path, planes.value(), used_palette,
@@ -3200,6 +3282,7 @@ int main(int argc, char* argv[]) {
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
                 ch_opts.fade_in = config->fade_in;
+                ch_opts.dpf = use_dpf_std;
 
             auto result = cheader::save(
                 config->output_path, planes.value(), used_palette,
@@ -3349,6 +3432,7 @@ int main(int argc, char* argv[]) {
                 ch_opts.interlace = config->interlace;
                 ch_opts.aga = (chipset == amiga::Chipset::aga);
                 ch_opts.fade_in = config->fade_in;
+                ch_opts.dpf = use_dpf_std;
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result = cheader::save_viewer(

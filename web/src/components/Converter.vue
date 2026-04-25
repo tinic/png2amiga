@@ -212,6 +212,14 @@ const rawTooltipHtml = computed(() => {
 // Whether HAM controls should be shown
 const showHamControls = computed(() => isHamMode(options.mode))
 
+// Dual playfield: only valid for standard lores/hires Amiga modes
+// (no HAM, no EHB, no Atari/DOS). Forces depth=3 OCS / 4 AGA.
+const dpfAvailable = computed(() => {
+  const m = options.mode
+  return !isHamMode(m) && !isEhbMode(m) &&
+         !isAtariMode(m) && !isDosMode(m)
+})
+
 // Available modes for current chipset
 const availableModes = computed(() => modesForChipset(options.chipset))
 
@@ -269,7 +277,17 @@ watch(() => options.mode, (mode, oldMode) => {
   // alone when switching between DOS modes so the user's toggle sticks.
   if (isDosMode(mode) && !isDosMode(oldMode)) options.nativePar = true
   if (!isDosMode(mode)) options.nativePar = false
+  // Dual playfield only applies to standard Amiga lores/hires.
+  if (!dpfAvailable.value) options.dualPlayfield = false
   track('mode-change', { from: oldMode, to: mode })
+})
+
+// DPF + Copper aren't combined (copper has its own pipeline branch in
+// api.cpp that doesn't run the DPF expansion). Force one off when the
+// other comes on so the user gets predictable behavior.
+watch(() => options.dualPlayfield, (on) => {
+  if (on) options.copper = false
+  track('dpf-toggle', { enabled: on })
 })
 
 // When chipset changes, reset mode if current mode isn't available
@@ -926,8 +944,17 @@ async function loadExample(example) {
               <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette.">Copper</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.copper" />
+                  <ToggleSwitch v-model="options.copper" :disabled="options.dualPlayfield" />
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
+                </div>
+              </div>
+
+              <!-- Dual playfield (standard Amiga lores/hires only). -->
+              <div v-if="dpfAvailable" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Forces depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.dualPlayfield" />
+                  <span style="color: #888; font-size: 0.625rem;">PF2 / upper color regs, PF1 zeroed</span>
                 </div>
               </div>
 

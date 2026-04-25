@@ -45,13 +45,14 @@ std::string sanitize_symbol(std::string_view name) {
 }
 
 // CAMG viewport mode word
-std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace) {
+std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) {
     std::uint32_t camg = 0;
     auto params = amiga::get_mode_params(mode);
     if (hires)           camg |= 0x8000;
     if (params.is_ham)   camg |= 0x0800;
     if (params.is_ehb)   camg |= 0x0080;
     if (interlace)       camg |= 0x0004;
+    if (dpf)             camg |= 0x0400;  // DBLPF (dual playfield)
     return camg;
 }
 
@@ -85,7 +86,7 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
     out += "#endif\n\n";
 
     // Metadata defines
-    auto camg = make_camg(mode, options.hires, options.interlace);
+    auto camg = make_camg(mode, options.hires, options.interlace, options.dpf);
     out += std::format("#define {}_WIDTH   {}\n", SYM, planes.width);
     out += std::format("#define {}_HEIGHT  {}\n", SYM, planes.height);
     out += std::format("#define {}_DEPTH   {}\n", SYM, planes.depth);
@@ -285,7 +286,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     auto is_ham = params.is_ham;
 
     bool is_hires = options.hires;
-    auto camg = make_camg(mode, is_hires, options.interlace);
+    auto camg = make_camg(mode, is_hires, options.interlace, options.dpf);
 
     // Fade-in is only supported for progressive non-HAM displays. Interlace
     // would need a separate fade loop per field; HAM's modify-R/G/B bits
@@ -756,6 +757,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     } else if (options.aga) {
         // AGA <=32: LOCT=1 pass + BPLCON3 switches (2 for LOCT on/off)
         cop_size += pal_count * 4 + 8;
+    } else if (options.dpf) {
+        // OCS-targeted DPF on AGA: extra LOCT=1 pass + 2 BPLCON3 switches
+        // + BPLCON4 + explicit FMODE write.
+        cop_size += pal_count * 4 + 16;
     }
     if (has_copper) {
         cop_size += height * options.copper_changes_per_line * 8 + height * 4;
@@ -826,10 +831,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed
-    // for >6 plane modes and hires-5+). Always emit when FMODE=3 is needed;
-    // otherwise leave at the chipset default (0).
+    // for >6 plane modes and hires-5+). For DPF we explicitly zero FMODE
+    // so an AGA host running an OCS-targeted DPF viewer doesn't inherit a
+    // non-zero state from prior software (e.g. SetPatch leaving FMODE=1).
     if (need_fmode3) {
         out += "    *cl++ = 0x01fc; *cl++ = 0x0003;  // FMODE: 64-bit DMA fetch\n";
+    } else if (options.dpf) {
+        out += "    *cl++ = 0x01fc; *cl++ = 0x0000;  // FMODE: 16-bit DMA fetch (OCS-compat)\n";
     }
 
     // --- BPLCON0: main display control register ---
@@ -845,12 +853,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (is_ham) bplcon0 |= (1 << 11);
     if (is_hires) bplcon0 |= (1 << 15);
     if (is_lace) bplcon0 |= (1 << 2);
+    if (options.dpf) bplcon0 |= (1 << 10);  // DBLPF (dual playfield)
 
     // Emit BPLCON0 as OR of named parts
     std::string bplcon0_expr;
     if (is_hires) bplcon0_expr += "(1<<15)/*HIRES*/|";
     bplcon0_expr += std::format("({}<<12)/*BPU*/", bpu);
     if (is_ham) bplcon0_expr += "|(1<<11)/*HAM*/";
+    if (options.dpf) bplcon0_expr += "|(1<<10)/*DBLPF*/";
     bplcon0_expr += "|(1<<9)/*COLOR*/";
     if (bpu3) bplcon0_expr += "|(1<<4)/*BPU3=8planes*/";
     if (is_lace) bplcon0_expr += "|(1<<2)/*LACE*/";
@@ -861,15 +871,50 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // BPLCON2: playfield priority and KILLEHB
     // Bit 9: KILLEHB — prevents 6-plane non-EHB from triggering Extra Half-Brite
-    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham) ? 0x0200 : 0x0000;
+    //                  (not applicable in DPF mode — bit 9 is unused there)
+    // Bit 6: PF2PRI = 0 (PF1 in front of PF2). With DPF and PF1 zeroed,
+    //        leaving PF2 behind means transparent PF1 lets PF2 show through.
+    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham && !options.dpf)
+                       ? 0x0200 : 0x0000;
     if (bplcon2)
         out += std::format("    *cl++ = offsetof(struct Custom, bplcon2); "
                            "*cl++ = 0x{:04X};  // KILLEHB\n", bplcon2);
     else
         out += "    *cl++ = offsetof(struct Custom, bplcon2); *cl++ = 0x0000;\n";
 
-    // BPLCON3: AGA palette bank select (bank 0, LOCT=0)
-    out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // BPLCON3: bank 0, no LOCT\n\n";
+    // BPLCON3: AGA palette bank select (bank 0, LOCT=0). In dual-playfield
+    // mode the PF2OF field (bits 12-10) selects PF2's color-register
+    // offset; on AGA the field defaults to 000 (= +0, no offset) and must
+    // be set explicitly even for OCS-compatible behavior.
+    //   000 = +0  101 = +32
+    //   001 = +2  110 = +64
+    //   010 = +4  111 = +128
+    //   011 = +8 (OCS-compatible, 3-plane PF2 -> regs 8..15)
+    //   100 = +16 (4-plane PF2 -> regs 16..31, AGA DPF)
+    // Verified empirically on A1200: with PF2OF=000 the image rendered via
+    // regs 0..7 instead of 8..15, hiding our shifted PF2 palette behind
+    // the zeroed PF1 slots.
+    {
+        unsigned bplcon3 = 0;
+        if (options.dpf) {
+            bplcon3 |= (depth == 8) ? 0x1000  // PF2OF=100, +16
+                                    : 0x0C00; // PF2OF=011, +8
+        }
+        out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};  // BPLCON3"
+                           "{}\n",
+                           bplcon3,
+                           options.dpf
+                               ? (depth == 8 ? " (DPF, PF2 +16)"
+                                             : " (DPF, PF2 +8)")
+                               : ": bank 0, no LOCT");
+    }
+    // BPLCON4: AGA bitplane XOR mask + sprite color base. Default state
+    // varies (Workbench may leave non-zero); zero it explicitly so
+    // OCS-targeted viewers run cleanly on AGA hardware.
+    if (options.dpf) {
+        out += "    *cl++ = 0x010C; *cl++ = 0x0011;  // BPLCON4: BPLAM=0, sprite bases\n";
+    }
+    out += "\n";
 
     // --- Bitplane modulo ---
     // Interleaved layout: each plane's pointer needs to skip past the other
@@ -943,6 +988,25 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += std::format("        *cl++ = {}_palette_lo[i];\n", sym);
             out += "    }\n";
             out += "    *cl++ = 0x0106; *cl++ = 0x0000;  // LOCT=0\n";
+        } else if (options.dpf) {
+            // OCS-targeted DPF viewer running on AGA: do an LOCT=1 pass
+            // with the same OCS 12-bit values so each color channel nibble
+            // gets replicated (0xN -> 0xNN), matching how OCS hardware
+            // expands 12-bit colors to 24-bit. Without this, the low
+            // nibbles inherit prior state and colors look wrong (often
+            // black) on AGA. Preserve PF2OF in BPLCON3 across the LOCT
+            // toggle so PF2 keeps its color offset.
+            unsigned pf2of = (depth == 8) ? 0x1000 : 0x0C00;
+            out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
+                               "  // LOCT=1 (AGA-compat)\n",
+                               pf2of | 0x0200);
+            out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
+            out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
+            out += std::format("        *cl++ = {}_palette[i];\n", sym);
+            out += "    }\n";
+            out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
+                               "  // LOCT=0, restore PF2OF\n",
+                               pf2of);
         }
         out += "\n";
     }

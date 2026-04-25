@@ -105,4 +105,19 @@ Result<EncodeResult> encode_image(const Image& image,
 Result<Image> render(const BitplaneData& planes,
                      std::span<const Color3f> palette);
 
+// ---------------------------------------------------------------------------
+// Dual-playfield expansion.
+//
+// Takes encoded bitplane data with N planes and produces 2N-plane data laid
+// out for Amiga DPF: PF1 = odd hardware planes (0-indexed even: 0, 2, 4, ...)
+// = all zero (transparent foreground); PF2 = even hardware planes (0-indexed
+// odd: 1, 3, 5, ...) = the original encoded image. Hardware looks up PF2
+// pixels in the upper color registers (8-15 OCS / 16-31 AGA), so the caller
+// pads the palette with (1<<N) zero entries at the start to align it.
+//
+// Layout of the output planes is preserved from the input.
+// ---------------------------------------------------------------------------
+
+Result<BitplaneData> expand_to_dpf_pf2(const BitplaneData& planes);
+
 } // namespace png2amiga::bitplane
