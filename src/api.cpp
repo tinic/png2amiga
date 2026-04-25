@@ -1327,17 +1327,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         return result;
     }
 
-    // --- SCAP (DPF mid-line palette swaps) ---
-    // Phase 1 limit: OCS DPF lores, no interlace.
+    // --- SCAP (mid-line palette swaps) ---
+    // Two variants:
+    //   * DPF (Phase 1, production): OCS lores DPF, 8 PF2 colours.
+    //   * Lores 5bpp (investigation): OCS lores single playfield,
+    //     32 colours. No cpp viewer export, just the encoded planes
+    //     and a rendered preview for PSNR comparison.
     if (options.scap) {
-        if (!options.dual_playfield ||
-            chipset != amiga::Chipset::ocs ||
+        if (chipset != amiga::Chipset::ocs ||
             mode != amiga::Mode::lores ||
             options.interlace) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "SCAP requires dual_playfield + chipset=ocs + mode=lores "
-                "(no interlace) — Phase 1 limitation",
+                "SCAP requires chipset=ocs + mode=lores (no interlace) — "
+                "Phase 1 limitation",
+            }};
+        }
+        if (!options.dual_playfield && depth != static_cast<std::size_t>(5)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "SCAP without --dpf requires depth=5 (lores 5bpp investigation)",
             }};
         }
         if (has_transparency) {
@@ -1348,31 +1357,41 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         scap_dith.method = parse_dither(options.dither);
         scap_dith.strength = options.dither_strength;
         scap_dith.error_clamp = options.error_clamp;
-        // SCAP per-strip palette evolution breaks under full-error
-        // diffusion kernels (Floyd-Steinberg, Stucki, Jarvis, Sierra
-        // Lite, Ostromoukhov): residuals propagated forward across a
-        // strip boundary no longer match the next strip's palette and
-        // amplify into mush. Atkinson's 6/8 damping is the only
-        // error-diffusion kernel that survives. Silently fall back so
-        // CLI / WASM callers don't have to know the rule.
-        switch (scap_dith.method) {
-            case dither::Method::floyd_steinberg:
-            case dither::Method::stucki:
-            case dither::Method::jarvis:
-            case dither::Method::sierra_lite:
-            case dither::Method::ostromoukhov:
-                scap_dith.method = dither::Method::atkinson;
-                break;
-            default: break;
+        // SCAP-DPF only: per-strip palette evolution mushes under
+        // full-error diffusion kernels at 8 colours. Atkinson's 6/8
+        // damping is the only error-diffusion kernel that survives.
+        // The lores-5bpp investigation deliberately skips this fallback
+        // so we can verify whether the same breakage happens with 32
+        // colours — if it doesn't, the issue is DPF-specific.
+        if (options.dual_playfield) {
+            switch (scap_dith.method) {
+                case dither::Method::floyd_steinberg:
+                case dither::Method::stucki:
+                case dither::Method::jarvis:
+                case dither::Method::sierra_lite:
+                case dither::Method::ostromoukhov:
+                    scap_dith.method = dither::Method::atkinson;
+                    break;
+                default: break;
+            }
         }
 
-        auto scap_res = scap::encode_scap_dpf_ocs(
-            *image,
-            static_cast<int>(image->width()),
-            static_cast<int>(image->height()),
-            options.reserve_color0,
-            scap_dith,
-            options.scap_debug);
+        Result<scap::ScapResult> scap_res =
+            options.dual_playfield
+            ? scap::encode_scap_dpf_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                options.reserve_color0,
+                scap_dith,
+                options.scap_debug)
+            : scap::encode_scap_lores_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                static_cast<int>(depth),
+                options.reserve_color0,
+                scap_dith);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;
@@ -1382,9 +1401,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.mode = mode;
         result.hires = false;
         result.interlace = false;
-        result.dpf = true;
+        result.dpf = options.dual_playfield;
         result.scap = true;
-        result.scap_line_moves = std::move(scap_res->line_moves);
+        // Only the DPF variant produces copper-list output the cheader
+        // emitter knows how to consume. The lores 5bpp investigation
+        // runs static-only — drop line_moves so cheader doesn't try to
+        // emit them.
+        if (options.dual_playfield)
+            result.scap_line_moves = std::move(scap_res->line_moves);
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.copper_changes = scap_res->avg_changes_per_line;

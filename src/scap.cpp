@@ -587,6 +587,334 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
 }
 
 // ---------------------------------------------------------------------------
+// SCAP investigation: lores 5bpp (single playfield, 32 colours).
+//
+// Same shape as encode_scap_dpf_ocs but with a runtime palette size,
+// register base 0, and no DPF expand. Built as a parallel implementation
+// rather than a generalised template so the DPF path stays untouched
+// while we run the experiment. If the PSNR delta is interesting we'll
+// dedupe afterwards.
+//
+// Slot table: kScap6bplOcs reused. The planner doesn't care about real
+// hardware MOVE positions for this PSNR measurement — it just needs the
+// 16-px strip boundaries.
+// ---------------------------------------------------------------------------
+Result<ScapResult> encode_scap_lores_ocs(const Image& image,
+                                         int width_arg,
+                                         int height_arg,
+                                         int depth,
+                                         bool reserve_color0,
+                                         const dither::Settings& dither_settings) {
+    if (depth < 1 || depth > 5) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_depth,
+            std::format("SCAP lores: depth must be 1..5, got {}", depth),
+        }};
+    }
+    auto& table = scap_table_for(6);  // reuse OCS DPF slot table for now
+    if (table.slots.empty()) {
+        return std::unexpected{Error{
+            ErrorCode::unsupported_mode,
+            "SCAP lores planner: kScap6bplOcs slot table is empty",
+        }};
+    }
+
+    auto width = (width_arg > 0) ? static_cast<std::size_t>(width_arg)
+                                  : image.width();
+    auto height = (height_arg > 0) ? static_cast<std::size_t>(height_arg)
+                                    : image.height();
+    if (image.width() != width || image.height() != height) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("SCAP lores planner: image is {}x{} but caller asked "
+                        "for {}x{} — resize before calling",
+                        image.width(), image.height(), width, height),
+        }};
+    }
+
+    auto& src = image;
+    const std::size_t kBaseColors = 1u << static_cast<unsigned>(depth);
+    constexpr int kRegBase = 0;  // single playfield: full register file
+
+    // ---- 1. Quantise to N base colours --------------------------------
+    int qcount = reserve_color0 ? static_cast<int>(kBaseColors) - 1
+                                : static_cast<int>(kBaseColors);
+    auto quantised = quantize::quantize(src,
+                                        static_cast<std::size_t>(qcount),
+                                        quantize::Algorithm::ocs_bruteforce,
+                                        /*diversity=*/0);
+    if (!quantised) return std::unexpected{quantised.error()};
+
+    std::vector<Color3f> base_palette(kBaseColors, Color3f{0.0f, 0.0f, 0.0f});
+    std::size_t off = reserve_color0 ? 1u : 0u;
+    for (std::size_t i = 0; i < quantised->colors.size() &&
+                            (off + i) < kBaseColors; ++i) {
+        base_palette[off + i] = palette::quantize_to_ocs(quantised->colors[i]);
+    }
+
+    // ---- 2. Global dither vs base palette ------------------------------
+    std::span<const Color3f> base_pal_span(base_palette.data(), kBaseColors);
+    auto dith_result = dither::apply(src, base_pal_span, dither_settings);
+    auto& base_index = dith_result.indices;
+
+    // OKLab cache of source pixels.
+    std::vector<color_space::OKLab> img_lab(width * height);
+    for (std::size_t y = 0; y < height; ++y)
+        for (std::size_t x = 0; x < width; ++x)
+            img_lab[y * width + x] = color_space::linear_to_oklab(src[x, y]);
+
+    // ---- 3. Per-line greedy planner -----------------------------------
+    std::vector<std::uint8_t> indices(width * height, 0);
+    std::vector<std::vector<ScapMove>> line_moves(height);
+    Image preview(width, height);
+
+    auto P = base_palette;
+    std::vector<color_space::OKLab> P_lab(kBaseColors);
+    auto recompute_lab = [&]() {
+        for (std::size_t k = 0; k < kBaseColors; ++k)
+            P_lab[k] = color_space::linear_to_oklab(P[k]);
+    };
+    recompute_lab();
+
+    std::size_t k_min = reserve_color0 ? 1u : 0u;
+
+    bool ordered = dither::is_ordered(dither_settings.method);
+    bool err_diffuse =
+        dither_settings.method != dither::Method::none &&
+        dither_settings.strength > 0.0f && !ordered;
+    auto kernel = err_diffuse
+        ? dither::error_diffusion_kernel(dither_settings.method)
+        : std::span<const dither::DiffusionEntry>{};
+    float clamp_v = dither_settings.error_clamp;
+
+    constexpr std::size_t kPad = 4;
+    std::array<std::vector<Color3f>, 3> err_rows{
+        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
+        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
+        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
+    };
+
+    auto clamp_err = [&](Color3f c) {
+        if (clamp_v <= 0.0f) return c;
+        c.r = std::clamp(c.r, -clamp_v, clamp_v);
+        c.g = std::clamp(c.g, -clamp_v, clamp_v);
+        c.b = std::clamp(c.b, -clamp_v, clamp_v);
+        return c;
+    };
+
+    auto find_best_swap_in_strip =
+        [&](std::size_t y, std::size_t x_lo, std::size_t x_hi,
+            int& out_reg, Color3f& out_color, float& out_reduction) {
+            std::vector<double> sumL(kBaseColors), suma(kBaseColors),
+                                sumb(kBaseColors), count(kBaseColors),
+                                cur_err(kBaseColors);
+            for (std::size_t x = x_lo; x < x_hi; ++x) {
+                auto k = static_cast<std::size_t>(base_index[y * width + x]);
+                auto& lab = img_lab[y * width + x];
+                sumL[k] += static_cast<double>(lab.L);
+                suma[k] += static_cast<double>(lab.a);
+                sumb[k] += static_cast<double>(lab.b);
+                count[k] += 1.0;
+                float dL = lab.L - P_lab[k].L;
+                float da = lab.a - P_lab[k].a;
+                float db = lab.b - P_lab[k].b;
+                cur_err[k] += static_cast<double>(dL * dL + da * da + db * db);
+            }
+            out_reg = -1;
+            out_reduction = 0.0f;
+            for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                if (count[k] < 1.0) continue;
+                color_space::OKLab centroid{
+                    static_cast<float>(sumL[k] / count[k]),
+                    static_cast<float>(suma[k] / count[k]),
+                    static_cast<float>(sumb[k] / count[k]),
+                };
+                double new_err = 0.0;
+                for (std::size_t x = x_lo; x < x_hi; ++x) {
+                    if (base_index[y * width + x] != k) continue;
+                    auto& lab = img_lab[y * width + x];
+                    float dL = lab.L - centroid.L;
+                    float da = lab.a - centroid.a;
+                    float db = lab.b - centroid.b;
+                    new_err += static_cast<double>(dL * dL + da * da + db * db);
+                }
+                float red = static_cast<float>(cur_err[k] - new_err);
+                if (red > out_reduction) {
+                    auto linear = color_space::oklab_to_linear(centroid).clamped();
+                    linear = palette::quantize_to_ocs(linear);
+                    out_reg = static_cast<int>(k);
+                    out_color = linear;
+                    out_reduction = red;
+                }
+            }
+        };
+
+    constexpr int kVStart = 44;
+    double total_error = 0.0;
+    std::size_t total_moves = 0;
+
+    std::size_t num_strips = table.slots.size() + 1;
+    std::vector<std::vector<Color3f>> strip_palettes(num_strips,
+        std::vector<Color3f>(kBaseColors));
+    std::vector<std::vector<color_space::OKLab>> strip_pal_lab(num_strips,
+        std::vector<color_space::OKLab>(kBaseColors));
+
+    auto strip_for_x = [&](std::size_t x) -> std::size_t {
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            if (x < static_cast<std::size_t>(table.slots[s].pixel_x))
+                return s;
+        }
+        return table.slots.size();
+    };
+
+    std::vector<std::uint16_t> x_strip(width);
+    for (std::size_t x = 0; x < width; ++x)
+        x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
+
+    for (std::size_t y = 0; y < height; ++y) {
+        int abs_vpos = static_cast<int>(y) + kVStart;
+        auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
+
+        // Per-line CAP-style reset: palette starts each line at base.
+        P = base_palette;
+        recompute_lab();
+        strip_palettes[0] = P;
+        strip_pal_lab[0] = P_lab;
+
+        // 1. Base palette MOVEs (informational — kBaseColors entries).
+        for (std::size_t k = 0; k < kBaseColors; ++k) {
+            line_moves[y].push_back(make_move(
+                static_cast<std::uint8_t>(kRegBase + k),
+                palette::linear_to_ocs(base_palette[k]),
+                -1));
+        }
+
+        // 2. Line-gate WAIT.
+        line_moves[y].push_back(make_wait(
+            static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
+
+        // 3. SCAP MOVEs — greedy per-strip swap.
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            std::size_t x_lo = std::min(width,
+                static_cast<std::size_t>(table.slots[s].pixel_x));
+            std::size_t x_hi = (s + 1 < table.slots.size())
+                ? std::min(width,
+                    static_cast<std::size_t>(table.slots[s + 1].pixel_x))
+                : width;
+
+            int swap_reg = -1;
+            Color3f swap_color{};
+            float reduction = 0.0f;
+            if (x_lo < width && x_hi > x_lo) {
+                find_best_swap_in_strip(y, x_lo, x_hi,
+                                        swap_reg, swap_color, reduction);
+            }
+
+            if (swap_reg >= 0 && reduction > 0.0f) {
+                auto swap_idx = static_cast<std::size_t>(swap_reg);
+                P[swap_idx] = swap_color;
+                P_lab[swap_idx] = color_space::linear_to_oklab(swap_color);
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(kRegBase + swap_reg),
+                    palette::linear_to_ocs(swap_color),
+                    static_cast<int>(s)));
+                ++total_moves;
+            }
+            strip_palettes[s + 1] = P;
+            strip_pal_lab[s + 1] = P_lab;
+        }
+
+        // 4. End-of-line WAIT.
+        line_moves[y].push_back(make_wait(
+            static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
+
+        // ---- Stage-2 render: per-strip nearest-color lookup with
+        // optional error diffusion / ordered dither bias.
+        for (std::size_t x = 0; x < width; ++x) {
+            std::size_t s = static_cast<std::size_t>(x_strip[x]);
+            auto& pal = strip_palettes[s];
+            auto& pl_lab = strip_pal_lab[s];
+
+            Color3f target = src[x, y];
+            if (err_diffuse) {
+                auto& e = err_rows[0][x + kPad];
+                target.r += e.r;
+                target.g += e.g;
+                target.b += e.b;
+            }
+            color_space::OKLab tgt_lab = color_space::linear_to_oklab(target);
+            if (ordered &&
+                dither_settings.method != dither::Method::none &&
+                dither_settings.strength > 0.0f) {
+                float th = dither::ordered_threshold(
+                    dither_settings.method, x, y);
+                tgt_lab.L += th * dither_settings.strength * 0.15f;
+                tgt_lab.a += th * dither_settings.strength * 0.03f;
+                tgt_lab.b += th * dither_settings.strength * 0.03f;
+            }
+
+            float best_d = std::numeric_limits<float>::max();
+            std::size_t best_k = k_min;
+            for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                float dL = tgt_lab.L - pl_lab[k].L;
+                float da = tgt_lab.a - pl_lab[k].a;
+                float db = tgt_lab.b - pl_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            indices[y * width + x] = static_cast<std::uint8_t>(best_k);
+            preview[x, y] = pal[best_k];
+
+            if (err_diffuse) {
+                Color3f residual = clamp_err(Color3f{
+                    target.r - pal[best_k].r,
+                    target.g - pal[best_k].g,
+                    target.b - pal[best_k].b,
+                });
+                for (auto& ent : kernel) {
+                    auto target_x = static_cast<std::ptrdiff_t>(x) + ent.dx;
+                    if (target_x < 0
+                        || target_x >= static_cast<std::ptrdiff_t>(width))
+                        continue;
+                    auto idx = static_cast<std::size_t>(target_x) + kPad;
+                    auto& buf = err_rows[static_cast<std::size_t>(ent.dy)];
+                    buf[idx].r += residual.r * ent.weight;
+                    buf[idx].g += residual.g * ent.weight;
+                    buf[idx].b += residual.b * ent.weight;
+                }
+            }
+        }
+        std::ranges::fill(err_rows[0], Color3f{0.0f, 0.0f, 0.0f});
+        std::rotate(err_rows.begin(), err_rows.begin() + 1, err_rows.end());
+
+        for (std::size_t x = 0; x < width; ++x) {
+            auto& a = img_lab[y * width + x];
+            auto pl = color_space::linear_to_oklab(preview[x, y]);
+            float dL = a.L - pl.L, da = a.a - pl.a, db = a.b - pl.b;
+            total_error += static_cast<double>(dL * dL + da * da + db * db);
+        }
+    }
+
+    // ---- 4. Direct N-plane encoding (no DPF expand) -------------------
+    auto enc = bitplane::encode(indices, width, height,
+                                static_cast<std::size_t>(depth),
+                                bitplane::Layout::interleaved);
+    if (!enc) return std::unexpected{enc.error()};
+
+    ScapResult res;
+    res.planes = *std::move(enc);
+    res.palette = std::move(base_palette);
+    res.line_moves = std::move(line_moves);
+    res.slot_table = table;
+    res.total_error = static_cast<float>(total_error);
+    res.avg_changes_per_line = height > 0
+        ? static_cast<float>(total_moves) / static_cast<float>(height)
+        : 0.0f;
+    res.rendered = std::move(preview);
+    return res;
+}
+
+// ---------------------------------------------------------------------------
 // Probe A — sweep one COLOR09 write across HPOS 0x00..0xE3, one per line,
 // on a 6-plane OCS DPF frame.
 // ---------------------------------------------------------------------------

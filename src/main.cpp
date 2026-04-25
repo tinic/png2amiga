@@ -463,7 +463,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--scap") {
             config.scap = true;
-            config.dual_playfield = true;     // SCAP is always DPF-encoded
+            // SCAP defaults to DPF (the production mode). The lores 5bpp
+            // investigation path needs --depth 5 + no --dpf — let that
+            // through by NOT auto-enabling DPF here. The post-parse fixup
+            // below auto-enables DPF only when the user didn't pick a
+            // 5bpp lores configuration.
             continue;
         }
         if (arg == "--scap-debug") {
@@ -795,6 +799,18 @@ Result<Config> parse_args(int argc, char* argv[]) {
     if (config.input_path.empty() && config.scap_probe.empty()) {
         print_usage();
         std::exit(1);
+    }
+
+    // SCAP post-parse fixup. Two supported configurations:
+    //   * Production: DPF, OCS, lores, depth=3 → auto-enable --dpf if
+    //     the user passed --scap without --dpf and didn't explicitly
+    //     ask for depth=5.
+    //   * Investigation: lores 5bpp single playfield (no --dpf), depth=5.
+    if (config.scap && !config.dual_playfield) {
+        bool wants_lores_5bpp = config.depth_explicit && config.depth == 5;
+        if (!wants_lores_5bpp) {
+            config.dual_playfield = true;
+        }
     }
 
     return config;
@@ -3074,14 +3090,22 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // --- SCAP (DPF mid-line palette swaps) ---
+    // --- SCAP (mid-line palette swaps) ---
+    // Two paths:
+    //   * DPF (production): --scap + --dpf + OCS lores depth=3 → 8 PF2
+    //     colours, full cpp viewer export.
+    //   * Lores 5bpp (investigation): --scap + OCS lores depth=5 (no
+    //     --dpf) → 32 colours, single playfield, PNG preview only,
+    //     no copper-list cpp output yet.
     if (config->scap) {
-        if (!use_dpf_std || chipset != amiga::Chipset::ocs ||
+        bool scap_lores_5bpp = !use_dpf_std && config->depth == 5;
+        if ((!use_dpf_std && !scap_lores_5bpp) ||
+            chipset != amiga::Chipset::ocs ||
             config->mode != amiga::Mode::lores ||
             config->interlace) {
             std::println(stderr,
-                "Error: --scap requires --dpf with --chipset ocs, --mode lores, "
-                "no --interlace (Phase 1 limitation)");
+                "Error: --scap requires OCS lores (no interlace) with either "
+                "--dpf depth=3 or plain depth=5 — got the wrong combo.");
             return 1;
         }
         if (has_transparency) {
@@ -3092,13 +3116,21 @@ int main(int argc, char* argv[]) {
         scap_dith.method = config->dither_method;
         scap_dith.strength = config->dither_strength;
         scap_dith.error_clamp = config->error_clamp;
-        auto scap_res = scap::encode_scap_dpf_ocs(
-            *image,
-            static_cast<int>(image->width()),
-            static_cast<int>(image->height()),
-            config->reserve_color0,
-            scap_dith,
-            config->scap_debug);
+        auto scap_res = scap_lores_5bpp
+            ? scap::encode_scap_lores_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                /*depth=*/5,
+                config->reserve_color0,
+                scap_dith)
+            : scap::encode_scap_dpf_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                config->reserve_color0,
+                scap_dith,
+                config->scap_debug);
         if (!scap_res) {
             std::println(stderr, "SCAP encode error: {}",
                          scap_res.error().message);
@@ -3107,7 +3139,9 @@ int main(int argc, char* argv[]) {
         float scap_psnr = color_space::compute_psnr_blurred(
             image->pixels(), scap_res->rendered.pixels(),
             image->width(), image->height());
-        std::println("Mode:   SCAP (OCS DPF, {} slots, {:.1f} useful MOVEs/line)",
+        std::println("Mode:   SCAP ({}, {} slots, {:.1f} useful MOVEs/line)",
+                     scap_lores_5bpp ? "OCS lores 5bpp investigation"
+                                     : "OCS DPF",
                      scap_res->slot_table.slots.size(),
                      scap_res->avg_changes_per_line);
         std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
@@ -3134,6 +3168,12 @@ int main(int argc, char* argv[]) {
                 std::println("PNG:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
+                if (scap_lores_5bpp) {
+                    std::println(stderr,
+                        "SCAP lores 5bpp: cpp viewer export not yet wired "
+                        "(investigation path is PNG-preview-only)");
+                    return 1;
+                }
                 cheader::CHeaderOptions ch_opts;
                 ch_opts.symbol_name = config->symbol_name.empty()
                     ? derive_symbol_name(config->output_path)
