@@ -985,7 +985,7 @@ async function loadExample(example) {
 
               <!-- SCAP — DPF mid-line palette swaps (OCS lores only, Phase 1) -->
               <div v-if="scapAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP: mid-line palette swaps inside DPF's PF2. Each scanline gets 20 MOVEs evenly spaced across the visible area, evolving the 8-colour PF2 palette ~16 lores px at a time. OCS DPF lores only.">SCAP</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP: a hand-tuned copper list of mid-line palette swaps inside DPF's PF2. Each scanline gets 20 MOVEs evenly spaced across the visible area, evolving the 8-colour PF2 palette ~16 lores px at a time. The slot table (HPOS calibration, line-gate, end-of-line) was tuned by hand against vAmiga so the visible MOVE position matches the planner's pixel_x. OCS DPF lores only.">SCAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.scap" />
                   <span style="color: #888; font-size: 0.625rem;">mid-line PF2 swaps (20/line)</span>
