@@ -2471,8 +2471,18 @@ int main(int argc, char* argv[]) {
 
             dither::Settings dith;
             dith.method = config->dither_method;
-            dith.strength = config->dither_strength;
-            dith.error_clamp = config->error_clamp;
+            auto ehb_cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
+                .mode    = config->mode,
+                .depth   = static_cast<int>(config->depth),
+                .dpf     = config->dual_playfield,
+                .scap    = false,
+                .copper  = true,
+                .chipset = chipset,
+            });
+            dith.strength = config->dither_strength_explicit
+                            ? config->dither_strength : ehb_cap_tune.strength;
+            dith.error_clamp = config->error_clamp_explicit
+                              ? config->error_clamp : ehb_cap_tune.error_clamp;
 
             std::println("Dither: {} (strength: {:.2f})",
                          dither_name(dith.method), dith.strength);
@@ -2715,8 +2725,18 @@ int main(int argc, char* argv[]) {
         // Dither against all 64 colors
         dither::Settings dith;
         dith.method = config->dither_method;
-        dith.strength = config->dither_strength;
-        dith.error_clamp = config->error_clamp;
+        auto ehb_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = false,
+            .copper  = false,
+            .chipset = chipset,
+        });
+        dith.strength = config->dither_strength_explicit
+                        ? config->dither_strength : ehb_tune.strength;
+        dith.error_clamp = config->error_clamp_explicit
+                          ? config->error_clamp : ehb_tune.error_clamp;
 
         // Note: dither-aware refinement is skipped for EHB because the
         // hardware-derived half-brite colors (sRGB DAC halving) create a
@@ -2910,8 +2930,18 @@ int main(int argc, char* argv[]) {
 
         dither::Settings dith;
         dith.method = config->dither_method;
-        dith.strength = config->dither_strength;
-        dith.error_clamp = config->error_clamp;
+        auto cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = false,
+            .copper  = true,
+            .chipset = chipset,
+        });
+        dith.strength = config->dither_strength_explicit
+                        ? config->dither_strength : cap_tune.strength;
+        dith.error_clamp = config->error_clamp_explicit
+                          ? config->error_clamp : cap_tune.error_clamp;
 
         std::println("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
@@ -3133,10 +3163,12 @@ int main(int argc, char* argv[]) {
         // sweep — see that file for grid + numbers. Explicit user
         // values via --dither-strength / --error-clamp always override.
         auto tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode  = config->mode,
-            .depth = static_cast<int>(config->depth),
-            .dpf   = config->dual_playfield,
-            .scap  = true,
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = true,
+            .copper  = true,    // SCAP layers on top of CAP since b0be343
+            .chipset = chipset,
         });
         scap_dith.error_clamp = config->error_clamp_explicit
                                 ? config->error_clamp : tune.error_clamp;

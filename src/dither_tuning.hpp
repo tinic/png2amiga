@@ -26,6 +26,8 @@ struct Context {
     int depth;            // bitplane depth as the encoder will use it
     bool dpf;             // dual-playfield
     bool scap;            // SCAP mid-line palette swaps
+    bool copper;          // CAP per-line palette evolution
+    amiga::Chipset chipset = amiga::Chipset::ocs;
 };
 
 Defaults defaults_for(const Context& ctx);
