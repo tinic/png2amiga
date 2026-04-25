@@ -845,8 +845,16 @@ function dismissHint() {
 async function loadExample(example) {
   dismissHint()
   track('example', { name: example.name })
-  // Reset to defaults, then apply example-specific settings
+  // Reset to defaults, then apply example-specific settings.
+  // nextTick between the two so watchers actually observe the
+  // intermediate "all defaults" state — without it Vue batches both
+  // Object.assigns into a single flush and watchers compare end vs
+  // initial. For SCAP that means scap stays true→true (no fire,
+  // copper never auto-enables) while the copper watcher DOES fire
+  // (true→false) and cascades scap off. Net effect: clicking the
+  // SCAP example a second time toggles copper off.
   Object.assign(options, defaultOptions())
+  await nextTick()
   if (example.opts) Object.assign(options, example.opts)
   const resp = await fetch(`/examples/${example.file}`)
   const buf = await resp.arrayBuffer()
