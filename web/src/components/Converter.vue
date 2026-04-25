@@ -222,11 +222,13 @@ const dpfAvailable = computed(() => {
   return (cs === 'aga') ? options.depth === 4 : options.depth === 3
 })
 
-// SCAP — DPF mid-line palette swaps. Phase 1: OCS DPF lores only.
+// SCAP — DPF mid-line palette swaps. Phase 1: OCS DPF lores only,
+// which means total depth=3 (PF2 = 3 bitplanes; PF1 zeroed). SCAP
+// makes no sense at any other depth.
 const scapAvailable = computed(() => {
   if (!options.dualPlayfield) return false
   const cs = effectiveChipset(options.mode, options.chipset)
-  return cs === 'ocs' && options.mode === 'lores'
+  return cs === 'ocs' && options.mode === 'lores' && options.depth === 3
 })
 
 // Available modes for current chipset
@@ -303,6 +305,14 @@ watch(() => options.dualPlayfield, (on) => {
 watch(() => options.scap, (on) => {
   if (on) options.copper = false
   track('scap-toggle', { enabled: on })
+})
+
+// Depth changes can invalidate DPF (requires depth=3 OCS / 4 AGA) and
+// SCAP (depth=3 OCS lores only). Mode/dpf watchers above don't fire
+// when only the depth slider moves, so reset here too.
+watch(() => options.depth, () => {
+  if (!dpfAvailable.value) options.dualPlayfield = false
+  if (!scapAvailable.value) options.scap = false
 })
 
 // When chipset changes, reset mode if current mode isn't available
