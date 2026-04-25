@@ -6,7 +6,6 @@
 #include "copper.hpp"
 #include "dither.hpp"
 #include "palette.hpp"
-#include "quantize.hpp"
 #include "types.hpp"
 
 #include <algorithm>
@@ -157,7 +156,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        const dither::Settings& dither_settings,
                                        bool debug_overlay,
                                        std::size_t copper_changes_override,
-                                       int palette_diversity) {
+                                       int palette_diversity,
+                                       std::function<void(float, std::string_view)>
+                                           on_progress) {
     auto& table = scap_table_for(6);
     if (table.slots.empty()) {
         return std::unexpected{Error{
@@ -231,21 +232,17 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         return (k == 0) ? std::array<int, 2>{0, 8}
                         : std::array<int, 2>{static_cast<int>(8 + k), -1};
     };
-    // CAP and SCAP share the same per-line copper budget — the OCS
-    // hblank fits ~14 MOVEs total (max_changes_per_line). Split them:
-    //   * --copper-changes N: total combined ≤ N. CAP gets min(N, 2),
-    //     SCAP gets the rest.
-    //   * Auto: total ≤ 14 by default. CAP gets 2 (small per-line
-    //     palette evolution), SCAP gets 12 (heavy mid-line activity).
-    // Without this split CAP could use 14 alone AND SCAP could use 14,
-    // for a combined 28 MOVEs/hblank — exceeds bus capacity.
+    // Hblank load is fixed at ~9 MOVEs (8 PF2 indices, k=0 dual-writes
+    // COLOR00+COLOR08) re-emitted unconditionally every line, so the CAP
+    // share is whatever the user asked for — bounded by the 14-MOVE OCS
+    // hblank budget. SCAP swaps live in the visible region and don't
+    // contend for hblank, so no SCAP share split is needed.
     constexpr std::size_t kMaxCombined = copper::max_changes_per_line(
         /*depth=*/3, false, false, amiga::Chipset::ocs, false);
     std::size_t total_budget = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombined)
         : kMaxCombined;
     std::size_t cap_share = std::min<std::size_t>(total_budget, 2u);
-    std::size_t scap_share = total_budget - cap_share;
     auto copper_result = copper::encode_copper(
         src, /*depth=*/3, dither_settings,
         amiga::Chipset::ocs,
@@ -419,20 +416,17 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
-    // Actual hardware register state across lines. SCAP's mid-line
-    // swaps leave registers holding swap-colours at end-of-line, so a
-    // diff-vs-cap_palettes[y-1] approach misses registers SCAP changed.
-    // Track the real state and diff against THIS for each per-line
-    // CAP MOVE block.
-    std::array<Color3f, kBaseColors> hw_state{};
     constexpr int kPasses = 6;
+    auto report_pass = [&](int pass_idx, float local) {
+        if (on_progress) {
+            float p = (static_cast<float>(pass_idx) +
+                       std::clamp(local, 0.0f, 1.0f)) /
+                      static_cast<float>(kPasses);
+            on_progress(p, "encoding");
+        }
+    };
+    if (on_progress) on_progress(0.0f, "encoding");
     for (int pass = 0; pass < kPasses; ++pass) {
-        // Reset hw_state at the start of every pass to the viewer's
-        // frame-init state: base_palette in production, all-zero in
-        // debug (matches the zero output_palette + zero per-line MOVEs).
-        for (std::size_t k = 0; k < kBaseColors; ++k)
-            hw_state[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
-                                        : base_palette[k];
         if (pass > 0) {
             for (std::size_t i = 0; i < indices.size(); ++i)
                 base_index[i] = indices[i];
@@ -454,24 +448,21 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             target[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
                                       : cap_palettes[y][k];
 
-        // 1. Per-line CAP MOVEs: diff vs the ACTUAL hardware state at
-        //    end of the previous line. SCAP's mid-line swaps on line
-        //    y-1 left some registers holding swap-colours instead of
-        //    cap_palettes[y-1] — the previous diff-vs-cap_palettes
-        //    logic missed those, so registers carried stale SCAP-swap
-        //    state into the next line and were displayed wrong.
+        // 1. Per-line CAP MOVEs: unconditionally re-emit all 8 PF2
+        //    base colours every line. DPF only has 8 PF2 indices so a
+        //    full reset costs ≤9 hblank MOVEs (k=0 dual-writes
+        //    COLOR00+COLOR08, k=1..7 single MOVE each), well below the
+        //    14-MOVE OCS hblank capacity. This makes SCAP's mid-line
+        //    swaps a non-issue across lines: whatever registers SCAP
+        //    polluted on line y-1 get fully overwritten before line y's
+        //    visible region starts. No hw_state tracking needed.
         for (std::size_t k = 0; k < kBaseColors; ++k) {
-            if (hw_state[k].r != target[k].r ||
-                hw_state[k].g != target[k].g ||
-                hw_state[k].b != target[k].b) {
-                auto regs = pf2_writes(k);
-                for (int reg : regs) {
-                    if (reg < 0) continue;
-                    line_moves[y].push_back(make_move(
-                        static_cast<std::uint8_t>(reg),
-                        palette::linear_to_ocs(target[k]), -1));
-                }
-                hw_state[k] = target[k];
+            auto regs = pf2_writes(k);
+            for (int reg : regs) {
+                if (reg < 0) continue;
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(reg),
+                    palette::linear_to_ocs(target[k]), -1));
             }
         }
 
@@ -492,17 +483,13 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         //    affects is [slots[s].pixel_x .. slots[s+1].pixel_x) — that's
         //    what the swap planner targets.
         //
-        //    Per-line useful-swap cap: bounds the number of registers
-        //    SCAP can change per line so the NEXT line's hblank doesn't
-        //    overflow trying to revert them all. With CAP using up to
-        //    `copper_changes_override` (or max_changes_per_line if 0)
-        //    in hblank already, we cap SCAP to the same value as a
-        //    sensible default — total hblank load stays bounded by
-        //    2× max_changes worst-case which still fits the ~16-MOVE
-        //    OCS hblank capacity comfortably for the typical copper
-        //    budget of 14. Slots beyond the cap emit fillers.
-        std::size_t useful_swap_cap = scap_share;
-        std::size_t useful_swaps = 0;
+        //    No per-line useful-swap cap is needed. The original cap
+        //    was there because SCAP swaps polluted register state, so the
+        //    NEXT line's hblank had to revert them — bounding swaps kept
+        //    the revert cost in budget. Since DPF now unconditionally
+        //    re-emits all 8 PF2 registers every line (~9 hblank MOVEs,
+        //    fixed), there is zero hblank cost from SCAP swaps. Every
+        //    slot is free to emit a useful swap.
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             std::size_t x_lo = std::min(width,
                 static_cast<std::size_t>(table.slots[s].pixel_x));
@@ -514,8 +501,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             int swap_reg = -1;
             Color3f swap_color{};
             float reduction = 0.0f;
-            if (x_lo < width && x_hi > x_lo
-                && useful_swaps < useful_swap_cap) {
+            if (x_lo < width && x_hi > x_lo) {
                 find_best_swap_in_strip(y, x_lo, x_hi,
                                         swap_reg, swap_color, reduction);
             }
@@ -524,8 +510,6 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 auto swap_idx = static_cast<std::size_t>(swap_reg);
                 P[swap_idx] = swap_color;
                 P_lab[swap_idx] = color_space::linear_to_oklab(swap_color);
-                // SCAP MOVE writes to the hardware register too.
-                hw_state[swap_idx] = swap_color;
 
                 // Mid-line SCAP swaps emit ONE MOVE — extra MOVEs in
                 // the chain would shift subsequent slot landing
@@ -539,7 +523,6 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     palette::linear_to_ocs(swap_color),
                     static_cast<int>(s)));
                 ++total_moves;
-                ++useful_swaps;
             } else {
                 line_moves[y].push_back(make_move(kFillerReg, kFillerVal,
                                                   static_cast<int>(s)));
@@ -620,8 +603,14 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             float dL = a.L - pl.L, da = a.a - pl.a, db = a.b - pl.b;
             total_error += static_cast<double>(dL * dL + da * da + db * db);
         }
+        if (height > 0 && (y & 0xF) == 0xF) {
+            report_pass(pass, static_cast<float>(y + 1) /
+                              static_cast<float>(height));
+        }
     }
+    report_pass(pass + 1, 0.0f);
     }  // kPasses
+    if (on_progress) on_progress(1.0f, "done");
 
     // ---- 4. 3-plane PF2 encoding, then expand to 6-plane DPF ------------
     auto enc = bitplane::encode(indices, width, height,
@@ -904,7 +893,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        const dither::Settings& dither_settings,
                                        std::size_t copper_changes_override,
                                        int palette_diversity,
-                                       bool debug_overlay) {
+                                       bool debug_overlay,
+                                       std::function<void(float, std::string_view)>
+                                           on_progress) {
     auto& table = kScap6bplEhb;
     if (table.slots.empty()) {
         return std::unexpected{Error{
@@ -1175,6 +1166,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // from the previous line.
     std::vector<Color3f> hw_state(kBaseColors);
     constexpr int kPasses = 6;
+    auto report_pass = [&](int pass_idx, float local) {
+        if (on_progress) {
+            float p = (static_cast<float>(pass_idx) +
+                       std::clamp(local, 0.0f, 1.0f)) /
+                      static_cast<float>(kPasses);
+            on_progress(p, "encoding");
+        }
+    };
+    if (on_progress) on_progress(0.0f, "encoding");
     for (int pass = 0; pass < kPasses; ++pass) {
         // Reset hw_state to the viewer's frame-init at each pass start.
         for (std::size_t k = 0; k < kBaseColors; ++k)
@@ -1411,8 +1411,14 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             float dL = a.L - pl.L, da = a.a - pl.a, db = a.b - pl.b;
             total_error += static_cast<double>(dL * dL + da * da + db * db);
         }
+        if (height > 0 && (y & 0xF) == 0xF) {
+            report_pass(pass, static_cast<float>(y + 1) /
+                              static_cast<float>(height));
+        }
     }
+    report_pass(pass + 1, 0.0f);
     }  // kPasses
+    if (on_progress) on_progress(1.0f, "done");
 
     // ---- 4. 6-plane bitplane encoding. The 6-bit index already encodes
     // half-brite as bit 5, which is exactly what the EHB hardware reads.

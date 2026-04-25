@@ -315,7 +315,9 @@ Result<CopperResult> encode_copper(const Image& image,
                                    const std::vector<std::pair<std::size_t, Color3f>>& locked,
                                    int palette_diversity,
                                    std::size_t skip_initial_swap_rows,
-                                   bool is_lace) {
+                                   bool is_lace,
+                                   std::function<void(float, std::string_view)>
+                                       on_progress) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -361,7 +363,8 @@ Result<CopperResult> encode_copper(const Image& image,
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
                                          stretch_k, user_palette, reserve_color0,
                                          locked, palette_diversity,
-                                         skip_initial_swap_rows, is_lace);
+                                         skip_initial_swap_rows, is_lace,
+                                         on_progress);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= move_budget) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
@@ -416,21 +419,30 @@ Result<CopperResult> encode_copper(const Image& image,
 
     // Step 2: Iterative two-pass predict+dither loop.
     //
-    // Iteration 1: pass 1 predicts per-scanline palettes using raw-pixel
-    //              error for column priority; pass 2 dithers with those
-    //              palettes and measures DITHERED per-column error.
-    // Iteration 2: pass 1 re-predicts using the dithered error map from
-    //              iteration 1 as column weights — swaps now target where
-    //              the ditherer actually struggled, not just where raw
-    //              pixel-to-palette distance was high.
+    // pd_iter 1: pass 1 predicts per-scanline palettes using raw-pixel
+    //            error for column priority; pass 2 dithers with those
+    //            palettes and measures DITHERED per-column error.
+    // pd_iter 2: pass 1 re-predicts using the dithered error map from
+    //            iteration 1 as column weights — swaps now target where
+    //            the ditherer actually struggled.
     //
-    // The feedback loop closes the gap between "what the optimizer thinks
-    // matters" and "what the dithered output actually looks like."
+    // Joint base-palette refinement (the --cap-best HAM strategy) was
+    // tried here and gave ≤+0.10 dB on indexed copper modes — the
+    // existing pd_iter feedback already finds a near-local-optimum so
+    // OKLab-centroid re-seeding doesn't dislodge it. Removed; --cap-best
+    // is HAM-only.
 
     std::vector<std::uint8_t> all_indices(width * height);
     std::vector<std::vector<CopperChange>> scanline_changes(height);
     std::vector<std::vector<Color3f>> scanline_palettes(height);
     float total_error = 0.0f;
+
+    auto report = [&](float p) {
+        if (on_progress) on_progress(std::clamp(p, 0.0f, 1.0f), "encoding");
+    };
+    report(0.0f);
+    constexpr float jlo = 0.0f;
+    constexpr float jhi = 1.0f;
 
     bool use_diffusion = dither_settings.method != dither::Method::none &&
                          !dither::is_ordered(dither_settings.method);
@@ -450,10 +462,20 @@ Result<CopperResult> encode_copper(const Image& image,
     constexpr int predict_dither_iterations = 2;
 
     // Column error seeded as zeros for iteration 1; fed back from
-    // dithered output for iteration 2+.
+    // dithered output for iteration 2+. Reset for each joint iteration.
     std::vector<float> column_error(width, 0.0f);
+    std::fill(column_error.begin(), column_error.end(), 0.0f);
 
     for (int pd_iter = 0; pd_iter < predict_dither_iterations; ++pd_iter) {
+    float pd_lo = jlo + (jhi - jlo) *
+        (static_cast<float>(pd_iter) /
+         static_cast<float>(predict_dither_iterations));
+    float pd_hi = jlo + (jhi - jlo) *
+        (static_cast<float>(pd_iter + 1) /
+         static_cast<float>(predict_dither_iterations));
+    auto pd_progress = [&](float local) {
+        report(pd_lo + (pd_hi - pd_lo) * std::clamp(local, 0.0f, 1.0f));
+    };
 
     // --- Pass 1: predict per-scanline palettes ---
     // For interlace, each field has its own palette state since field 1
@@ -626,7 +648,14 @@ Result<CopperResult> encode_copper(const Image& image,
             }
             pass1_column_error[x] = pass1_column_error[x] * col_decay + best_d;
         }
+        // Pass 1 covers 0..50% of pd_iter range. Progress reports every
+        // ~5% of rows to limit callback frequency.
+        if (height > 0 && (y & 7) == 7) {
+            pd_progress(0.5f *
+                static_cast<float>(y + 1) / static_cast<float>(height));
+        }
     }
+    pd_progress(0.5f);
 
     // --- Vertical palette dithering ---
     // At low bitplane depths (≤4), each palette register covers a wide color
@@ -815,7 +844,12 @@ Result<CopperResult> encode_copper(const Image& image,
             dither_row(row, pal_lab, y, dither_settings,
                        all_indices, y * width, total_error);
         }
+        if (height > 0 && (y & 7) == 7) {
+            pd_progress(0.5f + 0.5f *
+                static_cast<float>(y + 1) / static_cast<float>(height));
+        }
     }
+    pd_progress(1.0f);
 
     // --- Feedback: compute per-column dithered error for next iteration ---
     if (pd_iter + 1 < predict_dither_iterations) {
@@ -838,6 +872,8 @@ Result<CopperResult> encode_copper(const Image& image,
     }
 
     } // end predict_dither_iterations loop
+
+    if (on_progress) on_progress(1.0f, "done");
 
     // Encode to bitplanes
     auto planes = bitplane::encode(all_indices, width, height, depth);

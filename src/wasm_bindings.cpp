@@ -94,6 +94,23 @@ Options parse_js_options(val js_opts) {
         opts.scap = js_opts["scap"].as<bool>();
     if (js_opts.hasOwnProperty("scapDebug"))
         opts.scap_debug = js_opts["scapDebug"].as<bool>();
+    if (js_opts.hasOwnProperty("capBest"))
+        opts.cap_best = js_opts["capBest"].as<bool>();
+    else if (js_opts.hasOwnProperty("hamCapBest"))  // legacy alias
+        opts.cap_best = js_opts["hamCapBest"].as<bool>();
+    if (js_opts.hasOwnProperty("onProgress")) {
+        // The encoder may call this from worker threads. Under Emscripten
+        // (single-threaded by default) all calls land back on the worker
+        // thread invoking the JS function — safe. The callback dispatch
+        // posts back to the main UI thread via the Web Worker's own
+        // postMessage in the JS adapter.
+        val cb = js_opts["onProgress"];
+        if (cb.typeOf().as<std::string>() == "function") {
+            opts.on_progress = [cb](float p, std::string_view stage) {
+                cb(p, std::string(stage));
+            };
+        }
+    }
     return opts;
 }
 
@@ -317,6 +334,16 @@ val js_convert_mask_raw(val input_array, val js_opts) {
     return obj;
 }
 
+// JS API: ditherDefaults(options) -> { strength, errorClamp }
+val js_dither_defaults(val js_opts) {
+    auto opts = parse_js_options(js_opts);
+    auto d = dither_defaults_for(opts);
+    val obj = val::object();
+    obj.set("strength", d.strength);
+    obj.set("errorClamp", d.error_clamp);
+    return obj;
+}
+
 EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convert", &js_convert);
     function("convertRGBA", &js_convert_rgba);
@@ -327,4 +354,5 @@ EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convertRaw", &js_convert_raw);
     function("convertMask", &js_convert_mask);
     function("convertMaskRaw", &js_convert_mask_raw);
+    function("ditherDefaults", &js_dither_defaults);
 }

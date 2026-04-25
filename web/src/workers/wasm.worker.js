@@ -27,10 +27,24 @@ async function init() {
 const initPromise = init()
 
 self.onmessage = async (e) => {
-  const { id, fn, args } = e.data
+  const { id, fn, args, wantProgress } = e.data
   try {
     await initPromise
     if (!Module) throw new Error(initError || 'WASM module not loaded')
+
+    // Inject a progress callback into the options object (always at args[1]
+    // for these binding signatures). Embind passes JS functions to C++ via
+    // emscripten::val; the WASM encoder calls back into this worker thread.
+    // Each call posts {type:'progress'} to the main thread, throttled main-
+    // side so we don't bog down the UI on a torrent of ticks.
+    if (wantProgress && args[1] && typeof args[1] === 'object') {
+      args[1] = {
+        ...args[1],
+        onProgress: (p, stage) => {
+          self.postMessage({ type: 'progress', id, p, stage })
+        },
+      }
+    }
 
     let result
     switch (fn) {
@@ -61,6 +75,11 @@ self.onmessage = async (e) => {
       case 'convertMaskRaw':
         result = Module.convertMaskRaw(args[0], args[1])
         break
+      case 'ditherDefaults':
+        // Synchronous one-shot lookup — returns { strength, errorClamp }.
+        // The reply path below sends `result` as-is via postMessage.
+        self.postMessage({ id, result: Module.ditherDefaults(args[0]) })
+        return
       default:
         throw new Error(`Unknown function: ${fn}`)
     }

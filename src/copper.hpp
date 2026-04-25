@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::copper {
@@ -201,7 +203,13 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::size_t skip_initial_swap_rows = 0,
                                    // Interlace: reduces per-line MOVE budget by
                                    // 1 (HP=226 vs 220 → less post-display gap).
-                                   bool is_lace = false);
+                                   bool is_lace = false,
+                                   // Progress callback. Called periodically
+                                   // with (progress 0..1, stage label).
+                                   // Must be thread-safe — encoder may
+                                   // invoke from worker contexts.
+                                   std::function<void(float, std::string_view)>
+                                       on_progress = {});
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.

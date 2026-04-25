@@ -23,16 +23,20 @@
 #include "version.hpp"
 
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <expected>
 #include <format>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <print>
 #include <unordered_set>
 #include <string>
 #include <string_view>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -110,6 +114,13 @@ struct Config {
 
     // HAM greedy encoder (skip DP beam search, ~20× faster, ~1 dB worse).
     bool ham_fast = false;
+
+    // CAP best-quality planner. Multi-candidate × all-slot search + joint
+    // base-palette refinement. HAM6 + copper and HAM8 + copper only —
+    // indexed copper modes ignore this flag (their planner is already
+    // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
+    // Off by default — opt-in for offline / final exports.
+    bool cap_best = false;
 
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
@@ -274,6 +285,13 @@ void print_usage() {
         "\n"
         "HAM encoding:\n"
         "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
+        "  --cap-best                      Slower (~4-5×) CAP planner: multi-candidate\n"
+        "                                  slot search + joint base-palette refinement.\n"
+        "                                  HAM6 + copper and HAM8 + copper only — the\n"
+        "                                  indexed copper planner (lores/hires/EHB) is\n"
+        "                                  already mature and the refinement gives\n"
+        "                                  ≤+0.10 dB there. +0.5 to +2 dB PSNR on HAM.\n"
+        "                                  Off by default\n"
         "  --palette-diversity <0-9>       Remove near-duplicate palette entries (experimental)\n"
         "  --no-reserve-color0             Don't reserve palette index 0 for black\n"
         "                                  (gives the encoder one extra image colour;\n"
@@ -438,6 +456,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--ham-fast") {
             config.ham_fast = true;
+            continue;
+        }
+
+        if (arg == "--cap-best" || arg == "--ham-cap-best") {
+            // --ham-cap-best kept as legacy alias.
+            config.cap_best = true;
             continue;
         }
 
@@ -1657,6 +1681,34 @@ void show_terminal_preview(const Image& preview, amiga::Mode mode,
     iterm2_display(scaled);
 }
 
+// CLI progress reporter. Throttles to ~20Hz redraw, writes "\rEncoding NN.N%
+// [stage]\033[K" to stderr when it's a TTY (no-op otherwise so piped runs
+// don't get carriage returns in their stderr capture). Thread-safe — encoder
+// workers may invoke it concurrently. Final tick prints a newline so the
+// next CLI status line ("Encoded: ...") starts cleanly.
+std::function<void(float, std::string_view)> make_cli_progress_reporter() {
+    if (!isatty(fileno(stderr))) return {};
+    auto state = std::make_shared<std::pair<std::mutex,
+        std::chrono::steady_clock::time_point>>();
+    state->second = std::chrono::steady_clock::time_point{};
+    return [state](float p, std::string_view stage) {
+        std::lock_guard lk(state->first);
+        auto now = std::chrono::steady_clock::now();
+        bool final_tick = (stage == "done") || p >= 1.0f;
+        if (!final_tick &&
+            now - state->second < std::chrono::milliseconds(50)) {
+            return;
+        }
+        state->second = now;
+        float pct = std::clamp(p, 0.0f, 1.0f) * 100.0f;
+        std::fprintf(stderr, "\rEncoding... %5.1f%% [%.*s]\033[K",
+                     static_cast<double>(pct),
+                     static_cast<int>(stage.size()), stage.data());
+        if (final_tick) std::fputc('\n', stderr);
+        std::fflush(stderr);
+    };
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -2281,6 +2333,12 @@ int main(int argc, char* argv[]) {
         ham_opts.quantizer = config->quantizer;
         ham_opts.triple_beam = config->ham_triple;
         ham_opts.greedy = config->ham_fast;
+        // cap_best gates HAM4/5/7 — only HAM6 and HAM8 are eligible.
+        bool ham_eligible_for_cap_best =
+            (ham_params.bitplane_depth == 6 ||
+             ham_params.bitplane_depth == 8);
+        ham_opts.cap_best = config->cap_best && ham_eligible_for_cap_best;
+        ham_opts.on_progress = make_cli_progress_reporter();
         ham_opts.skip_initial_swap_rows = config->interlace ? 2 : 0;
 
         // Force transparent pixels to black before HAM encoding
@@ -2495,7 +2553,8 @@ int main(int argc, char* argv[]) {
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
                 static_cast<std::size_t>(config->copper_changes),
                 nullptr, true, {}, config->palette_diversity,
-                skip_initial, config->interlace);
+                skip_initial, config->interlace,
+                make_cli_progress_reporter());
             if (!copper_result) {
                 std::println(stderr, "Copper encode error: {}",
                              copper_result.error().message);
@@ -2959,7 +3018,8 @@ int main(int argc, char* argv[]) {
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
             static_cast<std::size_t>(config->copper_changes), nullptr,
             config->reserve_color0, copper_locks, config->palette_diversity,
-            skip_initial_lace, config->interlace);
+            skip_initial_lace, config->interlace,
+            make_cli_progress_reporter());
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);
@@ -3169,6 +3229,7 @@ int main(int argc, char* argv[]) {
                                 ? config->error_clamp : tune.error_clamp;
         scap_dith.strength    = config->dither_strength_explicit
                                 ? config->dither_strength : tune.strength;
+        auto scap_progress = make_cli_progress_reporter();
         auto scap_res =
             scap_ehb
             ? scap::encode_scap_ehb_ocs(
@@ -3179,7 +3240,8 @@ int main(int argc, char* argv[]) {
                 scap_dith,
                 static_cast<std::size_t>(config->copper_changes),
                 config->palette_diversity,
-                config->scap_debug)
+                config->scap_debug,
+                scap_progress)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
@@ -3188,7 +3250,8 @@ int main(int argc, char* argv[]) {
                 scap_dith,
                 config->scap_debug,
                 static_cast<std::size_t>(config->copper_changes),
-                config->palette_diversity);
+                config->palette_diversity,
+                scap_progress);
         if (!scap_res) {
             std::println(stderr, "SCAP encode error: {}",
                          scap_res.error().message);

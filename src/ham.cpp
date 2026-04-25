@@ -1142,7 +1142,8 @@ std::vector<HamSwap> find_ham_swaps(
     std::size_t num_base_colors,
     std::size_t data_bits,
     std::size_t changes_per_line,
-    amiga::Chipset chipset) {
+    amiga::Chipset chipset,
+    bool best_quality) {
 
     auto w = row.size();
     std::vector<HamSwap> swaps;
@@ -1165,6 +1166,77 @@ std::vector<HamSwap> find_ham_swaps(
         return err;
     };
 
+    // Fast (default) path: original single-candidate greedy. ~5-10× cheaper
+    // than the best-quality planner; sufficient for interactive web use and
+    // most CLI runs. Each iteration: pick the row's worst pixel as the only
+    // candidate, replace the least-used SET slot with its OCS-quantized
+    // value if and only if the swap reduces total row error. Bail on the
+    // first regression (further swaps from this state typically don't help).
+    if (!best_quality) {
+        for (std::size_t s = 0; s < changes_per_line; ++s) {
+            std::vector<SRGBColor> pal_srgb(num_base_colors);
+            for (std::size_t i = 0; i < num_base_colors; ++i)
+                pal_srgb[i] = linear_to_srgb8(current_pal[i]);
+
+            SRGBColor prev = pal_srgb.empty()
+                ? SRGBColor{0, 0, 0} : pal_srgb[0];
+
+            std::vector<std::size_t> set_count(num_base_colors, 0);
+            float worst_pixel_error = 0.0f;
+            Color3f worst_pixel_target{};
+            float base_err = 0.0f;
+
+            HamPrecomp swap_pre{
+                std::span<const Color3f>{current_pal.data(), num_base_colors},
+                data_bits};
+
+            for (std::size_t x = 0; x < w; ++x) {
+                auto result = encode_ham_pixel(
+                    prev, row[x], swap_pre,
+                    std::span<const SRGBColor>{pal_srgb});
+                auto [control, data_idx] = split_ham_value(result.value, data_bits);
+                if (control == 0) set_count[data_idx]++;
+                if (result.error > worst_pixel_error) {
+                    worst_pixel_error = result.error;
+                    worst_pixel_target = row[x];
+                }
+                base_err += result.error;
+                prev = result.result_color;
+            }
+
+            if (worst_pixel_error < 1e-6f) break;
+
+            std::size_t min_slot = 1;
+            std::size_t min_count = std::numeric_limits<std::size_t>::max();
+            for (std::size_t k = 1; k < num_base_colors; ++k) {
+                if (set_count[k] < min_count) {
+                    min_count = set_count[k];
+                    min_slot = k;
+                }
+            }
+
+            auto new_color = (chipset != amiga::Chipset::aga)
+                ? palette::quantize_to_ocs(worst_pixel_target)
+                : worst_pixel_target;
+
+            auto old_color = current_pal[min_slot];
+            current_pal[min_slot] = new_color;
+            float trial_err = measure_row_error(
+                std::span<const Color3f>{current_pal.data(), num_base_colors});
+            if (trial_err > base_err) {
+                current_pal[min_slot] = old_color;
+                break;
+            }
+            swaps.push_back({min_slot, new_color});
+        }
+        return swaps;
+    }
+
+    // Best-quality path (--ham-cap-best): per iteration, build a multi-
+    // candidate × multi-slot search and pick the (slot, color) pair that
+    // drops row error the most. Don't bail on a single failed candidate —
+    // only stop when NO candidate-slot pair improves the row. ~5-10×
+    // cost of the fast path. Mirrors SCAP's per-strip planner shape.
     for (std::size_t s = 0; s < changes_per_line; ++s) {
         std::vector<SRGBColor> pal_srgb(num_base_colors);
         for (std::size_t i = 0; i < num_base_colors; ++i)
@@ -1174,13 +1246,15 @@ std::vector<HamSwap> find_ham_swaps(
             ? SRGBColor{0, 0, 0} : pal_srgb[0];
 
         std::vector<std::size_t> set_count(num_base_colors, 0);
-        float worst_pixel_error = 0.0f;
-        Color3f worst_pixel_target{};
         float base_err = 0.0f;
 
         HamPrecomp swap_pre{
             std::span<const Color3f>{current_pal.data(), num_base_colors},
             data_bits};
+
+        // Track per-pixel error for top-K worst-pixel candidate selection.
+        struct PxErr { float err; std::size_t x; };
+        std::vector<PxErr> px_errs(w);
 
         for (std::size_t x = 0; x < w; ++x) {
             auto result = encode_ham_pixel(
@@ -1188,43 +1262,100 @@ std::vector<HamSwap> find_ham_swaps(
                 std::span<const SRGBColor>{pal_srgb});
             auto [control, data_idx] = split_ham_value(result.value, data_bits);
             if (control == 0) set_count[data_idx]++;
-            if (result.error > worst_pixel_error) {
-                worst_pixel_error = result.error;
-                worst_pixel_target = row[x];
-            }
             base_err += result.error;
+            px_errs[x] = {result.error, x};
             prev = result.result_color;
         }
 
-        if (worst_pixel_error < 1e-6f) break;
+        // Build candidate target colours: top-K highest-error source pixels
+        // (OCS-quantised on OCS, dedup by 12-bit key) + OKLab centroid of
+        // the K worst pixels. Centroid often beats any single pixel when a
+        // smooth high-error region (skin, sky band) needs a fresh anchor.
+        constexpr std::size_t kTopK = 16;
+        std::partial_sort(
+            px_errs.begin(),
+            px_errs.begin() + static_cast<std::ptrdiff_t>(std::min(kTopK, w)),
+            px_errs.end(),
+            [](const PxErr& a, const PxErr& b) { return a.err > b.err; });
+        if (px_errs.empty() || px_errs[0].err < 1e-6f) break;
 
-        // Candidate: replace the least-used SET slot with the worst pixel's target.
-        std::size_t min_slot = 1;
-        std::size_t min_count = std::numeric_limits<std::size_t>::max();
-        for (std::size_t k = 1; k < num_base_colors; ++k) {
-            if (set_count[k] < min_count) {
-                min_count = set_count[k];
-                min_slot = k;
+        std::vector<Color3f> cands;
+        cands.reserve(kTopK + 1);
+        std::array<bool, 4096> seen{};
+        auto ocs_key = [](Color3f c) {
+            int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
+            int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
+            int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
+            return static_cast<std::size_t>((r << 8) | (g << 4) | b);
+        };
+        auto add_cand = [&](Color3f c) {
+            auto cs = (chipset != amiga::Chipset::aga)
+                ? palette::quantize_to_ocs(c) : c;
+            auto key = ocs_key(cs);
+            if (chipset == amiga::Chipset::aga || !seen[key]) {
+                if (chipset != amiga::Chipset::aga) seen[key] = true;
+                cands.push_back(cs);
+            }
+        };
+        std::size_t topk_used = std::min(kTopK, w);
+        double sumL = 0.0, suma = 0.0, sumb = 0.0;
+        for (std::size_t i = 0; i < topk_used; ++i) {
+            auto x = px_errs[i].x;
+            add_cand(row[x]);
+            auto lab = color_space::linear_to_oklab(row[x]);
+            sumL += static_cast<double>(lab.L);
+            suma += static_cast<double>(lab.a);
+            sumb += static_cast<double>(lab.b);
+        }
+        if (topk_used > 0) {
+            OKLab centroid{
+                static_cast<float>(sumL / static_cast<double>(topk_used)),
+                static_cast<float>(suma / static_cast<double>(topk_used)),
+                static_cast<float>(sumb / static_cast<double>(topk_used))};
+            add_cand(color_space::oklab_to_linear(centroid).clamped());
+        }
+
+        // Candidate slots: every SET slot (k>=1), sorted least-used first.
+        // The best-quality planner is already opt-in (--ham-cap-best), so
+        // we don't compromise on search width here — searching every slot
+        // catches popular-slot swaps that re-route many SET pixels through
+        // cheaper MODIFY chains.
+        std::vector<std::size_t> slot_order;
+        slot_order.reserve(num_base_colors - 1);
+        for (std::size_t k = 1; k < num_base_colors; ++k)
+            slot_order.push_back(k);
+        std::sort(
+            slot_order.begin(), slot_order.end(),
+            [&](std::size_t a, std::size_t b) {
+                return set_count[a] < set_count[b];
+            });
+        std::size_t slot_trials = slot_order.size();
+
+        float best_trial = base_err;
+        Color3f best_color{};
+        std::size_t best_slot = 0;
+        bool any_improve = false;
+        for (auto& cand : cands) {
+            for (std::size_t si = 0; si < slot_trials; ++si) {
+                auto slot = slot_order[si];
+                auto old = current_pal[slot];
+                current_pal[slot] = cand;
+                float trial = measure_row_error(
+                    std::span<const Color3f>{current_pal.data(),
+                                             num_base_colors});
+                current_pal[slot] = old;
+                if (trial < best_trial) {
+                    best_trial = trial;
+                    best_color = cand;
+                    best_slot = slot;
+                    any_improve = true;
+                }
             }
         }
 
-        auto new_color = (chipset != amiga::Chipset::aga)
-            ? palette::quantize_to_ocs(worst_pixel_target)
-            : worst_pixel_target;
-
-        // Trial the swap: commit only if it reduces total row error.
-        // Prevents the regression where a greedy swap happens to hurt quality.
-        auto old_color = current_pal[min_slot];
-        current_pal[min_slot] = new_color;
-        float trial_err = measure_row_error(
-            std::span<const Color3f>{current_pal.data(), num_base_colors});
-        // Allow ties (trial_err == base_err) — sometimes a swap is neutral
-        // on this line but helps visual coherence across lines.
-        if (trial_err > base_err) {
-            current_pal[min_slot] = old_color;
-            break;  // net regression — further swaps unlikely to help
-        }
-        swaps.push_back({min_slot, new_color});
+        if (!any_improve) break;
+        current_pal[best_slot] = best_color;
+        swaps.push_back({best_slot, best_color});
     }
 
     return swaps;
@@ -1265,16 +1396,10 @@ Result<HamResult> encode_ham_copper_generic(
         base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
     }
 
-    std::vector<Color3f> current_pal = base_pal.colors;
     // For interlace, each field accumulates palette swaps independently so a
     // single per-line K-swap budget covers one row's diff (vs cumulative two
     // rows when fields share state).
     bool is_lace = opts.skip_initial_swap_rows > 0;
-    std::vector<Color3f> current_pal_f2 = base_pal.colors;
-    std::vector<std::uint8_t> ham_values(w * h);
-    std::vector<std::vector<Color3f>> scanline_palettes(h);
-    std::vector<std::vector<copper::CopperChange>> all_changes(h);
-    float total_error = 0.0f;
 
     // Error diffusion state
     bool use_error_diffusion = (opts.dither_method != dither::Method::none) &&
@@ -1333,121 +1458,211 @@ Result<HamResult> encode_ham_copper_generic(
     // Use pre-dithered image for error diffusion, original for other modes
     const Image& encode_image = use_error_diffusion ? dithered_image : image;
 
-    // Pass 1 (sequential): compute per-row palette state + copper changes.
-    // Each row's find_ham_swaps mutates current_pal based on the previous
-    // row's state, so this must be a serial dependency chain. It's cheap
-    // compared to the beam search that follows.
-    for (std::size_t y = 0; y < h; ++y) {
-        auto row = encode_image.row(y);
-        auto& pal_for_row = (is_lace && (y & 1)) ? current_pal_f2 : current_pal;
-
-        auto row_k = (y < opts.skip_initial_swap_rows)
-            ? std::size_t{0} : changes_per_line;
-        auto swaps = find_ham_swaps(row, pal_for_row, num_base_colors,
-                                    data_bits, row_k, chipset);
-
-        std::vector<copper::CopperChange> line_changes;
-        for (auto& [slot, color] : swaps) {
-            line_changes.push_back({
-                static_cast<std::uint8_t>(slot), color});
-        }
-        all_changes[y] = std::move(line_changes);
-        scanline_palettes[y] = pal_for_row;  // snapshot after swaps
-    }
-
-    // Pass 2 (parallel): encode each scanline. With Pass 1 done, every
-    // row's palette is known and the DP beam search is independent across
-    // rows. On Apple Silicon (8 perf cores) this typically scales near-
-    // linearly for large images.
-    std::atomic<std::size_t> next_y{0};
-    std::atomic<double> atomic_err{0.0};
-
-    auto worker = [&]() {
-        while (true) {
-            auto y = next_y.fetch_add(1);
-            if (y >= h) break;
-            auto row = encode_image.row(y);
-            auto& pal_for_row = scanline_palettes[y];
-
-            // Precompute sRGB for this scanline's palette.
-            std::vector<SRGBColor> pal_srgb(num_base_colors);
-            for (std::size_t i = 0; i < num_base_colors; ++i) {
-                pal_srgb[i] = linear_to_srgb8(pal_for_row[i]);
-            }
-            std::span<const SRGBColor> srgb_span{pal_srgb};
-            SRGBColor start = pal_srgb.empty()
-                ? SRGBColor{0, 0, 0} : pal_srgb[0];
-
-            HamPrecomp line_pre{
-                std::span<const Color3f>{pal_for_row.data(), num_base_colors},
-                data_bits};
-
-            float err;
-            if (use_ordered) {
-                std::vector<Color3f> dithered_row(w);
-                for (std::size_t x = 0; x < w; ++x) {
-                    auto lab = color_space::linear_to_oklab(row[x]);
-                    float threshold = dither::ordered_threshold(
-                        opts.dither_method, x, y);
-                    lab.L += threshold * opts.dither_strength * 0.15f;
-                    lab.a += threshold * opts.dither_strength * 0.03f;
-                    lab.b += threshold * opts.dither_strength * 0.03f;
-                    auto linear = color_space::oklab_to_linear(lab);
-                    dithered_row[x] = {
-                        std::clamp(linear.r, 0.0f, 1.0f),
-                        std::clamp(linear.g, 0.0f, 1.0f),
-                        std::clamp(linear.b, 0.0f, 1.0f),
-                    };
-                }
-                std::span<const Color3f> dr{dithered_row};
-                auto scanline = encode_scanline_dp(dr, start, line_pre,
-                                                   srgb_span, opts.beam_width);
-                if (opts.triple_beam > 0) {
-                    refine_triple(scanline.values, dr, start, line_pre,
-                                  srgb_span, opts.triple_beam);
-                }
-                std::copy(scanline.values.begin(), scanline.values.end(),
-                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-                err = scanline.error;
-            } else {
-                auto scanline = encode_scanline_dp(row, start, line_pre,
-                                                   srgb_span, opts.beam_width);
-                if (opts.triple_beam > 0) {
-                    refine_triple(scanline.values, row, start, line_pre,
-                                  srgb_span, opts.triple_beam);
-                }
-                std::copy(scanline.values.begin(), scanline.values.end(),
-                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
-                err = scanline.error;
-            }
-            double old = atomic_err.load(std::memory_order_relaxed);
-            while (!atomic_err.compare_exchange_weak(
-                old, old + static_cast<double>(err))) {}
-        }
+    struct PassResult {
+        std::vector<std::uint8_t> ham_values;
+        std::vector<std::vector<Color3f>> scanline_palettes;
+        std::vector<std::vector<copper::CopperChange>> all_changes;
+        std::vector<Color3f> base_used;
+        float total_error;
     };
 
-#ifndef __EMSCRIPTEN__
-    auto n_threads = std::max<unsigned>(1,
-        std::thread::hardware_concurrency());
-    if (n_threads > h) n_threads = static_cast<unsigned>(h);
-    std::vector<std::jthread> threads;
-    threads.reserve(n_threads);
-    for (unsigned i = 0; i < n_threads; ++i) threads.emplace_back(worker);
-    threads.clear();  // join on destruction
-#else
-    worker();
-#endif
-    total_error += static_cast<float>(atomic_err.load());
+    auto run_passes = [&](std::vector<Color3f> initial_base,
+                          float progress_lo, float progress_hi,
+                          std::string_view stage) -> PassResult {
+        auto report = [&](float local) {
+            if (opts.on_progress) {
+                opts.on_progress(
+                    progress_lo + (progress_hi - progress_lo) * local,
+                    stage);
+            }
+        };
+        // Pass 1 ≈ 5% of run_passes total time (CAP planning is cheap),
+        // Pass 2 ≈ 95% (parallel DP beam search dominates).
+        constexpr float kPass1Share = 0.05f;
+        PassResult out;
+        out.ham_values.assign(w * h, 0);
+        out.scanline_palettes.assign(h, {});
+        out.all_changes.assign(h, {});
+        out.base_used = initial_base;
+        out.total_error = 0.0f;
 
-    auto planes = bitplane::encode(ham_values, w, h, num_bitplanes);
+        std::vector<Color3f> current_pal = initial_base;
+        std::vector<Color3f> current_pal_f2 = initial_base;
+
+        // Pass 1 (sequential): per-row CAP planning. Each row mutates
+        // current_pal, so this must be serial. Cheap vs the beam search.
+        report(0.0f);
+        std::size_t pass1_step = std::max<std::size_t>(1, h / 20);
+        for (std::size_t y = 0; y < h; ++y) {
+            auto row = encode_image.row(y);
+            auto& pal_for_row = (is_lace && (y & 1))
+                ? current_pal_f2 : current_pal;
+            auto row_k = (y < opts.skip_initial_swap_rows)
+                ? std::size_t{0} : changes_per_line;
+            auto swaps = find_ham_swaps(row, pal_for_row, num_base_colors,
+                                        data_bits, row_k, chipset,
+                                        opts.cap_best);
+            std::vector<copper::CopperChange> line_changes;
+            for (auto& [slot, color] : swaps) {
+                line_changes.push_back({
+                    static_cast<std::uint8_t>(slot), color});
+            }
+            out.all_changes[y] = std::move(line_changes);
+            out.scanline_palettes[y] = pal_for_row;
+            if ((y + 1) % pass1_step == 0) {
+                report(kPass1Share *
+                       (static_cast<float>(y + 1) / static_cast<float>(h)));
+            }
+        }
+        report(kPass1Share);
+
+        // Pass 2 (parallel): DP beam search per row, independent across rows.
+        std::atomic<std::size_t> next_y{0};
+        std::atomic<double> atomic_err{0.0};
+        std::atomic<std::size_t> rows_done{0};
+        auto worker = [&]() {
+            while (true) {
+                auto y = next_y.fetch_add(1);
+                if (y >= h) break;
+                auto row = encode_image.row(y);
+                auto& pal_for_row = out.scanline_palettes[y];
+
+                std::vector<SRGBColor> pal_srgb(num_base_colors);
+                for (std::size_t i = 0; i < num_base_colors; ++i) {
+                    pal_srgb[i] = linear_to_srgb8(pal_for_row[i]);
+                }
+                std::span<const SRGBColor> srgb_span{pal_srgb};
+                SRGBColor start = pal_srgb.empty()
+                    ? SRGBColor{0, 0, 0} : pal_srgb[0];
+
+                HamPrecomp line_pre{
+                    std::span<const Color3f>{pal_for_row.data(),
+                                             num_base_colors},
+                    data_bits};
+
+                float err;
+                if (use_ordered) {
+                    std::vector<Color3f> dithered_row(w);
+                    for (std::size_t x = 0; x < w; ++x) {
+                        auto lab = color_space::linear_to_oklab(row[x]);
+                        float threshold = dither::ordered_threshold(
+                            opts.dither_method, x, y);
+                        lab.L += threshold * opts.dither_strength * 0.15f;
+                        lab.a += threshold * opts.dither_strength * 0.03f;
+                        lab.b += threshold * opts.dither_strength * 0.03f;
+                        auto linear = color_space::oklab_to_linear(lab);
+                        dithered_row[x] = {
+                            std::clamp(linear.r, 0.0f, 1.0f),
+                            std::clamp(linear.g, 0.0f, 1.0f),
+                            std::clamp(linear.b, 0.0f, 1.0f),
+                        };
+                    }
+                    std::span<const Color3f> dr{dithered_row};
+                    auto scanline = encode_scanline_dp(dr, start, line_pre,
+                                                       srgb_span,
+                                                       opts.beam_width);
+                    if (opts.triple_beam > 0) {
+                        refine_triple(scanline.values, dr, start, line_pre,
+                                      srgb_span, opts.triple_beam);
+                    }
+                    std::copy(scanline.values.begin(), scanline.values.end(),
+                              out.ham_values.begin() +
+                                  static_cast<std::ptrdiff_t>(y * w));
+                    err = scanline.error;
+                } else {
+                    auto scanline = encode_scanline_dp(row, start, line_pre,
+                                                       srgb_span,
+                                                       opts.beam_width);
+                    if (opts.triple_beam > 0) {
+                        refine_triple(scanline.values, row, start, line_pre,
+                                      srgb_span, opts.triple_beam);
+                    }
+                    std::copy(scanline.values.begin(), scanline.values.end(),
+                              out.ham_values.begin() +
+                                  static_cast<std::ptrdiff_t>(y * w));
+                    err = scanline.error;
+                }
+                double old = atomic_err.load(std::memory_order_relaxed);
+                while (!atomic_err.compare_exchange_weak(
+                    old, old + static_cast<double>(err))) {}
+                auto done = rows_done.fetch_add(1) + 1;
+                if (opts.on_progress && (done & 0x3) == 0) {
+                    report(kPass1Share +
+                           (1.0f - kPass1Share) *
+                               (static_cast<float>(done) /
+                                static_cast<float>(h)));
+                }
+            }
+        };
+
+#ifndef __EMSCRIPTEN__
+        auto n_threads = std::max<unsigned>(1,
+            std::thread::hardware_concurrency());
+        if (n_threads > h) n_threads = static_cast<unsigned>(h);
+        std::vector<std::jthread> threads;
+        threads.reserve(n_threads);
+        for (unsigned i = 0; i < n_threads; ++i)
+            threads.emplace_back(worker);
+        threads.clear();  // join on destruction
+#else
+        worker();
+#endif
+        out.total_error = static_cast<float>(atomic_err.load());
+        report(1.0f);
+        return out;
+    };
+
+    // Two-pass progress range: with cap_best, the second encode runs after
+    // refinement, so split 0..50% / 50..100%. Without cap_best, the single
+    // encode covers 0..100%.
+    float first_hi = opts.cap_best ? 0.5f : 1.0f;
+    auto best = run_passes(base_pal.colors, 0.0f, first_hi, "encoding");
+
+    // Joint base-palette + CAP refinement (--ham-cap-best only). Pass 1's
+    // base is fixed by choose_ham_palette without knowing what CAP will do.
+    // Re-pick the base as the per-slot OKLab centroid of the row palettes
+    // pass 1 actually settled into, then re-encode. The second encode starts
+    // closer to each row's "ideal" state, freeing CAP slots from catch-up
+    // duty. Cost: 2× total encode time. Skipped on the fast path.
+    if (opts.cap_best && changes_per_line > 0 && h > 0) {
+        std::vector<Color3f> refined = base_pal.colors;
+        for (std::size_t k = 1; k < num_base_colors; ++k) {
+            double sumL = 0.0, suma = 0.0, sumb = 0.0;
+            for (std::size_t y = 0; y < h; ++y) {
+                auto lab = color_space::linear_to_oklab(
+                    best.scanline_palettes[y][k]);
+                sumL += static_cast<double>(lab.L);
+                suma += static_cast<double>(lab.a);
+                sumb += static_cast<double>(lab.b);
+            }
+            auto inv = 1.0 / static_cast<double>(h);
+            OKLab centroid{
+                static_cast<float>(sumL * inv),
+                static_cast<float>(suma * inv),
+                static_cast<float>(sumb * inv)};
+            auto lin = color_space::oklab_to_linear(centroid);
+            lin.r = std::clamp(lin.r, 0.0f, 1.0f);
+            lin.g = std::clamp(lin.g, 0.0f, 1.0f);
+            lin.b = std::clamp(lin.b, 0.0f, 1.0f);
+            refined[k] = (chipset != amiga::Chipset::aga)
+                ? palette::quantize_to_ocs(lin) : lin;
+        }
+        auto retry = run_passes(std::move(refined), 0.5f, 1.0f, "refining");
+        if (retry.total_error < best.total_error) {
+            best = std::move(retry);
+        }
+    }
+    if (opts.on_progress) opts.on_progress(1.0f, "done");
+
+    auto planes = bitplane::encode(best.ham_values, w, h, num_bitplanes);
     if (!planes) return std::unexpected{planes.error()};
 
     return HamResult{
         *std::move(planes),
-        std::move(base_pal.colors),
-        total_error,
-        std::move(scanline_palettes),
-        std::move(all_changes),
+        std::move(best.base_used),
+        best.total_error,
+        std::move(best.scanline_palettes),
+        std::move(best.all_changes),
         changes_per_line,
     };
 }

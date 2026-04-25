@@ -7,7 +7,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::scap {
@@ -230,7 +232,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        const dither::Settings& dither_settings = {},
                                        bool debug_overlay = false,
                                        std::size_t copper_changes_override = 0,
-                                       int palette_diversity = 0);
+                                       int palette_diversity = 0,
+                                       std::function<void(float, std::string_view)>
+                                           on_progress = {});
 
 // ---------------------------------------------------------------------------
 // SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
@@ -255,7 +259,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        const dither::Settings& dither_settings = {},
                                        std::size_t copper_changes_override = 0,
                                        int palette_diversity = 0,
-                                       bool debug_overlay = false);
+                                       bool debug_overlay = false,
+                                       std::function<void(float, std::string_view)>
+                                           on_progress = {});
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).

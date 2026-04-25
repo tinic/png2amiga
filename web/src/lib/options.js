@@ -163,7 +163,7 @@ export const EXAMPLES = [
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', alphaThreshold: 0 } },
   { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
   { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'ostromoukhov', copper: true } },
-  { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 1.2, brightness: -0.05, contrast: 0.9, gamma: 1.0, copper: true } },
+  { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1.0, copper: true } },
   { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'ostromoukhov', copper: true } },
   { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'checker', dualPlayfield: true, scap: true } },
 ]
@@ -180,6 +180,11 @@ export function defaultOptions() {
     height: 0,
     // HAM
     hamBeam: 16,
+    // CAP best-quality planner (multi-candidate slot search + joint
+    // base-palette refinement). HAM6 + copper and HAM8 + copper only —
+    // indexed copper modes ignore this flag (their planner is already
+    // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
+    capBest: false,
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',
