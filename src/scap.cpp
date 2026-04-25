@@ -1251,7 +1251,12 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         }
         std::size_t useful_swap_cap = scap_share_ehb_max;
         std::size_t useful_swaps = 0;
-        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+        // Hard cap on visible MOVEs: 18. Skip slot 18 — no MOVE emitted
+        // for that slot (no later slot's chain alignment depends on
+        // it). Hardware empirically tolerates 18, not 19.
+        constexpr std::size_t kMaxVisibleMoves = 18;
+        std::size_t slots_to_run = std::min(table.slots.size(), kMaxVisibleMoves);
+        for (std::size_t s = 0; s < slots_to_run; ++s) {
             std::size_t x_lo = std::min(width,
                 static_cast<std::size_t>(table.slots[s].pixel_x));
             std::size_t x_hi = (s + 1 < table.slots.size())
@@ -1311,7 +1316,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 }
             }
             // FILLER: if no useful swap fired this slot, emit a no-op
-            // MOVE so the chain length stays equal to the slot count.
+            // MOVE so the chain length stays equal to slots_to_run.
             // Without this, subsequent SCAP MOVEs SHIFT one chain
             // position earlier on the bus, landing at the WRONG pixel
             // — that's the source of mid-line colour artifacts on
@@ -1323,6 +1328,13 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     palette::linear_to_ocs(hw_state[0]),
                     static_cast<int>(s)));
             }
+            strip_eff[s + 1] = P_eff;
+            strip_eff_lab[s + 1] = P_eff_lab;
+        }
+        // Skipped slots beyond slots_to_run keep the post-last-slot
+        // palette state — the last strip after slot (slots_to_run-1)'s
+        // pixel_x has no further SCAP swap, so its palette = current P.
+        for (std::size_t s = slots_to_run; s < num_strips - 1; ++s) {
             strip_eff[s + 1] = P_eff;
             strip_eff_lab[s + 1] = P_eff_lab;
         }
