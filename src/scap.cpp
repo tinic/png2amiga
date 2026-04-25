@@ -1,7 +1,9 @@
 #include "scap.hpp"
 
+#include "amiga.hpp"
 #include "bitplane.hpp"
 #include "color_space.hpp"
+#include "copper.hpp"
 #include "dither.hpp"
 #include "palette.hpp"
 #include "quantize.hpp"
@@ -208,31 +210,30 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     }
     auto& src = *src_image;
 
-    // ---- 1. Quantise to 8 PF2 colours (reserve idx 0 if requested) -------
+    // ---- 1. CAP first: per-line 8-colour palette evolution.
+    // SCAP layers on top of CAP. With only 8 PF2 colours the per-line
+    // search space is tiny, but CAP still finds useful palette diffs
+    // against neighbour scanlines.
     constexpr int kBaseColors = 8;        // PF2 width = 3 bitplanes
     constexpr int kRegBase = 8;           // PF2 starts at COLOR08 (PF2OF=+8)
-    int qcount = reserve_color0 ? kBaseColors - 1 : kBaseColors;
-    auto quantised = quantize::quantize(src,
-                                        static_cast<std::size_t>(qcount),
-                                        quantize::Algorithm::ocs_bruteforce,
-                                        /*diversity=*/0);
-    if (!quantised) return std::unexpected{quantised.error()};
-
+    auto copper_result = copper::encode_copper(
+        src, /*depth=*/3, dither_settings,
+        amiga::Chipset::ocs,
+        /*override_changes=*/0,
+        /*user_palette=*/nullptr,
+        reserve_color0,
+        /*locked=*/{},
+        /*palette_diversity=*/0,
+        /*skip_initial_swap_rows=*/0,
+        /*is_lace=*/false);
+    if (!copper_result) return std::unexpected{copper_result.error()};
+    auto& cap_palettes = copper_result->scanline_palettes;
+    auto& base_palette_vec = copper_result->base_palette;
     std::array<Color3f, kBaseColors> base_palette{};
-    for (auto& c : base_palette) c = Color3f{0.0f, 0.0f, 0.0f};
-    std::size_t off = reserve_color0 ? 1u : 0u;
-    for (std::size_t i = 0; i < quantised->colors.size() &&
-                            (off + i) < static_cast<std::size_t>(kBaseColors); ++i) {
-        base_palette[off + i] = palette::quantize_to_ocs(quantised->colors[i]);
-    }
+    for (std::size_t k = 0; k < kBaseColors && k < base_palette_vec.size(); ++k)
+        base_palette[k] = base_palette_vec[k];
 
-    // ---- 2. Global dither vs base palette --------------------------------
-    // dither::apply F-S's the whole image once against the 8-colour base
-    // palette. base_index[y*w+x] is the resulting palette index per pixel
-    // — these are the bitplane bits the hardware will read. The dither
-    // texture is uniform across the entire frame (no strip boundaries),
-    // which is what avoids the blocking artifacts a per-strip dither
-    // produces.
+    // ---- 2. Global dither vs FRAME-INIT base palette.
     std::span<const Color3f> base_pal_span(base_palette.data(), kBaseColors);
     auto dith_result = dither::apply(src, base_pal_span, dither_settings);
     auto& base_index = dith_result.indices;
@@ -364,23 +365,36 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // ---- Per-line CAP-style reset: palette starts each line at base ----
-        P = base_palette;
+        // Line entry palette = CAP plan for this line. cap_palettes[y]
+        // already reflects all per-line palette evolution decisions
+        // from CAP — we layer 20 mid-line SCAP swaps on top.
+        for (std::size_t k = 0; k < kBaseColors; ++k)
+            P[k] = cap_palettes[y][k];
         recompute_lab();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
 
-        // 1. 8 base-palette MOVEs (write COLOR08..15). These fire in the
-        //    horizontal blank just before this line's display area. In
-        //    debug_overlay mode they all write 0x0000 so the line opens
-        //    with PF2 regs black and every visible colour change is
-        //    attributable to a SCAP MOVE.
-        for (std::size_t k = 0; k < kBaseColors; ++k) {
-            line_moves[y].push_back(make_move(
-                static_cast<std::uint8_t>(kRegBase + k),
-                debug_overlay ? std::uint16_t{0x0000}
-                              : palette::linear_to_ocs(base_palette[k]),
-                -1));
+        // 1. Per-line CAP MOVEs (diff vs previous line's palette).
+        //    For y=0 the frame-init palette is already loaded by the
+        //    viewer before bitplane DMA. In debug_overlay mode every
+        //    register is forced to 0x0000 so SCAP MOVEs are the only
+        //    visible colour changes.
+        if (debug_overlay) {
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(kRegBase + k),
+                    std::uint16_t{0x0000}, -1));
+            }
+        } else if (y > 0) {
+            auto& prev = cap_palettes[y - 1];
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (prev[k].r != P[k].r || prev[k].g != P[k].g ||
+                    prev[k].b != P[k].b) {
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(kRegBase + k),
+                        palette::linear_to_ocs(P[k]), -1));
+                }
+            }
         }
 
         // 2. Line-gate WAIT — opens the SCAP chain at HPOS=line_gate_hpos.
@@ -613,23 +627,27 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
     const std::size_t kBaseColors = 1u << static_cast<unsigned>(depth);
     constexpr int kRegBase = 0;  // single playfield: full register file
 
-    // ---- 1. Quantise to N base colours --------------------------------
-    int qcount = reserve_color0 ? static_cast<int>(kBaseColors) - 1
-                                : static_cast<int>(kBaseColors);
-    auto quantised = quantize::quantize(src,
-                                        static_cast<std::size_t>(qcount),
-                                        quantize::Algorithm::ocs_bruteforce,
-                                        /*diversity=*/0);
-    if (!quantised) return std::unexpected{quantised.error()};
+    // ---- 1. CAP first: per-line palette evolution.
+    // Same layering as encode_scap_ehb_ocs: SCAP rides on top of CAP,
+    // not as a replacement. Without this every line shows the same
+    // base palette; the per-strip mid-line swaps then have to
+    // compensate for ALL the per-frame variance, which is impossible
+    // with a 20-MOVE budget.
+    auto copper_result = copper::encode_copper(
+        src, static_cast<std::size_t>(depth), dither_settings,
+        amiga::Chipset::ocs,
+        /*override_changes=*/0,
+        /*user_palette=*/nullptr,
+        reserve_color0,
+        /*locked=*/{},
+        /*palette_diversity=*/0,
+        /*skip_initial_swap_rows=*/0,
+        /*is_lace=*/false);
+    if (!copper_result) return std::unexpected{copper_result.error()};
+    auto& cap_palettes = copper_result->scanline_palettes;
+    auto& base_palette = copper_result->base_palette;
 
-    std::vector<Color3f> base_palette(kBaseColors, Color3f{0.0f, 0.0f, 0.0f});
-    std::size_t off = reserve_color0 ? 1u : 0u;
-    for (std::size_t i = 0; i < quantised->colors.size() &&
-                            (off + i) < kBaseColors; ++i) {
-        base_palette[off + i] = palette::quantize_to_ocs(quantised->colors[i]);
-    }
-
-    // ---- 2. Global dither vs base palette ------------------------------
+    // ---- 2. Global dither vs FRAME-INIT base palette.
     std::span<const Color3f> base_pal_span(base_palette.data(), kBaseColors);
     auto dith_result = dither::apply(src, base_pal_span, dither_settings);
     auto& base_index = dith_result.indices;
@@ -745,18 +763,24 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // Per-line CAP-style reset: palette starts each line at base.
-        P = base_palette;
+        // Line entry palette = the CAP plan for this line.
+        P = cap_palettes[y];
         recompute_lab();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
 
-        // 1. Base palette MOVEs (informational — kBaseColors entries).
-        for (std::size_t k = 0; k < kBaseColors; ++k) {
-            line_moves[y].push_back(make_move(
-                static_cast<std::uint8_t>(kRegBase + k),
-                palette::linear_to_ocs(base_palette[k]),
-                -1));
+        // 1. Per-line CAP MOVEs (diff vs previous line).
+        if (y > 0) {
+            auto& prev = cap_palettes[y - 1];
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (prev[k].r != P[k].r || prev[k].g != P[k].g ||
+                    prev[k].b != P[k].b) {
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(kRegBase + k),
+                        palette::linear_to_ocs(P[k]),
+                        -1));
+                }
+            }
         }
 
         // 2. Line-gate WAIT.
@@ -936,40 +960,43 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     constexpr std::size_t kEffective  = 64;
     constexpr int kRegBase = 0;
 
-    // ---- 1. Quantise to 32 BASE colours (median-cut over EHB-aware
-    // 64-colour space would be ideal; for the investigation we just
-    // quantise to 32 base entries and let the half-brites fall out).
-    int qcount = reserve_color0 ? static_cast<int>(kBaseColors) - 1
-                                : static_cast<int>(kBaseColors);
-    auto quantised = quantize::quantize(src,
-                                        static_cast<std::size_t>(qcount),
-                                        quantize::Algorithm::ocs_bruteforce,
-                                        /*diversity=*/0);
-    if (!quantised) return std::unexpected{quantised.error()};
+    // ---- 1. CAP first: per-line palette evolution.
+    // SCAP is a layer ON TOP OF CAP, not a replacement. The CAP encoder
+    // picks a per-line set of register diffs that evolves the 32-base
+    // palette across scanlines; SCAP then adds 20 mid-line MOVEs per
+    // line on top of that evolving state. Without this layering the
+    // image looks single-palette per frame, which is very visible on
+    // photographic content.
+    auto copper_result = copper::encode_copper(
+        src, /*depth=*/5, dither_settings,
+        amiga::Chipset::ocs,
+        /*override_changes=*/0,
+        /*user_palette=*/nullptr,
+        reserve_color0,
+        /*locked=*/{},
+        /*palette_diversity=*/0,
+        /*skip_initial_swap_rows=*/0,
+        /*is_lace=*/false);
+    if (!copper_result) return std::unexpected{copper_result.error()};
+    auto& cap_palettes = copper_result->scanline_palettes;  // [y][k] 32 base
+    auto& base_palette = copper_result->base_palette;       // 32 base, frame init
 
-    std::vector<Color3f> base_palette(kBaseColors, Color3f{0.0f, 0.0f, 0.0f});
-    std::size_t off = reserve_color0 ? 1u : 0u;
-    for (std::size_t i = 0; i < quantised->colors.size() &&
-                            (off + i) < kBaseColors; ++i) {
-        base_palette[off + i] = palette::quantize_to_ocs(quantised->colors[i]);
-    }
-
-    // Build the 64-effective palette (base + half-brite siblings) used
-    // for stage-1 dither and per-pixel nearest-colour lookup.
-    auto build_effective = [](const std::vector<Color3f>& base) {
+    // Build per-line 64-effective palette (32 base + 32 half-brite).
+    auto build_effective_64 = [](const std::vector<Color3f>& base) {
         std::vector<Color3f> eff(kEffective);
         for (std::size_t k = 0; k < kBaseColors; ++k) {
-            eff[k]              = base[k];
-            eff[kBaseColors+k]  = half_brite(base[k]);
+            eff[k]             = base[k];
+            eff[kBaseColors+k] = half_brite(base[k]);
         }
         return eff;
     };
-    auto effective = build_effective(base_palette);
 
-    // ---- 2. Global dither vs the 64-colour effective palette.
-    std::span<const Color3f> eff_pal_span(effective.data(), kEffective);
-    auto dith_result = dither::apply(src, eff_pal_span, dither_settings);
-    auto& base_index = dith_result.indices;  // 0..63 per pixel
+    // ---- 2. Global dither vs the FRAME-INIT 64 palette.
+    // base_index drives the strip-swap planner's centroid math.
+    auto effective_init = build_effective_64(base_palette);
+    std::span<const Color3f> eff_init_span(effective_init.data(), kEffective);
+    auto dith_result = dither::apply(src, eff_init_span, dither_settings);
+    auto& base_index = dith_result.indices;
 
     std::vector<color_space::OKLab> img_lab(width * height);
     for (std::size_t y = 0; y < height; ++y)
@@ -977,18 +1004,17 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             img_lab[y * width + x] = color_space::linear_to_oklab(src[x, y]);
 
     // ---- 3. Per-line greedy planner -----------------------------------
-    std::vector<std::uint8_t> indices(width * height, 0);  // 0..63
+    std::vector<std::uint8_t> indices(width * height, 0);
     std::vector<std::vector<ScapMove>> line_moves(height);
     Image preview(width, height);
 
-    auto P = base_palette;
-    auto P_eff = effective;
+    std::vector<Color3f> P;
+    std::vector<Color3f> P_eff;
     std::vector<color_space::OKLab> P_eff_lab(kEffective);
     auto recompute_lab = [&]() {
         for (std::size_t k = 0; k < kEffective; ++k)
             P_eff_lab[k] = color_space::linear_to_oklab(P_eff[k]);
     };
-    recompute_lab();
 
     std::size_t k_min = reserve_color0 ? 1u : 0u;
 
@@ -1134,19 +1160,30 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // CAP-style line reset.
-        P = base_palette;
-        P_eff = build_effective(P);
+        // Line entry palette = the CAP plan for this line, not a static
+        // base. cap_palettes[y] carries the evolved 32-base state from
+        // previous lines (CAP's per-scanline diffs already applied).
+        P = cap_palettes[y];
+        P_eff = build_effective_64(P);
         recompute_lab();
         strip_eff[0] = P_eff;
         strip_eff_lab[0] = P_eff_lab;
 
-        // 1. Base palette MOVEs (informational).
-        for (std::size_t k = 0; k < kBaseColors; ++k) {
-            line_moves[y].push_back(make_move(
-                static_cast<std::uint8_t>(kRegBase + k),
-                palette::linear_to_ocs(base_palette[k]),
-                -1));
+        // 1. Per-line CAP MOVEs: emit the diff vs the previous line so
+        // the running register state matches cap_palettes[y]. Line 0 is
+        // the frame-init palette and skips the diff (those registers
+        // are written before bitplane DMA starts, by the viewer).
+        if (y > 0) {
+            auto& prev = cap_palettes[y - 1];
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (prev[k].r != P[k].r || prev[k].g != P[k].g ||
+                    prev[k].b != P[k].b) {
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(kRegBase + k),
+                        palette::linear_to_ocs(P[k]),
+                        -1));
+                }
+            }
         }
         // 2. Line-gate WAIT.
         line_moves[y].push_back(make_wait(
