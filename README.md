@@ -23,8 +23,8 @@ typical test images. Sister project to
 
 **Amiga modes**: Lores / Hires (+ interlace), HAM6 (OCS) + HAM8 (AGA)
 with hires and/or interlace variants, EHB. 1–8 bitplanes per chipset
-limits. Copper per-line palette changes (sliced) for more than 16/32
-colors per line in any bitmap mode.
+limits. **CAP** (Copper-Augmented Palette, per-line swaps) and **SCAP**
+(Super CAP, mid-line swaps) for thousands of unique colors per frame.
 
 **Atari modes**: STF Low/Medium (9-bit palette), STE Low/Medium (12-bit
 palette), Degas Elite `.PI1`/`.PI2` output.
@@ -83,9 +83,16 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 # HAM8 realtime / batch profile (greedy, ~15× faster)
 ./build/png2amiga --mode ham8 --chipset aga --ham-fast input.png output.png
 
-# Per-line palette (sliced) — more colors per line via Copper
-./build/png2amiga --mode lores --depth 5 --copper input.png output.iff
-./build/png2amiga --mode ham6 --copper input.png output.iff
+# Per-line palette (CAP) — more colors per line via Copper-Augmented Palette
+./build/png2amiga --mode lores --depth 5 --cap input.png output.iff
+./build/png2amiga --mode ham6 --cap input.png output.iff
+
+# Mid-line palette swaps (SCAP) — DPF or EHB only
+./build/png2amiga --mode lores --dpf --scap input.png output.iff
+./build/png2amiga --mode ehb --scap input.png output.iff
+
+# HAM6 + CAP at maximum quality (~4-5× slower, +0.5 to +2 dB PSNR)
+./build/png2amiga --mode ham6 --cap --cap-best input.png output.iff
 
 # Generate a bootable Amiga floppy that displays the image
 ./build/png2amiga --mode ham6 input.png viewer.cpp
@@ -123,21 +130,63 @@ Run `./build/png2amiga --help` for the full flag reference.
 | `ste-low` | 320×200 | 4 | 16 | 12-bit (4096 colors) |
 | `ste-med` | 640×200 | 2 | 4 | 12-bit (4096 colors) |
 
-## Copper (Per-Line Palette)
+## CAP — Copper-Augmented Palette (per-line swaps)
 
-Add `--copper` to any bitmap mode (lores, hires, EHB, HAM6, HAM8) to
-let the Copper coprocessor rewrite palette registers between scanlines
-and get more colors per frame than the base palette allows.
+Add `--cap` (alias `--copper`) to any bitmap mode (lores, hires, EHB,
+HAM6, HAM8) to let the Copper coprocessor rewrite palette registers in
+the horizontal blank between every scanline. Each line displays with its
+own palette state, and the planner picks per-line color swaps that
+minimise OKLab error against the source row.
 
 The encoder respects the real-hardware post-DDFSTOP DMA budget:
-**14 MOVE instructions per line**. Safe static budget is 14 palette
-swaps on OCS and 3 on AGA (banked). Auto-mode then tries K+3, K+2,
-K+1 and picks the highest K whose worst-case cost fits the budget —
-typically 6 swaps/line at depths 3–5 on AGA.
+**14 MOVE instructions per line** (one of the 15 copper slots is the
+per-line WAIT). Safe static budget is 14 palette swaps on OCS (one MOVE
+per change) and 3 on AGA (4 MOVEs per change worst-case under banked
+LOCT). Auto-mode tries K+3, K+2, K+1 and picks the highest K whose
+worst-case cost fits the budget — typically 6 swaps/line at depths 3–5
+on AGA.
 
-`--copper-changes N` overrides the budget entirely; use if you want
-to experiment with configurations that may exceed real hardware limits
-but still display correctly on emulators.
+`--cap-changes N` (alias `--copper-changes`) overrides the budget; use
+if you want to experiment with configurations that may exceed real
+hardware limits but still display correctly on emulators.
+
+`--cap-best` enables a slower (~4–5×) HAM CAP planner that combines
+multi-candidate slot search with joint base-palette refinement. HAM6
+and HAM8 + CAP only — adds **+0.5 to +2 dB PSNR** on natural images,
+sometimes pushing into lossless territory on smooth gradients. The
+indexed CAP planner (lores/hires/EHB) already iterates predict-dither
+with column-error feedback and isn't improved further by this flag.
+
+## SCAP — Super CAP (mid-line swaps)
+
+`--scap` extends CAP by issuing additional palette MOVEs at fixed
+**mid-line** copper slots — so a single scanline can display multiple
+palette banks across its width. Where plain CAP gives "this row's 64
+colors", SCAP gives "this strip's 64 colors", with strips on a 16-pixel
+grid. SCAP rides on top of CAP (each line opens with the CAP base, then
+SCAP swaps walk it through the visible region).
+
+Two SCAP modes:
+
+* **DPF + SCAP** (`--mode lores --dpf --scap`) — OCS dual-playfield,
+  3-plane PF2 (8 base colors). The 8 PF2 registers are unconditionally
+  re-emitted in every line's hblank (~9 MOVEs, fixed) so SCAP swaps
+  cannot leak state across lines. Up to 19 useful mid-line swaps per
+  scanline; ~454 unique displayed colors per frame on a typical image.
+
+* **EHB + SCAP** (`--mode ehb --scap`) — OCS Extra Half-Brite, 32 base
+  registers + 32 hardware-derived half-brites. SCAP swaps a base
+  register and the corresponding half-brite is updated automatically by
+  the hardware DAC. Adaptive per-line hblank tracking keeps each line
+  inside the 14-MOVE OCS hblank budget. ~1100+ unique displayed colors
+  per frame.
+
+DPF+SCAP and EHB+SCAP are OCS-only and require lores (no interlace).
+Both compose with the existing CAP per-line palette evolution; the
+planner runs 6 iterative refinement passes alternating index dither and
+SCAP swap selection. SCAP slot positions were calibrated on real OCS
+hardware via the `--scap-probe` mode (see `src/scap.hpp` for the
+empirically-determined timing tables).
 
 ## Amiga Executable Generation
 
@@ -156,8 +205,9 @@ git submodule update --init
 ```
 
 The generated viewer takes the system, sets up the Copper list
-(including per-line palette changes if `--copper` was used), and waits
-for the left mouse button to exit.
+(including per-line CAP changes if `--cap` was used and mid-line SCAP
+swaps if `--scap` was used), and waits for the left mouse button to
+exit.
 
 ## License
 

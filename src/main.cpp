@@ -261,12 +261,13 @@ void print_usage() {
         "                                  a viewer that sweeps mid-line MOVE slots\n"
         "                                  on real hardware to discover the slot\n"
         "                                  table. Probe A only (OCS DPF) for now.\n"
-        "  --scap                          SCAP encoder: a hand-tuned copper list of\n"
-        "                                  mid-line palette swaps inside the displayed\n"
-        "                                  area. 20 MOVEs per scanline at 16-lores-px\n"
-        "                                  stride, slot HPOS table calibrated by hand\n"
-        "                                  against vAmiga. OCS DPF lores only\n"
-        "                                  (forces --dpf, depth=3).\n"
+        "  --scap                          Super CAP: mid-line palette swaps inside the\n"
+        "                                  displayed area, on top of CAP's per-line\n"
+        "                                  evolution. 19 MOVEs per scanline at 16-lores-\n"
+        "                                  px stride; slot HPOS table calibrated by hand\n"
+        "                                  against real OCS hardware. OCS lores only;\n"
+        "                                  pair with --dpf (3-plane PF2, 8 base colors)\n"
+        "                                  or --mode ehb (32 base + 32 half-brite).\n"
         "  --scap-debug                    SCAP slot-tuning debug bundle:\n"
         "                                    * forces base-palette MOVEs to 0x0000\n"
         "                                      (line opens with PF2 black; SCAP\n"
@@ -275,23 +276,24 @@ void print_usage() {
         "                                      at every 4/8/16 px (top-quarter /\n"
         "                                      top-half / full height)\n"
         "                                  Pair with examples/ramps.png.\n"
-        "  --copper                        Copper-Augmented Palette (CAP):\n"
-        "                                  per-scanline palette swaps via the\n"
-        "                                  copper, picked greedily by OKLab\n"
-        "                                  error reduction\n"
-        "  --copper-changes <0-16>         CAP swaps per line (0 = auto, picks the\n"
+        "  --cap                           Copper-Augmented Palette: per-scanline\n"
+        "                                  palette swaps via the copper, picked\n"
+        "                                  greedily by OKLab error reduction.\n"
+        "                                  (Legacy alias: --copper)\n"
+        "  --cap-changes <0-16>            CAP swaps per line (0 = auto, picks the\n"
         "                                  worst-case K that fits the 14-MOVE\n"
-        "                                  budget; auto mode also tries K+1..K+3)\n"
+        "                                  budget; auto mode also tries K+1..K+3).\n"
+        "                                  (Legacy alias: --copper-changes)\n"
         "\n"
         "HAM encoding:\n"
         "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
         "  --cap-best                      Slower (~4-5×) CAP planner: multi-candidate\n"
         "                                  slot search + joint base-palette refinement.\n"
-        "                                  HAM6 + copper and HAM8 + copper only — the\n"
-        "                                  indexed copper planner (lores/hires/EHB) is\n"
-        "                                  already mature and the refinement gives\n"
-        "                                  ≤+0.10 dB there. +0.5 to +2 dB PSNR on HAM.\n"
-        "                                  Off by default\n"
+        "                                  HAM6 + CAP and HAM8 + CAP only — the indexed\n"
+        "                                  CAP planner (lores/hires/EHB) is already\n"
+        "                                  mature and the refinement gives ≤+0.10 dB\n"
+        "                                  there. +0.5 to +2 dB PSNR on HAM. Off by\n"
+        "                                  default\n"
         "  --palette-diversity <0-9>       Remove near-duplicate palette entries (experimental)\n"
         "  --no-reserve-color0             Don't reserve palette index 0 for black\n"
         "                                  (gives the encoder one extra image colour;\n"
@@ -449,7 +451,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg == "--copper") {
+        if (arg == "--cap" || arg == "--copper") {
+            // --copper kept as legacy alias for --cap.
             config.copper = true;
             continue;
         }
@@ -691,7 +694,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                         " (use auto, median-cut, ocs-bruteforce, pnn)"}};
                 }
             }
-            else if (arg == "--copper-changes") {
+            else if (arg == "--cap-changes" || arg == "--copper-changes") {
+                // --copper-changes kept as legacy alias for --cap-changes.
                 config.copper_changes = std::atoi(std::string(val).c_str());
             }
             else if (arg == "--weight-l") {

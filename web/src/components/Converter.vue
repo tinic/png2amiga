@@ -1022,9 +1022,9 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- Copper-Augmented Palette (Amiga only; not for Atari/DOS) -->
+              <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS) -->
               <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Copper</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="CAP — Copper-Augmented Palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">CAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
