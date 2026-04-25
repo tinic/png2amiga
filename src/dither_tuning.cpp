@@ -34,7 +34,10 @@ Defaults defaults_for(const Context& ctx) {
         return Defaults{1.0f, 0.04f};
     }
     if (ctx.mode == amiga::Mode::ham8) {
-        return Defaults{0.9f, 0.10f};   // PSNR 46.38 mean (AGA)
+        // HAM8+CAP/AGA: st=0.7, ec=0.04 (PSNR 49.77 mean)
+        // HAM8 alone:   st=0.9, ec=0.10 (PSNR 46.38 mean)
+        if (ctx.copper) return Defaults{0.7f, 0.04f};
+        return Defaults{0.9f, 0.10f};
     }
     // HAM4/HAM5/HAM7 not in the sweep — assume their tuning follows
     // HAM6/HAM8 by interpolation. Conservative: leave on kFallback.
