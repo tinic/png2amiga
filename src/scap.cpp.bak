@@ -384,7 +384,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
-    constexpr int kPasses = 6;
+    constexpr int kPasses = 2;
     for (int pass = 0; pass < kPasses; ++pass) {
         if (pass > 0) {
             for (std::size_t i = 0; i < indices.size(); ++i)
@@ -677,10 +677,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         /*skip_initial_swap_rows=*/0,
         /*is_lace=*/false);
     if (!copper_result) return std::unexpected{copper_result.error()};
-    // Copies (not refs) so the joint-refinement pass below can reassign
-    // them when it re-runs CAP with a refined base palette.
-    auto cap_palettes = copper_result->scanline_palettes;
-    auto base_palette = copper_result->base_palette;
+    auto& cap_palettes = copper_result->scanline_palettes;  // [y][k] 32 base
+    auto& base_palette = copper_result->base_palette;       // 32 base, frame init
 
     // Build per-line 64-effective palette (32 base + 32 half-brite).
     auto build_effective_64 = [](const std::vector<Color3f>& base) {
@@ -694,11 +692,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 
     // ---- 2. Global dither vs the FRAME-INIT 64 palette.
     // base_index drives the strip-swap planner's centroid math.
-    // (Owned by value so the joint-refinement pass can rebuild it.)
     auto effective_init = build_effective_64(base_palette);
     std::span<const Color3f> eff_init_span(effective_init.data(), kEffective);
     auto dith_result = dither::apply(src, eff_init_span, dither_settings);
-    auto base_index = std::move(dith_result.indices);
+    auto& base_index = dith_result.indices;
 
     std::vector<color_space::OKLab> img_lab(width * height);
     for (std::size_t y = 0; y < height; ++y)
@@ -865,20 +862,18 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
-    // Iterative index refinement (#2). Each pass after the first feeds
-    // the previous pass's stage-2 indices back as base_index for the
-    // swap planner, so the planner optimises against the binding the
-    // encoder will actually produce. Empirically gains ~0.05 dB per
-    // additional pass through pass 6, then plateaus.
-    //
-    // We tried full joint base-palette + CAP refinement (#3) — recompute
-    // base from final indices, re-run CAP, re-dither stage 1 — but that
-    // REGRESSED PSNR by ~0.9 dB on the 10-image sweep. Re-running CAP
-    // from a different starting palette breaks the convergence the
-    // index iteration was building toward. Pure index refinement wins.
-    constexpr int kPasses = 6;
+    // Two-pass refinement: first pass uses stage-1's vs-init-palette
+    // base_index for swap planning. After stage-2 actually renders the
+    // image (per-strip nearest-colour search), the FINAL pixel→effective-
+    // index mapping is what the encoder will display — re-run swap
+    // planning against THOSE indices to refine. Two iterations is
+    // enough; gains stop converging beyond that.
+    constexpr int kPasses = 2;
     for (int pass = 0; pass < kPasses; ++pass) {
         if (pass > 0) {
+            // Use the previous pass's stage-2 indices as the new
+            // base_index — this is the actual binding the encoder
+            // produced, so the swap planner now optimises for that.
             for (std::size_t i = 0; i < indices.size(); ++i)
                 base_index[i] = indices[i];
             for (auto& v : line_moves) v.clear();
