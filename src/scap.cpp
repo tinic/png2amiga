@@ -662,7 +662,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // index 1 displays the ruler colour. Also recolour the same in the
     // per-pixel preview so PNG / stats reflect the markers.
     if (debug_overlay) {
-        output_palette[1] = Color3f{1.0f, 1.0f, 0.0f};   // yellow
+        output_palette[1] = Color3f{1.0f, 0.0f, 0.0f};   // red
 
         auto& dst = *expanded;
         auto bpr = dst.bytes_per_row;
@@ -683,7 +683,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             else continue;
             for (std::size_t y = 0; y < marker_h; ++y) {
                 set_pf1_lsb(x, y);
-                preview[x, y] = Color3f{1.0f, 1.0f, 0.0f};
+                preview[x, y] = Color3f{1.0f, 0.0f, 0.0f};
             }
         }
         (void)bpr;
@@ -803,7 +803,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
 
     // ---- Output palette (32 base entries) ----------------------------
     std::vector<Color3f> palette(32, Color3f{0.0f, 0.0f, 0.0f});
-    palette[1] = Color3f{1.0f, 1.0f, 0.0f};  // yellow ruler
+    palette[1] = Color3f{1.0f, 0.0f, 0.0f};  // red ruler
     // palette[kStripeReg] = black (default 0x000); SCAP MOVEs change it.
 
     // ---- Per-line copper: 1 reset MOVE + line-gate WAIT + 19 swaps ----
@@ -840,7 +840,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
             else if (x %  8 == 0) marker_h = h_half;
             else if (x %  4 == 0) marker_h = h_quarter;
             preview[x, yy] = (yy < marker_h)
-                ? Color3f{1.0f, 1.0f, 0.0f}     // ruler yellow
+                ? Color3f{1.0f, 0.0f, 0.0f}     // ruler red
                 // Stripe approximation: white if "MOVE-after" position,
                 // black if before. Just paint expected stripe pattern
                 // assuming MOVEs land at slots[s].pixel_x.
