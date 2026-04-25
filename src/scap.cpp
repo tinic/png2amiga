@@ -792,7 +792,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // to 18 for EHB+SCAP — leaves SCAP at scap_share=16 by default,
     // approaching the slot count of 19 for fuller mid-line activity.
     // Hardware verification ongoing; reduce if any overflow shows up.
-    constexpr std::size_t kMaxCombinedEhb = 22;
+    constexpr std::size_t kMaxCombinedEhb = 21;
     std::size_t total_budget_ehb = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombinedEhb)
         : kMaxCombinedEhb;
