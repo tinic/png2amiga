@@ -1344,6 +1344,23 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         scap_dith.method = parse_dither(options.dither);
         scap_dith.strength = options.dither_strength;
         scap_dith.error_clamp = options.error_clamp;
+        // SCAP per-strip palette evolution breaks under full-error
+        // diffusion kernels (Floyd-Steinberg, Stucki, Jarvis, Sierra
+        // Lite, Ostromoukhov): residuals propagated forward across a
+        // strip boundary no longer match the next strip's palette and
+        // amplify into mush. Atkinson's 6/8 damping is the only
+        // error-diffusion kernel that survives. Silently fall back so
+        // CLI / WASM callers don't have to know the rule.
+        switch (scap_dith.method) {
+            case dither::Method::floyd_steinberg:
+            case dither::Method::stucki:
+            case dither::Method::jarvis:
+            case dither::Method::sierra_lite:
+            case dither::Method::ostromoukhov:
+                scap_dith.method = dither::Method::atkinson;
+                break;
+            default: break;
+        }
 
         auto scap_res = scap::encode_scap_dpf_ocs(
             *image,
