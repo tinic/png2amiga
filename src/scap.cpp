@@ -420,11 +420,18 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     static_cast<std::uint8_t>(kRegBase + k),
                     std::uint16_t{0x0000}, -1));
             }
-        } else if (y > 0) {
-            auto& prev = cap_palettes[y - 1];
+        } else {
+            // Per-line CAP MOVEs: diff vs the running register state.
+            // For y=0 the running state is base_palette (loaded by the
+            // viewer's frame-init); CAP can decide to swap on row 0,
+            // making cap_palettes[0] differ from base_palette — emit
+            // that diff so hardware matches the planner. For y>0 diff
+            // is against the previous line's cap palette.
             for (std::size_t k = 0; k < kBaseColors; ++k) {
-                if (prev[k].r != P[k].r || prev[k].g != P[k].g ||
-                    prev[k].b != P[k].b) {
+                Color3f prev = (y == 0) ? base_palette[k]
+                                        : cap_palettes[y - 1][k];
+                if (prev.r != P[k].r || prev.g != P[k].g ||
+                    prev.b != P[k].b) {
                     line_moves[y].push_back(make_move(
                         static_cast<std::uint8_t>(kRegBase + k),
                         palette::linear_to_ocs(P[k]), -1));
@@ -901,15 +908,18 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         strip_eff[0] = P_eff;
         strip_eff_lab[0] = P_eff_lab;
 
-        // 1. Per-line CAP MOVEs: emit the diff vs the previous line so
-        // the running register state matches cap_palettes[y]. Line 0 is
-        // the frame-init palette and skips the diff (those registers
-        // are written before bitplane DMA starts, by the viewer).
-        if (y > 0) {
-            auto& prev = cap_palettes[y - 1];
+        // 1. Per-line CAP MOVEs: diff vs the running register state.
+        // For y=0 the running state is base_palette (loaded by the
+        // viewer's frame-init); CAP may decide to swap on row 0,
+        // making cap_palettes[0] differ from base_palette — emit that
+        // diff so hardware matches the planner. For y>0 diff against
+        // the previous line's CAP palette.
+        {
             for (std::size_t k = 0; k < kBaseColors; ++k) {
-                if (prev[k].r != P[k].r || prev[k].g != P[k].g ||
-                    prev[k].b != P[k].b) {
+                Color3f prev = (y == 0) ? base_palette[k]
+                                        : cap_palettes[y - 1][k];
+                if (prev.r != P[k].r || prev.g != P[k].g ||
+                    prev.b != P[k].b) {
                     line_moves[y].push_back(make_move(
                         static_cast<std::uint8_t>(kRegBase + k),
                         palette::linear_to_ocs(P[k]),
