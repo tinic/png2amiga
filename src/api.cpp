@@ -1357,24 +1357,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         scap_dith.method = parse_dither(options.dither);
         scap_dith.strength = options.dither_strength;
         scap_dith.error_clamp = options.error_clamp;
-        // SCAP-DPF only: per-strip palette evolution mushes under
-        // full-error diffusion kernels at 8 colours. Atkinson's 6/8
-        // damping is the only error-diffusion kernel that survives.
-        // The lores-5bpp investigation deliberately skips this fallback
-        // so we can verify whether the same breakage happens with 32
-        // colours — if it doesn't, the issue is DPF-specific.
-        if (options.dual_playfield) {
-            switch (scap_dith.method) {
-                case dither::Method::floyd_steinberg:
-                case dither::Method::stucki:
-                case dither::Method::jarvis:
-                case dither::Method::sierra_lite:
-                case dither::Method::ostromoukhov:
-                    scap_dith.method = dither::Method::atkinson;
-                    break;
-                default: break;
-            }
-        }
+        // The previous Atkinson-only fallback for DPF+SCAP is removed —
+        // the OKLab error-diffusion port (matching EHB+CAP) plus the
+        // per-mode (strength, error_clamp) tuning lets F-S/Stucki/Jarvis/
+        // Sierra-Lite/Ostromoukhov run in DPF without runaway mush.
 
         Result<scap::ScapResult> scap_res =
             options.dual_playfield

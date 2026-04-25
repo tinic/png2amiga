@@ -8,6 +8,7 @@
 #include "cga_text.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
+#include "dither_tuning.hpp"
 #include "scap.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
@@ -3128,17 +3129,19 @@ int main(int argc, char* argv[]) {
         }
         dither::Settings scap_dith;
         scap_dith.method = config->dither_method;
-        // SCAP-specific dither defaults. Empirical 2D sweep
-        // (strength × error-clamp) over the 10 example images with
-        // EHB+SCAP/F-S found the mean-PSNR optimum at strength=0.9,
-        // error-clamp=0.05 (mean 39.016 dB vs 38.857 at strength=1.0,
-        // error-clamp=0.04). The lower strength also drops the raw
-        // pixel error metric ~5% by attenuating residuals before
-        // they propagate. Both defaults respect explicit user overrides.
+        // Per-mode dither defaults from dither_tuning.cpp's empirical
+        // sweep — see that file for grid + numbers. Explicit user
+        // values via --dither-strength / --error-clamp always override.
+        auto tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode  = config->mode,
+            .depth = static_cast<int>(config->depth),
+            .dpf   = config->dual_playfield,
+            .scap  = true,
+        });
         scap_dith.error_clamp = config->error_clamp_explicit
-                                ? config->error_clamp : 0.05f;
+                                ? config->error_clamp : tune.error_clamp;
         scap_dith.strength    = config->dither_strength_explicit
-                                ? config->dither_strength : 0.9f;
+                                ? config->dither_strength : tune.strength;
         auto scap_res =
             scap_ehb
             ? scap::encode_scap_ehb_ocs(

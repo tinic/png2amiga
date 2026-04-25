@@ -124,23 +124,12 @@ const groupedDitherOptions = computed(() => {
   // pixels. They don't crash but produce mis-proportioned dither for
   // HAM — hide to avoid user confusion.
   const hide_nonsquare = ht !== null
-  // SCAP: error from the full-error kernels (Floyd-Steinberg, Stucki,
-  // Jarvis, Sierra Lite, Ostromoukhov) compounds across strip
-  // boundaries because each strip has a DIFFERENT palette — the
-  // forward-propagated residual no longer matches the next strip's
-  // available colours, so it amplifies into mush. Atkinson's 6/8
-  // (75%) damping is the only error-diffusion kernel that survives
-  // this. Hide everything else in the Error Diffusion group when
-  // SCAP is on; ordered/non-square patterns work fine.
-  const hide_lossy_ed = options.scap
   return DITHER_METHODS
     .filter(g => !(hide_nonsquare && g.group === 'Non-square'))
     .map(g => ({
       label: g.group,
       items: g.items
         .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
-        .filter(d => !(hide_lossy_ed && g.group === 'Error Diffusion'
-                       && d.value !== 'atkinson'))
         .map(d => ({ value: d.value, label: d.label }))
     }))
 })
@@ -318,12 +307,6 @@ watch(() => options.scap, (on) => {
   if (on) {
     // SCAP is an extension to CAP — make sure CAP is on too.
     options.copper = true
-    // Banned-by-SCAP error-diffusion kernels: their full error
-    // propagation breaks across SCAP's per-strip palette boundaries.
-    // Only Atkinson survives. If the user is on one, switch them.
-    const banned = ['floyd-steinberg', 'stucki', 'jarvis',
-                    'sierra-lite', 'ostromoukhov']
-    if (banned.includes(options.dither)) options.dither = 'atkinson'
   }
   track('scap-toggle', { enabled: on })
 })
