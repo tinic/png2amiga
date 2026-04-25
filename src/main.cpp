@@ -3178,7 +3178,8 @@ int main(int argc, char* argv[]) {
                 config->reserve_color0,
                 scap_dith,
                 static_cast<std::size_t>(config->copper_changes),
-                config->palette_diversity)
+                config->palette_diversity,
+                config->scap_debug)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),

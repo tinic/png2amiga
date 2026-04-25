@@ -1361,7 +1361,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.reserve_color0,
                 scap_dith,
                 static_cast<std::size_t>(options.copper_changes),
-                options.palette_diversity)
+                options.palette_diversity,
+                options.scap_debug)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),

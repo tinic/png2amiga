@@ -234,7 +234,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        bool reserve_color0 = true,
                                        const dither::Settings& dither_settings = {},
                                        std::size_t copper_changes_override = 0,
-                                       int palette_diversity = 0);
+                                       int palette_diversity = 0,
+                                       bool debug_overlay = false);
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).

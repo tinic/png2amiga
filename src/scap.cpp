@@ -742,13 +742,150 @@ Color3f half_brite(const Color3f& c) {
 
 } // namespace
 
+// EHB SCAP slot-tuning debug bundle. All bitplane pixels use a
+// single shared register (index 2). Frame-init palette puts that
+// register at black; SCAP slot s alternates the register between
+// white (s even) and black (s odd) at the slot's MOVE position. Net
+// visual: 16-px-wide black/white stripes with the transition AT the
+// slot's actual hardware MOVE landing — the visible edge IS the
+// timing measurement.
+//
+// PF1-style yellow rulers aren't available on EHB (no PF1 layer),
+// so the ruler paints into the bitplane data with index 1 = yellow
+// (locked in CAP). Ruler pixels override the stripe content but
+// give stable x-coord references at 4/8/16-px hierarchy.
+static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
+                                                std::size_t height) {
+    auto& table = scap_table_for(6);
+    constexpr std::size_t kStripeReg = 2;       // shared register all pixels use
+    constexpr std::uint16_t kBlack = 0x0000;
+    constexpr std::uint16_t kWhite = 0x0FFF;
+    constexpr int kVStart = 44;
+
+    // ---- Bitplane data: every pixel = index kStripeReg = 0b00010 -------
+    auto enc = bitplane::BitplaneData{};
+    auto aligned_w = (width + 15u) & ~std::size_t{15};
+    enc.width = width;
+    enc.height = height;
+    enc.depth = 6;
+    enc.bytes_per_row = aligned_w / 8;
+    enc.layout = bitplane::Layout::interleaved;
+    enc.data.assign(enc.total_bytes(), 0);
+    // Set every byte of plane 1 (= bit value 2) to 0xFF → all pixels = idx 2
+    for (std::size_t y = 0; y < height; ++y) {
+        auto off = enc.plane_row_offset(/*plane=*/1, y);
+        std::fill_n(enc.data.data() + off, enc.bytes_per_row,
+                    static_cast<std::uint8_t>(0xFF));
+    }
+    // Yellow rulers: paint ruler pixels with index 1 = 0b00001.
+    // Clear plane 1 (drop idx 2), set plane 0 (add idx 1).
+    auto h_full    = height;
+    auto h_half    = height / 2;
+    auto h_quarter = height / 4;
+    auto set_bit = [&](std::size_t plane, std::size_t y, std::size_t x, bool on) {
+        auto off = enc.plane_row_offset(plane, y);
+        auto byte = x / 8;
+        auto mask = static_cast<std::uint8_t>(1u << (7 - (x % 8)));
+        if (on) enc.data[off + byte] |=  mask;
+        else    enc.data[off + byte] &= ~mask;
+    };
+    for (std::size_t x = 0; x < width; ++x) {
+        std::size_t marker_h = 0;
+        if      (x % 16 == 0) marker_h = h_full;
+        else if (x %  8 == 0) marker_h = h_half;
+        else if (x %  4 == 0) marker_h = h_quarter;
+        else continue;
+        for (std::size_t yy = 0; yy < marker_h; ++yy) {
+            set_bit(0, yy, x, true);   // plane 0 ON  → idx |= 1
+            set_bit(1, yy, x, false);  // plane 1 OFF → idx &= ~2 (= idx 1)
+        }
+    }
+
+    // ---- Output palette (32 base entries) ----------------------------
+    std::vector<Color3f> palette(32, Color3f{0.0f, 0.0f, 0.0f});
+    palette[1] = Color3f{1.0f, 1.0f, 0.0f};  // yellow ruler
+    // palette[kStripeReg] = black (default 0x000); SCAP MOVEs change it.
+
+    // ---- Per-line copper: 1 reset MOVE + line-gate WAIT + 19 swaps ----
+    std::vector<std::vector<ScapMove>> line_moves(height);
+    for (std::size_t y = 0; y < height; ++y) {
+        int abs_vpos = static_cast<int>(y) + kVStart;
+        auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
+        // Reset the shared register to black at top of each line (the
+        // ONE per-line CAP MOVE we need; fits in hblank trivially).
+        line_moves[y].push_back(make_move(
+            static_cast<std::uint8_t>(kStripeReg), kBlack, -1));
+        // Line-gate WAIT.
+        line_moves[y].push_back(make_wait(
+            static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
+        // 19 SCAP MOVEs alternating white/black on the shared register.
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            std::uint16_t v = (s % 2 == 0) ? kWhite : kBlack;
+            line_moves[y].push_back(make_move(
+                static_cast<std::uint8_t>(kStripeReg), v,
+                static_cast<int>(s)));
+        }
+        // End-of-line WAIT.
+        line_moves[y].push_back(make_wait(
+            static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
+    }
+
+    // Build a rendered preview matching what the planner expects: every
+    // pixel = palette[kStripeReg] except ruler markers = palette[1].
+    Image preview(width, height);
+    for (std::size_t yy = 0; yy < height; ++yy) {
+        for (std::size_t x = 0; x < width; ++x) {
+            std::size_t marker_h = 0;
+            if      (x % 16 == 0) marker_h = h_full;
+            else if (x %  8 == 0) marker_h = h_half;
+            else if (x %  4 == 0) marker_h = h_quarter;
+            preview[x, yy] = (yy < marker_h)
+                ? Color3f{1.0f, 1.0f, 0.0f}     // ruler yellow
+                // Stripe approximation: white if "MOVE-after" position,
+                // black if before. Just paint expected stripe pattern
+                // assuming MOVEs land at slots[s].pixel_x.
+                : ([&]() {
+                    Color3f c{0,0,0};
+                    for (std::size_t s = 0; s < table.slots.size(); ++s) {
+                        if (static_cast<int>(x) >= table.slots[s].pixel_x &&
+                            (s + 1 == table.slots.size() ||
+                             static_cast<int>(x) < table.slots[s + 1].pixel_x)) {
+                            c = (s % 2 == 0) ? Color3f{1, 1, 1}
+                                             : Color3f{0, 0, 0};
+                            break;
+                        }
+                    }
+                    return c;
+                })();
+        }
+    }
+
+    ScapResult res;
+    res.planes = std::move(enc);
+    res.palette = std::move(palette);
+    res.slot_table = table;
+    res.total_error = 0.0f;
+    res.avg_changes_per_line = 0.0f;
+    res.avg_total_moves_per_line = static_cast<float>(
+        line_moves.empty() ? 0 : 1 + table.slots.size());
+    res.max_moves_per_line = 1 + table.slots.size();
+    res.avg_hblank_moves_per_line = 1.0f;
+    res.max_hblank_moves_per_line = 1;
+    res.avg_visible_moves_per_line = static_cast<float>(table.slots.size());
+    res.max_visible_moves_per_line = table.slots.size();
+    res.line_moves = std::move(line_moves);
+    res.rendered = std::move(preview);
+    return res;
+}
+
 Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        int width_arg,
                                        int height_arg,
                                        bool reserve_color0,
                                        const dither::Settings& dither_settings,
                                        std::size_t copper_changes_override,
-                                       int palette_diversity) {
+                                       int palette_diversity,
+                                       bool debug_overlay) {
     auto& table = scap_table_for(6);
     if (table.slots.empty()) {
         return std::unexpected{Error{
@@ -761,6 +898,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                   : image.width();
     auto height = (height_arg > 0) ? static_cast<std::size_t>(height_arg)
                                     : image.height();
+    if (debug_overlay) return encode_scap_ehb_debug(width, height);
     if (image.width() != width || image.height() != height) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
