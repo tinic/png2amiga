@@ -795,7 +795,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     //     bounded by N - CAP_share.
     //   * Auto: same adaptive logic, no global cap beyond hblank.
     constexpr std::size_t kHblankCeiling = 14;
-    constexpr std::size_t kMaxCombinedEhb = 22;  // upper bound for combined
+    constexpr std::size_t kMaxCombinedEhb = 20;  // CAP=2 + SCAP=18 visible max
     std::size_t total_budget_ehb = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombinedEhb)
         : kMaxCombinedEhb;
