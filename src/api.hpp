@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::api {
@@ -64,6 +66,19 @@ struct Options {
 
     // HAM encoding
     int ham_beam = 16;                   // beam width for DP search (1-256)
+    bool cap_best = false;               // multi-candidate CAP planner +
+                                         // joint base-palette refinement.
+                                         // HAM6 + copper and HAM8 + copper
+                                         // only — indexed copper modes
+                                         // ignore this flag (their planner
+                                         // is already mature and refinement
+                                         // gives ≤+0.10 dB).
+                                         // ~4-5× cost, +0.5..4 dB PSNR
+
+    // Optional progress callback. Called periodically with (progress 0..1,
+    // stage label). Currently emitted by HAM6+CAP encoders. Callback may
+    // run on encoder threads — must be thread-safe.
+    std::function<void(float, std::string_view)> on_progress;
 
     // Copper palette (per-scanline palette changes)
     bool copper = false;                // use per-scanline copper palettes
@@ -218,5 +233,15 @@ ConvertResult convert_mask_raw(const std::uint8_t* input_data,
 ConvertResult convert_mask_iff(const std::uint8_t* input_data,
                                std::size_t input_size,
                                const Options& options);
+
+// Per-mode dither tuning defaults (Floyd-Steinberg-tuned). Returns the
+// (strength, error_clamp) the encoder would use if the user hadn't
+// passed explicit values. Used by the web UI to refresh the displayed
+// error clamp when the mode changes.
+struct DitherDefaults {
+    float strength;
+    float error_clamp;
+};
+DitherDefaults dither_defaults_for(const Options& options);
 
 } // namespace png2amiga::api

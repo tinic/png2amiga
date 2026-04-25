@@ -8,6 +8,7 @@
 #include "cga_text.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
+#include "dither_tuning.hpp"
 #include "scap.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
@@ -22,16 +23,20 @@
 #include "version.hpp"
 
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <expected>
 #include <format>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <print>
 #include <unordered_set>
 #include <string>
 #include <string_view>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -110,6 +115,13 @@ struct Config {
     // HAM greedy encoder (skip DP beam search, ~20× faster, ~1 dB worse).
     bool ham_fast = false;
 
+    // CAP best-quality planner. Multi-candidate × all-slot search + joint
+    // base-palette refinement. HAM6 + copper and HAM8 + copper only —
+    // indexed copper modes ignore this flag (their planner is already
+    // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
+    // Off by default — opt-in for offline / final exports.
+    bool cap_best = false;
+
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
     // poorly-served image regions.
@@ -122,6 +134,8 @@ struct Config {
     // Dithering
     dither::Method dither_method = dither::Method::floyd_steinberg;
     bool dither_explicit = false;       // true if user passed --dither
+    bool dither_strength_explicit = false;
+    bool error_clamp_explicit = false;  // true if user passed --error-clamp
     float dither_strength = 1.0f;
     float error_clamp = 0.35f;
     std::string cga_text_metric = "blur";
@@ -271,6 +285,13 @@ void print_usage() {
         "\n"
         "HAM encoding:\n"
         "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
+        "  --cap-best                      Slower (~4-5×) CAP planner: multi-candidate\n"
+        "                                  slot search + joint base-palette refinement.\n"
+        "                                  HAM6 + copper and HAM8 + copper only — the\n"
+        "                                  indexed copper planner (lores/hires/EHB) is\n"
+        "                                  already mature and the refinement gives\n"
+        "                                  ≤+0.10 dB there. +0.5 to +2 dB PSNR on HAM.\n"
+        "                                  Off by default\n"
         "  --palette-diversity <0-9>       Remove near-duplicate palette entries (experimental)\n"
         "  --no-reserve-color0             Don't reserve palette index 0 for black\n"
         "                                  (gives the encoder one extra image colour;\n"
@@ -438,6 +459,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--cap-best" || arg == "--ham-cap-best") {
+            // --ham-cap-best kept as legacy alias.
+            config.cap_best = true;
+            continue;
+        }
+
         if (arg == "--fade-in") {
             config.fade_in = true;
             continue;
@@ -463,7 +490,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--scap") {
             config.scap = true;
-            config.dual_playfield = true;     // SCAP is always DPF-encoded
+            // SCAP defaults to DPF (the production mode). The lores 5bpp
+            // investigation path needs --depth 5 + no --dpf — let that
+            // through by NOT auto-enabling DPF here. The post-parse fixup
+            // below auto-enables DPF only when the user didn't pick a
+            // 5bpp lores configuration.
             continue;
         }
         if (arg == "--scap-debug") {
@@ -680,9 +711,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
             }
             else if (arg == "--dither-strength") {
                 config.dither_strength = std::stof(std::string(val));
+                config.dither_strength_explicit = true;
             }
             else if (arg == "--error-clamp") {
                 config.error_clamp = std::stof(std::string(val));
+                config.error_clamp_explicit = true;
             }
             else if (arg == "--cga-text-metric") {
                 config.cga_text_metric = std::string(val);
@@ -796,6 +829,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
         print_usage();
         std::exit(1);
     }
+
+    // SCAP post-parse fixup. Three supported configurations:
+    //   * DPF: --scap --dpf, OCS lores depth=3, 8 PF2 colours.
+    //   * EHB: --scap --mode ehb, 32 base + 32 hardware half-brite.
+    // No auto-promotion — the user must opt into one of the supported
+    // SCAP regimes explicitly. The CLI block below errors out otherwise.
 
     return config;
 }
@@ -1642,6 +1681,34 @@ void show_terminal_preview(const Image& preview, amiga::Mode mode,
     iterm2_display(scaled);
 }
 
+// CLI progress reporter. Throttles to ~20Hz redraw, writes "\rEncoding NN.N%
+// [stage]\033[K" to stderr when it's a TTY (no-op otherwise so piped runs
+// don't get carriage returns in their stderr capture). Thread-safe — encoder
+// workers may invoke it concurrently. Final tick prints a newline so the
+// next CLI status line ("Encoded: ...") starts cleanly.
+std::function<void(float, std::string_view)> make_cli_progress_reporter() {
+    if (!isatty(fileno(stderr))) return {};
+    auto state = std::make_shared<std::pair<std::mutex,
+        std::chrono::steady_clock::time_point>>();
+    state->second = std::chrono::steady_clock::time_point{};
+    return [state](float p, std::string_view stage) {
+        std::lock_guard lk(state->first);
+        auto now = std::chrono::steady_clock::now();
+        bool final_tick = (stage == "done") || p >= 1.0f;
+        if (!final_tick &&
+            now - state->second < std::chrono::milliseconds(50)) {
+            return;
+        }
+        state->second = now;
+        float pct = std::clamp(p, 0.0f, 1.0f) * 100.0f;
+        std::fprintf(stderr, "\rEncoding... %5.1f%% [%.*s]\033[K",
+                     static_cast<double>(pct),
+                     static_cast<int>(stage.size()), stage.data());
+        if (final_tick) std::fputc('\n', stderr);
+        std::fflush(stderr);
+    };
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -2250,12 +2317,28 @@ int main(int argc, char* argv[]) {
         ham::HamOptions ham_opts;
         ham_opts.beam_width = config->ham_beam;
         ham_opts.dither_method = ham_dither;
-        ham_opts.dither_strength = config->dither_strength;
-        ham_opts.error_clamp = config->error_clamp;
+        auto ham_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = false,
+            .copper  = config->copper,
+            .chipset = chipset,
+        });
+        ham_opts.dither_strength = config->dither_strength_explicit
+                                   ? config->dither_strength : ham_tune.strength;
+        ham_opts.error_clamp = config->error_clamp_explicit
+                              ? config->error_clamp : ham_tune.error_clamp;
         ham_opts.palette_diversity = config->palette_diversity;
         ham_opts.quantizer = config->quantizer;
         ham_opts.triple_beam = config->ham_triple;
         ham_opts.greedy = config->ham_fast;
+        // cap_best gates HAM4/5/7 — only HAM6 and HAM8 are eligible.
+        bool ham_eligible_for_cap_best =
+            (ham_params.bitplane_depth == 6 ||
+             ham_params.bitplane_depth == 8);
+        ham_opts.cap_best = config->cap_best && ham_eligible_for_cap_best;
+        ham_opts.on_progress = make_cli_progress_reporter();
         ham_opts.skip_initial_swap_rows = config->interlace ? 2 : 0;
 
         // Force transparent pixels to black before HAM encoding
@@ -2425,7 +2508,9 @@ int main(int argc, char* argv[]) {
     }
 
     // --- EHB mode ---
-    if (config->mode == amiga::Mode::ehb) {
+    // Skip when --scap is on so the SCAP-EHB investigation block below
+    // gets to handle it.
+    if (config->mode == amiga::Mode::ehb && !config->scap) {
         // EHB is always 6 bitplanes, 32 base + 32 half-brightness
         auto ehb_depth = std::size_t{6};
 
@@ -2445,8 +2530,18 @@ int main(int argc, char* argv[]) {
 
             dither::Settings dith;
             dith.method = config->dither_method;
-            dith.strength = config->dither_strength;
-            dith.error_clamp = config->error_clamp;
+            auto ehb_cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
+                .mode    = config->mode,
+                .depth   = static_cast<int>(config->depth),
+                .dpf     = config->dual_playfield,
+                .scap    = false,
+                .copper  = true,
+                .chipset = chipset,
+            });
+            dith.strength = config->dither_strength_explicit
+                            ? config->dither_strength : ehb_cap_tune.strength;
+            dith.error_clamp = config->error_clamp_explicit
+                              ? config->error_clamp : ehb_cap_tune.error_clamp;
 
             std::println("Dither: {} (strength: {:.2f})",
                          dither_name(dith.method), dith.strength);
@@ -2458,7 +2553,8 @@ int main(int argc, char* argv[]) {
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
                 static_cast<std::size_t>(config->copper_changes),
                 nullptr, true, {}, config->palette_diversity,
-                skip_initial, config->interlace);
+                skip_initial, config->interlace,
+                make_cli_progress_reporter());
             if (!copper_result) {
                 std::println(stderr, "Copper encode error: {}",
                              copper_result.error().message);
@@ -2689,8 +2785,18 @@ int main(int argc, char* argv[]) {
         // Dither against all 64 colors
         dither::Settings dith;
         dith.method = config->dither_method;
-        dith.strength = config->dither_strength;
-        dith.error_clamp = config->error_clamp;
+        auto ehb_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = false,
+            .copper  = false,
+            .chipset = chipset,
+        });
+        dith.strength = config->dither_strength_explicit
+                        ? config->dither_strength : ehb_tune.strength;
+        dith.error_clamp = config->error_clamp_explicit
+                          ? config->error_clamp : ehb_tune.error_clamp;
 
         // Note: dither-aware refinement is skipped for EHB because the
         // hardware-derived half-brite colors (sRGB DAC halving) create a
@@ -2884,8 +2990,18 @@ int main(int argc, char* argv[]) {
 
         dither::Settings dith;
         dith.method = config->dither_method;
-        dith.strength = config->dither_strength;
-        dith.error_clamp = config->error_clamp;
+        auto cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = false,
+            .copper  = true,
+            .chipset = chipset,
+        });
+        dith.strength = config->dither_strength_explicit
+                        ? config->dither_strength : cap_tune.strength;
+        dith.error_clamp = config->error_clamp_explicit
+                          ? config->error_clamp : cap_tune.error_clamp;
 
         std::println("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
@@ -2902,7 +3018,8 @@ int main(int argc, char* argv[]) {
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
             static_cast<std::size_t>(config->copper_changes), nullptr,
             config->reserve_color0, copper_locks, config->palette_diversity,
-            skip_initial_lace, config->interlace);
+            skip_initial_lace, config->interlace,
+            make_cli_progress_reporter());
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);
@@ -3074,14 +3191,21 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // --- SCAP (DPF mid-line palette swaps) ---
+    // --- SCAP (mid-line palette swaps) ---
+    // Two paths:
+    //   * DPF (production): --scap + --dpf + OCS lores depth=3 → 8 PF2
+    //     colours, full cpp viewer export.
+    //   * Lores 5bpp (investigation): --scap + OCS lores depth=5 (no
+    //     --dpf) → 32 colours, single playfield, PNG preview only,
+    //     no copper-list cpp output yet.
     if (config->scap) {
-        if (!use_dpf_std || chipset != amiga::Chipset::ocs ||
-            config->mode != amiga::Mode::lores ||
+        bool scap_ehb = config->mode == amiga::Mode::ehb;
+        bool scap_dpf = use_dpf_std && config->mode == amiga::Mode::lores;
+        if ((!scap_dpf && !scap_ehb) || chipset != amiga::Chipset::ocs ||
             config->interlace) {
             std::println(stderr,
-                "Error: --scap requires --dpf with --chipset ocs, --mode lores, "
-                "no --interlace (Phase 1 limitation)");
+                "Error: --scap requires OCS (no interlace) with either "
+                "--dpf lores depth=3 or --mode ehb.");
             return 1;
         }
         if (has_transparency) {
@@ -3090,15 +3214,44 @@ int main(int argc, char* argv[]) {
         }
         dither::Settings scap_dith;
         scap_dith.method = config->dither_method;
-        scap_dith.strength = config->dither_strength;
-        scap_dith.error_clamp = config->error_clamp;
-        auto scap_res = scap::encode_scap_dpf_ocs(
-            *image,
-            static_cast<int>(image->width()),
-            static_cast<int>(image->height()),
-            config->reserve_color0,
-            scap_dith,
-            config->scap_debug);
+        // Per-mode dither defaults from dither_tuning.cpp's empirical
+        // sweep — see that file for grid + numbers. Explicit user
+        // values via --dither-strength / --error-clamp always override.
+        auto tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = true,
+            .copper  = true,    // SCAP layers on top of CAP since b0be343
+            .chipset = chipset,
+        });
+        scap_dith.error_clamp = config->error_clamp_explicit
+                                ? config->error_clamp : tune.error_clamp;
+        scap_dith.strength    = config->dither_strength_explicit
+                                ? config->dither_strength : tune.strength;
+        auto scap_progress = make_cli_progress_reporter();
+        auto scap_res =
+            scap_ehb
+            ? scap::encode_scap_ehb_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                config->reserve_color0,
+                scap_dith,
+                static_cast<std::size_t>(config->copper_changes),
+                config->palette_diversity,
+                config->scap_debug,
+                scap_progress)
+            : scap::encode_scap_dpf_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                config->reserve_color0,
+                scap_dith,
+                config->scap_debug,
+                static_cast<std::size_t>(config->copper_changes),
+                config->palette_diversity,
+                scap_progress);
         if (!scap_res) {
             std::println(stderr, "SCAP encode error: {}",
                          scap_res.error().message);
@@ -3107,9 +3260,21 @@ int main(int argc, char* argv[]) {
         float scap_psnr = color_space::compute_psnr_blurred(
             image->pixels(), scap_res->rendered.pixels(),
             image->width(), image->height());
-        std::println("Mode:   SCAP (OCS DPF, {} slots, {:.1f} useful MOVEs/line)",
+        const char* scap_label = scap_ehb
+            ? "OCS EHB 6bpp investigation"
+            : "OCS DPF";
+        std::println("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line)",
+                     scap_label,
                      scap_res->slot_table.slots.size(),
                      scap_res->avg_changes_per_line);
+        std::println("Copper load: hblank avg {:.1f} (max {}), visible avg "
+                     "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
+                     scap_res->avg_hblank_moves_per_line,
+                     scap_res->max_hblank_moves_per_line,
+                     scap_res->avg_visible_moves_per_line,
+                     scap_res->max_visible_moves_per_line,
+                     scap_res->avg_total_moves_per_line,
+                     scap_res->max_moves_per_line);
         std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                      scap_res->planes.depth, scap_res->planes.total_bytes(),
                      count_unique_colors(scap_res->rendered),
@@ -3139,10 +3304,11 @@ int main(int argc, char* argv[]) {
                     ? derive_symbol_name(config->output_path)
                     : config->symbol_name;
                 ch_opts.aga = false;
-                ch_opts.dpf = true;
+                ch_opts.dpf = scap_dpf;     // false for EHB SCAP
                 ch_opts.fade_in = false;
                 ch_opts.scap_line_moves = &scap_res->line_moves;
-                ch_opts.scap_label = "scap_dpf_ocs";
+                ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs"
+                                              : "scap_dpf_ocs";
                 ch_opts.scap_anchor_hpos =
                     scap_res->slot_table.line_gate_hpos;
                 ch_opts.scap_total_planes =

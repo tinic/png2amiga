@@ -15,6 +15,7 @@ web/dist/
 test_output/
 .DS_Store
 fantasy.cpp
+test.cpp
 
 # Local scratch / debug artifacts (not shipped)
 /debug.png

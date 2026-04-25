@@ -7,7 +7,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::scap {
@@ -81,6 +83,7 @@ struct ScapSlotTable {
 // each MOVE takes ~4-12 CCK, so 20 MOVEs cover most of the visible
 // area. Right edge may stay on the final palette state if the chain
 // finishes before HPOS=DDFSTOP.
+constexpr int kOCS = 0;
 inline const ScapSlotTable kScap6bplOcs{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,        // DMA dictates actual MOVE landing
@@ -95,9 +98,29 @@ inline const ScapSlotTable kScap6bplOcs{
         // 6-plane DPF DMA contention the first real MOVE in the chain
         // lands at lores x = 8, and subsequent MOVEs follow at 16-px
         // spacing.
-        { 8}, { 24-1}, { 40}, { 56-1}, { 72-1}, { 88}, {104}, {120},
-        {136-1}, {152}, {168}, {184}, {200}, {216-1}, {232}, {248-1},
-        {264-1}, {280}, {296-1},
+        { 8+kOCS}, { 24-1+kOCS}, { 40+kOCS}, { 56-1+kOCS}, { 72-1+kOCS}, { 88+kOCS}, {104+kOCS}, {120+kOCS},
+        {136-1+kOCS}, {152+kOCS}, {168+kOCS}, {184+kOCS}, {200+kOCS}, {216-1+kOCS}, {232+kOCS}, {248-1+kOCS},
+        {264-1+kOCS}, {280+kOCS}, {296-1+kOCS},
+    }
+};
+
+// kScap6bplEhb — OCS EHB, 6 bitplanes, lores 320 px display.
+//
+// Same DMA shape as 6-plane DPF (6 plane fetches per 16 lores px) but
+// EHB has no PF2OF / DBLPF combiner machinery, so the actual MOVE
+// landing positions on the bus differ from DPF in subtle ways. This
+// table starts at the clean naive 16-px grid (8, 24, 40, ..., 296) —
+// no per-slot offset corrections yet. Calibrate empirically with
+// --scap-debug + the stripe tuner: each visible black/white transition
+// position is the actual MOVE landing for that slot. Adjust below.
+inline const ScapSlotTable kScap6bplEhb{
+    /*total_planes=*/6,
+    /*line_gate_hpos=*/0x3C,
+    /*end_of_line_hpos=*/0xDD,
+    /*slots=*/{
+        {  8-1}, { 24-1}, { 40-1}, { 56-1}, { 72-1}, { 88-1}, {104-1}, {120-1},
+        {136-1}, {152-1}, {168-1}, {184-1}, {200-1}, {216-1}, {232-1}, {248-1},
+        {264-1}, {280-1}, {296-1},
     }
 };
 
@@ -160,7 +183,13 @@ struct ScapResult {
 
     // Stats (planner output only; probes leave these zero).
     float total_error{};
-    float avg_changes_per_line{};
+    float avg_changes_per_line{};       // SCAP useful swaps/line
+    float avg_total_moves_per_line{};   // CAP diffs + SCAP swaps (real hw load)
+    std::size_t max_moves_per_line{};   // worst-case row MOVE count
+    float avg_hblank_moves_per_line{};  // MOVEs before line-gate WAIT (hblank)
+    std::size_t max_hblank_moves_per_line{};
+    float avg_visible_moves_per_line{}; // MOVEs after line-gate WAIT (SCAP)
+    std::size_t max_visible_moves_per_line{};
 
     // Rendered preview produced by the planner. Width × height linear-RGB
     // image where each pixel is looked up against the per-strip palette
@@ -201,7 +230,38 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int height,
                                        bool reserve_color0 = true,
                                        const dither::Settings& dither_settings = {},
-                                       bool debug_overlay = false);
+                                       bool debug_overlay = false,
+                                       std::size_t copper_changes_override = 0,
+                                       int palette_diversity = 0,
+                                       std::function<void(float, std::string_view)>
+                                           on_progress = {});
+
+// ---------------------------------------------------------------------------
+// SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
+// half-brite colours).
+//
+// 6bpp EHB has identical BPL DMA bandwidth to 6-plane lores (and to OCS DPF
+// 3+3) — same 6 plane fetches per 16 px — so the existing kScap6bplOcs
+// slot table transfers directly. The planner swaps the 32 BASE registers;
+// each swap implicitly updates the corresponding half-brite sibling
+// (hardware halves the sRGB DAC values), so a single MOVE shifts two
+// effective palette entries at once. Per-pixel encoding picks among all
+// 64 effective entries (bit 5 of the 6-bit index = half-brite toggle).
+//
+// Output: 6-plane bitplane data, 32-entry base palette (the half-brites
+// are reproduced by the hardware and are NOT written to CMAP), and a
+// rendered preview Image.
+// ---------------------------------------------------------------------------
+Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
+                                       int width,
+                                       int height,
+                                       bool reserve_color0 = true,
+                                       const dither::Settings& dither_settings = {},
+                                       std::size_t copper_changes_override = 0,
+                                       int palette_diversity = 0,
+                                       bool debug_overlay = false,
+                                       std::function<void(float, std::string_view)>
+                                           on_progress = {});
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).

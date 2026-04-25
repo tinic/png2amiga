@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.9.1 LANGUAGES C CXX)
+project(png2amiga VERSION 1.10.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -62,6 +62,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/palette_io.cpp
     src/copper.cpp
     src/scap.cpp
+    src/dither_tuning.cpp
     src/palette_locks.cpp
     src/cga_text.cpp
     src/cheader_dos_c.cpp

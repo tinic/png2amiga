@@ -8,7 +8,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::ham {
@@ -111,6 +113,20 @@ struct HamOptions {
     // (no copper swaps). For interlace, rows 0 and 1 are each field's first
     // displayed line with no prior scanline to schedule a pre-display WAIT on.
     std::size_t skip_initial_swap_rows = 0;
+
+    // Better but ~2-4× slower CAP swap planner: per-iteration considers
+    // top-K worst-error pixels + their OKLab centroid as candidates and
+    // tries the top-N least-used slots, picking the (slot, color) pair
+    // that drops row error the most. Off by default — the cheaper single-
+    // candidate greedy is good enough for typical interactive use.
+    bool cap_best = false;
+
+    // Optional progress reporter. Called periodically with (progress 0..1,
+    // stage label). Encoder makes no guarantees about call frequency or
+    // monotonicity across stages; values are smooth within a stage. Cheap
+    // when null (no allocation). Callback runs on encoder threads — must
+    // be thread-safe.
+    std::function<void(float, std::string_view)> on_progress;
 };
 
 // ---------------------------------------------------------------------------

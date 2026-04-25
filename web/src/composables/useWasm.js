@@ -25,6 +25,11 @@ function ensureWorker() {
       sharedLoading.value = false
       return
     }
+    if (msg.type === 'progress') {
+      const cb = pending.get(msg.id)
+      if (cb && cb.onProgress) cb.onProgress(msg.p, msg.stage)
+      return
+    }
     const cb = pending.get(msg.id)
     if (cb) {
       pending.delete(msg.id)
@@ -51,49 +56,60 @@ export function useWasm() {
   const error = sharedError
   ensureWorker()
 
-  function call(fn, ...args) {
+  // The optional `onProgress` arg (last position on each wrapper) lets
+  // callers receive progress ticks from the encoder during long operations
+  // (HAM6 + --ham-cap-best, large beam widths, etc.). The worker injects a
+  // JS callback into the WASM options at args[1]; ticks come back as
+  // {type:'progress'} messages and are routed by id.
+  function call(fn, args, onProgress) {
     const id = nextId++
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject })
-      worker.postMessage({ id, fn, args })
+      pending.set(id, { resolve, reject, onProgress })
+      worker.postMessage({ id, fn, args, wantProgress: !!onProgress })
     })
   }
 
-  function convertRGBA(imageBytes, options) {
-    return call('convertRGBA', imageBytes, options)
+  function convertRGBA(imageBytes, options, onProgress) {
+    return call('convertRGBA', [imageBytes, options], onProgress)
   }
 
-  function convertPNG(imageBytes, options) {
-    return call('convert', imageBytes, options)
+  function convertPNG(imageBytes, options, onProgress) {
+    return call('convert', [imageBytes, options], onProgress)
   }
 
-  function convertIFF(imageBytes, options) {
-    return call('convertIFF', imageBytes, options)
+  function convertIFF(imageBytes, options, onProgress) {
+    return call('convertIFF', [imageBytes, options], onProgress)
   }
 
-  function convertHeader(imageBytes, options, name) {
-    return call('convertHeader', imageBytes, options, name)
+  function convertHeader(imageBytes, options, name, onProgress) {
+    return call('convertHeader', [imageBytes, options, name], onProgress)
   }
 
-  function convertViewer(imageBytes, options) {
-    return call('convertViewer', imageBytes, options)
+  function convertViewer(imageBytes, options, onProgress) {
+    return call('convertViewer', [imageBytes, options], onProgress)
   }
 
-  function convertDegas(imageBytes, options) {
-    return call('convertDegas', imageBytes, options)
+  function convertDegas(imageBytes, options, onProgress) {
+    return call('convertDegas', [imageBytes, options], onProgress)
   }
 
-  function convertRaw(imageBytes, options) {
-    return call('convertRaw', imageBytes, options)
+  function convertRaw(imageBytes, options, onProgress) {
+    return call('convertRaw', [imageBytes, options], onProgress)
   }
 
-  function convertMask(imageBytes, options) {
-    return call('convertMask', imageBytes, options)
+  function convertMask(imageBytes, options, onProgress) {
+    return call('convertMask', [imageBytes, options], onProgress)
   }
 
-  function convertMaskRaw(imageBytes, options) {
-    return call('convertMaskRaw', imageBytes, options)
+  function convertMaskRaw(imageBytes, options, onProgress) {
+    return call('convertMaskRaw', [imageBytes, options], onProgress)
   }
 
-  return { loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw }
+  // Returns the per-mode dither defaults the C++ encoder would use:
+  // { strength, errorClamp }. Used to refresh the UI on mode change.
+  function ditherDefaults(options) {
+    return call('ditherDefaults', [options])
+  }
+
+  return { loading, error, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults }
 }

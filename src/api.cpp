@@ -8,6 +8,7 @@
 #include "copper.hpp"
 #include "degas.hpp"
 #include "dither.hpp"
+#include "dither_tuning.hpp"
 #include "ham.hpp"
 #include "scap.hpp"
 #include "iff.hpp"
@@ -805,6 +806,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.palette_diversity = options.palette_diversity;
         ham_opts.quantizer = options.quantizer;
         ham_opts.greedy = options.ham_fast;
+        // cap_best only applies to HAM6 and HAM8 — HAM4/5/7 are skipped
+        // because their tiny base palettes (4/8/32 colors) don't benefit
+        // from the refined planner enough to justify the cost.
+        auto ham_params = amiga::get_mode_params(mode);
+        bool ham_eligible_for_cap_best =
+            (ham_params.bitplane_depth == 6 ||
+             ham_params.bitplane_depth == 8);
+        ham_opts.cap_best = options.cap_best && ham_eligible_for_cap_best;
+        ham_opts.on_progress = options.on_progress;
         ham_opts.skip_initial_swap_rows = options.interlace ? 2 : 0;
 
         // Force transparent pixels to black BEFORE HAM encoding so the
@@ -909,7 +919,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                        static_cast<std::size_t>(options.copper_changes),
                                                        nullptr, options.reserve_color0,
                                                        {}, options.palette_diversity,
-                                                       skip_initial, options.interlace);
+                                                       skip_initial, options.interlace,
+                                                       options.on_progress);
             if (!copper_result) return std::unexpected{copper_result.error()};
 
             // Now re-dither each scanline against its 64-color EHB palette
@@ -1261,7 +1272,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                      copper_user_pal.empty() ? nullptr : &copper_user_pal,
                                                      options.reserve_color0, copper_locks,
                                                      options.palette_diversity,
-                                                     skip_initial_lace, options.interlace);
+                                                     skip_initial_lace, options.interlace,
+                                                     options.on_progress);
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         // Render preview BEFORE any DPF expansion: render_copper builds a
@@ -1327,17 +1339,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         return result;
     }
 
-    // --- SCAP (DPF mid-line palette swaps) ---
-    // Phase 1 limit: OCS DPF lores, no interlace.
+    // --- SCAP (mid-line palette swaps) ---
+    // Two variants:
+    //   * DPF: OCS lores DPF (depth=3), 8 PF2 colours. cpp export ready.
+    //   * EHB: OCS EHB (6bpp, 32 base + 32 hardware half-brites). No
+    //     cpp export wired yet — the encoder produces planes + preview.
     if (options.scap) {
-        if (!options.dual_playfield ||
-            chipset != amiga::Chipset::ocs ||
-            mode != amiga::Mode::lores ||
-            options.interlace) {
+        bool scap_ehb = mode == amiga::Mode::ehb;
+        bool scap_dpf = options.dual_playfield && mode == amiga::Mode::lores;
+        if (chipset != amiga::Chipset::ocs || options.interlace ||
+            (!scap_ehb && !scap_dpf)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "SCAP requires dual_playfield + chipset=ocs + mode=lores "
-                "(no interlace) — Phase 1 limitation",
+                "SCAP requires OCS (no interlace) with either --dpf lores "
+                "depth=3 or --mode ehb",
             }};
         }
         if (has_transparency) {
@@ -1348,31 +1363,29 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         scap_dith.method = parse_dither(options.dither);
         scap_dith.strength = options.dither_strength;
         scap_dith.error_clamp = options.error_clamp;
-        // SCAP per-strip palette evolution breaks under full-error
-        // diffusion kernels (Floyd-Steinberg, Stucki, Jarvis, Sierra
-        // Lite, Ostromoukhov): residuals propagated forward across a
-        // strip boundary no longer match the next strip's palette and
-        // amplify into mush. Atkinson's 6/8 damping is the only
-        // error-diffusion kernel that survives. Silently fall back so
-        // CLI / WASM callers don't have to know the rule.
-        switch (scap_dith.method) {
-            case dither::Method::floyd_steinberg:
-            case dither::Method::stucki:
-            case dither::Method::jarvis:
-            case dither::Method::sierra_lite:
-            case dither::Method::ostromoukhov:
-                scap_dith.method = dither::Method::atkinson;
-                break;
-            default: break;
-        }
 
-        auto scap_res = scap::encode_scap_dpf_ocs(
-            *image,
-            static_cast<int>(image->width()),
-            static_cast<int>(image->height()),
-            options.reserve_color0,
-            scap_dith,
-            options.scap_debug);
+        Result<scap::ScapResult> scap_res =
+            scap_ehb
+            ? scap::encode_scap_ehb_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                options.reserve_color0,
+                scap_dith,
+                static_cast<std::size_t>(options.copper_changes),
+                options.palette_diversity,
+                options.scap_debug,
+                options.on_progress)
+            : scap::encode_scap_dpf_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                options.reserve_color0,
+                scap_dith,
+                options.scap_debug,
+                static_cast<std::size_t>(options.copper_changes),
+                options.palette_diversity,
+                options.on_progress);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;
@@ -1382,9 +1395,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.mode = mode;
         result.hires = false;
         result.interlace = false;
-        result.dpf = true;
+        result.dpf = options.dual_playfield;
         result.scap = true;
-        result.scap_line_moves = std::move(scap_res->line_moves);
+        // Only the DPF variant has the cheader emitter wired up to
+        // consume scap_line_moves. EHB SCAP is preview-only for now.
+        if (scap_dpf)
+            result.scap_line_moves = std::move(scap_res->line_moves);
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.copper_changes = scap_res->avg_changes_per_line;
@@ -2238,6 +2254,28 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
     if (!iff_data) return make_error(iff_data.error().message);
 
     return make_mask_result(*std::move(iff_data), *result);
+}
+
+// Per-mode dither tuning lookup. Builds a dither_tuning::Context from
+// the API options — same fields the encoder uses internally — and
+// returns the strength/error_clamp the encoder would default to. The
+// web UI calls this on mode change to refresh its sliders.
+DitherDefaults dither_defaults_for(const Options& options) {
+    auto opts = decompose_mode_options(options);
+    auto mode = parse_mode(opts.mode);
+    auto chipset = opts.chipset == "aga"
+        ? amiga::Chipset::aga
+        : amiga::Chipset::ocs;
+    auto depth = std::clamp(opts.depth, 1, 8);
+    auto tune = dither_tuning::defaults_for(dither_tuning::Context{
+        .mode    = mode,
+        .depth   = depth,
+        .dpf     = opts.dual_playfield,
+        .scap    = opts.scap,
+        .copper  = opts.copper,
+        .chipset = chipset,
+    });
+    return DitherDefaults{tune.strength, tune.error_clamp};
 }
 
 } // namespace png2amiga::api

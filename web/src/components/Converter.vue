@@ -18,9 +18,10 @@ import Slider from 'primevue/slider'
 import ToggleSwitch from 'primevue/toggleswitch'
 import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
+import ProgressBar from 'primevue/progressbar'
 import Panel from 'primevue/panel'
 
-const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw } = useWasm()
+const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
 const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
@@ -51,6 +52,8 @@ watch(wasmLoading, (loading) => {
 const options = reactive(defaultOptions())
 const canvasRef = ref(null)
 const converting = ref(false)
+const progress = ref(0)         // 0..100 — encoder progress for slow paths
+const progressStage = ref('')
 const resultInfo = ref('')
 const errorMsg = ref('')
 const sizeOverride = ref(false)
@@ -124,23 +127,12 @@ const groupedDitherOptions = computed(() => {
   // pixels. They don't crash but produce mis-proportioned dither for
   // HAM — hide to avoid user confusion.
   const hide_nonsquare = ht !== null
-  // SCAP: error from the full-error kernels (Floyd-Steinberg, Stucki,
-  // Jarvis, Sierra Lite, Ostromoukhov) compounds across strip
-  // boundaries because each strip has a DIFFERENT palette — the
-  // forward-propagated residual no longer matches the next strip's
-  // available colours, so it amplifies into mush. Atkinson's 6/8
-  // (75%) damping is the only error-diffusion kernel that survives
-  // this. Hide everything else in the Error Diffusion group when
-  // SCAP is on; ordered/non-square patterns work fine.
-  const hide_lossy_ed = options.scap
   return DITHER_METHODS
     .filter(g => !(hide_nonsquare && g.group === 'Non-square'))
     .map(g => ({
       label: g.group,
       items: g.items
         .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
-        .filter(d => !(hide_lossy_ed && g.group === 'Error Diffusion'
-                       && d.value !== 'atkinson'))
         .map(d => ({ value: d.value, label: d.label }))
     }))
 })
@@ -318,12 +310,6 @@ watch(() => options.scap, (on) => {
   if (on) {
     // SCAP is an extension to CAP — make sure CAP is on too.
     options.copper = true
-    // Banned-by-SCAP error-diffusion kernels: their full error
-    // propagation breaks across SCAP's per-strip palette boundaries.
-    // Only Atkinson survives. If the user is on one, switch them.
-    const banned = ['floyd-steinberg', 'stucki', 'jarvis',
-                    'sierra-lite', 'ostromoukhov']
-    if (banned.includes(options.dither)) options.dither = 'atkinson'
   }
   track('scap-toggle', { enabled: on })
 })
@@ -422,6 +408,32 @@ function buildWasmOptions() {
 watch(() => options.dither, (to, from) => { track('dither-change', { from, to }) })
 watch(() => options.copper, (enabled) => { track('copper-toggle', { enabled }) })
 
+// Refresh errorClamp from the C++ per-mode tuning table whenever the mode
+// (or any flag that feeds Context — copper/dpf/scap/depth/chipset) changes.
+// Ignores whatever the user had set previously: the table value wins so a
+// mode switch always lands on the empirically-tuned default for that mode.
+async function refreshErrorClamp() {
+  if (wasmLoading.value) return
+  try {
+    const d = await ditherDefaults({
+      mode: options.mode,
+      chipset: options.chipset,
+      depth: options.depth,
+      copper: options.copper,
+      dualPlayfield: options.dualPlayfield,
+      scap: options.scap,
+    })
+    if (typeof d.errorClamp === 'number') options.errorClamp = d.errorClamp
+  } catch { /* WASM not ready yet — initial defaults stand */ }
+}
+watch(
+  () => [options.mode, options.copper, options.dualPlayfield, options.scap,
+         options.depth, options.chipset],
+  () => refreshErrorClamp())
+// Also refresh once after WASM finishes loading so the very first preview
+// uses the table value (defaultOptions() seeds with a generic 0.35).
+watch(wasmLoading, (loading) => { if (!loading) refreshErrorClamp() })
+
 // Track slider tweaks (debounced)
 let tweakTimer = null
 for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) {
@@ -465,9 +477,18 @@ function doConvert() {
     spinnerTimer = setTimeout(() => { converting.value = true }, 100)
 
     try {
-      const result = await convertRGBA(imageBytes.value, buildWasmOptions())
+      progress.value = 0
+      progressStage.value = ''
+      const onProgress = (p, stage) => {
+        progress.value = Math.round(p * 100)
+        progressStage.value = stage || ''
+      }
+      const result = await convertRGBA(
+        imageBytes.value, buildWasmOptions(), onProgress)
 
       clearTimeout(spinnerTimer)
+      progress.value = 0
+      progressStage.value = ''
 
       if (result.error) {
         errorMsg.value = result.error
@@ -1242,6 +1263,12 @@ async function loadExample(example) {
               <!-- HAM beam width (DP search) — advanced: quality plateaus
                    quickly past ~8, default 16 is fine for almost any image. -->
               <template v-if="showHamControls">
+                <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">
+                  <div class="flex align-items-center gap-2">
+                    <input type="checkbox" v-model="options.capBest" id="capBest" />
+                    <label for="capBest" class="text-xs text-color-secondary" title="Slower (~4-5x) CAP planner: multi-candidate slot search + joint base-palette refinement. Adds +0.5..2 dB PSNR. HAM6 + copper and HAM8 + copper only — indexed copper modes (lores/hires/EHB) ignore this flag (their planner is already mature). Off by default.">CAP best quality (slower)</label>
+                  </div>
+                </div>
                 <div class="pt-3 mt-3 border-top-1 surface-border">
                   <label class="block text-xs text-color-secondary font-semibold mb-1" title="Beam width for DP search. Higher = marginally better quality, slower. Range 1-256 (default 16). In practice quality plateaus past ~8.">HAM Beam Width</label>
                   <div class="flex gap-2 align-items-center">
@@ -1305,8 +1332,12 @@ async function loadExample(example) {
           >
             <div class="canvas-wrap relative" :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
               <canvas ref="canvasRef" class="preview-canvas" />
-              <div v-if="converting" class="overlay flex align-items-center justify-content-center">
-                <ProgressSpinner style="width: 2rem; height: 2rem" />
+              <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
+                <ProgressSpinner v-if="!progress" style="width: 2rem; height: 2rem" />
+                <div v-else style="width: 70%; max-width: 22rem; text-align: center;">
+                  <ProgressBar :value="progress" :show-value="true" style="height: 0.6rem" />
+                  <div class="text-xs text-color-secondary mt-1" v-if="progressStage">{{ progressStage }}</div>
+                </div>
               </div>
             </div>
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
