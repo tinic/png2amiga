@@ -122,6 +122,7 @@ struct Config {
     // Dithering
     dither::Method dither_method = dither::Method::floyd_steinberg;
     bool dither_explicit = false;       // true if user passed --dither
+    bool error_clamp_explicit = false;  // true if user passed --error-clamp
     float dither_strength = 1.0f;
     float error_clamp = 0.35f;
     std::string cga_text_metric = "blur";
@@ -687,6 +688,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
             }
             else if (arg == "--error-clamp") {
                 config.error_clamp = std::stof(std::string(val));
+                config.error_clamp_explicit = true;
             }
             else if (arg == "--cga-text-metric") {
                 config.cga_text_metric = std::string(val);
@@ -3124,8 +3126,17 @@ int main(int argc, char* argv[]) {
         }
         dither::Settings scap_dith;
         scap_dith.method = config->dither_method;
+        // SCAP-specific error-clamp default. Empirical sweep across the
+        // 10 examples (EHB+SCAP, F-S) put the mean-PSNR plateau in the
+        // 0.038-0.041 range; 0.04 is the clean midpoint, +1.20 dB over
+        // the CLI default of 0.35. Override unless the user explicitly
+        // set --error-clamp.
+        if (!config->error_clamp_explicit) {
+            scap_dith.error_clamp = 0.04f;
+        } else {
+            scap_dith.error_clamp = config->error_clamp;
+        }
         scap_dith.strength = config->dither_strength;
-        scap_dith.error_clamp = config->error_clamp;
         auto scap_res =
             scap_ehb
             ? scap::encode_scap_ehb_ocs(
