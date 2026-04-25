@@ -384,8 +384,20 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
+    // Actual hardware register state across lines. SCAP's mid-line
+    // swaps leave registers holding swap-colours at end-of-line, so a
+    // diff-vs-cap_palettes[y-1] approach misses registers SCAP changed.
+    // Track the real state and diff against THIS for each per-line
+    // CAP MOVE block.
+    std::array<Color3f, kBaseColors> hw_state{};
     constexpr int kPasses = 6;
     for (int pass = 0; pass < kPasses; ++pass) {
+        // Reset hw_state at the start of every pass to the viewer's
+        // frame-init state: base_palette in production, all-zero in
+        // debug (matches the zero output_palette + zero per-line MOVEs).
+        for (std::size_t k = 0; k < kBaseColors; ++k)
+            hw_state[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
+                                        : base_palette[k];
         if (pass > 0) {
             for (std::size_t i = 0; i < indices.size(); ++i)
                 base_index[i] = indices[i];
@@ -400,50 +412,36 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // Line entry palette = CAP plan for this line. cap_palettes[y]
-        // already reflects all per-line palette evolution decisions
-        // from CAP — we layer 20 mid-line SCAP swaps on top.
-        // In debug_overlay mode, hardware actually enters every line
-        // with all PF2 registers forced to 0x0000 (zero frame-init +
-        // forced-zero per-line MOVEs), so the planner must too —
-        // otherwise the preview leaks CAP colours into strip 0 even
-        // though those swaps are never written to hardware.
+        // Per-line target = CAP plan for this line, OR all-zero in
+        // debug mode (hardware enters every line with 0x0000 there).
+        std::array<Color3f, kBaseColors> target{};
         for (std::size_t k = 0; k < kBaseColors; ++k)
-            P[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
-                                 : cap_palettes[y][k];
+            target[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
+                                      : cap_palettes[y][k];
+
+        // 1. Per-line CAP MOVEs: diff vs the ACTUAL hardware state at
+        //    end of the previous line. SCAP's mid-line swaps on line
+        //    y-1 left some registers holding swap-colours instead of
+        //    cap_palettes[y-1] — the previous diff-vs-cap_palettes
+        //    logic missed those, so registers carried stale SCAP-swap
+        //    state into the next line and were displayed wrong.
+        for (std::size_t k = 0; k < kBaseColors; ++k) {
+            if (hw_state[k].r != target[k].r ||
+                hw_state[k].g != target[k].g ||
+                hw_state[k].b != target[k].b) {
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(kRegBase + k),
+                    palette::linear_to_ocs(target[k]), -1));
+                hw_state[k] = target[k];
+            }
+        }
+
+        // After per-line CAP MOVEs, hardware state == target. Plug it
+        // into the strip-0 palette for the SCAP swap planner.
+        for (std::size_t k = 0; k < kBaseColors; ++k) P[k] = target[k];
         recompute_lab();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
-
-        // 1. Per-line CAP MOVEs (diff vs previous line's palette).
-        //    For y=0 the frame-init palette is already loaded by the
-        //    viewer before bitplane DMA. In debug_overlay mode every
-        //    register is forced to 0x0000 so SCAP MOVEs are the only
-        //    visible colour changes.
-        if (debug_overlay) {
-            for (std::size_t k = 0; k < kBaseColors; ++k) {
-                line_moves[y].push_back(make_move(
-                    static_cast<std::uint8_t>(kRegBase + k),
-                    std::uint16_t{0x0000}, -1));
-            }
-        } else {
-            // Per-line CAP MOVEs: diff vs the running register state.
-            // For y=0 the running state is base_palette (loaded by the
-            // viewer's frame-init); CAP can decide to swap on row 0,
-            // making cap_palettes[0] differ from base_palette — emit
-            // that diff so hardware matches the planner. For y>0 diff
-            // is against the previous line's cap palette.
-            for (std::size_t k = 0; k < kBaseColors; ++k) {
-                Color3f prev = (y == 0) ? base_palette[k]
-                                        : cap_palettes[y - 1][k];
-                if (prev.r != P[k].r || prev.g != P[k].g ||
-                    prev.b != P[k].b) {
-                    line_moves[y].push_back(make_move(
-                        static_cast<std::uint8_t>(kRegBase + k),
-                        palette::linear_to_ocs(P[k]), -1));
-                }
-            }
-        }
 
         // 2. Line-gate WAIT — opens the SCAP chain at HPOS=line_gate_hpos.
         line_moves[y].push_back(make_wait(
@@ -474,6 +472,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 auto swap_idx = static_cast<std::size_t>(swap_reg);
                 P[swap_idx] = swap_color;
                 P_lab[swap_idx] = color_space::linear_to_oklab(swap_color);
+                // SCAP MOVE writes to the hardware register too.
+                hw_state[swap_idx] = swap_color;
 
                 line_moves[y].push_back(make_move(
                     static_cast<std::uint8_t>(kRegBase + swap_reg),
@@ -897,8 +897,17 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // REGRESSED PSNR by ~0.9 dB on the 10-image sweep. Re-running CAP
     // from a different starting palette breaks the convergence the
     // index iteration was building toward. Pure index refinement wins.
+    //
+    // Actual hardware register state across lines. SCAP swaps leave
+    // registers holding swap-colours at end-of-line; the per-line
+    // CAP MOVEs need to diff against THIS, not against cap_palettes
+    // from the previous line.
+    std::vector<Color3f> hw_state(kBaseColors);
     constexpr int kPasses = 6;
     for (int pass = 0; pass < kPasses; ++pass) {
+        // Reset hw_state to the viewer's frame-init at each pass start.
+        for (std::size_t k = 0; k < kBaseColors; ++k)
+            hw_state[k] = base_palette[k];
         if (pass > 0) {
             for (std::size_t i = 0; i < indices.size(); ++i)
                 base_index[i] = indices[i];
@@ -922,18 +931,17 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         strip_eff[0] = P_eff;
         strip_eff_lab[0] = P_eff_lab;
 
-        // 1. Per-line CAP MOVEs: diff vs the running register state.
-        // For y=0 the running state is base_palette (loaded by the
-        // viewer's frame-init); CAP may decide to swap on row 0,
-        // making cap_palettes[0] differ from base_palette — emit that
-        // diff so hardware matches the planner. For y>0 diff against
-        // the previous line's CAP palette.
+        // 1. Per-line CAP MOVEs: diff vs the ACTUAL hardware register
+        // state at end of the previous line. SCAP's mid-line swaps on
+        // line y-1 may have left registers holding swap-colours rather
+        // than cap_palettes[y-1], so a diff vs cap_palettes misses
+        // them and the registers carry stale state into line y.
         {
             for (std::size_t k = 0; k < kBaseColors; ++k) {
-                Color3f prev = (y == 0) ? base_palette[k]
-                                        : cap_palettes[y - 1][k];
-                if (prev.r != P[k].r || prev.g != P[k].g ||
-                    prev.b != P[k].b) {
+                if (hw_state[k].r != P[k].r ||
+                    hw_state[k].g != P[k].g ||
+                    hw_state[k].b != P[k].b) {
+                    hw_state[k] = P[k];
                     line_moves[y].push_back(make_move(
                         static_cast<std::uint8_t>(kRegBase + k),
                         palette::linear_to_ocs(P[k]),
@@ -969,6 +977,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 P_eff_lab[k] = color_space::linear_to_oklab(P_eff[k]);
                 P_eff_lab[kBaseColors + k] =
                     color_space::linear_to_oklab(P_eff[kBaseColors + k]);
+                // SCAP MOVE writes to the hardware register too.
+                hw_state[k] = swap_color;
                 line_moves[y].push_back(make_move(
                     static_cast<std::uint8_t>(kRegBase + swap_reg),
                     palette::linear_to_ocs(swap_color),
