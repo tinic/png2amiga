@@ -81,6 +81,7 @@ struct ScapSlotTable {
 // each MOVE takes ~4-12 CCK, so 20 MOVEs cover most of the visible
 // area. Right edge may stay on the final palette state if the chain
 // finishes before HPOS=DDFSTOP.
+constexpr int kOCS = 0;
 inline const ScapSlotTable kScap6bplOcs{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,        // DMA dictates actual MOVE landing
@@ -95,9 +96,9 @@ inline const ScapSlotTable kScap6bplOcs{
         // 6-plane DPF DMA contention the first real MOVE in the chain
         // lands at lores x = 8, and subsequent MOVEs follow at 16-px
         // spacing.
-        { 8}, { 24-1}, { 40}, { 56-1}, { 72-1}, { 88}, {104}, {120},
-        {136-1}, {152}, {168}, {184}, {200}, {216-1}, {232}, {248-1},
-        {264-1}, {280}, {296-1},
+        { 8+kOCS}, { 24-1+kOCS}, { 40+kOCS}, { 56-1+kOCS}, { 72-1+kOCS}, { 88+kOCS}, {104+kOCS}, {120+kOCS},
+        {136-1+kOCS}, {152+kOCS}, {168+kOCS}, {184+kOCS}, {200+kOCS}, {216-1+kOCS}, {232+kOCS}, {248-1+kOCS},
+        {264-1+kOCS}, {280+kOCS}, {296-1+kOCS},
     }
 };
 

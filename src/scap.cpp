@@ -565,9 +565,17 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     if (!expanded) return std::unexpected{expanded.error()};
 
     // ---- 5. Output palette: 8 zero PF1 entries + 8 PF2 base entries -----
+    // In debug_overlay mode the PF2 entries are also zeroed — together
+    // with the forced-zero per-line MOVEs above this means the viewer's
+    // frame-init writes black to COLOR08..15 and they STAY black until
+    // a SCAP MOVE swaps a register mid-line. Without this the row-0
+    // display would briefly flash the auto-quantised base colours
+    // before the line-0 zero MOVEs land in hblank.
     std::vector<Color3f> output_palette(16, Color3f{0.0f, 0.0f, 0.0f});
-    for (std::size_t k = 0; k < kBaseColors; ++k)
-        output_palette[static_cast<std::size_t>(kRegBase) + k] = base_palette[k];
+    if (!debug_overlay) {
+        for (std::size_t k = 0; k < kBaseColors; ++k)
+            output_palette[static_cast<std::size_t>(kRegBase) + k] = base_palette[k];
+    }
 
     // ---- 5b. Optional PF1 ruler markers (slot-tuning aid) ---------------
     // Yellow vertical guides at 4 / 8 / 16 px, with hierarchy by height:
