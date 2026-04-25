@@ -825,9 +825,10 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
         // toward mid-grey at the chain's end.
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             auto pair_n = static_cast<std::uint16_t>(s / 2);
-            auto step = std::min<std::uint16_t>(
-                static_cast<std::uint16_t>(pair_n * 0x222),
-                static_cast<std::uint16_t>(0x0FFF));
+            // Modular nibble: 2 levels per pair, wrap at 16. Keeps the
+            // value as a clean OCS greyscale (R=G=B nibble replicated).
+            auto nibble = static_cast<std::uint16_t>((2u * pair_n) % 16u);
+            auto step = static_cast<std::uint16_t>(nibble * 0x111);
             std::uint16_t v = (s % 2 == 0)
                 ? static_cast<std::uint16_t>(0x0FFF - step)
                 : step;
@@ -863,9 +864,10 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
                             // Mirror the SCAP MOVE values used above:
                             // pair N gets (0xFFF - N·0x111, N·0x111).
                             std::size_t pair_int = s / 2;
-                            float pair_n = static_cast<float>(pair_int);
-                            float step = std::min(pair_n * 2.0f / 15.0f, 1.0f);
-                            float v = (s % 2 == 0) ? (1.0f - step) : step;
+                            // Same modular nibble math as cpp emission.
+                            int nibble = static_cast<int>((2 * pair_int) % 16);
+                            int n = (s % 2 == 0) ? (15 - nibble) : nibble;
+                            float v = static_cast<float>(n) / 15.0f;
                             c = Color3f{v, v, v};
                             break;
                         }
