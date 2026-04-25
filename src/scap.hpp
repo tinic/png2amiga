@@ -204,29 +204,6 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        bool debug_overlay = false);
 
 // ---------------------------------------------------------------------------
-// Investigation: SCAP for plain lores 5bpp (single playfield, 32 colours).
-//
-// Same per-line structure as encode_scap_dpf_ocs but without DPF: full
-// 32-entry register file (regs 0..31), 5 bitplanes encoded directly (no
-// 3→6 expansion), no PF1 ruler markers. Reuses kScap6bplOcs's slot
-// table as a calibration starting point — the actual 5bpp DMA pattern
-// has slightly more bandwidth, so MOVE landing positions on hardware
-// will differ. For now the planner treats slots as if they're identical
-// to the DPF case; this is purely a software-side PSNR experiment.
-//
-// Output: ScapResult with planes (5-bp), palette (32 entries), line_moves
-// (informational, NOT meant for cheader emission yet), and a rendered
-// preview Image. Caller should treat .line_moves as opaque — the cheader
-// SCAP block currently only knows how to consume DPF output.
-// ---------------------------------------------------------------------------
-Result<ScapResult> encode_scap_lores_ocs(const Image& image,
-                                         int width,
-                                         int height,
-                                         int depth = 5,
-                                         bool reserve_color0 = true,
-                                         const dither::Settings& dither_settings = {});
-
-// ---------------------------------------------------------------------------
 // SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
 // half-brite colours).
 //

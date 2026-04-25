@@ -1329,24 +1329,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // --- SCAP (mid-line palette swaps) ---
     // Two variants:
-    //   * DPF (Phase 1, production): OCS lores DPF, 8 PF2 colours.
-    //   * Lores 5bpp (investigation): OCS lores single playfield,
-    //     32 colours. No cpp viewer export, just the encoded planes
-    //     and a rendered preview for PSNR comparison.
+    //   * DPF: OCS lores DPF (depth=3), 8 PF2 colours. cpp export ready.
+    //   * EHB: OCS EHB (6bpp, 32 base + 32 hardware half-brites). No
+    //     cpp export wired yet — the encoder produces planes + preview.
     if (options.scap) {
-        if (chipset != amiga::Chipset::ocs ||
-            mode != amiga::Mode::lores ||
-            options.interlace) {
+        bool scap_ehb = mode == amiga::Mode::ehb;
+        bool scap_dpf = options.dual_playfield && mode == amiga::Mode::lores;
+        if (chipset != amiga::Chipset::ocs || options.interlace ||
+            (!scap_ehb && !scap_dpf)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "SCAP requires chipset=ocs + mode=lores (no interlace) — "
-                "Phase 1 limitation",
-            }};
-        }
-        if (!options.dual_playfield && depth != static_cast<std::size_t>(5)) {
-            return std::unexpected{Error{
-                ErrorCode::unsupported_mode,
-                "SCAP without --dpf requires depth=5 (lores 5bpp investigation)",
+                "SCAP requires OCS (no interlace) with either --dpf lores "
+                "depth=3 or --mode ehb",
             }};
         }
         if (has_transparency) {
@@ -1357,27 +1351,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         scap_dith.method = parse_dither(options.dither);
         scap_dith.strength = options.dither_strength;
         scap_dith.error_clamp = options.error_clamp;
-        // The previous Atkinson-only fallback for DPF+SCAP is removed —
-        // the OKLab error-diffusion port (matching EHB+CAP) plus the
-        // per-mode (strength, error_clamp) tuning lets F-S/Stucki/Jarvis/
-        // Sierra-Lite/Ostromoukhov run in DPF without runaway mush.
 
         Result<scap::ScapResult> scap_res =
-            options.dual_playfield
-            ? scap::encode_scap_dpf_ocs(
+            scap_ehb
+            ? scap::encode_scap_ehb_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                options.reserve_color0,
+                scap_dith)
+            : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
                 options.reserve_color0,
                 scap_dith,
-                options.scap_debug)
-            : scap::encode_scap_lores_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                static_cast<int>(depth),
-                options.reserve_color0,
-                scap_dith);
+                options.scap_debug);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;
@@ -1389,11 +1378,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = false;
         result.dpf = options.dual_playfield;
         result.scap = true;
-        // Only the DPF variant produces copper-list output the cheader
-        // emitter knows how to consume. The lores 5bpp investigation
-        // runs static-only — drop line_moves so cheader doesn't try to
-        // emit them.
-        if (options.dual_playfield)
+        // Only the DPF variant has the cheader emitter wired up to
+        // consume scap_line_moves. EHB SCAP is preview-only for now.
+        if (scap_dpf)
             result.scap_line_moves = std::move(scap_res->line_moves);
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;

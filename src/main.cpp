@@ -808,17 +808,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
     // SCAP post-parse fixup. Three supported configurations:
     //   * Production: DPF, OCS, lores, depth=3 → auto-enable --dpf if
-    //     the user passed --scap without --dpf, lores mode, and didn't
-    //     explicitly ask for depth=5.
-    //   * Investigation: lores 5bpp single playfield (no --dpf), depth=5.
-    //   * Investigation: EHB 6bpp (--mode ehb), 32 base + 32 half-brite.
-    if (config.scap && !config.dual_playfield) {
-        bool wants_lores_5bpp = config.mode == amiga::Mode::lores &&
-                                config.depth_explicit && config.depth == 5;
-        bool wants_ehb = config.mode == amiga::Mode::ehb;
-        if (!wants_lores_5bpp && !wants_ehb) {
-            config.dual_playfield = true;
-        }
+    //     the user passed --scap without --dpf and isn't in EHB mode.
+    //   * EHB 6bpp (--mode ehb), 32 base + 32 half-brite (PNG preview only).
+    if (config.scap && !config.dual_playfield &&
+        config.mode != amiga::Mode::ehb) {
+        config.dual_playfield = true;
     }
 
     return config;
@@ -3148,19 +3142,13 @@ int main(int argc, char* argv[]) {
     //     --dpf) → 32 colours, single playfield, PNG preview only,
     //     no copper-list cpp output yet.
     if (config->scap) {
-        bool scap_ehb        = config->mode == amiga::Mode::ehb;
-        bool scap_lores_5bpp = !use_dpf_std && !scap_ehb &&
-                                config->mode == amiga::Mode::lores &&
-                                config->depth == 5;
-        bool valid =
-            (use_dpf_std && config->mode == amiga::Mode::lores) ||
-            scap_lores_5bpp ||
-            scap_ehb;
-        if (!valid || chipset != amiga::Chipset::ocs ||
+        bool scap_ehb = config->mode == amiga::Mode::ehb;
+        bool scap_dpf = use_dpf_std && config->mode == amiga::Mode::lores;
+        if ((!scap_dpf && !scap_ehb) || chipset != amiga::Chipset::ocs ||
             config->interlace) {
             std::println(stderr,
-                "Error: --scap requires OCS (no interlace) with one of: "
-                "--dpf lores depth=3, lores depth=5, or --mode ehb.");
+                "Error: --scap requires OCS (no interlace) with either "
+                "--dpf lores depth=3 or --mode ehb.");
             return 1;
         }
         if (has_transparency) {
@@ -3192,21 +3180,13 @@ int main(int argc, char* argv[]) {
                 static_cast<int>(image->height()),
                 config->reserve_color0,
                 scap_dith)
-            : (scap_lores_5bpp
-                ? scap::encode_scap_lores_ocs(
-                    *image,
-                    static_cast<int>(image->width()),
-                    static_cast<int>(image->height()),
-                    /*depth=*/5,
-                    config->reserve_color0,
-                    scap_dith)
-                : scap::encode_scap_dpf_ocs(
-                    *image,
-                    static_cast<int>(image->width()),
-                    static_cast<int>(image->height()),
-                    config->reserve_color0,
-                    scap_dith,
-                    config->scap_debug));
+            : scap::encode_scap_dpf_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                config->reserve_color0,
+                scap_dith,
+                config->scap_debug);
         if (!scap_res) {
             std::println(stderr, "SCAP encode error: {}",
                          scap_res.error().message);
@@ -3215,10 +3195,9 @@ int main(int argc, char* argv[]) {
         float scap_psnr = color_space::compute_psnr_blurred(
             image->pixels(), scap_res->rendered.pixels(),
             image->width(), image->height());
-        const char* scap_label =
-            scap_ehb        ? "OCS EHB 6bpp investigation"
-            : scap_lores_5bpp ? "OCS lores 5bpp investigation"
-                              : "OCS DPF";
+        const char* scap_label = scap_ehb
+            ? "OCS EHB 6bpp investigation"
+            : "OCS DPF";
         std::println("Mode:   SCAP ({}, {} slots, {:.1f} useful MOVEs/line)",
                      scap_label,
                      scap_res->slot_table.slots.size(),
@@ -3247,11 +3226,10 @@ int main(int argc, char* argv[]) {
                 std::println("PNG:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                if (scap_lores_5bpp || scap_ehb) {
+                if (scap_ehb) {
                     std::println(stderr,
-                        "SCAP {}: cpp viewer export not yet wired "
-                        "(investigation path is PNG-preview-only)",
-                        scap_ehb ? "EHB" : "lores 5bpp");
+                        "SCAP EHB: cpp viewer export not yet wired "
+                        "(investigation path is PNG-preview-only)");
                     return 1;
                 }
                 cheader::CHeaderOptions ch_opts;

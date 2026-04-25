@@ -20,8 +20,6 @@ Defaults defaults_for(const Context& ctx) {
         if (ctx.dpf)        return Defaults{0.9f, 0.10f};   // 8 colours
         if (ctx.mode == amiga::Mode::ehb)
                             return Defaults{0.9f, 0.10f};   // 64 effective
-        if (ctx.mode == amiga::Mode::lores && ctx.depth == 5)
-                            return Defaults{0.9f, 0.35f};   // 32 colours
         return kFallback;
     }
 
