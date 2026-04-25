@@ -986,10 +986,12 @@ async function loadExample(example) {
 
               <!-- Copper-Augmented Palette (Amiga only; not for Atari/DOS) -->
               <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette: per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Copper</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette (CAP): per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank). SCAP is itself a copper list (mid-line PF2 swaps), so when SCAP is on the copper is already active and CAP is replaced — the toggle reflects 'copper active' but is locked.">Copper</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.copper" :disabled="options.scap" />
-                  <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
+                  <ToggleSwitch :modelValue="options.copper || options.scap"
+                                @update:modelValue="v => { if (!options.scap) options.copper = v }"
+                                :disabled="options.scap" />
+                  <span style="color: #888; font-size: 0.625rem;">{{ options.scap ? 'driven by SCAP' : 'Copper-Augmented Palette' }}</span>
                 </div>
               </div>
 
