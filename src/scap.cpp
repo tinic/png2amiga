@@ -817,21 +817,20 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
         // Line-gate WAIT.
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
-        // 19 SCAP MOVEs: opposing greyscale pairs on the shared
-        // register. Pair N (slots 2N, 2N+1) uses complementary greys
-        // (0xFFF - N·0x111) and (N·0x111). The pair value steps each
-        // pair so neighbouring stripes are visually distinct: slots 0/1
-        // are pure white/black, 2/3 are 0xEEE/0x111, ..., progressing
-        // toward mid-grey at the chain's end.
+        // 19 SCAP MOVEs: opposing primary/complement RGB pairs on the
+        // shared register. Pair N cycles through (R,C), (G,M), (B,Y);
+        // pair-mod-3 picks which axis. Each stripe is a single solid
+        // saturated colour. Vivid hues make slot positions easy to
+        // pick out against the red ruler.
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
-            auto pair_n = static_cast<std::uint16_t>(s / 2);
-            // Modular nibble: 2 levels per pair, wrap at 16. Keeps the
-            // value as a clean OCS greyscale (R=G=B nibble replicated).
-            auto nibble = static_cast<std::uint16_t>((2u * pair_n) % 16u);
-            auto step = static_cast<std::uint16_t>(nibble * 0x111);
-            std::uint16_t v = (s % 2 == 0)
-                ? static_cast<std::uint16_t>(0x0FFF - step)
-                : step;
+            auto pair_n = s / 2;
+            std::uint16_t color = 0, complement = 0;
+            switch (pair_n % 3) {
+                case 0: color = 0x0F00; complement = 0x00FF; break;  // R / C
+                case 1: color = 0x00F0; complement = 0x0F0F; break;  // G / M
+                case 2: color = 0x000F; complement = 0x0FF0; break;  // B / Y
+            }
+            std::uint16_t v = (s % 2 == 0) ? color : complement;
             line_moves[y].push_back(make_move(
                 static_cast<std::uint8_t>(kStripeReg), v,
                 static_cast<int>(s)));
@@ -864,11 +863,14 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
                             // Mirror the SCAP MOVE values used above:
                             // pair N gets (0xFFF - N·0x111, N·0x111).
                             std::size_t pair_int = s / 2;
-                            // Same modular nibble math as cpp emission.
-                            int nibble = static_cast<int>((2 * pair_int) % 16);
-                            int n = (s % 2 == 0) ? (15 - nibble) : nibble;
-                            float v = static_cast<float>(n) / 15.0f;
-                            c = Color3f{v, v, v};
+                            // Mirror cpp: cycle (R,C), (G,M), (B,Y).
+                            Color3f base, comp;
+                            switch (pair_int % 3) {
+                                case 0: base = {1, 0, 0}; comp = {0, 1, 1}; break;
+                                case 1: base = {0, 1, 0}; comp = {1, 0, 1}; break;
+                                default: base = {0, 0, 1}; comp = {1, 1, 0}; break;
+                            }
+                            c = (s % 2 == 0) ? base : comp;
                             break;
                         }
                     }
