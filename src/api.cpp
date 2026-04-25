@@ -1359,14 +1359,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
                 options.reserve_color0,
-                scap_dith)
+                scap_dith,
+                static_cast<std::size_t>(options.copper_changes),
+                options.palette_diversity)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
                 options.reserve_color0,
                 scap_dith,
-                options.scap_debug);
+                options.scap_debug,
+                static_cast<std::size_t>(options.copper_changes),
+                options.palette_diversity);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;

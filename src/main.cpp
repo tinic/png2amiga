@@ -807,13 +807,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
     }
 
     // SCAP post-parse fixup. Three supported configurations:
-    //   * Production: DPF, OCS, lores, depth=3 → auto-enable --dpf if
-    //     the user passed --scap without --dpf and isn't in EHB mode.
-    //   * EHB 6bpp (--mode ehb), 32 base + 32 half-brite (PNG preview only).
-    if (config.scap && !config.dual_playfield &&
-        config.mode != amiga::Mode::ehb) {
-        config.dual_playfield = true;
-    }
+    //   * DPF: --scap --dpf, OCS lores depth=3, 8 PF2 colours.
+    //   * EHB: --scap --mode ehb, 32 base + 32 hardware half-brite.
+    // No auto-promotion — the user must opt into one of the supported
+    // SCAP regimes explicitly. The CLI block below errors out otherwise.
 
     return config;
 }
@@ -3179,14 +3176,18 @@ int main(int argc, char* argv[]) {
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
                 config->reserve_color0,
-                scap_dith)
+                scap_dith,
+                static_cast<std::size_t>(config->copper_changes),
+                config->palette_diversity)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
                 config->reserve_color0,
                 scap_dith,
-                config->scap_debug);
+                config->scap_debug,
+                static_cast<std::size_t>(config->copper_changes),
+                config->palette_diversity);
         if (!scap_res) {
             std::println(stderr, "SCAP encode error: {}",
                          scap_res.error().message);

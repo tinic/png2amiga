@@ -201,7 +201,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int height,
                                        bool reserve_color0 = true,
                                        const dither::Settings& dither_settings = {},
-                                       bool debug_overlay = false);
+                                       bool debug_overlay = false,
+                                       std::size_t copper_changes_override = 0,
+                                       int palette_diversity = 0);
 
 // ---------------------------------------------------------------------------
 // SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
@@ -223,7 +225,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        int width,
                                        int height,
                                        bool reserve_color0 = true,
-                                       const dither::Settings& dither_settings = {});
+                                       const dither::Settings& dither_settings = {},
+                                       std::size_t copper_changes_override = 0,
+                                       int palette_diversity = 0);
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).

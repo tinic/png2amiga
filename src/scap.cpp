@@ -155,7 +155,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int height_arg,
                                        bool reserve_color0,
                                        const dither::Settings& dither_settings,
-                                       bool debug_overlay) {
+                                       bool debug_overlay,
+                                       std::size_t copper_changes_override,
+                                       int palette_diversity) {
     auto& table = scap_table_for(6);
     if (table.slots.empty()) {
         return std::unexpected{Error{
@@ -219,11 +221,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     auto copper_result = copper::encode_copper(
         src, /*depth=*/3, dither_settings,
         amiga::Chipset::ocs,
-        /*override_changes=*/0,
+        copper_changes_override,
         /*user_palette=*/nullptr,
         reserve_color0,
         /*locked=*/{},
-        /*palette_diversity=*/0,
+        palette_diversity,
         /*skip_initial_swap_rows=*/0,
         /*is_lace=*/false);
     if (!copper_result) return std::unexpected{copper_result.error()};
@@ -628,7 +630,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        int width_arg,
                                        int height_arg,
                                        bool reserve_color0,
-                                       const dither::Settings& dither_settings) {
+                                       const dither::Settings& dither_settings,
+                                       std::size_t copper_changes_override,
+                                       int palette_diversity) {
     auto& table = scap_table_for(6);
     if (table.slots.empty()) {
         return std::unexpected{Error{
@@ -665,11 +669,11 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     auto copper_result = copper::encode_copper(
         src, /*depth=*/5, dither_settings,
         amiga::Chipset::ocs,
-        /*override_changes=*/0,
+        copper_changes_override,
         /*user_palette=*/nullptr,
         reserve_color0,
         /*locked=*/{},
-        /*palette_diversity=*/0,
+        palette_diversity,
         /*skip_initial_swap_rows=*/0,
         /*is_lace=*/false);
     if (!copper_result) return std::unexpected{copper_result.error()};
