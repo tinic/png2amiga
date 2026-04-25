@@ -982,15 +982,6 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- SCAP slot-tuning debug bundle: black base palette + yellow rulers -->
-              <div v-if="options.scap" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP slot-tuning debug bundle: forces the base-palette MOVEs to 0x0000 (line opens with PF2 black so every visible colour change is attributable to a SCAP MOVE) AND paints yellow PF1 ruler markers at every 4/8/16 px (top-quarter / top-half / full height). Pair with the ramps test image. Leave OFF for production.">SCAP debug</label>
-                <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.scapDebug" />
-                  <span style="color: #888; font-size: 0.625rem;">black base + yellow 4/8/16 rulers</span>
-                </div>
-              </div>
-
               <!-- Native PAR (DOS modes only): preserve source aspect inside the fixed
                    hardware buffer by letterboxing/pillarboxing with black padding. -->
               <div v-if="isDosMode(options.mode)" class="grid align-items-center">
