@@ -979,7 +979,7 @@ async function loadExample(example) {
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.dualPlayfield" />
-                  <span style="color: #888; font-size: 0.625rem;">PF2 / upper color regs, PF1 zeroed</span>
+                  <span style="color: #888; font-size: 0.625rem;">PF2 only, upper color regs</span>
                 </div>
               </div>
 
