@@ -217,7 +217,20 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // search space is tiny, but CAP still finds useful palette diffs
     // against neighbour scanlines.
     constexpr int kBaseColors = 8;        // PF2 width = 3 bitplanes
-    constexpr int kRegBase = 8;           // PF2 starts at COLOR08 (PF2OF=+8)
+    // PF2 index → COLOR-register mapping:
+    //   * OCS DPF combiner rule: PF2 index 0 falls through to COLOR00
+    //     (the "both PFs zero → background" case). Indices 1..7 use the
+    //     implicit +8 offset → COLOR09..15. COLOR08 is unused on OCS.
+    //   * AGA DPF with BPLCON3 PF2OF=011: index 0 → COLOR08, indices
+    //     1..7 → COLOR09..15.
+    // The cpp viewer needs to work on both chipsets, so we write index
+    // 0 to BOTH COLOR00 and COLOR08 (one of the two is always the live
+    // register depending on chipset). pf2_writes(k) returns the list
+    // of registers that must be written for PF2 index k.
+    auto pf2_writes = [](std::size_t k) -> std::array<int, 2> {
+        return (k == 0) ? std::array<int, 2>{0, 8}
+                        : std::array<int, 2>{static_cast<int>(8 + k), -1};
+    };
     auto copper_result = copper::encode_copper(
         src, /*depth=*/3, dither_settings,
         amiga::Chipset::ocs,
@@ -429,9 +442,13 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             if (hw_state[k].r != target[k].r ||
                 hw_state[k].g != target[k].g ||
                 hw_state[k].b != target[k].b) {
-                line_moves[y].push_back(make_move(
-                    static_cast<std::uint8_t>(kRegBase + k),
-                    palette::linear_to_ocs(target[k]), -1));
+                auto regs = pf2_writes(k);
+                for (int reg : regs) {
+                    if (reg < 0) continue;
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(reg),
+                        palette::linear_to_ocs(target[k]), -1));
+                }
                 hw_state[k] = target[k];
             }
         }
@@ -475,10 +492,16 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 // SCAP MOVE writes to the hardware register too.
                 hw_state[swap_idx] = swap_color;
 
-                line_moves[y].push_back(make_move(
-                    static_cast<std::uint8_t>(kRegBase + swap_reg),
-                    palette::linear_to_ocs(swap_color),
-                    static_cast<int>(s)));
+                auto regs = pf2_writes(swap_idx);
+                bool first = true;
+                for (int reg : regs) {
+                    if (reg < 0) continue;
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(reg),
+                        palette::linear_to_ocs(swap_color),
+                        first ? static_cast<int>(s) : -1));
+                    first = false;
+                }
                 ++total_moves;
             } else {
                 line_moves[y].push_back(make_move(kFillerReg, kFillerVal,
@@ -570,17 +593,25 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     auto expanded = bitplane::expand_to_dpf_pf2(*enc);
     if (!expanded) return std::unexpected{expanded.error()};
 
-    // ---- 5. Output palette: 8 zero PF1 entries + 8 PF2 base entries -----
-    // In debug_overlay mode the PF2 entries are also zeroed — together
-    // with the forced-zero per-line MOVEs above this means the viewer's
-    // frame-init writes black to COLOR08..15 and they STAY black until
-    // a SCAP MOVE swaps a register mid-line. Without this the row-0
-    // display would briefly flash the auto-quantised base colours
-    // before the line-0 zero MOVEs land in hblank.
+    // ---- 5. Output palette: PF2 base entries at OCS DPF addresses -----
+    // Per the OCS DPF combiner rule (above), PF2 index 0 displays as
+    // COLOR00 (NOT COLOR08), and PF2 indices 1..7 display as
+    // COLOR09..15. COLOR08 is unused on OCS DPF. Address the frame-init
+    // palette accordingly so the cpp viewer renders correctly on real
+    // OCS hardware (and on AGA in OCS-DPF mode without BPLCON3 PF2OF).
+    //
+    // In debug_overlay mode all entries stay at 0x0000 — together with
+    // the forced-zero per-line MOVEs this means the viewer's frame-init
+    // writes black to every register and only SCAP MOVEs change colours.
     std::vector<Color3f> output_palette(16, Color3f{0.0f, 0.0f, 0.0f});
     if (!debug_overlay) {
-        for (std::size_t k = 0; k < kBaseColors; ++k)
-            output_palette[static_cast<std::size_t>(kRegBase) + k] = base_palette[k];
+        for (std::size_t k = 0; k < kBaseColors; ++k) {
+            auto regs = pf2_writes(k);
+            for (int reg : regs) {
+                if (reg < 0) continue;
+                output_palette[static_cast<std::size_t>(reg)] = base_palette[k];
+            }
+        }
     }
 
     // ---- 5b. Optional PF1 ruler markers (slot-tuning aid) ---------------
