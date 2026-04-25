@@ -1310,6 +1310,19 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     ++useful_swaps;
                 }
             }
+            // FILLER: if no useful swap fired this slot, emit a no-op
+            // MOVE so the chain length stays equal to the slot count.
+            // Without this, subsequent SCAP MOVEs SHIFT one chain
+            // position earlier on the bus, landing at the WRONG pixel
+            // — that's the source of mid-line colour artifacts on
+            // real images. The filler writes COLOR00 back to its
+            // current value (visually a no-op).
+            if (line_moves[y].back().slot_index != static_cast<int>(s)) {
+                line_moves[y].push_back(make_move(
+                    /*reg=*/0,
+                    palette::linear_to_ocs(hw_state[0]),
+                    static_cast<int>(s)));
+            }
             strip_eff[s + 1] = P_eff;
             strip_eff_lab[s + 1] = P_eff_lab;
         }
