@@ -759,7 +759,6 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
     auto& table = kScap6bplEhb;
     constexpr std::size_t kStripeReg = 2;       // shared register all pixels use
     constexpr std::uint16_t kBlack = 0x0000;
-    constexpr std::uint16_t kWhite = 0x0FFF;
     constexpr int kVStart = 44;
 
     // ---- Bitplane data: every pixel = index kStripeReg = 0b00010 -------
@@ -818,9 +817,18 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
         // Line-gate WAIT.
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
-        // 19 SCAP MOVEs alternating white/black on the shared register.
+        // 19 SCAP MOVEs: opposing greyscale pairs on the shared
+        // register. Pair N (slots 2N, 2N+1) uses complementary greys
+        // (0xFFF - N·0x111) and (N·0x111). The pair value steps each
+        // pair so neighbouring stripes are visually distinct: slots 0/1
+        // are pure white/black, 2/3 are 0xEEE/0x111, ..., progressing
+        // toward mid-grey at the chain's end.
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
-            std::uint16_t v = (s % 2 == 0) ? kWhite : kBlack;
+            auto pair_n = static_cast<std::uint16_t>(s / 2);
+            auto step = static_cast<std::uint16_t>(pair_n * 0x111);
+            std::uint16_t v = (s % 2 == 0)
+                ? static_cast<std::uint16_t>(0x0FFF - step)
+                : step;
             line_moves[y].push_back(make_move(
                 static_cast<std::uint8_t>(kStripeReg), v,
                 static_cast<int>(s)));
@@ -850,8 +858,13 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
                         if (static_cast<int>(x) >= table.slots[s].pixel_x &&
                             (s + 1 == table.slots.size() ||
                              static_cast<int>(x) < table.slots[s + 1].pixel_x)) {
-                            c = (s % 2 == 0) ? Color3f{1, 1, 1}
-                                             : Color3f{0, 0, 0};
+                            // Mirror the SCAP MOVE values used above:
+                            // pair N gets (0xFFF - N·0x111, N·0x111).
+                            std::size_t pair_int = s / 2;
+                            float pair_n = static_cast<float>(pair_int);
+                            float step = pair_n / 15.0f;  // 0..1 range (max pair=9 → 0.6)
+                            float v = (s % 2 == 0) ? (1.0f - step) : step;
+                            c = Color3f{v, v, v};
                             break;
                         }
                     }
