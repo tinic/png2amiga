@@ -782,22 +782,25 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // line on top of that evolving state. Without this layering the
     // image looks single-palette per frame, which is very visible on
     // photographic content.
-    // CAP and SCAP share the same per-line copper budget (~14 MOVE
-    // hblank). Split:
-    //   * --copper-changes N: total combined ≤ N, CAP gets min(N, 2),
-    //     SCAP gets the rest.
-    //   * Auto: combined ≤ 14, default CAP=2, SCAP=12.
-    // EHB-specific: empirically OCS hblank can absorb a bit more than
-    // the conservative 14 MOVEs the regular CAP encoder targets. Bumped
-    // to 18 for EHB+SCAP — leaves SCAP at scap_share=16 by default,
-    // approaching the slot count of 19 for fuller mid-line activity.
-    // Hardware verification ongoing; reduce if any overflow shows up.
-    constexpr std::size_t kMaxCombinedEhb = 20;
+    // CAP and SCAP share the OCS hblank's MOVE budget. Adaptive split:
+    //   * Each line's hblank fits up to kHblankCeiling MOVEs (=14 for
+    //     OCS empirical safe ceiling). Hblank load on line y+1 is
+    //     CAP_changes[y+1] + SCAP_swaps[y] (revert) — exceeding 14
+    //     causes hardware overflow on busy images (verified per
+    //     fantasy.png). So per-line: SCAP_swaps[y] ≤ kHblankCeiling -
+    //     CAP_changes[y+1]. CAP_changes per line comes straight from
+    //     copper_result->scanline_changes (already planned).
+    //   * --copper-changes N caps the COMBINED budget globally.
+    //     CAP gets min(N, 2), SCAP gets the per-line adaptive value
+    //     bounded by N - CAP_share.
+    //   * Auto: same adaptive logic, no global cap beyond hblank.
+    constexpr std::size_t kHblankCeiling = 14;
+    constexpr std::size_t kMaxCombinedEhb = 22;  // upper bound for combined
     std::size_t total_budget_ehb = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombinedEhb)
         : kMaxCombinedEhb;
     std::size_t cap_share_ehb = std::min<std::size_t>(total_budget_ehb, 2u);
-    std::size_t scap_share_ehb = total_budget_ehb - cap_share_ehb;
+    std::size_t scap_share_ehb_max = total_budget_ehb - cap_share_ehb;
     auto copper_result = copper::encode_copper(
         src, /*depth=*/5, dither_settings,
         amiga::Chipset::ocs,
@@ -1068,7 +1071,20 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         //    override or max_changes_per_line auto-default — bounds
         //    the number of registers that need reverting on the next
         //    hblank.
-        std::size_t useful_swap_cap = scap_share_ehb;
+        // Adaptive per-line SCAP cap: SCAP_swaps[y] + CAP_changes[y+1]
+        // must fit hblank ceiling. cap_changes_for_next = how many
+        // CAP MOVEs line y+1 will emit in its hblank (excluding the
+        // SCAP-revert MOVEs from line y). For the last line nothing
+        // follows, so unbounded by CAP-next.
+        std::size_t cap_changes_for_next =
+            (y + 1 < height && y + 1 < copper_result->scanline_changes.size())
+            ? copper_result->scanline_changes[y + 1].size()
+            : 0u;
+        std::size_t adaptive_cap = (kHblankCeiling > cap_changes_for_next)
+            ? (kHblankCeiling - cap_changes_for_next)
+            : 0u;
+        std::size_t useful_swap_cap =
+            std::min<std::size_t>(scap_share_ehb_max, adaptive_cap);
         std::size_t useful_swaps = 0;
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             std::size_t x_lo = std::min(width,
