@@ -3227,21 +3227,16 @@ int main(int argc, char* argv[]) {
                 std::println("PNG:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                if (scap_ehb) {
-                    std::println(stderr,
-                        "SCAP EHB: cpp viewer export not yet wired "
-                        "(investigation path is PNG-preview-only)");
-                    return 1;
-                }
                 cheader::CHeaderOptions ch_opts;
                 ch_opts.symbol_name = config->symbol_name.empty()
                     ? derive_symbol_name(config->output_path)
                     : config->symbol_name;
                 ch_opts.aga = false;
-                ch_opts.dpf = true;
+                ch_opts.dpf = scap_dpf;     // false for EHB SCAP
                 ch_opts.fade_in = false;
                 ch_opts.scap_line_moves = &scap_res->line_moves;
-                ch_opts.scap_label = "scap_dpf_ocs";
+                ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs"
+                                              : "scap_dpf_ocs";
                 ch_opts.scap_anchor_hpos =
                     scap_res->slot_table.line_gate_hpos;
                 ch_opts.scap_total_planes =
