@@ -231,10 +231,25 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         return (k == 0) ? std::array<int, 2>{0, 8}
                         : std::array<int, 2>{static_cast<int>(8 + k), -1};
     };
+    // CAP and SCAP share the same per-line copper budget — the OCS
+    // hblank fits ~14 MOVEs total (max_changes_per_line). Split them:
+    //   * --copper-changes N: total combined ≤ N. CAP gets min(N, 2),
+    //     SCAP gets the rest.
+    //   * Auto: total ≤ 14 by default. CAP gets 2 (small per-line
+    //     palette evolution), SCAP gets 12 (heavy mid-line activity).
+    // Without this split CAP could use 14 alone AND SCAP could use 14,
+    // for a combined 28 MOVEs/hblank — exceeds bus capacity.
+    constexpr std::size_t kMaxCombined = copper::max_changes_per_line(
+        /*depth=*/3, false, false, amiga::Chipset::ocs, false);
+    std::size_t total_budget = (copper_changes_override > 0)
+        ? std::min<std::size_t>(copper_changes_override, kMaxCombined)
+        : kMaxCombined;
+    std::size_t cap_share = std::min<std::size_t>(total_budget, 2u);
+    std::size_t scap_share = total_budget - cap_share;
     auto copper_result = copper::encode_copper(
         src, /*depth=*/3, dither_settings,
         amiga::Chipset::ocs,
-        copper_changes_override,
+        cap_share,
         /*user_palette=*/nullptr,
         reserve_color0,
         /*locked=*/{},
@@ -486,12 +501,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         //    2× max_changes worst-case which still fits the ~16-MOVE
         //    OCS hblank capacity comfortably for the typical copper
         //    budget of 14. Slots beyond the cap emit fillers.
-        std::size_t useful_swap_cap =
-            (copper_changes_override > 0)
-            ? copper_changes_override
-            : copper::max_changes_per_line(
-                  /*depth=*/3, /*is_ham=*/false, /*is_hires=*/false,
-                  amiga::Chipset::ocs, /*is_lace=*/false);
+        std::size_t useful_swap_cap = scap_share;
         std::size_t useful_swaps = 0;
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             std::size_t x_lo = std::min(width,
@@ -682,12 +692,39 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     ScapResult res;
     res.planes = *std::move(expanded);
     res.palette = std::move(output_palette);
-    res.line_moves = std::move(line_moves);
     res.slot_table = table;
     res.total_error = static_cast<float>(total_error);
     res.avg_changes_per_line = height > 0
         ? static_cast<float>(total_moves) / static_cast<float>(height)
         : 0.0f;
+    {
+        std::size_t total_all = 0, row_max = 0;
+        std::size_t total_hb = 0, hb_max = 0;
+        std::size_t total_vis = 0, vis_max = 0;
+        for (auto& row : line_moves) {
+            std::size_t rm = 0, hb = 0, vis = 0;
+            bool past_line_gate = false;
+            for (auto& op : row) {
+                if (op.kind == ScapOpKind::kWait) {
+                    past_line_gate = true;
+                    continue;
+                }
+                ++rm;
+                if (past_line_gate) ++vis; else ++hb;
+            }
+            total_all += rm;  if (rm  > row_max) row_max = rm;
+            total_hb  += hb;  if (hb  > hb_max)  hb_max  = hb;
+            total_vis += vis; if (vis > vis_max) vis_max = vis;
+        }
+        auto h = static_cast<float>(height ? height : 1);
+        res.avg_total_moves_per_line   = static_cast<float>(total_all) / h;
+        res.max_moves_per_line         = row_max;
+        res.avg_hblank_moves_per_line  = static_cast<float>(total_hb)  / h;
+        res.max_hblank_moves_per_line  = hb_max;
+        res.avg_visible_moves_per_line = static_cast<float>(total_vis) / h;
+        res.max_visible_moves_per_line = vis_max;
+    }
+    res.line_moves = std::move(line_moves);
     res.rendered = std::move(preview);
     return res;
 }
@@ -745,10 +782,22 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // line on top of that evolving state. Without this layering the
     // image looks single-palette per frame, which is very visible on
     // photographic content.
+    // CAP and SCAP share the same per-line copper budget (~14 MOVE
+    // hblank). Split:
+    //   * --copper-changes N: total combined ≤ N, CAP gets min(N, 2),
+    //     SCAP gets the rest.
+    //   * Auto: combined ≤ 14, default CAP=2, SCAP=12.
+    constexpr std::size_t kMaxCombinedEhb = copper::max_changes_per_line(
+        /*depth=*/5, false, false, amiga::Chipset::ocs, false);
+    std::size_t total_budget_ehb = (copper_changes_override > 0)
+        ? std::min<std::size_t>(copper_changes_override, kMaxCombinedEhb)
+        : kMaxCombinedEhb;
+    std::size_t cap_share_ehb = std::min<std::size_t>(total_budget_ehb, 2u);
+    std::size_t scap_share_ehb = total_budget_ehb - cap_share_ehb;
     auto copper_result = copper::encode_copper(
         src, /*depth=*/5, dither_settings,
         amiga::Chipset::ocs,
-        copper_changes_override,
+        cap_share_ehb,
         /*user_palette=*/nullptr,
         reserve_color0,
         /*locked=*/{},
@@ -1015,12 +1064,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         //    override or max_changes_per_line auto-default — bounds
         //    the number of registers that need reverting on the next
         //    hblank.
-        std::size_t useful_swap_cap =
-            (copper_changes_override > 0)
-            ? copper_changes_override
-            : copper::max_changes_per_line(
-                  /*depth=*/5, /*is_ham=*/false, /*is_hires=*/false,
-                  amiga::Chipset::ocs, /*is_lace=*/false);
+        std::size_t useful_swap_cap = scap_share_ehb;
         std::size_t useful_swaps = 0;
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             std::size_t x_lo = std::min(width,
@@ -1143,12 +1187,39 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     ScapResult res;
     res.planes = *std::move(enc);
     res.palette = std::move(base_palette);  // 32 base entries; HW derives 32 half-brites
-    res.line_moves = std::move(line_moves);
     res.slot_table = table;
     res.total_error = static_cast<float>(total_error);
     res.avg_changes_per_line = height > 0
         ? static_cast<float>(total_moves) / static_cast<float>(height)
         : 0.0f;
+    {
+        std::size_t total_all = 0, row_max = 0;
+        std::size_t total_hb = 0, hb_max = 0;
+        std::size_t total_vis = 0, vis_max = 0;
+        for (auto& row : line_moves) {
+            std::size_t rm = 0, hb = 0, vis = 0;
+            bool past_line_gate = false;
+            for (auto& op : row) {
+                if (op.kind == ScapOpKind::kWait) {
+                    past_line_gate = true;
+                    continue;
+                }
+                ++rm;
+                if (past_line_gate) ++vis; else ++hb;
+            }
+            total_all += rm;  if (rm  > row_max) row_max = rm;
+            total_hb  += hb;  if (hb  > hb_max)  hb_max  = hb;
+            total_vis += vis; if (vis > vis_max) vis_max = vis;
+        }
+        auto h = static_cast<float>(height ? height : 1);
+        res.avg_total_moves_per_line   = static_cast<float>(total_all) / h;
+        res.max_moves_per_line         = row_max;
+        res.avg_hblank_moves_per_line  = static_cast<float>(total_hb)  / h;
+        res.max_hblank_moves_per_line  = hb_max;
+        res.avg_visible_moves_per_line = static_cast<float>(total_vis) / h;
+        res.max_visible_moves_per_line = vis_max;
+    }
+    res.line_moves = std::move(line_moves);
     res.rendered = std::move(preview);
     return res;
 }

@@ -161,7 +161,13 @@ struct ScapResult {
 
     // Stats (planner output only; probes leave these zero).
     float total_error{};
-    float avg_changes_per_line{};
+    float avg_changes_per_line{};       // SCAP useful swaps/line
+    float avg_total_moves_per_line{};   // CAP diffs + SCAP swaps (real hw load)
+    std::size_t max_moves_per_line{};   // worst-case row MOVE count
+    float avg_hblank_moves_per_line{};  // MOVEs before line-gate WAIT (hblank)
+    std::size_t max_hblank_moves_per_line{};
+    float avg_visible_moves_per_line{}; // MOVEs after line-gate WAIT (SCAP)
+    std::size_t max_visible_moves_per_line{};
 
     // Rendered preview produced by the planner. Width × height linear-RGB
     // image where each pixel is looked up against the per-strip palette

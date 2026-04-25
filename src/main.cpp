@@ -3199,10 +3199,18 @@ int main(int argc, char* argv[]) {
         const char* scap_label = scap_ehb
             ? "OCS EHB 6bpp investigation"
             : "OCS DPF";
-        std::println("Mode:   SCAP ({}, {} slots, {:.1f} useful MOVEs/line)",
+        std::println("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line)",
                      scap_label,
                      scap_res->slot_table.slots.size(),
                      scap_res->avg_changes_per_line);
+        std::println("Copper load: hblank avg {:.1f} (max {}), visible avg "
+                     "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
+                     scap_res->avg_hblank_moves_per_line,
+                     scap_res->max_hblank_moves_per_line,
+                     scap_res->avg_visible_moves_per_line,
+                     scap_res->max_visible_moves_per_line,
+                     scap_res->avg_total_moves_per_line,
+                     scap_res->max_moves_per_line);
         std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                      scap_res->planes.depth, scap_res->planes.total_bytes(),
                      count_unique_colors(scap_res->rendered),
