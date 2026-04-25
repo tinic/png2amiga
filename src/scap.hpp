@@ -102,6 +102,26 @@ inline const ScapSlotTable kScap6bplOcs{
     }
 };
 
+// kScap6bplEhb — OCS EHB, 6 bitplanes, lores 320 px display.
+//
+// Same DMA shape as 6-plane DPF (6 plane fetches per 16 lores px) but
+// EHB has no PF2OF / DBLPF combiner machinery, so the actual MOVE
+// landing positions on the bus differ from DPF in subtle ways. This
+// table starts at the clean naive 16-px grid (8, 24, 40, ..., 296) —
+// no per-slot offset corrections yet. Calibrate empirically with
+// --scap-debug + the stripe tuner: each visible black/white transition
+// position is the actual MOVE landing for that slot. Adjust below.
+inline const ScapSlotTable kScap6bplEhb{
+    /*total_planes=*/6,
+    /*line_gate_hpos=*/0x3C,
+    /*end_of_line_hpos=*/0xDD,
+    /*slots=*/{
+        {  8}, { 24}, { 40}, { 56}, { 72}, { 88}, {104}, {120},
+        {136}, {152}, {168}, {184}, {200}, {216}, {232}, {248},
+        {264}, {280}, {296},
+    }
+};
+
 // Deferred — populated when we run an AGA probe.
 inline const ScapSlotTable kScap8bplAga{
     /*total_planes=*/8,

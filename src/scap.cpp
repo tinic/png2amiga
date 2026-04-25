@@ -756,7 +756,7 @@ Color3f half_brite(const Color3f& c) {
 // give stable x-coord references at 4/8/16-px hierarchy.
 static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
                                                 std::size_t height) {
-    auto& table = scap_table_for(6);
+    auto& table = kScap6bplEhb;
     constexpr std::size_t kStripeReg = 2;       // shared register all pixels use
     constexpr std::uint16_t kBlack = 0x0000;
     constexpr std::uint16_t kWhite = 0x0FFF;
@@ -886,7 +886,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        std::size_t copper_changes_override,
                                        int palette_diversity,
                                        bool debug_overlay) {
-    auto& table = scap_table_for(6);
+    auto& table = kScap6bplEhb;
     if (table.slots.empty()) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
