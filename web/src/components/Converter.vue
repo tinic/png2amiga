@@ -315,7 +315,8 @@ watch(() => options.dualPlayfield, (on) => {
 })
 watch(() => options.scap, (on) => {
   if (on) {
-    options.copper = false
+    // SCAP is a copper list — flip Copper on so the UI reflects it.
+    options.copper = true
     // Banned-by-SCAP error-diffusion kernels: their full error
     // propagation breaks across SCAP's per-strip palette boundaries.
     // Only Atkinson survives. If the user is on one, switch them.
@@ -324,6 +325,12 @@ watch(() => options.scap, (on) => {
     if (banned.includes(options.dither)) options.dither = 'atkinson'
   }
   track('scap-toggle', { enabled: on })
+})
+
+// Copper off while SCAP is on means the user wants to drop the copper
+// list entirely — turn SCAP off too.
+watch(() => options.copper, (on) => {
+  if (!on && options.scap) options.scap = false
 })
 
 // Depth changes can invalidate DPF (requires depth=3 OCS / 4 AGA) and
@@ -986,11 +993,9 @@ async function loadExample(example) {
 
               <!-- Copper-Augmented Palette (Amiga only; not for Atari/DOS) -->
               <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette (CAP): per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank). SCAP is itself a copper list (mid-line PF2 swaps), so when SCAP is on the copper is already active and CAP is replaced — the toggle reflects 'copper active' but is locked.">Copper</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Copper-Augmented Palette (CAP): per-scanline palette swaps via the copper, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank). SCAP is itself a copper list (mid-line PF2 swaps); enabling SCAP turns Copper on, and turning Copper off also turns SCAP off.">Copper</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch :modelValue="options.copper || options.scap"
-                                @update:modelValue="v => { if (!options.scap) options.copper = v }"
-                                :disabled="options.scap" />
+                  <ToggleSwitch v-model="options.copper" />
                   <span style="color: #888; font-size: 0.625rem;">{{ options.scap ? 'driven by SCAP' : 'Copper-Augmented Palette' }}</span>
                 </div>
               </div>
