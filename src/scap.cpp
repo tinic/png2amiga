@@ -915,6 +915,400 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
 }
 
 // ---------------------------------------------------------------------------
+// SCAP for EHB — 6 bitplanes, 32 base regs + 32 hardware half-brites.
+//
+// Same DMA pattern as 6-plane DPF, so kScap6bplOcs's slot table applies
+// unchanged. The planner swaps among the 32 BASE registers; each swap
+// implicitly shifts the corresponding half-brite sibling. Per-pixel
+// nearest-colour search runs over all 64 effective entries.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Half-brite a base linear-RGB colour: sRGB-halve then back to linear,
+// matching make_ehb_palette() and the Amiga DAC.
+Color3f half_brite(const Color3f& c) {
+    auto srgb = color_space::linear_to_srgb(c).clamped();
+    Color3f half_srgb{srgb.r * 0.5f, srgb.g * 0.5f, srgb.b * 0.5f};
+    return color_space::srgb_to_linear(half_srgb);
+}
+
+} // namespace
+
+Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
+                                       int width_arg,
+                                       int height_arg,
+                                       bool reserve_color0,
+                                       const dither::Settings& dither_settings) {
+    auto& table = scap_table_for(6);
+    if (table.slots.empty()) {
+        return std::unexpected{Error{
+            ErrorCode::unsupported_mode,
+            "SCAP EHB planner: kScap6bplOcs slot table is empty",
+        }};
+    }
+
+    auto width = (width_arg > 0) ? static_cast<std::size_t>(width_arg)
+                                  : image.width();
+    auto height = (height_arg > 0) ? static_cast<std::size_t>(height_arg)
+                                    : image.height();
+    if (image.width() != width || image.height() != height) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("SCAP EHB planner: image is {}x{} but caller asked "
+                        "for {}x{} — resize before calling",
+                        image.width(), image.height(), width, height),
+        }};
+    }
+
+    auto& src = image;
+    constexpr std::size_t kBaseColors = 32;
+    constexpr std::size_t kEffective  = 64;
+    constexpr int kRegBase = 0;
+
+    // ---- 1. Quantise to 32 BASE colours (median-cut over EHB-aware
+    // 64-colour space would be ideal; for the investigation we just
+    // quantise to 32 base entries and let the half-brites fall out).
+    int qcount = reserve_color0 ? static_cast<int>(kBaseColors) - 1
+                                : static_cast<int>(kBaseColors);
+    auto quantised = quantize::quantize(src,
+                                        static_cast<std::size_t>(qcount),
+                                        quantize::Algorithm::ocs_bruteforce,
+                                        /*diversity=*/0);
+    if (!quantised) return std::unexpected{quantised.error()};
+
+    std::vector<Color3f> base_palette(kBaseColors, Color3f{0.0f, 0.0f, 0.0f});
+    std::size_t off = reserve_color0 ? 1u : 0u;
+    for (std::size_t i = 0; i < quantised->colors.size() &&
+                            (off + i) < kBaseColors; ++i) {
+        base_palette[off + i] = palette::quantize_to_ocs(quantised->colors[i]);
+    }
+
+    // Build the 64-effective palette (base + half-brite siblings) used
+    // for stage-1 dither and per-pixel nearest-colour lookup.
+    auto build_effective = [](const std::vector<Color3f>& base) {
+        std::vector<Color3f> eff(kEffective);
+        for (std::size_t k = 0; k < kBaseColors; ++k) {
+            eff[k]              = base[k];
+            eff[kBaseColors+k]  = half_brite(base[k]);
+        }
+        return eff;
+    };
+    auto effective = build_effective(base_palette);
+
+    // ---- 2. Global dither vs the 64-colour effective palette.
+    std::span<const Color3f> eff_pal_span(effective.data(), kEffective);
+    auto dith_result = dither::apply(src, eff_pal_span, dither_settings);
+    auto& base_index = dith_result.indices;  // 0..63 per pixel
+
+    std::vector<color_space::OKLab> img_lab(width * height);
+    for (std::size_t y = 0; y < height; ++y)
+        for (std::size_t x = 0; x < width; ++x)
+            img_lab[y * width + x] = color_space::linear_to_oklab(src[x, y]);
+
+    // ---- 3. Per-line greedy planner -----------------------------------
+    std::vector<std::uint8_t> indices(width * height, 0);  // 0..63
+    std::vector<std::vector<ScapMove>> line_moves(height);
+    Image preview(width, height);
+
+    auto P = base_palette;
+    auto P_eff = effective;
+    std::vector<color_space::OKLab> P_eff_lab(kEffective);
+    auto recompute_lab = [&]() {
+        for (std::size_t k = 0; k < kEffective; ++k)
+            P_eff_lab[k] = color_space::linear_to_oklab(P_eff[k]);
+    };
+    recompute_lab();
+
+    std::size_t k_min = reserve_color0 ? 1u : 0u;
+
+    bool ordered = dither::is_ordered(dither_settings.method);
+    bool err_diffuse =
+        dither_settings.method != dither::Method::none &&
+        dither_settings.strength > 0.0f && !ordered;
+    auto kernel = err_diffuse
+        ? dither::error_diffusion_kernel(dither_settings.method)
+        : std::span<const dither::DiffusionEntry>{};
+    float clamp_v = dither_settings.error_clamp;
+
+    constexpr std::size_t kPad = 4;
+    std::array<std::vector<Color3f>, 3> err_rows{
+        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
+        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
+        std::vector<Color3f>(width + 2 * kPad, Color3f{0.0f, 0.0f, 0.0f}),
+    };
+    auto clamp_err = [&](Color3f c) {
+        if (clamp_v <= 0.0f) return c;
+        c.r = std::clamp(c.r, -clamp_v, clamp_v);
+        c.g = std::clamp(c.g, -clamp_v, clamp_v);
+        c.b = std::clamp(c.b, -clamp_v, clamp_v);
+        return c;
+    };
+
+    // Greedy strip swap. We can only MOVE the 32 BASE registers; each
+    // base[k] swap also redefines half-brite[k] = halve(base[k]). For
+    // a candidate swap on register k, the affected pixels are those
+    // currently bound to either index k (base) or index kBaseColors+k
+    // (half-brite). New error: nearest-of-(centroid, half-brite-of-
+    // centroid) per pixel.
+    auto find_best_swap_in_strip =
+        [&](std::size_t y, std::size_t x_lo, std::size_t x_hi,
+            int& out_reg, Color3f& out_color, float& out_reduction) {
+            std::array<double, kBaseColors> sumL_b{}, suma_b{}, sumb_b{};
+            std::array<double, kBaseColors> sumL_h{}, suma_h{}, sumb_h{};
+            std::array<double, kBaseColors> count_b{}, count_h{};
+            std::array<double, kBaseColors> cur_err{};
+            for (std::size_t x = x_lo; x < x_hi; ++x) {
+                auto idx = static_cast<std::size_t>(base_index[y * width + x]);
+                std::size_t k = idx & (kBaseColors - 1);
+                bool is_half = idx >= kBaseColors;
+                auto& lab = img_lab[y * width + x];
+                if (is_half) {
+                    sumL_h[k] += static_cast<double>(lab.L);
+                    suma_h[k] += static_cast<double>(lab.a);
+                    sumb_h[k] += static_cast<double>(lab.b);
+                    count_h[k] += 1.0;
+                } else {
+                    sumL_b[k] += static_cast<double>(lab.L);
+                    suma_b[k] += static_cast<double>(lab.a);
+                    sumb_b[k] += static_cast<double>(lab.b);
+                    count_b[k] += 1.0;
+                }
+                auto& pl = P_eff_lab[idx];
+                float dL = lab.L - pl.L;
+                float da = lab.a - pl.a;
+                float db = lab.b - pl.b;
+                cur_err[k] += static_cast<double>(dL * dL + da * da + db * db);
+            }
+            out_reg = -1;
+            out_reduction = 0.0f;
+            for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                double total_count = count_b[k] + count_h[k];
+                if (total_count < 1.0) continue;
+                // Try swapping base[k] to the OKLab centroid of base-bound
+                // pixels (most common case). For the half-brite-bound
+                // pixels we measure error against the half-of-centroid.
+                color_space::OKLab cb{
+                    static_cast<float>(sumL_b[k] / std::max(count_b[k], 1.0)),
+                    static_cast<float>(suma_b[k] / std::max(count_b[k], 1.0)),
+                    static_cast<float>(sumb_b[k] / std::max(count_b[k], 1.0)),
+                };
+                color_space::OKLab ch{
+                    static_cast<float>(sumL_h[k] / std::max(count_h[k], 1.0)),
+                    static_cast<float>(suma_h[k] / std::max(count_h[k], 1.0)),
+                    static_cast<float>(sumb_h[k] / std::max(count_h[k], 1.0)),
+                };
+                // Use the count-weighted average of (cb, 2*ch) as the new
+                // base candidate (since half-brite = halve(base), pixels
+                // currently bound to half-brite want base ≈ 2*their colour
+                // in sRGB — but we approximate in OKLab by doubling L,
+                // which is rough but cheap; refine if needed).
+                color_space::OKLab cand;
+                if (count_b[k] > 0.0 && count_h[k] > 0.0) {
+                    float wb = static_cast<float>(count_b[k] / total_count);
+                    float wh = static_cast<float>(count_h[k] / total_count);
+                    cand.L = wb * cb.L + wh * std::min(2.0f * ch.L, 1.0f);
+                    cand.a = wb * cb.a + wh * (2.0f * ch.a);
+                    cand.b = wb * cb.b + wh * (2.0f * ch.b);
+                } else if (count_b[k] > 0.0) {
+                    cand = cb;
+                } else {
+                    cand.L = std::min(2.0f * ch.L, 1.0f);
+                    cand.a = 2.0f * ch.a;
+                    cand.b = 2.0f * ch.b;
+                }
+                auto cand_lin = color_space::oklab_to_linear(cand).clamped();
+                cand_lin = palette::quantize_to_ocs(cand_lin);
+                auto cand_half = half_brite(cand_lin);
+                auto cand_lab  = color_space::linear_to_oklab(cand_lin);
+                auto cand_h_lab = color_space::linear_to_oklab(cand_half);
+                double new_err = 0.0;
+                for (std::size_t x = x_lo; x < x_hi; ++x) {
+                    auto idx = static_cast<std::size_t>(base_index[y*width + x]);
+                    if ((idx & (kBaseColors - 1)) != k) continue;
+                    auto& lab = img_lab[y * width + x];
+                    bool is_half = idx >= kBaseColors;
+                    auto& cl = is_half ? cand_h_lab : cand_lab;
+                    float dL = lab.L - cl.L;
+                    float da = lab.a - cl.a;
+                    float db = lab.b - cl.b;
+                    new_err += static_cast<double>(dL * dL + da * da + db * db);
+                }
+                float red = static_cast<float>(cur_err[k] - new_err);
+                if (red > out_reduction) {
+                    out_reg = static_cast<int>(k);
+                    out_color = cand_lin;
+                    out_reduction = red;
+                }
+            }
+        };
+
+    constexpr int kVStart = 44;
+    double total_error = 0.0;
+    std::size_t total_moves = 0;
+
+    std::size_t num_strips = table.slots.size() + 1;
+    std::vector<std::vector<Color3f>> strip_eff(num_strips,
+        std::vector<Color3f>(kEffective));
+    std::vector<std::vector<color_space::OKLab>> strip_eff_lab(num_strips,
+        std::vector<color_space::OKLab>(kEffective));
+
+    auto strip_for_x = [&](std::size_t x) -> std::size_t {
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            if (x < static_cast<std::size_t>(table.slots[s].pixel_x))
+                return s;
+        }
+        return table.slots.size();
+    };
+    std::vector<std::uint16_t> x_strip(width);
+    for (std::size_t x = 0; x < width; ++x)
+        x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
+
+    for (std::size_t y = 0; y < height; ++y) {
+        int abs_vpos = static_cast<int>(y) + kVStart;
+        auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
+
+        // CAP-style line reset.
+        P = base_palette;
+        P_eff = build_effective(P);
+        recompute_lab();
+        strip_eff[0] = P_eff;
+        strip_eff_lab[0] = P_eff_lab;
+
+        // 1. Base palette MOVEs (informational).
+        for (std::size_t k = 0; k < kBaseColors; ++k) {
+            line_moves[y].push_back(make_move(
+                static_cast<std::uint8_t>(kRegBase + k),
+                palette::linear_to_ocs(base_palette[k]),
+                -1));
+        }
+        // 2. Line-gate WAIT.
+        line_moves[y].push_back(make_wait(
+            static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
+
+        // 3. SCAP MOVEs.
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            std::size_t x_lo = std::min(width,
+                static_cast<std::size_t>(table.slots[s].pixel_x));
+            std::size_t x_hi = (s + 1 < table.slots.size())
+                ? std::min(width,
+                    static_cast<std::size_t>(table.slots[s + 1].pixel_x))
+                : width;
+
+            int swap_reg = -1;
+            Color3f swap_color{};
+            float reduction = 0.0f;
+            if (x_lo < width && x_hi > x_lo) {
+                find_best_swap_in_strip(y, x_lo, x_hi,
+                                        swap_reg, swap_color, reduction);
+            }
+            if (swap_reg >= 0 && reduction > 0.0f) {
+                auto k = static_cast<std::size_t>(swap_reg);
+                P[k] = swap_color;
+                P_eff[k] = swap_color;
+                P_eff[kBaseColors + k] = half_brite(swap_color);
+                P_eff_lab[k] = color_space::linear_to_oklab(P_eff[k]);
+                P_eff_lab[kBaseColors + k] =
+                    color_space::linear_to_oklab(P_eff[kBaseColors + k]);
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(kRegBase + swap_reg),
+                    palette::linear_to_ocs(swap_color),
+                    static_cast<int>(s)));
+                ++total_moves;
+            }
+            strip_eff[s + 1] = P_eff;
+            strip_eff_lab[s + 1] = P_eff_lab;
+        }
+
+        // 4. End-of-line WAIT.
+        line_moves[y].push_back(make_wait(
+            static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
+
+        // Stage-2 render across all 64 effective entries per pixel.
+        for (std::size_t x = 0; x < width; ++x) {
+            std::size_t s = static_cast<std::size_t>(x_strip[x]);
+            auto& eff_pal = strip_eff[s];
+            auto& eff_lab = strip_eff_lab[s];
+
+            Color3f target = src[x, y];
+            if (err_diffuse) {
+                auto& e = err_rows[0][x + kPad];
+                target.r += e.r;
+                target.g += e.g;
+                target.b += e.b;
+            }
+            color_space::OKLab tgt_lab = color_space::linear_to_oklab(target);
+            if (ordered &&
+                dither_settings.method != dither::Method::none &&
+                dither_settings.strength > 0.0f) {
+                float th = dither::ordered_threshold(
+                    dither_settings.method, x, y);
+                tgt_lab.L += th * dither_settings.strength * 0.15f;
+                tgt_lab.a += th * dither_settings.strength * 0.03f;
+                tgt_lab.b += th * dither_settings.strength * 0.03f;
+            }
+
+            float best_d = std::numeric_limits<float>::max();
+            std::size_t best_k = k_min;
+            for (std::size_t k = k_min; k < kEffective; ++k) {
+                float dL = tgt_lab.L - eff_lab[k].L;
+                float da = tgt_lab.a - eff_lab[k].a;
+                float db = tgt_lab.b - eff_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            indices[y * width + x] = static_cast<std::uint8_t>(best_k);
+            preview[x, y] = eff_pal[best_k];
+
+            if (err_diffuse) {
+                Color3f residual = clamp_err(Color3f{
+                    target.r - eff_pal[best_k].r,
+                    target.g - eff_pal[best_k].g,
+                    target.b - eff_pal[best_k].b,
+                });
+                for (auto& ent : kernel) {
+                    auto target_x = static_cast<std::ptrdiff_t>(x) + ent.dx;
+                    if (target_x < 0
+                        || target_x >= static_cast<std::ptrdiff_t>(width))
+                        continue;
+                    auto idx = static_cast<std::size_t>(target_x) + kPad;
+                    auto& buf = err_rows[static_cast<std::size_t>(ent.dy)];
+                    buf[idx].r += residual.r * ent.weight;
+                    buf[idx].g += residual.g * ent.weight;
+                    buf[idx].b += residual.b * ent.weight;
+                }
+            }
+        }
+        std::ranges::fill(err_rows[0], Color3f{0.0f, 0.0f, 0.0f});
+        std::rotate(err_rows.begin(), err_rows.begin() + 1, err_rows.end());
+
+        for (std::size_t x = 0; x < width; ++x) {
+            auto& a = img_lab[y * width + x];
+            auto pl = color_space::linear_to_oklab(preview[x, y]);
+            float dL = a.L - pl.L, da = a.a - pl.a, db = a.b - pl.b;
+            total_error += static_cast<double>(dL * dL + da * da + db * db);
+        }
+    }
+
+    // ---- 4. 6-plane bitplane encoding. The 6-bit index already encodes
+    // half-brite as bit 5, which is exactly what the EHB hardware reads.
+    auto enc = bitplane::encode(indices, width, height,
+                                /*depth=*/6, bitplane::Layout::interleaved);
+    if (!enc) return std::unexpected{enc.error()};
+
+    ScapResult res;
+    res.planes = *std::move(enc);
+    res.palette = std::move(base_palette);  // 32 base entries; HW derives 32 half-brites
+    res.line_moves = std::move(line_moves);
+    res.slot_table = table;
+    res.total_error = static_cast<float>(total_error);
+    res.avg_changes_per_line = height > 0
+        ? static_cast<float>(total_moves) / static_cast<float>(height)
+        : 0.0f;
+    res.rendered = std::move(preview);
+    return res;
+}
+
+// ---------------------------------------------------------------------------
 // Probe A — sweep one COLOR09 write across HPOS 0x00..0xE3, one per line,
 // on a 6-plane OCS DPF frame.
 // ---------------------------------------------------------------------------

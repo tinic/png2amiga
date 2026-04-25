@@ -227,6 +227,28 @@ Result<ScapResult> encode_scap_lores_ocs(const Image& image,
                                          const dither::Settings& dither_settings = {});
 
 // ---------------------------------------------------------------------------
+// SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
+// half-brite colours).
+//
+// 6bpp EHB has identical BPL DMA bandwidth to 6-plane lores (and to OCS DPF
+// 3+3) — same 6 plane fetches per 16 px — so the existing kScap6bplOcs
+// slot table transfers directly. The planner swaps the 32 BASE registers;
+// each swap implicitly updates the corresponding half-brite sibling
+// (hardware halves the sRGB DAC values), so a single MOVE shifts two
+// effective palette entries at once. Per-pixel encoding picks among all
+// 64 effective entries (bit 5 of the 6-bit index = half-brite toggle).
+//
+// Output: 6-plane bitplane data, 32-entry base palette (the half-brites
+// are reproduced by the hardware and are NOT written to CMAP), and a
+// rendered preview Image.
+// ---------------------------------------------------------------------------
+Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
+                                       int width,
+                                       int height,
+                                       bool reserve_color0 = true,
+                                       const dither::Settings& dither_settings = {});
+
+// ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).
 //
 // Builds a 6-plane DPF frame where every pixel = PF2 index 1, i.e. the
