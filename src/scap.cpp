@@ -476,6 +476,23 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         //    Slot s's MOVE fires AT slots[s].pixel_x, so the strip it
         //    affects is [slots[s].pixel_x .. slots[s+1].pixel_x) — that's
         //    what the swap planner targets.
+        //
+        //    Per-line useful-swap cap: bounds the number of registers
+        //    SCAP can change per line so the NEXT line's hblank doesn't
+        //    overflow trying to revert them all. With CAP using up to
+        //    `copper_changes_override` (or max_changes_per_line if 0)
+        //    in hblank already, we cap SCAP to the same value as a
+        //    sensible default — total hblank load stays bounded by
+        //    2× max_changes worst-case which still fits the ~16-MOVE
+        //    OCS hblank capacity comfortably for the typical copper
+        //    budget of 14. Slots beyond the cap emit fillers.
+        std::size_t useful_swap_cap =
+            (copper_changes_override > 0)
+            ? copper_changes_override
+            : copper::max_changes_per_line(
+                  /*depth=*/3, /*is_ham=*/false, /*is_hires=*/false,
+                  amiga::Chipset::ocs, /*is_lace=*/false);
+        std::size_t useful_swaps = 0;
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             std::size_t x_lo = std::min(width,
                 static_cast<std::size_t>(table.slots[s].pixel_x));
@@ -487,7 +504,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             int swap_reg = -1;
             Color3f swap_color{};
             float reduction = 0.0f;
-            if (x_lo < width && x_hi > x_lo) {
+            if (x_lo < width && x_hi > x_lo
+                && useful_swaps < useful_swap_cap) {
                 find_best_swap_in_strip(y, x_lo, x_hi,
                                         swap_reg, swap_color, reduction);
             }
@@ -511,6 +529,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     palette::linear_to_ocs(swap_color),
                     static_cast<int>(s)));
                 ++total_moves;
+                ++useful_swaps;
             } else {
                 line_moves[y].push_back(make_move(kFillerReg, kFillerVal,
                                                   static_cast<int>(s)));
@@ -992,7 +1011,17 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
 
-        // 3. SCAP MOVEs.
+        // 3. SCAP MOVEs. Per-line useful-swap cap = copper_changes
+        //    override or max_changes_per_line auto-default — bounds
+        //    the number of registers that need reverting on the next
+        //    hblank.
+        std::size_t useful_swap_cap =
+            (copper_changes_override > 0)
+            ? copper_changes_override
+            : copper::max_changes_per_line(
+                  /*depth=*/5, /*is_ham=*/false, /*is_hires=*/false,
+                  amiga::Chipset::ocs, /*is_lace=*/false);
+        std::size_t useful_swaps = 0;
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             std::size_t x_lo = std::min(width,
                 static_cast<std::size_t>(table.slots[s].pixel_x));
@@ -1004,7 +1033,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             int swap_reg = -1;
             Color3f swap_color{};
             float reduction = 0.0f;
-            if (x_lo < width && x_hi > x_lo) {
+            if (x_lo < width && x_hi > x_lo
+                && useful_swaps < useful_swap_cap) {
                 find_best_swap_in_strip(y, x_lo, x_hi,
                                         swap_reg, swap_color, reduction);
             }
@@ -1023,6 +1053,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     palette::linear_to_ocs(swap_color),
                     static_cast<int>(s)));
                 ++total_moves;
+                ++useful_swaps;
             }
             strip_eff[s + 1] = P_eff;
             strip_eff_lab[s + 1] = P_eff_lab;
