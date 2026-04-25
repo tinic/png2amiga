@@ -825,7 +825,9 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
         // toward mid-grey at the chain's end.
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             auto pair_n = static_cast<std::uint16_t>(s / 2);
-            auto step = static_cast<std::uint16_t>(pair_n * 0x222);
+            auto step = std::min<std::uint16_t>(
+                static_cast<std::uint16_t>(pair_n * 0x222),
+                static_cast<std::uint16_t>(0x0FFF));
             std::uint16_t v = (s % 2 == 0)
                 ? static_cast<std::uint16_t>(0x0FFF - step)
                 : step;
@@ -862,7 +864,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
                             // pair N gets (0xFFF - N·0x111, N·0x111).
                             std::size_t pair_int = s / 2;
                             float pair_n = static_cast<float>(pair_int);
-                            float step = pair_n * 2.0f / 15.0f;  // doubled rate
+                            float step = std::min(pair_n * 2.0f / 15.0f, 1.0f);
                             float v = (s % 2 == 0) ? (1.0f - step) : step;
                             c = Color3f{v, v, v};
                             break;
