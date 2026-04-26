@@ -163,6 +163,18 @@ struct Config {
     bool json = false;                 // emit JSON status object instead of human text
     std::string depfile;               // Make-format depfile path (empty = disabled)
     bool list_modes = false;           // emit mode catalog (human or JSON) and exit 0
+
+    // Bitplane layout override for raw/.h export. nullopt = auto per mode
+    // (Amiga → line-interleaved, DOS planar → plane-sequential, Atari →
+    // word-interleaved). Setting this overrides the auto choice. Affects
+    // the byte order in the encoded output; doesn't touch IFF (which has
+    // its own body-storage convention).
+    std::optional<bitplane::Layout> layout_override;
+
+    // Skip image scaling — output uses source dimensions verbatim.
+    // Compatible with .h, .iff, .raw, .pal, .png. .cpp/.c viewer is
+    // rejected because the viewer code assumes fixed Amiga screen modes.
+    bool no_scale = false;
     amiga::Mode mode = amiga::Mode::lores;
     bool hires = false;                // compound mode hires override
     bool interlace = false;            // LACE bit in CAMG
@@ -440,6 +452,25 @@ void print_usage() {
         "                                  on entry, fades out on exit. Non-HAM,\n"
         "                                  non-interlace only.\n"
         "\n"
+        "Bitplane export:\n"
+        "  --layout <which>                Bitplane byte order in .raw and .h output:\n"
+        "                                    auto              (default; mode-specific)\n"
+        "                                    interleaved       (Amiga DMA order; rows\n"
+        "                                                       interleave plane bytes)\n"
+        "                                    standard          (plane-sequential; for\n"
+        "                                                       paint programs / boot\n"
+        "                                                       blocks; aliases:\n"
+        "                                                       --non-interleaved,\n"
+        "                                                       --planar)\n"
+        "                                    word-interleaved  (Atari ST native)\n"
+        "                                  Doesn't affect .iff (uses its own format).\n"
+        "  --non-interleaved, --planar     Shortcut for --layout standard\n"
+        "  --interleaved                   Shortcut for --layout interleaved\n"
+        "  --no-scale                      Skip scaling — output uses source PNG\n"
+        "                                  dimensions verbatim. Compatible with .h,\n"
+        "                                  .iff, .raw, .pal, .png. NOT compatible with\n"
+        "                                  .cpp/.c viewer (needs fixed screen modes).\n"
+        "\n"
         "Build-system integration:\n"
         "  -q, --quiet                     Suppress all stdout status; errors still go\n"
         "                                  to stderr. Useful in CMake/Make/Ninja builds.\n"
@@ -590,6 +621,39 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--depfile" && i + 1 < argc) {
             config.depfile = std::string(argv[++i]);
+            continue;
+        }
+
+        if (arg == "--no-scale") {
+            config.no_scale = true;
+            continue;
+        }
+
+        // --layout interleaved|standard. Also --non-interleaved as a
+        // shortcut for the plane-sequential variant most paint programs
+        // and bootblocks expect.
+        if (arg == "--layout" && i + 1 < argc) {
+            std::string_view v = argv[++i];
+            if (v == "interleaved")
+                config.layout_override = bitplane::Layout::interleaved;
+            else if (v == "standard" || v == "non-interleaved" ||
+                     v == "planar" || v == "plane-sequential")
+                config.layout_override = bitplane::Layout::standard;
+            else if (v == "word-interleaved" || v == "atari")
+                config.layout_override = bitplane::Layout::word_interleaved;
+            else if (v != "auto") {
+                return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                    std::format("Unknown --layout '{}' (use interleaved, "
+                                "standard, word-interleaved, or auto)", v)}};
+            }
+            continue;
+        }
+        if (arg == "--non-interleaved" || arg == "--planar") {
+            config.layout_override = bitplane::Layout::standard;
+            continue;
+        }
+        if (arg == "--interleaved") {
+            config.layout_override = bitplane::Layout::interleaved;
             continue;
         }
 
@@ -1845,6 +1909,25 @@ int main(int argc, char* argv[]) {
     g_quiet = config->quiet;
     g_json  = config->json;
 
+    // --no-scale + .cpp/.c viewer is incoherent: the generated viewer
+    // sets BPLCON0/DDFSTRT/DDFSTOP/BPLxMOD for a specific Amiga screen
+    // mode and assumes the bitplane buffer matches the mode's display
+    // window. Arbitrary source dimensions would mis-display. Reject
+    // at startup so the user gets a clear error before any work.
+    auto _ends_cpp_or_c = [](std::string_view s) {
+        return s.size() >= 4 &&
+               (s.substr(s.size() - 4) == ".cpp" ||
+                s.substr(s.size() - 2) == ".c");
+    };
+    if (config->no_scale && _ends_cpp_or_c(config->output_path)) {
+        std::println(stderr, "Error: --no-scale is incompatible with .cpp/.c "
+                             "viewer output. The generated AmigaOS viewer "
+                             "expects fixed Amiga screen dimensions; use "
+                             "--no-scale only with .h, .iff, .raw, .pal, "
+                             "or .png output.");
+        return exit_code::usage;
+    }
+
     // --list-modes: emit the mode catalog and exit. Useful for build
     // systems probing supported modes without running an encode.
     if (config->list_modes) {
@@ -2037,7 +2120,15 @@ int main(int argc, char* argv[]) {
     if (config->interlace && !params.is_interlaced) par *= 2.0;
 
     std::size_t target_w, target_h;
-    if (config->width && config->height) {
+    if (config->no_scale) {
+        // --no-scale: emit at the source PNG's exact dimensions.
+        // The encoder's downstream scaling step becomes a no-op since
+        // image dims already match target. Useful for asset pipelines
+        // that pre-scale and want the converter to act as a pure
+        // pixel-to-bitplane translator.
+        target_w = src_w;
+        target_h = src_h;
+    } else if (config->width && config->height) {
         // Both specified: use as-is (user explicitly wants this aspect)
         target_w = *config->width;
         target_h = *config->height;
@@ -2865,9 +2956,63 @@ int main(int argc, char* argv[]) {
                         return 1;
                     }
                     cli_status("Viewer: {}", config->output_path);
+                } else if (ends_with(config->output_path, ".iff") ||
+                           ends_with(config->output_path, ".ilbm")) {
+                    // EHB+CAP IFF: emit 6-plane bitplane data + CMAP
+                    // (32 base colours; EHB hardware derives the
+                    // half-brites at display time) + CAMG with EHB
+                    // flag set + PCHG with the per-line base palette
+                    // evolution. RECOIL / DPaint / ViewTek read this
+                    // as a normal EHB ILBM and apply the per-line
+                    // changes themselves.
+                    iff::IffOptions iff_opts;
+                    iff_opts.hires = config->hires;
+                    iff_opts.interlace = config->interlace;
+                    iff_opts.has_transparency = has_transparency;
+                    if (!copper_result->scanline_palettes.empty()) {
+                        iff_opts.scanline_palettes =
+                            &copper_result->scanline_palettes;
+                    }
+                    auto result = iff::save_ilbm(
+                        config->output_path, planes.value(),
+                        cmap_palette, config->mode, iff_opts);
+                    if (!result) {
+                        std::println(stderr, "IFF write error: {}",
+                                     result.error().message);
+                        return exit_code::cant_create;
+                    }
+                    cli_status("IFF:    {} ({} bytes)",
+                                 config->output_path,
+                                 planes->total_bytes());
+                } else if (ends_with(config->output_path, ".h")) {
+                    // .h header for EHB+CAP: bitplanes + base CMAP +
+                    // copper change data, no viewer init code.
+                    cheader::CHeaderOptions ch_opts;
+                    ch_opts.symbol_name = config->symbol_name.empty()
+                        ? derive_symbol_name(config->output_path)
+                        : config->symbol_name;
+                    ch_opts.hires = config->hires;
+                    ch_opts.interlace = config->interlace;
+                    ch_opts.copper_changes = &copper_result->scanline_changes;
+                    ch_opts.copper_changes_per_line =
+                        copper_result->changes_per_line;
+                    ch_opts.copper_scanline_palettes =
+                        &copper_result->scanline_palettes;
+                    pad_planes_to_mode(planes.value(), config->mode,
+                                       config->hires);
+                    auto result = cheader::save(
+                        config->output_path, planes.value(),
+                        cmap_palette, config->mode, ch_opts);
+                    if (!result) {
+                        std::println(stderr, "Header write error: {}",
+                                     result.error().message);
+                        return exit_code::cant_create;
+                    }
+                    cli_status("Header: {}", config->output_path);
                 } else {
-                    std::println(stderr, "EHB copper: only .png and .cpp output supported");
-                    return 1;
+                    std::println(stderr, "EHB copper: only .png, .iff, "
+                                         ".h, and .cpp/.c output supported");
+                    return exit_code::usage;
                 }
             }
 
@@ -3456,7 +3601,8 @@ int main(int argc, char* argv[]) {
                 }
                 cli_status("PNG:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
-                       ends_with(config->output_path, ".c")) {
+                       ends_with(config->output_path, ".c") ||
+                       ends_with(config->output_path, ".h")) {
                 cheader::CHeaderOptions ch_opts;
                 ch_opts.symbol_name = config->symbol_name.empty()
                     ? derive_symbol_name(config->output_path)
@@ -3473,19 +3619,26 @@ int main(int argc, char* argv[]) {
                     scap_res->slot_table.total_planes;
                 pad_planes_to_mode(scap_res->planes, config->mode,
                                    config->hires);
-                auto r = cheader::save_viewer(
-                    config->output_path, scap_res->planes,
-                    scap_res->palette, config->mode, ch_opts);
+                bool is_h = ends_with(config->output_path, ".h");
+                auto r = is_h
+                    ? cheader::save(
+                        config->output_path, scap_res->planes,
+                        scap_res->palette, config->mode, ch_opts)
+                    : cheader::save_viewer(
+                        config->output_path, scap_res->planes,
+                        scap_res->palette, config->mode, ch_opts);
                 if (!r) {
-                    std::println(stderr, "Viewer write error: {}",
+                    std::println(stderr, "{} write error: {}",
+                                 is_h ? "Header" : "Viewer",
                                  r.error().message);
-                    return 1;
+                    return exit_code::cant_create;
                 }
-                cli_status("Viewer: {}", config->output_path);
+                cli_status("{}: {}", is_h ? "Header" : "Viewer",
+                           config->output_path);
             } else {
                 std::println(stderr,
-                    "SCAP output: only .png and .cpp/.c supported (Phase 1)");
-                return 1;
+                    "SCAP output: only .png, .h, and .cpp/.c supported");
+                return exit_code::usage;
             }
         }
         return 0;
@@ -3737,10 +3890,12 @@ int main(int argc, char* argv[]) {
     // to line-interleaved for DMA.
     bool dos_planar = (amiga::is_ega(config->mode) || amiga::is_vga(config->mode))
                       && !amiga::is_chunky(config->mode);
-    auto bp_layout = amiga::is_atari(config->mode)
-        ? bitplane::Layout::word_interleaved
-        : dos_planar ? bitplane::Layout::standard
-                     : bitplane::Layout::interleaved;
+    auto bp_layout = config->layout_override
+        ? *config->layout_override
+        : (amiga::is_atari(config->mode)
+            ? bitplane::Layout::word_interleaved
+            : dos_planar ? bitplane::Layout::standard
+                         : bitplane::Layout::interleaved);
     auto planes = bitplane::encode(dither_result.indices,
                                    image->width(), image->height(),
                                    config->depth, bp_layout);

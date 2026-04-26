@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.10.8 LANGUAGES C CXX)
+project(png2amiga VERSION 1.10.9 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -124,6 +124,23 @@ else()
     add_test(
         NAME "help"
         COMMAND png2amiga --help
+    )
+
+    # RECOIL round-trip suite. Encodes one input through every IFF-
+    # producing combo, decodes each IFF via Piotr Fusik's recoil2png,
+    # and PSNR-compares against png2amiga's own preview. Skips cleanly
+    # if recoil2png isn't installed. Run with:
+    #     cmake --build build --target recoil_check
+    # Artifacts land in build/recoil_check/<combo>/ for inspection.
+    add_custom_target(recoil_check
+        COMMAND python3
+                ${CMAKE_SOURCE_DIR}/tools/recoil_roundtrip.py
+                --build ${CMAKE_BINARY_DIR}/recoil_check
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        DEPENDS png2amiga
+        COMMENT "RECOIL round-trip suite — encode → IFF → recoil2png → PSNR"
+        VERBATIM
+        USES_TERMINAL
     )
 
     # --- Raw bitplane output ---

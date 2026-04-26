@@ -188,7 +188,15 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     }
 
     // --- CAMG chunk ---
+    // Include PAL_MONITOR_ID (0x00021000) in the high word so the
+    // CAMG looks like a modern 32-bit Amiga ModeID. Pre-AGA readers
+    // mask off the high bits and see the OCS flags unchanged; AGA-aware
+    // readers (RECOIL, ViewTek, IrfanView IFF plugin, modern AmigaOS)
+    // need the monitor ID to recognise HAM8 / 6+ plane indexed modes.
+    // Without it our HAM8 IFFs were misrendered as malformed HAM6.
     auto camg = make_camg(mode, options.hires, options.interlace, options.dpf);
+    constexpr std::uint32_t PAL_MONITOR_ID = 0x00021000;
+    camg |= PAL_MONITOR_ID;
     write_id(out, "CAMG");
     write_u32(out, 4);
     write_u32(out, camg);

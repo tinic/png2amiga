@@ -122,15 +122,13 @@ struct HamPixelResult {
 
 // Encode a HAM value: combine control bits and data bits.
 // HAM6 (6 planes): control in bits 5-4 (top 2), data in bits 3-0
-// HAM8 (8 planes): control in bits 1-0 (bottom 2), data in bits 7-2
-// General HAM-N: for N <= 7, control in top 2 bits; for N = 8, control in bottom 2.
+// Standard Amiga HAM convention: control bits live in the TOP 2 bits of
+// the encoded value (i.e. the highest-numbered bitplanes), data in the
+// remaining low bits. Holds for HAM6 (planes 4-5 control, 0-3 data) and
+// HAM8 (planes 6-7 control, 0-5 data) — the chip and every standard
+// reader (DPaint, ViewTek, RECOIL) interpret it this way.
 constexpr std::uint8_t make_ham_value(std::uint8_t control, std::uint8_t data,
                                       std::size_t data_bits) noexcept {
-    if (data_bits == 6) {
-        // HAM8: control in low 2 bits, data in high 6 bits
-        return static_cast<std::uint8_t>((data << 2) | control);
-    }
-    // HAM6 and others: control in high 2 bits, data in low N bits
     return static_cast<std::uint8_t>((control << data_bits) | data);
 }
 
@@ -156,15 +154,11 @@ struct HamPrecomp {
     }
 };
 
-// Extract control and data from a HAM value (inverse of make_ham_value)
+// Extract control and data from a HAM value (inverse of make_ham_value):
+// control = top 2 bits, data = low data_bits bits. Same convention for
+// HAM6 (data_bits=4) and HAM8 (data_bits=6).
 constexpr std::pair<std::uint8_t, std::uint8_t>
 split_ham_value(std::uint8_t value, std::size_t data_bits) noexcept {
-    if (data_bits == 6) {
-        // HAM8: control in low 2 bits
-        return {static_cast<std::uint8_t>(value & 0x03),
-                static_cast<std::uint8_t>(value >> 2)};
-    }
-    // HAM6 and others: control in high 2 bits
     auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1u);
     return {static_cast<std::uint8_t>(value >> data_bits),
             static_cast<std::uint8_t>(value & data_mask)};
