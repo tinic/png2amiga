@@ -1398,10 +1398,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = false;
         result.dpf = options.dual_playfield;
         result.scap = true;
-        // Only the DPF variant has the cheader emitter wired up to
-        // consume scap_line_moves. EHB SCAP is preview-only for now.
-        if (scap_dpf)
-            result.scap_line_moves = std::move(scap_res->line_moves);
+        // The cheader emitter writes COLORxx MOVEs for any reg in 0..31
+        // (`0x0180 + reg*2`), so it handles both DPF (regs 8-15) and EHB
+        // (regs 0-31) variants of the SCAP copper list identically.
+        result.scap_line_moves = std::move(scap_res->line_moves);
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.copper_changes = scap_res->avg_changes_per_line;
@@ -1952,9 +1952,14 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     }
     if (result->scap && !result->scap_line_moves.empty()) {
         ch_opts.scap_line_moves = &result->scap_line_moves;
-        ch_opts.scap_label = "scap_dpf_ocs";
-        ch_opts.scap_anchor_hpos = scap::kScap6bplOcs.line_gate_hpos;
-        ch_opts.scap_total_planes = scap::kScap6bplOcs.total_planes;
+        // Pick the table that matches the mode the SCAP planner ran
+        // against (the slot positions happen to coincide between DPF
+        // and EHB OCS variants, but the label and intent differ).
+        bool scap_ehb = result->mode == amiga::Mode::ehb;
+        auto& table = scap_ehb ? scap::kScap6bplEhb : scap::kScap6bplOcs;
+        ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs" : "scap_dpf_ocs";
+        ch_opts.scap_anchor_hpos = table.line_gate_hpos;
+        ch_opts.scap_total_planes = table.total_planes;
         ch_opts.fade_in = false;  // SCAP carries its own per-line palette
     }
     auto viewer = cheader::generate_viewer(
