@@ -87,6 +87,47 @@ void cli_status(std::format_string<Args...> fmt, Args&&... args) {
     std::println(fmt, std::forward<Args>(args)...);
 }
 
+// Human-readable byte size: "51120 B", "49.9 K", "1.2 M".
+std::string fmt_size(int bytes) {
+    if (bytes < 1024) return std::format("{} B", bytes);
+    if (bytes < 1024 * 1024)
+        return std::format("{:.1f} K", static_cast<double>(bytes) / 1024.0);
+    return std::format("{:.1f} M", static_cast<double>(bytes) / (1024.0 * 1024.0));
+}
+
+// Canonical "Encoded:" status line. ALL CLI encoders should funnel
+// through this so disk/chip numbers stay correct as new modes add data.
+// Caller supplies the encoder's outputs:
+//   plane_bytes      bitplane data size
+//   palette_size     base palette entry count
+//   aga              AGA chipset (palette / copper costs 2× the OCS price)
+//   cap_grid_entries CAP planner's height × cpl (0 if no CAP)
+//   scap_op_count    SCAP planner's total WAIT/MOVE ops (0 if no SCAP)
+//   max_moves        worst-case copper MOVEs per scanline (for chip-RAM)
+//   height           image height (used in chip-RAM per-line list math)
+// Pass `avg_cap` only when the mode actually has CAP — otherwise the
+// "0.0 avg CAP/line" suffix is misleading.
+void cli_print_encoded(int depth, int plane_bytes, int palette_size,
+                       bool aga, int cap_grid_entries, int scap_op_count,
+                       int height, int max_moves, int num_colors,
+                       std::optional<float> avg_cap,
+                       double quant_error, float psnr) {
+    auto sb = api::compute_size_breakdown(plane_bytes, palette_size, aga,
+                                          cap_grid_entries, scap_op_count,
+                                          height, max_moves);
+    if (avg_cap) {
+        cli_status("Encoded: {} bitplanes, disk: {}, chip: {}, {} colors, "
+                   "{:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
+                   depth, fmt_size(sb.disk_bytes), fmt_size(sb.chip_bytes),
+                   num_colors, *avg_cap, quant_error, psnr);
+    } else {
+        cli_status("Encoded: {} bitplanes, disk: {}, chip: {}, {} colors, "
+                   "error: {:.4f}, PSNR: {:.2f} dB",
+                   depth, fmt_size(sb.disk_bytes), fmt_size(sb.chip_bytes),
+                   num_colors, quant_error, psnr);
+    }
+}
+
 // Emit a Make-format depfile so CMake's add_custom_command(... DEPFILE)
 // triggers a rebuild when --palette / external inputs change. Format:
 //   <output>: <input1> <input2> ...
@@ -2626,13 +2667,31 @@ int main(int argc, char* argv[]) {
             float avg_ch = ham_result->copper_changes.size() > 0
                 ? static_cast<float>(total_ch) / static_cast<float>(ham_result->copper_changes.size())
                 : 0.0f;
-            cli_status("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
-                         ham_result->planes.depth, ham_result->planes.total_bytes(),
-                         ham_unique, avg_ch, ham_result->total_error, ham_psnr);
+            int ham_cap_entries = static_cast<int>(
+                ham_result->copper_changes.size() *
+                ham_result->changes_per_line);
+            cli_print_encoded(
+                static_cast<int>(ham_result->planes.depth),
+                static_cast<int>(ham_result->planes.total_bytes()),
+                static_cast<int>(ham_result->base_palette.size()),
+                chipset == amiga::Chipset::aga,
+                ham_cap_entries, /*scap=*/0,
+                static_cast<int>(ham_result->planes.height),
+                static_cast<int>(ham_result->changes_per_line),
+                ham_unique,
+                std::optional<float>{avg_ch},
+                static_cast<double>(ham_result->total_error), ham_psnr);
         } else {
-            cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
-                         ham_result->planes.depth, ham_result->planes.total_bytes(),
-                         ham_unique, ham_result->total_error, ham_psnr);
+            cli_print_encoded(
+                static_cast<int>(ham_result->planes.depth),
+                static_cast<int>(ham_result->planes.total_bytes()),
+                static_cast<int>(ham_result->base_palette.size()),
+                chipset == amiga::Chipset::aga,
+                /*cap=*/0, /*scap=*/0,
+                static_cast<int>(ham_result->planes.height),
+                /*max_moves=*/0,
+                ham_unique, std::nullopt,
+                static_cast<double>(ham_result->total_error), ham_psnr);
         }
 
         if (ham_preview)
@@ -2913,11 +2972,19 @@ int main(int argc, char* argv[]) {
 
             float ehb_psnr = color_space::compute_psnr_blurred(
                 image->pixels(), rendered.pixels(), w, h);
-            cli_status("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
-                         planes->depth, planes->total_bytes(),
-                         count_unique_colors(rendered),
-                         copper_result->avg_changes_per_line,
-                         total_error, ehb_psnr);
+            int ehb_cap_entries = static_cast<int>(
+                h * copper_result->changes_per_line);
+            cli_print_encoded(
+                static_cast<int>(planes->depth),
+                static_cast<int>(planes->total_bytes()),
+                static_cast<int>(copper_result->base_palette.size()),
+                /*aga=*/false,
+                ehb_cap_entries, /*scap=*/0,
+                static_cast<int>(h),
+                static_cast<int>(copper_result->max_moves_per_line),
+                static_cast<int>(count_unique_colors(rendered)),
+                std::optional<float>{copper_result->avg_changes_per_line},
+                static_cast<double>(total_error), ehb_psnr);
 
             if (config->preview) show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
 
@@ -3174,9 +3241,16 @@ int main(int argc, char* argv[]) {
         float ehb_psnr = color_space::compute_psnr_blurred(
             image->pixels(), preview->pixels(),
             image->width(), image->height());
-        cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
-                     planes->depth, planes->total_bytes(),
-                     count_unique_colors(*preview), dither_result.total_error, ehb_psnr);
+        cli_print_encoded(
+            static_cast<int>(planes->depth),
+            static_cast<int>(planes->total_bytes()),
+            static_cast<int>(ehb_pal.colors.size()),
+            /*aga=*/false,
+            /*cap=*/0, /*scap=*/0,
+            static_cast<int>(planes->height), /*max_moves=*/0,
+            static_cast<int>(count_unique_colors(*preview)),
+            std::nullopt,
+            static_cast<double>(dither_result.total_error), ehb_psnr);
 
         if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
@@ -3392,11 +3466,19 @@ int main(int argc, char* argv[]) {
         float cop_psnr = color_space::compute_psnr_blurred(
             image->pixels(), preview->pixels(),
             image->width(), image->height());
-        cli_status("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
-                     copper_result->planes.depth, copper_result->planes.total_bytes(),
-                     count_unique_colors(*preview),
-                     copper_result->avg_changes_per_line,
-                     copper_result->total_error, cop_psnr);
+        int cop_cap_entries = static_cast<int>(
+            copper_result->planes.height * copper_result->changes_per_line);
+        cli_print_encoded(
+            static_cast<int>(copper_result->planes.depth),
+            static_cast<int>(copper_result->planes.total_bytes()),
+            static_cast<int>(copper_result->base_palette.size()),
+            chipset == amiga::Chipset::aga,
+            cop_cap_entries, /*scap=*/0,
+            static_cast<int>(copper_result->planes.height),
+            static_cast<int>(copper_result->max_moves_per_line),
+            static_cast<int>(count_unique_colors(*preview)),
+            std::optional<float>{copper_result->avg_changes_per_line},
+            static_cast<double>(copper_result->total_error), cop_psnr);
 
         if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
@@ -3578,10 +3660,20 @@ int main(int argc, char* argv[]) {
                      scap_res->max_visible_moves_per_line,
                      scap_res->avg_total_moves_per_line,
                      scap_res->max_moves_per_line);
-        cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
-                     scap_res->planes.depth, scap_res->planes.total_bytes(),
-                     count_unique_colors(scap_res->rendered),
-                     scap_res->total_error, scap_psnr);
+        int scap_ops = 0;
+        for (auto& moves : scap_res->line_moves) scap_ops += static_cast<int>(moves.size());
+        cli_print_encoded(
+            static_cast<int>(scap_res->planes.depth),
+            static_cast<int>(scap_res->planes.total_bytes()),
+            static_cast<int>(scap_res->palette.size()),
+            /*aga=*/false,
+            /*cap_grid_entries=*/0,
+            scap_ops,
+            static_cast<int>(scap_res->rendered.height()),
+            static_cast<int>(scap_res->max_moves_per_line),
+            static_cast<int>(count_unique_colors(scap_res->rendered)),
+            std::optional<float>{scap_res->avg_changes_per_line},
+            static_cast<double>(scap_res->total_error), scap_psnr);
 
         if (config->preview)
             show_terminal_preview(scap_res->rendered, config->mode,
@@ -3936,9 +4028,16 @@ int main(int argc, char* argv[]) {
     float std_psnr = color_space::compute_psnr_blurred(
         image->pixels(), preview->pixels(),
         image->width(), image->height());
-    cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
-                 planes->depth, planes->total_bytes(),
-                 count_unique_colors(*preview), dither_result.total_error, std_psnr);
+    cli_print_encoded(
+        static_cast<int>(planes->depth),
+        static_cast<int>(planes->total_bytes()),
+        static_cast<int>(pal.size()),
+        chipset == amiga::Chipset::aga,
+        /*cap=*/0, /*scap=*/0,
+        static_cast<int>(planes->height), /*max_moves=*/0,
+        static_cast<int>(count_unique_colors(*preview)),
+        std::nullopt,
+        static_cast<double>(dither_result.total_error), std_psnr);
 
     // Terminal preview
     if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);

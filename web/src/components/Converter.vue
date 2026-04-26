@@ -648,33 +648,13 @@ function doConvert() {
       let info = `${result.width}x${result.height}, ${statusChipset.value}`
       info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
       if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg CAP/line`
-      // Size stats
-      const pb = result.planeBytes || 0
-      const cb = result.copperBytes || 0  // per-scanline copper change data in .raw output
-      const depth = result.depth || 0
-      const colors = result.colors || 0
-      const aga = !!result.aga
-      const maxMoves = result.maxMovesPerLine || 0
-
-      // Disk: bitplanes + palette (AGA has hi+lo) + copper change data
-      // .raw layout: pb + colors*2 (hi pal) + colors*2 (lo pal, AGA only) + cb
-      const palBytes = colors * (aga ? 4 : 2)
-      const diskBytes = pb + palBytes + cb
-
-      // Chip RAM: bitplanes + actual copper list
-      //   - Initial setup: ~80 bytes (BPLCON0/1/2/3 + DDF + DIW + FMODE)
-      //   - Per-frame palette write: 1 instruction per color (OCS) or 2 (AGA hi+lo)
-      //   - Per-scanline copper writes: WAIT + max_moves instructions per line, ×4 bytes
-      //     (uses worst-case max_moves_per_line — actual is slightly less on most lines)
-      //   - End markers + blank-below: ~32 bytes
-      const initSetup = 80
-      const palSetup = colors * (aga ? 8 : 4)
-      const perLineCopper = (1 + maxMoves) * 4
-      const copList = cb ? result.height * perLineCopper : 0
-      const chipBytes = pb + initSetup + palSetup + copList + 32
-      if (pb > 0) {
+      // Size stats — diskBytes / chipBytes are the single source of truth
+      // (computed once in api::make_result so they can't go stale across
+      // mode additions). Don't re-derive from {planeBytes, copperBytes,
+      // changesPerLine, ...} here.
+      if (result.planeBytes > 0) {
         const fmt = (b) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
-        info += `, disk: ${fmt(diskBytes)}, chip: ${fmt(chipBytes)}`
+        info += `, disk: ${fmt(result.diskBytes || 0)}, chip: ${fmt(result.chipBytes || 0)}`
       }
       if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
       if (result.psnr != null && isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`

@@ -1711,16 +1711,34 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.totalColors = count_unique_colors(p.rendered);
     r.planeBytes = static_cast<int>(p.planes.total_bytes());
     r.aga = p.aga;
+    int cap_grid_entries = 0;
+    int scap_op_count = 0;
+    int max_moves = 0;
     if (p.copper && !p.scanline_changes.empty()) {
         auto h = p.rendered.height();
         auto cpl = p.changes_per_line;
-        // .raw output writes a fixed [h][cpl] grid with sentinels (4 B/entry)
-        auto cop_data_bytes = h * cpl * 4;  // reg(2) + color(2) per change
-        if (p.aga) cop_data_bytes *= 2;     // hi + lo per change
-        r.copperBytes = static_cast<int>(cop_data_bytes);
+        cap_grid_entries = static_cast<int>(h * cpl);
         r.changesPerLine = static_cast<int>(cpl);
-        r.maxMovesPerLine = static_cast<int>(p.max_moves_per_line);
+        max_moves = static_cast<int>(p.max_moves_per_line);
     }
+    if (p.scap && !p.scap_line_moves.empty()) {
+        std::size_t total_ops = 0;
+        std::size_t per_line_max = 0;
+        for (auto& moves : p.scap_line_moves) {
+            total_ops += moves.size();
+            per_line_max = std::max(per_line_max, moves.size());
+        }
+        scap_op_count = static_cast<int>(total_ops);
+        max_moves = std::max(max_moves, static_cast<int>(per_line_max));
+    }
+    auto sb = compute_size_breakdown(
+        r.planeBytes,
+        static_cast<int>(p.palette.size()),
+        p.aga, cap_grid_entries, scap_op_count, r.height, max_moves);
+    r.copperBytes = sb.copper_bytes;
+    r.diskBytes = sb.disk_bytes;
+    r.chipBytes = sb.chip_bytes;
+    r.maxMovesPerLine = max_moves;
     r.quantError = p.quant_error;
     r.psnr = p.psnr;
     r.hasTransparency = p.has_transparency;

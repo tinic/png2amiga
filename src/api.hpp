@@ -13,6 +13,64 @@ namespace png2amiga::api {
 // The quantizer fills the remaining slots, and the locked color is reachable
 // by the dither phase. Has no effect on HAM modes (palette is dynamic) or
 // copper modes (per-scanline palettes).
+// Centralised disk + chip-RAM accounting for an encoded image. ALL
+// reporting sites (CLI "Encoded" line, web disk/chip readout, viewer
+// header comments) must read from this — never re-derive size locally,
+// or numbers go stale the next time a mode adds new payload (this bit
+// us with EHB+SCAP, where scap_line_moves was missing from every call
+// site's bespoke math).
+//
+// Inputs:
+//   plane_bytes    — bitplane data size (e.g. planes.total_bytes()).
+//   palette_size   — number of colour entries (Color3f count).
+//   aga            — chipset is AGA (palette costs 2× and copper writes
+//                    cost 2× per change for hi+lo nibble passes).
+//   cap_changes    — total CAP scanline changes across the frame
+//                    (e.g. sum of scanline_changes[*].size()) OR 0.
+//                    Note: for the .raw grid layout we use the
+//                    (height × cpl) pre-allocated size, not the actual
+//                    count — pass that pre-multiplied number here too.
+//   scap_op_count  — total SCAP WAIT/MOVE ops across the frame
+//                    (sum of scap_line_moves[*].size()) OR 0.
+//   height         — image height (used for chip-RAM per-line copper
+//                    list sizing).
+//   max_moves      — worst-case copper MOVEs/line (chip RAM uses this
+//                    to budget the per-line WAIT+MOVEs slot).
+struct SizeBreakdown {
+    int plane_bytes{};      // bitplane data
+    int palette_bytes{};    // palette in .raw / .pal layout
+    int copper_bytes{};     // CAP grid + SCAP per-line ops
+    int disk_bytes{};       // .raw total = planes + palette + copper
+    int chip_bytes{};       // worst-case Amiga chip-RAM
+};
+
+constexpr int kCopperInitSetupBytes = 80;
+constexpr int kCopperEndMarkerBytes = 32;
+
+inline SizeBreakdown compute_size_breakdown(
+    int plane_bytes,
+    int palette_size,
+    bool aga,
+    int cap_grid_entries,    // height × cpl (CAP .raw grid)
+    int scap_op_count,       // sum of scap_line_moves[*].size()
+    int height,
+    int max_moves) {
+    SizeBreakdown s;
+    s.plane_bytes = plane_bytes;
+    s.palette_bytes = palette_size * (aga ? 4 : 2);
+    int cap_bytes = cap_grid_entries * (aga ? 8 : 4);  // 4 B/word, AGA = hi+lo
+    int scap_bytes = scap_op_count * 4;                // 4 B per WAIT/MOVE word
+    s.copper_bytes = cap_bytes + scap_bytes;
+    s.disk_bytes = s.plane_bytes + s.palette_bytes + s.copper_bytes;
+    int has_copper = (s.copper_bytes > 0) ? 1 : 0;
+    int pal_setup = palette_size * (aga ? 8 : 4);
+    int per_line_words = 1 + max_moves;
+    int cop_list_bytes = has_copper ? (height * per_line_words * 4) : 0;
+    s.chip_bytes = s.plane_bytes + kCopperInitSetupBytes + pal_setup +
+                   cop_list_bytes + kCopperEndMarkerBytes;
+    return s;
+}
+
 struct LockSpec {
     int index;       // palette slot, 0..max_colors-1
     int r, g, b;     // sRGB 0-255
@@ -164,7 +222,19 @@ struct ConvertResult {
     float copperChanges{};              // avg actual color changes per line (0 if no copper)
     int totalColors{};                  // unique colors in rendered output
     int planeBytes{};                   // raw bitplane data size
-    int copperBytes{};                  // copper data size in .raw file (0 if no copper)
+    int copperBytes{};                  // copper-list bytes total (CAP scanline_changes
+                                        // + SCAP per-line moves, 4 B per word).
+                                        // 0 if mode has no copper. Use this for chip-RAM
+                                        // / disk-cost reporting — call sites must NOT
+                                        // re-derive size from {scanlines, cpl} because new
+                                        // modes (DPF/EHB+SCAP) carry extra data they'd miss.
+    int diskBytes{};                    // .raw file size: bitplanes + palette + copper data.
+                                        // Computed centrally in make_result so call sites
+                                        // can't drift stale as new modes are added.
+    int chipBytes{};                    // worst-case chip-RAM cost: bitplanes + copper list
+                                        // (init MOVEs + per-line WAIT+MOVEs at max_moves_per_line)
+                                        // + palette setup. Same single-source-of-truth rule
+                                        // as diskBytes.
     int changesPerLine{};               // K used by encoder (post auto-stretch)
     int maxMovesPerLine{};              // worst-case copper MOVEs per scanline
     bool aga{};                         // chipset is AGA (true ⇒ palette has hi+lo halves)
