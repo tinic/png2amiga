@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <expected>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <mutex>
@@ -145,6 +146,122 @@ void write_depfile(const std::string& depfile_path,
     f << "\n";
 }
 
+// ---------------------------------------------------------------------------
+// Batch mode helpers
+// ---------------------------------------------------------------------------
+//
+// Build a horizontal atlas from N input PNGs so the encoder's quantizer +
+// (when --cap) per-line copper planner see all frames simultaneously and
+// produce ONE shared palette + ONE per-line plan covering every frame's
+// row simultaneously. Per-frame outputs are then sliced from the atlas's
+// bitplane data after the encoder runs (sharing CMAP/PCHG/copper symbols).
+
+// Forward decl — defined below load_batch_inputs but referenced for the
+// symbol-collision check. Sanitises a stem into a C identifier.
+std::string sanitise_symbol(std::string_view s);
+
+struct BatchInputFrame {
+    std::string path;
+    std::string stem;     // basename without extension — used for symbol names
+    Image       image;
+};
+
+// Load all batch input PNGs and validate constraints:
+//  * all frames same width AND height
+//  * width % 16 == 0 (Amiga bitplane word alignment for clean per-frame slicing)
+//  * unique stems (or hard error)
+Result<std::vector<BatchInputFrame>> load_batch_inputs(
+    std::span<const std::string> input_paths) {
+    std::vector<BatchInputFrame> frames;
+    frames.reserve(input_paths.size());
+    std::unordered_set<std::string> seen_stems;
+    std::unordered_set<std::string> seen_syms;
+    int first_w = -1, first_h = -1;
+    for (auto& p : input_paths) {
+        auto img = png_io::load(p);
+        if (!img) return std::unexpected{img.error()};
+        std::filesystem::path fp(p);
+        auto stem = fp.stem().string();
+        if (stem.empty() || stem == "." || stem == "..") {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                std::format("batch: invalid empty/dot stem from path '{}' "
+                            "(would yield bare '.iff' / unsafe output name)", p)}};
+        }
+        if (auto [_, inserted] = seen_stems.insert(stem); !inserted) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                std::format("batch: duplicate input stem '{}' "
+                            "(would collide on output) from path '{}'",
+                            stem, p)}};
+        }
+        // Symbol-collision check: distinct stems can collapse to the same
+        // C identifier under sanitise_symbol (e.g. 'foo-1' and 'foo_1' both
+        // → 'foo_1'). Catch here so the .h / .cpp emitters never produce
+        // duplicate symbols.
+        auto sym = sanitise_symbol(stem);
+        if (auto [_, inserted] = seen_syms.insert(sym); !inserted) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                std::format("batch: stem '{}' (from '{}') sanitises to "
+                            "C identifier '{}' which collides with a prior "
+                            "frame; rename so symbols stay unique",
+                            stem, p, sym)}};
+        }
+        int w = static_cast<int>(img->width());
+        int h = static_cast<int>(img->height());
+        if (first_w < 0) { first_w = w; first_h = h; }
+        else if (w != first_w || h != first_h) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                std::format("batch: frame '{}' is {}x{}; expected {}x{} "
+                            "(all frames must share dimensions)",
+                            p, w, h, first_w, first_h)}};
+        }
+        if (w % 16 != 0) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                std::format("batch: frame width {} must be a multiple of 16 "
+                            "(Amiga bitplane word alignment for per-frame "
+                            "slicing); got '{}'", w, p)}};
+        }
+        frames.push_back(BatchInputFrame{p, std::move(stem), *std::move(img)});
+    }
+    if (frames.empty()) {
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+            "batch: no input PNGs provided (expected positional args after --batch <dir>)"}};
+    }
+    return frames;
+}
+
+// Concatenate frames horizontally into a single atlas image. All frames
+// must share dimensions (validated by load_batch_inputs).
+Image build_atlas(std::span<const BatchInputFrame> frames) {
+    auto frame_w = frames[0].image.width();
+    auto frame_h = frames[0].image.height();
+    auto atlas_w = frame_w * frames.size();
+    Image atlas(atlas_w, frame_h);
+    for (std::size_t fi = 0; fi < frames.size(); ++fi) {
+        auto x0 = fi * frame_w;
+        for (std::size_t y = 0; y < frame_h; ++y) {
+            for (std::size_t x = 0; x < frame_w; ++x) {
+                atlas[x0 + x, y] = frames[fi].image[x, y];
+            }
+        }
+    }
+    return atlas;
+}
+
+// Sanitise a frame stem into a C identifier safe for symbol generation:
+// spaces/hyphens/dots → underscores; leading digit → '_' prefix.
+std::string sanitise_symbol(std::string_view s) {
+    std::string out;
+    out.reserve(s.size() + 1);
+    if (!s.empty() && std::isdigit(static_cast<unsigned char>(s[0])))
+        out.push_back('_');
+    for (auto c : s) {
+        if (std::isalnum(static_cast<unsigned char>(c))) out.push_back(c);
+        else out.push_back('_');
+    }
+    if (out.empty()) out = "frame";
+    return out;
+}
+
 int count_unique_colors(const Image& img) {
     std::unordered_set<std::uint32_t> seen;
     for (std::size_t y = 0; y < img.height(); ++y)
@@ -204,6 +321,17 @@ struct Config {
     bool json = false;                 // emit JSON status object instead of human text
     std::string depfile;               // Make-format depfile path (empty = disabled)
     bool list_modes = false;           // emit mode catalog (human or JSON) and exit 0
+
+    // Batch mode: N input PNGs encoded as a single horizontally-tiled
+    // atlas so they share one palette and (if --cap) one copper plan,
+    // then per-frame outputs are sliced from the atlas. Game-asset
+    // pipelines for sprite sheets, animation frames, room layers etc.
+    // Constraints: all frames same width/height, width % 16 == 0,
+    // --scap rejected, --no-scale auto-implied.
+    bool batch = false;
+    std::string batch_output_dir;
+    std::string batch_format = "h";        // iff, h, png, raw
+    std::vector<std::string> batch_inputs; // populated from positional args
 
     // Bitplane layout override for raw/.h export. nullopt = auto per mode
     // (Amiga → line-interleaved, DOS planar → plane-sequential, Atari →
@@ -512,6 +640,28 @@ void print_usage() {
         "                                  .iff, .raw, .pal, .png. NOT compatible with\n"
         "                                  .cpp/.c viewer (needs fixed screen modes).\n"
         "\n"
+        "Batch (game-asset multi-frame) mode:\n"
+        "  --batch <dir>                   Encode N input PNGs as a single horizontal\n"
+        "                                  atlas so they share one palette and (if --cap)\n"
+        "                                  one per-line copper plan, then emit per-frame\n"
+        "                                  outputs into <dir>. Sprite sheets, animation\n"
+        "                                  frames, room layers — anything where N images\n"
+        "                                  must render with the same palette + copper at\n"
+        "                                  runtime. Auto-implies --no-scale.\n"
+        "                                  Constraints: all inputs same width AND height,\n"
+        "                                  width % 16 == 0 (Amiga bitplane word align),\n"
+        "                                  --scap is rejected.\n"
+        "                                  When --batch is set, ALL positional args are\n"
+        "                                  input PNGs (output path positional is unused).\n"
+        "  --batch-format <ext>            Per-frame output format: h, iff, png, raw, cpp.\n"
+        "                                  cpp emits one AmigaOS viewer that cycles frames\n"
+        "                                  on left-click (right-click exits).\n"
+        "                                  Default h. For h, a single combined .h file\n"
+        "                                  with N frame plane arrays + shared palette\n"
+        "                                  + shared copper symbols is written. For\n"
+        "                                  iff/png/raw, N separate files share CMAP/\n"
+        "                                  PCHG (iff) or palette via companion .pal.\n"
+        "\n"
         "Build-system integration:\n"
         "  -q, --quiet                     Suppress all stdout status; errors still go\n"
         "                                  to stderr. Useful in CMake/Make/Ninja builds.\n"
@@ -667,6 +817,30 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--no-scale") {
             config.no_scale = true;
+            continue;
+        }
+
+        if (arg == "--batch") {
+            if (i + 1 >= argc) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--batch requires a directory argument"}};
+            }
+            config.batch = true;
+            config.batch_output_dir = std::string(argv[++i]);
+            // Force --no-scale: atlas dimensions must not be auto-resampled.
+            config.no_scale = true;
+            continue;
+        }
+
+        if (arg == "--batch-format") {
+            if (i + 1 >= argc) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--batch-format requires an extension argument (h, iff, png, raw)"}};
+            }
+            config.batch_format = std::string(argv[++i]);
+            // Strip leading '.' if present.
+            if (!config.batch_format.empty() && config.batch_format[0] == '.')
+                config.batch_format.erase(0, 1);
             continue;
         }
 
@@ -1048,10 +1222,54 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 "Unknown option: " + std::string(arg)}};
         }
         else {
-            if (positional == 0) config.input_path = std::string(arg);
-            else if (positional == 1) config.output_path = std::string(arg);
+            if (config.batch) {
+                // In batch mode every positional arg is an input PNG;
+                // the output dir + format come from --batch / --batch-format.
+                config.batch_inputs.emplace_back(arg);
+            } else {
+                if (positional == 0) config.input_path = std::string(arg);
+                else if (positional == 1) config.output_path = std::string(arg);
+            }
             ++positional;
         }
+    }
+
+    if (config.batch) {
+        // Reject incompatible flags up front so the user sees the issue
+        // before we do any work.
+        if (config.scap) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                "batch mode is incompatible with --scap (per-frame mid-line "
+                "swap chains aren't shareable across frames)"}};
+        }
+        if (!config.batch_output_dir.empty()) {
+            // Auto-create the output dir.
+            std::error_code ec;
+            std::filesystem::create_directories(config.batch_output_dir, ec);
+            if (ec) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("batch: cannot create output dir '{}': {}",
+                                config.batch_output_dir, ec.message())}};
+            }
+        }
+        // Validate format.
+        if (config.batch_format != "h" && config.batch_format != "iff" &&
+            config.batch_format != "png" && config.batch_format != "raw" &&
+            config.batch_format != "cpp") {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                std::format("batch: unknown --batch-format '{}' "
+                            "(expected: h, iff, png, raw, cpp)",
+                            config.batch_format)}};
+        }
+        if (config.batch_format == "cpp" && config.interlace) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                "batch: --batch-format cpp does not support --interlace "
+                "(multi-frame BPLxPT patching needs both fields' lists "
+                "kept in sync; not implemented)"}};
+        }
+        // input_path is unused in batch mode — set to a dummy non-empty
+        // value so the no-input gate below passes.
+        if (config.input_path.empty()) config.input_path = "<batch>";
     }
 
     if (config.input_path.empty() && config.scap_probe.empty() &&
@@ -1939,6 +2157,435 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Batch mode entry point — encode N PNGs as a single horizontal atlas so
+// they share one palette and (if --cap) one per-line copper plan, then
+// emit per-frame outputs into config.batch_output_dir.
+//
+// Strategy: build atlas Image, serialise as PNG bytes, run api::encode_state
+// once on the atlas to get all encoder intermediates (planes, palette,
+// scanline_changes, scap_line_moves, ...) in one shot. Then decode the
+// atlas's bitplane data to per-pixel indices, slice column ranges per
+// frame, re-encode each slice to its own BitplaneData, and run the
+// existing per-format writers (iff::write_ilbm, cheader::save, png_io,
+// raw) against the slice + the SHARED palette/copper from the atlas.
+//
+// The shared-CAP property holds because horizontal stacking puts every
+// frame's row Y at the SAME atlas row Y, so the per-line CAP plan
+// computed for the atlas applies verbatim to each frame.
+//
+// SCAP is rejected up front (per-frame mid-line swap chains aren't
+// shareable across frames). HAM/EHB/DPF are all allowed.
+// ---------------------------------------------------------------------------
+int run_batch(const Config& cfg) {
+    // 1. Load + validate inputs.
+    auto frames_r = load_batch_inputs(cfg.batch_inputs);
+    if (!frames_r) {
+        std::println(stderr, "Error: {}", frames_r.error().message);
+        return exit_code::usage;
+    }
+    auto& frames = *frames_r;
+    std::size_t frame_w = frames[0].image.width();
+    std::size_t frame_h = frames[0].image.height();
+    std::size_t n_frames = frames.size();
+
+    cli_status("Batch: {} frames, {}x{} each, atlas {}x{}",
+               n_frames, frame_w, frame_h, frame_w * n_frames, frame_h);
+
+    // 2. Build atlas + encode atlas → PNG bytes (api::encode_state takes
+    //    PNG bytes).
+    auto atlas = build_atlas(frames);
+    auto atlas_png = png_io::encode(atlas);
+    if (!atlas_png) {
+        std::println(stderr, "batch: atlas PNG encode failed: {}",
+                     atlas_png.error().message);
+        return exit_code::internal;
+    }
+
+    // 3. Run encoder on atlas. Map Config → api::Options for the subset
+    //    of fields the encoder honours; the rest stay at api defaults.
+    auto mode_name = [](amiga::Mode m) -> std::string_view {
+        switch (m) {
+        case amiga::Mode::lores: return "lores";
+        case amiga::Mode::lores_interlace: return "lores-lace";
+        case amiga::Mode::hires: return "hires";
+        case amiga::Mode::hires_interlace: return "hires-lace";
+        case amiga::Mode::ham6: return "ham6";
+        case amiga::Mode::ham8: return "ham8";
+        case amiga::Mode::ehb: return "ehb";
+        case amiga::Mode::stf_low: return "stf-low";
+        case amiga::Mode::stf_med: return "stf-med";
+        case amiga::Mode::stf_hi:  return "stf-hi";
+        case amiga::Mode::ste_low: return "ste-low";
+        case amiga::Mode::ste_med: return "ste-med";
+        case amiga::Mode::ste_hi:  return "ste-hi";
+        default: return "lores";
+        }
+    };
+    auto dither_name = [](dither::Method m) -> std::string_view {
+        switch (m) {
+        case dither::Method::none: return "none";
+        case dither::Method::bayer2x2: return "bayer2x2";
+        case dither::Method::bayer4x4: return "bayer4x4";
+        case dither::Method::bayer8x8: return "bayer8x8";
+        case dither::Method::checker: return "checker";
+        case dither::Method::floyd_steinberg: return "floyd-steinberg";
+        case dither::Method::atkinson: return "atkinson";
+        case dither::Method::sierra_lite: return "sierra-lite";
+        case dither::Method::stucki: return "stucki";
+        case dither::Method::jarvis: return "jarvis";
+        case dither::Method::ostromoukhov: return "ostromoukhov";
+        default: return "floyd-steinberg";
+        }
+    };
+    api::Options opts;
+    opts.mode = std::string{mode_name(cfg.mode)};
+    if (cfg.chipset)
+        opts.chipset = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
+    opts.depth = static_cast<int>(cfg.depth);
+    opts.interlace = cfg.interlace;
+    opts.gamma = cfg.preprocess.gamma;
+    opts.brightness = cfg.preprocess.brightness;
+    opts.contrast = cfg.preprocess.contrast;
+    opts.saturation = cfg.preprocess.saturation;
+    opts.hue_shift = cfg.preprocess.hue_shift;
+    opts.sharpen = cfg.preprocess.sharpen;
+    opts.match_range = cfg.match_range;
+    opts.dither = std::string{dither_name(cfg.dither_method)};
+    opts.dither_strength = cfg.dither_strength;
+    opts.error_clamp = cfg.error_clamp;
+    opts.palette_diversity = cfg.palette_diversity;
+    opts.quantizer = cfg.quantizer;
+    opts.ham_fast = cfg.ham_fast;
+    opts.ham_beam = static_cast<int>(cfg.ham_beam);
+    opts.cap_best = cfg.cap_best;
+    opts.copper = cfg.copper;
+    opts.copper_changes = static_cast<int>(cfg.copper_changes);
+    opts.reserve_color0 = cfg.reserve_color0;
+    opts.dual_playfield = cfg.dual_playfield;
+    opts.scap = false;  // already rejected at parse time
+    opts.width = static_cast<int>(atlas.width());
+    opts.height = static_cast<int>(atlas.height());
+
+    auto enc = api::encode_state(atlas_png->data(), atlas_png->size(), opts);
+    if (!enc.ok()) {
+        std::println(stderr, "batch: atlas encode failed: {}", enc.error_msg);
+        return exit_code::internal;
+    }
+    auto& st = enc.state;
+
+    // 4. Decode atlas planes → per-pixel indices (uint8 each). For HAM
+    //    these encode HAM control+data; for indexed modes they're
+    //    palette indices. bitplane::decode round-trips with bitplane::
+    //    encode either way.
+    auto atlas_indices_r = bitplane::decode(st.planes);
+    if (!atlas_indices_r) {
+        std::println(stderr, "batch: atlas decode failed: {}",
+                     atlas_indices_r.error().message);
+        return exit_code::internal;
+    }
+    auto& atlas_indices = *atlas_indices_r;
+
+    // 5. Slice atlas indices per frame and re-encode each slice into
+    //    its own BitplaneData.
+    std::vector<bitplane::BitplaneData> frame_planes;
+    frame_planes.reserve(n_frames);
+    std::size_t atlas_w = st.planes.width;
+    for (std::size_t fi = 0; fi < n_frames; ++fi) {
+        auto x0 = fi * frame_w;
+        std::vector<std::uint8_t> idx(frame_w * frame_h);
+        for (std::size_t y = 0; y < frame_h; ++y) {
+            auto src = atlas_indices.data() + y * atlas_w + x0;
+            std::copy(src, src + frame_w, idx.data() + y * frame_w);
+        }
+        auto enc_planes = bitplane::encode(
+            idx, frame_w, frame_h, st.planes.depth, st.planes.layout);
+        if (!enc_planes) {
+            std::println(stderr, "batch: frame {} encode failed: {}",
+                         fi, enc_planes.error().message);
+            return exit_code::internal;
+        }
+        frame_planes.push_back(*std::move(enc_planes));
+    }
+
+    // 6. Per-format emission. Each format writes per-frame files +
+    //    optional shared companion files into cfg.batch_output_dir.
+    namespace fs = std::filesystem;
+    auto out_dir = fs::path(cfg.batch_output_dir);
+
+    auto& fmt = cfg.batch_format;
+
+    if (fmt == "iff") {
+        for (std::size_t fi = 0; fi < n_frames; ++fi) {
+            iff::IffOptions iff_opts;
+            iff_opts.hires = st.hires;
+            iff_opts.interlace = st.interlace;
+            iff_opts.dpf = st.dpf;
+            iff_opts.has_transparency = st.has_transparency;
+            if (!st.scanline_palettes.empty())
+                iff_opts.scanline_palettes = &st.scanline_palettes;
+            auto out_path = (out_dir / (frames[fi].stem + ".iff")).string();
+            auto r = iff::save_ilbm(out_path, frame_planes[fi],
+                                    st.palette, st.mode, iff_opts);
+            if (!r) {
+                std::println(stderr, "batch: IFF write '{}' failed: {}",
+                             out_path, r.error().message);
+                return exit_code::cant_create;
+            }
+        }
+        // Companion .pal — base palette, OCS 12-bit packed.
+        auto pal_path = (out_dir / "palette.pal").string();
+        auto pr = palette_io::save_ocs_palette(pal_path, st.palette);
+        if (!pr) std::println(stderr, "batch: warning, .pal write failed: {}",
+                              pr.error().message);
+    }
+    else if (fmt == "png") {
+        for (std::size_t fi = 0; fi < n_frames; ++fi) {
+            // Render frame from atlas (the encoder already produced the
+            // full atlas preview in st.rendered; we slice the column range).
+            Image frame_img(frame_w, frame_h);
+            auto x0 = fi * frame_w;
+            for (std::size_t y = 0; y < frame_h; ++y)
+                for (std::size_t x = 0; x < frame_w; ++x)
+                    frame_img[x, y] = st.rendered[x0 + x, y];
+            auto out_path = (out_dir / (frames[fi].stem + ".png")).string();
+            auto r = png_io::save(out_path, frame_img);
+            if (!r) {
+                std::println(stderr, "batch: PNG write '{}' failed: {}",
+                             out_path, r.error().message);
+                return exit_code::cant_create;
+            }
+        }
+        // .pal companion — useful for tooling that wants the palette
+        // even though it's already baked into each PNG's pixels.
+        auto pal_path = (out_dir / "palette.pal").string();
+        if (auto pr = palette_io::save_ocs_palette(pal_path, st.palette); !pr)
+            std::println(stderr, "batch: warning, .pal write failed: {}",
+                         pr.error().message);
+    }
+    else if (fmt == "raw") {
+        for (std::size_t fi = 0; fi < n_frames; ++fi) {
+            auto out_path = (out_dir / (frames[fi].stem + ".raw")).string();
+            std::ofstream f(out_path, std::ios::binary);
+            if (!f) {
+                std::println(stderr, "batch: cannot create '{}'", out_path);
+                return exit_code::cant_create;
+            }
+            f.write(reinterpret_cast<const char*>(frame_planes[fi].data.data()),
+                    static_cast<std::streamsize>(frame_planes[fi].data.size()));
+        }
+        // Shared .pal.
+        auto pal_path = (out_dir / "palette.pal").string();
+        if (auto pr = palette_io::save_ocs_palette(pal_path, st.palette); !pr)
+            std::println(stderr, "batch: warning, .pal write failed: {}",
+                         pr.error().message);
+    }
+    else if (fmt == "h") {
+        // Single combined .h with N frame plane arrays, one shared
+        // palette, optional shared copper changes. Symbol prefix is
+        // derived from the output dir's basename. Format is hand-rolled
+        // here (mirrors cheader::generate's UWORD-array shape) so the
+        // shared palette/copper aren't duplicated per frame.
+        auto dir_name = out_dir.filename().string();
+        if (dir_name.empty()) dir_name = "sprites";
+        auto prefix = sanitise_symbol(dir_name);
+        auto h_path = (out_dir / (prefix + ".h")).string();
+        std::ofstream f(h_path);
+        if (!f) {
+            std::println(stderr, "batch: cannot create '{}'", h_path);
+            return exit_code::cant_create;
+        }
+        auto upper_prefix = prefix;
+        for (auto& c : upper_prefix) c = static_cast<char>(std::toupper(c));
+        auto& plane_ref = frame_planes[0];
+        auto words_per_row = plane_ref.bytes_per_row / 2;
+
+        f << "/* Generated by png2amiga --batch — do not edit */\n";
+        f << "/* " << n_frames << " frames, " << frame_w << "x" << frame_h
+          << ", " << static_cast<int>(plane_ref.depth)
+          << " bitplanes, shared palette"
+          << (st.scanline_changes.empty() ? "" : " + per-line copper") << " */\n\n";
+        f << "#ifndef " << upper_prefix << "_H\n";
+        f << "#define " << upper_prefix << "_H\n\n";
+        f << "#ifndef UWORD\n#define UWORD unsigned short\n#endif\n";
+        f << "#ifndef ULONG\n#define ULONG unsigned long\n#endif\n\n";
+        f << "#define " << upper_prefix << "_FRAME_COUNT  " << n_frames << "\n";
+        f << "#define " << upper_prefix << "_FRAME_WIDTH  " << frame_w << "\n";
+        f << "#define " << upper_prefix << "_FRAME_HEIGHT " << frame_h << "\n";
+        f << "#define " << upper_prefix << "_DEPTH        "
+          << static_cast<int>(plane_ref.depth) << "\n";
+        f << "#define " << upper_prefix << "_BPR          "
+          << static_cast<int>(plane_ref.bytes_per_row) << "\n\n";
+
+        // Per-frame plane arrays. Each frame emits one UWORD array per
+        // bitplane (sym_planeN) and an array of plane-pointer pairs the
+        // user can index by frame number.
+        for (std::size_t fi = 0; fi < n_frames; ++fi) {
+            const auto& planes = frame_planes[fi];
+            auto sym = prefix + "_" + sanitise_symbol(frames[fi].stem);
+            for (std::size_t p = 0; p < planes.depth; ++p) {
+                f << "static const UWORD " << sym << "_plane" << p << "[] = {\n";
+                auto total_words = words_per_row * planes.height;
+                std::size_t word_count = 0;
+                for (std::size_t y = 0; y < planes.height; ++y) {
+                    f << "    ";
+                    auto offset = planes.plane_row_offset(p, y);
+                    for (std::size_t w = 0; w < words_per_row; ++w) {
+                        auto byte_off = offset + w * 2;
+                        auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
+                        auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
+                        auto word = static_cast<std::uint16_t>((hi << 8) | lo);
+                        ++word_count;
+                        f << std::format("0x{:04X}", word);
+                        if (word_count < total_words) f << ",";
+                    }
+                    f << "\n";
+                }
+                f << "};\n";
+            }
+            f << "\n";
+        }
+
+        // Plane-pointer table: const UWORD* prefix_frames[N][DEPTH].
+        f << "static const UWORD* const " << prefix << "_frames["
+          << n_frames << "]["
+          << static_cast<int>(plane_ref.depth) << "] = {\n";
+        for (std::size_t fi = 0; fi < n_frames; ++fi) {
+            auto sym = prefix + "_" + sanitise_symbol(frames[fi].stem);
+            f << "    {";
+            for (std::size_t p = 0; p < plane_ref.depth; ++p) {
+                f << " " << sym << "_plane" << p;
+                if (p + 1 < plane_ref.depth) f << ",";
+            }
+            f << " }";
+            if (fi + 1 < n_frames) f << ",";
+            f << "\n";
+        }
+        f << "};\n\n";
+
+        // Shared palette (OCS 12-bit 0x0RGB).
+        auto pal_count = st.palette.size();
+        if (st.mode == amiga::Mode::ehb && pal_count > 32) pal_count = 32;
+        f << "#define " << upper_prefix << "_COLORS  " << pal_count << "\n\n";
+        f << "static const UWORD " << prefix << "_palette[] = {\n";
+        for (std::size_t i = 0; i < pal_count; ++i) {
+            auto rgb12 = palette::linear_to_ocs(st.palette[i]);
+            f << std::format("    0x{:04X}", rgb12);
+            if (i + 1 < pal_count) f << ",";
+            auto srgb = color_space::linear_to_srgb(st.palette[i]).clamped();
+            int r8 = static_cast<int>(std::lround(srgb.r * 255.0f));
+            int g8 = static_cast<int>(std::lround(srgb.g * 255.0f));
+            int b8 = static_cast<int>(std::lround(srgb.b * 255.0f));
+            f << std::format("  /* #{:02X}{:02X}{:02X} */\n", r8, g8, b8);
+        }
+        f << "};\n\n";
+
+        // Shared CAP copper plan (per-scanline palette swaps), if any.
+        if (!st.scanline_changes.empty()) {
+            auto& changes = st.scanline_changes;
+            auto cpl = st.changes_per_line;
+            auto height = changes.size();
+            f << "#define " << upper_prefix << "_COPPER_CHANGES  " << cpl
+              << "  /* max register changes per scanline */\n\n";
+            f << "struct " << prefix << "_copper_entry {\n"
+              << "    UWORD reg;\n"
+              << "    UWORD color;\n"
+              << "};\n\n";
+            f << "static const struct " << prefix << "_copper_entry "
+              << prefix << "_copper[" << height << "][" << cpl << "] = {\n";
+            for (std::size_t y = 0; y < height; ++y) {
+                f << "    { ";
+                auto& line = changes[y];
+                for (std::size_t s = 0; s < cpl; ++s) {
+                    if (s < line.size()) {
+                        auto rgb12 = palette::linear_to_ocs(line[s].color);
+                        f << std::format("{{{},0x{:04X}}}", line[s].reg, rgb12);
+                    } else {
+                        f << "{0xFFFF,0x0000}";
+                    }
+                    if (s + 1 < cpl) f << ", ";
+                }
+                f << " }";
+                if (y + 1 < height) f << ",";
+                f << "\n";
+            }
+            f << "};\n\n";
+        }
+
+        f << "#endif /* " << upper_prefix << "_H */\n";
+        cli_status("Header: {}", h_path);
+    }
+    else if (fmt == "cpp") {
+        // Single AmigaOS viewer with all frames; left-click cycles, right-click exits.
+        auto dir_name = out_dir.filename().string();
+        if (dir_name.empty()) dir_name = "sprites";
+        auto prefix = sanitise_symbol(dir_name);
+        auto cpp_path = (out_dir / (prefix + ".cpp")).string();
+
+        cheader::CHeaderOptions ch;
+        ch.symbol_name = prefix;
+        ch.hires = st.hires;
+        ch.interlace = st.interlace;
+        ch.aga = st.aga;
+        ch.dpf = st.dpf;
+        std::span<const bitplane::BitplaneData> extras{
+            frame_planes.data() + 1, frame_planes.size() - 1};
+        ch.extra_frame_planes = extras;
+        if (!st.scanline_changes.empty()) {
+            ch.copper_changes = &st.scanline_changes;
+            ch.copper_changes_per_line = st.changes_per_line;
+            ch.copper_scanline_palettes = &st.scanline_palettes;
+        }
+        auto r = cheader::save_viewer(cpp_path, frame_planes[0],
+                                      st.palette, st.mode, ch);
+        if (!r) {
+            std::println(stderr, "batch: viewer write '{}' failed: {}",
+                         cpp_path, r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("Viewer: {} ({} frames, click to cycle, right-click to exit)",
+                   cpp_path, n_frames);
+    }
+    else {
+        std::println(stderr, "batch: unknown --batch-format '{}'", fmt);
+        return exit_code::usage;
+    }
+
+    // Inline preview: dump each generated frame via iTerm2 escape codes.
+    // The atlas's rendered Image has every frame baked in; slice + show.
+    if (cfg.preview && !is_quiet()) {
+        for (std::size_t fi = 0; fi < n_frames; ++fi) {
+            Image frame_img(frame_w, frame_h);
+            auto x0 = fi * frame_w;
+            for (std::size_t y = 0; y < frame_h; ++y)
+                for (std::size_t x = 0; x < frame_w; ++x)
+                    frame_img[x, y] = st.rendered[x0 + x, y];
+            cli_status("Preview frame {}/{} ({}):",
+                       fi + 1, n_frames, frames[fi].stem);
+            show_terminal_preview(frame_img, st.mode, st.hires, st.interlace);
+        }
+    }
+
+    // Summary. "Colors" reports the unique color count in the rendered
+    // atlas — same metric the non-batch encoders print via
+    // count_unique_colors(preview), so CAP/SCAP/HAM totals match what the
+    // single-image CLI shows.
+    auto sb = api::compute_size_breakdown(
+        static_cast<int>(frame_planes[0].total_bytes()),
+        static_cast<int>(st.palette.size()),
+        st.aga, /*cap_grid=*/0, /*scap_ops=*/0,
+        static_cast<int>(frame_h), static_cast<int>(st.max_moves_per_line));
+    auto total_colors = count_unique_colors(st.rendered);
+    cli_status("Batch: encoded {} frames into '{}', "
+               "{} colors, {:.1f} avg CAP/line, "
+               "per-frame disk {} (× {} frames)",
+               n_frames, cfg.batch_output_dir,
+               total_colors,
+               st.copper_changes,
+               fmt_size(sb.disk_bytes), n_frames);
+    return exit_code::ok;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -2127,6 +2774,13 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
         }
+    }
+
+    // Batch mode runs an entirely different path: build atlas, encode
+    // once, slice per frame, write N outputs. Skip the normal single-
+    // input pipeline below.
+    if (config->batch) {
+        return run_batch(*config);
     }
 
     // Load input image

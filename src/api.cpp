@@ -2298,6 +2298,47 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
     return make_mask_result(*std::move(iff_data), *result);
 }
 
+// Run the encoder and return its full intermediate state. Pipes through
+// the same run_pipeline() the rest of the API uses, then copies relevant
+// PipelineResult fields out into the public EncodeState. Used by the
+// batch CLI handler so it can slice the atlas's bitplane data per-frame
+// after a single encode pass.
+EncodeStateOrError encode_state(const std::uint8_t* input_data,
+                                std::size_t input_size,
+                                const Options& options) {
+    EncodeStateOrError out;
+    auto r = run_pipeline(input_data, input_size, options);
+    if (!r) {
+        out.error_msg = r.error().message;
+        return out;
+    }
+    auto& p = *r;
+    auto& s = out.state;
+    s.rendered = std::move(p.rendered);
+    s.planes = std::move(p.planes);
+    s.palette = std::move(p.palette);
+    s.indices = std::move(p.indices);
+    s.mode = p.mode;
+    s.aga = p.aga;
+    s.hires = p.hires;
+    s.interlace = p.interlace;
+    s.dpf = p.dpf;
+    s.copper = p.copper;
+    s.scap = p.scap;
+    s.has_transparency = p.has_transparency;
+    s.transparency_mask = std::move(p.transparency_mask);
+    s.scanline_palettes = std::move(p.scanline_palettes);
+    s.scanline_changes = std::move(p.scanline_changes);
+    s.scap_line_moves = std::move(p.scap_line_moves);
+    s.copper_num_colors = p.copper_num_colors;
+    s.changes_per_line = p.changes_per_line;
+    s.max_moves_per_line = p.max_moves_per_line;
+    s.copper_changes = p.copper_changes;
+    s.quant_error = p.quant_error;
+    s.psnr = p.psnr;
+    return out;
+}
+
 // Per-mode dither tuning lookup. Builds a dither_tuning::Context from
 // the API options — same fields the encoder uses internally — and
 // returns the strength/error_clamp the encoder would default to. The

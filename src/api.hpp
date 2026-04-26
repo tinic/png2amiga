@@ -1,5 +1,11 @@
 #pragma once
 
+#include "amiga.hpp"
+#include "bitplane.hpp"
+#include "copper.hpp"
+#include "scap.hpp"
+#include "types.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -313,5 +319,64 @@ struct DitherDefaults {
     float error_clamp;
 };
 DitherDefaults dither_defaults_for(const Options& options);
+
+// ---------------------------------------------------------------------------
+// EncodeState — full encoder intermediates exposed for batch / atlas tooling
+// where N frames must share one palette + one copper plan and per-frame
+// outputs are sliced from a single atlas encode. The CLI batch handler
+// (--batch) is the primary consumer; non-batch users should call convert/
+// convertIFF/convertRGBA/convertHeader instead.
+//
+// Fields are populated for the relevant mode; CAP fields stay empty for
+// non-CAP modes, scap_line_moves stays empty for non-SCAP modes, etc.
+// ---------------------------------------------------------------------------
+struct EncodeState {
+    Image rendered;                                       // preview (palette-applied RGB)
+    bitplane::BitplaneData planes;                        // raw bitplane data
+    std::vector<Color3f> palette;                         // base palette (linear RGB)
+    std::vector<std::uint8_t> indices;                    // per-pixel palette indices
+                                                          // (non-CAP modes only; empty
+                                                          // for HAM and CAP since their
+                                                          // palette varies per pixel/row)
+    amiga::Mode mode{};
+    bool aga = false;
+    bool hires = false;
+    bool interlace = false;
+    bool dpf = false;
+    bool copper = false;
+    bool scap = false;
+    bool has_transparency = false;
+    std::vector<bool> transparency_mask;
+    std::vector<std::vector<Color3f>> scanline_palettes;  // CAP/SCAP per-line palettes
+    std::vector<std::vector<copper::CopperChange>> scanline_changes;  // CAP per-line MOVEs
+    std::vector<std::vector<scap::ScapMove>> scap_line_moves;         // SCAP per-line ops
+    std::size_t copper_num_colors{};
+    std::size_t changes_per_line{};
+    std::size_t max_moves_per_line{};
+    float copper_changes{};
+    float quant_error{};
+    float psnr{};
+};
+
+// Run the encoder pipeline and return its full intermediate state. Same
+// input as convert() but instead of serialising to bytes, hands back
+// every object the caller might want to slice/recompose (planes,
+// palette, scanline_changes, scap_line_moves, etc.).
+//
+// On failure returns a non-empty error string in EncodeState::error_msg
+// (TODO: rework as Result<EncodeState> when we want to stop folding all
+// errors to one channel). For now, callers should check rendered.width().
+//
+// The web/native pipelines should keep using convert*() — encode_state
+// is intentionally thicker than ConvertResult and exposes implementation
+// details that aren't part of the long-term stable API.
+struct EncodeStateOrError {
+    EncodeState state;
+    std::string error_msg;  // empty on success
+    bool ok() const { return error_msg.empty(); }
+};
+EncodeStateOrError encode_state(const std::uint8_t* input_data,
+                                std::size_t input_size,
+                                const Options& options);
 
 } // namespace png2amiga::api

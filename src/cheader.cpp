@@ -573,6 +573,50 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
     out += "};\n\n";
 
+    // Extra frames (multi-frame batch viewer). Frame 0 = the primary
+    // `_planes` array above; each extra frame N gets `_frameN_planes`.
+    // Same line-interleaved layout, same chip-RAM placement.
+    auto n_extra = options.extra_frame_planes.size();
+    if (n_extra > 0) {
+        for (std::size_t fi = 0; fi < n_extra; ++fi) {
+            auto& fp = options.extra_frame_planes[fi];
+            auto fw = fp.bytes_per_row / 2;
+            auto ftw = fw * fp.depth * fp.height;
+            std::size_t fwc = 0;
+            out += std::format("static const UWORD {}_frame{}_planes[]"
+                               " __attribute__((aligned({})))"
+                               " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
+                               sym, fi + 1, align);
+            for (std::size_t y = 0; y < fp.height; ++y) {
+                for (std::size_t p = 0; p < fp.depth; ++p) {
+                    out += "    ";
+                    auto offset = fp.plane_row_offset(p, y);
+                    for (std::size_t w = 0; w < fw; ++w) {
+                        auto byte_off = offset + w * 2;
+                        auto hi = static_cast<std::uint16_t>(fp.data[byte_off]);
+                        auto lo = static_cast<std::uint16_t>(fp.data[byte_off + 1]);
+                        auto word = static_cast<std::uint16_t>((hi << 8) | lo);
+                        ++fwc;
+                        out += std::format("0x{:04X}", word);
+                        if (fwc < ftw) out += ",";
+                    }
+                    out += "\n";
+                }
+            }
+            out += "};\n\n";
+        }
+        // Frame base table — index = frame number, value = base UBYTE pointer.
+        // Used by the click-cycle loop to repatch BPLxPT in the copper list.
+        out += std::format("static const UBYTE* const {}_frame_bases[{}] = {{\n",
+                           sym, n_extra + 1);
+        out += std::format("    (const UBYTE*){}_planes,\n", sym);
+        for (std::size_t fi = 0; fi < n_extra; ++fi) {
+            out += std::format("    (const UBYTE*){}_frame{}_planes{}\n",
+                               sym, fi + 1, fi + 1 < n_extra ? "," : "");
+        }
+        out += "};\n\n";
+    }
+
     // --- Palette ---
     out += std::format("static const UWORD {}_palette[] = {{\n", sym);
     for (std::size_t i = 0; i < pal_count; ++i) {
@@ -1083,6 +1127,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
     out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
                        sym, bpr);
+    if (n_extra > 0) {
+        // Save the slot for click-cycle BPLxPT patching. The next 4*depth
+        // UWORDs in the copper list hold BPL1PTH/L .. BPLnPTH/L; we'll
+        // overwrite them in-place each click.
+        out += "    USHORT* bpl_slot = cl;\n";
+    }
     out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
 
     // Set palette via copper list.
@@ -1573,8 +1623,34 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    Enable();  // allow CPU to service interrupts\n\n";
     }
 
-    // Wait for left mouse button
-    out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
+    // Wait for left mouse button. Multi-frame batch viewer: each click
+    // advances to the next frame (wraps around); right-click exits.
+    if (n_extra > 0) {
+        out += std::format("    // Multi-frame click-cycle: {} frames total\n",
+                           n_extra + 1);
+        out += "    int frame = 0;\n";
+        out += "    short prev = 0;\n";
+        out += "    for (;;) {\n";
+        out += "        WaitVbl();\n";
+        out += "        // Right-click (CIA-A port A bit 2 via POTGOR bit 10) exits.\n";
+        out += "        if (((*(volatile UWORD*)0xdff016) & (1<<10)) == 0) break;\n";
+        out += "        short cur = MouseLeft();\n";
+        out += "        if (cur && !prev) {\n";
+        out += std::format("            frame++; if (frame >= {}) frame = 0;\n",
+                           n_extra + 1);
+        out += std::format("            const UBYTE* base = {}_frame_bases[frame];\n",
+                           sym);
+        out += std::format("            const UBYTE* fp[{}];\n", depth);
+        out += std::format("            for (int i = 0; i < {}; i++) fp[i] = base + {} * i;\n",
+                           depth, bpr);
+        out += std::format("            (void)copSetPlanes(bpl_slot, fp, {});\n",
+                           depth);
+        out += "        }\n";
+        out += "        prev = cur;\n";
+        out += "    }\n\n";
+    } else {
+        out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
+    }
 
     // Fade-out: reverse, then disable display and free
     if (do_fade) {

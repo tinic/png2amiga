@@ -68,6 +68,16 @@ struct CHeaderOptions {
     std::string scap_label;
     int scap_anchor_hpos = 0;
     int scap_total_planes = 0;
+
+    // Multi-frame viewer (--batch --batch-format cpp). When non-empty, the
+    // viewer emits one bitplane data array per frame (including the primary
+    // `planes` arg as frame 0) and rebinds the copper list's BPLxPT entries
+    // on every left-click. Wraps from last frame back to frame 0; right-click
+    // (or the same exit path as before) terminates. All frames must share
+    // dimensions / depth / layout (atlas-encoded by the batch driver, so this
+    // is automatic). Interlace is unsupported and rejected up the stack.
+    std::span<const bitplane::BitplaneData> extra_frame_planes;
+    std::vector<std::string> frame_labels;  // one per frame, for stem-named symbols
 };
 
 // ---------------------------------------------------------------------------
