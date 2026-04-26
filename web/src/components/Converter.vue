@@ -51,9 +51,53 @@ watch(wasmLoading, (loading) => {
 
 const options = reactive(defaultOptions())
 const canvasRef = ref(null)
+const crtCanvasRef = ref(null)  // WebGL CRT-preview overlay canvas
+const crtEnabled = ref(false)
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
 const progressStage = ref('')
+
+// Lazy-init the CRT renderer the first time --crt is toggled on; persist
+// across re-renders. Only torn down on unmount.
+let crtRenderer = null
+let lastRgba = null              // cached source RGBA so a CRT toggle
+let lastSrc = { w: 0, h: 0 }     // change can re-render without re-encoding
+let lastDst = { w: 0, h: 0 }
+async function ensureCrtRenderer() {
+  if (crtRenderer || !crtCanvasRef.value) return crtRenderer
+  const { createCrtRenderer } = await import('../lib/crt.js')
+  try {
+    crtRenderer = createCrtRenderer(crtCanvasRef.value)
+  } catch (e) {
+    errorMsg.value = `CRT: ${e.message}`
+    crtEnabled.value = false
+    return null
+  }
+  return crtRenderer
+}
+function renderCrt() {
+  if (!lastRgba || !crtRenderer) return
+  // Backing-store sizing is decoupled from the displayed (CSS) size.
+  // We need ≥4 output rows per source row for the Gaussian beam to
+  // resolve as scanlines instead of a dot grid (with only 2 rows per
+  // source row, hardScan=-8 alternates ~1→~0 in adjacent rows and
+  // the mask modulates each one independently → dot pattern, not
+  // scanlines). For interlace we soften scanlines anyway so 2 rows
+  // suffices. Width oversamples so the slot mask gets ≥6 output pixels
+  // per RGB triad and reads as continuous stripes.
+  const isInterlace = lastSrc.h >= 280
+  const yScale = isInterlace ? 2 : 4
+  const xScale = Math.max(2, Math.ceil(1024 / lastSrc.w))
+  const dw = lastSrc.w * xScale
+  const dh = lastSrc.h * yScale
+  if (crtCanvasRef.value) {
+    // Display size matches the regular preview's lastDst so the mode
+    // aspect ratio (lores 2:1, hires 1:2 etc.) is preserved.
+    crtCanvasRef.value.style.width  = `${lastDst.w}px`
+    crtCanvasRef.value.style.height = `${lastDst.h}px`
+  }
+  crtRenderer.render(lastRgba, lastSrc.w, lastSrc.h, dw, dh)
+}
 const resultInfo = ref('')
 const errorMsg = ref('')
 const sizeOverride = ref(false)
@@ -97,7 +141,10 @@ function loupePointerDown(e) {
 }
 function loupePointerMove(e) {
   if (!dragStart) return
-  const canvas = canvasRef.value
+  // Use whichever canvas is currently visible. With v-show, the hidden
+  // one's clientWidth/Height is 0 so picking the wrong one would clamp
+  // the pan to zero and the zoomed view wouldn't scroll.
+  const canvas = crtEnabled.value ? crtCanvasRef.value : canvasRef.value
   if (!canvas) return
   const maxX = canvas.clientWidth * 3
   const maxY = canvas.clientHeight * 3
@@ -215,14 +262,25 @@ const rawTooltipHtml = computed(() => {
 // Whether HAM controls should be shown
 const showHamControls = computed(() => isHamMode(options.mode))
 
-// Dual playfield: only valid for standard lores/hires Amiga modes
-// (no HAM, no EHB, no Atari/DOS) AND only with the matching depth for
-// the current chipset (3 for OCS = 8 PF2 colours, 4 for AGA = 16).
+// Dual playfield: only valid for standard Amiga modes (no HAM, no EHB,
+// no Atari/DOS) at the matching depth for the current chipset (3 for
+// OCS = 8 PF2 colours, 4 for AGA = 16).
+//
+// OCS hires is excluded (any -lace variant too): OCS hires caps at 4
+// bitplanes total, so DPF would split 2+2 giving only 4 colours per
+// playfield, and the chipset doesn't officially support hires+DPF.
+//
+// OCS lores-lace + DPF IS allowed — BPLCON0's LACE bit (2) and DBLPF
+// bit (10) are independent and can be set together. The hardware does
+// 320×400 with two 8-colour playfields fine, even though the
+// combination flickers on consumer monitors without scan-doubling.
+// AGA hires + DPF (depth=4 → 4+4) is also fine.
 const dpfAvailable = computed(() => {
   const m = options.mode
   if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isDosMode(m)) return false
   const cs = effectiveChipset(m, options.chipset)
-  return (cs === 'aga') ? options.depth === 4 : options.depth === 3
+  if (cs === 'aga') return options.depth === 4
+  return options.depth === 3 && !m.includes('hires')
 })
 
 // SCAP — mid-line palette swaps. Two flavours, both OCS lores only:
@@ -414,6 +472,19 @@ function buildWasmOptions() {
 watch(() => options.dither, (to, from) => { track('dither-change', { from, to }) })
 watch(() => options.copper, (enabled) => { track('copper-toggle', { enabled }) })
 
+// CRT toggle: lazy-init the WebGL renderer on first use, re-render the
+// cached preview without forcing a fresh encode pass.
+watch(crtEnabled, async (on) => {
+  track('crt-toggle', { enabled: on })
+  if (on) {
+    const r = await ensureCrtRenderer()
+    if (r) renderCrt()
+  }
+})
+onBeforeUnmount(() => {
+  if (crtRenderer) { crtRenderer.dispose(); crtRenderer = null }
+})
+
 // Refresh errorClamp from the C++ per-mode tuning table whenever the mode
 // (or any flag that feeds Context — copper/dpf/scap/depth/chipset) changes.
 // Ignores whatever the user had set previously: the table value wins so a
@@ -540,6 +611,15 @@ function doConvert() {
       )
       tmpCtx.putImageData(imgData, 0, 0)
       ctx.drawImage(tmp, 0, 0, dw, dh)
+
+      // Cache source for CRT re-render on toggle without re-encoding.
+      lastRgba = new Uint8Array(result.rgba)
+      lastSrc = { w: result.width, h: result.height }
+      lastDst = { w: dw, h: dh }
+      if (crtEnabled.value) {
+        const r = await ensureCrtRenderer()
+        if (r) renderCrt()
+      }
 
       lastWidth.value = result.width
       lastHeight.value = result.height
@@ -1036,6 +1116,14 @@ async function loadExample(example) {
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
                 </div>
               </div>
+              <!-- CAP best quality (HAM modes only — flag is a no-op elsewhere) -->
+              <div v-if="options.copper && showHamControls" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Slower (~4-5x) CAP planner: multi-candidate slot search + joint base-palette refinement. +0.5..2 dB PSNR on HAM6/HAM8 + CAP. Off by default.">CAP best</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.capBest" />
+                  <span style="color: #888; font-size: 0.625rem;">~4-5× slower</span>
+                </div>
+              </div>
 
               <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
               <div v-if="dpfAvailable" class="grid align-items-center">
@@ -1269,12 +1357,6 @@ async function loadExample(example) {
               <!-- HAM beam width (DP search) — advanced: quality plateaus
                    quickly past ~8, default 16 is fine for almost any image. -->
               <template v-if="showHamControls">
-                <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">
-                  <div class="flex align-items-center gap-2">
-                    <input type="checkbox" v-model="options.capBest" id="capBest" />
-                    <label for="capBest" class="text-xs text-color-secondary" title="Slower (~4-5x) CAP planner: multi-candidate slot search + joint base-palette refinement. Adds +0.5..2 dB PSNR. HAM6 + copper and HAM8 + copper only — indexed copper modes (lores/hires/EHB) ignore this flag (their planner is already mature). Off by default.">CAP best quality (slower)</label>
-                  </div>
-                </div>
                 <div class="pt-3 mt-3 border-top-1 surface-border">
                   <label class="block text-xs text-color-secondary font-semibold mb-1" title="Beam width for DP search. Higher = marginally better quality, slower. Range 1-256 (default 16). In practice quality plateaus past ~8.">HAM Beam Width</label>
                   <div class="flex gap-2 align-items-center">
@@ -1337,17 +1419,21 @@ async function loadExample(example) {
                :class="{ 'loupe-active': loupeActive }"
           >
             <div class="canvas-wrap relative" :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
-              <canvas ref="canvasRef" class="preview-canvas" />
+              <canvas ref="canvasRef" class="preview-canvas" v-show="!crtEnabled" />
+              <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />
               <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
                 <ProgressSpinner v-if="!progress" style="width: 2rem; height: 2rem" />
                 <div v-else style="width: 70%; max-width: 22rem; text-align: center;">
-                  <ProgressBar :value="progress" :show-value="true" style="height: 0.6rem" />
+                  <ProgressBar :value="progress" :show-value="true" style="height: 1.5rem" />
                   <div class="text-xs text-color-secondary mt-1" v-if="progressStage">{{ progressStage }}</div>
                 </div>
               </div>
             </div>
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
               <i class="pi pi-search"></i>
+            </button>
+            <button class="loupe-btn crt-btn" :class="{ active: crtEnabled }" @click.stop="crtEnabled = !crtEnabled" title="CRT preview — Commodore 1084S RGB monitor simulation (slot mask, scanlines, bloom)">
+              <i class="pi pi-desktop"></i>
             </button>
           </div>
           <div class="flex justify-content-between align-items-center px-1">
@@ -1578,6 +1664,10 @@ async function loadExample(example) {
 .loupe-btn.active {
   background: var(--p-primary-color);
   color: #fff;
+}
+.loupe-btn.crt-btn {
+  /* Sit immediately to the left of the loupe button. */
+  right: 2.4rem;
 }
 
 .preview-canvas {
