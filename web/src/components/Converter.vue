@@ -225,14 +225,20 @@ const dpfAvailable = computed(() => {
   return (cs === 'aga') ? options.depth === 4 : options.depth === 3
 })
 
-// SCAP — DPF mid-line palette swaps. SCAP is an extension to CAP
-// (per-line palette evolution); enabling SCAP turns CAP on too, and
-// turning CAP off cascades SCAP off. Phase 1: OCS DPF lores only,
-// total depth=3 (PF2 = 3 bitplanes; PF1 zeroed).
+// SCAP — mid-line palette swaps. Two flavours, both OCS lores only:
+//   * DPF + lores (depth=3): 3-plane PF2, 8 base colours.
+//   * EHB (mode=ehb): 32 base + 32 hardware-derived half-brites.
+// SCAP is an extension to CAP (per-line palette evolution); enabling
+// SCAP turns CAP on too, and turning CAP off cascades SCAP off.
 const scapAvailable = computed(() => {
-  if (!options.dualPlayfield) return false
   const cs = effectiveChipset(options.mode, options.chipset)
-  return cs === 'ocs' && options.mode === 'lores' && options.depth === 3
+  if (cs !== 'ocs') return false
+  // DPF lores at depth=3
+  if (options.dualPlayfield && options.mode === 'lores' &&
+      options.depth === 3) return true
+  // EHB (depth is fixed at 6 for EHB; mode string identifies it)
+  if (options.mode === 'ehb') return true
+  return false
 })
 
 // Available modes for current chipset
@@ -1040,12 +1046,12 @@ async function loadExample(example) {
                 </div>
               </div>
 
-              <!-- SCAP — DPF mid-line palette swaps (OCS lores only, Phase 1) -->
+              <!-- SCAP — mid-line palette swaps (OCS lores only, DPF or EHB) -->
               <div v-if="scapAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP: a hand-tuned copper list of mid-line palette swaps inside DPF's PF2. Each scanline gets 20 MOVEs evenly spaced across the visible area, evolving the 8-colour PF2 palette ~16 lores px at a time. The slot table (HPOS calibration, line-gate, end-of-line) was tuned by hand against vAmiga so the visible MOVE position matches the planner's pixel_x. OCS DPF lores only.">SCAP</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP — Super CAP: mid-line palette swaps inside the displayed area, on top of CAP's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">SCAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.scap" />
-                  <span style="color: #888; font-size: 0.625rem;">mid-line PF2 swaps (20/line)</span>
+                  <span style="color: #888; font-size: 0.625rem;">mid-line palette swaps (19/line)</span>
                 </div>
               </div>
 
