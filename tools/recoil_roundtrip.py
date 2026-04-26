@@ -96,8 +96,11 @@ def find_recoil():
         p = shutil.which(name)
         if p:
             return p
-    # Bundle in /Applications/RECOIL.app/Contents/MacOS/
+    # Common install locations
     for app in (
+        os.path.expanduser("~/bin/recoil2png"),
+        "/usr/local/bin/recoil2png",
+        "/opt/homebrew/bin/recoil2png",
         "/Applications/RECOIL.app/Contents/MacOS/recoil2png",
         "/Applications/RECOIL.app/Contents/Resources/recoil2png",
     ):

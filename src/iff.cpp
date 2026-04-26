@@ -167,9 +167,22 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     // --- CMAP chunk ---
     // For EHB mode, only write the 32 base colors — the Amiga hardware
     // automatically generates the other 32 at half brightness.
-    auto cmap_colors = palette;
-    if (mode == amiga::Mode::ehb && palette.size() > 32) {
-        cmap_colors = palette.first(32);
+    // CMAP source: when scanline_palettes is provided (CAP modes), use
+    // line 0's palette as the CMAP. PCHG diffs the rest against line 0,
+    // so the reader's palette state for line 0 must match scan_pals[0]
+    // exactly — otherwise every subsequent row gets a constant
+    // (CMAP − scan_pals[0]) offset applied. Without this, the per-row
+    // mutations inside find_ham_swaps / copper::encode (and especially
+    // --cap-best's joint base-palette refinement, where base_palette
+    // is the OKLab centroid of all rows, not row 0 specifically)
+    // produce wrong colours via every IFF reader.
+    auto pchg_pal0 = (options.scanline_palettes &&
+                      !options.scanline_palettes->empty())
+        ? std::span<const Color3f>(*(options.scanline_palettes->data()))
+        : palette;
+    auto cmap_colors = pchg_pal0;
+    if (mode == amiga::Mode::ehb && cmap_colors.size() > 32) {
+        cmap_colors = cmap_colors.first(32);
     }
 
     auto cmap_size = cmap_colors.size() * 3;
@@ -217,103 +230,180 @@ Result<std::vector<std::uint8_t>> write_ilbm(
         auto height = planes.height;
         auto colors_per_line = scan_pals[0].size();
 
-        // Build per-line change lists (register, 12-bit RGB).
-        struct Change { std::uint8_t reg; std::uint16_t rgb12; };
-        std::vector<std::vector<Change>> line_changes(height);
-        std::vector<std::uint16_t> prev(colors_per_line);
-        // Initial state = line 0's palette (matches CMAP). This means
-        // line 0 emits no changes (CMAP already provides it). We start
-        // diffing from line 1 against line 0.
-        if (!scan_pals.empty()) {
-            auto& pal0 = scan_pals[0];
-            for (std::size_t i = 0; i < colors_per_line; ++i) {
-                auto c = (i < pal0.size()) ? pal0[i] : Color3f{};
-                prev[i] = palette::linear_to_ocs(c);
-            }
-        }
-        std::size_t changed_lines = 0;
-        std::uint16_t min_reg = 0xFFFF, max_reg = 0;
-        std::uint16_t max_per_line = 0;
-        std::uint32_t total = 0;
-        for (std::size_t y = 0; y < height; ++y) {
-            auto& pal = (y < scan_pals.size()) ? scan_pals[y] : scan_pals[0];
-            auto& chgs = line_changes[y];
-            for (std::size_t i = 0; i < colors_per_line; ++i) {
-                auto c = (i < pal.size()) ? pal[i] : Color3f{};
-                auto rgb = palette::linear_to_ocs(c);
-                if (rgb != prev[i]) {
-                    chgs.push_back({static_cast<std::uint8_t>(i), rgb});
-                    prev[i] = rgb;
-                }
-            }
-            if (!chgs.empty()) {
-                ++changed_lines;
-                if (chgs.front().reg < min_reg) min_reg = chgs.front().reg;
-                if (chgs.back().reg > max_reg)  max_reg = chgs.back().reg;
-                auto sz = static_cast<std::uint16_t>(chgs.size());
-                if (sz > max_per_line) max_per_line = sz;
-                total += static_cast<std::uint32_t>(chgs.size());
-            }
-        }
-        if (min_reg == 0xFFFF) min_reg = 0;
+        // Two PCHG storage variants exist (Vigna 1991, netpbm de-facto):
+        //   PCHGF_12BIT (flag 0x0001): SmallLineChanges, regs 0..31, RGB444
+        //   PCHGF_32BIT (flag 0x0002): BigLineChanges,   regs 0..65535, RGB888+A
+        // Use Big when the palette can address registers >= 32 (HAM7/HAM8
+        // base palette), otherwise Small for compactness.
+        const bool use_big = colors_per_line > 32;
 
         write_id(out, "PCHG");
         auto pchg_size_off = out.size();
         write_u32(out, 0);  // placeholder
         auto pchg_start = out.size();
 
-        // PCHGHeader (20 bytes, all big-endian)
-        write_u16(out, 0);              // Compression: 0 = none
-        write_u16(out, 1);              // Flags: bit 0 = PCHGB_12BIT
-        write_u16(out, 0);              // StartLine = 0
-        write_u16(out, static_cast<std::uint16_t>(height));  // LineCount
-        write_u16(out, static_cast<std::uint16_t>(changed_lines));
-        write_u16(out, min_reg);
-        write_u16(out, max_reg);
-        write_u16(out, max_per_line);
-        write_u32(out, total);
+        if (use_big) {
+            struct Rgb8 { std::uint8_t r, g, b; };
+            auto to_rgb8 = [](Color3f c) {
+                auto srgb = color_space::linear_to_srgb(c).clamped();
+                return Rgb8{
+                    static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f)),
+                    static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f)),
+                    static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f))};
+            };
+            struct Change { std::uint16_t reg; std::uint8_t r, g, b; };
+            std::vector<std::vector<Change>> line_changes(height);
+            std::vector<Rgb8> prev(colors_per_line);
+            auto& pal0 = scan_pals[0];
+            for (std::size_t i = 0; i < colors_per_line; ++i) {
+                prev[i] = to_rgb8((i < pal0.size()) ? pal0[i] : Color3f{});
+            }
+            std::size_t changed_lines = 0;
+            std::uint16_t min_reg = 0xFFFF, max_reg = 0;
+            std::uint16_t max_per_line = 0;
+            std::uint32_t total = 0;
+            for (std::size_t y = 0; y < height; ++y) {
+                auto& pal = (y < scan_pals.size()) ? scan_pals[y]
+                                                   : scan_pals[0];
+                auto& chgs = line_changes[y];
+                for (std::size_t i = 0; i < colors_per_line; ++i) {
+                    auto rgb = to_rgb8((i < pal.size()) ? pal[i] : Color3f{});
+                    auto& p = prev[i];
+                    if (rgb.r != p.r || rgb.g != p.g || rgb.b != p.b) {
+                        chgs.push_back({static_cast<std::uint16_t>(i),
+                                        rgb.r, rgb.g, rgb.b});
+                        p = rgb;
+                    }
+                }
+                if (!chgs.empty()) {
+                    ++changed_lines;
+                    if (chgs.front().reg < min_reg) min_reg = chgs.front().reg;
+                    if (chgs.back().reg  > max_reg) max_reg  = chgs.back().reg;
+                    auto sz = static_cast<std::uint16_t>(chgs.size());
+                    if (sz > max_per_line) max_per_line = sz;
+                    total += static_cast<std::uint32_t>(chgs.size());
+                }
+            }
+            if (min_reg == 0xFFFF) min_reg = 0;
 
-        // LineMask: ceil(LineCount/32) ULONGs, bit N set if line N has
-        // any changes. Bit order: bit 31 of word 0 = line 0.
-        auto mask_words = (height + 31) / 32;
-        std::vector<std::uint32_t> mask(mask_words, 0);
-        for (std::size_t y = 0; y < height; ++y) {
-            if (!line_changes[y].empty()) {
-                mask[y / 32] |= (1u << (31 - (y % 32)));
-            }
-        }
-        for (auto w : mask) write_u32(out, w);
+            // PCHGHeader (20 bytes)
+            write_u16(out, 0);                              // Compression
+            write_u16(out, 2);                              // Flags = PCHGF_32BIT
+            write_u16(out, 0);                              // StartLine
+            write_u16(out, static_cast<std::uint16_t>(height));
+            write_u16(out, static_cast<std::uint16_t>(changed_lines));
+            write_u16(out, min_reg);
+            write_u16(out, max_reg);
+            write_u16(out, max_per_line);
+            write_u32(out, total);
 
-        // Per-changed-line data: SmallLineChanges, grouped by register
-        // range 0..15 (count16) and 16..31 (count32), each followed by
-        // SmallPaletteChange entries.
-        //   SmallPaletteChange: high nibble = register within group,
-        //                       low 12 bits = RGB444 (RRRRGGGGBBBB).
-        // Registers 32+ are not expressible in the 12-bit PCHG variant;
-        // we clip silently (rare for our HAM6/EHB/lores cases).
-        for (std::size_t y = 0; y < height; ++y) {
-            auto& chgs = line_changes[y];
-            if (chgs.empty()) continue;
-            std::uint8_t count16 = 0, count32 = 0;
-            for (auto& c : chgs) {
-                if (c.reg < 16) ++count16;
-                else if (c.reg < 32) ++count32;
+            auto mask_words = (height + 31) / 32;
+            std::vector<std::uint32_t> mask(mask_words, 0);
+            for (std::size_t y = 0; y < height; ++y) {
+                if (!line_changes[y].empty()) {
+                    mask[y / 32] |= (1u << (31 - (y % 32)));
+                }
             }
-            write_u8(out, count16);
-            write_u8(out, count32);
-            // Group 0..15 first, then 16..31
-            for (auto& c : chgs) {
-                if (c.reg >= 16) continue;
-                std::uint16_t entry = static_cast<std::uint16_t>(
-                    (c.reg << 12) | (c.rgb12 & 0x0FFF));
-                write_u16(out, entry);
+            for (auto w : mask) write_u32(out, w);
+
+            // BigLineChanges per changed line:
+            //   UWORD ChangeCount
+            //   BigPaletteChange[]: UWORD Register; UBYTE Alpha, Red, Blue, Green
+            //   (note: ARBG byte order, not ARGB — per Vigna spec)
+            for (std::size_t y = 0; y < height; ++y) {
+                auto& chgs = line_changes[y];
+                if (chgs.empty()) continue;
+                write_u16(out, static_cast<std::uint16_t>(chgs.size()));
+                for (auto& c : chgs) {
+                    write_u16(out, c.reg);
+                    write_u8(out, 0);      // Alpha
+                    write_u8(out, c.r);
+                    write_u8(out, c.b);    // ARBG, not ARGB
+                    write_u8(out, c.g);
+                }
             }
-            for (auto& c : chgs) {
-                if (c.reg < 16 || c.reg >= 32) continue;
-                std::uint16_t entry = static_cast<std::uint16_t>(
-                    (static_cast<std::uint16_t>(c.reg - 16) << 12) |
-                    (c.rgb12 & 0x0FFF));
-                write_u16(out, entry);
+        } else {
+            struct Change { std::uint8_t reg; std::uint16_t rgb12; };
+            std::vector<std::vector<Change>> line_changes(height);
+            std::vector<std::uint16_t> prev(colors_per_line);
+            auto& pal0 = scan_pals[0];
+            for (std::size_t i = 0; i < colors_per_line; ++i) {
+                auto c = (i < pal0.size()) ? pal0[i] : Color3f{};
+                prev[i] = palette::linear_to_ocs(c);
+            }
+            std::size_t changed_lines = 0;
+            std::uint16_t min_reg = 0xFFFF, max_reg = 0;
+            std::uint16_t max_per_line = 0;
+            std::uint32_t total = 0;
+            for (std::size_t y = 0; y < height; ++y) {
+                auto& pal = (y < scan_pals.size()) ? scan_pals[y]
+                                                   : scan_pals[0];
+                auto& chgs = line_changes[y];
+                for (std::size_t i = 0; i < colors_per_line; ++i) {
+                    auto c = (i < pal.size()) ? pal[i] : Color3f{};
+                    auto rgb = palette::linear_to_ocs(c);
+                    if (rgb != prev[i]) {
+                        chgs.push_back({static_cast<std::uint8_t>(i), rgb});
+                        prev[i] = rgb;
+                    }
+                }
+                if (!chgs.empty()) {
+                    ++changed_lines;
+                    if (chgs.front().reg < min_reg) min_reg = chgs.front().reg;
+                    if (chgs.back().reg  > max_reg) max_reg  = chgs.back().reg;
+                    auto sz = static_cast<std::uint16_t>(chgs.size());
+                    if (sz > max_per_line) max_per_line = sz;
+                    total += static_cast<std::uint32_t>(chgs.size());
+                }
+            }
+            if (min_reg == 0xFFFF) min_reg = 0;
+
+            // PCHGHeader (20 bytes)
+            write_u16(out, 0);                              // Compression
+            write_u16(out, 1);                              // Flags = PCHGF_12BIT
+            write_u16(out, 0);                              // StartLine
+            write_u16(out, static_cast<std::uint16_t>(height));
+            write_u16(out, static_cast<std::uint16_t>(changed_lines));
+            write_u16(out, min_reg);
+            write_u16(out, max_reg);
+            write_u16(out, max_per_line);
+            write_u32(out, total);
+
+            auto mask_words = (height + 31) / 32;
+            std::vector<std::uint32_t> mask(mask_words, 0);
+            for (std::size_t y = 0; y < height; ++y) {
+                if (!line_changes[y].empty()) {
+                    mask[y / 32] |= (1u << (31 - (y % 32)));
+                }
+            }
+            for (auto w : mask) write_u32(out, w);
+
+            // SmallLineChanges per changed line: count16, count32, then
+            // entries grouped 0..15 / 16..31. Each entry = 4-bit reg-in-group
+            // (high nibble) | 12-bit RGB444 (low 12 bits).
+            for (std::size_t y = 0; y < height; ++y) {
+                auto& chgs = line_changes[y];
+                if (chgs.empty()) continue;
+                std::uint8_t count16 = 0, count32 = 0;
+                for (auto& c : chgs) {
+                    if (c.reg < 16) ++count16;
+                    else if (c.reg < 32) ++count32;
+                }
+                write_u8(out, count16);
+                write_u8(out, count32);
+                for (auto& c : chgs) {
+                    if (c.reg >= 16) continue;
+                    std::uint16_t entry = static_cast<std::uint16_t>(
+                        (c.reg << 12) | (c.rgb12 & 0x0FFF));
+                    write_u16(out, entry);
+                }
+                for (auto& c : chgs) {
+                    if (c.reg < 16 || c.reg >= 32) continue;
+                    std::uint16_t entry = static_cast<std::uint16_t>(
+                        (static_cast<std::uint16_t>(c.reg - 16) << 12) |
+                        (c.rgb12 & 0x0FFF));
+                    write_u16(out, entry);
+                }
             }
         }
 
