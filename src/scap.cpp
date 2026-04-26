@@ -525,13 +525,15 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 return e;
             };
 
-        // Beam search params. Empirically tuned: B=32 / K=32 /
-        // kPerRegCap=4 lowers planner OKLab error by ~2.5% and lifts
-        // preview-PSNR by ~+0.11 dB vs B=8/K=12/cap=2 baseline, with
-        // ~6× CPU. Encode-time on a 320×213 photo: 0.73s. Wider beams
-        // hit a plateau.
-        constexpr std::size_t kBeamWidth = 32;
-        constexpr std::size_t kCandsPerSlot = 32;
+        // Beam search params. Tuned by sweep across the test image set
+        // (lovers/photo/fromthe/space3/electrichues02). B=64 is the
+        // sweet spot for DPF: peak preview-PSNR (33.95 dB) at ~1s per
+        // 320×213 image. Wider beams (B=128, 192, 256) keep lowering
+        // planner error but PSNR plateaus — the planner's OKLab²
+        // metric drifts from blurred-sRGB PSNR past this point.
+        // K=16 saturates given 7 modifiable regs × kPerRegCap=4 = 28.
+        constexpr std::size_t kBeamWidth = 64;
+        constexpr std::size_t kCandsPerSlot = 16;
         struct BeamNode {
             std::array<Color3f, kBaseColors> P;
             std::array<color_space::OKLab, kBaseColors> P_lab;
@@ -1412,14 +1414,18 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 
         // Beam state. P holds 32 base linear-RGB; P_lab_b and P_lab_h
         // are the cached OKLab of base and halve(base) respectively.
-        // EHB does not benefit from a wider beam: pushing beyond these
-        // values lowers planner error (the metric it minimises) but
-        // worsens preview-PSNR — once the EHB plan is this tight
-        // (default error ~50 vs DPF ~140), the planner's OKLab² metric
-        // drifts from blurred-sRGB PSNR and additional refinement
-        // scatters dither residuals in ways that don't show in the
-        // planner's score.
-        constexpr std::size_t kBeamWidth = 4;
+        // B=2 is the sweet spot for EHB SCAP per the same sweep: PSNR
+        // peaks at 40.49 dB. Wider beams keep lowering planner error
+        // but worsen preview-PSNR because dither residuals scatter
+        // into noise the planner doesn't see — the OKLab² metric
+        // drifts hard from blurred-sRGB PSNR once the EHB plan is
+        // already this tight (default error ~51 vs DPF ~140).
+        //   B=1: err=52.13 psnr=40.31 dB  (= greedy)
+        //   B=2: err=51.16 psnr=40.49 dB  ← peak
+        //   B=3: err=50.74 psnr=40.37 dB
+        //   B=4: err=50.57 psnr=40.45 dB
+        //   B=16: err=50.03 psnr=40.19 dB (over-fits)
+        constexpr std::size_t kBeamWidth = 2;
         constexpr std::size_t kCandsPerSlot = 16;
         constexpr std::size_t kEMaxSlots = 32;
         constexpr std::size_t kHblankCeilingLocal = kHblankCeiling;
