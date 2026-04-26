@@ -315,77 +315,6 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     if (err_diffuse) err_buf.assign(width * height,
                                     color_space::OKLab{0.0f, 0.0f, 0.0f});
 
-    // For each strip pick the swap that maximises error reduction.
-    // base_index[pixel] is FIXED (set by the global F-S pass), so the
-    // per-strip "cluster" of a register k is exactly the strip pixels
-    // whose base_index equals k. We replace P[k] with the OKLab centroid
-    // of those source pixels, snapped to the OCS palette.
-    auto find_best_swap_in_strip =
-        [&](std::size_t y, std::size_t x_lo, std::size_t x_hi,
-            int& out_reg, Color3f& out_color, float& out_reduction) {
-            std::array<double, kBaseColors> sumL{}, suma{}, sumb{}, count{}, cur_err{};
-            for (std::size_t x = x_lo; x < x_hi; ++x) {
-                auto k = static_cast<std::size_t>(base_index[y * width + x]);
-                auto& lab = img_lab[y * width + x];
-                sumL[k] += static_cast<double>(lab.L);
-                suma[k] += static_cast<double>(lab.a);
-                sumb[k] += static_cast<double>(lab.b);
-                count[k] += 1.0;
-                float dL = lab.L - P_lab[k].L;
-                float da = lab.a - P_lab[k].a;
-                float db = lab.b - P_lab[k].b;
-                cur_err[k] += static_cast<double>(dL * dL + da * da + db * db);
-            }
-            std::vector<Color3f> cands;
-            cands.reserve(static_cast<std::size_t>(x_hi - x_lo) + kBaseColors);
-            std::array<bool, 4096> seen{};
-            auto ocs_key = [](const Color3f& c) {
-                int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
-                int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
-                int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
-                return static_cast<std::size_t>((r << 8) | (g << 4) | b);
-            };
-            auto add_cand = [&](Color3f c) {
-                auto cs = palette::quantize_to_ocs(c);
-                auto key = ocs_key(cs);
-                if (!seen[key]) { seen[key] = true; cands.push_back(cs); }
-            };
-            for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(src[x, y]);
-            for (std::size_t k = 0; k < kBaseColors; ++k) {
-                if (count[k] > 0.0) {
-                    color_space::OKLab cd{
-                        static_cast<float>(sumL[k] / count[k]),
-                        static_cast<float>(suma[k] / count[k]),
-                        static_cast<float>(sumb[k] / count[k])};
-                    add_cand(color_space::oklab_to_linear(cd).clamped());
-                }
-            }
-
-            out_reg = -1;
-            out_reduction = 0.0f;
-            for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                if (count[k] < 1.0) continue;
-                for (auto& cand_lin : cands) {
-                    auto cand_lab = color_space::linear_to_oklab(cand_lin);
-                    double new_err = 0.0;
-                    for (std::size_t x = x_lo; x < x_hi; ++x) {
-                        if (base_index[y * width + x] != k) continue;
-                        auto& lab = img_lab[y * width + x];
-                        float dL = lab.L - cand_lab.L;
-                        float da = lab.a - cand_lab.a;
-                        float db = lab.b - cand_lab.b;
-                        new_err += static_cast<double>(dL * dL + da * da + db * db);
-                    }
-                    float red = static_cast<float>(cur_err[k] - new_err);
-                    if (red > out_reduction) {
-                        out_reg = static_cast<int>(k);
-                        out_color = cand_lin;
-                        out_reduction = red;
-                    }
-                }
-            }
-        };
-
     constexpr int kVStart = 44;
     constexpr std::uint8_t kFillerReg = 31;       // COLOR31 — unread in OCS DPF 3+3
     constexpr std::uint16_t kFillerVal = 0x0000;
@@ -477,55 +406,258 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
 
-        // 3. 20 SCAP MOVEs back-to-back. Greedy per-slot swap selection;
-        //    fall back to a harmless filler MOVE if no useful swap.
-        //    Slot s's MOVE fires AT slots[s].pixel_x, so the strip it
-        //    affects is [slots[s].pixel_x .. slots[s+1].pixel_x) — that's
-        //    what the swap planner targets.
+        // 3. 20 SCAP MOVEs back-to-back. Joint beam-search planner:
+        //    explores B parallel sequences of (slot → register, color)
+        //    decisions instead of greedy max-reduction per slot. Greedy
+        //    locked onto the most-populated register slot-after-slot
+        //    because total summed error scales with cluster size — the
+        //    planner has no incentive to pick under-utilised registers
+        //    even when doing so would unlock far better total-line
+        //    coverage. Beam search picks the chain with min total strip
+        //    error across all slots, naturally favouring decisions that
+        //    don't waste the line on micro-tweaking one register.
         //
-        //    No per-line useful-swap cap is needed. The original cap
-        //    was there because SCAP swaps polluted register state, so the
-        //    NEXT line's hblank had to revert them — bounding swaps kept
-        //    the revert cost in budget. Since DPF now unconditionally
-        //    re-emits all 8 PF2 registers every line (~9 hblank MOVEs,
-        //    fixed), there is zero hblank cost from SCAP swaps. Every
-        //    slot is free to emit a useful swap.
-        for (std::size_t s = 0; s < table.slots.size(); ++s) {
-            std::size_t x_lo = std::min(width,
-                static_cast<std::size_t>(table.slots[s].pixel_x));
-            std::size_t x_hi = (s + 1 < table.slots.size())
-                ? std::min(width,
-                    static_cast<std::size_t>(table.slots[s + 1].pixel_x))
-                : width;
+        //    Score: per-line per-strip per-register cluster stats are
+        //    pre-computed (count, OKLab centroid, spread). Strip error
+        //    given palette P = Σ_k count[k]·||centroid[k]-P[k]||² +
+        //    spread[k]. O(8) per state-evaluation.
 
-            int swap_reg = -1;
-            Color3f swap_color{};
-            float reduction = 0.0f;
-            if (x_lo < width && x_hi > x_lo) {
-                find_best_swap_in_strip(y, x_lo, x_hi,
-                                        swap_reg, swap_color, reduction);
+        struct ClusterStat {
+            float L = 0, a = 0, b = 0;
+            double spread = 0;
+            std::uint16_t count = 0;
+        };
+        struct StripStats {
+            std::array<ClusterStat, kBaseColors> clusters{};
+            std::vector<Color3f> cands;          // OCS-quantized
+            std::vector<color_space::OKLab> cands_lab;
+        };
+
+        // Pre-compute per-strip stats. strips[0] = pixels [0..slot0).
+        // strips[s+1] = pixels [slot[s] .. slot[s+1]) — the strip slot s
+        // controls. Slot s's MOVE affects strips[s+1] (and beyond if no
+        // later slot overrides P[k]).
+        std::vector<StripStats> strips(num_strips);
+        auto strip_x_range = [&](std::size_t s) {
+            std::size_t lo = (s == 0) ? std::size_t{0}
+                : std::min(width,
+                    static_cast<std::size_t>(table.slots[s - 1].pixel_x));
+            std::size_t hi = (s < table.slots.size())
+                ? std::min(width,
+                    static_cast<std::size_t>(table.slots[s].pixel_x))
+                : width;
+            return std::pair<std::size_t, std::size_t>{lo, hi};
+        };
+        for (std::size_t s = 0; s < num_strips; ++s) {
+            auto [x_lo, x_hi] = strip_x_range(s);
+            if (x_lo >= x_hi) continue;
+            std::array<double, kBaseColors> sumL{}, suma{}, sumb{};
+            std::array<std::uint32_t, kBaseColors> cnt{};
+            for (std::size_t x = x_lo; x < x_hi; ++x) {
+                auto k = static_cast<std::size_t>(base_index[y * width + x]);
+                auto& lab = img_lab[y * width + x];
+                sumL[k] += static_cast<double>(lab.L);
+                suma[k] += static_cast<double>(lab.a);
+                sumb[k] += static_cast<double>(lab.b);
+                ++cnt[k];
+            }
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (cnt[k] == 0) continue;
+                strips[s].clusters[k].count =
+                    static_cast<std::uint16_t>(cnt[k]);
+                strips[s].clusters[k].L =
+                    static_cast<float>(sumL[k] / cnt[k]);
+                strips[s].clusters[k].a =
+                    static_cast<float>(suma[k] / cnt[k]);
+                strips[s].clusters[k].b =
+                    static_cast<float>(sumb[k] / cnt[k]);
+            }
+            for (std::size_t x = x_lo; x < x_hi; ++x) {
+                auto k = static_cast<std::size_t>(base_index[y * width + x]);
+                auto& lab = img_lab[y * width + x];
+                float dL = lab.L - strips[s].clusters[k].L;
+                float da = lab.a - strips[s].clusters[k].a;
+                float db = lab.b - strips[s].clusters[k].b;
+                strips[s].clusters[k].spread +=
+                    static_cast<double>(dL * dL + da * da + db * db);
+            }
+            std::array<bool, 4096> seen{};
+            auto ocs_key = [](const Color3f& c) {
+                int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
+                int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
+                int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
+                return static_cast<std::size_t>((r << 8) | (g << 4) | b);
+            };
+            auto add_cand = [&](Color3f c) {
+                auto cs = palette::quantize_to_ocs(c);
+                auto key = ocs_key(cs);
+                if (!seen[key]) {
+                    seen[key] = true;
+                    strips[s].cands.push_back(cs);
+                    strips[s].cands_lab.push_back(
+                        color_space::linear_to_oklab(cs));
+                }
+            };
+            for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(src[x, y]);
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (cnt[k] == 0) continue;
+                color_space::OKLab cd{strips[s].clusters[k].L,
+                                      strips[s].clusters[k].a,
+                                      strips[s].clusters[k].b};
+                add_cand(color_space::oklab_to_linear(cd).clamped());
+            }
+        }
+
+        auto strip_err =
+            [&](const StripStats& st,
+                const std::array<color_space::OKLab, kBaseColors>& P_lab_v) {
+                double e = 0;
+                for (std::size_t k = 0; k < kBaseColors; ++k) {
+                    auto& cl = st.clusters[k];
+                    if (cl.count == 0) continue;
+                    float dL = cl.L - P_lab_v[k].L;
+                    float da = cl.a - P_lab_v[k].a;
+                    float db = cl.b - P_lab_v[k].b;
+                    e += static_cast<double>(cl.count) *
+                         static_cast<double>(dL * dL + da * da + db * db);
+                    e += cl.spread;
+                }
+                return e;
+            };
+
+        constexpr std::size_t kBeamWidth = 8;
+        constexpr std::size_t kCandsPerSlot = 12;
+        struct BeamNode {
+            std::array<Color3f, kBaseColors> P;
+            std::array<color_space::OKLab, kBaseColors> P_lab;
+            std::array<int, 32> dec_reg{};
+            std::array<Color3f, 32> dec_color{};
+            double cum_err = 0;
+        };
+        std::vector<BeamNode> beam(1);
+        beam[0].P = P;
+        beam[0].P_lab = P_lab;
+        for (auto& d : beam[0].dec_reg) d = -1;
+        beam[0].cum_err = strip_err(strips[0], P_lab);
+
+        std::vector<BeamNode> next;
+        next.reserve(kBeamWidth * (kCandsPerSlot + 1));
+
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            next.clear();
+            auto& st = strips[s + 1];
+            bool strip_empty = true;
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (st.clusters[k].count > 0) { strip_empty = false; break; }
             }
 
-            if (swap_reg >= 0 && reduction > 0.0f) {
-                auto swap_idx = static_cast<std::size_t>(swap_reg);
-                P[swap_idx] = swap_color;
-                P_lab[swap_idx] = color_space::linear_to_oklab(swap_color);
+            for (auto& state : beam) {
+                double filler_err =
+                    strip_empty ? 0.0 : strip_err(st, state.P_lab);
+                {
+                    BeamNode child = state;
+                    child.dec_reg[s] = -1;
+                    child.cum_err += filler_err;
+                    next.push_back(child);
+                }
+                if (strip_empty) continue;
 
-                // Mid-line SCAP swaps emit ONE MOVE — extra MOVEs in
-                // the chain would shift subsequent slot landing
-                // positions by ~8 lores px on hardware. Register 0 is
-                // excluded from the swap planner (k_min=1 below) so we
-                // never need to dual-write here; the chipset-mismatch
-                // for PF2 index 0 is handled by frame-init and per-line
-                // CAP MOVEs (both in hblank, no timing impact).
-                line_moves[y].push_back(make_move(
-                    static_cast<std::uint8_t>(8 + swap_idx),
-                    palette::linear_to_ocs(swap_color),
-                    static_cast<int>(s)));
-                ++total_moves;
-            } else {
+                struct Move {
+                    int reg;
+                    std::size_t cand_idx;
+                    double err;
+                };
+                std::vector<Move> moves;
+                moves.reserve(kBaseColors * st.cands.size());
+                for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
+                        auto& c_lab = st.cands_lab[ci];
+                        double e = 0;
+                        for (std::size_t k2 = 0; k2 < kBaseColors; ++k2) {
+                            auto& cl = st.clusters[k2];
+                            if (cl.count == 0) continue;
+                            const auto& P2 =
+                                (k2 == k) ? c_lab : state.P_lab[k2];
+                            float dL = cl.L - P2.L;
+                            float da = cl.a - P2.a;
+                            float db = cl.b - P2.b;
+                            e += static_cast<double>(cl.count) *
+                                 static_cast<double>(
+                                     dL * dL + da * da + db * db);
+                            e += cl.spread;
+                        }
+                        if (e >= filler_err) continue;
+                        moves.push_back({static_cast<int>(k), ci, e});
+                    }
+                }
+                // Per-state per-register cap so beam expansion covers
+                // multiple registers — without it, the top-K moves can
+                // all target the same dominant register with slight
+                // colour variations.
+                std::sort(moves.begin(), moves.end(),
+                    [](const Move& a, const Move& b) {
+                        return a.err < b.err;
+                    });
+                constexpr std::size_t kPerRegCap = 2;
+                std::array<std::size_t, kBaseColors> reg_taken{};
+                std::vector<Move> picked;
+                picked.reserve(kCandsPerSlot);
+                for (auto& m : moves) {
+                    auto rk = static_cast<std::size_t>(m.reg);
+                    if (reg_taken[rk] >= kPerRegCap) continue;
+                    picked.push_back(m);
+                    ++reg_taken[rk];
+                    if (picked.size() >= kCandsPerSlot) break;
+                }
+                moves = std::move(picked);
+
+                for (auto& m : moves) {
+                    auto reg_idx = static_cast<std::size_t>(m.reg);
+                    BeamNode child = state;
+                    child.P[reg_idx] = st.cands[m.cand_idx];
+                    child.P_lab[reg_idx] = st.cands_lab[m.cand_idx];
+                    child.dec_reg[s] = m.reg;
+                    child.dec_color[s] = st.cands[m.cand_idx];
+                    child.cum_err += m.err;
+                    next.push_back(child);
+                }
+            }
+
+            std::size_t keep_b = std::min(kBeamWidth, next.size());
+            if (next.size() > keep_b) {
+                std::partial_sort(
+                    next.begin(),
+                    next.begin() +
+                        static_cast<std::ptrdiff_t>(keep_b),
+                    next.end(),
+                    [](const BeamNode& a, const BeamNode& b) {
+                        return a.cum_err < b.cum_err;
+                    });
+                next.resize(keep_b);
+            }
+            beam.swap(next);
+        }
+
+        auto& best = *std::min_element(
+            beam.begin(), beam.end(),
+            [](const BeamNode& a, const BeamNode& b) {
+                return a.cum_err < b.cum_err;
+            });
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            int reg = best.dec_reg[s];
+            if (reg < 0) {
                 line_moves[y].push_back(make_move(kFillerReg, kFillerVal,
                                                   static_cast<int>(s)));
+            } else {
+                auto reg_idx = static_cast<std::size_t>(reg);
+                Color3f col = best.dec_color[s];
+                P[reg_idx] = col;
+                P_lab[reg_idx] = color_space::linear_to_oklab(col);
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(8 + reg_idx),
+                    palette::linear_to_ocs(col),
+                    static_cast<int>(s)));
+                ++total_moves;
             }
             strip_palettes[s + 1] = P;
             strip_pal_lab[s + 1] = P_lab;
