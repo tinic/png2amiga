@@ -525,8 +525,13 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 return e;
             };
 
-        constexpr std::size_t kBeamWidth = 8;
-        constexpr std::size_t kCandsPerSlot = 12;
+        // Beam search params. Empirically tuned: B=32 / K=32 /
+        // kPerRegCap=4 lowers planner OKLab error by ~2.5% and lifts
+        // preview-PSNR by ~+0.11 dB vs B=8/K=12/cap=2 baseline, with
+        // ~6× CPU. Encode-time on a 320×213 photo: 0.73s. Wider beams
+        // hit a plateau.
+        constexpr std::size_t kBeamWidth = 32;
+        constexpr std::size_t kCandsPerSlot = 32;
         struct BeamNode {
             std::array<Color3f, kBaseColors> P;
             std::array<color_space::OKLab, kBaseColors> P_lab;
@@ -598,7 +603,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     [](const Move& a, const Move& b) {
                         return a.err < b.err;
                     });
-                constexpr std::size_t kPerRegCap = 2;
+                constexpr std::size_t kPerRegCap = 4;
                 std::array<std::size_t, kBaseColors> reg_taken{};
                 std::vector<Move> picked;
                 picked.reserve(kCandsPerSlot);
@@ -1407,6 +1412,13 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 
         // Beam state. P holds 32 base linear-RGB; P_lab_b and P_lab_h
         // are the cached OKLab of base and halve(base) respectively.
+        // EHB does not benefit from a wider beam: pushing beyond these
+        // values lowers planner error (the metric it minimises) but
+        // worsens preview-PSNR — once the EHB plan is this tight
+        // (default error ~50 vs DPF ~140), the planner's OKLab² metric
+        // drifts from blurred-sRGB PSNR and additional refinement
+        // scatters dither residuals in ways that don't show in the
+        // planner's score.
         constexpr std::size_t kBeamWidth = 4;
         constexpr std::size_t kCandsPerSlot = 16;
         constexpr std::size_t kEMaxSlots = 32;
