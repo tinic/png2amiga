@@ -682,6 +682,27 @@ Result<CopperResult> encode_copper(const Image& image,
 
             if (swap.error_reduction <= 0.0f) break;
 
+            // Per-slot drift cap: reject swaps that take a slot farther
+            // than kMaxDriftSq (OKLab²) from its base_pal value. The
+            // greedy planner can pick centroids that are perceptually
+            // far from base when consecutive rows have varied content;
+            // accumulating those moves over many rows produces a slot
+            // whose colour is wildly different from base_pal[slot]. A
+            // pixel near base_pal[slot]'s value in subsequent rows then
+            // finds the drifted slot in OKLab terms (very dark vs
+            // slightly-brighter is a near-tie in OKLab L) and renders
+            // with the drifted colour, producing visible cross-row
+            // banding (chuck31: black-space pixels rendering as #444433
+            // because slot 1 had drifted from base #111 to #444).
+            // The cap keeps each slot perceptually within ΔE ~12 of base.
+            constexpr float kMaxDriftSq = 0.03f;
+            auto base_lab = color_space::linear_to_oklab(base_pal[swap.slot]);
+            auto new_lab = color_space::linear_to_oklab(swap.new_color);
+            float ddL = base_lab.L - new_lab.L;
+            float dda = base_lab.a - new_lab.a;
+            float ddb = base_lab.b - new_lab.b;
+            if (ddL * ddL + dda * dda + ddb * ddb > kMaxDriftSq) break;
+
             // Nibble-skip optimization (AGA only): if the new color shares its
             // high 4-bit nibble with the slot's previous value, the LOCT=0 (high)
             // write is unnecessary. The viewer detects skip_hi via a 0xFFFF
