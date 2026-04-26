@@ -1548,14 +1548,36 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
     // Print exit message with image stats
     {
-        auto chipset_str = options.aga ? "AGA 24-bit" : "OCS 12-bit";
+        auto chipset_str = options.aga ? "AGA" : "OCS";
         auto total_bytes = planes.total_bytes();
-        bool has_cop = options.copper_changes && !options.copper_changes->empty();
+        bool has_cop  = options.copper_changes && !options.copper_changes->empty();
+        // has_scap is already declared in the outer scope (line 416).
 
-        // Build the message as a C string literal
+        // Mode label: combines the base mode (HAM/EHB/lores/hires) with
+        // any active modifiers (DPF, CAP, SCAP, hires, interlace) into a
+        // single human-readable string. Order: BASE [+ DPF] [+ CAP|SCAP].
+        auto mode_params = amiga::get_mode_params(mode);
+        std::string mode_label;
+        if (mode_params.is_ham) {
+            mode_label = std::format("HAM{}", planes.depth);
+        } else if (mode_params.is_ehb) {
+            mode_label = "EHB";
+        } else if (options.hires) {
+            mode_label = std::format("hires {}bpl", planes.depth);
+        } else {
+            mode_label = std::format("lores {}bpl", planes.depth);
+        }
+        if (options.dpf)       mode_label += " + DPF";
+        if (options.interlace) mode_label += " + lace";
+        if (has_scap)          mode_label += " + SCAP";
+        else if (has_cop)      mode_label += " + CAP";
+
+        // Build the message as a C string literal. Each line starts with
+        // two spaces and a label-padded prefix so the values align in a
+        // single visual column.
         std::string msg;
         msg += "\\n";
-        msg += "\\033[1;33m";  // bold yellow
+        msg += "\\033[1;33m";  // bold yellow banner
         msg += "                 ___            _\\n";
         msg += "  _ __ _ _  __ _|_  )__ _ _ __ (_)__ _ __ _\\n";
         msg += " | '_ \\\\ ' \\\\/ _` |/ // _` | '  \\\\| / _` / _` |\\n";
@@ -1563,14 +1585,22 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         msg += " |_|       |___/                 |___/\\n";
         msg += "\\033[0m";
         msg += "\\n";
-        msg += std::format("  {}\\n", sym);
-        msg += std::format("  {}x{}, {}bpl, {} colors, {}\\n",
-                           planes.width, planes.height, planes.depth,
-                           palette.size(), chipset_str);
-        msg += std::format("  {} bytes bitplane data\\n", total_bytes);
+        msg += std::format("  Mode:     {}\\n", mode_label);
+        msg += std::format("  Display:  {}x{}, {} ({}-bit palette)\\n",
+                           planes.width, planes.height, chipset_str,
+                           options.aga ? 24 : 12);
+        msg += std::format("  Palette:  {} colors\\n", palette.size());
+        msg += std::format("  Bitplane: {} bytes\\n", total_bytes);
         if (has_cop)
-            msg += std::format("  Copper: {} changes/line\\n",
+            msg += std::format("  CAP:      {} swaps/line max\\n",
                                options.copper_changes_per_line);
+        if (has_scap) {
+            std::size_t scap_words = 0;
+            for (auto& row : *options.scap_line_moves)
+                scap_words += row.size() * 2;
+            msg += std::format("  SCAP:     {} bytes copper list\\n",
+                               scap_words * 2);
+        }
         msg += "\\n";
         msg += "  \\033[36mhttps://www.png2amiga.app\\033[0m\\n";
         msg += "\\n";
