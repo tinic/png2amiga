@@ -921,6 +921,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                        nullptr, options.reserve_color0,
                                                        {}, options.palette_diversity,
                                                        skip_initial, options.interlace,
+                                                       /*is_ehb=*/true,
                                                        options.on_progress);
             if (!copper_result) return std::unexpected{copper_result.error()};
 
@@ -1274,6 +1275,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                      options.reserve_color0, copper_locks,
                                                      options.palette_diversity,
                                                      skip_initial_lace, options.interlace,
+                                                     /*is_ehb=*/false,
                                                      options.on_progress);
         if (!copper_result) return std::unexpected{copper_result.error()};
 

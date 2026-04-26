@@ -204,6 +204,19 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // Interlace: reduces per-line MOVE budget by
                                    // 1 (HP=226 vs 220 → less post-display gap).
                                    bool is_lace = false,
+                                   // EHB-aware mode: depth must be 5 (32 base
+                                   // colors). The planner scores swaps against
+                                   // the 64-effective palette (32 base + 32
+                                   // hardware half-brite). A swap on base slot
+                                   // k automatically also updates effective
+                                   // slot k+32 = halve(base[k]). Without this
+                                   // flag, CAP+EHB optimises a 32-color
+                                   // objective while rendering hits 64 — for
+                                   // high-dynamic-range images the 32-color
+                                   // planner picks middle-tone bases and
+                                   // 64-effective ends up covering neither
+                                   // very-dark nor very-bright gamut ends.
+                                   bool is_ehb = false,
                                    // Progress callback. Called periodically
                                    // with (progress 0..1, stage label).
                                    // Must be thread-safe — encoder may

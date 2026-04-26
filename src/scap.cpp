@@ -1097,7 +1097,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         /*locked=*/{},
         palette_diversity,
         /*skip_initial_swap_rows=*/0,
-        /*is_lace=*/false);
+        /*is_lace=*/false,
+        /*is_ehb=*/true);
     if (!copper_result) return std::unexpected{copper_result.error()};
     // Copies (not refs) so the joint-refinement pass below can reassign
     // them when it re-runs CAP with a refined base palette.

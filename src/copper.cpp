@@ -251,6 +251,104 @@ SwapCandidate find_best_swap(
     return best;
 }
 
+// Halve a base linear-RGB colour in sRGB space (Amiga DAC behaviour).
+// Mirrors palette::make_ehb_palette and scap::half_brite.
+Color3f halve_brite(const Color3f& c) {
+    auto srgb = color_space::linear_to_srgb(c).clamped();
+    Color3f half_srgb{srgb.r * 0.5f, srgb.g * 0.5f, srgb.b * 0.5f};
+    return color_space::srgb_to_linear(half_srgb);
+}
+
+// EHB-aware swap planner. SwapScratch and current_pal/current_lab are
+// sized 64 (32 base + 32 hardware half-brite). This function only
+// considers swaps to base slots 0..31 — half-brite slots 32..63 are
+// hardware-derived from the base they mirror, so they're never directly
+// modifiable. A swap on base slot k cascades to slot k+32 = halve(C),
+// and the score reflects that: cur error from cluster k AND cluster
+// k+32 vs new error from cluster k against C plus cluster k+32 against
+// halve(C).
+//
+// Two candidate colours are tried per slot: the base cluster's centroid
+// (best for cluster k alone), and the half-brite cluster's centroid
+// doubled in sRGB (best for cluster k+32 alone). Whichever gives the
+// larger combined-cluster error reduction wins. With one tiebreak: if
+// cluster k+32 is empty, only the base centroid is tried; if cluster k
+// is empty, only the doubled half centroid.
+SwapCandidate find_best_swap_ehb(
+    std::span<const color_space::OKLab> current_lab,
+    std::span<const std::span<const color_space::OKLab>> rows_lab,
+    SwapScratch& sc,
+    const std::vector<bool>& excluded = {}) {
+
+    constexpr std::size_t kBase = 32;
+    auto width = rows_lab[0].size();
+    auto& stats = sc.stats;
+    auto& assignments = sc.assignments;
+    auto& pixel_weights = sc.pixel_weights;
+
+    SwapCandidate best{0, {}, -1.0f};
+
+    for (std::size_t k = 0; k < kBase; ++k) {
+        if (!excluded.empty() && k < excluded.size() && excluded[k]) continue;
+        auto count_b = stats[k].count;
+        auto count_h = stats[k + kBase].count;
+        if (count_b < 0.001 && count_h < 0.001) continue;
+
+        double cur_err = stats[k].total_error + stats[k + kBase].total_error;
+
+        auto try_candidate = [&](Color3f c_lin) {
+            c_lin = palette::quantize_to_ocs(c_lin);
+            auto c_lab = color_space::linear_to_oklab(c_lin);
+            auto h_lab = color_space::linear_to_oklab(halve_brite(c_lin));
+            double new_err = 0.0;
+            for (std::size_t r = 0; r < rows_lab.size(); ++r) {
+                auto& rl = rows_lab[r];
+                auto base = r * width;
+                for (std::size_t x = 0; x < width; ++x) {
+                    auto a = assignments[base + x];
+                    if (a != k && a != k + kBase) continue;
+                    const auto& ref = (a == k) ? c_lab : h_lab;
+                    float dL = rl[x].L - ref.L;
+                    float da = rl[x].a - ref.a;
+                    float db = rl[x].b - ref.b;
+                    new_err +=
+                        static_cast<double>(dL * dL + da * da + db * db) *
+                        static_cast<double>(pixel_weights[base + x]);
+                }
+            }
+            float reduction = static_cast<float>(cur_err - new_err);
+            if (reduction > best.error_reduction) {
+                best = {k, c_lin, reduction};
+            }
+        };
+
+        if (count_b > 0.001) {
+            color_space::OKLab cb{
+                static_cast<float>(stats[k].sum_L / count_b),
+                static_cast<float>(stats[k].sum_a / count_b),
+                static_cast<float>(stats[k].sum_b / count_b)};
+            try_candidate(color_space::oklab_to_linear(cb).clamped());
+        }
+        if (count_h > 0.001) {
+            color_space::OKLab ch{
+                static_cast<float>(stats[k + kBase].sum_L / count_h),
+                static_cast<float>(stats[k + kBase].sum_a / count_h),
+                static_cast<float>(stats[k + kBase].sum_b / count_h)};
+            auto h_lin = color_space::oklab_to_linear(ch).clamped();
+            auto h_srgb = color_space::linear_to_srgb(h_lin).clamped();
+            Color3f doubled_srgb{
+                std::min(2.0f * h_srgb.r, 1.0f),
+                std::min(2.0f * h_srgb.g, 1.0f),
+                std::min(2.0f * h_srgb.b, 1.0f)};
+            try_candidate(
+                color_space::srgb_to_linear(doubled_srgb).clamped());
+        }
+        // Suppress unused-parameter warning when current_lab path drops.
+        (void)current_lab;
+    }
+    return best;
+}
+
 // Dither a single row with correct Y coordinate for ordered dithering
 void dither_row(std::span<const Color3f> row,
                 std::span<const color_space::OKLab> pal_lab,
@@ -316,6 +414,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                    int palette_diversity,
                                    std::size_t skip_initial_swap_rows,
                                    bool is_lace,
+                                   bool is_ehb,
                                    std::function<void(float, std::string_view)>
                                        on_progress) {
     if (depth < 1 || depth > 8) {
@@ -363,7 +462,7 @@ Result<CopperResult> encode_copper(const Image& image,
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
                                          stretch_k, user_palette, reserve_color0,
                                          locked, palette_diversity,
-                                         skip_initial_swap_rows, is_lace,
+                                         skip_initial_swap_rows, is_lace, is_ehb,
                                          on_progress);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= move_budget) return stretch;
@@ -545,9 +644,22 @@ Result<CopperResult> encode_copper(const Image& image,
         // assignments for pixels affected by the swap — big win for
         // high-color modes (e.g. lores8 AGA, 256 colors: full-rebuild
         // dropped from ~4.7 B ops to ~300 M).
-        std::vector<color_space::OKLab> pal_lab(num_colors);
+        //
+        // EHB-aware mode: pal_lab is sized 64 (32 base + 32 hardware
+        // half-brite). The planner scores swaps against this 64-vector
+        // so candidates that hurt half-brite-bound pixels get penalised
+        // even though the underlying register write only touches a base
+        // slot. Output (changes / scanline_palettes) stays 32-base.
+        const std::size_t pal_n = is_ehb ? std::size_t{64} : num_colors;
+        std::vector<color_space::OKLab> pal_lab(pal_n);
         for (std::size_t i = 0; i < num_colors; ++i) {
             pal_lab[i] = color_space::linear_to_oklab(current_pal[i]);
+        }
+        if (is_ehb) {
+            for (std::size_t k = 0; k < num_colors; ++k) {
+                pal_lab[num_colors + k] = color_space::linear_to_oklab(
+                    halve_brite(current_pal[k]));
+            }
         }
         SwapScratch sc;
         build_swap_scratch(sc, pal_lab, rows_lab, weights, width, col_weights);
@@ -559,9 +671,14 @@ Result<CopperResult> encode_copper(const Image& image,
         auto this_row_changes = (y < skip_initial_swap_rows)
             ? std::size_t{0} : changes_per_line;
         for (std::size_t s = 0; s < this_row_changes; ++s) {
-            auto swap = find_best_swap(
-                current_pal, pal_lab, rows, rows_lab, weights, chipset, sc,
-                swapped, col_weights);
+            SwapCandidate swap{0, {}, -1.0f};
+            if (is_ehb) {
+                swap = find_best_swap_ehb(pal_lab, rows_lab, sc, swapped);
+            } else {
+                swap = find_best_swap(
+                    current_pal, pal_lab, rows, rows_lab, weights, chipset, sc,
+                    swapped, col_weights);
+            }
 
             if (swap.error_reduction <= 0.0f) break;
 
@@ -578,12 +695,23 @@ Result<CopperResult> encode_copper(const Image& image,
                 skip_lo_flag = (old_hilo.lo == new_hilo.lo);
             }
 
-            // Apply the swap (update pal_lab and scratch incrementally)
+            // Apply the swap. For EHB, also update the half-brite mirror
+            // slot (k+32) and refresh the scratch for both — pixels can
+            // migrate in or out of either cluster as a result.
             swapped[swap.slot] = true;
             current_pal[swap.slot] = swap.new_color;
             pal_lab[swap.slot] = color_space::linear_to_oklab(swap.new_color);
+            if (is_ehb) {
+                pal_lab[num_colors + swap.slot] =
+                    color_space::linear_to_oklab(halve_brite(swap.new_color));
+            }
             refresh_swap_scratch(sc, pal_lab, rows_lab, width,
                                  static_cast<std::uint8_t>(swap.slot));
+            if (is_ehb) {
+                refresh_swap_scratch(sc, pal_lab, rows_lab, width,
+                                     static_cast<std::uint8_t>(
+                                         num_colors + swap.slot));
+            }
             changes.push_back(CopperChange{
                 static_cast<std::uint8_t>(swap.slot),
                 swap.new_color,

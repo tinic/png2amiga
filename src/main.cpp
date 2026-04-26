@@ -2802,7 +2802,7 @@ int main(int argc, char* argv[]) {
             auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
                 static_cast<std::size_t>(config->copper_changes),
                 nullptr, true, {}, config->palette_diversity,
-                skip_initial, config->interlace,
+                skip_initial, config->interlace, /*is_ehb=*/true,
                 make_cli_progress_reporter());
             if (!copper_result) {
                 std::println(stderr, "Copper encode error: {}",
@@ -3321,7 +3321,7 @@ int main(int argc, char* argv[]) {
         auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
             static_cast<std::size_t>(config->copper_changes), nullptr,
             config->reserve_color0, copper_locks, config->palette_diversity,
-            skip_initial_lace, config->interlace,
+            skip_initial_lace, config->interlace, /*is_ehb=*/false,
             make_cli_progress_reporter());
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
