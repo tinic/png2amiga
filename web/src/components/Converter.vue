@@ -406,6 +406,11 @@ watch(() => options.chipset, (chipset, oldChipset) => {
   if (max > 0 && options.depth > max) {
     options.depth = max
   }
+  // SCAP is OCS-only and DPF requires the chipset-specific depth — both
+  // get invalidated when the chipset flips. The mode/dpf/depth watchers
+  // above don't fire here, so reset directly.
+  if (!dpfAvailable.value) options.dualPlayfield = false
+  if (!scapAvailable.value) options.scap = false
 })
 
 // When size override is toggled, populate from last result or reset to 0
