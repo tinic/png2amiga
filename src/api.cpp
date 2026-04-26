@@ -1817,6 +1817,22 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
         ch_opts.symbol_name = options.symbol_name;
     ch_opts.dpf = result->dpf;
     ch_opts.aga = result->aga;
+    // CAP per-line copper data, when present.
+    if (result->copper && !result->scanline_changes.empty()) {
+        ch_opts.copper_changes = &result->scanline_changes;
+        ch_opts.copper_changes_per_line = result->changes_per_line;
+    }
+    // SCAP mid-line MOVE list, when present. Mirrors convert_viewer's
+    // wiring so the .h carries the same _scap_copper_list[] UWORD array
+    // (data only — no init code; that lives in the .cpp viewer).
+    if (result->scap && !result->scap_line_moves.empty()) {
+        ch_opts.scap_line_moves = &result->scap_line_moves;
+        bool scap_ehb = result->mode == amiga::Mode::ehb;
+        auto& table = scap_ehb ? scap::kScap6bplEhb : scap::kScap6bplOcs;
+        ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs" : "scap_dpf_ocs";
+        ch_opts.scap_anchor_hpos = table.line_gate_hpos;
+        ch_opts.scap_total_planes = table.total_planes;
+    }
     auto header = cheader::generate(
         result->planes, result->palette, result->mode, ch_opts);
     if (!header) return make_error(header.error().message);

@@ -4,20 +4,23 @@
 [![Web App](https://img.shields.io/badge/Try_it-png2amiga.app-brightgreen)](https://www.png2amiga.app)
 [![C++26](https://img.shields.io/badge/C%2B%2B-26-blue.svg)](https://en.cppreference.com/w/cpp/26)
 
-PNG/JPEG/WebP → Commodore Amiga and Atari ST/STE graphics. Produces IFF
-ILBM, Degas `.PI1`/`.PI2`, C headers, raw bitplanes, and self-contained
-AmigaOS executables that boot from a floppy image and display the image.
+PNG/JPEG/WebP → Commodore Amiga, Atari ST/STE, and IBM PC (CGA / EGA /
+VGA) graphics. Writes IFF ILBM, Degas `.PI1`/`.PI2`, C headers, raw
+bitplanes, and standalone AmigaOS viewer `.cpp` source. The bundled
+`build-amiga.sh` wrapper runs the included `m68k-amiga-elf-gcc` +
+`exe2adf` toolchain to turn the `.cpp` into a runnable `.exe` and
+bootable `.adf`. DOS-mode `.c` output compiles with `ia16-elf-gcc`
+into a 16-bit real-mode viewer.
 
 **[Try it in your browser at png2amiga.app](https://www.png2amiga.app)** —
-live preview via WebAssembly, compile to Amiga executables server-side.
+live preview via WebAssembly, server-side compile to Amiga executables.
 
 [![png2amiga.app web interface](docs/screenshot.png)](https://www.png2amiga.app)
 
-Built for Amiga and Atari demoscene production. All color operations use
-[OKLab](https://bottosson.github.io/posts/oklab/) perceptual color space.
-Beats `ham_convert`'s highest-quality HAM8 profile by 2–4 dB PSNR on
-typical test images. Sister project to
-[png2c64](https://github.com/tinic/png2c64).
+Aimed at retro-platform asset pipelines (Amiga / Atari / IBM PC
+demoscene, hobby AmigaOS games, MS-DOS coding). All color operations
+use [OKLab](https://bottosson.github.io/posts/oklab/) perceptual color
+space. Sister project to [png2c64](https://github.com/tinic/png2c64).
 
 ## Features
 
@@ -26,8 +29,16 @@ with hires and/or interlace variants, EHB. 1–8 bitplanes per chipset
 limits. **CAP** (Copper-Augmented Palette, per-line swaps) and **SCAP**
 (Super CAP, mid-line swaps) for thousands of unique colors per frame.
 
-**Atari modes**: STF Low/Medium (9-bit palette), STE Low/Medium (12-bit
-palette), Degas Elite `.PI1`/`.PI2` output.
+**Atari modes**: STF Low/Medium/Hi, STE Low/Medium/Hi (9-bit palette
+on STF, 12-bit on STE; ST-Hi is hardware-locked monochrome). Degas
+Elite `.PI1`/`.PI2`/`.PI3` output.
+
+**IBM PC modes**: CGA 320×200 / 640×200 / composite (NTSC artifact
+colors) / 80×100 text-mode glyph matching, EGA 320×200 / 640×200 /
+640×350 (16 of the 64-color IrgbIRGB gamut), VGA Mode 13h (320×200,
+256-color chunky), Mode 10h (640×350, 16-color planar), Mode 12h
+(640×480, 16-color planar). 16-bit DOS viewer `.c` output for
+`ia16-elf-gcc` compilation.
 
 **Palette quantizers**: OCS brute-force (histogram + greedy over all
 4096 OCS colors), PNN agglomerative (auto-selected for HAM8 / AGA), and
@@ -44,9 +55,9 @@ per-pixel patterns. All operate in OKLab.
 quality cost) for live preview or batch video processing.
 
 **Output**: `.png` preview, `.iff` ILBM, `.h` C header, `.cpp`
-standalone viewer source, `.exe` compiled AmigaOS executable, `.adf`
-bootable floppy image, `.pi1`/`.pi2` Degas, `.raw` + `.pal` raw
-bitplanes with palette.
+standalone viewer source (Amiga) or `.c` (DOS), `.pi1`/`.pi2`/`.pi3`
+Degas, `.raw` + `.pal` raw bitplanes with palette. The `build-amiga.sh`
+helper compiles `.cpp` → `.exe` → `.adf` via the bundled toolchain.
 
 ## Build
 
@@ -87,9 +98,11 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 ./build/png2amiga --mode lores --depth 5 --cap input.png output.iff
 ./build/png2amiga --mode ham6 --cap input.png output.iff
 
-# Mid-line palette swaps (SCAP) — DPF or EHB only
-./build/png2amiga --mode lores --dpf --scap input.png output.iff
-./build/png2amiga --mode ehb --scap input.png output.iff
+# Mid-line palette swaps (SCAP) — DPF or EHB only.
+# IFF can't represent mid-line MOVEs (no standard ILBM chunk for them);
+# use .cpp (runnable AmigaOS viewer) or .h (data-only) instead.
+./build/png2amiga --mode lores --dpf --scap input.png viewer.cpp
+./build/png2amiga --mode ehb --scap input.png data.h
 
 # HAM6 + CAP at maximum quality (~4-5× slower, +0.5 to +2 dB PSNR)
 ./build/png2amiga --mode ham6 --cap --cap-best input.png output.iff
@@ -105,6 +118,12 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 # Atari ST/STE
 ./build/png2amiga --mode stf-low input.png output.pi1
 ./build/png2amiga --mode ste-low input.png output.pi1
+
+# IBM PC (CGA / EGA / VGA)
+./build/png2amiga --mode vga-13h input.png output.png        # preview
+./build/png2amiga --mode ega-320 input.png viewer.c          # 16-bit DOS viewer
+./build/png2amiga --mode cga-320 --cga-palette p1-high \
+    input.png output.png
 ```
 
 Run `./build/png2amiga --help` for the full flag reference.
@@ -117,7 +136,7 @@ Run `./build/png2amiga --help` for the full flag reference.
 | `lores-lace` | 320px | OCS:5 AGA:8 | 2–256 | Interlaced (wide pixels) |
 | `hires` | 640px | OCS:4 AGA:8 | 2–256 | Tall pixels |
 | `hires-lace` | 640px | OCS:4 AGA:8 | 2–256 | Interlaced (square pixels) |
-| `ham6` / `ham6-lace` / `ham6-hires` | 320/640px | 6 | 4096 | Hold-And-Modify (OCS) |
+| `ham6` (+ lace/hires variants) | 320/640px | 6 | 4096 | Hold-And-Modify (OCS) |
 | `ham8` (+ lace/hires variants) | 320/640px | 8 | 16M | Hold-And-Modify (AGA) |
 | `ehb` / `ehb-lace` | 320px | 6 | 64 | Extra Half-Brite |
 
@@ -127,8 +146,25 @@ Run `./build/png2amiga --help` for the full flag reference.
 |------|-----------|-------|--------|---------|
 | `stf-low` | 320×200 | 4 | 16 | 9-bit (512 colors) |
 | `stf-med` | 640×200 | 2 | 4 | 9-bit (512 colors) |
+| `stf-hi` / `ste-hi` | 640×400 | 1 | 2 (B/W) | hardware-locked monochrome |
 | `ste-low` | 320×200 | 4 | 16 | 12-bit (4096 colors) |
 | `ste-med` | 640×200 | 2 | 4 | 12-bit (4096 colors) |
+
+## IBM PC Modes
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `cga-320` | 320×200 | 4 | Fixed palettes (`--cga-palette p0-low/p0-high/p1-low/p1-high`) |
+| `cga-640` | 640×200 | 2 | Monochrome |
+| `cga-composite` | 160×200 effective | 16 | NTSC artifact colors from 320×200 2bpp |
+| `cga-text80x100` | 80×100 cells | 16 fg × 16 bg | Glyph + attribute matching against the IBM CGA 8×8 font |
+| `ega-320` / `ega-640` / `ega-hi` | 320×200 / 640×200 / 640×350 | 16 of 64 | 4-plane IrgbIRGB gamut |
+| `vga-13h` | 320×200 | 256 | 8bpp chunky, 18-bit DAC |
+| `vga-10h` | 640×350 | 16 | 4-plane planar, 18-bit DAC |
+| `vga-12h` | 640×480 | 16 | 4-plane planar, square pixels |
+
+`--native-par` letterboxes/pillarboxes the source into the fixed DOS
+buffer; the default is to stretch-fill.
 
 ## CAP — Copper-Augmented Palette (per-line swaps)
 
@@ -152,8 +188,8 @@ hardware limits but still display correctly on emulators.
 
 `--cap-best` enables a slower (~4–5×) HAM CAP planner that combines
 multi-candidate slot search with joint base-palette refinement. HAM6
-and HAM8 + CAP only — adds **+0.5 to +2 dB PSNR** on natural images,
-sometimes pushing into lossless territory on smooth gradients. The
+and HAM8 + CAP only. Adds roughly +0.5 to +1.5 dB PSNR on natural
+images; smooth synthetic gradients can land near lossless. The
 indexed CAP planner (lores/hires/EHB) already iterates predict-dither
 with column-error feedback and isn't improved further by this flag.
 

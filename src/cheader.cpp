@@ -56,6 +56,71 @@ std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) 
     return camg;
 }
 
+// Emit the SCAP copper list as a UWORD array. Used by both .h (data-
+// only export) and .cpp (viewer init code). Caller chooses whether
+// the declaration is `const` (external linkage, .h) or `static const`
+// (file-scope, .cpp viewer); pass the literal `linkage` prefix.
+//
+// Includes the past-0xFF wrap marker patched into line 255's end-of-line
+// WAIT when the list extends past line 255 + kVStart=44 — see the
+// detailed comment at the original emit site for the timing rationale.
+void emit_scap_copper_list(std::string& out,
+                           const std::string& sym,
+                           const CHeaderOptions& options,
+                           std::string_view linkage) {
+    auto& moves = *options.scap_line_moves;
+    constexpr int kVStart = 44;
+
+    out += std::format("// SCAP copper list — {} (anchor=0x{:02X}, "
+                       "total_planes={})\n",
+                       options.scap_label.empty() ? "unnamed"
+                                                  : options.scap_label,
+                       options.scap_anchor_hpos,
+                       options.scap_total_planes);
+
+    std::size_t scap_total_words = 0;
+    for (auto& row : moves) scap_total_words += row.size() * 2;
+    bool needs_wrap_marker =
+        (kVStart + static_cast<int>(moves.size()) > 256) && !moves.empty();
+    if (scap_total_words == 0) scap_total_words = 2;
+
+    out += std::format("{} UWORD {}_scap_copper_list[{}] = {{\n",
+                       linkage, sym, scap_total_words);
+    std::size_t emitted = 0;
+    for (std::size_t y = 0; y < moves.size(); ++y) {
+        auto& row = moves[y];
+        int abs_vpos = kVStart + static_cast<int>(y);
+        if (row.empty()) continue;
+        bool patch_wrap_at_eol = needs_wrap_marker && abs_vpos == 255;
+        out += "    ";
+        for (std::size_t i = 0; i < row.size(); ++i) {
+            auto& op = row[i];
+            std::uint16_t w0 = 0, w1 = 0;
+            if (op.kind == scap::ScapOpKind::kWait) {
+                w0 = static_cast<std::uint16_t>(
+                    (static_cast<unsigned>(op.vpos) << 8) |
+                    (op.hpos & 0xFE) | 0x0001);
+                w1 = 0xFFFE;
+                if (patch_wrap_at_eol && i == row.size() - 1) {
+                    w0 = 0xFFDF;
+                }
+            } else {
+                auto reg = static_cast<unsigned>(op.reg & 0x1F);
+                w0 = static_cast<std::uint16_t>(0x0180 + reg * 2);
+                w1 = op.rgb_ocs;
+            }
+            out += std::format("0x{:04X},0x{:04X}", w0, w1);
+            emitted += 2;
+            if (emitted < scap_total_words) out += ",";
+        }
+        out += std::format("  /* y={} (vp={}) */\n", y, abs_vpos & 0xFF);
+    }
+    if (emitted == 0) out += "    0x0000,0x0000\n";
+    out += "};\n\n";
+    out += std::format("{} ULONG {}_scap_copper_words = {};\n\n",
+                       linkage, sym, emitted);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -226,6 +291,14 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
         out += "};\n\n";
     }
 
+    // SCAP copper list (data-only). The .cpp viewer also emits this
+    // array under the same name, with `static const` linkage; here we
+    // use `const` (external linkage) so user code that includes the
+    // .h gets a definition it can pass to its own Copper installer.
+    if (options.scap_line_moves && !options.scap_line_moves->empty()) {
+        emit_scap_copper_list(out, sym, options, "const");
+    }
+
     out += std::format("#endif /* {}_H */\n", SYM);
 
     return out;
@@ -309,8 +382,46 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
            "this.cpp support/gcc8_a_support.s support/gcc8_c_support.c\n";
     out += "//          elf2hunk out.elf out.exe\n";
     out += "//\n";
-    out += std::format("// Image: {}x{}, {} bitplanes, CAMG 0x{:04X}, {} colors\n",
-                       width, height, depth, camg, pal_count);
+    {
+        // Build a human-readable mode label that mirrors the runtime
+        // exit message (e.g. "HAM6 + CAP", "EHB + SCAP",
+        // "lores 6bpl + DPF + SCAP").
+        bool _has_cop  = options.copper_changes && !options.copper_changes->empty();
+        bool _has_scap = options.scap_line_moves && !options.scap_line_moves->empty();
+        std::string mode_label;
+        if (params.is_ham) {
+            mode_label = std::format("HAM{}", depth);
+        } else if (params.is_ehb) {
+            mode_label = "EHB";
+        } else if (is_hires) {
+            mode_label = std::format("hires {}bpl", depth);
+        } else {
+            mode_label = std::format("lores {}bpl", depth);
+        }
+        if (options.dpf)       mode_label += " + DPF";
+        if (options.interlace) mode_label += " + lace";
+        if (_has_scap)         mode_label += " + SCAP";
+        else if (_has_cop)     mode_label += " + CAP";
+        const char* chipset_str = options.aga ? "AGA" : "OCS";
+        out += std::format("// Image:    {}x{}, {} ({}-bit palette)\n",
+                           width, height, chipset_str,
+                           options.aga ? 24 : 12);
+        out += std::format("// Mode:     {}\n", mode_label);
+        out += std::format("// Bitplane: {} bytes ({} planes, {} bytes/row)\n",
+                           planes.total_bytes(), depth, bpr);
+        out += std::format("// Palette:  {} colors\n", pal_count);
+        if (_has_cop)
+            out += std::format("// CAP:      {} swaps/line max\n",
+                               options.copper_changes_per_line);
+        if (_has_scap) {
+            std::size_t scap_words = 0;
+            for (auto& row : *options.scap_line_moves)
+                scap_words += row.size() * 2;
+            out += std::format("// SCAP:     {} bytes copper list\n",
+                               scap_words * 2);
+        }
+        out += std::format("// CAMG:     0x{:04X}\n", camg);
+    }
     out += "// Click left mouse button to exit.\n\n";
 
     out += "#include \"support/gcc8_c_support.h\"\n";
@@ -387,6 +498,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    custom->intena = 0x7fff;\n";
     out += "    custom->intreq = 0x7fff;\n";
     out += "    custom->dmacon = 0x7fff;\n";
+    // Reset BPLCON state to neutral defaults before re-installing the\n
+    // system copper. Stops any leftover viewer-mode bits (DBLPF, HAM,\n
+    // HIRES, LACE, AGA PF2OF/BPLAM) from briefly bleeding into the\n
+    // restored display in the window between dmacon=off and the system\n
+    // copper's first cycle. BPLCON3/4 writes are ignored on plain OCS.\n
+    out += "    custom->bplcon0 = 0x0200;  // COLOR enable, BPU=0, no DBLPF/HAM/HIRES/LACE\n";
+    out += "    custom->bplcon1 = 0;\n";
+    out += "    custom->bplcon2 = 0;\n";
+    out += "    custom->bplcon3 = 0x0C00;  // BANK=0, LOCT=0, PF2OF=011 (AGA default)\n";
+    out += "    custom->bplcon4 = 0x0011;  // BPLAM=0, sprite bases (AGA default)\n";
     out += "    *(volatile APTR*)(((UBYTE*)VBR) + 0x6c) = SystemIrq;\n";
     out += "    custom->cop1lc = (ULONG)GfxBase->copinit;\n";
     out += "    custom->cop2lc = (ULONG)GfxBase->LOFlist;\n";
@@ -663,78 +784,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // per-line count arrays. Probe ADFs use this to map HPOS to display
     // pixel x; the production planner emits the same shape.
     if (has_scap) {
-        auto& moves = *options.scap_line_moves;
-        // The image starts at PAL VSTART=44. When the copper list extends
-        // past line 255, the regular per-line WAIT for line 255 is replaced
-        // with the magic 0xFFDF first word — this specific transition
-        // through line 255 hp=0xDF arms the copper's past-0xFF state so
-        // subsequent WAITs at vp = (line & 0xFF) match correctly for lines
-        // >= 256. See commit 8aeedcf — a separate (0xFFDF, 0xFFFE) marker
-        // emitted AFTER line 255's normal WAITs does NOT work, because by
-        // then hpos has already advanced past 0xDF and the WAIT fires
-        // immediately without arming the comparator carry. So we patch
-        // line 255's last (end-of-line) WAIT in-place to 0xFFDF.
-        constexpr int kVStart = 44;
-
-        out += std::format("// SCAP copper list — {} (anchor=0x{:02X}, "
-                           "total_planes={})\n",
-                           options.scap_label.empty() ? "unnamed"
-                                                       : options.scap_label,
-                           options.scap_anchor_hpos,
-                           options.scap_total_planes);
-
-        std::size_t scap_total_words = 0;
-        for (auto& row : moves) scap_total_words += row.size() * 2;
-        bool needs_wrap_marker =
-            (kVStart + static_cast<int>(moves.size()) > 256) && !moves.empty();
-        if (scap_total_words == 0) scap_total_words = 2;
-
-        out += std::format("static const UWORD {}_scap_copper_list[{}] = {{\n",
-                           sym, scap_total_words);
-        std::size_t emitted = 0;
-        for (std::size_t y = 0; y < moves.size(); ++y) {
-            auto& row = moves[y];
-            int abs_vpos = kVStart + static_cast<int>(y);
-            if (row.empty()) continue;
-            // The end-of-line WAIT is the last entry in each row (8 base
-            // MOVEs + line-gate WAIT + 20 SCAP MOVEs + end-of-line WAIT).
-            // For line 255 of a wrap-crossing list, swap that WAIT's first
-            // word for 0xFFDF so the past-0xFF state arms.
-            bool patch_wrap_at_eol = needs_wrap_marker && abs_vpos == 255;
-            out += "    ";
-            for (std::size_t i = 0; i < row.size(); ++i) {
-                auto& op = row[i];
-                std::uint16_t w0 = 0, w1 = 0;
-                if (op.kind == scap::ScapOpKind::kWait) {
-                    // WAIT: ((VP & 0xFF) << 8) | (HP & 0xFE) | 1, then
-                    // 0xFFFE. The LSB of the first word is the copper
-                    // instruction-type bit — must be 1 for WAIT, else the
-                    // copper executes the word as a MOVE to register
-                    // $00xx (no-op write to interrupt regs / similar) and
-                    // the intended palette MOVE never fires.
-                    w0 = static_cast<std::uint16_t>(
-                        (static_cast<unsigned>(op.vpos) << 8) |
-                        (op.hpos & 0xFE) | 0x0001);
-                    w1 = 0xFFFE;
-                    if (patch_wrap_at_eol && i == row.size() - 1) {
-                        w0 = 0xFFDF;  // arms past-0xFF state at line 255
-                    }
-                } else {
-                    // MOVE: COLORxx register address, then OCS-12 data word.
-                    auto reg = static_cast<unsigned>(op.reg & 0x1F);
-                    w0 = static_cast<std::uint16_t>(0x0180 + reg * 2);
-                    w1 = op.rgb_ocs;
-                }
-                out += std::format("0x{:04X},0x{:04X}", w0, w1);
-                emitted += 2;
-                if (emitted < scap_total_words) out += ",";
-            }
-            out += std::format("  /* y={} (vp={}) */\n", y, abs_vpos & 0xFF);
-        }
-        if (emitted == 0) out += "    0x0000,0x0000\n";  // dummy
-        out += "};\n\n";
-        out += std::format("static const ULONG {}_scap_copper_words = {};\n\n",
-                           sym, emitted);
+        // Shared with generate() (.h emitter). Viewer keeps `static const`
+        // linkage so the array stays in this translation unit; .h uses
+        // plain `const` so user code that includes the .h sees the
+        // definition with external linkage.
+        emit_scap_copper_list(out, sym, options, "static const");
     }
 
     out += "// Write bitplane pointer registers into a copper list.\n";
