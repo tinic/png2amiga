@@ -890,7 +890,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // --- EHB mode: 32 base colors + 32 half-brightness ---
-    if (mode == amiga::Mode::ehb) {
+    // SCAP+EHB has its own dedicated encoder downstream — let it through.
+    if (mode == amiga::Mode::ehb && !options.scap) {
         depth = 6;  // EHB is always 6 bitplanes
 
         // Force transparent pixels to black before encoding
