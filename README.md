@@ -209,6 +209,49 @@ The generated viewer takes the system, sets up the Copper list
 swaps if `--scap` was used), and waits for the left mouse button to
 exit.
 
+## Build-system integration (CMake / Make / Ninja)
+
+png2amiga is designed to slot into a CMake-driven asset pipeline (e.g.
+VSCode + vscode-amiga-debug + WinUAE). Relevant flags:
+
+| Flag | Purpose |
+|---|---|
+| `-q` / `--quiet` | Suppress stdout status; errors still go to stderr |
+| `--json` | Emit a JSON status object on success (implies `--quiet`) |
+| `--depfile <path>` | Write a Make-format depfile so changes to `--palette` files trigger a rebuild |
+| `--list-modes` | Print supported modes and exit (pair with `--json` for machine-readable catalog) |
+
+**Exit codes** follow `sysexits.h` so `RESULT_VARIABLE` distinguishes
+failure categories: `0` ok, `1` internal/encode error, `64` usage error
+(bad CLI args), `66` input file unreadable, `73` output write failed.
+
+**CMake helper module** (`cmake/Png2amiga.cmake`) provides
+`png2amiga_add_image()`:
+
+```cmake
+include(/path/to/png2amiga/cmake/Png2amiga.cmake)
+
+png2amiga_add_image(
+  TARGET   sprites
+  INPUT    ${CMAKE_CURRENT_SOURCE_DIR}/art/title.png
+  OUTPUT   ${CMAKE_CURRENT_BINARY_DIR}/title.h
+           ${CMAKE_CURRENT_BINARY_DIR}/title.iff
+  MODE     ham6
+  OPTIONS  --cap --ham-beam 32
+  PALETTE  ${CMAKE_CURRENT_SOURCE_DIR}/palette.gpl   # optional
+)
+```
+
+Each `OUTPUT` becomes its own `add_custom_command` so `make -jN` /
+`ninja` build them in parallel. Each command writes a `.d` depfile next
+to its output for accurate dependency tracking.
+
+**Determinism**: encoding is deterministic — same input + same flags
+always produces byte-identical output. Multithreading (HAM beam search,
+OCS palette quantization) uses lock-free per-row work distribution with
+deterministic merge order. Safe to use under `ccache` / build cache
+hashing.
+
 ## License
 
 MIT

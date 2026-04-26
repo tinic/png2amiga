@@ -43,6 +43,67 @@ namespace {
 
 using namespace png2amiga;
 
+// Exit codes following sysexits.h conventions so build systems can
+// distinguish failure categories (CMake's RESULT_VARIABLE, Make's $?).
+//   0  success
+//   1  internal error / encode failure
+//   64 EX_USAGE     — bad CLI arguments / unsupported option combo
+//   66 EX_NOINPUT   — input file missing or unreadable
+//   73 EX_CANTCREAT — output file write failed
+namespace exit_code {
+inline constexpr int ok          = 0;
+inline constexpr int internal    = 1;
+inline constexpr int usage       = 64;
+inline constexpr int no_input    = 66;
+inline constexpr int cant_create = 73;
+}  // namespace exit_code
+
+// Status-output gating. Set in main() right after parse_args returns so
+// cli_status() can no-op silently in quiet mode. Two booleans (vs. a
+// pointer to Config) so this works without forward declarations.
+bool g_quiet = false;
+bool g_json  = false;
+
+bool is_quiet() { return g_quiet; }
+
+// Encode-result snapshot for JSON status output. Populated lazily by
+// the per-mode branches as soon as the relevant numbers are known so
+// the end-of-main JSON emitter can produce a single object without
+// re-parsing internal state. Floats default to NaN to mark "not set".
+struct JsonResult {
+    int   width  = 0;
+    int   height = 0;
+    int   depth  = 0;
+    int   colors = 0;
+    float psnr   = std::numeric_limits<float>::quiet_NaN();
+} g_json_result;
+
+// Wrapper around std::println for human status output to stdout. No-op
+// when --quiet / --json is set. Errors should NOT use this — they go
+// straight to stderr regardless of flag state.
+template <class... Args>
+void cli_status(std::format_string<Args...> fmt, Args&&... args) {
+    if (is_quiet()) return;
+    std::println(fmt, std::forward<Args>(args)...);
+}
+
+// Emit a Make-format depfile so CMake's add_custom_command(... DEPFILE)
+// triggers a rebuild when --palette / external inputs change. Format:
+//   <output>: <input1> <input2> ...
+// Only call after a successful encode so a partial depfile doesn't poison
+// the build.
+void write_depfile(const std::string& depfile_path,
+                   const std::string& output_path,
+                   std::span<const std::string_view> inputs) {
+    std::ofstream f(depfile_path);
+    if (!f) return;  // Soft failure — depfile is advisory; don't fail the build
+    f << output_path << ":";
+    for (auto& in : inputs) {
+        if (!in.empty()) f << " " << in;
+    }
+    f << "\n";
+}
+
 int count_unique_colors(const Image& img) {
     std::unordered_set<std::uint32_t> seen;
     for (std::size_t y = 0; y < img.height(); ++y)
@@ -92,9 +153,16 @@ void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode,
 // Config
 // ---------------------------------------------------------------------------
 
+// Build-system integration flags (--quiet, --json, --depfile, --list-modes).
+// Centralised so the CLI dispatcher can route status output through one
+// helper instead of sprinkling `if (config.quiet)` everywhere.
 struct Config {
     std::string input_path;
     std::string output_path;           // .png for preview, .iff for ILBM, .h for C header
+    bool quiet = false;                // suppress all stdout status (errors → stderr)
+    bool json = false;                 // emit JSON status object instead of human text
+    std::string depfile;               // Make-format depfile path (empty = disabled)
+    bool list_modes = false;           // emit mode catalog (human or JSON) and exit 0
     amiga::Mode mode = amiga::Mode::lores;
     bool hires = false;                // compound mode hires override
     bool interlace = false;            // LACE bit in CAMG
@@ -209,7 +277,7 @@ struct Config {
 };
 
 void print_version() {
-    std::println("png2amiga {}", png2amiga::version);
+    cli_status("png2amiga {}", png2amiga::version);
 }
 
 void print_usage() {
@@ -372,6 +440,25 @@ void print_usage() {
         "                                  on entry, fades out on exit. Non-HAM,\n"
         "                                  non-interlace only.\n"
         "\n"
+        "Build-system integration:\n"
+        "  -q, --quiet                     Suppress all stdout status; errors still go\n"
+        "                                  to stderr. Useful in CMake/Make/Ninja builds.\n"
+        "  --json                          Emit JSON status object instead of human text.\n"
+        "                                  Implies --quiet for non-JSON output.\n"
+        "  --depfile <path>                Write a Make-format depfile listing the input\n"
+        "                                  PNG and any external palette file. Used by\n"
+        "                                  CMake's add_custom_command(... DEPFILE) so a\n"
+        "                                  --palette change triggers a rebuild.\n"
+        "  --list-modes                    Print supported modes and exit (pair with\n"
+        "                                  --json for machine-readable catalog).\n"
+        "\n"
+        "Exit codes (sysexits.h-style):\n"
+        "  0  success\n"
+        "  1  internal error / encode failure\n"
+        "  64 EX_USAGE     — bad CLI args / unsupported option combo\n"
+        "  66 EX_NOINPUT   — input file missing or unreadable\n"
+        "  73 EX_CANTCREAT — output write failed\n"
+        "\n"
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
         "  .png extension -> preview PNG image\n"
@@ -481,6 +568,28 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--fade-in") {
             config.fade_in = true;
+            continue;
+        }
+
+        if (arg == "--quiet" || arg == "-q") {
+            config.quiet = true;
+            continue;
+        }
+
+        if (arg == "--json") {
+            config.json = true;
+            // JSON implies quiet — no human text mixed with the JSON object.
+            config.quiet = true;
+            continue;
+        }
+
+        if (arg == "--list-modes") {
+            config.list_modes = true;
+            continue;
+        }
+
+        if (arg == "--depfile" && i + 1 < argc) {
+            config.depfile = std::string(argv[++i]);
             continue;
         }
 
@@ -840,9 +949,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
     }
 
-    if (config.input_path.empty() && config.scap_probe.empty()) {
+    if (config.input_path.empty() && config.scap_probe.empty() &&
+        !config.list_modes) {
         print_usage();
-        std::exit(1);
+        std::exit(exit_code::usage);
     }
 
     // SCAP post-parse fixup. Three supported configurations:
@@ -953,7 +1063,7 @@ void iterm2_display(const Image& image, unsigned scale = 2) {
     auto png = png_io::encode(image);
     if (!png) return;
     auto encoded = base64_encode(*png);
-    std::println("\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
+    cli_status("\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
                  png->size(), image.width() * scale, image.height() * scale,
                  encoded);
 }
@@ -1351,7 +1461,7 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
             std::println(stderr, "Mask PNG write error: {}", result.error().message);
             return;
         }
-        std::println("Mask:   {} ({}x{} PNG)", path, w, h);
+        cli_status("Mask:   {} ({}x{} PNG)", path, w, h);
     } else if (ends_with(path, ".iff") || ends_with(path, ".ilbm")) {
         auto indices = build_indices();
         auto planes = bitplane::encode(indices, w, h, 1);
@@ -1371,7 +1481,7 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
             std::println(stderr, "Mask IFF write error: {}", result.error().message);
             return;
         }
-        std::println("Mask:   {} ({}x{} IFF, 1 bitplane)", path, w, h);
+        cli_status("Mask:   {} ({}x{} IFF, 1 bitplane)", path, w, h);
     } else if (ends_with(path, ".raw")) {
         auto indices = build_indices();
         auto planes = bitplane::encode(indices, w, h, 1);
@@ -1386,7 +1496,7 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
         }
         file.write(reinterpret_cast<const char*>(planes->data.data()),
                    static_cast<std::streamsize>(planes->data.size()));
-        std::println("Mask:   {} ({}x{} raw, {} bytes)", path, w, h,
+        cli_status("Mask:   {} ({}x{} raw, {} bytes)", path, w, h,
                      planes->data.size());
     } else {
         std::println(stderr, "Mask: unsupported extension for '{}' (use .png, .iff, or .raw)", path);
@@ -1463,7 +1573,7 @@ void save_raw(std::string_view path,
     }
 
     auto total = static_cast<std::size_t>(file.tellp());
-    std::println("Raw:    {} ({} bytes)", path, total);
+    cli_status("Raw:    {} ({} bytes)", path, total);
 }
 
 // CGA raw output: hardware-layout memory dump (16384 bytes total).
@@ -1532,7 +1642,7 @@ void save_raw_cga(std::string_view path,
     file.write(reinterpret_cast<const char*>(buf.data()),
                static_cast<std::streamsize>(buf.size()));
 
-    std::println("Raw:    {} ({} bytes, CGA {})", path, buf.size(),
+    cli_status("Raw:    {} ({} bytes, CGA {})", path, buf.size(),
                  is_mono      ? "mono 640x200 (1bpp banked)"
                : is_composite ? "composite 160x200x16 (2bpp banked, NTSC artifact)"
                               : "320x200 (2bpp banked)");
@@ -1561,7 +1671,7 @@ void save_raw_ega(std::string_view path,
     }
 
     auto total = static_cast<std::size_t>(file.tellp());
-    std::println("Raw:    {} ({} bytes, EGA 4-plane planar)", path, total);
+    cli_status("Raw:    {} ({} bytes, EGA 4-plane planar)", path, total);
 }
 
 // VGA hires planar raw output (Mode 10h / 12h): 4-plane MSB-first bitplanes
@@ -1591,7 +1701,7 @@ void save_raw_vga_planar(std::string_view path,
     }
 
     auto total = static_cast<std::size_t>(file.tellp());
-    std::println("Raw:    {} ({} bytes, VGA {})", path, total,
+    cli_status("Raw:    {} ({} bytes, VGA {})", path, total,
                  mode == amiga::Mode::vga_10h ? "Mode 10h 4-plane planar"
                                               : "Mode 12h 4-plane planar");
 }
@@ -1621,7 +1731,7 @@ void save_raw_vga(std::string_view path,
     }
 
     auto total = static_cast<std::size_t>(file.tellp());
-    std::println("Raw:    {} ({} bytes, VGA Mode 13h chunky)", path, total);
+    cli_status("Raw:    {} ({} bytes, VGA Mode 13h chunky)", path, total);
 }
 
 Result<void> save_preview(std::string_view path, const Image& preview,
@@ -1730,7 +1840,40 @@ int main(int argc, char* argv[]) {
     auto config = parse_args(argc, argv);
     if (!config) {
         std::println(stderr, "Error: {}", config.error().message);
-        return 1;
+        return exit_code::usage;
+    }
+    g_quiet = config->quiet;
+    g_json  = config->json;
+
+    // --list-modes: emit the mode catalog and exit. Useful for build
+    // systems probing supported modes without running an encode.
+    if (config->list_modes) {
+        if (config->json) {
+            std::print("{{\n  \"version\": \"{}\",\n  \"modes\": [\n",
+                       png2amiga::version);
+            const char* modes[] = {
+                "lores", "lores-lace", "hires", "hires-lace",
+                "ham6", "ham6-lace", "ham6-hires", "ham6-hires-lace",
+                "ham8", "ham8-lace", "ham8-hires", "ham8-hires-lace",
+                "ehb", "ehb-lace",
+                "stf-low", "stf-med", "stf-hi",
+                "ste-low", "ste-med", "ste-hi",
+                "vga-13h", "vga-10h", "vga-12h",
+                "ega-320", "ega-640", "ega-hi",
+                "cga-320", "cga-640", "cga-composite", "cga-text80x100",
+            };
+            for (std::size_t i = 0; i < std::size(modes); ++i) {
+                std::print("    \"{}\"{}\n", modes[i],
+                           i + 1 < std::size(modes) ? "," : "");
+            }
+            cli_status("  ]\n}}");
+        } else {
+            cli_status("png2amiga {} — supported modes:", png2amiga::version);
+            cli_status("  Amiga:    lores, lores-lace, hires, hires-lace, ham6, ham8, ehb (+ -lace, -hires variants)");
+            cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi");
+            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, cga-text80x100");
+        }
+        return exit_code::ok;
     }
 
     // --- SCAP calibration probe path ---
@@ -1779,7 +1922,7 @@ int main(int argc, char* argv[]) {
         ch_opts.scap_anchor_hpos = res.slot_table.line_gate_hpos;
         ch_opts.scap_total_planes = res.slot_table.total_planes;
 
-        std::println("SCAP probe: {} ({}x{}, {} planes, {} per-line ops)",
+        cli_status("SCAP probe: {} ({}x{}, {} planes, {} per-line ops)",
                      res.probe_label,
                      res.planes.width, res.planes.height,
                      res.planes.depth,
@@ -1795,7 +1938,7 @@ int main(int argc, char* argv[]) {
                              r.error().message);
                 return 1;
             }
-            std::println("Viewer: {}", config->output_path);
+            cli_status("Viewer: {}", config->output_path);
         } else if (ends_with(config->output_path, ".h")) {
             auto r = cheader::save(config->output_path, res.planes,
                                    res.palette, amiga::Mode::lores,
@@ -1805,7 +1948,7 @@ int main(int argc, char* argv[]) {
                              r.error().message);
                 return 1;
             }
-            std::println("Header: {}", config->output_path);
+            cli_status("Header: {}", config->output_path);
         } else {
             std::println(stderr,
                          "Error: --scap-probe output must be .cpp/.c/.h");
@@ -1867,7 +2010,7 @@ int main(int argc, char* argv[]) {
     if (!image) {
         std::println(stderr, "Error loading {}: {}", config->input_path,
                      image.error().message);
-        return 1;
+        return exit_code::no_input;
     }
 
     // Compute target dimensions from source aspect ratio
@@ -1941,7 +2084,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::println("Input:  {}x{}", image->width(), image->height());
+    cli_status("Input:  {}x{}", image->width(), image->height());
 
     // Determine the effective source crop region BEFORE building the mask,
     // so we can sample alpha from the cropped region rather than the full
@@ -2049,7 +2192,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (has_transparency) {
-            std::println("Alpha:  {} transparent pixels ({})",
+            cli_status("Alpha:  {} transparent pixels ({})",
                 std::count(transparency_mask.begin(),
                            transparency_mask.end(), true),
                 config->alpha_dither != dither::Method::none
@@ -2065,11 +2208,11 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         if (config->crop_w > 0 && config->crop_h > 0) {
-            std::println("Crop:   {}x{}+{}+{} -> {}x{}",
+            cli_status("Crop:   {}x{}+{}+{} -> {}x{}",
                          crop_w, crop_h, crop_x, crop_y,
                          cropped->width(), cropped->height());
         } else {
-            std::println("Crop:   auto {}x{} -> {}x{} (center, {:g}:{:g} aspect)",
+            cli_status("Crop:   auto {}x{} -> {}x{} (center, {:g}:{:g} aspect)",
                          image->width(), image->height(),
                          cropped->width(), cropped->height(),
                          static_cast<double>(target_w),
@@ -2099,7 +2242,7 @@ int main(int argc, char* argv[]) {
         actual_depth = amiga::get_mode_params(config->mode).bitplane_depth;
         config->depth = actual_depth;
     }
-    std::println("Target: {}x{} @ {} bitplanes", target_w, target_h, actual_depth);
+    cli_status("Target: {}x{} @ {} bitplanes", target_w, target_h, actual_depth);
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
@@ -2148,7 +2291,7 @@ int main(int argc, char* argv[]) {
                         transparency_mask[y * w + x];
             transparency_mask = std::move(new_mask);
         }
-        std::println("Center: {}x{} -> {}x{} (pad)", w, h, fw, fh);
+        cli_status("Center: {}x{} -> {}x{} (pad)", w, h, fw, fh);
         image = std::move(padded);
         target_w = fw;
         target_h = fh;
@@ -2158,7 +2301,7 @@ int main(int argc, char* argv[]) {
     preprocess::apply(*image, config->preprocess);
 
     auto chipset = effective_chipset(*config);
-    std::println("Chipset: {}", chipset == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
+    cli_status("Chipset: {}", chipset == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
     // PF1 (foreground) zeroed and the palette shifted into the upper color
@@ -2243,7 +2386,7 @@ int main(int argc, char* argv[]) {
         // Render once: used for stats line, terminal preview, and any
         // PNG output.
         auto preview = cga_text::render(*res);
-        std::println("Encoded: {} cells ({}x{}), {} bytes, {} colors, "
+        cli_status("Encoded: {} cells ({}x{}), {} bytes, {} colors, "
                      "error: {:.2f}, CRTC scanline offset: {}",
                      res->cols * res->rows, res->cols, res->rows,
                      res->data.size(), count_unique_colors(preview),
@@ -2255,7 +2398,7 @@ int main(int argc, char* argv[]) {
                                  std::ios::binary);
                 of.write(reinterpret_cast<const char*>(res->data.data()),
                          static_cast<std::streamsize>(res->data.size()));
-                std::println("Raw:    {} ({} bytes, CGA text {}x{} char+attr"
+                cli_status("Raw:    {} ({} bytes, CGA text {}x{} char+attr"
                              "; blink must be CLEARED in mode reg 0x3D8 bit 5 "
                              "so attr bit 7 becomes bg intensity, enabling "
                              "all 16 bg colors)",
@@ -2280,7 +2423,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Viewer: {} (DOS/ia16-elf 16-bit)",
+                cli_status("Viewer: {} (DOS/ia16-elf 16-bit)",
                              config->output_path);
             } else {
                 std::vector<bool> empty_mask;
@@ -2292,7 +2435,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("PNG:    {}", config->output_path);
+                cli_status("PNG:    {}", config->output_path);
             }
         }
 
@@ -2324,7 +2467,7 @@ int main(int argc, char* argv[]) {
         auto ham_default_dither = dither::Method::floyd_steinberg;
         auto ham_dither = config->dither_explicit
             ? config->dither_method : ham_default_dither;
-        std::println("Mode:   HAM{} (beam: {}, dither: {})",
+        cli_status("Mode:   HAM{} (beam: {}, dither: {})",
                      ham_params.bitplane_depth,
                      config->ham_beam,
                      dither_name(ham_dither));
@@ -2392,11 +2535,11 @@ int main(int argc, char* argv[]) {
             float avg_ch = ham_result->copper_changes.size() > 0
                 ? static_cast<float>(total_ch) / static_cast<float>(ham_result->copper_changes.size())
                 : 0.0f;
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
+            cli_status("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
                          ham_result->planes.depth, ham_result->planes.total_bytes(),
                          ham_unique, avg_ch, ham_result->total_error, ham_psnr);
         } else {
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
+            cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                          ham_result->planes.depth, ham_result->planes.total_bytes(),
                          ham_unique, ham_result->total_error, ham_psnr);
         }
@@ -2423,7 +2566,7 @@ int main(int argc, char* argv[]) {
                     std::println(stderr, "IFF write error: {}", result.error().message);
                     return 1;
                 }
-                std::println("IFF:    {}", config->output_path);
+                cli_status("IFF:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".h")) {
                 cheader::CHeaderOptions ch_opts;
                 ch_opts.symbol_name = config->symbol_name.empty()
@@ -2450,7 +2593,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Header: {}", config->output_path);
+                cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
                 cheader::CHeaderOptions ch_opts;
@@ -2479,7 +2622,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Viewer: {}", config->output_path);
+                cli_status("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
                 save_raw(config->output_path, ham_result->planes,
                          ham_result->base_palette, chipset,
@@ -2493,7 +2636,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Pal:    {} ({} colors, {} bytes)",
+                cli_status("Pal:    {} ({} colors, {} bytes)",
                              config->output_path,
                              ham_result->base_palette.size(),
                              ham_result->base_palette.size() * 2);
@@ -2510,7 +2653,7 @@ int main(int argc, char* argv[]) {
                     std::println(stderr, "PNG write error: {}", result.error().message);
                     return 1;
                 }
-                std::println("PNG:    {}", config->output_path);
+                cli_status("PNG:    {}", config->output_path);
             }
         }
 
@@ -2558,7 +2701,7 @@ int main(int argc, char* argv[]) {
             dith.error_clamp = config->error_clamp_explicit
                               ? config->error_clamp : ehb_cap_tune.error_clamp;
 
-            std::println("Dither: {} (strength: {:.2f})",
+            cli_status("Dither: {} (strength: {:.2f})",
                          dither_name(dith.method), dith.strength);
 
             // Copper encoder optimizes 32 base colors per scanline (depth=5)
@@ -2575,7 +2718,7 @@ int main(int argc, char* argv[]) {
                              copper_result.error().message);
                 return 1;
             }
-            std::println("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line)",
+            cli_status("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line)",
                          copper_result->changes_per_line,
                          copper_result->max_moves_per_line);
 
@@ -2679,7 +2822,7 @@ int main(int argc, char* argv[]) {
 
             float ehb_psnr = color_space::compute_psnr_blurred(
                 image->pixels(), rendered.pixels(), w, h);
-            std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
+            cli_status("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
                          planes->depth, planes->total_bytes(),
                          count_unique_colors(rendered),
                          copper_result->avg_changes_per_line,
@@ -2699,7 +2842,7 @@ int main(int argc, char* argv[]) {
                         std::println(stderr, "PNG write error: {}", result.error().message);
                         return 1;
                     }
-                    std::println("PNG:    {}", config->output_path);
+                    cli_status("PNG:    {}", config->output_path);
                 } else if (ends_with(config->output_path, ".cpp") ||
                            ends_with(config->output_path, ".c")) {
                     cheader::CHeaderOptions ch_opts;
@@ -2721,7 +2864,7 @@ int main(int argc, char* argv[]) {
                         std::println(stderr, "Viewer write error: {}", result.error().message);
                         return 1;
                     }
-                    std::println("Viewer: {}", config->output_path);
+                    cli_status("Viewer: {}", config->output_path);
                 } else {
                     std::println(stderr, "EHB copper: only .png and .cpp output supported");
                     return 1;
@@ -2737,7 +2880,7 @@ int main(int argc, char* argv[]) {
         }
 
         // --- EHB without copper ---
-        std::println("Mode:   EHB (Extra Half-Brite)");
+        cli_status("Mode:   EHB (Extra Half-Brite)");
 
         // Validate locks/pins for EHB (target must be 0-31)
         if (auto v = palette_locks::validate_locks(config->locks, 32); !v) {
@@ -2773,7 +2916,7 @@ int main(int argc, char* argv[]) {
                     base_locked[idx] = true;
                 }
             }
-            std::println("Palette: {} colors loaded from {}",
+            cli_status("Palette: {} colors loaded from {}",
                          base_pal.size(), config->palette_file);
         } else {
             // 32 base colors total: locks + reserved black at 0 + quantized fill
@@ -2818,9 +2961,9 @@ int main(int argc, char* argv[]) {
         // non-linear constraint that the linear centroid approach can't
         // capture correctly.
 
-        std::println("Palette: {} base + {} half-brite = {} colors",
+        cli_status("Palette: {} base + {} half-brite = {} colors",
                      base_pal.size(), base_pal.size(), ehb_pal.size());
-        std::println("Dither: {} (strength: {:.2f})",
+        cli_status("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
 
         auto dither_result = dither::apply(*image, ehb_pal.colors, dith);
@@ -2886,7 +3029,7 @@ int main(int argc, char* argv[]) {
         float ehb_psnr = color_space::compute_psnr_blurred(
             image->pixels(), preview->pixels(),
             image->width(), image->height());
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
+        cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                      planes->depth, planes->total_bytes(),
                      count_unique_colors(*preview), dither_result.total_error, ehb_psnr);
 
@@ -2909,7 +3052,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("IFF:    {} ({} bytes)",
+                cli_status("IFF:    {} ({} bytes)",
                              config->output_path, planes->total_bytes());
             } else if (ends_with(config->output_path, ".h")) {
                 cheader::CHeaderOptions ch_opts;
@@ -2931,7 +3074,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Header: {}", config->output_path);
+                cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
                 cheader::CHeaderOptions ch_opts2;
@@ -2952,7 +3095,7 @@ int main(int argc, char* argv[]) {
                                  result2.error().message);
                     return 1;
                 }
-                std::println("Viewer: {}", config->output_path);
+                cli_status("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
                 save_raw(config->output_path, planes.value(),
                          full_palette, chipset);
@@ -2964,7 +3107,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Pal:    {} ({} colors, {} bytes)",
+                cli_status("Pal:    {} ({} colors, {} bytes)",
                              config->output_path, full_palette.size(),
                              full_palette.size() * 2);
             } else {
@@ -2976,7 +3119,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("PNG:    {}", config->output_path);
+                cli_status("PNG:    {}", config->output_path);
             }
         }
 
@@ -3018,7 +3161,7 @@ int main(int argc, char* argv[]) {
         dith.error_clamp = config->error_clamp_explicit
                           ? config->error_clamp : cap_tune.error_clamp;
 
-        std::println("Dither: {} (strength: {:.2f})",
+        cli_status("Dither: {} (strength: {:.2f})",
                      dither_name(dith.method), dith.strength);
 
         // Build locked slot list from --lock-index specs
@@ -3042,7 +3185,7 @@ int main(int argc, char* argv[]) {
         }
         // Print actual cpl after orchestration (auto mode may have stretched
         // or fallen back).
-        std::println("Mode:   CAP ({} changes/line, max {} MOVEs/line)",
+        cli_status("Mode:   CAP ({} changes/line, max {} MOVEs/line)",
                      copper_result->changes_per_line,
                      copper_result->max_moves_per_line);
 
@@ -3104,7 +3247,7 @@ int main(int argc, char* argv[]) {
         float cop_psnr = color_space::compute_psnr_blurred(
             image->pixels(), preview->pixels(),
             image->width(), image->height());
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
+        cli_status("Encoded: {} bitplanes, {} bytes, {} colors, {:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
                      copper_result->planes.depth, copper_result->planes.total_bytes(),
                      count_unique_colors(*preview),
                      copper_result->avg_changes_per_line,
@@ -3131,7 +3274,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("IFF:    {} ({} bytes)",
+                cli_status("IFF:    {} ({} bytes)",
                              config->output_path,
                              copper_result->planes.total_bytes());
             } else if (ends_with(config->output_path, ".h")) {
@@ -3155,7 +3298,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Header: {}", config->output_path);
+                cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
                 cheader::CHeaderOptions ch_opts2;
@@ -3179,7 +3322,7 @@ int main(int argc, char* argv[]) {
                                  result2.error().message);
                     return 1;
                 }
-                std::println("Viewer: {}", config->output_path);
+                cli_status("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
                 save_raw(config->output_path, copper_result->planes,
                          cmap_palette, chipset,
@@ -3194,7 +3337,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("PNG:    {}", config->output_path);
+                cli_status("PNG:    {}", config->output_path);
             }
         }
 
@@ -3278,11 +3421,11 @@ int main(int argc, char* argv[]) {
         const char* scap_label = scap_ehb
             ? "OCS EHB 6bpp investigation"
             : "OCS DPF";
-        std::println("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line)",
+        cli_status("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line)",
                      scap_label,
                      scap_res->slot_table.slots.size(),
                      scap_res->avg_changes_per_line);
-        std::println("Copper load: hblank avg {:.1f} (max {}), visible avg "
+        cli_status("Copper load: hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
                      scap_res->avg_hblank_moves_per_line,
                      scap_res->max_hblank_moves_per_line,
@@ -3290,7 +3433,7 @@ int main(int argc, char* argv[]) {
                      scap_res->max_visible_moves_per_line,
                      scap_res->avg_total_moves_per_line,
                      scap_res->max_moves_per_line);
-        std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
+        cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                      scap_res->planes.depth, scap_res->planes.total_bytes(),
                      count_unique_colors(scap_res->rendered),
                      scap_res->total_error, scap_psnr);
@@ -3311,7 +3454,7 @@ int main(int argc, char* argv[]) {
                                  r.error().message);
                     return 1;
                 }
-                std::println("PNG:    {}", config->output_path);
+                cli_status("PNG:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
                 cheader::CHeaderOptions ch_opts;
@@ -3338,7 +3481,7 @@ int main(int argc, char* argv[]) {
                                  r.error().message);
                     return 1;
                 }
-                std::println("Viewer: {}", config->output_path);
+                cli_status("Viewer: {}", config->output_path);
             } else {
                 std::println(stderr,
                     "SCAP output: only .png and .cpp/.c supported (Phase 1)");
@@ -3386,7 +3529,7 @@ int main(int argc, char* argv[]) {
             // patterns regardless of any CGA register setting.
             auto pal16 = palette::cga_composite_palette();
             pal.colors.assign(pal16.begin(), pal16.end());
-            std::println("Palette: CGA composite, 16 colors (NTSC artifact, old CGA)");
+            cli_status("Palette: CGA composite, 16 colors (NTSC artifact, old CGA)");
         } else if (config->mode == amiga::Mode::cga_320) {
             palette::CgaPalette best = palette::CgaPalette::p1_high;
             if (config->cga_auto_palette) {
@@ -3427,7 +3570,7 @@ int main(int argc, char* argv[]) {
                 best, static_cast<std::uint8_t>(config->cga_bg));
             pal.colors.assign(pal4.begin(), pal4.end());
             const char* names[] = {"0-low", "0-high", "1-low", "1-high"};
-            std::println("Palette: CGA {} (bg=0x{:X}), 4 colors{}",
+            cli_status("Palette: CGA {} (bg=0x{:X}), 4 colors{}",
                          names[static_cast<int>(best)],
                          config->cga_bg & 0xF,
                          config->cga_auto_palette ? " (auto)" : "");
@@ -3438,7 +3581,7 @@ int main(int argc, char* argv[]) {
                     palette::kCgaHw[config->cga_bg & 0xF]),
                 color_space::srgb_hex_to_linear(palette::kCgaHw[15]),
             };
-            std::println("Palette: CGA mono, 2 colors (bg=0x{:X}, fg=white)",
+            cli_status("Palette: CGA mono, 2 colors (bg=0x{:X}, fg=white)",
                          config->cga_bg & 0xF);
         }
     } else if (user_pal_std) {
@@ -3459,12 +3602,12 @@ int main(int argc, char* argv[]) {
                 std_locked[idx] = true;
             }
         }
-        std::println("Palette: {} colors (loaded from {})",
+        cli_status("Palette: {} colors (loaded from {})",
                      pal.size(), config->palette_file);
     } else if (amiga::is_atari_hi(config->mode)) {
         // Monochrome: fixed white + black palette
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
-        std::println("Palette: 2 colors (monochrome)");
+        cli_status("Palette: 2 colors (monochrome)");
     } else if (config->mode == amiga::Mode::ega_320 ||
                config->mode == amiga::Mode::ega_640) {
         // EGA 200-line CGA-compat: palette order must be kCgaHw exactly.
@@ -3476,7 +3619,7 @@ int main(int argc, char* argv[]) {
         pal.colors.reserve(16);
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
-        std::println("Palette: 16 colors (kCgaHw, EGA CGA-compat IRGB)");
+        cli_status("Palette: 16 colors (kCgaHw, EGA CGA-compat IRGB)");
     } else {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, reserve_zero_std);
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
@@ -3509,7 +3652,7 @@ int main(int argc, char* argv[]) {
             chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
-        std::println("Palette: {} colors (auto, {})",
+        cli_status("Palette: {} colors (auto, {})",
                      pal.size(),
                      amiga::is_stf(config->mode) ? "STF 9-bit" :
                      amiga::is_vga(config->mode) ? "VGA 18-bit" :
@@ -3562,7 +3705,7 @@ int main(int argc, char* argv[]) {
 
     std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
-    std::println("Dither: {} (strength: {:.2f})",
+    cli_status("Dither: {} (strength: {:.2f})",
                  dither_name(dith.method), dith.strength);
 
     auto dither_result = dither::apply(*image, pal_span, dith);
@@ -3638,7 +3781,7 @@ int main(int argc, char* argv[]) {
     float std_psnr = color_space::compute_psnr_blurred(
         image->pixels(), preview->pixels(),
         image->width(), image->height());
-    std::println("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
+    cli_status("Encoded: {} bitplanes, {} bytes, {} colors, error: {:.4f}, PSNR: {:.2f} dB",
                  planes->depth, planes->total_bytes(),
                  count_unique_colors(*preview), dither_result.total_error, std_psnr);
 
@@ -3660,7 +3803,7 @@ int main(int argc, char* argv[]) {
                 std::println(stderr, "Degas write error: {}", result.error().message);
                 return 1;
             }
-            std::println("Degas:  {} (32034 bytes)", config->output_path);
+            cli_status("Degas:  {} (32034 bytes)", config->output_path);
         } else if (ends_with(config->output_path, ".iff") ||
             ends_with(config->output_path, ".ilbm")) {
             iff::IffOptions iff_opts;
@@ -3676,7 +3819,7 @@ int main(int argc, char* argv[]) {
                 std::println(stderr, "IFF write error: {}", result.error().message);
                 return 1;
             }
-            std::println("IFF:    {} ({} bytes)",
+            cli_status("IFF:    {} ({} bytes)",
                          config->output_path, planes->total_bytes());
         } else if (ends_with(config->output_path, ".h")) {
             cheader::CHeaderOptions ch_opts;
@@ -3697,7 +3840,7 @@ int main(int argc, char* argv[]) {
                              result.error().message);
                 return 1;
             }
-            std::println("Header: {}", config->output_path);
+            cli_status("Header: {}", config->output_path);
         } else if (ends_with(config->output_path, ".cpp") ||
                    ends_with(config->output_path, ".c")) {
             auto symbol = config->symbol_name.empty()
@@ -3729,7 +3872,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i8086)",
+                cli_status("Viewer: {} (DOS/ia16-elf 16-bit, -march=i8086)",
                              config->output_path);
             } else if (want_c16 && (config->mode == amiga::Mode::ega_320 ||
                                     config->mode == amiga::Mode::ega_640 ||
@@ -3765,7 +3908,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
+                cli_status("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
                              config->output_path);
             } else if (want_c16 && (config->mode == amiga::Mode::vga_10h ||
                                     config->mode == amiga::Mode::vga_12h)) {
@@ -3792,7 +3935,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
+                cli_status("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
                              config->output_path);
             } else if (want_c16 && config->mode == amiga::Mode::vga_13h) {
                 // VGA 256-color chunky. Build 768-byte DAC from linear
@@ -3817,7 +3960,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
+                cli_status("Viewer: {} (DOS/ia16-elf 16-bit, -march=i80286)",
                              config->output_path);
             } else if (want_c16) {
                 std::println(stderr,
@@ -3848,7 +3991,7 @@ int main(int argc, char* argv[]) {
                                  result.error().message);
                     return 1;
                 }
-                std::println("Viewer: {}", config->output_path);
+                cli_status("Viewer: {}", config->output_path);
             }
         } else if (ends_with(config->output_path, ".raw")) {
             if (amiga::is_chunky(config->mode)) {
@@ -3877,7 +4020,7 @@ int main(int argc, char* argv[]) {
                              result.error().message);
                 return 1;
             }
-            std::println("Pal:    {} ({} colors, {} bytes)",
+            cli_status("Pal:    {} ({} colors, {} bytes)",
                          config->output_path, used_palette.size(),
                          used_palette.size() * 2);
         } else {
@@ -3888,7 +4031,7 @@ int main(int argc, char* argv[]) {
                 std::println(stderr, "PNG write error: {}", result.error().message);
                 return 1;
             }
-            std::println("PNG:    {}", config->output_path);
+            cli_status("PNG:    {}", config->output_path);
         }
     }
 
@@ -3897,5 +4040,38 @@ int main(int argc, char* argv[]) {
         save_mask(config->mask_path, transparency_mask,
                   target_w, target_h, config->mask_invert, config->interlace);
 
-    return 0;
+    // CMake/Ninja depfile: input PNG + optional palette file are the
+    // only external inputs we read. Output is the file we just wrote.
+    // Emitted last so a partial file doesn't poison the build cache if
+    // an earlier write failed.
+    if (!config->depfile.empty() && !config->output_path.empty()) {
+        std::array<std::string_view, 2> inputs{
+            config->input_path,
+            config->palette_file,
+        };
+        write_depfile(config->depfile, config->output_path, inputs);
+    }
+
+    // JSON status object on stdout (only field that survives --quiet).
+    // Build systems can capture this via OUTPUT_VARIABLE / parse with
+    // jq. Keys deliberately conservative — we ship only what is
+    // available across every encode path; richer per-mode stats can
+    // be added incrementally.
+    if (config->json) {
+        auto js_escape = [](std::string_view s) {
+            std::string out;
+            out.reserve(s.size() + 8);
+            for (char c : s) {
+                if (c == '"' || c == '\\') { out += '\\'; out += c; }
+                else if (c == '\n') out += "\\n";
+                else out += c;
+            }
+            return out;
+        };
+        std::println("{{\"input\":\"{}\",\"output\":\"{}\",\"status\":\"ok\"}}",
+                     js_escape(config->input_path),
+                     js_escape(config->output_path));
+    }
+
+    return exit_code::ok;
 }
