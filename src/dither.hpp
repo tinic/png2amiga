@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -104,7 +105,7 @@ enum class Method : unsigned char {
 // ---------------------------------------------------------------------------
 
 struct Settings {
-    Method method = Method::floyd_steinberg;
+    Method method = Method::ostromoukhov;
     float strength = 1.0f;      // 0.0 = no dithering, 1.0 = full
     float error_clamp = 0.12f;  // max error magnitude per OKLab channel
     bool serpentine = true;      // alternate scan direction (error diffusion)
@@ -279,6 +280,88 @@ std::uint8_t pick_knoll_index(
 // 3). Implemented as a 4-step greedy plan with palette repeats allowed,
 // indexed by Bayer 2×2.
 std::uint8_t pick_tri_tone_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength);
+
+// ---------------------------------------------------------------------------
+// diffuse_raw_buffer — single source of truth for per-pixel error-diffusion
+// scaffolding across all "raw buffer" mode pipelines (HAM, EHB+CAP, copper,
+// SCAP, SNES Mode 7, EHB main path). Owns:
+//
+//   • input → OKLab conversion
+//   • serpentine scan
+//   • structure-aware bias map (Laplacian / contrast / Zhou-Fang)
+//   • Riemersma 16-element exponential-decay queue
+//   • Ostromoukhov 0.6 + 0.8·threshold variable kernel scaling
+//   • Ordered dither L/a/b threshold offsets (0.15 / 0.03 / 0.03)
+//   • Error-clamping per OKLab channel
+//
+// The picker is the only mode-specific piece. It is invoked once per
+// pixel with the *adjusted* target Lab (bias + error feedback + ordered
+// offsets already applied) and returns the chosen output Lab plus, for
+// Ostromoukhov, the near/far threshold ratio. Side effects (writing
+// indices, raw bytes, HAM ops) are the picker's responsibility.
+//
+// Returns the accumulated squared OKLab error (sum of |source−chosen|²),
+// useful for PSNR-style metrics. Caller pays for the structure-bias and
+// Riemersma queue precompute.
+// ---------------------------------------------------------------------------
+
+struct PickResult {
+    color_space::OKLab chosen_lab;
+    // Used only for Method::ostromoukhov: sqrt(best)/(sqrt(best)+sqrt(2nd))
+    // ∈ [0, 0.5]. Pickers without a meaningful "second nearest" (raw grid
+    // snap, HAM ops) leave this at 0.5 → unit kernel scale.
+    float ostro_threshold = 0.5f;
+};
+
+using PixelPicker = std::function<PickResult(
+    const color_space::OKLab& target,
+    std::size_t x, std::size_t y)>;
+
+float diffuse_raw_buffer(const Image& image,
+                         const Settings& settings,
+                         const PixelPicker& pick);
+
+// True if `method` actually performs error diffusion (has an FS-style
+// kernel and isn't an ordered or palette-aware family). Centralised
+// because the same 4-clause expression
+//   method != none && !is_ordered(m) && !is_yliluoma(m) && !kernel.empty()
+// previously appeared verbatim in copper.cpp / scap.cpp / main.cpp /
+// api.cpp / ham.cpp — drifting independently when methods were added.
+bool uses_error_diffusion(Method method);
+
+// Pick a palette index for a target Lab using the right strategy:
+//   • yliluoma family → pick_yliluoma_family_index
+//   • everything else → nearest neighbour with second-nearest tracked
+//     for ostromoukhov's variable scaling
+// `k_min` skips reserved entries (e.g. transparent color 0 in DPF/EHB).
+// Out-param `chosen_lab` is the picked palette colour. Returns the
+// ostromoukhov threshold (sb / (sb+ss) for nearest pair, 0.5 for
+// yliluoma — i.e. unit kernel scale).
+//
+// Replaces the duplicate 25-line if(yli)/else(nearest+second) blocks
+// in api.cpp / copper.cpp / scap.cpp×2 / main.cpp.
+float pick_palette_index_with_ostro(
+    Method method,
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength,
+    std::size_t k_min,
+    std::size_t& chosen_index,
+    png2amiga::color_space::OKLab& chosen_lab);
+
+// Dispatch helper for the yliluoma family — picks the right
+// per-pixel quantizer (opt_checker/opt_line/opt_line_checker/knoll/
+// tri_tone/yliluoma1/yliluoma/yliluoma2) based on `method`.
+//
+// Caller must check `is_yliluoma(method)` first; passing a non-yliluoma
+// method falls back to plain yliluoma alg-2 greedy. Replaces the
+// 8-case switch that was duplicated in copper.cpp / scap.cpp /
+// ham.cpp / main.cpp / api.cpp.
+std::uint8_t pick_yliluoma_family_index(
+    Method method,
     const png2amiga::color_space::OKLab& target,
     std::span<const png2amiga::color_space::OKLab> palette_lab,
     std::size_t x, std::size_t y, float strength);

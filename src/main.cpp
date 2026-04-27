@@ -432,7 +432,7 @@ struct Config {
     std::string quantizer;
 
     // Dithering
-    dither::Method dither_method = dither::Method::floyd_steinberg;
+    dither::Method dither_method = dither::Method::ostromoukhov;
     bool dither_explicit = false;       // true if user passed --dither
     bool dither_strength_explicit = false;
     bool error_clamp_explicit = false;  // true if user passed --error-clamp
@@ -623,15 +623,15 @@ void print_usage() {
         "    Aperiodic / noise:\n"
         "      blue-noise|void-cluster|cluster-noise|\n"
         "      ign|ign-tri|r2|r2-tri|white-noise|value-noise\n"
-        "    Error diffusion:\n"
-        "      floyd-steinberg|atkinson|sierra-lite|stucki|jarvis|\n"
-        "      ostromoukhov|riemersma|gilbert\n"
+        "    Error diffusion (ranked by mean PSNR across 10 images × 6 modes):\n"
+        "      ostromoukhov|sierra-lite|atkinson|jarvis|floyd-steinberg|\n"
+        "      stucki|gilbert|riemersma\n"
         "    Structure-aware error diffusion:\n"
         "      structure-fs|contrast-fs|zhoufang\n"
         "    Palette-aware ordered:\n"
         "      opt-checker|opt-line|opt-line-checker|tri-tone|knoll|yliluoma1|yliluoma|yliluoma2\n"
         "    none\n"
-        "    (default: floyd-steinberg)\n"
+        "    (default: ostromoukhov)\n"
         "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
         "  --error-clamp <float>           Max error per channel, squared internally\n"
         "                                  (default: 0.35; useful range 0.0-1.0)\n"
@@ -3687,7 +3687,7 @@ int main(int argc, char* argv[]) {
         // (~4 sRGB-value-per-step), and FS improves blurred PSNR by
         // +0.1 to +0.7 dB on all test images. User can disable with
         // `--dither none`.
-        auto ham_default_dither = dither::Method::floyd_steinberg;
+        auto ham_default_dither = dither::Method::ostromoukhov;
         auto ham_dither = config->dither_explicit
             ? config->dither_method : ham_default_dither;
         cli_status("Mode:   HAM{} (beam: {}, dither: {})",
@@ -3963,158 +3963,40 @@ int main(int argc, char* argv[]) {
                          copper_result->changes_per_line,
                          copper_result->max_moves_per_line);
 
-            // Re-dither each scanline against its 64-color EHB palette
+            // Re-dither each scanline against its 64-color EHB palette.
+            // Driver owns ED scaffolding (kernel, serpentine, structure
+            // bias, Riemersma queue, ostromoukhov scaling, ordered
+            // offsets); picker resolves the per-row EHB palette and
+            // dispatches to the yliluoma family or nearest-pair pick.
             auto w = image->width();
             auto h = image->height();
             std::vector<std::uint8_t> all_indices(w * h);
-            float total_error = 0.0f;
 
-            bool use_ordered = dither::is_ordered(dith.method) &&
-                               dith.method != dither::Method::none;
-            bool is_yli = dither::is_yliluoma(dith.method);
-            // Empty-kernel methods (yliluoma family, gilbert) must NOT
-            // take the diffusion path — same fix as copper.cpp / scap.cpp.
-            bool use_diffusion = !use_ordered && !is_yli &&
-                                 dith.method != dither::Method::none &&
-                                 !dither::error_diffusion_kernel(dith.method).empty();
-            std::vector<color_space::OKLab> err_buf;
-            if (use_diffusion) err_buf.resize(w * h);
-
-            // Structure-aware bias + Riemersma queue, mirroring the
-            // copper.cpp / scap.cpp / ham.cpp integration.
-            auto bias_map = use_diffusion
-                ? dither::compute_structure_bias(*image, dith.method)
-                : std::vector<float>{};
-            bool needs_riem = use_diffusion &&
-                dither::needs_riemersma_queue(dith.method);
-            constexpr std::size_t RIEM_QSIZE = 16;
-            std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
-            std::array<float, RIEM_QSIZE> riem_weights{};
-            std::size_t riem_head = 0;
-            if (needs_riem) {
-                const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
-                float w_acc = 1.0f;
-                for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
-                    riem_weights[i] = w_acc;
-                    w_acc *= ratio;
-                }
-                float total = 0.0f;
-                for (float wt : riem_weights) total += wt;
-                for (float& wt : riem_weights) wt /= total;
-            }
-
+            std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
             for (std::size_t y = 0; y < h; ++y) {
                 auto& base32 = copper_result->scanline_palettes[y];
                 Palette bp;
                 bp.colors.assign(base32.begin(), base32.end());
                 auto ehb64 = palette::make_ehb_palette(bp.colors);
-
-                auto row = image->row(y);
-                std::vector<color_space::OKLab> pal_lab(ehb64.colors.size());
+                pal_lab_per_row[y].resize(ehb64.colors.size());
                 for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                    pal_lab[i] = color_space::linear_to_oklab(ehb64.colors[i]);
-
-                for (std::size_t x = 0; x < w; ++x) {
-                    auto pixel_lab = color_space::linear_to_oklab(row[x]);
-                    auto ec = dith.error_clamp;
-                    if (needs_riem) {
-                        color_space::OKLab carry{};
-                        for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                            std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                            carry.L += riem_queue[age].L * riem_weights[k];
-                            carry.a += riem_queue[age].a * riem_weights[k];
-                            carry.b += riem_queue[age].b * riem_weights[k];
-                        }
-                        pixel_lab.L += std::clamp(carry.L, -ec, ec);
-                        pixel_lab.a += std::clamp(carry.a, -ec, ec);
-                        pixel_lab.b += std::clamp(carry.b, -ec, ec);
-                    } else if (!err_buf.empty()) {
-                        auto& e = err_buf[y * w + x];
-                        pixel_lab.L += std::clamp(e.L, -ec, ec);
-                        pixel_lab.a += std::clamp(e.a, -ec, ec);
-                        pixel_lab.b += std::clamp(e.b, -ec, ec);
-                    }
-                    if (!bias_map.empty()) pixel_lab.L += bias_map[y * w + x];
-                    if (use_ordered) {
-                        float thr = dither::ordered_threshold(dith.method, x, y);
-                        pixel_lab.L += thr * dith.strength * 0.15f;
-                        pixel_lab.a += thr * dith.strength * 0.03f;
-                        pixel_lab.b += thr * dith.strength * 0.03f;
-                    }
-                    std::uint8_t best_k = 0;
-                    float best_d = 0.0f;
-                    if (is_yli) {
-                        // Palette-aware methods (yliluoma family) — pick
-                        // index per-pixel against the row's EHB palette.
-                        switch (dith.method) {
-                        case dither::Method::opt_checker:
-                            best_k = dither::pick_opt_checker_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::opt_line:
-                            best_k = dither::pick_opt_line_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::opt_line_checker:
-                            best_k = dither::pick_opt_line_checker_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::knoll:
-                            best_k = dither::pick_knoll_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::tri_tone:
-                            best_k = dither::pick_tri_tone_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::yliluoma1:
-                            best_k = dither::pick_yliluoma1_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::yliluoma2:
-                            best_k = dither::pick_yliluoma_index(
-                                pixel_lab, pal_lab, x, y, true, dith.strength); break;
-                        default:  // yliluoma (alg 2 greedy)
-                            best_k = dither::pick_yliluoma_index(
-                                pixel_lab, pal_lab, x, y, false, dith.strength); break;
-                        }
-                        float dL = pixel_lab.L - pal_lab[best_k].L;
-                        float da = pixel_lab.a - pal_lab[best_k].a;
-                        float db = pixel_lab.b - pal_lab[best_k].b;
-                        best_d = dL * dL + da * da + db * db;
-                    } else {
-                        best_d = std::numeric_limits<float>::max();
-                        for (std::size_t k = 0; k < pal_lab.size(); ++k) {
-                            float dL = pixel_lab.L - pal_lab[k].L;
-                            float da = pixel_lab.a - pal_lab[k].a;
-                            float db = pixel_lab.b - pal_lab[k].b;
-                            float d = dL * dL + da * da + db * db;
-                            if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
-                        }
-                    }
-                    all_indices[y * w + x] = best_k;
-                    total_error += best_d;
-                    if (use_diffusion) {
-                        auto& cl = pal_lab[best_k];
-                        color_space::OKLab qe = {
-                            (pixel_lab.L - cl.L) * dith.strength,
-                            (pixel_lab.a - cl.a) * dith.strength,
-                            (pixel_lab.b - cl.b) * dith.strength};
-                        if (needs_riem) {
-                            riem_queue[riem_head] = qe;
-                            riem_head = (riem_head + 1) % RIEM_QSIZE;
-                        } else {
-                            auto kernel = dither::error_diffusion_kernel(dith.method);
-                            for (auto& [kdx, kdy, kw] : kernel) {
-                                auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
-                                auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                                if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                                    ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                                    auto& e = err_buf[static_cast<std::size_t>(ny) * w +
-                                                      static_cast<std::size_t>(nx)];
-                                    e.L += qe.L * kw;
-                                    e.a += qe.a * kw;
-                                    e.b += qe.b * kw;
-                                }
-                            }
-                        }
-                    }
-                }
+                    pal_lab_per_row[y][i] =
+                        color_space::linear_to_oklab(ehb64.colors[i]);
             }
+
+            float total_error = dither::diffuse_raw_buffer(
+                *image, dith,
+                [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+                    auto& pal_lab = pal_lab_per_row[y];
+                    std::size_t k = 0;
+                    color_space::OKLab chosen{};
+                    float thr = dither::pick_palette_index_with_ostro(
+                        dith.method, target, pal_lab, x, y,
+                        dith.strength, /*k_min=*/0, k, chosen);
+                    all_indices[y * w + x] = static_cast<std::uint8_t>(k);
+                    return {chosen, thr};
+                });
 
             if (has_transparency) {
                 for (std::size_t i = 0; i < transparency_mask.size() && i < all_indices.size(); ++i)

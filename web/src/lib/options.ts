@@ -173,13 +173,23 @@ export const DITHER_METHODS: DitherGroup[] = [
   { group: 'None', items: [
     { value: 'none', label: 'None' },
   ]},
+  // Order within "Error Diffusion" reflects the mean PSNR ranking from
+  // a 10-image × 6-mode sweep (lores/ham6/ham8/ehb plus copper variants):
+  // ostromoukhov 37.116 dB > sierra-lite 37.100 > atkinson 37.089 >
+  // jarvis 37.062 > floyd-steinberg 37.039 > stucki 36.767 > gilbert
+  // 35.767 > riemersma 35.081. Top-5 sit within 0.08 dB so the order is
+  // a guideline, not a verdict; ostromoukhov is the global default.
+  // Structure-aware variants sit at the bottom because they intentionally
+  // sacrifice PSNR for perceptual quality. Palette-aware methods
+  // (yliluoma family / knoll / opt-* / tri-tone) follow.
   { group: 'Error Diffusion', items: [
-    { value: 'floyd-steinberg', label: 'Floyd–\nSteinberg' },
-    { value: 'atkinson',        label: 'Atkinson' },
-    { value: 'sierra-lite',     label: 'Sierra Lite' },
-    { value: 'stucki',          label: 'Stucki' },
-    { value: 'jarvis',          label: 'Jarvis' },
     { value: 'ostromoukhov',    label: 'Ostromoukhov' },
+    { value: 'sierra-lite',     label: 'Sierra Lite' },
+    { value: 'atkinson',        label: 'Atkinson' },
+    { value: 'jarvis',          label: 'Jarvis' },
+    { value: 'floyd-steinberg', label: 'Floyd–\nSteinberg' },
+    { value: 'stucki',          label: 'Stucki' },
+    { value: 'gilbert',         label: 'Gilbert' },
     { value: 'riemersma',       label: 'Riemersma' },
     { value: 'opt-checker',     label: 'Optimal\nChecker' },
     { value: 'opt-line',        label: 'Optimal\nLine' },
@@ -410,6 +420,14 @@ export function isDosMode(mode: string): boolean {
 export function isSnesMode(mode: string): boolean {
   return mode.startsWith('snes-')
 }
+// SNES Mode 7 Direct quantises every pixel directly to the RGB443 grid
+// (no palette table). Only the hard-coded FS-style serpentine error
+// diffusion in the encoder is meaningful — every other dither method
+// silently collapses to it. Restrict the gallery + force a fallback
+// when this mode is selected.
+export function isSnesDirectMode(mode: string): boolean {
+  return mode === 'snes-mode7-direct'
+}
 // Modes with non-square hardware pixels that benefit from --native-par
 // (preserve source aspect ratio inside the fixed hardware buffer via
 // letterbox / pillarbox). DOS + SNES both fit; auto-toggled on mode
@@ -442,7 +460,7 @@ const MODE_PAR: Record<string, number> = {
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
 
-const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis', 'ostromoukhov'])
+const ERROR_DIFFUSION = new Set(['ostromoukhov', 'sierra-lite', 'atkinson', 'jarvis', 'floyd-steinberg', 'stucki', 'gilbert', 'riemersma'])
 
 export function isErrorDiffusion(dither: string): boolean {
   return ERROR_DIFFUSION.has(dither)

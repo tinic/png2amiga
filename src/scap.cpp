@@ -302,46 +302,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // strip palette swaps because the residual magnitude isn't
     // perceptually proportional and DPF's tight 8-colour palette has
     // gaps wider than the residuals could absorb.
-    bool ordered = dither::is_ordered(dither_settings.method);
-    bool yli_method = dither::is_yliluoma(dither_settings.method);
-    // Same kernel-empty fix as copper.cpp: methods with no FS-shaped
-    // kernel (yliluoma, gilbert, …) must NOT enter the err_diffuse path
-    // — empty kernel = nothing to scatter, and all dithering is lost.
-    bool err_diffuse =
-        dither_settings.method != dither::Method::none &&
-        dither_settings.strength > 0.0f && !ordered && !yli_method &&
-        !dither::error_diffusion_kernel(dither_settings.method).empty();
-    auto kernel = err_diffuse
-        ? dither::error_diffusion_kernel(dither_settings.method)
-        : std::span<const dither::DiffusionEntry>{};
-    float clamp_v = dither_settings.error_clamp;
-
-    std::vector<color_space::OKLab> err_buf;
-    if (err_diffuse) err_buf.assign(width * height,
-                                    color_space::OKLab{0.0f, 0.0f, 0.0f});
-
-    // Structure-aware bias (Laplacian / contrast / zhoufang) and the
-    // Riemersma decay queue work the same way as in CAP — see copper.cpp.
-    auto bias_map = err_diffuse
-        ? dither::compute_structure_bias(src, dither_settings.method)
-        : std::vector<float>{};
-    bool needs_riem = err_diffuse &&
-        dither::needs_riemersma_queue(dither_settings.method);
-    constexpr std::size_t RIEM_QSIZE = 16;
-    std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
-    std::array<float, RIEM_QSIZE> riem_weights{};
-    std::size_t riem_head = 0;
-    if (needs_riem) {
-        const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
-        float w_acc = 1.0f;
-        for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
-            riem_weights[i] = w_acc;
-            w_acc *= ratio;
-        }
-        float total = 0.0f;
-        for (float wt : riem_weights) total += wt;
-        for (float& wt : riem_weights) wt /= total;
-    }
+    // ED scaffolding (kernel, error buf, structure bias, Riemersma) all
+    // live inside dither::diffuse_raw_buffer (the post-pass-1 driver
+    // call below). The CAP planner only needs to know whether dithering
+    // is enabled at all (yliluoma family + ordered + ED kernel) so we
+    // keep the policy flags here.
 
     constexpr int kVStart = 44;
     constexpr std::uint8_t kFillerReg = 31;       // COLOR31 — unread in OCS DPF 3+3
@@ -355,6 +320,16 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     std::size_t num_strips = table.slots.size() + 1;
     std::vector<std::array<Color3f, kBaseColors>> strip_palettes(num_strips);
     std::vector<std::array<color_space::OKLab, kBaseColors>> strip_pal_lab(num_strips);
+
+    // Captured per-row strip palettes for the post-loop driver call
+    // (pass 2). Pass 1 fills strip_palettes[s] for the current row and
+    // we snapshot into strip_palettes_per_row[y] before moving on.
+    std::vector<std::vector<std::array<Color3f, kBaseColors>>>
+        strip_palettes_per_row(height,
+            std::vector<std::array<Color3f, kBaseColors>>(num_strips));
+    std::vector<std::vector<std::array<color_space::OKLab, kBaseColors>>>
+        strip_pal_lab_per_row(height,
+            std::vector<std::array<color_space::OKLab, kBaseColors>>(num_strips));
 
     // slots[s].pixel_x is the LEFT edge of strip s+1 (i.e. strip s+1 covers
     // pixels [slots[s].pixel_x .. slots[s+1].pixel_x), and strip s+1 uses
@@ -388,9 +363,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             for (std::size_t i = 0; i < indices.size(); ++i)
                 base_index[i] = indices[i];
             for (auto& v : line_moves) v.clear();
-            if (!err_buf.empty())
-                std::fill(err_buf.begin(), err_buf.end(),
-                          color_space::OKLab{0.0f, 0.0f, 0.0f});
+            // err_buf is owned by dither::diffuse_raw_buffer (allocated
+            // fresh each pass-2 call), so no manual reset is needed.
             total_moves = 0;
             total_error = 0.0;
         }
@@ -702,133 +676,43 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
-        // ---- Pass 2: render via OKLab error diffusion against the
-        // per-strip palette. Each pixel's nearest-colour lookup uses
-        // ITS strip's palette so colour rendition tracks MOVE
-        // evolution; the residual is computed in OKLab and scattered
-        // by the user's kernel into a whole-image error buffer.
-        for (std::size_t x = 0; x < width; ++x) {
-            std::size_t s = static_cast<std::size_t>(x_strip[x]);
-            auto& pal = strip_palettes[s];
-            auto& pl_lab = strip_pal_lab[s];
+        // Snapshot pass-1 strip state for this row; pass-2 dither runs
+        // over the whole image once, after the per-row loop.
+        strip_palettes_per_row[y] = strip_palettes;
+        strip_pal_lab_per_row[y] = strip_pal_lab;
 
-            auto pixel_lab = color_space::linear_to_oklab(src[x, y]);
-            if (err_diffuse && !needs_riem) {
-                auto& e = err_buf[y * width + x];
-                pixel_lab.L += std::clamp(e.L, -clamp_v, clamp_v);
-                pixel_lab.a += std::clamp(e.a, -clamp_v, clamp_v);
-                pixel_lab.b += std::clamp(e.b, -clamp_v, clamp_v);
-            }
-            if (needs_riem) {
-                color_space::OKLab carry{};
-                for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                    std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                    carry.L += riem_queue[age].L * riem_weights[k];
-                    carry.a += riem_queue[age].a * riem_weights[k];
-                    carry.b += riem_queue[age].b * riem_weights[k];
-                }
-                pixel_lab.L += std::clamp(carry.L, -clamp_v, clamp_v);
-                pixel_lab.a += std::clamp(carry.a, -clamp_v, clamp_v);
-                pixel_lab.b += std::clamp(carry.b, -clamp_v, clamp_v);
-            }
-            if (!bias_map.empty()) pixel_lab.L += bias_map[y * width + x];
-            if (ordered &&
-                dither_settings.method != dither::Method::none &&
-                dither_settings.strength > 0.0f) {
-                float th = dither::ordered_threshold(
-                    dither_settings.method, x, y);
-                pixel_lab.L += th * dither_settings.strength * 0.15f;
-                pixel_lab.a += th * dither_settings.strength * 0.03f;
-                pixel_lab.b += th * dither_settings.strength * 0.03f;
-            }
-
-            std::size_t best_k = k_min;
-            if (yli_method) {
-                // Per-pixel mixing-plan against this strip's palette.
-                std::span<const color_space::OKLab> sub{
-                    pl_lab.data() + k_min, kBaseColors - k_min};
-                bool mode2 = (dither_settings.method == dither::Method::yliluoma2);
-                bool checker = (dither_settings.method == dither::Method::opt_checker);
-                bool knoll = (dither_settings.method == dither::Method::knoll);
-                bool tritone = (dither_settings.method == dither::Method::tri_tone);
-                bool yli1 = (dither_settings.method == dither::Method::yliluoma1);
-                bool optline = (dither_settings.method == dither::Method::opt_line);
-                bool optlchk = (dither_settings.method == dither::Method::opt_line_checker);
-                std::uint8_t rel;
-                if (checker) {
-                    rel = dither::pick_opt_checker_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (knoll) {
-                    rel = dither::pick_knoll_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (tritone) {
-                    rel = dither::pick_tri_tone_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (yli1) {
-                    rel = dither::pick_yliluoma1_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (optline) {
-                    rel = dither::pick_opt_line_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (optlchk) {
-                    rel = dither::pick_opt_line_checker_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else {
-                    rel = dither::pick_yliluoma_index(
-                        pixel_lab, sub, x, y, mode2, dither_settings.strength);
-                }
-                best_k = k_min + static_cast<std::size_t>(rel);
-            } else {
-                float best_d = std::numeric_limits<float>::max();
-                for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                    float dL = pixel_lab.L - pl_lab[k].L;
-                    float da = pixel_lab.a - pl_lab[k].a;
-                    float db = pixel_lab.b - pl_lab[k].b;
-                    float d = dL * dL + da * da + db * db;
-                    if (d < best_d) { best_d = d; best_k = k; }
-                }
-            }
-            indices[y * width + x] = static_cast<std::uint8_t>(best_k);
-            preview[x, y] = pal[best_k];
-
-            if (err_diffuse) {
-                auto& cl = pl_lab[best_k];
-                color_space::OKLab qe{
-                    (pixel_lab.L - cl.L) * dither_settings.strength,
-                    (pixel_lab.a - cl.a) * dither_settings.strength,
-                    (pixel_lab.b - cl.b) * dither_settings.strength,
-                };
-                if (needs_riem) {
-                    riem_queue[riem_head] = qe;
-                    riem_head = (riem_head + 1) % RIEM_QSIZE;
-                } else {
-                    for (auto& [kdx, kdy, kw] : kernel) {
-                        auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
-                        auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                        if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
-                            ny >= 0 && static_cast<std::size_t>(ny) < height) {
-                            auto& e = err_buf[
-                                static_cast<std::size_t>(ny) * width +
-                                static_cast<std::size_t>(nx)];
-                            e.L += qe.L * kw;
-                            e.a += qe.a * kw;
-                            e.b += qe.b * kw;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (std::size_t x = 0; x < width; ++x) {
-            auto& a = img_lab[y * width + x];
-            auto pl = color_space::linear_to_oklab(preview[x, y]);
-            float dL = a.L - pl.L, da = a.a - pl.a, db = a.b - pl.b;
-            total_error += static_cast<double>(dL * dL + da * da + db * db);
-        }
         if (height > 0 && (y & 0xF) == 0xF) {
             report_pass(pass, static_cast<float>(y + 1) /
                               static_cast<float>(height));
         }
+    }
+
+    // ---- Pass 2: whole-image dither against per-row, per-strip
+    // palettes. Driver owns ED scaffolding (kernel, serpentine, bias
+    // map, Riemersma queue, ostromoukhov scaling, ordered offsets);
+    // picker resolves x_strip[x] → row's strip palette.
+    total_error = 0.0;
+    {
+        float te = dither::diffuse_raw_buffer(
+            src, dither_settings,
+            [&](const color_space::OKLab& target,
+                std::size_t x, std::size_t y) -> dither::PickResult {
+                auto s = static_cast<std::size_t>(x_strip[x]);
+                auto& pal = strip_palettes_per_row[y][s];
+                auto& pl_lab = strip_pal_lab_per_row[y][s];
+                std::span<const color_space::OKLab> pl_span(
+                    pl_lab.data(), kBaseColors);
+
+                std::size_t k = 0;
+                color_space::OKLab chosen{};
+                float thr = dither::pick_palette_index_with_ostro(
+                    dither_settings.method, target, pl_span, x, y,
+                    dither_settings.strength, k_min, k, chosen);
+                indices[y * width + x] = static_cast<std::uint8_t>(k);
+                preview[x, y] = pal[k];
+                return {chosen, thr};
+            });
+        total_error = static_cast<double>(te);
     }
     report_pass(pass + 1, 0.0f);
     }  // kPasses
@@ -940,18 +824,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     return res;
 }
 
-// ---------------------------------------------------------------------------
-namespace {
-
-// Half-brite a base linear-RGB colour: sRGB-halve then back to linear,
-// matching make_ehb_palette() and the Amiga DAC.
-Color3f half_brite(const Color3f& c) {
-    auto srgb = color_space::linear_to_srgb(c).clamped();
-    Color3f half_srgb{srgb.r * 0.5f, srgb.g * 0.5f, srgb.b * 0.5f};
-    return color_space::srgb_to_linear(half_srgb);
-}
-
-} // namespace
+// half_brite() lives in palette.hpp; pull it into this TU's lookup.
+using palette::half_brite;
 
 // EHB SCAP slot-tuning debug bundle. All bitplane pixels use a
 // single shared register (index 2). Frame-init palette puts that
@@ -1226,47 +1100,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 
     std::size_t k_min = reserve_color0 ? 1u : 0u;
 
-    bool ordered = dither::is_ordered(dither_settings.method);
-    bool yli_method = dither::is_yliluoma(dither_settings.method);
-    bool err_diffuse =
-        dither_settings.method != dither::Method::none &&
-        dither_settings.strength > 0.0f && !ordered && !yli_method &&
-        !dither::error_diffusion_kernel(dither_settings.method).empty();
-    auto kernel = err_diffuse
-        ? dither::error_diffusion_kernel(dither_settings.method)
-        : std::span<const dither::DiffusionEntry>{};
-    float clamp_v = dither_settings.error_clamp;
-
-    // Whole-image OKLab error buffer, matching the EHB+CAP path in
-    // main.cpp. Diffusing the residual in the perceptual space (vs
-    // linear RGB) keeps error magnitudes comparable across strip
-    // palette swaps and avoids the runaway-mush we saw in the DPF
-    // F-S/Stucki/Jarvis runs. Strength is applied at scatter time so
-    // --dither-strength actually attenuates the residual.
-    std::vector<color_space::OKLab> err_buf;
-    if (err_diffuse) err_buf.assign(width * height,
-                                    color_space::OKLab{0.0f, 0.0f, 0.0f});
-
-    auto bias_map = err_diffuse
-        ? dither::compute_structure_bias(src, dither_settings.method)
-        : std::vector<float>{};
-    bool needs_riem = err_diffuse &&
-        dither::needs_riemersma_queue(dither_settings.method);
-    constexpr std::size_t RIEM_QSIZE = 16;
-    std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
-    std::array<float, RIEM_QSIZE> riem_weights{};
-    std::size_t riem_head = 0;
-    if (needs_riem) {
-        const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
-        float w_acc = 1.0f;
-        for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
-            riem_weights[i] = w_acc;
-            w_acc *= ratio;
-        }
-        float total = 0.0f;
-        for (float wt : riem_weights) total += wt;
-        for (float& wt : riem_weights) wt /= total;
-    }
+    // ED scaffolding (kernel, error buf, structure bias, Riemersma queue,
+    // ostromoukhov scaling, ordered offsets) lives inside
+    // dither::diffuse_raw_buffer (the post-pass-1 driver call below).
 
     constexpr int kVStart = 44;
     double total_error = 0.0;
@@ -1277,6 +1113,18 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         std::vector<Color3f>(kEffective));
     std::vector<std::vector<color_space::OKLab>> strip_eff_lab(num_strips,
         std::vector<color_space::OKLab>(kEffective));
+
+    // Per-row snapshot for the post-loop driver call (pass 2). Each row
+    // overwrites strip_eff[s]/strip_eff_lab[s] during pass-1 planning;
+    // we copy the snapshot into the [y] slot before moving on.
+    std::vector<std::vector<std::vector<Color3f>>>
+        strip_eff_per_row(height,
+            std::vector<std::vector<Color3f>>(num_strips,
+                std::vector<Color3f>(kEffective)));
+    std::vector<std::vector<std::vector<color_space::OKLab>>>
+        strip_eff_lab_per_row(height,
+            std::vector<std::vector<color_space::OKLab>>(num_strips,
+                std::vector<color_space::OKLab>(kEffective)));
 
     auto strip_for_x = [&](std::size_t x) -> std::size_t {
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
@@ -1324,9 +1172,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             for (std::size_t i = 0; i < indices.size(); ++i)
                 base_index[i] = indices[i];
             for (auto& v : line_moves) v.clear();
-            if (!err_buf.empty())
-                std::fill(err_buf.begin(), err_buf.end(),
-                          color_space::OKLab{0.0f, 0.0f, 0.0f});
+            // err_buf is owned by dither::diffuse_raw_buffer (allocated
+            // fresh each pass-2 call), so no manual reset is needed.
             total_moves = 0;
             total_error = 0.0;
         }
@@ -1757,132 +1604,44 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
-        // Stage-2 render across all 64 effective entries per pixel,
-        // with the EHB+CAP-style OKLab error-diffusion / ordered-bias
-        // path (see main.cpp's `if (config->mode == ehb && copper)`).
-        // Error buffer is whole-image OKLab; clamp on read; residual
-        // gets the strength multiplier at scatter.
-        for (std::size_t x = 0; x < width; ++x) {
-            std::size_t s = static_cast<std::size_t>(x_strip[x]);
-            auto& eff_pal = strip_eff[s];
-            auto& eff_lab = strip_eff_lab[s];
+        // Snapshot pass-1 strip state for this row; pass-2 dither runs
+        // over the whole image once, after the per-row loop.
+        strip_eff_per_row[y] = strip_eff;
+        strip_eff_lab_per_row[y] = strip_eff_lab;
 
-            auto pixel_lab = color_space::linear_to_oklab(src[x, y]);
-            if (err_diffuse && !needs_riem) {
-                auto& e = err_buf[y * width + x];
-                pixel_lab.L += std::clamp(e.L, -clamp_v, clamp_v);
-                pixel_lab.a += std::clamp(e.a, -clamp_v, clamp_v);
-                pixel_lab.b += std::clamp(e.b, -clamp_v, clamp_v);
-            }
-            if (needs_riem) {
-                color_space::OKLab carry{};
-                for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                    std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                    carry.L += riem_queue[age].L * riem_weights[k];
-                    carry.a += riem_queue[age].a * riem_weights[k];
-                    carry.b += riem_queue[age].b * riem_weights[k];
-                }
-                pixel_lab.L += std::clamp(carry.L, -clamp_v, clamp_v);
-                pixel_lab.a += std::clamp(carry.a, -clamp_v, clamp_v);
-                pixel_lab.b += std::clamp(carry.b, -clamp_v, clamp_v);
-            }
-            if (!bias_map.empty()) pixel_lab.L += bias_map[y * width + x];
-            if (ordered &&
-                dither_settings.method != dither::Method::none &&
-                dither_settings.strength > 0.0f) {
-                float th = dither::ordered_threshold(
-                    dither_settings.method, x, y);
-                pixel_lab.L += th * dither_settings.strength * 0.15f;
-                pixel_lab.a += th * dither_settings.strength * 0.03f;
-                pixel_lab.b += th * dither_settings.strength * 0.03f;
-            }
-
-            std::size_t best_k = k_min;
-            if (yli_method) {
-                std::span<const color_space::OKLab> sub{
-                    eff_lab.data() + k_min, kEffective - k_min};
-                bool mode2 = (dither_settings.method == dither::Method::yliluoma2);
-                bool checker = (dither_settings.method == dither::Method::opt_checker);
-                bool knoll = (dither_settings.method == dither::Method::knoll);
-                bool tritone = (dither_settings.method == dither::Method::tri_tone);
-                bool yli1 = (dither_settings.method == dither::Method::yliluoma1);
-                bool optline = (dither_settings.method == dither::Method::opt_line);
-                bool optlchk = (dither_settings.method == dither::Method::opt_line_checker);
-                std::uint8_t rel;
-                if (checker) {
-                    rel = dither::pick_opt_checker_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (knoll) {
-                    rel = dither::pick_knoll_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (tritone) {
-                    rel = dither::pick_tri_tone_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (yli1) {
-                    rel = dither::pick_yliluoma1_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (optline) {
-                    rel = dither::pick_opt_line_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else if (optlchk) {
-                    rel = dither::pick_opt_line_checker_index(
-                        pixel_lab, sub, x, y, dither_settings.strength);
-                } else {
-                    rel = dither::pick_yliluoma_index(
-                        pixel_lab, sub, x, y, mode2, dither_settings.strength);
-                }
-                best_k = k_min + static_cast<std::size_t>(rel);
-            } else {
-                float best_d = std::numeric_limits<float>::max();
-                for (std::size_t k = k_min; k < kEffective; ++k) {
-                    float dL = pixel_lab.L - eff_lab[k].L;
-                    float da = pixel_lab.a - eff_lab[k].a;
-                    float db = pixel_lab.b - eff_lab[k].b;
-                    float d = dL * dL + da * da + db * db;
-                    if (d < best_d) { best_d = d; best_k = k; }
-                }
-            }
-            indices[y * width + x] = static_cast<std::uint8_t>(best_k);
-            preview[x, y] = eff_pal[best_k];
-
-            if (err_diffuse) {
-                auto& cl = eff_lab[best_k];
-                color_space::OKLab qe{
-                    (pixel_lab.L - cl.L) * dither_settings.strength,
-                    (pixel_lab.a - cl.a) * dither_settings.strength,
-                    (pixel_lab.b - cl.b) * dither_settings.strength,
-                };
-                if (needs_riem) {
-                    riem_queue[riem_head] = qe;
-                    riem_head = (riem_head + 1) % RIEM_QSIZE;
-                } else {
-                    for (auto& [kdx, kdy, kw] : kernel) {
-                        auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
-                        auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                        if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
-                            ny >= 0 && static_cast<std::size_t>(ny) < height) {
-                            auto& e = err_buf[
-                                static_cast<std::size_t>(ny) * width +
-                                static_cast<std::size_t>(nx)];
-                            e.L += qe.L * kw;
-                            e.a += qe.a * kw;
-                            e.b += qe.b * kw;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (std::size_t x = 0; x < width; ++x) {
-            auto& a = img_lab[y * width + x];
-            auto pl = color_space::linear_to_oklab(preview[x, y]);
-            float dL = a.L - pl.L, da = a.a - pl.a, db = a.b - pl.b;
-            total_error += static_cast<double>(dL * dL + da * da + db * db);
-        }
         if (height > 0 && (y & 0xF) == 0xF) {
             report_pass(pass, static_cast<float>(y + 1) /
                               static_cast<float>(height));
         }
+    }
+
+    // Stage-2 render across all 64 effective entries per pixel against
+    // the per-row, per-strip palette. Driver owns ED scaffolding
+    // (kernel, serpentine, structure bias, Riemersma, ostromoukhov,
+    // ordered offsets); picker resolves x_strip[x] → row's strip
+    // palette, then yliluoma family or nearest pair pick.
+    total_error = 0.0;
+    {
+        float te = dither::diffuse_raw_buffer(
+            src, dither_settings,
+            [&](const color_space::OKLab& target,
+                std::size_t x, std::size_t y) -> dither::PickResult {
+                auto s = static_cast<std::size_t>(x_strip[x]);
+                auto& eff_pal = strip_eff_per_row[y][s];
+                auto& eff_lab = strip_eff_lab_per_row[y][s];
+                std::span<const color_space::OKLab> eff_span(
+                    eff_lab.data(), kEffective);
+
+                std::size_t k = 0;
+                color_space::OKLab chosen{};
+                float thr = dither::pick_palette_index_with_ostro(
+                    dither_settings.method, target, eff_span, x, y,
+                    dither_settings.strength, k_min, k, chosen);
+                indices[y * width + x] = static_cast<std::uint8_t>(k);
+                preview[x, y] = eff_pal[k];
+                return {chosen, thr};
+            });
+        total_error = static_cast<double>(te);
     }
     report_pass(pass + 1, 0.0f);
     }  // kPasses

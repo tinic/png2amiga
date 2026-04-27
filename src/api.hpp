@@ -109,11 +109,15 @@ struct Options {
     int height = 0;                     // override output height (0 = mode default)
 
     // Dithering
-    std::string dither = "floyd-steinberg"; // none, bayer2x2, bayer4x4, bayer8x8,
-                                            // checker, h2x4, clustered-dot,
-                                            // line2, line-checker, line4, line8,
-                                            // floyd-steinberg, atkinson, sierra-lite,
-                                            // stucki, jarvis
+    std::string dither = "ostromoukhov";    // Top of the ED leaderboard
+                                            // (mean PSNR across 10 images × 6
+                                            // modes). Other ED options:
+                                            // sierra-lite, atkinson, jarvis,
+                                            // floyd-steinberg, stucki, gilbert,
+                                            // riemersma. Plus ordered methods
+                                            // (bayer*, checker, line*, etc.)
+                                            // and palette-aware (yliluoma*,
+                                            // knoll, opt-*, tri-tone).
     float dither_strength = 1.0f;       // 0.0 = no dither, 1.0 = full
     float error_clamp = 0.12f;          // max error per OKLab channel
 

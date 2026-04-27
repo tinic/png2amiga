@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -172,26 +172,23 @@ let exportCount = 0
 // HAM6 supports F-S/Atkinson/etc. but Ostromoukhov falls back to F-S
 // in HAM's inline pre-dither (variable coefficients can't be applied
 // to the chipset-precision quantization), so hide it specifically.
+// Set of palette-aware methods that don't fit HAM's encoder-bit
+// pipeline — kept in one set so the filter expression stays simple
+// (and below the eslint complexity limit).
+const YLIL_FAMILY = new Set([
+  'yliluoma', 'yliluoma2', 'opt-checker', 'knoll', 'tri-tone',
+  'yliluoma1', 'opt-line', 'opt-line-checker',
+])
+// SNES Mode 7 Direct quantises every pixel directly to the RGB443 grid
+// — there is no palette table, so the yliluoma family (palette-aware
+// pattern dithers) has nothing to mix and is hidden. All other ordered
+// + ED methods route through dither::diffuse_raw_buffer.
+
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
-  // HAM: Ostromoukhov's variable-coefficient kernel degrades to plain
-  // F-S in the pre-dither pass (both HAM6 and HAM8), and the C64-lineage
-  // non-square patterns target C64 multicolor pixel ratios, not Amiga
-  // square pixels — both are hidden in HAM modes.
   const hide_ostro = ht !== null
   const hide_nonsquare = ht !== null
-  // Yliluoma is palette-aware (computes mixing plans against a fixed
-  // palette). HAM doesn't have a fixed palette — pixels are reached via
-  // base-color SETs and per-channel MODIFYs — so the plan can't span the
-  // achievable HAM colour space. Hide in HAM modes to avoid confusion.
-  const hide_yliluoma = ht !== null
-  // Set of palette-aware methods that don't fit HAM's encoder-bit
-  // pipeline — kept in one set so the filter expression stays simple
-  // (and below the eslint complexity limit).
-  const YLIL_FAMILY = new Set([
-    'yliluoma', 'yliluoma2', 'opt-checker', 'knoll', 'tri-tone',
-    'yliluoma1', 'opt-line', 'opt-line-checker',
-  ])
+  const hide_yliluoma = ht !== null || isSnesDirectMode(options.mode)
   return DITHER_METHODS
     .map(g => ({
       label: g.group,
@@ -388,7 +385,16 @@ const HAM_INCOMPATIBLE_DITHERS = new Set([
 
 function maybeFallbackHamDither(mode: string): void {
   if (hamType(mode) !== null && HAM_INCOMPATIBLE_DITHERS.has(options.dither)) {
-    options.dither = 'floyd-steinberg'
+    options.dither = 'ostromoukhov'
+  }
+}
+
+function maybeFallbackSnesDirectDither(mode: string): void {
+  // Mode 7 Direct has no palette table, so the yliluoma family (palette-
+  // aware pattern dithers) is meaningless. Snap any yliluoma selection
+  // to F-S; everything else routes through dither::diffuse_raw_buffer.
+  if (isSnesDirectMode(mode) && YLIL_FAMILY.has(options.dither)) {
+    options.dither = 'ostromoukhov'
   }
 }
 
@@ -396,6 +402,7 @@ function maybeFallbackHamDither(mode: string): void {
 watch(() => options.mode, (mode, oldMode) => {
   clampDepthForMode(mode)
   maybeFallbackHamDither(mode)
+  maybeFallbackSnesDirectDither(mode)
   syncNativeParToMode(mode, oldMode)
   // DPF and SCAP both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
@@ -1536,6 +1543,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 .p-select-overlay .p-select-option,
 .p-select-overlay .p-select-option-group {
   font-size: 0.75rem;
+}
+/* PrimeVue caps the list at ~200px which clipped the 8-entry chipset
+   dropdown (Amiga OCS / AGA / Atari STF / STE / VGA / EGA / CGA / SNES).
+   Bump the cap so the full list shows without scrolling. */
+.p-select-overlay .p-select-list,
+.p-select-overlay .p-select-list-container {
+  max-height: 360px !important;
 }
 .p-select-overlay .p-select-option-group {
   font-weight: 700;

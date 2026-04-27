@@ -72,37 +72,8 @@ constexpr OKLab oklab_clamp(OKLab e, float max_mag) noexcept {
 // Error diffusion kernels (same as dither.cpp)
 // ===========================================================================
 
-// Error-diffusion kernels are defined publicly in dither.cpp/dither.hpp;
-// use dither::error_diffusion_kernel(method) directly.
-
-// Is the dither method an error-diffusion method (vs ordered or none)?
-// Ostromoukhov is included: its variable-coefficient logic doesn't apply
-// to the HAM pre-dither pass (which quantizes against a fixed grid, not
-// a sparse palette), but dither::error_diffusion_kernel() returns the
-// F-S base kernel for it, which gives sensible pre-dither behavior
-// rather than silently falling back to no-dither.
-bool is_error_diffusion(dither::Method m) {
-    switch (m) {
-    case dither::Method::floyd_steinberg:
-    case dither::Method::atkinson:
-    case dither::Method::sierra_lite:
-    case dither::Method::stucki:
-    case dither::Method::jarvis:
-    case dither::Method::ostromoukhov:
-        return true;
-    // Structure-aware FS variants and Riemersma all build on F-S kernel —
-    // routed through HAM's standard error-diffusion path so they actually
-    // dither instead of silently no-op'ing. The structure bias / queue
-    // logic is added on top in the diffusion loop below.
-    case dither::Method::structure_fs:
-    case dither::Method::contrast_fs:
-    case dither::Method::zhoufang:
-    case dither::Method::riemersma:
-        return true;
-    default:
-        return false;
-    }
-}
+// Error-diffusion kernels live in dither.cpp; HAM uses
+// dither::uses_error_diffusion to gate its pre-dither pass.
 
 // ===========================================================================
 // HAM encoding core (generic for any data_bits)
@@ -895,8 +866,7 @@ Result<HamResult> encode_ham_generic(
     float total_error = 0.0f;
 
     // Check if dithering is requested
-    bool use_error_diffusion = (opts.dither_method != dither::Method::none) &&
-                               is_error_diffusion(opts.dither_method);
+    bool use_error_diffusion = dither::uses_error_diffusion(opts.dither_method);
     bool use_ordered_dither = (opts.dither_method != dither::Method::none) &&
                               dither::is_ordered(opts.dither_method) &&
                               opts.dither_method != dither::Method::none;
@@ -965,71 +935,27 @@ Result<HamResult> encode_ham_generic(
         // quantization step, not the HAM encoding itself. Trying to diffuse
         // during HAM encoding causes horizontal banding because HAM's
         // sequential pixel dependency conflicts with error propagation.
-        auto kernel = dither::error_diffusion_kernel(opts.dither_method);
-        auto strength = opts.dither_strength;
-        auto error_clamp_val = opts.error_clamp;
-
-        // Structure-aware bias and Riemersma queue, same as copper.cpp /
-        // scap.cpp: compute the 2D bias map once over the full image so
-        // pre-quantization tone shaping survives HAM's pre-dither pass.
-        auto bias_map = dither::compute_structure_bias(image, opts.dither_method);
-        bool needs_riem = dither::needs_riemersma_queue(opts.dither_method);
-        constexpr std::size_t RIEM_QSIZE = 16;
-        std::array<OKLab, RIEM_QSIZE> riem_queue{};
-        std::array<float, RIEM_QSIZE> riem_weights{};
-        std::size_t riem_head = 0;
-        if (needs_riem) {
-            const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
-            float w_acc = 1.0f;
-            for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
-                riem_weights[i] = w_acc;
-                w_acc *= ratio;
-            }
-            float total = 0.0f;
-            for (float wt : riem_weights) total += wt;
-            for (float& wt : riem_weights) wt /= total;
-        }
-
-        // Pre-dither: quantize each pixel to chipset precision with error diffusion
         Image dithered_image(w, h);
-        std::vector<OKLab> error_buf(w * h, OKLab{0, 0, 0});
 
-        for (std::size_t y = 0; y < h; ++y) {
-            bool reverse = (y % 2 == 1);  // serpentine
-            auto row = image.row(y);
-            for (std::size_t step = 0; step < w; ++step) {
-                std::size_t x = reverse ? (w - 1 - step) : step;
-                auto buf_idx = y * w + x;
-
-                // Add accumulated error to original color
-                auto target_lab = color_space::linear_to_oklab(row[x]);
-                OKLab carry;
-                if (needs_riem) {
-                    carry = OKLab{0, 0, 0};
-                    for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                        std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                        carry.L += riem_queue[age].L * riem_weights[k];
-                        carry.a += riem_queue[age].a * riem_weights[k];
-                        carry.b += riem_queue[age].b * riem_weights[k];
-                    }
-                } else {
-                    carry = error_buf[buf_idx];
-                }
-                auto clamped_err = oklab_clamp(carry, error_clamp_val);
-                auto adjusted_lab = oklab_add(target_lab, clamped_err);
-                if (!bias_map.empty()) adjusted_lab.L += bias_map[buf_idx];
-                auto adjusted = color_space::oklab_to_linear(adjusted_lab);
+        dither::Settings d_settings{
+            .method = opts.dither_method,
+            .strength = opts.dither_strength,
+            .error_clamp = opts.error_clamp,
+            .serpentine = true,
+        };
+        dither::diffuse_raw_buffer(
+            image, d_settings,
+            [&](const OKLab& target,
+                std::size_t x, std::size_t y) -> dither::PickResult {
+                auto adjusted = color_space::oklab_to_linear(target);
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
 
-                // Quantize to match HAM MODIFY precision. HAM uses
-                // `data_bits` per channel for MODIFY ops (4 for HAM6,
-                // 6 for HAM8). Quantizing to exactly that grid gives
-                // the ditherer something meaningful to diffuse — the
-                // previous OCS-only quantization was a no-op on AGA,
-                // which is why HAM8 was showing banding regardless of
-                // --dither.
+                // Quantize to HAM MODIFY precision (4 bits for HAM6,
+                // 6 for HAM8). Snapping to the actual MODIFY grid is
+                // what gives the ditherer something to diffuse — the
+                // earlier OCS-only quantization no-op'd on AGA.
                 auto srgb_adj = linear_to_srgb8(adjusted);
                 srgb_adj.r = expand_to_8bit(
                     reduce_to_bits(srgb_adj.r, data_bits), data_bits);
@@ -1039,35 +965,8 @@ Result<HamResult> encode_ham_generic(
                     reduce_to_bits(srgb_adj.b, data_bits), data_bits);
                 auto quantized = srgb8_to_linear(srgb_adj);
                 dithered_image[x, y] = quantized;
-
-                // Compute and distribute error
-                auto actual_lab = color_space::linear_to_oklab(quantized);
-                auto quant_error = oklab_scale(
-                    oklab_sub(adjusted_lab, actual_lab), strength);
-
-                if (needs_riem) {
-                    // Riemersma owns its propagation through the queue —
-                    // mixing with the FS kernel double-counts.
-                    riem_queue[riem_head] = quant_error;
-                    riem_head = (riem_head + 1) % RIEM_QSIZE;
-                } else {
-                    for (auto& entry : kernel) {
-                        auto nx = static_cast<std::ptrdiff_t>(x) +
-                                  (reverse ? -entry.dx : entry.dx);
-                        auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
-                        if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                            ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                            auto nidx = static_cast<std::size_t>(ny) * w +
-                                        static_cast<std::size_t>(nx);
-                            error_buf[nidx] = oklab_clamp(
-                                oklab_add(error_buf[nidx],
-                                          oklab_scale(quant_error, entry.weight)),
-                                error_clamp_val);
-                        }
-                    }
-                }
-            }
-        }
+                return {color_space::linear_to_oklab(quantized), 0.5f};
+            });
 
         // Now encode HAM on the pre-dithered image (no further dithering).
         // Parallelized the same way as the non-dithered path.
@@ -1446,8 +1345,7 @@ Result<HamResult> encode_ham_copper_generic(
     bool is_lace = opts.skip_initial_swap_rows > 0;
 
     // Error diffusion state
-    bool use_error_diffusion = (opts.dither_method != dither::Method::none) &&
-                               is_error_diffusion(opts.dither_method);
+    bool use_error_diffusion = dither::uses_error_diffusion(opts.dither_method);
     bool use_ordered = (opts.dither_method != dither::Method::none) &&
                        dither::is_ordered(opts.dither_method);
 
@@ -1457,84 +1355,25 @@ Result<HamResult> encode_ham_copper_generic(
     Image dithered_image(0, 0);
     if (use_error_diffusion) {
         dithered_image = Image(w, h);
-        auto kernel = dither::error_diffusion_kernel(opts.dither_method);
-        auto strength = opts.dither_strength;
-        auto error_clamp_val = opts.error_clamp;
-        std::vector<OKLab> error_buf(w * h, OKLab{0, 0, 0});
-
-        // Structure bias / Riemersma queue, same pattern as the other
-        // HAM ED site (and copper.cpp / scap.cpp).
-        auto bias_map = dither::compute_structure_bias(image, opts.dither_method);
-        bool needs_riem = dither::needs_riemersma_queue(opts.dither_method);
-        constexpr std::size_t RIEM_QSIZE = 16;
-        std::array<OKLab, RIEM_QSIZE> riem_queue{};
-        std::array<float, RIEM_QSIZE> riem_weights{};
-        std::size_t riem_head = 0;
-        if (needs_riem) {
-            const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
-            float w_acc = 1.0f;
-            for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
-                riem_weights[i] = w_acc;
-                w_acc *= ratio;
-            }
-            float total = 0.0f;
-            for (float wt : riem_weights) total += wt;
-            for (float& wt : riem_weights) wt /= total;
-        }
-
-        for (std::size_t y = 0; y < h; ++y) {
-            bool reverse = (y % 2 == 1);
-            auto row = image.row(y);
-            for (std::size_t step = 0; step < w; ++step) {
-                std::size_t x = reverse ? (w - 1 - step) : step;
-                auto buf_idx = y * w + x;
-                auto target_lab = color_space::linear_to_oklab(row[x]);
-                OKLab carry;
-                if (needs_riem) {
-                    carry = OKLab{0, 0, 0};
-                    for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                        std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                        carry.L += riem_queue[age].L * riem_weights[k];
-                        carry.a += riem_queue[age].a * riem_weights[k];
-                        carry.b += riem_queue[age].b * riem_weights[k];
-                    }
-                } else {
-                    carry = error_buf[buf_idx];
-                }
-                auto clamped_err = oklab_clamp(carry, error_clamp_val);
-                auto adjusted_lab = oklab_add(target_lab, clamped_err);
-                if (!bias_map.empty()) adjusted_lab.L += bias_map[buf_idx];
-                auto adjusted = color_space::oklab_to_linear(adjusted_lab);
+        dither::Settings d_settings{
+            .method = opts.dither_method,
+            .strength = opts.dither_strength,
+            .error_clamp = opts.error_clamp,
+            .serpentine = true,
+        };
+        dither::diffuse_raw_buffer(
+            image, d_settings,
+            [&](const OKLab& target,
+                std::size_t x, std::size_t y) -> dither::PickResult {
+                auto adjusted = color_space::oklab_to_linear(target);
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
                 auto quantized = (chipset != amiga::Chipset::aga)
                     ? palette::quantize_to_ocs(adjusted) : adjusted;
                 dithered_image[x, y] = quantized;
-                auto actual_lab = color_space::linear_to_oklab(quantized);
-                auto quant_error = oklab_scale(
-                    oklab_sub(adjusted_lab, actual_lab), strength);
-                if (needs_riem) {
-                    riem_queue[riem_head] = quant_error;
-                    riem_head = (riem_head + 1) % RIEM_QSIZE;
-                } else {
-                    for (auto& entry : kernel) {
-                        auto nx = static_cast<std::ptrdiff_t>(x) +
-                                  (reverse ? -entry.dx : entry.dx);
-                        auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
-                        if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                            ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                            auto nidx = static_cast<std::size_t>(ny) * w +
-                                        static_cast<std::size_t>(nx);
-                            error_buf[nidx] = oklab_clamp(
-                                oklab_add(error_buf[nidx],
-                                          oklab_scale(quant_error, entry.weight)),
-                                error_clamp_val);
-                        }
-                    }
-                }
-            }
-        }
+                return {color_space::linear_to_oklab(quantized), 0.5f};
+            });
     }
 
     // Use pre-dithered image for error diffusion, original for other modes

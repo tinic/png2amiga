@@ -149,9 +149,33 @@ function cycle(direction: number): void {
   flex-direction: column;
   gap: 0.75rem;
   max-height: 70vh;
-  overflow-y: auto;
+  /* `scroll` (vs `auto`) forces the track to always render so the
+     popup's scrollability is visually obvious — `auto` only paints
+     the bar mid-scroll on macOS / iOS, which made the popup look
+     fixed-height even though it actually did scroll. */
+  overflow-y: scroll;
   padding: 0.25rem;
   min-width: 640px;
+}
+/* Make the always-on track readable on dark backgrounds — macOS
+   default overlay scrollbars are nearly invisible at rest. */
+.dither-gallery::-webkit-scrollbar { width: 10px; }
+.dither-gallery::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 5px;
+}
+.dither-gallery::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 5px;
+}
+.dither-gallery::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.40);
+}
+/* Firefox — `scrollbar-color` plus `scrollbar-width: thin` keeps it
+   visible without inflating the popup geometry. */
+.dither-gallery {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) rgba(255, 255, 255, 0.04);
 }
 .dither-group-label {
   margin: 0 0 0.35rem;

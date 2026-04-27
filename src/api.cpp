@@ -189,7 +189,7 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "crosshatch") return dither::Method::crosshatch;
     if (s == "radial") return dither::Method::radial;
     if (s == "value-noise") return dither::Method::value_noise;
-    return dither::Method::floyd_steinberg;
+    return dither::Method::ostromoukhov;
 }
 
 // Crop an image to a sub-region
@@ -461,6 +461,15 @@ struct PipelineResult {
     // bg color (master index), bit 4 = bright, bit 5 = palette select. 0xFF
     // means "not a CGA-320 run" (viewer falls back to its default 0x30).
     std::uint8_t cga_mode_ctrl2 = 0xFF;
+
+    // Fill quant_error + psnr from the source image and the rendered
+    // preview. Replaces the same 4 lines repeated at every mode branch.
+    void finalize_psnr(const Image& src, float total_error) {
+        quant_error = total_error;
+        psnr = color_space::compute_psnr_blurred(
+            src.pixels(), rendered.pixels(),
+            src.width(), src.height());
+    }
 };
 
 // Round height. Only force even for interlace (fields must be equal).
@@ -701,10 +710,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.quant_error = res->total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(),
-            image->width(), image->height());
+        result.finalize_psnr(*image, res->total_error);
         result.raw_frame = std::move(res->data);
         result.text_scanline_offset = res->scanline_offset;
         result.text_cell_height =
@@ -766,9 +772,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.quant_error = dith_result.total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(), w, h);
+        result.finalize_psnr(*image, dith_result.total_error);
         result.raw_frame = std::move(raw);
         return result;
     }
@@ -825,9 +829,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.quant_error = dith_result.total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(), w, h);
+        result.finalize_psnr(*image, dith_result.total_error);
         result.raw_frame = std::move(raw);
         return result;
     }
@@ -869,66 +871,25 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 rendered.pixels()[i] = palette[dith_result.indices[i]];
             raw = dith_result.indices;
         } else {
-            // Direct Color RGB443 — 2048 colours, too many for the
-            // dither pipeline's uint8_t palette indices. Instead, run
-            // serpentine Floyd-Steinberg-style error diffusion in OKLab
-            // (or a thin nearest-snap when dither=none) against the
-            // implicit 4-4-3 grid, packing each pixel directly.
-            auto serp = dith.method != dither::Method::none;
-            std::vector<color_space::OKLab> err_buf(w * h, {0, 0, 0});
-            dith_result.indices.resize(w * h);  // dummy — we don't use them
-            for (std::size_t y = 0; y < h; ++y) {
-                bool reverse = serp && (y & 1);
-                for (std::size_t step = 0; step < w; ++step) {
-                    std::size_t x = reverse ? (w - 1 - step) : step;
-                    auto src = (*image)[x, y];
-                    auto src_lab = color_space::linear_to_oklab(src);
-                    auto& e = err_buf[y * w + x];
-                    auto ec = dith.error_clamp;
-                    color_space::OKLab adj{
-                        src_lab.L + std::clamp(e.L, -ec, ec),
-                        src_lab.a + std::clamp(e.a, -ec, ec),
-                        src_lab.b + std::clamp(e.b, -ec, ec),
-                    };
-                    auto adj_lin = color_space::oklab_to_linear(adj);
-                    auto snapped = snes_color::rgb443_quantize(adj_lin);
+            // Direct Color RGB443 — no palette table; quantise each
+            // pixel to the 4-4-3 grid. The driver handles all ED /
+            // ordered / structure-aware / Riemersma / Ostromoukhov
+            // scaffolding; we only supply the per-pixel grid snap.
+            // Yliluoma family is filtered out by the UI because
+            // palette-aware planning makes no sense without a palette.
+            raw.assign(w * h, std::uint8_t{0});
+            dith_result.indices.assign(w * h, 0);  // unused; kept for symmetry
+            dith_result.total_error = dither::diffuse_raw_buffer(
+                *image, dith,
+                [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+                    auto snapped = snes_color::rgb443_quantize(
+                        color_space::oklab_to_linear(target));
                     rendered.pixels()[y * w + x] = snapped;
-                    raw.push_back(snes_color::pack_rgb443_byte(snapped));
-
-                    if (dith.method != dither::Method::none) {
-                        auto snapped_lab = color_space::linear_to_oklab(snapped);
-                        color_space::OKLab qe{
-                            (adj.L - snapped_lab.L) * dith.strength,
-                            (adj.a - snapped_lab.a) * dith.strength,
-                            (adj.b - snapped_lab.b) * dith.strength,
-                        };
-                        constexpr std::array<std::tuple<int,int,float>, 4> fs{{
-                            {1, 0, 7.0f / 16.0f},
-                            {-1, 1, 3.0f / 16.0f},
-                            {0, 1, 5.0f / 16.0f},
-                            {1, 1, 1.0f / 16.0f},
-                        }};
-                        for (auto [dx, dy, kw] : fs) {
-                            if (reverse) dx = -dx;
-                            auto nx = static_cast<std::ptrdiff_t>(x) + dx;
-                            auto ny = static_cast<std::ptrdiff_t>(y) + dy;
-                            if (nx < 0 || ny < 0) continue;
-                            if (static_cast<std::size_t>(nx) >= w) continue;
-                            if (static_cast<std::size_t>(ny) >= h) continue;
-                            auto& en = err_buf[static_cast<std::size_t>(ny) * w +
-                                                static_cast<std::size_t>(nx)];
-                            en.L += qe.L * kw;
-                            en.a += qe.a * kw;
-                            en.b += qe.b * kw;
-                        }
-                    }
-                }
-                // Reverse direction: serpentine FS already handled per-pixel
-                // by the `reverse` flag inside the inner loop; no extra step
-                // needed at row boundary.
-            }
-            // No palette table for Direct mode.
-            palette.clear();
+                    raw[y * w + x] = snes_color::pack_rgb443_byte(snapped);
+                    return {color_space::linear_to_oklab(snapped), 0.5f};
+                });
+            palette.clear();  // No palette table for Direct mode.
         }
 
         PipelineResult result;
@@ -941,9 +902,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.quant_error = dith_result.total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(), w, h);
+        result.finalize_psnr(*image, dith_result.total_error);
         result.raw_frame = std::move(raw);
         return result;
     }
@@ -1045,10 +1004,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
-        result.quant_error = ham_result->total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(),
-            image->width(), image->height());
+        result.finalize_psnr(*image, ham_result->total_error);
         return result;
     }
 
@@ -1093,166 +1049,36 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto w = image->width();
             auto h = image->height();
             std::vector<std::uint8_t> all_indices(w * h);
-            float total_error = 0.0f;
 
-            bool use_ordered = dither::is_ordered(dith.method) &&
-                               dith.method != dither::Method::none;
-            bool is_yli = dither::is_yliluoma(dith.method);
-            // Empty-kernel methods (yliluoma family, gilbert) must NOT
-            // take the diffusion path. Mirror the copper.cpp / scap.cpp
-            // / ham.cpp / main.cpp EHB+CAP fix so palette-aware methods
-            // and structure-aware variants both work in the WASM/web
-            // EHB+CAP path too.
-            bool use_diffusion = !use_ordered && !is_yli &&
-                                 dith.method != dither::Method::none &&
-                                 !dither::error_diffusion_kernel(dith.method).empty();
-            // Error buffer for diffusion (OKLab per pixel)
-            std::vector<color_space::OKLab> err_buf;
-            if (use_diffusion) err_buf.resize(w * h);
-
-            // Structure-aware bias map + Riemersma decay queue.
-            auto bias_map = use_diffusion
-                ? dither::compute_structure_bias(*image, dith.method)
-                : std::vector<float>{};
-            bool needs_riem = use_diffusion &&
-                dither::needs_riemersma_queue(dith.method);
-            constexpr std::size_t RIEM_QSIZE = 16;
-            std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
-            std::array<float, RIEM_QSIZE> riem_weights{};
-            std::size_t riem_head = 0;
-            if (needs_riem) {
-                const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
-                float w_acc = 1.0f;
-                for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
-                    riem_weights[i] = w_acc;
-                    w_acc *= ratio;
-                }
-                float total = 0.0f;
-                for (float wt : riem_weights) total += wt;
-                for (float& wt : riem_weights) wt /= total;
-            }
-
+            // Per-row 64-entry EHB palette (Lab + linear), precomputed
+            // once so the picker is cheap.
+            std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
+            std::vector<std::vector<Color3f>> pal_lin_per_row(h);
             for (std::size_t y = 0; y < h; ++y) {
-                // Get this scanline's base palette from copper
                 auto& base32 = copper_result->scanline_palettes[y];
                 Palette bp;
                 bp.colors.assign(base32.begin(), base32.end());
                 auto ehb64 = palette::make_ehb_palette(bp.colors);
-
-                // Dither this row against all 64 EHB colors
-                auto row = image->row(y);
-                std::vector<color_space::OKLab> pal_lab(ehb64.colors.size());
+                pal_lin_per_row[y] = ehb64.colors;
+                pal_lab_per_row[y].resize(ehb64.colors.size());
                 for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                    pal_lab[i] = color_space::linear_to_oklab(ehb64.colors[i]);
-
-                for (std::size_t x = 0; x < w; ++x) {
-                    auto pixel_lab = color_space::linear_to_oklab(row[x]);
-                    auto ec = dith.error_clamp;
-
-                    if (needs_riem) {
-                        color_space::OKLab carry{};
-                        for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                            std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                            carry.L += riem_queue[age].L * riem_weights[k];
-                            carry.a += riem_queue[age].a * riem_weights[k];
-                            carry.b += riem_queue[age].b * riem_weights[k];
-                        }
-                        pixel_lab.L += std::clamp(carry.L, -ec, ec);
-                        pixel_lab.a += std::clamp(carry.a, -ec, ec);
-                        pixel_lab.b += std::clamp(carry.b, -ec, ec);
-                    } else if (!err_buf.empty()) {
-                        auto& e = err_buf[y * w + x];
-                        pixel_lab.L += std::clamp(e.L, -ec, ec);
-                        pixel_lab.a += std::clamp(e.a, -ec, ec);
-                        pixel_lab.b += std::clamp(e.b, -ec, ec);
-                    }
-                    if (!bias_map.empty()) pixel_lab.L += bias_map[y * w + x];
-
-                    // Ordered dither: apply threshold with correct (x, y)
-                    if (use_ordered) {
-                        float thr = dither::ordered_threshold(dith.method, x, y);
-                        pixel_lab.L += thr * dith.strength * 0.15f;
-                        pixel_lab.a += thr * dith.strength * 0.03f;
-                        pixel_lab.b += thr * dith.strength * 0.03f;
-                    }
-
-                    std::uint8_t best_k = 0;
-                    float best_d = 0.0f;
-                    if (is_yli) {
-                        switch (dith.method) {
-                        case dither::Method::opt_checker:
-                            best_k = dither::pick_opt_checker_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::opt_line:
-                            best_k = dither::pick_opt_line_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::opt_line_checker:
-                            best_k = dither::pick_opt_line_checker_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::knoll:
-                            best_k = dither::pick_knoll_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::tri_tone:
-                            best_k = dither::pick_tri_tone_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::yliluoma1:
-                            best_k = dither::pick_yliluoma1_index(
-                                pixel_lab, pal_lab, x, y, dith.strength); break;
-                        case dither::Method::yliluoma2:
-                            best_k = dither::pick_yliluoma_index(
-                                pixel_lab, pal_lab, x, y, true, dith.strength); break;
-                        default:  // yliluoma (alg 2 greedy)
-                            best_k = dither::pick_yliluoma_index(
-                                pixel_lab, pal_lab, x, y, false, dith.strength); break;
-                        }
-                        float dL = pixel_lab.L - pal_lab[best_k].L;
-                        float da = pixel_lab.a - pal_lab[best_k].a;
-                        float db = pixel_lab.b - pal_lab[best_k].b;
-                        best_d = dL * dL + da * da + db * db;
-                    } else {
-                        best_d = std::numeric_limits<float>::max();
-                        for (std::size_t k = 0; k < pal_lab.size(); ++k) {
-                            float dL = pixel_lab.L - pal_lab[k].L;
-                            float da = pixel_lab.a - pal_lab[k].a;
-                            float db = pixel_lab.b - pal_lab[k].b;
-                            float d = dL * dL + da * da + db * db;
-                            if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
-                        }
-                    }
-                    all_indices[y * w + x] = best_k;
-                    total_error += best_d;
-
-                    // Error diffusion: propagate to neighbors using the
-                    // kernel for the chosen method. Riemersma owns its
-                    // queue; everyone else writes to the FS-style buffer.
-                    if (use_diffusion) {
-                        auto chosen_lab = pal_lab[best_k];
-                        color_space::OKLab qerr = {
-                            (pixel_lab.L - chosen_lab.L) * dith.strength,
-                            (pixel_lab.a - chosen_lab.a) * dith.strength,
-                            (pixel_lab.b - chosen_lab.b) * dith.strength,
-                        };
-                        if (needs_riem) {
-                            riem_queue[riem_head] = qerr;
-                            riem_head = (riem_head + 1) % RIEM_QSIZE;
-                        } else {
-                            auto kernel = dither::error_diffusion_kernel(dith.method);
-                            for (auto& [kdx, kdy, kw] : kernel) {
-                                auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
-                                auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                                if (nx >= 0 && static_cast<std::size_t>(nx) < image->width() &&
-                                    ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                                    auto& e = err_buf[static_cast<std::size_t>(ny) * image->width() +
-                                                      static_cast<std::size_t>(nx)];
-                                    e.L += qerr.L * kw;
-                                    e.a += qerr.a * kw;
-                                    e.b += qerr.b * kw;
-                                }
-                            }
-                        }
-                    }
-                }
+                    pal_lab_per_row[y][i] =
+                        color_space::linear_to_oklab(ehb64.colors[i]);
             }
+
+            float total_error = dither::diffuse_raw_buffer(
+                *image, dith,
+                [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+                    auto& pal_lab = pal_lab_per_row[y];
+                    std::size_t k = 0;
+                    color_space::OKLab chosen{};
+                    float thr = dither::pick_palette_index_with_ostro(
+                        dith.method, target, pal_lab, x, y,
+                        dith.strength, /*k_min=*/0, k, chosen);
+                    all_indices[y * w + x] = static_cast<std::uint8_t>(k);
+                    return {chosen, thr};
+                });
 
             // Handle transparency
             if (has_transparency) {
@@ -1305,10 +1131,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.has_transparency = has_transparency;
             result.transparency_mask = tmask;
             result.copper_changes = copper_result->avg_changes_per_line;
-            result.quant_error = total_error;
-            result.psnr = color_space::compute_psnr_blurred(
-                image->pixels(), result.rendered.pixels(),
-                image->width(), image->height());
+            result.finalize_psnr(*image, total_error);
             return result;
         }
 
@@ -1461,10 +1284,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
-        result.quant_error = dither_result.total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(),
-            image->width(), image->height());
+        result.finalize_psnr(*image, dither_result.total_error);
         return result;
     }
 
@@ -1576,10 +1396,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
         result.copper_changes = copper_result->avg_changes_per_line;
-        result.quant_error = copper_result->total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(),
-            image->width(), image->height());
+        result.finalize_psnr(*image, copper_result->total_error);
         return result;
     }
 
@@ -1648,10 +1465,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.copper_changes = scap_res->avg_changes_per_line;
-        result.quant_error = scap_res->total_error;
-        result.psnr = color_space::compute_psnr_blurred(
-            image->pixels(), result.rendered.pixels(),
-            image->width(), image->height());
+        result.finalize_psnr(*image, scap_res->total_error);
         return result;
     }
 
@@ -1914,10 +1728,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         for (std::size_t i = 0; i < tmask.size(); ++i)
             if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
     }
-    result.quant_error = dither_result.total_error;
-    result.psnr = color_space::compute_psnr_blurred(
-        image->pixels(), result.rendered.pixels(),
-        image->width(), image->height());
+    result.finalize_psnr(*image, dither_result.total_error);
     result.cga_mode_ctrl2 = cga_mode_ctrl2;
     return result;
 }

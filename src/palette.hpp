@@ -414,6 +414,15 @@ inline std::size_t find_nearest(Color3f color,
 // We compute this in sRGB space (as the hardware operates on DAC values).
 // ---------------------------------------------------------------------------
 
+// Half-brite a base linear-RGB colour: sRGB-halve then back to linear,
+// matching the Amiga DAC. Single source of truth replacing
+// scap::half_brite + copper::halve_brite.
+inline Color3f half_brite(const Color3f& c) {
+    auto srgb = color_space::linear_to_srgb(c).clamped();
+    Color3f half_srgb{srgb.r * 0.5f, srgb.g * 0.5f, srgb.b * 0.5f};
+    return color_space::srgb_to_linear(half_srgb);
+}
+
 inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
     Palette pal;
     pal.name = "ehb";
@@ -429,12 +438,8 @@ inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
     }
 
     // Entries 32-63: half-brightness copies
-    // The Amiga EHB hardware halves each sRGB DAC value, so we convert to
-    // sRGB, halve, and convert back to linear.
     for (std::size_t i = 0; i < 32; ++i) {
-        auto srgb = color_space::linear_to_srgb(pal.colors[i]).clamped();
-        Color3f half_srgb{srgb.r * 0.5f, srgb.g * 0.5f, srgb.b * 0.5f};
-        pal.colors.push_back(color_space::srgb_to_linear(half_srgb));
+        pal.colors.push_back(half_brite(pal.colors[i]));
     }
 
     return pal;

@@ -751,9 +751,13 @@ constexpr std::array atkinson_kernel = {
     DiffusionEntry{ 0, 2, 0.00f},   // c6: bottom2     (was 1/8)
 };
 
-// Sierra Lite
-//    * 2/4
-//  1/4 1/4
+// Sierra Lite — Frankie Sierra 1990 "Filter Lite". Kernel-shape sweep
+// (576 combos × 5 images × 2 modes) found apparent +0.7 dB winners
+// at sum≈0.925, but disambiguation showed they were a strength effect
+// in disguise: normalised-winner shape × strength sweep matches
+// canonical-shape × strength sweep within 0.02 dB. Strength tuning,
+// not kernel reshaping, is the real lever — see dither_tuning.cpp
+// where sierra-lite's strength was raised from 0.85 to 0.90.
 constexpr std::array sierra_lite_kernel = {
     DiffusionEntry{ 1, 0, 2.0f / 4.0f},
     DiffusionEntry{-1, 1, 1.0f / 4.0f},
@@ -1228,6 +1232,39 @@ DitherResult apply_riemersma(
 // ===========================================================================
 
 } // namespace (anon closes — the next two are public API)
+
+// Forward decls so pick_yliluoma_family_index can dispatch.
+std::uint8_t pick_yliluoma_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y,
+    bool mode2, float strength);
+
+std::uint8_t pick_yliluoma_family_index(
+    Method method,
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength) {
+
+    switch (method) {
+    case Method::opt_checker:
+        return pick_opt_checker_index(target, palette_lab, x, y, strength);
+    case Method::opt_line:
+        return pick_opt_line_index(target, palette_lab, x, y, strength);
+    case Method::opt_line_checker:
+        return pick_opt_line_checker_index(target, palette_lab, x, y, strength);
+    case Method::knoll:
+        return pick_knoll_index(target, palette_lab, x, y, strength);
+    case Method::tri_tone:
+        return pick_tri_tone_index(target, palette_lab, x, y, strength);
+    case Method::yliluoma1:
+        return pick_yliluoma1_index(target, palette_lab, x, y, strength);
+    case Method::yliluoma2:
+        return pick_yliluoma_index(target, palette_lab, x, y, true, strength);
+    default:  // yliluoma (alg 2 greedy) — also fallback for non-family methods
+        return pick_yliluoma_index(target, palette_lab, x, y, false, strength);
+    }
+}
 
 // Per-pixel Yliluoma quantizer — exposed so callers can use it on a
 // per-row basis (e.g., copper.cpp's CAP loop) with the absolute y index
@@ -2566,6 +2603,185 @@ std::vector<float> compute_structure_bias(const Image& image, Method method) {
         }
     }
     return bias;
+}
+
+bool uses_error_diffusion(Method method) {
+    return method != Method::none &&
+           !is_ordered(method) &&
+           !is_yliluoma(method) &&
+           !error_diffusion_kernel(method).empty();
+}
+
+float pick_palette_index_with_ostro(
+    Method method,
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength,
+    std::size_t k_min,
+    std::size_t& chosen_index,
+    color_space::OKLab& chosen_lab) {
+
+    if (is_yliluoma(method)) {
+        std::span<const color_space::OKLab> sub = (k_min == 0)
+            ? palette_lab
+            : std::span<const color_space::OKLab>{
+                palette_lab.data() + k_min, palette_lab.size() - k_min};
+        auto rel = pick_yliluoma_family_index(method, target, sub,
+                                               x, y, strength);
+        chosen_index = k_min + static_cast<std::size_t>(rel);
+        chosen_lab = palette_lab[chosen_index];
+        return 0.5f;  // yliluoma → unit ostromoukhov scale
+    }
+
+    float best_d = std::numeric_limits<float>::max();
+    float second_d = std::numeric_limits<float>::max();
+    std::size_t best_k = k_min;
+    for (std::size_t k = k_min; k < palette_lab.size(); ++k) {
+        float dL = target.L - palette_lab[k].L;
+        float da = target.a - palette_lab[k].a;
+        float db = target.b - palette_lab[k].b;
+        float d = dL * dL + da * da + db * db;
+        if (d < best_d) {
+            second_d = best_d;
+            best_d = d;
+            best_k = k;
+        } else if (d < second_d) {
+            second_d = d;
+        }
+    }
+    chosen_index = best_k;
+    chosen_lab = palette_lab[best_k];
+    if (second_d > 1e-12f) {
+        float sb = std::sqrt(best_d);
+        float ss = std::sqrt(second_d);
+        return sb / (sb + ss);
+    }
+    return 0.5f;
+}
+
+// ===========================================================================
+// diffuse_raw_buffer — single per-pixel ED scaffolding for raw-buffer modes
+//
+// Replaces nine near-identical copies of the same loop (api.cpp×3,
+// ham.cpp×2, copper.cpp, scap.cpp×2, main.cpp). Centralising the
+// scaffolding here also fixes drift that had crept in: ostromoukhov
+// variable scaling was no-op'd in 6/9 sites, and main.cpp's loop wasn't
+// serpentining.
+// ===========================================================================
+float diffuse_raw_buffer(const Image& image,
+                         const Settings& settings,
+                         const PixelPicker& pick) {
+    auto w = image.width();
+    auto h = image.height();
+
+    bool is_ord  = is_ordered(settings.method) &&
+                   settings.method != Method::none;
+    auto kernel  = error_diffusion_kernel(settings.method);
+    bool is_diff = settings.method != Method::none && !is_ord &&
+                   !kernel.empty();
+    bool is_ostro = (settings.method == Method::ostromoukhov);
+    bool needs_riem = is_diff && needs_riemersma_queue(settings.method);
+
+    auto bias_map = is_diff
+        ? compute_structure_bias(image, settings.method)
+        : std::vector<float>{};
+
+    constexpr std::size_t RIEM_QSIZE = 16;
+    std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
+    std::array<float, RIEM_QSIZE> riem_weights{};
+    std::size_t riem_head = 0;
+    if (needs_riem) {
+        const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+        float w_acc = 1.0f;
+        for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+            riem_weights[i] = w_acc;
+            w_acc *= ratio;
+        }
+        float total = 0.0f;
+        for (float wt : riem_weights) total += wt;
+        for (float& wt : riem_weights) wt /= total;
+    }
+
+    std::vector<color_space::OKLab> err_buf;
+    if (is_diff) err_buf.assign(w * h, color_space::OKLab{0, 0, 0});
+
+    float total_error = 0.0f;
+    auto ec = settings.error_clamp;
+
+    for (std::size_t y = 0; y < h; ++y) {
+        bool reverse = is_diff && settings.serpentine && (y & 1);
+
+        for (std::size_t step = 0; step < w; ++step) {
+            std::size_t x = reverse ? (w - 1 - step) : step;
+            auto src_lab = color_space::linear_to_oklab(image[x, y]);
+            color_space::OKLab target = src_lab;
+
+            if (needs_riem) {
+                color_space::OKLab carry{};
+                for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                    std::size_t age =
+                        (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                    carry.L += riem_queue[age].L * riem_weights[k];
+                    carry.a += riem_queue[age].a * riem_weights[k];
+                    carry.b += riem_queue[age].b * riem_weights[k];
+                }
+                target.L += std::clamp(carry.L, -ec, ec);
+                target.a += std::clamp(carry.a, -ec, ec);
+                target.b += std::clamp(carry.b, -ec, ec);
+            } else if (is_diff) {
+                auto& e = err_buf[y * w + x];
+                target.L += std::clamp(e.L, -ec, ec);
+                target.a += std::clamp(e.a, -ec, ec);
+                target.b += std::clamp(e.b, -ec, ec);
+            }
+            if (!bias_map.empty()) target.L += bias_map[y * w + x];
+            if (is_ord) {
+                float thr = ordered_threshold(settings.method, x, y);
+                target.L += thr * settings.strength * 0.15f;
+                target.a += thr * settings.strength * 0.03f;
+                target.b += thr * settings.strength * 0.03f;
+            }
+
+            auto picked = pick(target, x, y);
+
+            float dL = src_lab.L - picked.chosen_lab.L;
+            float da = src_lab.a - picked.chosen_lab.a;
+            float db = src_lab.b - picked.chosen_lab.b;
+            total_error += dL * dL + da * da + db * db;
+
+            if (is_diff) {
+                color_space::OKLab qe{
+                    (target.L - picked.chosen_lab.L) * settings.strength,
+                    (target.a - picked.chosen_lab.a) * settings.strength,
+                    (target.b - picked.chosen_lab.b) * settings.strength,
+                };
+                float ostro_scale = is_ostro
+                    ? (0.6f + 0.8f * picked.ostro_threshold)
+                    : 1.0f;
+                if (needs_riem) {
+                    riem_queue[riem_head] = qe;
+                    riem_head = (riem_head + 1) % RIEM_QSIZE;
+                } else {
+                    for (auto& [kdx, kdy, kw] : kernel) {
+                        auto nx = static_cast<std::ptrdiff_t>(x) +
+                                  (reverse ? -kdx : kdx);
+                        auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                        if (nx < 0 || ny < 0) continue;
+                        if (static_cast<std::size_t>(nx) >= w) continue;
+                        if (static_cast<std::size_t>(ny) >= h) continue;
+                        auto& en = err_buf[
+                            static_cast<std::size_t>(ny) * w +
+                            static_cast<std::size_t>(nx)];
+                        en.L += qe.L * kw * ostro_scale;
+                        en.a += qe.a * kw * ostro_scale;
+                        en.b += qe.b * kw * ostro_scale;
+                    }
+                }
+            }
+        }
+    }
+
+    return total_error;
 }
 
 float ordered_threshold(Method method, std::size_t x, std::size_t y) {
