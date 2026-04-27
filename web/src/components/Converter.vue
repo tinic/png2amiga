@@ -538,6 +538,62 @@ if (globalThis.window !== undefined) {
 let debounceTimer = null
 let spinnerTimer = null
 
+function formatResultInfo(result) {
+  let info = `${result.width}x${result.height}, ${statusChipset.value}`
+  info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
+  if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg CAP/line`
+  // Size stats — diskBytes / chipBytes are the single source of truth
+  // (computed once in api::make_result so they can't go stale across
+  // mode additions). Don't re-derive from {planeBytes, copperBytes,
+  // changesPerLine, ...} here.
+  if (result.planeBytes > 0) {
+    const fmt = (b) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
+    info += `, disk: ${fmt(result.diskBytes || 0)}, chip: ${fmt(result.chipBytes || 0)}`
+  }
+  if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
+  if (result.psnr != null && Number.isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`
+  return info
+}
+
+function paintPreviewCanvas(result) {
+  const canvas = canvasRef.value
+  if (!canvas) return null
+  const { sx, sy } = previewScale(options.mode)
+  const dw = result.width * sx
+  const dh = result.height * sy
+  canvas.width = dw
+  canvas.height = dh
+  // Native-PAR preview (DOS modes only): keep the canvas backing at
+  // integer-NN upscaled resolution for sharp pixels, but CSS-stretch
+  // the displayed HEIGHT so each pixel renders with the hardware PAR.
+  //   Target CSS aspect = buffer_w * par / buffer_h (the real CRT frame)
+  // With width pinned to dw, height becomes dw * buffer_h / (buffer_w * par).
+  // PAR < 1 (tall pixels → EGA 640×200 etc.) stretches height UP;
+  // PAR > 1 (wide pixels → CGA composite) compresses height DOWN.
+  if (isDosMode(options.mode) && options.nativePar) {
+    const par = modePar(options.mode)
+    const cssH = Math.round(dw * result.height / (result.width * par))
+    canvas.style.width = `${dw}px`
+    canvas.style.height = `${cssH}px`
+  } else {
+    canvas.style.width = `${dw}px`
+    canvas.style.height = `${dh}px`
+  }
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+  const tmp = document.createElement('canvas')
+  tmp.width = result.width
+  tmp.height = result.height
+  const tmpCtx = tmp.getContext('2d')
+  const imgData = new ImageData(
+    new Uint8ClampedArray(result.rgba),
+    result.width, result.height
+  )
+  tmpCtx.putImageData(imgData, 0, 0)
+  ctx.drawImage(tmp, 0, 0, dw, dh)
+  return { dw, dh }
+}
+
 function doConvert() {
   if (!imageBytes.value || wasmLoading.value) return
 
@@ -571,43 +627,9 @@ function doConvert() {
         return
       }
 
-      const canvas = canvasRef.value
-      if (!canvas) { converting.value = false; return }
-
-      const { sx, sy } = previewScale(options.mode)
-      const dw = result.width * sx
-      const dh = result.height * sy
-      canvas.width = dw
-      canvas.height = dh
-      // Native-PAR preview (DOS modes only): keep the canvas backing at
-      // integer-NN upscaled resolution for sharp pixels, but CSS-stretch
-      // the displayed HEIGHT so each pixel renders with the hardware PAR.
-      //   Target CSS aspect = buffer_w * par / buffer_h (the real CRT frame)
-      // With width pinned to dw, height becomes dw * buffer_h / (buffer_w * par).
-      // PAR < 1 (tall pixels → EGA 640×200 etc.) stretches height UP;
-      // PAR > 1 (wide pixels → CGA composite) compresses height DOWN.
-      if (isDosMode(options.mode) && options.nativePar) {
-        const par = modePar(options.mode)
-        const cssH = Math.round(dw * result.height / (result.width * par))
-        canvas.style.width = `${dw}px`
-        canvas.style.height = `${cssH}px`
-      } else {
-        canvas.style.width = `${dw}px`
-        canvas.style.height = `${dh}px`
-      }
-
-      const ctx = canvas.getContext('2d')
-      ctx.imageSmoothingEnabled = false
-      const tmp = document.createElement('canvas')
-      tmp.width = result.width
-      tmp.height = result.height
-      const tmpCtx = tmp.getContext('2d')
-      const imgData = new ImageData(
-        new Uint8ClampedArray(result.rgba),
-        result.width, result.height
-      )
-      tmpCtx.putImageData(imgData, 0, 0)
-      ctx.drawImage(tmp, 0, 0, dw, dh)
+      const painted = paintPreviewCanvas(result)
+      if (!painted) { converting.value = false; return }
+      const { dw, dh } = painted
 
       // Cache source for CRT re-render on toggle without re-encoding.
       lastRgba = new Uint8Array(result.rgba)
@@ -637,20 +659,7 @@ function doConvert() {
         options.height = result.height
       }
 
-      let info = `${result.width}x${result.height}, ${statusChipset.value}`
-      info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
-      if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg CAP/line`
-      // Size stats — diskBytes / chipBytes are the single source of truth
-      // (computed once in api::make_result so they can't go stale across
-      // mode additions). Don't re-derive from {planeBytes, copperBytes,
-      // changesPerLine, ...} here.
-      if (result.planeBytes > 0) {
-        const fmt = (b) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
-        info += `, disk: ${fmt(result.diskBytes || 0)}, chip: ${fmt(result.chipBytes || 0)}`
-      }
-      if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
-      if (result.psnr != null && Number.isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`
-      resultInfo.value = info
+      resultInfo.value = formatResultInfo(result)
 
       const convertMs = performance.now() - convertStart
       track('convert', {
@@ -859,6 +868,66 @@ function resetOptions() {
   track('reset')
 }
 
+function parseGimpPalette(text) {
+  const colors = []
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/)
+    if (m) colors.push(`rgb(${m[1]},${m[2]},${m[3]})`)
+  }
+  return colors
+}
+
+function parseIffCmap(bytes) {
+  const colors = []
+  let pos = 12
+  while (pos + 8 <= bytes.length) {
+    const id = String.fromCodePoint(...bytes.slice(pos, pos + 4))
+    const size = (bytes[pos+4] << 24) | (bytes[pos+5] << 16) | (bytes[pos+6] << 8) | bytes[pos+7]
+    pos += 8
+    if (id === 'CMAP') {
+      for (let i = 0; i + 2 < size && pos + i + 2 <= bytes.length; i += 3) {
+        colors.push(`rgb(${bytes[pos+i]},${bytes[pos+i+1]},${bytes[pos+i+2]})`)
+      }
+      break
+    }
+    pos += size + (size & 1)  // chunks are word-aligned
+  }
+  return colors
+}
+
+function parseHexPalette(text) {
+  const colors = []
+  for (const line of text.split('\n')) {
+    const m = line.trim().match(/^#?([0-9a-fA-F]{6})$/)
+    if (m) colors.push(`#${m[1]}`)
+  }
+  return colors
+}
+
+function parseBinaryPalette(bytes) {
+  // Binary .pal: 2 bytes per color, big-endian 0x0RGB.
+  const colors = []
+  for (let i = 0; i + 1 < bytes.length; i += 2) {
+    const w = (bytes[i] << 8) | bytes[i + 1]
+    const r = ((w >> 8) & 0xF) * 17
+    const g = ((w >> 4) & 0xF) * 17
+    const b = (w & 0xF) * 17
+    colors.push(`rgb(${r},${g},${b})`)
+  }
+  return colors
+}
+
+function parsePaletteBytes(bytes) {
+  const text = new TextDecoder().decode(bytes)
+  let colors
+  if (text.startsWith('GIMP Palette')) colors = parseGimpPalette(text)
+  else if (bytes.length >= 12 && String.fromCodePoint(...bytes.slice(0, 4)) === 'FORM') colors = parseIffCmap(bytes)
+  else colors = parseHexPalette(text)
+  // Fall back to binary .pal if no text-format matches found anything.
+  if (colors.length === 0) colors = parseBinaryPalette(bytes)
+  return colors
+}
+
 function loadPalette() {
   const input = document.createElement('input')
   input.type = 'file'
@@ -870,47 +939,7 @@ function loadPalette() {
     const bytes = new Uint8Array(buf)
     paletteData.value = bytes
     options.copper = false  // copper not compatible with custom palette
-    // Parse colors for preview
-    const text = new TextDecoder().decode(bytes)
-    const colors = []
-    if (text.startsWith('GIMP Palette')) {
-      // GPL format
-      for (const line of text.split('\n')) {
-        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/)
-        if (m) colors.push(`rgb(${m[1]},${m[2]},${m[3]})`)
-      }
-    } else if (bytes.length >= 12 && String.fromCodePoint(...bytes.slice(0, 4)) === 'FORM') {
-      // IFF: scan for CMAP chunk
-      let pos = 12
-      while (pos + 8 <= bytes.length) {
-        const id = String.fromCodePoint(...bytes.slice(pos, pos + 4))
-        const size = (bytes[pos+4] << 24) | (bytes[pos+5] << 16) | (bytes[pos+6] << 8) | bytes[pos+7]
-        pos += 8
-        if (id === 'CMAP') {
-          for (let i = 0; i + 2 < size && pos + i + 2 <= bytes.length; i += 3)
-            {colors.push(`rgb(${bytes[pos+i]},${bytes[pos+i+1]},${bytes[pos+i+2]})`)}
-          break
-        }
-        pos += size + (size & 1)  // chunks are word-aligned
-      }
-    } else {
-      // Try hex text (one RRGGBB per line)
-      for (const line of text.split('\n')) {
-        const m = line.trim().match(/^#?([0-9a-fA-F]{6})$/)
-        if (m) colors.push(`#${m[1]}`)
-      }
-    }
-    if (colors.length === 0) {
-      // Binary .pal: 2 bytes per color, big-endian 0x0RGB
-      for (let i = 0; i + 1 < bytes.length; i += 2) {
-        const w = (bytes[i] << 8) | bytes[i + 1]
-        const r = ((w >> 8) & 0xF) * 17
-        const g = ((w >> 4) & 0xF) * 17
-        const b = (w & 0xF) * 17
-        colors.push(`rgb(${r},${g},${b})`)
-      }
-    }
-    paletteColors.value = colors
+    paletteColors.value = parsePaletteBytes(bytes)
     // Pass raw file bytes to WASM for auto-format detection
     options.paletteData = bytes
   })

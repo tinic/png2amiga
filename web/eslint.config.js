@@ -66,9 +66,9 @@ export default [
       'no-return-await': 'error',
       'no-param-reassign': ['error', { props: false }],
       // Existing baseline for Converter.vue's larger handlers — tighten over time.
-      'complexity': ['error', 30],
+      'complexity': ['error', 20],
       'max-params': ['error', 5],
-      'sonarjs/cognitive-complexity': ['error', 30],
+      'sonarjs/cognitive-complexity': ['error', 20],
       'no-console': ['warn', { allow: ['warn', 'error'] }],
       'curly': ['error', 'multi-line'],
 

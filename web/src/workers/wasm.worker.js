@@ -24,74 +24,54 @@ async function init() {
 
 const initPromise = init()
 
+// Dispatch table: each entry is the WASM binding name + argv shape. Most take
+// (bytes, options); convertHeader takes a third symbolName arg.
+const DISPATCHERS = {
+  convertRGBA:    (m, args) => m.convertRGBA(args[0], args[1]),
+  convert:        (m, args) => m.convert(args[0], args[1]),
+  convertIFF:     (m, args) => m.convertIFF(args[0], args[1]),
+  convertHeader:  (m, args) => m.convertHeader(args[0], args[1], args[2]),
+  convertViewer:  (m, args) => m.convertViewer(args[0], args[1]),
+  convertDegas:   (m, args) => m.convertDegas(args[0], args[1]),
+  convertRaw:     (m, args) => m.convertRaw(args[0], args[1]),
+  convertMask:    (m, args) => m.convertMask(args[0], args[1]),
+  convertMaskRaw: (m, args) => m.convertMaskRaw(args[0], args[1]),
+}
+
+function injectProgressCallback(args, id, wantProgress) {
+  // Embind passes JS functions to C++ via emscripten::val; the WASM encoder
+  // calls back into this worker thread. Each call posts {type:'progress'} to
+  // the main thread, throttled main-side so we don't bog down the UI on a
+  // torrent of ticks.
+  if (!wantProgress || !args[1] || typeof args[1] !== 'object') return args
+  const next = [...args]
+  next[1] = {
+    ...args[1],
+    onProgress: (p, stage) => {
+      self.postMessage({ type: 'progress', id, p, stage })
+    },
+  }
+  return next
+}
+
 globalThis.addEventListener('message', async (e) => {
   const { id, fn, args, wantProgress } = e.data
   try {
     await initPromise
     if (!Module) throw new Error(initError || 'WASM module not loaded')
 
-    // Inject a progress callback into the options object (always at args[1]
-    // for these binding signatures). Embind passes JS functions to C++ via
-    // emscripten::val; the WASM encoder calls back into this worker thread.
-    // Each call posts {type:'progress'} to the main thread, throttled main-
-    // side so we don't bog down the UI on a torrent of ticks.
-    if (wantProgress && args[1] && typeof args[1] === 'object') {
-      args[1] = {
-        ...args[1],
-        onProgress: (p, stage) => {
-          self.postMessage({ type: 'progress', id, p, stage })
-        },
-      }
+    const argv = injectProgressCallback(args, id, wantProgress)
+
+    // ditherDefaults is a synchronous one-shot lookup that returns
+    // { strength, errorClamp } directly — no transfer-buffer plumbing.
+    if (fn === 'ditherDefaults') {
+      self.postMessage({ id, result: Module.ditherDefaults(argv[0]) })
+      return
     }
 
-    let result
-    switch (fn) {
-      case 'convertRGBA': {
-        result = Module.convertRGBA(args[0], args[1])
-        break
-      }
-      case 'convert': {
-        result = Module.convert(args[0], args[1])
-        break
-      }
-      case 'convertIFF': {
-        result = Module.convertIFF(args[0], args[1])
-        break
-      }
-      case 'convertHeader': {
-        result = Module.convertHeader(args[0], args[1], args[2])
-        break
-      }
-      case 'convertViewer': {
-        result = Module.convertViewer(args[0], args[1])
-        break
-      }
-      case 'convertDegas': {
-        result = Module.convertDegas(args[0], args[1])
-        break
-      }
-      case 'convertRaw': {
-        result = Module.convertRaw(args[0], args[1])
-        break
-      }
-      case 'convertMask': {
-        result = Module.convertMask(args[0], args[1])
-        break
-      }
-      case 'convertMaskRaw': {
-        result = Module.convertMaskRaw(args[0], args[1])
-        break
-      }
-      case 'ditherDefaults': {
-        // Synchronous one-shot lookup — returns { strength, errorClamp }.
-        // The reply path below sends `result` as-is via postMessage.
-        self.postMessage({ id, result: Module.ditherDefaults(args[0]) })
-        return
-      }
-      default: {
-        throw new Error(`Unknown function: ${fn}`)
-      }
-    }
+    const dispatch = DISPATCHERS[fn]
+    if (!dispatch) throw new Error(`Unknown function: ${fn}`)
+    const result = dispatch(Module, argv)
 
     // Build plain object reply with transferable buffers
     const reply = {
