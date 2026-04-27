@@ -372,6 +372,13 @@ watch(() => options.mode, (mode, oldMode) => {
   clampDepthForMode(mode)
   // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
   if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov') options.dither = 'floyd-steinberg'
+  // Yliluoma is palette-aware and HAM has no fixed palette — silently
+  // no-ops in HAM. Auto-fall back to F-S when entering a HAM mode so
+  // the user doesn't end up with a stuck "selected but inactive" pick.
+  if (hamType(mode) !== null &&
+      (options.dither === 'yliluoma' || options.dither === 'yliluoma2')) {
+    options.dither = 'floyd-steinberg'
+  }
   syncNativeParToMode(mode, oldMode)
   // DPF and SCAP both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
