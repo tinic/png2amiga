@@ -748,8 +748,27 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 std::span<const color_space::OKLab> sub{
                     pl_lab.data() + k_min, kBaseColors - k_min};
                 bool mode2 = (dither_settings.method == dither::Method::yliluoma2);
-                auto rel = dither::pick_yliluoma_index(
-                    pixel_lab, sub, x, y, mode2, dither_settings.strength);
+                bool checker = (dither_settings.method == dither::Method::opt_checker);
+                bool knoll = (dither_settings.method == dither::Method::knoll);
+                bool tritone = (dither_settings.method == dither::Method::tri_tone);
+                bool yli1 = (dither_settings.method == dither::Method::yliluoma1);
+                std::uint8_t rel;
+                if (checker) {
+                    rel = dither::pick_opt_checker_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (knoll) {
+                    rel = dither::pick_knoll_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (tritone) {
+                    rel = dither::pick_tri_tone_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (yli1) {
+                    rel = dither::pick_yliluoma1_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else {
+                    rel = dither::pick_yliluoma_index(
+                        pixel_lab, sub, x, y, mode2, dither_settings.strength);
+                }
                 best_k = k_min + static_cast<std::size_t>(rel);
             } else {
                 float best_d = std::numeric_limits<float>::max();
@@ -1775,8 +1794,27 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 std::span<const color_space::OKLab> sub{
                     eff_lab.data() + k_min, kEffective - k_min};
                 bool mode2 = (dither_settings.method == dither::Method::yliluoma2);
-                auto rel = dither::pick_yliluoma_index(
-                    pixel_lab, sub, x, y, mode2, dither_settings.strength);
+                bool checker = (dither_settings.method == dither::Method::opt_checker);
+                bool knoll = (dither_settings.method == dither::Method::knoll);
+                bool tritone = (dither_settings.method == dither::Method::tri_tone);
+                bool yli1 = (dither_settings.method == dither::Method::yliluoma1);
+                std::uint8_t rel;
+                if (checker) {
+                    rel = dither::pick_opt_checker_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (knoll) {
+                    rel = dither::pick_knoll_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (tritone) {
+                    rel = dither::pick_tri_tone_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (yli1) {
+                    rel = dither::pick_yliluoma1_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else {
+                    rel = dither::pick_yliluoma_index(
+                        pixel_lab, sub, x, y, mode2, dither_settings.strength);
+                }
                 best_k = k_min + static_cast<std::size_t>(rel);
             } else {
                 float best_d = std::numeric_limits<float>::max();

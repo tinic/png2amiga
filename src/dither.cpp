@@ -1262,8 +1262,285 @@ std::uint8_t pick_yliluoma_index(
     return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
 }
 
+// Per-pixel Knoll pattern dither — Thomas Knoll's Photoshop "Pattern" mode,
+// US patent 6,606,166 (filed 2001, expired 2019). Same greedy mixing-plan
+// construction as Yliluoma method 1 / 2 but with the patent's original
+// parameters: N=16 plan size laid out on a 4×4 Bayer matrix. The shorter
+// plan is faster than Yliluoma's 8×8/N=64 setup and gives the
+// characteristic "Photoshop pattern" look.
+std::uint8_t pick_knoll_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y,
+    float strength) {
+
+    constexpr std::size_t PLAN_SIZE = 16;
+    const std::size_t P = palette_lab.size();
+    if (P == 0) return 0;
+
+    std::array<std::size_t, PLAN_SIZE> plan{};
+    std::array<float, PLAN_SIZE> plan_luma{};
+    std::array<std::size_t, PLAN_SIZE> sorted{};
+
+    color_space::OKLab sum{};
+    for (std::size_t step = 0; step < PLAN_SIZE; ++step) {
+        float best_err = std::numeric_limits<float>::max();
+        std::size_t best_k = 0;
+        float n_inv = 1.0f / static_cast<float>(step + 1);
+        for (std::size_t k = 0; k < P; ++k) {
+            color_space::OKLab avg = {
+                (sum.L + palette_lab[k].L) * n_inv,
+                (sum.a + palette_lab[k].a) * n_inv,
+                (sum.b + palette_lab[k].b) * n_inv,
+            };
+            float dL = avg.L - target.L;
+            float da = avg.a - target.a;
+            float db = avg.b - target.b;
+            float err = dL * dL + da * da + db * db;
+            if (err < best_err) { best_err = err; best_k = k; }
+        }
+        plan[step] = best_k;
+        sum.L += palette_lab[best_k].L;
+        sum.a += palette_lab[best_k].a;
+        sum.b += palette_lab[best_k].b;
+    }
+
+    // Sort plan entries by luma so Bayer's "low" threshold maps to darker.
+    for (std::size_t i = 0; i < PLAN_SIZE; ++i) {
+        plan_luma[i] = palette_lab[plan[i]].L;
+        sorted[i] = i;
+    }
+    for (std::size_t i = 1; i < PLAN_SIZE; ++i) {
+        std::size_t j = i;
+        while (j > 0 && plan_luma[sorted[j - 1]] > plan_luma[sorted[j]]) {
+            std::swap(sorted[j], sorted[j - 1]);
+            --j;
+        }
+    }
+
+    // Bayer4 threshold ∈ [-0.5, 0.5) → b ∈ [0, 16) indexes the 16-step plan.
+    int b = static_cast<int>((bayer4[y % 4][x % 4] + 0.5f) * 16.0f);
+    if (b < 0) b = 0;
+    if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
+    int median = static_cast<int>(PLAN_SIZE) / 2;
+    int adjusted = median + static_cast<int>(static_cast<float>(b - median) * strength);
+    if (adjusted < 0) adjusted = 0;
+    if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
+    return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
+}
+
+// Tri-tone — Yliluoma's 2×2 / 3-colour preset. Greedy plan of 4 entries
+// (palette repeats allowed) sorted by luma, indexed by the standard
+// Bayer 2×2 phase. When the 4-step plan picks the same colour twice,
+// you naturally get the "one at 50% + two at 25%" pattern Yliluoma
+// describes.
+std::uint8_t pick_tri_tone_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength) {
+
+    constexpr std::size_t PLAN_SIZE = 4;
+    const std::size_t P = palette_lab.size();
+    if (P == 0) return 0;
+
+    std::array<std::size_t, PLAN_SIZE> plan{};
+    std::array<float, PLAN_SIZE> plan_luma{};
+    std::array<std::size_t, PLAN_SIZE> sorted{};
+
+    color_space::OKLab sum{};
+    for (std::size_t step = 0; step < PLAN_SIZE; ++step) {
+        float best_err = std::numeric_limits<float>::max();
+        std::size_t best_k = 0;
+        float n_inv = 1.0f / static_cast<float>(step + 1);
+        for (std::size_t k = 0; k < P; ++k) {
+            color_space::OKLab avg = {
+                (sum.L + palette_lab[k].L) * n_inv,
+                (sum.a + palette_lab[k].a) * n_inv,
+                (sum.b + palette_lab[k].b) * n_inv,
+            };
+            float dL = avg.L - target.L;
+            float da = avg.a - target.a;
+            float db = avg.b - target.b;
+            float err = dL * dL + da * da + db * db;
+            if (err < best_err) { best_err = err; best_k = k; }
+        }
+        plan[step] = best_k;
+        sum.L += palette_lab[best_k].L;
+        sum.a += palette_lab[best_k].a;
+        sum.b += palette_lab[best_k].b;
+    }
+
+    for (std::size_t i = 0; i < PLAN_SIZE; ++i) {
+        plan_luma[i] = palette_lab[plan[i]].L;
+        sorted[i] = i;
+    }
+    for (std::size_t i = 1; i < PLAN_SIZE; ++i) {
+        std::size_t j = i;
+        while (j > 0 && plan_luma[sorted[j - 1]] > plan_luma[sorted[j]]) {
+            std::swap(sorted[j], sorted[j - 1]);
+            --j;
+        }
+    }
+
+    int b = static_cast<int>((bayer2[y % 2][x % 2] + 0.5f) * 4.0f);
+    if (b < 0) b = 0;
+    if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
+    int median = static_cast<int>(PLAN_SIZE) / 2;
+    int adjusted = median + static_cast<int>(static_cast<float>(b - median) * strength);
+    if (adjusted < 0) adjusted = 0;
+    if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
+    return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
+}
+
+// Yliluoma Algorithm 1 — exhaustive (i, j, ratio) search. For each
+// unique palette pair (i ≤ j) and each mixing ratio r ∈ {1..N-1} on a
+// 4×4 Bayer cell (N=16 ratio levels), compute avg = r/N · p[i] +
+// (N-r)/N · p[j] in OKLab and pick the (i, j, r) minimising distance
+// to target. Per Yliluoma's "Improvement to Algorithm 1", a
+// luminance-difference cutoff trims the pair list — pairs with
+// ΔL > strength·0.6 are skipped, which kills millions of unhelpful
+// far-apart pairs and keeps the search tractable on 32+ colour
+// palettes. Output for the current pixel: bayer threshold ∈ [0, N) is
+// compared to r — below r → palette[i], else palette[j].
+std::uint8_t pick_yliluoma1_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength) {
+
+    constexpr int N = 16;  // 4×4 Bayer cell area
+    const std::size_t P = palette_lab.size();
+    if (P == 0) return 0;
+    if (P == 1) return 0;
+
+    // Luma cutoff scales linearly with strength up to a moderate cap.
+    // At strength=0 only same-colour "pairs" (i==j) survive → nearest-
+    // colour, no dither. At strength=1 cutoff is 0.3 in OKLab L — wide
+    // enough for genuine pair averaging but tight enough to keep the
+    // search from picking visually-correct-on-average but per-pixel-
+    // extreme pairs (the failure mode of unbounded Algorithm 1).
+    float s = std::clamp(strength, 0.0f, 1.0f);
+    float luma_cutoff = s * 0.30f;
+
+    float best_err = std::numeric_limits<float>::max();
+    std::size_t best_i = 0, best_j = 0;
+    int best_r = N / 2;
+    for (std::size_t i = 0; i < P; ++i) {
+        for (std::size_t j = i; j < P; ++j) {
+            float dl = std::abs(palette_lab[i].L - palette_lab[j].L);
+            if (dl > luma_cutoff) continue;
+            for (int r = 0; r <= N; ++r) {
+                float w_i = static_cast<float>(r) / static_cast<float>(N);
+                float w_j = 1.0f - w_i;
+                float aL = palette_lab[i].L * w_i + palette_lab[j].L * w_j;
+                float aa = palette_lab[i].a * w_i + palette_lab[j].a * w_j;
+                float ab = palette_lab[i].b * w_i + palette_lab[j].b * w_j;
+                float dL = aL - target.L;
+                float da = aa - target.a;
+                float db = ab - target.b;
+                float err = dL * dL + da * da + db * db;
+                if (err < best_err) {
+                    best_err = err; best_i = i; best_j = j; best_r = r;
+                }
+            }
+        }
+    }
+
+    // Bayer4 threshold ∈ [-0.5, 0.5) → b ∈ [0, N) compared against r.
+    int b = static_cast<int>((bayer4[y % 4][x % 4] + 0.5f) * static_cast<float>(N));
+    if (b < 0) b = 0;
+    if (b >= N) b = N - 1;
+    return static_cast<std::uint8_t>((b < best_r) ? best_i : best_j);
+}
+
 bool is_yliluoma(Method method) {
-    return method == Method::yliluoma || method == Method::yliluoma2;
+    return method == Method::yliluoma || method == Method::yliluoma2 ||
+           method == Method::opt_checker || method == Method::knoll ||
+           method == Method::tri_tone || method == Method::yliluoma1;
+}
+
+// Per-pixel optimal-pair quantizer for the 2×2 checker variant.
+// Brute-force search over all palette pairs (i, j) — including i==j —
+// picks the pair whose linear-OKLab AVERAGE most closely matches target.
+// Output index = sorted-by-luma pair[(x+y) & 1]. The 2×2 checker reads
+// well on CRTs because the phosphor + scanline blur averages adjacent
+// pixels into the intended midtone with near-zero spatial frequency.
+//
+// O(P²) per pixel where P = palette size. For our typical 16/32-colour
+// palettes this is hundreds of pairs per pixel, well under 100M ops on
+// a 320×200 image. Cheap.
+std::uint8_t pick_opt_checker_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength) {
+
+    const std::size_t P = palette_lab.size();
+    if (P == 0) return 0;
+    if (P == 1) return 0;
+
+    float s = std::clamp(strength, 0.0f, 1.0f);
+
+    // Step 0: nearest-colour pick over the full palette. This anchors
+    // the pair so step 1 can't run off into wildly distant colours —
+    // unlike a free brute-force pair search, which at strength=1 would
+    // happily pick (black, white) for a midgrey target.
+    std::size_t A = 0;
+    float best_a = std::numeric_limits<float>::max();
+    for (std::size_t k = 0; k < P; ++k) {
+        float dL = palette_lab[k].L - target.L;
+        float da = palette_lab[k].a - target.a;
+        float db = palette_lab[k].b - target.b;
+        float d = dL * dL + da * da + db * db;
+        if (d < best_a) { best_a = d; A = k; }
+    }
+
+    // Strength=0 short-circuit — never call the algorithm "no dither"
+    // when the user asks for none. Returns plain nearest-colour.
+    if (s == 0.0f) return static_cast<std::uint8_t>(A);
+
+    // Step 1: pick partner B such that (palette[A] + palette[B]) / 2
+    // is closest to target. Yliluoma method 1 is greedy: B = A is a
+    // valid candidate (gives baseline best_a) and naturally wins when
+    // target is on-palette → no visible dither there. A separation
+    // penalty modulated by strength biases the search toward closer
+    // partners as strength drops, so the checker contrast tapers
+    // smoothly toward zero rather than slamming to "no dither" at a
+    // hard threshold.
+    //
+    //   sep_w(s) interpolates exponentially in [0.005, 5.0]:
+    //     s=1.0 → 0.005 (mild — full Yliluoma 1 averaging)
+    //     s=0.5 → 0.158
+    //     s→0   → 5.0 (forces B == A)
+    constexpr float MIN_W = 0.005f;
+    constexpr float MAX_W = 5.0f;
+    float sep_w = MIN_W * std::pow(MAX_W / MIN_W, 1.0f - s);
+
+    std::size_t B = A;
+    float best_b = best_a;  // baseline: pair (A, A), no improvement
+    for (std::size_t k = 0; k < P; ++k) {
+        if (k == A) continue;
+        float aL = (palette_lab[A].L + palette_lab[k].L) * 0.5f;
+        float aa = (palette_lab[A].a + palette_lab[k].a) * 0.5f;
+        float ab = (palette_lab[A].b + palette_lab[k].b) * 0.5f;
+        float dL = aL - target.L;
+        float da = aa - target.a;
+        float db = ab - target.b;
+        float avg_err = dL * dL + da * da + db * db;
+        float sL = palette_lab[A].L - palette_lab[k].L;
+        float sa = palette_lab[A].a - palette_lab[k].a;
+        float sb = palette_lab[A].b - palette_lab[k].b;
+        float sep = sL * sL + sa * sa + sb * sb;
+        float err = avg_err + sep_w * sep;
+        if (err < best_b) { best_b = err; B = k; }
+    }
+
+    // If B collapsed back to A (no candidate beat the same-colour
+    // baseline), no checker — return A for both phases.
+    if (B == A) return static_cast<std::uint8_t>(A);
+
+    // Sort by luma so checker's "low" phase always picks the darker.
+    std::size_t lo = A, hi = B;
+    if (palette_lab[hi].L < palette_lab[lo].L) std::swap(lo, hi);
+    return static_cast<std::uint8_t>(((x + y) & 1u) ? hi : lo);
 }
 
 namespace { // reopen anon namespace for the apply_* helpers below
@@ -1902,6 +2179,84 @@ DitherResult apply(const Image& image,
         return apply_yliluoma(image, pal_span, settings.strength, false);
     case Method::yliluoma2:
         return apply_yliluoma(image, pal_span, settings.strength, true);
+    case Method::opt_checker: {
+        // Per-pixel optimal pair, indexed by (x+y) & 1 checker phase.
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto t = color_space::linear_to_oklab(image[x, y]);
+                auto idx = pick_opt_checker_index(t, pal_span, x, y, settings.strength);
+                r.indices[y * w + x] = idx;
+                float dL = t.L - pal_span[idx].L;
+                float da = t.a - pal_span[idx].a;
+                float db = t.b - pal_span[idx].b;
+                r.total_error += dL * dL + da * da + db * db;
+            }
+        }
+        return r;
+    }
+    case Method::knoll: {
+        // Knoll pattern dither — N=16 plan on 4×4 Bayer.
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto t = color_space::linear_to_oklab(image[x, y]);
+                auto idx = pick_knoll_index(t, pal_span, x, y, settings.strength);
+                r.indices[y * w + x] = idx;
+                float dL = t.L - pal_span[idx].L;
+                float da = t.a - pal_span[idx].a;
+                float db = t.b - pal_span[idx].b;
+                r.total_error += dL * dL + da * da + db * db;
+            }
+        }
+        return r;
+    }
+    case Method::tri_tone: {
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto t = color_space::linear_to_oklab(image[x, y]);
+                auto idx = pick_tri_tone_index(t, pal_span, x, y, settings.strength);
+                r.indices[y * w + x] = idx;
+                float dL = t.L - pal_span[idx].L;
+                float da = t.a - pal_span[idx].a;
+                float db = t.b - pal_span[idx].b;
+                r.total_error += dL * dL + da * da + db * db;
+            }
+        }
+        return r;
+    }
+    case Method::yliluoma1: {
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto t = color_space::linear_to_oklab(image[x, y]);
+                auto idx = pick_yliluoma1_index(t, pal_span, x, y, settings.strength);
+                r.indices[y * w + x] = idx;
+                float dL = t.L - pal_span[idx].L;
+                float da = t.a - pal_span[idx].a;
+                float db = t.b - pal_span[idx].b;
+                r.total_error += dL * dL + da * da + db * db;
+            }
+        }
+        return r;
+    }
 
     case Method::structure_fs:
         return apply_structure_fs(

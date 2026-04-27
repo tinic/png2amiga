@@ -1,6 +1,7 @@
 #pragma once
 
 #include "amiga.hpp"
+#include "dither.hpp"
 
 namespace png2amiga::dither_tuning {
 
@@ -28,6 +29,10 @@ struct Context {
     bool scap;            // SCAP mid-line palette swaps
     bool copper;          // CAP per-line palette evolution
     amiga::Chipset chipset = amiga::Chipset::ocs;
+    // Optional dither method — when provided, palette-aware methods
+    // (opt-checker, knoll, yliluoma, yliluoma2) get a method-specific
+    // optimal strength override. Default (none) keeps the F-S table.
+    dither::Method method = dither::Method::floyd_steinberg;
 };
 
 Defaults defaults_for(const Context& ctx);

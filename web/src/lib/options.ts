@@ -176,8 +176,16 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'jarvis',          label: 'Jarvis' },
     { value: 'ostromoukhov',    label: 'Ostromoukhov' },
     { value: 'riemersma',       label: 'Riemersma' },
-    { value: 'yliluoma',        label: 'Yliluoma 1' },
-    { value: 'yliluoma2',       label: 'Yliluoma 2' },
+    { value: 'opt-checker',     label: 'Optimal\nChecker' },
+    { value: 'tri-tone',        label: 'Tri-tone' },
+    { value: 'knoll',           label: 'Knoll' },
+    // Naming aligns with Yliluoma's article: Algorithm 1 is the exhaustive
+    // pair × ratio search; Algorithm 2 is the greedy N=64 plan-builder.
+    // Internal IDs (`yliluoma`, `yliluoma2`) predate this clean-up — IDs
+    // stay stable (don't break existing CLI/URL state), labels truth-up.
+    { value: 'yliluoma1',       label: 'Yliluoma 1' },     // Alg 1 (exhaustive)
+    { value: 'yliluoma',        label: 'Yliluoma 2' },     // Alg 2 greedy
+    { value: 'yliluoma2',       label: 'Yliluoma 2\nluma' }, // Alg 2 luma-weighted variant
     { value: 'structure-fs',    label: 'Structure\nFS' },
     { value: 'contrast-fs',     label: 'Contrast\nFS' },
     { value: 'zhoufang',        label: 'Zhou–\nFang' },

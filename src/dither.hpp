@@ -84,6 +84,10 @@ enum class Method : unsigned char {
     zhoufang,         // Zhou-Fang adaptive-coefficient ED (intensity-dependent)
     yliluoma,         // Yliluoma/Knoll palette-aware pattern dither (8×8 Bayer)
     yliluoma2,        // Yliluoma method 2 — gamma-aware variant
+    opt_checker,      // Optimal Checker — Yliluoma N=2 greedy pair on a 2×2 cell
+    knoll,            // Knoll pattern dither — N=16 plan on 4×4 Bayer (US 6,606,166 expired 2019)
+    tri_tone,         // Yliluoma tri-tone — 2×2 cell, 3 colours (one 50%, two 25%)
+    yliluoma1,        // Yliluoma Algorithm 1 — exhaustive pair × ratio search w/ luma threshold
     aseprite_old,     // Aseprite "old" 4×4 — hand-tuned, checker-biased
     libcaca_3x3,      // libcaca hand-tuned 3×3 dispersed dot
     libcaca_6x6,      // libcaca hand-tuned 6×6 dispersed dot
@@ -233,5 +237,42 @@ std::uint8_t pick_yliluoma_index(
     std::span<const png2amiga::color_space::OKLab> palette_lab,
     std::size_t x, std::size_t y,
     bool mode2, float strength);
+
+// Per-pixel Yliluoma 2×2-checker variant — brute-force optimal palette
+// PAIR whose average matches target, picked by (x+y)&1 phase. CRT-
+// friendly; phosphor + scanline blur averages adjacent pixels.
+// `strength` scales how often the phase wins vs collapsing to nearest
+// (1.0 = full checker, 0.0 = no visible dither).
+std::uint8_t pick_opt_checker_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength);
+
+// Per-pixel Knoll pattern dither (Photoshop's "Pattern", US patent
+// 6,606,166 expired 2019). N=16 greedy mixing plan on a 4×4 Bayer cell.
+std::uint8_t pick_knoll_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength);
+
+// Tri-tone — Yliluoma's named 2×2 / 3-colour preset. One palette entry
+// at 50% (Bayer cells 0 and 1) plus two more at 25% each (cells 2 and
+// 3). Implemented as a 4-step greedy plan with palette repeats allowed,
+// indexed by Bayer 2×2.
+std::uint8_t pick_tri_tone_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength);
+
+// Yliluoma Algorithm 1 — exhaustive search over (Color1, Color2, ratio)
+// triples. For each unique palette pair (i ≤ j) and each ratio r in
+// {1, 2, …, N-1} (N=16 cell area on a 4×4 Bayer), score the linear mix
+// against target; pick the best triple. A luminance-difference cutoff
+// trims the pair list ("Improvement to Algorithm 1") so the search
+// stays tractable on 32+ colour palettes.
+std::uint8_t pick_yliluoma1_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength);
 
 } // namespace png2amiga::dither

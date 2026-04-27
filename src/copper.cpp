@@ -364,10 +364,29 @@ void dither_row(std::span<const Color3f> row,
         // Yliluoma needs the absolute y to rotate Bayer per scanline,
         // not y=0 from a 1-row sub-image (root of the vertical-line bias).
         bool mode2 = (settings.method == dither::Method::yliluoma2);
+        bool checker = (settings.method == dither::Method::opt_checker);
+        bool knoll = (settings.method == dither::Method::knoll);
+        bool tritone = (settings.method == dither::Method::tri_tone);
+        bool yli1 = (settings.method == dither::Method::yliluoma1);
         for (std::size_t x = 0; x < width; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(row[x]);
-            auto idx = dither::pick_yliluoma_index(
-                pixel_lab, pal_lab, x, y, mode2, settings.strength);
+            std::uint8_t idx;
+            if (checker) {
+                idx = dither::pick_opt_checker_index(
+                    pixel_lab, pal_lab, x, y, settings.strength);
+            } else if (knoll) {
+                idx = dither::pick_knoll_index(
+                    pixel_lab, pal_lab, x, y, settings.strength);
+            } else if (tritone) {
+                idx = dither::pick_tri_tone_index(
+                    pixel_lab, pal_lab, x, y, settings.strength);
+            } else if (yli1) {
+                idx = dither::pick_yliluoma1_index(
+                    pixel_lab, pal_lab, x, y, settings.strength);
+            } else {
+                idx = dither::pick_yliluoma_index(
+                    pixel_lab, pal_lab, x, y, mode2, settings.strength);
+            }
             out_indices[out_offset + x] = idx;
             float dL = pixel_lab.L - pal_lab[idx].L;
             float da = pixel_lab.a - pal_lab[idx].a;

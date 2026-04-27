@@ -165,6 +165,10 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "zhoufang") return dither::Method::zhoufang;
     if (s == "yliluoma") return dither::Method::yliluoma;
     if (s == "yliluoma2") return dither::Method::yliluoma2;
+    if (s == "opt-checker") return dither::Method::opt_checker;
+    if (s == "knoll") return dither::Method::knoll;
+    if (s == "tri-tone") return dither::Method::tri_tone;
+    if (s == "yliluoma1") return dither::Method::yliluoma1;
     if (s == "aseprite-old") return dither::Method::aseprite_old;
     if (s == "libcaca3") return dither::Method::libcaca_3x3;
     if (s == "libcaca6") return dither::Method::libcaca_6x6;
@@ -2394,6 +2398,7 @@ DitherDefaults dither_defaults_for(const Options& options) {
         .scap    = opts.scap,
         .copper  = opts.copper,
         .chipset = chipset,
+        .method  = parse_dither(opts.dither),
     });
     return DitherDefaults{tune.strength, tune.error_clamp};
 }

@@ -624,7 +624,7 @@ void print_usage() {
         "    Structure-aware error diffusion:\n"
         "      structure-fs|contrast-fs|zhoufang\n"
         "    Palette-aware ordered:\n"
-        "      yliluoma|yliluoma2\n"
+        "      opt-checker|tri-tone|knoll|yliluoma1|yliluoma|yliluoma2\n"
         "    none\n"
         "    (default: floyd-steinberg)\n"
         "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
@@ -805,6 +805,10 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "zhoufang") return dither::Method::zhoufang;
     if (s == "yliluoma") return dither::Method::yliluoma;
     if (s == "yliluoma2") return dither::Method::yliluoma2;
+    if (s == "opt-checker") return dither::Method::opt_checker;
+    if (s == "knoll") return dither::Method::knoll;
+    if (s == "tri-tone") return dither::Method::tri_tone;
+    if (s == "yliluoma1") return dither::Method::yliluoma1;
     if (s == "aseprite-old") return dither::Method::aseprite_old;
     if (s == "libcaca3") return dither::Method::libcaca_3x3;
     if (s == "libcaca6") return dither::Method::libcaca_6x6;
@@ -1544,6 +1548,10 @@ const char* dither_name(dither::Method m) {
     case dither::Method::zhoufang: return "zhoufang";
     case dither::Method::yliluoma: return "yliluoma";
     case dither::Method::yliluoma2: return "yliluoma2";
+    case dither::Method::opt_checker: return "opt-checker";
+    case dither::Method::knoll: return "knoll";
+    case dither::Method::tri_tone: return "tri-tone";
+    case dither::Method::yliluoma1: return "yliluoma1";
     case dither::Method::aseprite_old: return "aseprite-old";
     case dither::Method::libcaca_3x3: return "libcaca3";
     case dither::Method::libcaca_6x6: return "libcaca6";

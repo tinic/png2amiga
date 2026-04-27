@@ -191,7 +191,7 @@ const groupedDitherOptions = computed(() => {
       items: g.items
         .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
-        .filter(d => !(hide_yliluoma && (d.value === 'yliluoma' || d.value === 'yliluoma2')))
+        .filter(d => !(hide_yliluoma && (d.value === 'yliluoma' || d.value === 'yliluoma2' || d.value === 'opt-checker' || d.value === 'knoll' || d.value === 'tri-tone' || d.value === 'yliluoma1')))
         .map(d => ({ value: d.value, label: d.label }))
     }))
     .filter(g => g.items.length > 0)
@@ -367,18 +367,23 @@ function syncNativeParToMode(mode: string, oldMode: string): void {
   if (!isDosMode(mode)) options.nativePar = false
 }
 
+// Methods that don't dither in HAM — auto-fallback to F-S on mode change
+// so the dither dropdown never shows a "selected but inactive" pick.
+const HAM_INCOMPATIBLE_DITHERS = new Set([
+  'ostromoukhov', 'yliluoma', 'yliluoma2', 'opt-checker', 'knoll',
+  'tri-tone', 'yliluoma1',
+])
+
+function maybeFallbackHamDither(mode: string): void {
+  if (hamType(mode) !== null && HAM_INCOMPATIBLE_DITHERS.has(options.dither)) {
+    options.dither = 'floyd-steinberg'
+  }
+}
+
 // Update depth when mode changes — only clamp, don't reset
 watch(() => options.mode, (mode, oldMode) => {
   clampDepthForMode(mode)
-  // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
-  if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov') options.dither = 'floyd-steinberg'
-  // Yliluoma is palette-aware and HAM has no fixed palette — silently
-  // no-ops in HAM. Auto-fall back to F-S when entering a HAM mode so
-  // the user doesn't end up with a stuck "selected but inactive" pick.
-  if (hamType(mode) !== null &&
-      (options.dither === 'yliluoma' || options.dither === 'yliluoma2')) {
-    options.dither = 'floyd-steinberg'
-  }
+  maybeFallbackHamDither(mode)
   syncNativeParToMode(mode, oldMode)
   // DPF and SCAP both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
@@ -522,11 +527,14 @@ onBeforeUnmount(() => {
   if (crtRenderer) { crtRenderer.dispose(); crtRenderer = null }
 })
 
-// Refresh errorClamp from the C++ per-mode tuning table whenever the mode
-// (or any flag that feeds Context — copper/dpf/scap/depth/chipset) changes.
-// Ignores whatever the user had set previously: the table value wins so a
-// mode switch always lands on the empirically-tuned default for that mode.
-async function refreshErrorClamp() {
+// Refresh strength + errorClamp from the C++ tuning table whenever the
+// mode, any context flag (copper/dpf/scap/depth/chipset), OR the dither
+// method itself changes. Method-aware overrides exist for palette-aware
+// methods (opt-checker, knoll, yliluoma, yliluoma2) — picking one of
+// those needs to immediately reset the strength slider to the tuned
+// optimum, not keep the previous F-S-tuned value the user happened to
+// have. The table always wins on context change.
+async function refreshDitherDefaults() {
   if (wasmLoading.value) return
   try {
     const d = await ditherDefaults({
@@ -536,17 +544,19 @@ async function refreshErrorClamp() {
       copper: options.copper,
       dualPlayfield: options.dualPlayfield,
       scap: options.scap,
+      dither: options.dither,
     })
+    if (typeof d.strength === 'number')   options.ditherStrength = d.strength
     if (typeof d.errorClamp === 'number') options.errorClamp = d.errorClamp
   } catch { /* WASM not ready yet — initial defaults stand */ }
 }
 watch(
   () => [options.mode, options.copper, options.dualPlayfield, options.scap,
-         options.depth, options.chipset],
-  () => { void refreshErrorClamp() })
+         options.depth, options.chipset, options.dither],
+  () => { void refreshDitherDefaults() })
 // Also refresh once after WASM finishes loading so the very first preview
 // uses the table value (defaultOptions() seeds with a generic 0.35).
-watch(wasmLoading, (loading) => { if (!loading) void refreshErrorClamp() })
+watch(wasmLoading, (loading) => { if (!loading) void refreshDitherDefaults() })
 
 // Track slider tweaks (debounced)
 let tweakTimer: ReturnType<typeof setTimeout> | null = null
