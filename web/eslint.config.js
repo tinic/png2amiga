@@ -145,11 +145,11 @@ export default [
         terms: ['fixme', 'xxx'],
         location: 'anywhere',
       }],
-      // Goal: cyclomatic and cognitive complexity of 10. Refactor functions
+      // Goal: cyclomatic and cognitive complexity of 8. Refactor functions
       // that exceed it into smaller named helpers; do NOT raise the cap.
-      'complexity': ['error', 10],
+      'complexity': ['error', 8],
       'max-params': ['error', 5],
-      'sonarjs/cognitive-complexity': ['error', 10],
+      'sonarjs/cognitive-complexity': ['error', 8],
       'no-console': ['warn', { allow: ['warn', 'error'] }],
       'curly': ['error', 'multi-line'],
 

@@ -359,25 +359,28 @@ const paletteMismatchMode = computed(() => {
   return ''
 })
 
-// Update depth when mode changes — only clamp, don't reset
-watch(() => options.mode, (mode, oldMode) => {
+function clampDepthForMode(mode: string): void {
   const max = maxDepth(mode, options.chipset)
-  if (max === 0) {
-    // Fixed depth modes (HAM, EHB) — use their default
-    options.depth = defaultDepth(mode)
-  } else if (options.depth > max) {
-    options.depth = max
-  }
-  // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
-  if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov')
-    {options.dither = 'floyd-steinberg'}
+  // Fixed depth modes (HAM, EHB) — use their default. Otherwise clamp.
+  if (max === 0) options.depth = defaultDepth(mode)
+  else if (options.depth > max) options.depth = max
+}
+
+function syncNativeParToMode(mode: string, oldMode: string): void {
   // DOS modes default to native PAR (letterbox/pillarbox into fixed buffer)
-  // so the preview shows the image at the right aspect ratio instead of
-  // stretched. Reset when entering a DOS mode from a non-DOS mode; leave
-  // alone when switching between DOS modes so the user's toggle sticks.
+  // so the preview shows the right aspect. Reset when entering a DOS mode
+  // from non-DOS; leave alone between DOS modes so the user toggle sticks.
   if (isDosMode(mode) && !isDosMode(oldMode)) options.nativePar = true
   if (!isDosMode(mode)) options.nativePar = false
-  // Dual playfield only applies to standard Amiga lores/hires.
+}
+
+// Update depth when mode changes — only clamp, don't reset
+watch(() => options.mode, (mode, oldMode) => {
+  clampDepthForMode(mode)
+  // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
+  if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov') options.dither = 'floyd-steinberg'
+  syncNativeParToMode(mode, oldMode)
+  // DPF and SCAP both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
   track('mode-change', { from: oldMode, to: mode })
@@ -414,22 +417,22 @@ watch(() => options.depth, () => {
   if (!scapAvailable.value) options.scap = false
 })
 
+function maybeResetModeForChipset(): void {
+  const modes = modesForChipset(options.chipset)
+  if (modes.some(m => m.value === options.mode)) return
+  const fallback = modes[0]
+  if (!fallback) return
+  options.mode = fallback.value
+  options.depth = defaultDepth(options.mode)
+}
+
 // When chipset changes, reset mode if current mode isn't available
 watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
-  const modes = modesForChipset(options.chipset)
-  if (!modes.some(m => m.value === options.mode)) {
-    const fallback = modes[0]
-    if (fallback) {
-      options.mode = fallback.value
-      options.depth = defaultDepth(options.mode)
-    }
-  }
+  maybeResetModeForChipset()
   if (isAtariMode(options.mode) || isDosMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
-  if (max > 0 && options.depth > max) {
-    options.depth = max
-  }
+  if (max > 0 && options.depth > max) options.depth = max
   // SCAP is OCS-only and DPF requires the chipset-specific depth — both
   // get invalidated when the chipset flips. The mode/dpf/depth watchers
   // above don't fire here, so reset directly.
@@ -580,15 +583,19 @@ function formatSizeStats(result: ConvertResult): string {
   return `, disk: ${formatBytes(result.diskBytes ?? 0)}, chip: ${formatBytes(result.chipBytes ?? 0)}`
 }
 
+function pushIf(parts: string[], cond: unknown, fragment: string): void {
+  if (cond) parts.push(fragment)
+}
+
 function formatResultInfo(result: ConvertResult) {
   const colorCount = result.totalColors || result.colors || 0
   const parts = [`${result.width}x${result.height}, ${statusChipset.value}`,
                  `${result.depth || '?'}bpl, ${colorCount} colors`]
-  if (result.copperChanges) parts.push(`${result.copperChanges.toFixed(1)} avg CAP/line`)
+  pushIf(parts, result.copperChanges, `${(result.copperChanges ?? 0).toFixed(1)} avg CAP/line`)
   const sizeStats = formatSizeStats(result)
-  if (sizeStats) parts.push(sizeStats.slice(2))  // strip leading ", "
-  if (result.quantError != null) parts.push(`error: ${result.quantError.toFixed(2)}`)
-  if (result.psnr != null && Number.isFinite(result.psnr)) parts.push(`PSNR: ${result.psnr.toFixed(1)} dB`)
+  pushIf(parts, sizeStats, sizeStats.slice(2))  // strip leading ", "
+  pushIf(parts, result.quantError != null, `error: ${(result.quantError ?? 0).toFixed(2)}`)
+  pushIf(parts, result.psnr != null && Number.isFinite(result.psnr), `PSNR: ${(result.psnr ?? 0).toFixed(1)} dB`)
   return parts.join(', ')
 }
 
@@ -633,6 +640,15 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number } |
   return { dw, dh }
 }
 
+function maybeSeedSizes(result: ConvertResult): void {
+  // If size-override is on but width/height are 0 (fresh image just loaded),
+  // seed the inputs with the natural defaults; triggers one idempotent
+  // re-convert via the deep options watcher.
+  if (!sizeOverride.value || (options.width && options.height)) return
+  options.width = result.width
+  options.height = result.height
+}
+
 function updateLastResultRefs(result: ConvertResult): void {
   lastWidth.value = result.width
   lastHeight.value = result.height
@@ -643,13 +659,7 @@ function updateLastResultRefs(result: ConvertResult): void {
   lastMaxMovesPerLine.value = result.maxMovesPerLine || 0
   lastAga.value = Boolean(result.aga)
   imageHasAlpha.value = Boolean(result.hasTransparency)
-  // If size-override is on but width/height are 0 (fresh image just loaded),
-  // seed the inputs with the natural defaults; triggers one idempotent
-  // re-convert via the deep options watcher.
-  if (sizeOverride.value && (!options.width || !options.height)) {
-    options.width = result.width
-    options.height = result.height
-  }
+  maybeSeedSizes(result)
 }
 
 function trackConvertSuccess(_result: ConvertResult, convertMs: number): void {
@@ -732,10 +742,11 @@ function errorMessage(error: unknown): string {
 
 // payload widening: Uint8Array<ArrayBufferLike> isn't accepted by BlobPart in
 // TS 5.7+ due to typed-array buffer variance, but Blob() at runtime accepts
-// any ArrayBufferView. Cast at the boundary.
-type BlobPayload = Uint8Array | ArrayBuffer | string
+// any ArrayBufferView. Cast at the boundary. Also accepts a pre-built Blob
+// (e.g. from fetch().blob()).
+type BlobPayload = Uint8Array | ArrayBuffer | string | Blob
 function downloadBlob(payload: BlobPayload, filename: string, mime: string) {
-  const blob = new Blob([payload as BlobPart], { type: mime })
+  const blob = payload instanceof Blob ? payload : new Blob([payload as BlobPart], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -858,6 +869,23 @@ async function downloadMaskRaw() {
   converting.value = false
 }
 
+async function postCompile(format: string, source: string): Promise<Blob | null> {
+  const resp = await fetch(`/api/compile?format=${format}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: source,
+  })
+  if (!resp.ok) {
+    errorMsg.value = await resp.text()
+    return null
+  }
+  return resp.blob()
+}
+
+function viewerSourceFromResult(result: ConvertResult): string {
+  return result.header || (result.data ? new TextDecoder().decode(result.data) : '')
+}
+
 async function compileAndDownload(format: string) {
   if (!imageBytes.value) return
   converting.value = true
@@ -868,23 +896,9 @@ async function compileAndDownload(format: string) {
     opts.symbolName = stem
     const result = await convertViewer(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
-    const source = result.header || (result.data ? new TextDecoder().decode(result.data) : '')
-    const resp = await fetch(`/api/compile?format=${format}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: source,
-    })
-    if (!resp.ok) {
-      errorMsg.value = await resp.text()
-      return
-    }
-    const blob = await resp.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = baseStem() + '.' + format
-    a.click()
-    URL.revokeObjectURL(url)
+    const blob = await postCompile(format, viewerSourceFromResult(result))
+    if (!blob) return
+    downloadBlob(blob, baseStem() + '.' + format, 'application/octet-stream')
     exportCount++
     track('export', { format, mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }

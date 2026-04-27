@@ -411,16 +411,23 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'cga-text80x100':  { sx: 1, sy: 2 },
 }
 
+// Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for
+// hires+lace (square 640×400), 1×2 for hires (tall fields), 2×1 for
+// lace (extra rows already), 2×2 baseline.
+const AMIGA_PREVIEW_SCALE: PreviewScale[] = [
+  { sx: 2, sy: 2 },  // 0b00: progressive lores
+  { sx: 1, sy: 2 },  // 0b01: hires, progressive
+  { sx: 2, sy: 1 },  // 0b10: lores, interlace
+  { sx: 1, sy: 1 },  // 0b11: hires, interlace
+]
+
 // Pixel display scale for preview (minimum pixel size on screen)
 export function previewScale(mode: string): PreviewScale {
   const dos = DOS_PREVIEW_SCALE[mode]
   if (dos) return dos
   const hi = isHiresMode(mode) || mode.endsWith('-med') || mode.endsWith('-hi')
   const lace = isInterlaceMode(mode) || mode.endsWith('-hi')  // -hi is 640×400 square pixels
-  if (hi && lace) return { sx: 1, sy: 1 }
-  if (hi)         return { sx: 1, sy: 2 }
-  if (lace)       return { sx: 2, sy: 1 }
-  return { sx: 2, sy: 2 }
+  return AMIGA_PREVIEW_SCALE[(lace ? 2 : 0) | (hi ? 1 : 0)] ?? { sx: 2, sy: 2 }
 }
 
 // Decompose a UI mode into C++ mode string + optional width override.
@@ -458,6 +465,16 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'vga-13h': 8,
 }
 
+// Family-level fallbacks for defaultDepth. Tried in order after the
+// per-mode FIXED_DEFAULT_DEPTH lookup misses. First matching predicate
+// wins; the final entry is the lores baseline (always matches).
+const FAMILY_DEFAULT_DEPTH: { match: (m: string) => boolean; depth: number }[] = [
+  { match: m => m.startsWith('cga-text') || m.startsWith('ega-text'), depth: 4 },
+  { match: m => isEgaMode(m) || isVgaMode(m), depth: 4 },
+  { match: m => isHiresMode(m), depth: 4 },
+  { match: () => true, depth: 5 },
+]
+
 // Default bitplane depth for a given mode
 export function defaultDepth(mode: string): number {
   if (isEhbMode(mode)) return 6
@@ -466,12 +483,7 @@ export function defaultDepth(mode: string): number {
   if (ham === 'ham8') return 8
   const fixed = FIXED_DEFAULT_DEPTH[mode]
   if (fixed !== undefined) return fixed
-  // Family fallbacks. Text modes and EGA/VGA all default to 4-plane;
-  // unknown hires modes also 4; standard lores 5.
-  if (mode.startsWith('cga-text') || mode.startsWith('ega-text')) return 4
-  if (isEgaMode(mode) || isVgaMode(mode)) return 4
-  if (isHiresMode(mode)) return 4
-  return 5
+  return FAMILY_DEFAULT_DEPTH.find(f => f.match(mode))?.depth ?? 5
 }
 
 // Number of displayable colors for a given mode/depth, formatted as a label.
