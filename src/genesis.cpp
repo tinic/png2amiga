@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <limits>
 #include <random>
+#include <unordered_map>
+#include <utility>
 
 namespace png2amiga::genesis {
 
@@ -156,6 +158,58 @@ std::vector<std::uint8_t> kmeans_tiles(
 
 } // namespace
 
+namespace {
+
+// Build palette line `k` from the union of pixels of all tiles assigned
+// to it. Median-cut on the union, then BGR333-snap each entry. Backdrop
+// (index 0) gets the cluster mean — purely cosmetic since opaque pixels
+// never pick 0.
+void build_palette_line(
+    const Image& image, std::size_t tiles_x, std::size_t tiles_y,
+    std::span<const std::uint8_t> tile_palette,
+    std::uint8_t k, float palette_diversity,
+    std::vector<Color3f>& out) {
+
+    auto w = image.width();
+    auto h = image.height();
+    out.assign(kColorsPerPalette, Color3f{0.0f, 0.0f, 0.0f});
+
+    std::vector<Color3f> pixels;
+    for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+        for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+            if (tile_palette[ty * tiles_x + tx] != k) continue;
+            auto x0 = tx * kTileSide, y0 = ty * kTileSide;
+            auto x_end = std::min(x0 + kTileSide, w);
+            auto y_end = std::min(y0 + kTileSide, h);
+            for (std::size_t y = y0; y < y_end; ++y)
+                for (std::size_t x = x0; x < x_end; ++x)
+                    pixels.push_back(image[x, y]);
+        }
+    }
+    if (pixels.empty()) return;
+
+    Image cluster_img(pixels.size(), 1, std::move(pixels));
+    auto pal = quantize::quantize(cluster_img, kColorsPerPalette - 1,
+                                   quantize::Algorithm::median_cut,
+                                   static_cast<int>(palette_diversity));
+    if (!pal) return;
+    for (std::size_t i = 0; i < pal->colors.size() &&
+                            i + 1 < kColorsPerPalette; ++i) {
+        out[i + 1] = console_color::bgr333_quantize(pal->colors[i]);
+    }
+    Color3f mean{0, 0, 0};
+    for (auto& c : pal->colors) {
+        mean.r += c.r; mean.g += c.g; mean.b += c.b;
+    }
+    if (!pal->colors.empty()) {
+        float n = static_cast<float>(pal->colors.size());
+        mean.r /= n; mean.g /= n; mean.b /= n;
+        out[0] = console_color::bgr333_quantize(mean);
+    }
+}
+
+} // namespace
+
 GenesisResult cluster_tiles_into_palettes(
     const Image& image, float palette_diversity) {
 
@@ -170,7 +224,8 @@ GenesisResult cluster_tiles_into_palettes(
     res.pixel_index.assign(w * h, 0);
     res.preview = Image(w, h);
 
-    // 1. Fingerprint each tile.
+    // 1. Centroid k-means seeding — fast initial assignment that's "close
+    //    enough" for refinement to take over.
     std::vector<TileFingerprint> fps(n_tiles);
     for (std::size_t ty = 0; ty < tiles_y; ++ty) {
         for (std::size_t tx = 0; tx < tiles_x; ++tx) {
@@ -178,64 +233,137 @@ GenesisResult cluster_tiles_into_palettes(
                 fingerprint_tile(image, tx * kTileSide, ty * kTileSide);
         }
     }
-
-    // 2. k-means assign tiles → 4 clusters.
     res.tile_palette = kmeans_tiles(fps, 0);
 
-    // 3. For each cluster, gather its pixels and run median-cut for 15
-    //    palette colours (index 0 reserved as transparent / backdrop).
+    // 2. Build initial palette lines from the centroid-clustering.
     for (std::size_t k = 0; k < kPaletteCount; ++k) {
-        std::vector<Color3f> pixels;
-        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-                if (res.tile_palette[ty * tiles_x + tx] != k) continue;
-                auto x0 = tx * kTileSide;
-                auto y0 = ty * kTileSide;
-                auto x_end = std::min(x0 + kTileSide, w);
-                auto y_end = std::min(y0 + kTileSide, h);
-                for (std::size_t y = y0; y < y_end; ++y)
-                    for (std::size_t x = x0; x < x_end; ++x)
-                        pixels.push_back(image[x, y]);
-            }
-        }
-
-        // Always 16 entries, with index 0 = backdrop (we use the cluster's
-        // mean colour as the backdrop so the palette visually "owns" all
-        // 16 slots; transparent pixels in the source still pin to 0).
-        res.palette_lines[k].assign(kColorsPerPalette,
-                                     Color3f{0.0f, 0.0f, 0.0f});
-
-        if (pixels.empty()) continue;
-
-        // Run median-cut on a 1-row image of these pixels for 15 palette
-        // entries, then BGR333-snap each.
-        Image cluster_img(pixels.size(), 1, std::move(pixels));
-        auto pal = quantize::quantize(
-            cluster_img, kColorsPerPalette - 1,
-            quantize::Algorithm::median_cut,
-            static_cast<int>(palette_diversity));
-        if (pal) {
-            for (std::size_t i = 0; i < pal->colors.size() &&
-                                    i + 1 < kColorsPerPalette; ++i) {
-                res.palette_lines[k][i + 1] =
-                    console_color::bgr333_quantize(pal->colors[i]);
-            }
-            // Backdrop = quantised cluster mean for tidiness.
-            // (No effect on dithered output: opaque pixels never pick 0.)
-            Color3f mean{0, 0, 0};
-            std::size_t n = 0;
-            for (auto& c : pal->colors) {
-                mean.r += c.r; mean.g += c.g; mean.b += c.b; ++n;
-            }
-            if (n > 0) {
-                mean.r /= static_cast<float>(n);
-                mean.g /= static_cast<float>(n);
-                mean.b /= static_cast<float>(n);
-                res.palette_lines[k][0] = console_color::bgr333_quantize(mean);
-            }
-        }
+        build_palette_line(image, tiles_x, tiles_y, res.tile_palette,
+                           static_cast<std::uint8_t>(k), palette_diversity,
+                           res.palette_lines[k]);
     }
 
+    // Note: a Lloyd-style refinement step (re-assign each tile to the
+    // palette that minimises its nearest-neighbour quantisation error,
+    // then rebuild palettes) was tested and produced mixed results: it
+    // gained 0.8-1.0 dB on photo.jpg but regressed lovers/fantasy by up
+    // to -2.3 dB. The score function uses nearest-only OKLab², while
+    // the actual render path is dithered nearest-pair — the metric is
+    // overconfident on tiles that benefit from dither's pair-mixing.
+    // Pursue dither-aware refinement (or non-greedy 4-palette search)
+    // before re-enabling.
+
+    return res;
+}
+
+namespace {
+
+// Apply an H or V flip (or both) to a 64-entry 8×8 nibble pattern.
+std::array<std::uint8_t, 64> flip_tile(
+    const std::array<std::uint8_t, 64>& src, bool h, bool v) noexcept {
+    std::array<std::uint8_t, 64> out{};
+    for (std::size_t y = 0; y < kTileSide; ++y) {
+        std::size_t sy = v ? (kTileSide - 1 - y) : y;
+        for (std::size_t x = 0; x < kTileSide; ++x) {
+            std::size_t sx = h ? (kTileSide - 1 - x) : x;
+            out[y * kTileSide + x] = src[sy * kTileSide + sx];
+        }
+    }
+    return out;
+}
+
+// Encode a 64-entry nibble pattern straight to 32 VRAM bytes — used by
+// dedup before the dictionary lookup.
+std::array<std::uint8_t, 32> pack_pattern(
+    const std::array<std::uint8_t, 64>& p) noexcept {
+    std::array<std::uint8_t, 32> bytes{};
+    for (std::size_t row = 0; row < kTileSide; ++row) {
+        for (std::size_t pair = 0; pair < 4; ++pair) {
+            std::uint8_t left  = p[row * kTileSide + pair * 2]     & 0x0F;
+            std::uint8_t right = p[row * kTileSide + pair * 2 + 1] & 0x0F;
+            bytes[row * 4 + pair] =
+                static_cast<std::uint8_t>((left << 4) | right);
+        }
+    }
+    return bytes;
+}
+
+} // namespace
+
+DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
+                        std::span<const std::uint8_t> tile_palette,
+                        std::size_t width, std::size_t height) {
+
+    DedupResult res;
+    auto tiles_x = (width  + kTileSide - 1) / kTileSide;
+    auto tiles_y = (height + kTileSide - 1) / kTileSide;
+    res.tilemap.assign(tiles_x * tiles_y, TilemapCell{});
+
+    // Dictionary: 32-byte canonical (no-flip) tile bytes → VRAM tile index.
+    // unordered_map keys on the array directly via a small custom hash.
+    struct ArrayHash {
+        std::size_t operator()(const std::array<std::uint8_t, 32>& a) const noexcept {
+            // FNV-1a 64-bit, plenty good for ≤2k tile populations.
+            std::uint64_t h = 0xCBF29CE484222325ULL;
+            for (auto b : a) {
+                h ^= b;
+                h *= 0x100000001B3ULL;
+            }
+            return static_cast<std::size_t>(h);
+        }
+    };
+    std::unordered_map<std::array<std::uint8_t, 32>, std::uint16_t,
+                       ArrayHash> dict;
+
+    for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+        for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+            std::array<std::uint8_t, 64> raw{};
+            auto x0 = tx * kTileSide;
+            auto y0 = ty * kTileSide;
+            for (std::size_t row = 0; row < kTileSide; ++row) {
+                for (std::size_t col = 0; col < kTileSide; ++col) {
+                    auto px = x0 + col;
+                    auto py = y0 + row;
+                    raw[row * kTileSide + col] =
+                        (px < width && py < height)
+                            ? (pixel_index[py * width + px] & 0x0F)
+                            : 0;
+                }
+            }
+
+            // Probe four orientations against the dictionary in this order:
+            //   identity → H → V → H+V
+            // First hit wins. The canonical key in the dict is always the
+            // identity-orientation tile bytes — when we add a NEW tile we
+            // store its identity form.
+            TilemapCell cell{};
+            cell.palette_line = tile_palette[ty * tiles_x + tx];
+            bool found = false;
+            std::array<std::pair<bool, bool>, 4> orients{{
+                {false, false}, {true, false}, {false, true}, {true, true}}};
+            for (auto [h, v] : orients) {
+                auto flipped = (h || v) ? flip_tile(raw, h, v) : raw;
+                auto bytes = pack_pattern(flipped);
+                auto it = dict.find(bytes);
+                if (it != dict.end()) {
+                    cell.tile_index = it->second;
+                    cell.h_flip = h;
+                    cell.v_flip = v;
+                    if (h || v) ++res.flipped_dedupes;
+                    else        ++res.identical_dedupes;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                auto bytes = pack_pattern(raw);
+                auto idx = static_cast<std::uint16_t>(res.tiles.size());
+                res.tiles.push_back(bytes);
+                dict.emplace(bytes, idx);
+                cell.tile_index = idx;
+            }
+            res.tilemap[ty * tiles_x + tx] = cell;
+        }
+    }
     return res;
 }
 

@@ -4,6 +4,7 @@
 #include "bitplane.hpp"
 #include "cheader.hpp"
 #include "cheader_dos_c.hpp"
+#include "cheader_genesis.hpp"
 #include "degas.hpp"
 #include "color_space.hpp"
 #include "cga_text.hpp"
@@ -3566,10 +3567,20 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
 
+        // Genesis-specific dither default: opt-checker. The 2×2 phase
+        // window aligns with 8-pixel tile boundaries so tile-dedup
+        // survives (~40% on photos), unlike error diffusion which
+        // serpentine-states across tiles → 0% dedup → blown VRAM
+        // budget. PSNR is ~3 dB below ostromoukhov but VRAM usage
+        // halves, which is the right Genesis tradeoff. User can
+        // override with --dither.
+        auto genesis_dither = config->dither_explicit
+            ? config->dither_method : dither::Method::opt_checker;
+
         api::Options aopts;
         aopts.mode = (config->mode == amiga::Mode::genesis_h32)
             ? "genesis-h32" : "genesis-h40";
-        aopts.dither = std::string{dither_name(config->dither_method)};
+        aopts.dither = std::string{dither_name(genesis_dither)};
         aopts.dither_strength = config->dither_strength;
         aopts.error_clamp = config->error_clamp;
         aopts.palette_diversity = config->palette_diversity;
@@ -3583,13 +3594,32 @@ int main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
         cli_status("Dither: {} (strength: {:.2f})",
-                     dither_name(config->dither_method),
+                     dither_name(genesis_dither),
                      config->dither_strength);
         cli_status("Mode:   Sega Genesis ({}), {}x{}, 4 palettes × 16 BGR333",
                      (config->mode == amiga::Mode::genesis_h32
                           ? "H32 256-wide" : "H40 320-wide"),
                      aopts.width, aopts.height);
-        cli_status("Encoded: {} bytes (tiles + tilemap + CRAM), PSNR: {:.2f} dB",
+        // Tile-dedup stats. The "after dedup" tile count maps directly to
+        // VRAM bytes (×32). Real Genesis VRAM is 64 KB total, with the
+        // upper bound for plane-A title art around ~1280 tiles before
+        // sprites and plane-B start contending.
+        if (st.genesis_total_cells > 0) {
+            auto unique = st.genesis_unique_tiles;
+            auto total = st.genesis_total_cells;
+            float dedup_pct = total > 0
+                ? 100.0f * (1.0f - static_cast<float>(unique) /
+                                    static_cast<float>(total))
+                : 0.0f;
+            cli_status("Tiles:  {} unique / {} cells ({:.1f}% dedup, {} VRAM bytes)",
+                         unique, total, dedup_pct, unique * 32);
+            if (unique > 1280) {
+                cli_status("Warning: {} unique tiles exceeds the typical "
+                            "~1280 plane-A budget (~40 KB).", unique);
+            }
+        }
+        cli_status("Encoded: {} bytes total (tiles + tilemap + CRAM), "
+                     "PSNR: {:.2f} dB",
                      st.raw_frame.size(), st.psnr);
 
         if (ends_with(config->output_path, ".bin") ||
@@ -3604,6 +3634,31 @@ int main(int argc, char* argv[]) {
             }
             cli_status("Raw:    {} ({} bytes)",
                          config->output_path, st.raw_frame.size());
+        } else if (ends_with(config->output_path, ".h")) {
+            cheader_genesis::GenesisHeaderOptions hopts;
+            hopts.tile_bytes = st.genesis_tile_bytes;
+            hopts.tilemap = st.genesis_tilemap_cells;
+            hopts.palette = st.genesis_palette_words;
+            hopts.width_pixels = static_cast<std::size_t>(aopts.width);
+            hopts.height_pixels = static_cast<std::size_t>(aopts.height);
+            hopts.symbol = config->symbol_name.empty()
+                ? std::string{"genesis_image"} : config->symbol_name;
+            auto hdr = cheader_genesis::generate(hopts);
+            if (!hdr) {
+                std::println(stderr, "Genesis header error: {}",
+                             hdr.error().message);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(hdr->data()),
+                     static_cast<std::streamsize>(hdr->size()));
+            if (!of) {
+                std::println(stderr, "Genesis header write error: {}",
+                             config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("Header: {} ({} bytes)",
+                         config->output_path, hdr->size());
         } else {
             // PNG preview.
             auto r = save_preview(config->output_path, st.rendered,

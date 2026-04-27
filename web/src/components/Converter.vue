@@ -206,9 +206,13 @@ const groupedDitherOptions = computed(() => {
 // Atari (mode defines depth), DOS modes (EGA/VGA/CGA/text — 1/2/4/8),
 // and SNES Mode 7 (always 8bpp chunky).
 const showDepthSlider = computed(() => {
+  // Hidden for any mode where depth is fixed by the hardware buffer:
+  // HAM (N-2 data bits), EHB (always 6), Atari (mode defines depth),
+  // DOS (EGA/VGA/CGA/text — 1/2/4/8), SNES Mode 7 (8bpp chunky), and
+  // Sega Genesis (4bpp tiles). Equivalent to "is the buffer fixed by
+  // hardware?" — isFixedBufferMode covers DOS/SNES/Genesis already.
   return !isHamMode(options.mode) && !isEhbMode(options.mode) &&
-         !isAtariMode(options.mode) && !isDosMode(options.mode) &&
-         !isSnesMode(options.mode)
+         !isAtariMode(options.mode) && !isFixedBufferMode(options.mode)
 })
 
 // Raw export tooltip with format layout (HTML for fixed-width font).
@@ -398,11 +402,24 @@ function maybeFallbackSnesDirectDither(mode: string): void {
   }
 }
 
+// Genesis prefers opt-checker by default: its 2×2-phase threshold aligns
+// with 8-pixel tile boundaries so tile dedup survives (~40% on photos).
+// Error-diffusion methods (FS, atkinson, etc.) destroy dedup → blow the
+// 1280-tile VRAM budget. Auto-snap to opt-checker when entering Genesis
+// from a non-Genesis mode; switching between H32 and H40 keeps the
+// user's current choice.
+function maybeSelectGenesisDither(mode: string, oldMode?: string): void {
+  if (!isGenesisMode(mode)) return
+  if (oldMode && isGenesisMode(oldMode)) return
+  options.dither = 'opt-checker'
+}
+
 // Update depth when mode changes — only clamp, don't reset
 watch(() => options.mode, (mode, oldMode) => {
   clampDepthForMode(mode)
   maybeFallbackHamDither(mode)
   maybeFallbackSnesDirectDither(mode)
+  maybeSelectGenesisDither(mode, oldMode)
   syncNativeParToMode(mode, oldMode)
   // DPF and SCAP both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
@@ -621,6 +638,21 @@ function pushIf(parts: string[], cond: unknown, fragment: string): void {
   if (cond) parts.push(fragment)
 }
 
+function formatGenesisTileStats(result: ConvertResult): string {
+  if (!result.genesisTotalCells || result.genesisUniqueTiles == null) return ''
+  const u = result.genesisUniqueTiles
+  const t = result.genesisTotalCells
+  const pct = t > 0 ? (1 - u / t) * 100 : 0
+  // The 1280-tile threshold is the typical plane-A budget when sharing
+  // VRAM with sprites + plane B. Pure title screens that own all 64 KB
+  // can push to ~2048; we flag the conservative bound so users have a
+  // clear "this may not fit on real hardware" signal.
+  const vram_kb = (u * 32 / 1024).toFixed(1)
+  const over_budget = u > 1280
+  const tag = over_budget ? '⚠ ' : ''
+  return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${vram_kb} KB VRAM)`
+}
+
 function formatResultInfo(result: ConvertResult) {
   // result.colors is non-optional in ConvertResult, so the chain stops there.
   const colorCount = result.totalColors ?? result.colors
@@ -631,6 +663,8 @@ function formatResultInfo(result: ConvertResult) {
   pushIf(parts, sizeStats, sizeStats.slice(2))  // strip leading ", "
   pushIf(parts, result.quantError != null, `error: ${(result.quantError ?? 0).toFixed(2)}`)
   pushIf(parts, result.psnr != null && Number.isFinite(result.psnr), `PSNR: ${(result.psnr ?? 0).toFixed(1)} dB`)
+  const tileStats = formatGenesisTileStats(result)
+  pushIf(parts, tileStats, tileStats)
   return parts.join(', ')
 }
 
@@ -1394,8 +1428,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
             <!-- Advanced section -->
             <Panel header="Advanced" toggleable collapsed class="mt-2">
-              <!-- Custom palette -->
-              <div v-if="!isHamMode(options.mode)">
+              <!-- Custom palette: HAM has dynamic per-pixel palette; Genesis
+                   builds 4 separate palette lines from k-means clustering, so
+                   a single uploaded palette has no clean mapping. -->
+              <div v-if="!isHamMode(options.mode) && !isGenesisMode(options.mode)">
                 <label class="block text-xs text-color-secondary font-semibold mb-1">Custom Palette</label>
                 <div class="flex gap-2 align-items-center">
                   <Button label="Load" icon="pi pi-upload" size="small" severity="secondary" @click="loadPalette" :disabled="converting" />

@@ -171,6 +171,8 @@ val js_convert_rgba(val input_array, val js_opts) {
     obj.set("quantError", result.quantError);
     obj.set("psnr", result.psnr);
     obj.set("hasTransparency", result.hasTransparency);
+    obj.set("genesisUniqueTiles", result.genesisUniqueTiles);
+    obj.set("genesisTotalCells",  result.genesisTotalCells);
     obj.set("error", result.error);
 
     if (!result.data.empty())

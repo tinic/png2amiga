@@ -465,6 +465,17 @@ struct PipelineResult {
     // means "not a CGA-320 run" (viewer falls back to its default 0x30).
     std::uint8_t cga_mode_ctrl2 = 0xFF;
 
+    // Sega Genesis only — tile-dedup stats reported in the CLI status line
+    // (and useful for the web UI to flag VRAM-budget issues). 0 means
+    // "not a Genesis run".
+    std::size_t genesis_unique_tiles = 0;
+    std::size_t genesis_total_cells = 0;
+    // Genesis split byte streams for SGDK header generation. raw_frame
+    // remains the single concatenated stream for .bin output.
+    std::vector<std::uint8_t>  genesis_tile_bytes;     // unique_tiles × 32
+    std::vector<std::uint16_t> genesis_tilemap_cells;  // total_cells
+    std::vector<std::uint16_t> genesis_palette_words;  // 64 BGR333 words
+
     // Fill quant_error + psnr from the source image and the rendered
     // preview. Replaces the same 4 lines repeated at every mode branch.
     void finalize_psnr(const Image& src, float total_error) {
@@ -982,48 +993,49 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         gres.preview = rendered;
         gres.total_error = te;
 
-        // 5. Pack tile bytes (32 B per tile, palette-indexed within its
-        //    assigned 16-colour line) and tilemap cells (16 b each).
+        // 5. Tile-dedup with H/V/H+V flip detection. Two cells with the
+        //    same pixel-index pattern share VRAM bytes; per-cell palette
+        //    + flips live in the tilemap. Cuts VRAM by ~30-70% on title
+        //    art with repeated regions (skies, gradients, decorations).
+        auto dedup = genesis::dedup_tiles(
+            gres.pixel_index, gres.tile_palette, w, h);
         auto tiles_y = (h + genesis::kTileSide - 1) / genesis::kTileSide;
-        std::vector<std::uint8_t> raw;
-        raw.reserve(tiles_x * tiles_y * 32 +     // tile bytes
-                    tiles_x * tiles_y * 2 +      // tilemap
-                    genesis::kPaletteCount *
-                        genesis::kColorsPerPalette * 2);  // CRAM
-        std::vector<std::uint8_t> tile_pixels(genesis::kTileSide *
-                                               genesis::kTileSide);
-        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-                for (std::size_t row = 0; row < genesis::kTileSide; ++row) {
-                    for (std::size_t col = 0; col < genesis::kTileSide; ++col) {
-                        auto px = tx * genesis::kTileSide + col;
-                        auto py = ty * genesis::kTileSide + row;
-                        tile_pixels[row * genesis::kTileSide + col] =
-                            (px < w && py < h) ? pixel_index[py * w + px] : 0;
-                    }
-                }
-                auto bytes = genesis::encode_4bpp_tile(tile_pixels);
-                raw.insert(raw.end(), bytes.begin(), bytes.end());
-            }
-        }
-        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-                std::uint16_t tile_idx = static_cast<std::uint16_t>(
-                    ty * tiles_x + tx);
-                std::uint8_t pal = tile_pal[ty * tiles_x + tx];
-                std::uint16_t cell = genesis::encode_tilemap_cell(
-                    tile_idx, pal);
-                raw.push_back(static_cast<std::uint8_t>(cell >> 8));
-                raw.push_back(static_cast<std::uint8_t>(cell & 0xFF));
-            }
+        auto total_cells = tiles_x * tiles_y;
+
+        // Build the three byte streams: tile bytes, tilemap cells (u16),
+        // palette CRAM words (u16). The single .bin stream concatenates
+        // all three; the SGDK C-header generator wants them separately.
+        std::vector<std::uint8_t>  tile_bytes;
+        std::vector<std::uint16_t> tilemap_cells;
+        std::vector<std::uint16_t> palette_words;
+        tile_bytes.reserve(dedup.tiles.size() * 32);
+        tilemap_cells.reserve(total_cells);
+        palette_words.reserve(genesis::kPaletteCount *
+                              genesis::kColorsPerPalette);
+        for (auto& bytes : dedup.tiles)
+            tile_bytes.insert(tile_bytes.end(), bytes.begin(), bytes.end());
+        for (auto& cell : dedup.tilemap) {
+            tilemap_cells.push_back(genesis::encode_tilemap_cell(
+                cell.tile_index, cell.palette_line,
+                cell.h_flip, cell.v_flip, /*priority=*/false));
         }
         for (std::size_t k = 0; k < genesis::kPaletteCount; ++k) {
             for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i) {
-                std::uint16_t word = console_color::to_bgr333_word(
-                    gres.palette_lines[k][i]);
-                raw.push_back(static_cast<std::uint8_t>(word >> 8));
-                raw.push_back(static_cast<std::uint8_t>(word & 0xFF));
+                palette_words.push_back(
+                    console_color::to_bgr333_word(gres.palette_lines[k][i]));
             }
+        }
+        std::vector<std::uint8_t> raw;
+        raw.reserve(tile_bytes.size() + tilemap_cells.size() * 2 +
+                    palette_words.size() * 2);
+        raw.insert(raw.end(), tile_bytes.begin(), tile_bytes.end());
+        for (auto w16 : tilemap_cells) {
+            raw.push_back(static_cast<std::uint8_t>(w16 >> 8));
+            raw.push_back(static_cast<std::uint8_t>(w16 & 0xFF));
+        }
+        for (auto w16 : palette_words) {
+            raw.push_back(static_cast<std::uint8_t>(w16 >> 8));
+            raw.push_back(static_cast<std::uint8_t>(w16 & 0xFF));
         }
 
         // Flatten the palette lines into a single 64-entry vector for the
@@ -1047,6 +1059,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.transparency_mask = tmask;
         result.finalize_psnr(*image, te);
         result.raw_frame = std::move(raw);
+        result.genesis_unique_tiles = dedup.tiles.size();
+        result.genesis_total_cells = total_cells;
+        result.genesis_tile_bytes = std::move(tile_bytes);
+        result.genesis_tilemap_cells = std::move(tilemap_cells);
+        result.genesis_palette_words = std::move(palette_words);
         return result;
     }
 
@@ -1937,6 +1954,8 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.quantError = p.quant_error;
     r.psnr = p.psnr;
     r.hasTransparency = p.has_transparency;
+    r.genesisUniqueTiles = static_cast<int>(p.genesis_unique_tiles);
+    r.genesisTotalCells  = static_cast<int>(p.genesis_total_cells);
     return r;
 }
 
@@ -2532,6 +2551,11 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.quant_error = p.quant_error;
     s.psnr = p.psnr;
     s.raw_frame = std::move(p.raw_frame);
+    s.genesis_unique_tiles = p.genesis_unique_tiles;
+    s.genesis_total_cells = p.genesis_total_cells;
+    s.genesis_tile_bytes = std::move(p.genesis_tile_bytes);
+    s.genesis_tilemap_cells = std::move(p.genesis_tilemap_cells);
+    s.genesis_palette_words = std::move(p.genesis_palette_words);
     return out;
 }
 

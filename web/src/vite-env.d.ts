@@ -48,6 +48,8 @@ declare module '@wasm/png2amiga.js' {
     quantError?: number
     psnr?: number
     hasTransparency?: boolean
+    genesisUniqueTiles?: number
+    genesisTotalCells?: number
     error?: string
   }
 

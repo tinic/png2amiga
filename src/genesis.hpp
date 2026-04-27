@@ -77,6 +77,36 @@ struct GenesisResult {
 GenesisResult cluster_tiles_into_palettes(
     const Image& image, float palette_diversity);
 
+// Per-cell tilemap entry resolved after dedup. Mirrors the bit layout of
+// encode_tilemap_cell — kept as a struct so the dedup output is clean
+// without bit-twiddling at the call site.
+struct TilemapCell {
+    std::uint16_t tile_index = 0;
+    std::uint8_t palette_line = 0;
+    bool h_flip = false;
+    bool v_flip = false;
+};
+
+// Tile + tilemap dedup with H/V/H+V flip detection. Two tiles with
+// identical pixel-index patterns share the same VRAM tile *regardless of
+// palette* (palette lives in the tilemap cell, not the tile bytes), so
+// dedup keys on the 64-byte raw nibble pattern alone.
+//
+// `pixel_index` is row-major W×H palette indices in [0, 16).
+// `tile_palette` is row-major (W/8)×(H/8), values in [0, kPaletteCount).
+// Output `tiles_out` are the unique 32-byte VRAM tiles in dictionary
+// order; `tilemap_out` has one cell per (tx, ty) pointing into them.
+struct DedupResult {
+    std::vector<std::array<std::uint8_t, 32>> tiles;
+    std::vector<TilemapCell> tilemap;
+    std::size_t identical_dedupes = 0;  // exact-match hits (no flip)
+    std::size_t flipped_dedupes = 0;    // H, V, or H+V flip hits
+};
+
+DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
+                        std::span<const std::uint8_t> tile_palette,
+                        std::size_t width, std::size_t height);
+
 // Encode a single 8×8 tile of palette indices into Genesis VRAM bytes.
 //
 // VRAM tile layout: 32 bytes per tile, row-major. Each row is 4 bytes;

@@ -31,6 +31,8 @@ interface ReplyEnvelope {
   quantError?: number
   psnr?: number
   hasTransparency?: boolean
+  genesisUniqueTiles?: number
+  genesisTotalCells?: number
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -116,6 +118,8 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('quantError', result.quantError),
     ...opt('psnr', result.psnr),
     ...opt('hasTransparency', result.hasTransparency),
+    ...opt('genesisUniqueTiles', result.genesisUniqueTiles),
+    ...opt('genesisTotalCells', result.genesisTotalCells),
     ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []

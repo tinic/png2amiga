@@ -250,6 +250,8 @@ struct ConvertResult {
     bool aga{};                         // chipset is AGA (true ⇒ palette has hi+lo halves)
     float quantError{};                 // perceptual encoding error (OKLab ΔE² sum)
     float psnr{};                       // PSNR in dB (Gaussian-blurred sRGB)
+    int genesisUniqueTiles{};           // Sega Genesis: unique VRAM tiles after dedup
+    int genesisTotalCells{};             // Sega Genesis: tilemap cells (W/8 × H/8); 0 = not Genesis
     bool hasTransparency{};             // source image had alpha channel
     std::string error;                  // error message (empty on success)
 };
@@ -366,6 +368,14 @@ struct EncodeState {
     // palette-index array; for SNES Direct it's the 8bpp packed
     // bbgggrrr-format Direct Color pixel byte array.
     std::vector<std::uint8_t> raw_frame;
+
+    // Sega Genesis only — tile-dedup stats. 0 means "not a Genesis run".
+    std::size_t genesis_unique_tiles = 0;
+    std::size_t genesis_total_cells = 0;
+    // Genesis split byte streams (used by the SGDK header generator).
+    std::vector<std::uint8_t>  genesis_tile_bytes;
+    std::vector<std::uint16_t> genesis_tilemap_cells;
+    std::vector<std::uint16_t> genesis_palette_words;
 };
 
 // Run the encoder pipeline and return its full intermediate state. Same

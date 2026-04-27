@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.16.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.17.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -66,6 +66,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/palette_locks.cpp
     src/cga_text.cpp
     src/cheader_dos_c.cpp
+    src/cheader_genesis.cpp
     src/snes_io.cpp
     src/genesis.cpp
     src/api.cpp
