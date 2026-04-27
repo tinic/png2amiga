@@ -38,7 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # for git rev-list --count HEAD baked into version
+          submodules: recursive  # third_party/libwebp etc. are submodules
+          fetch-depth: 0         # for git rev-list --count HEAD baked into version
 
       - uses: actions/setup-node@v4
         with:
