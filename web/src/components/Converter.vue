@@ -605,7 +605,7 @@ function formatResultInfo(result: ConvertResult) {
   return parts.join(', ')
 }
 
-function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number } | null {
+function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number; cssW: number; cssH: number } | null {
   const canvas = canvasRef.value
   if (!canvas || !result.rgba) return null
   const { sx, sy } = previewScale(options.mode)
@@ -620,15 +620,14 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number } |
   // With width pinned to dw, height becomes dw * buffer_h / (buffer_w * par).
   // PAR < 1 (tall pixels → EGA 640×200 etc.) stretches height UP;
   // PAR > 1 (wide pixels → CGA composite) compresses height DOWN.
+  const cssW = dw
+  let cssH = dh
   if (isDosMode(options.mode) && options.nativePar) {
     const par = modePar(options.mode)
-    const cssH = Math.round(dw * result.height / (result.width * par))
-    canvas.style.width = `${dw}px`
-    canvas.style.height = `${cssH}px`
-  } else {
-    canvas.style.width = `${dw}px`
-    canvas.style.height = `${dh}px`
+    cssH = Math.round(dw * result.height / (result.width * par))
   }
+  canvas.style.width = `${cssW}px`
+  canvas.style.height = `${cssH}px`
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
   ctx.imageSmoothingEnabled = false
@@ -643,7 +642,7 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number } |
   )
   tmpCtx.putImageData(imgData, 0, 0)
   ctx.drawImage(tmp, 0, 0, dw, dh)
-  return { dw, dh }
+  return { dw, dh, cssW, cssH }
 }
 
 function maybeSeedSizes(result: ConvertResult): void {
@@ -685,11 +684,11 @@ function trackConvertSuccess(_result: ConvertResult, convertMs: number): void {
 async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   const painted = paintPreviewCanvas(result)
   if (!painted || !result.rgba) return false
-  const { dw, dh } = painted
+  const { cssW, cssH } = painted
   // Cache source for CRT re-render on toggle without re-encoding.
   lastRgba = new Uint8Array(result.rgba)
   lastSrc = { w: result.width, h: result.height }
-  lastDst = { w: dw, h: dh }
+  lastDst = { w: cssW, h: cssH }
   if (crtEnabled.value) {
     const r = await ensureCrtRenderer()
     if (r) renderCrt()
