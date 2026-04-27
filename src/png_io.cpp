@@ -155,14 +155,18 @@ Result<Image> load(std::string_view path) {
     }
 
     // Reject pathological dimensions before they overflow size_t under
-    // 32-bit (WASM) or exhaust memory under 64-bit. 32K × 32K is already
-    // 4 GB of RGBA pixels — plenty more than any real input.
-    constexpr int kMaxDimension = 32768;
-    if (w <= 0 || h <= 0 || w > kMaxDimension || h > kMaxDimension) {
+    // 32-bit (WASM) or exhaust memory under 64-bit. Per-axis cap is
+    // relaxed enough for batch-mode atlases (very wide, short); the
+    // pixel-count cap is the real memory guard.
+    constexpr int kMaxDimension = 131072;
+    constexpr long long kMaxPixels = 256LL * 1024 * 1024;  // 256 Mpx
+    if (w <= 0 || h <= 0 || w > kMaxDimension || h > kMaxDimension ||
+        static_cast<long long>(w) * h > kMaxPixels) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("Image dimensions out of range: {}x{} (max {}x{})",
-                        w, h, kMaxDimension, kMaxDimension),
+            std::format("Image dimensions out of range: {}x{} "
+                        "(per-axis max {}, total max {} pixels)",
+                        w, h, kMaxDimension, kMaxPixels),
         }};
     }
 

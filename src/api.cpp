@@ -214,14 +214,20 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         return std::unexpected{Error{ErrorCode::invalid_png, "Failed to decode image"}};
 
     // Reject pathological dimensions before they overflow size_t under
-    // 32-bit (WASM) or exhaust memory under 64-bit.
-    constexpr int kMaxDimension = 32768;
-    if (w <= 0 || h <= 0 || w > kMaxDimension || h > kMaxDimension) {
+    // 32-bit (WASM) or exhaust memory under 64-bit. The per-axis cap is
+    // relaxed enough for batch-mode atlases (N frames stitched
+    // horizontally → very wide but short); the pixel-count cap protects
+    // against true memory blowups.
+    constexpr int kMaxDimension = 131072;
+    constexpr long long kMaxPixels = 256LL * 1024 * 1024;  // 256 Mpx → 1 GiB RGBA
+    if (w <= 0 || h <= 0 || w > kMaxDimension || h > kMaxDimension ||
+        static_cast<long long>(w) * h > kMaxPixels) {
         free_raw();
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("Image dimensions out of range: {}x{} (max {}x{})",
-                        w, h, kMaxDimension, kMaxDimension),
+            std::format("Image dimensions out of range: {}x{} "
+                        "(per-axis max {}, total max {} pixels)",
+                        w, h, kMaxDimension, kMaxPixels),
         }};
     }
 

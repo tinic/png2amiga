@@ -229,20 +229,60 @@ Result<std::vector<BatchInputFrame>> load_batch_inputs(
     return frames;
 }
 
+// Atlas gutter width (Amiga word units). Inserted to the left of every
+// frame and after the last frame so error-diffusion dither errors flowing
+// across frame boundaries hit edge-replicated padding instead of poisoning
+// the next frame's leftmost pixels. 16 keeps atlas width word-aligned
+// (frame_w is already validated as mult-of-16).
+constexpr std::size_t kBatchGutter = 16;
+
 // Concatenate frames horizontally into a single atlas image. All frames
-// must share dimensions (validated by load_batch_inputs).
+// must share dimensions (validated by load_batch_inputs). Each frame is
+// surrounded by `kBatchGutter`-wide gutters filled with that frame's
+// nearest edge column (left gutter ← frame's left column, right gutter ←
+// frame's right column). Error-diffusion dither errors flowing rightward
+// across the frame's right edge dissipate into matching-color gutter
+// pixels rather than landing on the next frame's leftmost real pixels.
+// Serpentine scanning's left-flowing errors on odd rows behave the same
+// way thanks to the symmetric gutter on the left.
 Image build_atlas(std::span<const BatchInputFrame> frames) {
     auto frame_w = frames[0].image.width();
     auto frame_h = frames[0].image.height();
-    auto atlas_w = frame_w * frames.size();
+    auto atlas_w = frames.size() * (frame_w + kBatchGutter) + kBatchGutter;
     Image atlas(atlas_w, frame_h);
     for (std::size_t fi = 0; fi < frames.size(); ++fi) {
-        auto x0 = fi * frame_w;
+        auto frame_x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
+        auto& src = frames[fi].image;
         for (std::size_t y = 0; y < frame_h; ++y) {
-            for (std::size_t x = 0; x < frame_w; ++x) {
-                atlas[x0 + x, y] = frames[fi].image[x, y];
-            }
+            // Left gutter ← src column 0
+            for (std::size_t g = 0; g < kBatchGutter; ++g)
+                atlas[frame_x0 - kBatchGutter + g, y] = src[0, y];
+            // Frame body
+            for (std::size_t x = 0; x < frame_w; ++x)
+                atlas[frame_x0 + x, y] = src[x, y];
+            // Right gutter ← src column frame_w-1 (only the rightmost frame
+            // writes the trailing gutter; intermediate gutters are written
+            // by the next frame's left-gutter pass on the next iteration,
+            // which overwrites these pixels with that frame's left edge —
+            // intentional so the gutter between frames i and i+1 is
+            // half-and-half: left half = frame i's right column, right
+            // half = frame i+1's left column).
+            for (std::size_t g = 0; g < kBatchGutter; ++g)
+                atlas[frame_x0 + frame_w + g, y] = src[frame_w - 1, y];
         }
+    }
+    // Now overwrite the right half of each interior gutter with the next
+    // frame's left edge. (The full-gutter write above leaves both halves
+    // as frame i's right edge; here we replace the second half with frame
+    // i+1's left edge.)
+    auto half = kBatchGutter / 2;
+    for (std::size_t fi = 0; fi + 1 < frames.size(); ++fi) {
+        auto frame_x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
+        auto gutter_start = frame_x0 + frame_w + half;  // start of right half
+        auto& next = frames[fi + 1].image;
+        for (std::size_t y = 0; y < frame_h; ++y)
+            for (std::size_t g = 0; g < half; ++g)
+                atlas[gutter_start + g, y] = next[0, y];
     }
     return atlas;
 }
@@ -2189,8 +2229,8 @@ int run_batch(const Config& cfg) {
     std::size_t frame_h = frames[0].image.height();
     std::size_t n_frames = frames.size();
 
-    cli_status("Batch: {} frames, {}x{} each, atlas {}x{}",
-               n_frames, frame_w, frame_h, frame_w * n_frames, frame_h);
+    cli_status("Batch: {} frames, {}x{} each",
+               n_frames, frame_w, frame_h);
 
     // 2. Build atlas + encode atlas → PNG bytes (api::encode_state takes
     //    PNG bytes).
@@ -2292,7 +2332,9 @@ int run_batch(const Config& cfg) {
     frame_planes.reserve(n_frames);
     std::size_t atlas_w = st.planes.width;
     for (std::size_t fi = 0; fi < n_frames; ++fi) {
-        auto x0 = fi * frame_w;
+        // Skip leading gutter + (frame_w + gutter)·fi to land on this frame's
+        // first real column. Gutters are dither-error sponges, not output.
+        auto x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
         std::vector<std::uint8_t> idx(frame_w * frame_h);
         for (std::size_t y = 0; y < frame_h; ++y) {
             auto src = atlas_indices.data() + y * atlas_w + x0;
@@ -2342,9 +2384,10 @@ int run_batch(const Config& cfg) {
     else if (fmt == "png") {
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             // Render frame from atlas (the encoder already produced the
-            // full atlas preview in st.rendered; we slice the column range).
+            // full atlas preview in st.rendered; we slice past the gutter
+            // pad inserted to absorb cross-frame dither error).
             Image frame_img(frame_w, frame_h);
-            auto x0 = fi * frame_w;
+            auto x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
             for (std::size_t y = 0; y < frame_h; ++y)
                 for (std::size_t x = 0; x < frame_w; ++x)
                     frame_img[x, y] = st.rendered[x0 + x, y];
@@ -2417,13 +2460,40 @@ int run_batch(const Config& cfg) {
         f << "#define " << upper_prefix << "_BPR          "
           << static_cast<int>(plane_ref.bytes_per_row) << "\n\n";
 
+        // Detect plane-i is all-zero across every frame in the batch.
+        // Such planes (typical for DPF where one playfield is unused on
+        // every frame) get omitted from the .h: emitting them would be
+        // pure padding the runtime can supply via calloc(bpr*height,1).
+        std::vector<bool> plane_zero(plane_ref.depth, true);
+        for (std::size_t p = 0; p < plane_ref.depth; ++p) {
+            for (std::size_t fi = 0; fi < n_frames && plane_zero[p]; ++fi) {
+                const auto& bp = frame_planes[fi];
+                for (std::size_t y = 0; y < bp.height && plane_zero[p]; ++y) {
+                    auto off = bp.plane_row_offset(p, y);
+                    for (std::size_t b = 0; b < bp.bytes_per_row; ++b) {
+                        if (bp.data[off + b]) { plane_zero[p] = false; break; }
+                    }
+                }
+            }
+        }
+        bool any_zero_plane = std::ranges::any_of(plane_zero,
+                                                  [](bool z) { return z; });
+        if (any_zero_plane) {
+            f << "/* Plane mask (all-zero across every frame): ";
+            for (std::size_t p = 0; p < plane_ref.depth; ++p)
+                f << (plane_zero[p] ? '0' : '1');
+            f << " — NULL slots in _frames[][] = caller must supply "
+                 "bpr*height zero'd chip RAM at runtime. */\n\n";
+        }
+
         // Per-frame plane arrays. Each frame emits one UWORD array per
-        // bitplane (sym_planeN) and an array of plane-pointer pairs the
-        // user can index by frame number.
+        // *non-zero* bitplane (sym_planeN). Zero planes across the whole
+        // batch are skipped; the plane table below uses 0 (NULL) for them.
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             const auto& planes = frame_planes[fi];
             auto sym = prefix + "_" + sanitise_symbol(frames[fi].stem);
             for (std::size_t p = 0; p < planes.depth; ++p) {
+                if (plane_zero[p]) continue;
                 f << "static const UWORD " << sym << "_plane" << p << "[] = {\n";
                 auto total_words = words_per_row * planes.height;
                 std::size_t word_count = 0;
@@ -2447,6 +2517,7 @@ int run_batch(const Config& cfg) {
         }
 
         // Plane-pointer table: const UWORD* prefix_frames[N][DEPTH].
+        // NULL entries = caller supplies a zero'd buffer at runtime.
         f << "static const UWORD* const " << prefix << "_frames["
           << n_frames << "]["
           << static_cast<int>(plane_ref.depth) << "] = {\n";
@@ -2454,7 +2525,8 @@ int run_batch(const Config& cfg) {
             auto sym = prefix + "_" + sanitise_symbol(frames[fi].stem);
             f << "    {";
             for (std::size_t p = 0; p < plane_ref.depth; ++p) {
-                f << " " << sym << "_plane" << p;
+                if (plane_zero[p]) f << " 0";
+                else f << " " << sym << "_plane" << p;
                 if (p + 1 < plane_ref.depth) f << ",";
             }
             f << " }";
@@ -2556,7 +2628,7 @@ int run_batch(const Config& cfg) {
     if (cfg.preview && !is_quiet()) {
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             Image frame_img(frame_w, frame_h);
-            auto x0 = fi * frame_w;
+            auto x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
             for (std::size_t y = 0; y < frame_h; ++y)
                 for (std::size_t x = 0; x < frame_w; ++x)
                     frame_img[x, y] = st.rendered[x0 + x, y];
@@ -2566,23 +2638,77 @@ int run_batch(const Config& cfg) {
         }
     }
 
-    // Summary. "Colors" reports the unique color count in the rendered
-    // atlas — same metric the non-batch encoders print via
-    // count_unique_colors(preview), so CAP/SCAP/HAM totals match what the
-    // single-image CLI shows.
-    auto sb = api::compute_size_breakdown(
-        static_cast<int>(frame_planes[0].total_bytes()),
-        static_cast<int>(st.palette.size()),
-        st.aga, /*cap_grid=*/0, /*scap_ops=*/0,
-        static_cast<int>(frame_h), static_cast<int>(st.max_moves_per_line));
+    // Summary. Disk accounting splits per-frame (bitplanes only, the
+    // bytes that get duplicated per frame) from shared (palette + CAP
+    // copper, one copy serves all frames). The total bundle = N ×
+    // per-frame planes + shared. compute_size_breakdown does the math
+    // for one full image; we ask it for both halves so per-frame
+    // doesn't pretend to include the shared overhead.
+    int cap_entries = st.scanline_changes.empty() ? 0
+        : static_cast<int>(static_cast<int>(frame_h) *
+                           static_cast<int>(st.changes_per_line));
+    // Skip all-zero planes in disk accounting. DPF uses two playfields'
+    // worth of bitplanes (e.g. depth=3 + dpf → 6 total), but if one
+    // playfield is unused (e.g. PF1 transparent for video frames) those
+    // planes serialise as pure zeros and can be memset(0) at runtime
+    // instead of being stored. Reporting them as "real" disk bytes
+    // overstates the cost.
+    auto count_nonzero_planes = [](const bitplane::BitplaneData& bp) {
+        int nonzero = 0;
+        auto bpr = bp.bytes_per_row;
+        for (std::size_t p = 0; p < bp.depth; ++p) {
+            bool any = false;
+            for (std::size_t y = 0; y < bp.height && !any; ++y) {
+                auto off = bp.plane_row_offset(p, y);
+                for (std::size_t b = 0; b < bpr; ++b)
+                    if (bp.data[off + b]) { any = true; break; }
+            }
+            if (any) ++nonzero;
+        }
+        return nonzero;
+    };
+    int nonzero_planes = count_nonzero_planes(frame_planes[0]);
+    int per_plane_bytes = static_cast<int>(frame_planes[0].height *
+                                            frame_planes[0].bytes_per_row);
+    int plane_b = nonzero_planes * per_plane_bytes;
+    int pal_b = static_cast<int>(st.palette.size()) * (st.aga ? 4 : 2);
+    int cap_b = cap_entries * (st.aga ? 8 : 4);
+    int shared_b = pal_b + cap_b;
+    int total_b = plane_b * static_cast<int>(n_frames) + shared_b;
     auto total_colors = count_unique_colors(st.rendered);
+
+    Image frame_img(frame_w, frame_h);
+    float psnr_sum = 0.0f;
+    int psnr_count = 0;
+    for (std::size_t fi = 0; fi < n_frames; ++fi) {
+        auto x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
+        for (std::size_t y = 0; y < frame_h; ++y)
+            for (std::size_t x = 0; x < frame_w; ++x)
+                frame_img[x, y] = st.rendered[x0 + x, y];
+        float fp = color_space::compute_psnr_blurred(
+            frames[fi].image.pixels(), frame_img.pixels(),
+            frame_w, frame_h);
+        int fc = count_unique_colors(frame_img);
+        cli_status("  frame {}/{} ({}): {} colors, PSNR {:.2f} dB",
+                   fi + 1, n_frames, frames[fi].stem, fc, fp);
+        if (std::isfinite(fp)) { psnr_sum += fp; ++psnr_count; }
+    }
+    float avg_psnr = psnr_count ? psnr_sum / static_cast<float>(psnr_count)
+                                : std::numeric_limits<float>::infinity();
+
     cli_status("Batch: encoded {} frames into '{}', "
                "{} colors, {:.1f} avg CAP/line, "
-               "per-frame disk {} (× {} frames)",
+               "planes {}/frame ({}/{} non-zero) × {} + shared {} = {} total, "
+               "PSNR avg {:.2f} dB",
                n_frames, cfg.batch_output_dir,
                total_colors,
                st.copper_changes,
-               fmt_size(sb.disk_bytes), n_frames);
+               fmt_size(plane_b),
+               nonzero_planes, static_cast<int>(frame_planes[0].depth),
+               n_frames,
+               fmt_size(shared_b),
+               fmt_size(total_b),
+               avg_psnr);
     return exit_code::ok;
 }
 

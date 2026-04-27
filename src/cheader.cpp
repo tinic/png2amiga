@@ -546,73 +546,133 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                        width, height, depth, camg);
     // 8-byte alignment when FMODE=3 (64-bit DMA fetch); 2-byte otherwise.
     auto align = need_fmode3 ? 8 : 2;
-    out += std::format("static const UWORD {}_planes[]"
-                       " __attribute__((aligned({})))"
-                       " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
-                       sym, align);
-
     auto words_per_row = bpr / 2;
-    auto total_words = words_per_row * depth * height;
-    std::size_t word_count = 0;
 
-    for (std::size_t y = 0; y < height; ++y) {
+    // Multi-frame batch viewer flag: switches the data layout from
+    // line-interleaved (single image, fast DMA) to plane-sequential
+    // per-frame so we can omit zero planes entirely and let the runtime
+    // supply a shared zero chip-RAM buffer for them. Plane-sequential
+    // layout uses BPLxMOD=0 (or -8 for FMODE=3) since each plane is
+    // contiguous bpr*height bytes; no inter-plane skip needed between
+    // rows. The single-frame path keeps the original interleaved layout.
+    auto n_extra = options.extra_frame_planes.size();
+    bool is_batch = n_extra > 0;
+    std::size_t n_frames_total = is_batch ? n_extra + 1 : 1;
+
+    // Detect planes that are all-zero across every frame in the batch.
+    // Those get omitted from the source (huge savings for DPF where one
+    // playfield is unused) and the runtime points BPLxPT for those plane
+    // indices at a single shared zero buffer.
+    auto plane_all_zero = [](const bitplane::BitplaneData& bp, std::size_t p) {
+        for (std::size_t y = 0; y < bp.height; ++y) {
+            auto off = bp.plane_row_offset(p, y);
+            for (std::size_t b = 0; b < bp.bytes_per_row; ++b)
+                if (bp.data[off + b]) return false;
+        }
+        return true;
+    };
+    std::vector<bool> plane_zero(depth, false);
+    if (is_batch) {
         for (std::size_t p = 0; p < depth; ++p) {
+            bool z = plane_all_zero(planes, p);
+            for (std::size_t fi = 0; fi < n_extra && z; ++fi)
+                if (!plane_all_zero(options.extra_frame_planes[fi], p))
+                    z = false;
+            plane_zero[p] = z;
+        }
+    }
+    bool any_zero_plane = std::ranges::any_of(plane_zero,
+                                              [](bool z) { return z; });
+
+    auto emit_plane_seq = [&](std::size_t fi, const bitplane::BitplaneData& bp,
+                              std::size_t p) {
+        // One plane-sequential UWORD array: just this plane's bpr*height
+        // bytes serialised row-by-row. Word count = words_per_row*height.
+        auto wpr = bp.bytes_per_row / 2;
+        auto total = wpr * bp.height;
+        std::size_t wc = 0;
+        out += std::format("static const UWORD {}_f{}_p{}[]"
+                           " __attribute__((aligned({})))"
+                           " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
+                           sym, fi, p, align);
+        for (std::size_t y = 0; y < bp.height; ++y) {
             out += "    ";
-            auto offset = planes.plane_row_offset(p, y);
-            for (std::size_t w = 0; w < words_per_row; ++w) {
+            auto offset = bp.plane_row_offset(p, y);
+            for (std::size_t w = 0; w < wpr; ++w) {
                 auto byte_off = offset + w * 2;
-                auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
-                auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
+                auto hi = static_cast<std::uint16_t>(bp.data[byte_off]);
+                auto lo = static_cast<std::uint16_t>(bp.data[byte_off + 1]);
                 auto word = static_cast<std::uint16_t>((hi << 8) | lo);
-                ++word_count;
+                ++wc;
                 out += std::format("0x{:04X}", word);
-                if (word_count < total_words) out += ",";
+                if (wc < total) out += ",";
             }
             out += "\n";
         }
-    }
-    out += "};\n\n";
+        out += "};\n";
+    };
 
-    // Extra frames (multi-frame batch viewer). Frame 0 = the primary
-    // `_planes` array above; each extra frame N gets `_frameN_planes`.
-    // Same line-interleaved layout, same chip-RAM placement.
-    auto n_extra = options.extra_frame_planes.size();
-    if (n_extra > 0) {
-        for (std::size_t fi = 0; fi < n_extra; ++fi) {
-            auto& fp = options.extra_frame_planes[fi];
-            auto fw = fp.bytes_per_row / 2;
-            auto ftw = fw * fp.depth * fp.height;
-            std::size_t fwc = 0;
-            out += std::format("static const UWORD {}_frame{}_planes[]"
-                               " __attribute__((aligned({})))"
-                               " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
-                               sym, fi + 1, align);
-            for (std::size_t y = 0; y < fp.height; ++y) {
-                for (std::size_t p = 0; p < fp.depth; ++p) {
-                    out += "    ";
-                    auto offset = fp.plane_row_offset(p, y);
-                    for (std::size_t w = 0; w < fw; ++w) {
-                        auto byte_off = offset + w * 2;
-                        auto hi = static_cast<std::uint16_t>(fp.data[byte_off]);
-                        auto lo = static_cast<std::uint16_t>(fp.data[byte_off + 1]);
-                        auto word = static_cast<std::uint16_t>((hi << 8) | lo);
-                        ++fwc;
-                        out += std::format("0x{:04X}", word);
-                        if (fwc < ftw) out += ",";
-                    }
-                    out += "\n";
-                }
-            }
-            out += "};\n\n";
+    if (is_batch) {
+        // Plane-sequential per-frame emission. Each frame fi gets one
+        // array per non-zero plane: <sym>_fI_pJ. Zero planes are NOT
+        // emitted; the runtime's shared zero buffer covers them.
+        if (any_zero_plane) {
+            out += "/* Plane mask (all-zero across every frame, NULL in "
+                   "_frame_planes[][] = use shared runtime zero buffer): ";
+            for (std::size_t p = 0; p < depth; ++p)
+                out += plane_zero[p] ? '0' : '1';
+            out += " */\n\n";
         }
-        // Frame base table — index = frame number, value = base UBYTE pointer.
-        // Used by the click-cycle loop to repatch BPLxPT in the copper list.
-        out += std::format("static const UBYTE* const {}_frame_bases[{}] = {{\n",
-                           sym, n_extra + 1);
-        out += std::format("    (const UBYTE*){}_planes,\n", sym);
-        for (std::size_t fi = 0; fi < n_extra; ++fi) {
-            out += std::format("    (const UBYTE*){}_frame{}_planes{}\n",
-                               sym, fi + 1, fi + 1 < n_extra ? "," : "");
+        for (std::size_t fi = 0; fi < n_frames_total; ++fi) {
+            const auto& bp = (fi == 0) ? planes
+                                       : options.extra_frame_planes[fi - 1];
+            for (std::size_t p = 0; p < depth; ++p) {
+                if (plane_zero[p]) continue;
+                emit_plane_seq(fi, bp, p);
+            }
+        }
+        out += "\n";
+        // Pointer table: per frame, per plane. NULL = use the shared
+        // runtime zero buffer (alloc'd and patched in below).
+        out += std::format("static const UBYTE* {}_frame_planes[{}][{}] = {{\n",
+                           sym, n_frames_total, depth);
+        for (std::size_t fi = 0; fi < n_frames_total; ++fi) {
+            out += "    {";
+            for (std::size_t p = 0; p < depth; ++p) {
+                if (plane_zero[p]) out += " 0";
+                else out += std::format(" (const UBYTE*){}_f{}_p{}",
+                                        sym, fi, p);
+                if (p + 1 < depth) out += ",";
+            }
+            out += " }";
+            if (fi + 1 < n_frames_total) out += ",";
+            out += "\n";
+        }
+        out += "};\n\n";
+    } else {
+        // Single-frame: original line-interleaved blob (best DRAM page
+        // locality for fast DMA). One static array, all planes inlined.
+        out += std::format("static const UWORD {}_planes[]"
+                           " __attribute__((aligned({})))"
+                           " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
+                           sym, align);
+        auto total_words = words_per_row * depth * height;
+        std::size_t word_count = 0;
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t p = 0; p < depth; ++p) {
+                out += "    ";
+                auto offset = planes.plane_row_offset(p, y);
+                for (std::size_t w = 0; w < words_per_row; ++w) {
+                    auto byte_off = offset + w * 2;
+                    auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
+                    auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
+                    auto word = static_cast<std::uint16_t>((hi << 8) | lo);
+                    ++word_count;
+                    out += std::format("0x{:04X}", word);
+                    if (word_count < total_words) out += ",";
+                }
+                out += "\n";
+            }
         }
         out += "};\n\n";
     }
@@ -1109,31 +1169,54 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "\n";
 
     // --- Bitplane modulo ---
-    // Interleaved layout: each plane's pointer needs to skip past the other
-    // planes' rows after consuming bpr bytes of its own row.
+    // Single-frame (line-interleaved): each plane's pointer skips past
+    // other planes' rows after consuming bpr bytes of its own row.
     //   Progressive: mod = bpr * (depth - 1)
-    //   Interlace:   mod = bpr * (depth*2 - 1)   (also skip the other field's row)
-    // FMODE=3 reads 8 bytes past the visible area as overread, so the pointer
-    // has advanced bpr+8 instead of bpr — subtract 8 from the modulo.
-    auto mod = static_cast<int>(bpr) *
-               (static_cast<int>(depth) * (is_lace ? 2 : 1) - 1)
-             - (need_fmode3 ? 8 : 0);
+    //   Interlace:   mod = bpr * (depth*2 - 1)   (skip the other field too)
+    // Batch (plane-sequential): each plane is a contiguous bpr*height
+    // block, so the next row is already at +bpr — no skip, mod = 0.
+    // FMODE=3 reads 8 bytes past the visible area as overread, so the
+    // pointer has advanced bpr+8 instead of bpr — subtract 8.
+    int mod = is_batch
+        ? -(need_fmode3 ? 8 : 0)
+        : static_cast<int>(bpr)
+              * (static_cast<int>(depth) * (is_lace ? 2 : 1) - 1)
+              - (need_fmode3 ? 8 : 0);
     out += std::format("    *cl++ = offsetof(struct Custom, bpl1mod); "
                        "*cl++ = {};\n", mod);
     out += std::format("    *cl++ = offsetof(struct Custom, bpl2mod); "
                        "*cl++ = {};\n\n", mod);
 
-    out += std::format("    const UBYTE* planes[{}];\n", depth);
-    out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
-    out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
-                       sym, bpr);
-    if (n_extra > 0) {
-        // Save the slot for click-cycle BPLxPT patching. The next 4*depth
-        // UWORDs in the copper list hold BPL1PTH/L .. BPLnPTH/L; we'll
-        // overwrite them in-place each click.
+    if (is_batch) {
+        // Batch: BPLxPT comes from <sym>_frame_planes[frame][plane].
+        // NULL slots get patched at runtime to a shared zero buffer that
+        // is allocated once in chip RAM (size bpr*height) so unused
+        // playfields cost only one buffer instead of one per frame.
+        if (any_zero_plane) {
+            out += std::format("    UBYTE* zero_plane = (UBYTE*)AllocMem("
+                               "{}, MEMF_CHIP | MEMF_CLEAR);\n",
+                               bpr * height);
+            out += "    if (!zero_plane) { FreeSystem(); return 0; }\n";
+            out += std::format("    for (int fi = 0; fi < {}; fi++)\n",
+                               n_frames_total);
+            out += std::format("        for (int p = 0; p < {}; p++)\n", depth);
+            out += std::format("            if (!{}_frame_planes[fi][p])\n",
+                               sym);
+            out += std::format("                {}_frame_planes[fi][p] = "
+                               "zero_plane;\n", sym);
+        }
+        out += std::format("    const UBYTE* planes[{}];\n", depth);
+        out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
+        out += std::format("        planes[i] = {}_frame_planes[0][i];\n", sym);
         out += "    USHORT* bpl_slot = cl;\n";
+        out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
+    } else {
+        out += std::format("    const UBYTE* planes[{}];\n", depth);
+        out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
+        out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
+                           sym, bpr);
+        out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
     }
-    out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
 
     // Set palette via copper list.
     // AGA >32 colors: BPLCON3 bank switching.
@@ -1638,11 +1721,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "        if (cur && !prev) {\n";
         out += std::format("            frame++; if (frame >= {}) frame = 0;\n",
                            n_extra + 1);
-        out += std::format("            const UBYTE* base = {}_frame_bases[frame];\n",
-                           sym);
         out += std::format("            const UBYTE* fp[{}];\n", depth);
-        out += std::format("            for (int i = 0; i < {}; i++) fp[i] = base + {} * i;\n",
-                           depth, bpr);
+        out += std::format("            for (int i = 0; i < {}; i++) fp[i] = "
+                           "{}_frame_planes[frame][i];\n", depth, sym);
         out += std::format("            (void)copSetPlanes(bpl_slot, fp, {});\n",
                            depth);
         out += "        }\n";
