@@ -282,6 +282,7 @@ export const EXAMPLES: Example[] = [
   { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
   { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'ostromoukhov', copper: true } },
   { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'checker', dualPlayfield: true, scap: true } },
+  { name: 'asterix',      file: 'asterix.png',         opts: { mode: 'cga-text80x100', chipset: 'cga', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
 ]
 
 export function defaultOptions(): Options {
