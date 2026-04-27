@@ -49,9 +49,14 @@ jobs:
 
       # Emscripten — the WASM build is the source-of-truth for @wasm/png2amiga.js
       # imports; without it Vite can't bundle. Caching the SDK saves ~30s per run.
+      #
+      # Pinning to a specific release version avoids the `HEAD.zip` fetch path
+      # the `latest` setting takes — that path occasionally 502s during GitHub
+      # CDN incidents (kills the whole CI run). A pinned tag downloads from a
+      # release archive that's far more reliably cached. Bump as needed.
       - uses: mymindstorm/setup-emsdk@v14
         with:
-          version: latest
+          version: 3.1.74
           actions-cache-folder: emsdk-cache
 
       - name: Install build tools
