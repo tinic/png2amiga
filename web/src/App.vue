@@ -1,6 +1,8 @@
 <script setup>
 import Converter from './components/Converter.vue'
 import { track } from './lib/analytics.js'
+
+const version = __APP_VERSION__
 </script>
 
 <template>
@@ -10,7 +12,7 @@ import { track } from './lib/analytics.js'
         <div class="flex align-items-center gap-3">
           <img src="/boing.svg" alt="Amiga Boing Ball" class="logo" />
           <div>
-            <h1 class="m-0 title">png2amiga</h1>
+            <h1 class="m-0 title">png2amiga<span class="version">v{{ version }}</span></h1>
             <p class="m-0 mt-1 text-sm text-color-secondary">
               Convert images to Commodore Amiga OCS/AGA formats with perceptual color matching
               — <a href="https://github.com/tinic/png2amiga" target="_blank" class="github-link" @click="track('github-click')">GitHub <i class="pi pi-github"></i></a>
@@ -39,6 +41,16 @@ import { track } from './lib/analytics.js'
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+.version {
+  margin-left: 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: #888;
+  -webkit-text-fill-color: #888;
+  vertical-align: middle;
 }
 
 .github-link {
