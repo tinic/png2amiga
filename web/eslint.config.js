@@ -120,14 +120,36 @@ export default [
       }],
       'no-restricted-syntax': ['error',
         {
-          selector: "TSAsExpression > TSAnyKeyword",
-          message: "`as any` is banned. Cast through `unknown` and explain why if absolutely necessary.",
+          // `as any`
+          selector: 'TSAsExpression > TSAnyKeyword',
+          message: '`as any` is banned. Cast through `unknown` and explain why if absolutely necessary.',
+        },
+        {
+          // `as unknown as X` — escape hatch that defeats the as-any ban.
+          // Acceptable only at well-defined trust boundaries (worker
+          // postMessage, third-party untyped APIs); use an explicit
+          // // eslint-disable-next-line + rationale at those sites.
+          selector: 'TSAsExpression > TSAsExpression > TSUnknownKeyword',
+          message: 'Chained `as unknown as X` is banned. Add a runtime narrow (typeof / instanceof / "in") or define a proper type at the boundary.',
+        },
+        {
+          // Non-null assertion (`x!`) — a quieter cousin of `as any`. Use
+          // an explicit narrow (`if (!x) throw …`) so the asserter's
+          // contract is checked at runtime.
+          selector: 'TSNonNullExpression',
+          message: 'Non-null assertion (`!`) is banned. Use an explicit narrow / runtime guard so the contract is checked.',
         },
       ],
-      // Existing baseline for Converter.vue's larger handlers — tighten over time.
-      'complexity': ['error', 20],
+      // Surface "known-broken, ship anyway" debt comments as warnings.
+      'no-warning-comments': ['warn', {
+        terms: ['fixme', 'xxx'],
+        location: 'anywhere',
+      }],
+      // Goal: cyclomatic and cognitive complexity of 10. Refactor functions
+      // that exceed it into smaller named helpers; do NOT raise the cap.
+      'complexity': ['error', 10],
       'max-params': ['error', 5],
-      'sonarjs/cognitive-complexity': ['error', 20],
+      'sonarjs/cognitive-complexity': ['error', 10],
       'no-console': ['warn', { allow: ['warn', 'error'] }],
       'curly': ['error', 'multi-line'],
 
@@ -147,6 +169,18 @@ export default [
       // for the raw-format tooltip), which already coerces every
       // interpolation to a number — see the SAFETY comment by rawTooltipHtml.
       'vue/no-v-html': 'error',
+      // Catch the "destructure a ref" footgun: `const { value } = myRef`
+      // gives you a value, not reactivity, and silently breaks subsequent
+      // updates.
+      'vue/no-ref-object-destructure': 'error',
+      // Keep <script setup> macros in a consistent order so PRs don't churn
+      // on stylistic ordering: defineOptions → defineProps → defineEmits →
+      // defineSlots (the eslint-plugin-vue default).
+      'vue/define-macros-order': 'error',
+      // Vue 3.5+: use `useTemplateRef('foo')` instead of the legacy
+      // `ref(null)` + matching template `ref="foo"`. The new form is
+      // type-safe and detaches automatically.
+      'vue/prefer-use-template-ref': 'error',
 
       // import-x — resolver doesn't grok @wasm alias / vite-built worker URLs
       'import-x/no-unresolved': ['error', {

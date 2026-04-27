@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, watch, nextTick, computed, onBeforeUnmount } from 'vue'
+import { ref, reactive, watch, nextTick, computed, onBeforeUnmount, useTemplateRef } from 'vue'
 import type { ConvertResult } from '@wasm/png2amiga.js'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
@@ -54,8 +54,8 @@ watch(wasmLoading, async (loading) => {
 })
 
 const options = reactive(defaultOptions())
-const canvasRef = ref<HTMLCanvasElement | null>(null)
-const crtCanvasRef = ref<HTMLCanvasElement | null>(null)  // WebGL CRT-preview overlay canvas
+const canvasRef = useTemplateRef<HTMLCanvasElement>('canvasRef')
+const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL CRT-preview overlay canvas
 const crtEnabled = ref(false)
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
@@ -125,7 +125,7 @@ const loupeActive = ref(false)
 const loupeX = ref(0)  // pan offset in CSS pixels (negative = scrolled right/down)
 const loupeY = ref(0)
 const loupeHeight = ref<string | null>(null)
-const previewColRef = ref<HTMLElement | null>(null)
+const previewColRef = useTemplateRef<HTMLElement>('previewColRef')
 let dragStart: DragStart | null = null    // { x, y, ox, oy } while dragging
 
 function loupeToggle() {
@@ -217,6 +217,43 @@ const showDepthSlider = computed(() => {
 // inserted as raw HTML. Every interpolation MUST be numeric/bool and is
 // coerced via Number() / Boolean() below so a future regression that
 // smuggles a string with HTML special characters can't turn into XSS.
+interface RawSection { off: number; size: number; label: string; detail: string }
+
+function rawHeaderLines(): string[] {
+  return [
+    `Raw binary format (big-endian):`,
+    ``,
+    `Offset  Size     Content`,
+    `------  -------  ----------------------------`,
+  ]
+}
+
+function formatRawRow(s: RawSection): string[] {
+  const offHex = s.off.toString(16).padStart(4, '0')
+  const sizeStr = s.size.toLocaleString().padStart(7)
+  return [`0x${offHex}  ${sizeStr}  ${s.label}`, `                 ${s.detail}`]
+}
+
+interface RawLayoutInputs { d: number; bpr: number; aga: boolean; colors: number; pb: number; copPerPass: number; cpl: number; h: number }
+
+function rawSections({ d, bpr, aga, colors, pb, copPerPass, cpl, h }: RawLayoutInputs): RawSection[] {
+  const palSize = colors * 2
+  const sections: RawSection[] = []
+  let off = 0
+  sections.push({ off, size: pb, label: 'Bitplanes', detail: `(${d}bpl, ${bpr}B/row, interleaved)` }); off += pb
+  sections.push({ off, size: palSize, label: `Palette${aga ? ' hi' : ''}`, detail: `(${colors} * u16, ${aga ? 'hi nibbles 0x0RGB' : '0x0RGB'})` }); off += palSize
+  if (aga) {
+    sections.push({ off, size: palSize, label: 'Palette lo', detail: `(${colors} * u16, lo nibbles 0x0RGB)` }); off += palSize
+  }
+  if (copPerPass > 0) {
+    sections.push({ off, size: copPerPass, label: `Copper${aga ? ' hi' : ''}`, detail: `((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)` }); off += copPerPass
+    if (aga) {
+      sections.push({ off, size: copPerPass, label: 'Copper lo', detail: `((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)` })
+    }
+  }
+  return sections
+}
+
 const rawTooltipHtml = computed(() => {
   const n = (v: unknown) => Number(v) || 0
   const w = n(lastWidth.value)
@@ -224,37 +261,22 @@ const rawTooltipHtml = computed(() => {
   const d = n(options.depth || defaultDepth(options.mode))
   const dd = n(defaultDepth(options.mode))
   const bpr = Math.ceil(w / 16) * 2
-  // Use the actual chipset reported by the encoder, not the user's option,
-  // because mode-driven chipset (e.g. HAM7/8 force AGA) may override.
+  // Encoder-reported chipset, not the user option (HAM7/8 force AGA).
   const aga = Boolean(lastAga.value)
   const colors = 1 << (isHamMode(options.mode) ? dd - 2 : d)
   const pb = n(lastPlaneBytes.value)
   const cb = n(lastCopperBytes.value)
-  const palSize = colors * 2
   // .raw uses fixed [h][cpl] grid with sentinels for unused/skipped slots.
-  // copPerPass = h * cpl * 4. cpl reported by the encoder (post auto-stretch).
   const cpl = n(lastChangesPerLine.value)
   const copPerPass = aga && cb ? cb / 2 : cb
-  let off = 0
-  const lines = [ `Raw binary format (big-endian):`, ``, `Offset  Size     Content`, `------  -------  ----------------------------`]
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${pb.toLocaleString().padStart(7)}  Bitplanes`, `                 (${d}bpl, ${bpr}B/row, interleaved)`)
-  off += pb
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette${aga ? ' hi' : ''}`, `                 (${colors} * u16, ${aga ? 'hi nibbles 0x0RGB' : '0x0RGB'})`)
-  off += palSize
-  if (aga) {
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette lo`, `                 (${colors} * u16, lo nibbles 0x0RGB)`)
-    off += palSize
-  }
-  if (cb > 0) {
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper${aga ? ' hi' : ''}`, `                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
-    off += copPerPass
-    if (aga) {
-      lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper lo`, `                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
-      off += copPerPass
-    }
-  }
-  lines.push(`------  -------  ----------------------------`)
-  lines.push(`Total:  ${off.toLocaleString().padStart(7)}  ${w}x${h}, ${d}bpl, ${aga ? 'AGA 24-bit' : 'OCS 12-bit'}`)
+  const sections = rawSections({ d, bpr, aga, colors, pb, copPerPass, cpl, h })
+  const total = sections.reduce((sum, s) => sum + s.size, 0)
+  const lines = [
+    ...rawHeaderLines(),
+    ...sections.flatMap(s => formatRawRow(s)),
+    `------  -------  ----------------------------`,
+    `Total:  ${total.toLocaleString().padStart(7)}  ${w}x${h}, ${d}bpl, ${aga ? 'AGA 24-bit' : 'OCS 12-bit'}`,
+  ]
   return `<pre style="margin:0;font-size:0.7rem;line-height:1.3;white-space:pre">${lines.join('\n')}</pre>`
 })
 
@@ -547,21 +569,27 @@ window.addEventListener('beforeunload', () => {
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let spinnerTimer: ReturnType<typeof setTimeout> | null = null
 
+function formatBytes(b: number): string {
+  return b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
+}
+
+function formatSizeStats(result: ConvertResult): string {
+  // diskBytes / chipBytes are the single source of truth (computed once
+  // in api::make_result so they can't go stale across mode additions).
+  if (!result.planeBytes || result.planeBytes <= 0) return ''
+  return `, disk: ${formatBytes(result.diskBytes ?? 0)}, chip: ${formatBytes(result.chipBytes ?? 0)}`
+}
+
 function formatResultInfo(result: ConvertResult) {
-  let info = `${result.width}x${result.height}, ${statusChipset.value}`
-  info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
-  if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg CAP/line`
-  // Size stats — diskBytes / chipBytes are the single source of truth
-  // (computed once in api::make_result so they can't go stale across
-  // mode additions). Don't re-derive from {planeBytes, copperBytes,
-  // changesPerLine, ...} here.
-  if (result.planeBytes && result.planeBytes > 0) {
-    const fmt = (b: number) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
-    info += `, disk: ${fmt(result.diskBytes ?? 0)}, chip: ${fmt(result.chipBytes ?? 0)}`
-  }
-  if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
-  if (result.psnr != null && Number.isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`
-  return info
+  const colorCount = result.totalColors || result.colors || 0
+  const parts = [`${result.width}x${result.height}, ${statusChipset.value}`,
+                 `${result.depth || '?'}bpl, ${colorCount} colors`]
+  if (result.copperChanges) parts.push(`${result.copperChanges.toFixed(1)} avg CAP/line`)
+  const sizeStats = formatSizeStats(result)
+  if (sizeStats) parts.push(sizeStats.slice(2))  // strip leading ", "
+  if (result.quantError != null) parts.push(`error: ${result.quantError.toFixed(2)}`)
+  if (result.psnr != null && Number.isFinite(result.psnr)) parts.push(`PSNR: ${result.psnr.toFixed(1)} dB`)
+  return parts.join(', ')
 }
 
 function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number } | null {
@@ -605,96 +633,95 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number } |
   return { dw, dh }
 }
 
+function updateLastResultRefs(result: ConvertResult): void {
+  lastWidth.value = result.width
+  lastHeight.value = result.height
+  lastCopPerLine.value = result.copperChanges || 0
+  lastPlaneBytes.value = result.planeBytes || 0
+  lastCopperBytes.value = result.copperBytes || 0
+  lastChangesPerLine.value = result.changesPerLine || 0
+  lastMaxMovesPerLine.value = result.maxMovesPerLine || 0
+  lastAga.value = Boolean(result.aga)
+  imageHasAlpha.value = Boolean(result.hasTransparency)
+  // If size-override is on but width/height are 0 (fresh image just loaded),
+  // seed the inputs with the natural defaults; triggers one idempotent
+  // re-convert via the deep options watcher.
+  if (sizeOverride.value && (!options.width || !options.height)) {
+    options.width = result.width
+    options.height = result.height
+  }
+}
+
+function trackConvertSuccess(_result: ConvertResult, convertMs: number): void {
+  track('convert', {
+    mode: options.mode, chipset: options.chipset, dither: options.dither,
+    depth: options.depth, copper: options.copper,
+    ditherStrength: options.ditherStrength, gamma: options.gamma,
+    brightness: options.brightness, contrast: options.contrast,
+    saturation: options.saturation, convertMs: Math.round(convertMs),
+  })
+  if (!firstConvertTracked) {
+    firstConvertTracked = true
+    track('first-convert-time', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
+  }
+}
+
+async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
+  const painted = paintPreviewCanvas(result)
+  if (!painted || !result.rgba) return false
+  const { dw, dh } = painted
+  // Cache source for CRT re-render on toggle without re-encoding.
+  lastRgba = new Uint8Array(result.rgba)
+  lastSrc = { w: result.width, h: result.height }
+  lastDst = { w: dw, h: dh }
+  if (crtEnabled.value) {
+    const r = await ensureCrtRenderer()
+    if (r) renderCrt()
+  }
+  return true
+}
+
+async function runConvert(srcBytes: Uint8Array): Promise<void> {
+  errorMsg.value = ''
+  const convertStart = performance.now()
+  // Spinner only if conversion is slower than 100 ms.
+  if (spinnerTimer) clearTimeout(spinnerTimer)
+  spinnerTimer = setTimeout(() => { converting.value = true }, 100)
+  progress.value = 0
+  progressStage.value = ''
+  try {
+    const onProgress = (p: number, stage: string) => {
+      progress.value = Math.round(p * 100)
+      progressStage.value = stage || ''
+    }
+    const result = await convertRGBA(srcBytes, buildWasmOptions(), onProgress)
+    if (spinnerTimer) clearTimeout(spinnerTimer)
+    progress.value = 0
+    progressStage.value = ''
+    if (result.error) {
+      errorMsg.value = result.error
+      track('error', { type: 'convert', message: result.error, mode: options.mode })
+      return
+    }
+    if (!await paintAndCacheResult(result)) return
+    updateLastResultRefs(result)
+    resultInfo.value = formatResultInfo(result)
+    trackConvertSuccess(result, performance.now() - convertStart)
+  } catch (error) {
+    if (spinnerTimer) clearTimeout(spinnerTimer)
+    const message = errorMessage(error)
+    errorMsg.value = message
+    track('error', { type: 'convert-exception', message })
+  } finally {
+    converting.value = false
+  }
+}
+
 function doConvert() {
   const bytes = imageBytes.value
   if (!bytes || wasmLoading.value) return
-
   if (debounceTimer) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(() => { void runConvert(bytes) }, 150)
-  async function runConvert(srcBytes: Uint8Array) {
-    errorMsg.value = ''
-    const convertStart = performance.now()
-
-    // Show spinner only if conversion takes longer than 100ms
-    if (spinnerTimer) clearTimeout(spinnerTimer)
-    spinnerTimer = setTimeout(() => { converting.value = true }, 100)
-
-    try {
-      progress.value = 0
-      progressStage.value = ''
-      const onProgress = (p: number, stage: string) => {
-        progress.value = Math.round(p * 100)
-        progressStage.value = stage || ''
-      }
-      const result = await convertRGBA(
-        srcBytes, buildWasmOptions(), onProgress)
-
-      if (spinnerTimer) clearTimeout(spinnerTimer)
-      progress.value = 0
-      progressStage.value = ''
-
-      if (result.error) {
-        errorMsg.value = result.error
-        track('error', { type: 'convert', message: result.error, mode: options.mode })
-        converting.value = false
-        return
-      }
-
-      const painted = paintPreviewCanvas(result)
-      if (!painted || !result.rgba) { converting.value = false; return }
-      const { dw, dh } = painted
-
-      // Cache source for CRT re-render on toggle without re-encoding.
-      lastRgba = new Uint8Array(result.rgba)
-      lastSrc = { w: result.width, h: result.height }
-      lastDst = { w: dw, h: dh }
-      if (crtEnabled.value) {
-        const r = await ensureCrtRenderer()
-        if (r) renderCrt()
-      }
-
-      lastWidth.value = result.width
-      lastHeight.value = result.height
-      lastCopPerLine.value = result.copperChanges || 0
-      lastPlaneBytes.value = result.planeBytes || 0
-      lastCopperBytes.value = result.copperBytes || 0
-      lastChangesPerLine.value = result.changesPerLine || 0
-      lastMaxMovesPerLine.value = result.maxMovesPerLine || 0
-      lastAga.value = Boolean(result.aga)
-      imageHasAlpha.value = Boolean(result.hasTransparency)
-
-      // If we're in size-override mode but width/height got reset to 0
-      // (a new image just loaded), populate the inputs with the freshly
-      // computed natural defaults for the new image. Triggers one more
-      // (idempotent) convert via the deep options watcher.
-      if (sizeOverride.value && (!options.width || !options.height)) {
-        options.width = result.width
-        options.height = result.height
-      }
-
-      resultInfo.value = formatResultInfo(result)
-
-      const convertMs = performance.now() - convertStart
-      track('convert', {
-        mode: options.mode, chipset: options.chipset, dither: options.dither,
-        depth: options.depth, copper: options.copper,
-        ditherStrength: options.ditherStrength, gamma: options.gamma,
-        brightness: options.brightness, contrast: options.contrast,
-        saturation: options.saturation, convertMs: Math.round(convertMs),
-      })
-      if (!firstConvertTracked) {
-        firstConvertTracked = true
-        track('first-convert-time', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
-      }
-    } catch (error) {
-      if (spinnerTimer) clearTimeout(spinnerTimer)
-      const message = error instanceof Error ? error.message : String(error)
-      errorMsg.value = message
-      track('error', { type: 'convert-exception', message })
-    }
-
-    converting.value = false
-  }
 }
 
 watch([imageBytes, () => ({ ...options })], doConvert, { deep: true })
@@ -880,22 +907,28 @@ function parseGimpPalette(text: string): string[] {
   return colors
 }
 
-function parseIffCmap(bytes: Uint8Array): string[] {
+function readBe32(bytes: Uint8Array, pos: number): number {
+  return ((bytes[pos] ?? 0) << 24) | ((bytes[pos+1] ?? 0) << 16) | ((bytes[pos+2] ?? 0) << 8) | (bytes[pos+3] ?? 0)
+}
+
+function readCmapColors(bytes: Uint8Array, pos: number, size: number): string[] {
   const colors: string[] = []
+  for (let i = 0; i + 2 < size && pos + i + 2 <= bytes.length; i += 3) {
+    colors.push(`rgb(${bytes[pos+i] ?? 0},${bytes[pos+i+1] ?? 0},${bytes[pos+i+2] ?? 0})`)
+  }
+  return colors
+}
+
+function parseIffCmap(bytes: Uint8Array): string[] {
   let pos = 12
   while (pos + 8 <= bytes.length) {
     const id = String.fromCodePoint(...bytes.slice(pos, pos + 4))
-    const size = ((bytes[pos+4] ?? 0) << 24) | ((bytes[pos+5] ?? 0) << 16) | ((bytes[pos+6] ?? 0) << 8) | (bytes[pos+7] ?? 0)
+    const size = readBe32(bytes, pos + 4)
     pos += 8
-    if (id === 'CMAP') {
-      for (let i = 0; i + 2 < size && pos + i + 2 <= bytes.length; i += 3) {
-        colors.push(`rgb(${bytes[pos+i] ?? 0},${bytes[pos+i+1] ?? 0},${bytes[pos+i+2] ?? 0})`)
-      }
-      break
-    }
+    if (id === 'CMAP') return readCmapColors(bytes, pos, size)
     pos += size + (size & 1)  // chunks are word-aligned
   }
-  return colors
+  return []
 }
 
 const HEX_LINE = /^#?([0-9a-fA-F]{6})$/

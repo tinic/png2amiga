@@ -45,47 +45,50 @@ const pending = new Map<number, PendingEntry | DitherDefaultsPendingEntry>()
 const sharedLoading = ref(true)
 const sharedError = ref('')
 
-function handleMessage(msg: WorkerInboundMessage): void {
-  if ('type' in msg) {
-    if (msg.type === 'ready') {
-      sharedLoading.value = false
-      return
-    }
-    if (msg.type === 'error') {
-      sharedError.value = msg.error
-      sharedLoading.value = false
-      return
-    }
-    if (msg.type === 'progress') {
-      const cb = pending.get(msg.id)
-      if (cb && 'onProgress' in cb && cb.onProgress) cb.onProgress(msg.p, msg.stage)
-      return
-    }
+function unwrapConvertEnvelope(raw: ReplyEnvelope): ConvertResult {
+  // Conditional spreads (rather than `rgba: ... ?? undefined`) so we don't
+  // explicitly set optional keys to undefined under exactOptionalPropertyTypes.
+  const { rgba, data, ...rest } = raw
+  return {
+    ...rest,
+    ...(rgba ? { rgba: new Uint8Array(rgba) } : {}),
+    ...(data ? { data: new Uint8Array(data) } : {}),
   }
-  // Reply path: id-keyed { result } or { error }.
-  const cb = pending.get(msg.id)
+}
+
+function handleProgress(id: number, p: number, stage: string): void {
+  const cb = pending.get(id)
+  if (cb && 'onProgress' in cb && cb.onProgress) cb.onProgress(p, stage)
+}
+
+function handleReply(id: number, result: ReplyEnvelope | DitherDefaults): void {
+  const cb = pending.get(id)
   if (!cb) return
-  pending.delete(msg.id)
-  if ('error' in msg) {
-    cb.reject(new Error(msg.error))
-    return
+  pending.delete(id)
+  if ('width' in result) {
+    ;(cb.resolve as (r: ConvertResult) => void)(unwrapConvertEnvelope(result))
+  } else {
+    ;(cb.resolve as (r: DitherDefaults) => void)(result)
   }
-  const raw = msg.result
-  if ('width' in raw) {
-    // ConvertResult envelope — wrap transferred ArrayBuffers as Uint8Array.
-    // Conditional spreads (rather than `rgba: ... ?? undefined`) so we don't
-    // explicitly set optional keys to undefined under exactOptionalPropertyTypes.
-    const { rgba, data, ...rest } = raw
-    const result: ConvertResult = {
-      ...rest,
-      ...(rgba ? { rgba: new Uint8Array(rgba) } : {}),
-      ...(data ? { data: new Uint8Array(data) } : {}),
-    }
-    ;(cb.resolve as (r: ConvertResult) => void)(result)
-    return
-  }
-  // DitherDefaults — passes through as-is.
-  ;(cb.resolve as (r: DitherDefaults) => void)(raw)
+}
+
+function handleError(id: number, error: string): void {
+  const cb = pending.get(id)
+  if (!cb) return
+  pending.delete(id)
+  cb.reject(new Error(error))
+}
+
+function handleStatus(msg: { type: string } & Partial<{ id: number; error: string; p: number; stage: string }>): void {
+  if (msg.type === 'ready')    { sharedLoading.value = false; return }
+  if (msg.type === 'error')    { sharedError.value = msg.error ?? ''; sharedLoading.value = false; return }
+  if (msg.type === 'progress') handleProgress(msg.id ?? -1, msg.p ?? 0, msg.stage ?? '')
+}
+
+function handleMessage(msg: WorkerInboundMessage): void {
+  if ('type' in msg) { handleStatus(msg); return }
+  if ('error' in msg) handleError(msg.id, msg.error)
+  else handleReply(msg.id, msg.result)
 }
 
 function ensureWorker(): void {
@@ -127,12 +130,16 @@ export function useWasm(): UseWasmReturn {
   // (HAM6 + --ham-cap-best, large beam widths, etc.). The worker injects a
   // JS callback into the WASM options at args[1]; ticks come back as
   // {type:'progress'} messages and are routed by id.
+  function postWorker(msg: WorkerOutboundMessage): void {
+    if (!worker) throw new Error('worker not initialised')
+    worker.postMessage(msg)
+  }
+
   function callConvert(fn: string, args: unknown[], onProgress?: ProgressCallback): Promise<ConvertResult> {
     const id = nextId++
     return new Promise((resolve, reject) => {
       pending.set(id, onProgress ? { resolve, reject, onProgress } : { resolve, reject })
-      const msg: WorkerOutboundMessage = { id, fn, args, wantProgress: Boolean(onProgress) }
-      worker!.postMessage(msg)
+      postWorker({ id, fn, args, wantProgress: Boolean(onProgress) })
     })
   }
 
@@ -140,8 +147,7 @@ export function useWasm(): UseWasmReturn {
     const id = nextId++
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject })
-      const msg: WorkerOutboundMessage = { id, fn: 'ditherDefaults', args, wantProgress: false }
-      worker!.postMessage(msg)
+      postWorker({ id, fn: 'ditherDefaults', args, wantProgress: false })
     })
   }
 

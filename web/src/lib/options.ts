@@ -394,25 +394,29 @@ export function isHiresMode(mode: string): boolean {
   return mode.includes('hires')
 }
 
+// DOS mode preview scaling overrides. The WASM encoder returns the raw
+// hardware buffer (320×200, 640×200, 640×350, 640×480, 160×200); we
+// nearest-neighbor scale on-canvas with whole factors. 640-wide buffers
+// already fill most screen widths so don't double them; 320-wide ones do.
+const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
+  'cga-320':         { sx: 2, sy: 2 },
+  'ega-320':         { sx: 2, sy: 2 },
+  'vga-13h':         { sx: 2, sy: 2 },
+  'cga-composite':   { sx: 4, sy: 2 },  // 160×200 → stretch wide
+  'vga-12h':         { sx: 1, sy: 1 },
+  'vga-10h':         { sx: 1, sy: 1 },
+  'ega-hi':          { sx: 1, sy: 1 },
+  'ega-640':         { sx: 1, sy: 2 },
+  'cga-640':         { sx: 1, sy: 2 },
+  'cga-text80x100':  { sx: 1, sy: 2 },
+}
+
 // Pixel display scale for preview (minimum pixel size on screen)
 export function previewScale(mode: string): PreviewScale {
-  // DOS modes have non-integer PAR (e.g. VGA 13h ~ 0.83 tall). The WASM
-  // encoder returns the raw hardware buffer (e.g. 640x350, 640x480, 640x200);
-  // we nearest-neighbor scale it on-canvas using whole factors so the
-  // preview is readable. 640-wide buffers already fill most screen widths,
-  // so don't double them; 320-wide DOS buffers double horizontally.
-  if (mode === 'cga-320' || mode === 'ega-320' || mode === 'vga-13h')
-    {return { sx: 2, sy: 2 }}
-  if (mode === 'cga-composite')               return { sx: 4, sy: 2 } // 160x200 → stretch
-  if (mode === 'vga-12h')                     return { sx: 1, sy: 1 }
-  // Text modes: renderer returns cols*8 × rows*cell_h; pixels already
-  // account for the scanline count so just pick a display sy that
-  // approximates 4:3 on a modern display.
-  if (mode === 'vga-10h' || mode === 'ega-hi') return { sx: 1, sy: 1 }
-  if (mode === 'ega-640' || mode === 'cga-640' ||
-      mode === 'cga-text80x100') return { sx: 1, sy: 2 }
+  const dos = DOS_PREVIEW_SCALE[mode]
+  if (dos) return dos
   const hi = isHiresMode(mode) || mode.endsWith('-med') || mode.endsWith('-hi')
-  const lace = isInterlaceMode(mode) || mode.endsWith('-hi')  // -hi is 640x400 square pixels
+  const lace = isInterlaceMode(mode) || mode.endsWith('-hi')  // -hi is 640×400 square pixels
   if (hi && lace) return { sx: 1, sy: 1 }
   if (hi)         return { sx: 1, sy: 2 }
   if (lace)       return { sx: 2, sy: 1 }
@@ -443,19 +447,27 @@ export function maxDepth(mode: string, chipset: Chipset): number {
   return chipset === 'aga' ? 8 : 5
 }
 
+// Modes whose default bitplane depth is fixed by hardware. Looked up
+// before the family-based fallbacks below so e.g. cga-640 picks 1 not 4.
+const FIXED_DEFAULT_DEPTH: Record<string, number> = {
+  'stf-low': 4, 'ste-low': 4,
+  'stf-med': 2, 'ste-med': 2,
+  'stf-hi':  1, 'ste-hi':  1,
+  'cga-640': 1,
+  'cga-320': 2, 'cga-composite': 2,
+  'vga-13h': 8,
+}
+
 // Default bitplane depth for a given mode
 export function defaultDepth(mode: string): number {
   if (isEhbMode(mode)) return 6
   const ham = hamType(mode)
   if (ham === 'ham6') return 6
   if (ham === 'ham8') return 8
-  if (mode === 'stf-low' || mode === 'ste-low') return 4
-  if (mode === 'stf-med' || mode === 'ste-med') return 2
-  if (mode === 'stf-hi' || mode === 'ste-hi') return 1
-  // DOS modes: depth fixed by hardware.
-  if (mode === 'cga-640') return 1
-  if (mode === 'cga-320' || mode === 'cga-composite') return 2
-  if (mode === 'vga-13h') return 8
+  const fixed = FIXED_DEFAULT_DEPTH[mode]
+  if (fixed !== undefined) return fixed
+  // Family fallbacks. Text modes and EGA/VGA all default to 4-plane;
+  // unknown hires modes also 4; standard lores 5.
   if (mode.startsWith('cga-text') || mode.startsWith('ega-text')) return 4
   if (isEgaMode(mode) || isVgaMode(mode)) return 4
   if (isHiresMode(mode)) return 4
