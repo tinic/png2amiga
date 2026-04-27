@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+
 import WasmWorker from '../workers/wasm.worker.js?worker'
 
 let worker = null
@@ -14,7 +15,7 @@ const sharedError = ref('')
 function ensureWorker() {
   if (worker) return
   worker = new WasmWorker()
-  worker.onmessage = (e) => {
+  worker.addEventListener('message', (e) => {
     const msg = e.data
     if (msg.type === 'ready') {
       sharedLoading.value = false
@@ -42,7 +43,7 @@ function ensureWorker() {
         cb.resolve(r)
       }
     }
-  }
+  })
 }
 
 // Call this as early as possible (e.g. from main.js before app.mount) so the
@@ -65,7 +66,7 @@ export function useWasm() {
     const id = nextId++
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject, onProgress })
-      worker.postMessage({ id, fn, args, wantProgress: !!onProgress })
+      worker.postMessage({ id, fn, args, wantProgress: Boolean(onProgress) })
     })
   }
 

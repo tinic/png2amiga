@@ -1,4 +1,5 @@
 import { ref, onUnmounted } from 'vue'
+
 import { track } from '../lib/analytics.js'
 
 export function useImageUpload() {
@@ -28,11 +29,11 @@ export function useImageUpload() {
     imageUrl.value = URL.createObjectURL(file)
     uploadTimestamp.value = Date.now()
     const img = new Image()
-    img.onload = () => {
+    img.addEventListener('load', () => {
       imageWidth.value = img.width
       imageHeight.value = img.height
       track('upload', { type: file.type, size: Math.round(file.size / 1024), width: img.width, height: img.height })
-    }
+    })
     img.src = imageUrl.value
   }
 
@@ -55,7 +56,7 @@ export function useImageUpload() {
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = 'image/*'
-    input.onchange = () => handleFiles(input.files)
+    input.addEventListener('change', () => handleFiles(input.files))
     input.click()
   }
 

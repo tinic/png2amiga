@@ -297,15 +297,15 @@ export function createCrtRenderer(canvas) {
     //     filled in by the alternate field on real hardware.
     const isHires     = srcW >= 480
     const isInterlace = srcH >= 280
-    const hardScan = isInterlace ? -1.0 : -8.0
-    const hardPix  = isHires     ? -5.0 : -3.0
+    const hardScan = isInterlace ? -1 : -8
+    const hardPix  = isHires     ? -5 : -3
     // Bloom contributes more in interlace / hires (where the per-row
     // beam is thinner relative to the visible structure).
-    const bloom    = isInterlace ? 0.10 : 0.18
+    const bloom    = isInterlace ? 0.1 : 0.18
     // Brightness compensates for the mask dimming. With softened
     // scanlines (interlace) the average level is already higher, so
     // pull the boost down to keep the look balanced.
-    const brightness = isInterlace ? 1.10 : 1.25
+    const brightness = isInterlace ? 1.1 : 1.25
 
     gl.useProgram(program)
     gl.activeTexture(gl.TEXTURE0)
@@ -317,8 +317,8 @@ export function createCrtRenderer(canvas) {
     gl.uniform1f(u.hardPix,    hardPix)
     gl.uniform1f(u.maskDark,   0.5)
     gl.uniform1f(u.maskLight,  1.5)
-    gl.uniform1f(u.warpX,      1.0 / 96.0)
-    gl.uniform1f(u.warpY,      1.0 / 72.0)
+    gl.uniform1f(u.warpX,      1 / 96)
+    gl.uniform1f(u.warpY,      1 / 72)
     gl.uniform1f(u.bloom,      bloom)
     gl.uniform1f(u.brightness, brightness)
 

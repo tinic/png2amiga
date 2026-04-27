@@ -1,17 +1,5 @@
 <script setup>
 import { ref, reactive, watch, nextTick, computed, onBeforeUnmount } from 'vue'
-import { useWasm } from '../composables/useWasm.js'
-import { useImageUpload } from '../composables/useImageUpload.js'
-import { track } from '../lib/analytics.js'
-import {
-  MODES, CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
-  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
-  defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion, isInterlaceMode,
-  isDosMode, isVgaMode, isEgaMode, isCgaMode, modePar,
-  maxDepth, defaultDepth, effectiveChipset, previewScale,
-  modesForChipset, decomposeMode,
-} from '../lib/options.js'
-
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Slider from 'primevue/slider'
@@ -21,31 +9,44 @@ import ProgressSpinner from 'primevue/progressspinner'
 import ProgressBar from 'primevue/progressbar'
 import Panel from 'primevue/panel'
 
-const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+import {
+  CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
+  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
+  defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
+  isDosMode, isVgaMode, isEgaMode, modePar,
+  maxDepth, defaultDepth, effectiveChipset, previewScale,
+  modesForChipset,
+} from '../lib/options.js'
+import { track } from '../lib/analytics.js'
+import { useImageUpload } from '../composables/useImageUpload.js'
+import { useWasm } from '../composables/useWasm.js'
+
+const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
 const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
 
 // Load first example by default once WASM is ready
-watch(wasmLoading, (loading) => {
-  if (!loading && !wasmError.value && !imageBytes.value) {
-    const example = EXAMPLES[0]
-    fetch(`/examples/${example.file}`)
-      .then(r => r.arrayBuffer())
-      .then(buf => {
-        imageBytes.value = new Uint8Array(buf)
-        imageName.value = example.file
-        const type = example.file.endsWith('.jpg') || example.file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
-        const blob = new Blob([buf], { type })
-        imageUrl.value = URL.createObjectURL(blob)
-        // Decode dimensions so resize presets work for the default example.
-        const img = new Image()
-        img.onload = () => {
-          imageWidth.value = img.width
-          imageHeight.value = img.height
-        }
-        img.src = imageUrl.value
-      })
+watch(wasmLoading, async (loading) => {
+  if (loading || wasmError.value || imageBytes.value) return
+  const example = EXAMPLES[0]
+  try {
+    const r = await fetch(`/examples/${example.file}`)
+    const buf = await r.arrayBuffer()
+    imageBytes.value = new Uint8Array(buf)
+    imageName.value = example.file
+    const type = example.file.endsWith('.jpg') || example.file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
+    const blob = new Blob([buf], { type })
+    imageUrl.value = URL.createObjectURL(blob)
+    // Decode dimensions so resize presets work for the default example.
+    const img = new Image()
+    img.addEventListener('load', () => {
+      imageWidth.value = img.width
+      imageHeight.value = img.height
+    })
+    img.src = imageUrl.value
+  } catch (error) {
+    console.warn('failed to load default example:', error)
   }
 })
 
@@ -68,8 +69,8 @@ async function ensureCrtRenderer() {
   const { createCrtRenderer } = await import('../lib/crt.js')
   try {
     crtRenderer = createCrtRenderer(crtCanvasRef.value)
-  } catch (e) {
-    errorMsg.value = `CRT: ${e.message}`
+  } catch (error) {
+    errorMsg.value = `CRT: ${error.message}`
     crtEnabled.value = false
     return null
   }
@@ -228,29 +229,20 @@ const rawTooltipHtml = computed(() => {
   const cpl = n(lastChangesPerLine.value)
   const copPerPass = aga && cb ? cb / 2 : cb
   let off = 0
-  let lines = []
-  lines.push(`Raw binary format (big-endian):`)
-  lines.push(``)
-  lines.push(`Offset  Size     Content`)
-  lines.push(`------  -------  ----------------------------`)
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${pb.toLocaleString().padStart(7)}  Bitplanes`)
-  lines.push(`                 (${d}bpl, ${bpr}B/row, interleaved)`)
+  const lines = [ `Raw binary format (big-endian):`, ``, `Offset  Size     Content`, `------  -------  ----------------------------`]
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${pb.toLocaleString().padStart(7)}  Bitplanes`, `                 (${d}bpl, ${bpr}B/row, interleaved)`)
   off += pb
-  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette${aga ? ' hi' : ''}`)
-  lines.push(`                 (${colors} * u16, ${aga ? 'hi nibbles 0x0RGB' : '0x0RGB'})`)
+  lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette${aga ? ' hi' : ''}`, `                 (${colors} * u16, ${aga ? 'hi nibbles 0x0RGB' : '0x0RGB'})`)
   off += palSize
   if (aga) {
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette lo`)
-    lines.push(`                 (${colors} * u16, lo nibbles 0x0RGB)`)
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${palSize.toLocaleString().padStart(7)}  Palette lo`, `                 (${colors} * u16, lo nibbles 0x0RGB)`)
     off += palSize
   }
   if (cb > 0) {
-    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper${aga ? ' hi' : ''}`)
-    lines.push(`                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
+    lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper${aga ? ' hi' : ''}`, `                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
     off += copPerPass
     if (aga) {
-      lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper lo`)
-      lines.push(`                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
+      lines.push(`0x${off.toString(16).padStart(4,'0')}  ${copPerPass.toLocaleString().padStart(7)}  Copper lo`, `                 ((u8:0+u8:reg+u16:col) * ${cpl}/line, ${h} lines)`)
       off += copPerPass
     }
   }
@@ -349,7 +341,7 @@ watch(() => options.mode, (mode, oldMode) => {
   }
   // HAM6: Ostromoukhov falls back to F-S in pre-dither → switch to F-S
   if (hamType(mode) === 'ham6' && options.dither === 'ostromoukhov')
-    options.dither = 'floyd-steinberg'
+    {options.dither = 'floyd-steinberg'}
   // DOS modes default to native PAR (letterbox/pillarbox into fixed buffer)
   // so the preview shows the image at the right aspect ratio instead of
   // stretched. Reset when entering a DOS mode from a non-DOS mode; leave
@@ -397,7 +389,7 @@ watch(() => options.depth, () => {
 watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
   const modes = modesForChipset(options.chipset)
-  if (!modes.find(m => m.value === options.mode)) {
+  if (!modes.some(m => m.value === options.mode)) {
     options.mode = modes[0].value
     options.depth = defaultDepth(options.mode)
   }
@@ -537,7 +529,7 @@ watch(() => options.cgaTextMetric, (val) => {
 onBeforeUnmount(() => {
   track('session-duration', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
 })
-if (typeof window !== 'undefined') {
+if (globalThis.window !== undefined) {
   window.addEventListener('beforeunload', () => {
     track('session-duration', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
   })
@@ -633,8 +625,8 @@ function doConvert() {
       lastCopperBytes.value = result.copperBytes || 0
       lastChangesPerLine.value = result.changesPerLine || 0
       lastMaxMovesPerLine.value = result.maxMovesPerLine || 0
-      lastAga.value = !!result.aga
-      imageHasAlpha.value = !!result.hasTransparency
+      lastAga.value = Boolean(result.aga)
+      imageHasAlpha.value = Boolean(result.hasTransparency)
 
       // If we're in size-override mode but width/height got reset to 0
       // (a new image just loaded), populate the inputs with the freshly
@@ -657,7 +649,7 @@ function doConvert() {
         info += `, disk: ${fmt(result.diskBytes || 0)}, chip: ${fmt(result.chipBytes || 0)}`
       }
       if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
-      if (result.psnr != null && isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`
+      if (result.psnr != null && Number.isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`
       resultInfo.value = info
 
       const convertMs = performance.now() - convertStart
@@ -672,10 +664,10 @@ function doConvert() {
         firstConvertTracked = true
         track('first-convert-time', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
       }
-    } catch (e) {
+    } catch (error) {
       clearTimeout(spinnerTimer)
-      errorMsg.value = e.message
-      track('error', { type: 'convert-exception', message: e.message })
+      errorMsg.value = error.message
+      track('error', { type: 'convert-exception', message: error.message })
     }
 
     converting.value = false
@@ -699,7 +691,7 @@ async function downloadPNG() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: 'png', mode: options.mode, exportCount, secsSinceUpload: uploadTimestamp.value ? Math.round((Date.now() - uploadTimestamp.value) / 1000) : undefined })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -709,8 +701,9 @@ async function downloadDegas() {
   try {
     const result = await convertDegas(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
-    const ext = options.mode.endsWith('-hi') ? '.pi3'
-               : options.mode.endsWith('-med') ? '.pi2' : '.pi1'
+    let ext = '.pi1'
+    if (options.mode.endsWith('-hi')) ext = '.pi3'
+    else if (options.mode.endsWith('-med')) ext = '.pi2'
     const blob = new Blob([result.data], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -720,7 +713,7 @@ async function downloadDegas() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: ext, mode: options.mode, exportCount })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -739,7 +732,7 @@ async function downloadIFF() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: 'iff', mode: options.mode, exportCount })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -748,7 +741,7 @@ async function downloadViewer() {
   converting.value = true
   try {
     const stem = options.symbolName ||
-      (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_')
+      (imageName.value || 'image').replace(/\.[^.]+$/, '').replaceAll(/\W/g, '_')
     const opts = buildWasmOptions()
     opts.symbolName = stem
     const result = await convertViewer(imageBytes.value, opts)
@@ -762,7 +755,7 @@ async function downloadViewer() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: 'cpp', mode: options.mode, exportCount })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -781,7 +774,7 @@ async function downloadRaw() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: 'raw', mode: options.mode, exportCount })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -790,7 +783,7 @@ async function downloadMaskPNG() {
   converting.value = true
   try {
     const opts = buildWasmOptions()
-    opts.maskInvert = !!options.maskInvert
+    opts.maskInvert = Boolean(options.maskInvert)
     const result = await convertMask(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
     const blob = new Blob([result.data], { type: 'image/png' })
@@ -802,7 +795,7 @@ async function downloadMaskPNG() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: 'mask-png', mode: options.mode, exportCount })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -811,7 +804,7 @@ async function downloadMaskRaw() {
   converting.value = true
   try {
     const opts = buildWasmOptions()
-    opts.maskInvert = !!options.maskInvert
+    opts.maskInvert = Boolean(options.maskInvert)
     const result = await convertMaskRaw(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
     const blob = new Blob([result.data], { type: 'application/octet-stream' })
@@ -823,7 +816,7 @@ async function downloadMaskRaw() {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format: 'mask-raw', mode: options.mode, exportCount })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -832,7 +825,7 @@ async function compileAndDownload(format) {
   converting.value = true
   try {
     const stem = options.symbolName ||
-      (imageName.value || 'image').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_')
+      (imageName.value || 'image').replace(/\.[^.]+$/, '').replaceAll(/\W/g, '_')
     const opts = buildWasmOptions()
     opts.symbolName = stem
     const result = await convertViewer(imageBytes.value, opts)
@@ -856,7 +849,7 @@ async function compileAndDownload(format) {
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format, mode: options.mode, exportCount })
-  } catch (e) { errorMsg.value = e.message }
+  } catch (error) { errorMsg.value = error.message }
   converting.value = false
 }
 
@@ -870,7 +863,7 @@ function loadPalette() {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.gpl,.hex,.txt,.pal,.iff,.ilbm,.lbm'
-  input.onchange = async () => {
+  input.addEventListener('change', async () => {
     const file = input.files[0]
     if (!file) return
     const buf = await file.arrayBuffer()
@@ -886,16 +879,16 @@ function loadPalette() {
         const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/)
         if (m) colors.push(`rgb(${m[1]},${m[2]},${m[3]})`)
       }
-    } else if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'FORM') {
+    } else if (bytes.length >= 12 && String.fromCodePoint(...bytes.slice(0, 4)) === 'FORM') {
       // IFF: scan for CMAP chunk
       let pos = 12
       while (pos + 8 <= bytes.length) {
-        const id = String.fromCharCode(...bytes.slice(pos, pos + 4))
+        const id = String.fromCodePoint(...bytes.slice(pos, pos + 4))
         const size = (bytes[pos+4] << 24) | (bytes[pos+5] << 16) | (bytes[pos+6] << 8) | bytes[pos+7]
         pos += 8
         if (id === 'CMAP') {
           for (let i = 0; i + 2 < size && pos + i + 2 <= bytes.length; i += 3)
-            colors.push(`rgb(${bytes[pos+i]},${bytes[pos+i+1]},${bytes[pos+i+2]})`)
+            {colors.push(`rgb(${bytes[pos+i]},${bytes[pos+i+1]},${bytes[pos+i+2]})`)}
           break
         }
         pos += size + (size & 1)  // chunks are word-aligned
@@ -920,7 +913,7 @@ function loadPalette() {
     paletteColors.value = colors
     // Pass raw file bytes to WASM for auto-format detection
     options.paletteData = bytes
-  }
+  })
   input.click()
 }
 

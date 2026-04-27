@@ -122,28 +122,28 @@ export const ALPHA_DITHER_METHODS = [
 ]
 
 export const SLIDERS = [
-  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 3.0, step: 0.05, default: 1.0,
+  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 3, step: 0.05, default: 1,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
-  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3.0, step: 0.05, default: 0.8,
+  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
     tip: 'Dithering intensity. 0 = no dithering effect, 1 = standard, >1 = exaggerated.' },
-  { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1.0, step: 0.05, default: 0.0,
+  { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1, step: 0.05, default: 0,
     tip: 'Additive lightness shift in perceptual OKLab space.' },
-  { key: 'contrast',       label: 'Contrast',    min: 0,   max: 3.0, step: 0.05, default: 1.0,
+  { key: 'contrast',       label: 'Contrast',    min: 0,   max: 3, step: 0.05, default: 1,
     tip: 'Scale around perceptual mid-grey. 1.0 = no change, >1 increases contrast.' },
-  { key: 'saturation',     label: 'Saturation',  min: 0,   max: 3.0, step: 0.05, default: 1.0,
+  { key: 'saturation',     label: 'Saturation',  min: 0,   max: 3, step: 0.05, default: 1,
     tip: 'Chroma scaling in OKLab space. 0 = greyscale, 1 = original, >1 = boosted color.' },
-  { key: 'hueShift',       label: 'Hue',         min: -180, max: 180, step: 1.0,  default: 0.0,
+  { key: 'hueShift',       label: 'Hue',         min: -180, max: 180, step: 1,  default: 0,
     tip: 'Rotate all colors in OKLab. Shifts hues to better match the Amiga palette.' },
-  { key: 'sharpen',        label: 'Sharpen',     min: -1,  max: 2.0, step: 0.05, default: 0.0,
+  { key: 'sharpen',        label: 'Sharpen',     min: -1,  max: 2, step: 0.05, default: 0,
     tip: 'Negative = blur (reduces noise), positive = sharpen (enhances edges).' },
-  { key: 'blackPoint',     label: 'Black Pt',    min: 0,   max: 0.5, step: 0.01, default: 0.0,
+  { key: 'blackPoint',     label: 'Black Pt',    min: 0,   max: 0.5, step: 0.01, default: 0,
     tip: 'Clip the darkest fraction of the image. Deepens blacks.' },
-  { key: 'whitePoint',     label: 'White Pt',    min: 0,   max: 0.5, step: 0.01, default: 0.0,
+  { key: 'whitePoint',     label: 'White Pt',    min: 0,   max: 0.5, step: 0.01, default: 0,
     tip: 'Clip the brightest fraction of the image. Cleans up highlights.' },
 ]
 
 export const DIFFUSION_SLIDERS = [
-  { key: 'errorClamp',    label: 'Error Clamp', min: 0,   max: 1.0, step: 0.025, default: 0.35,
+  { key: 'errorClamp',    label: 'Error Clamp', min: 0,   max: 1, step: 0.025, default: 0.35,
     tip: 'Max error accumulation per channel (squared internally). Lower = cleaner, higher = more dithering noise.' },
 ]
 
@@ -163,7 +163,7 @@ export const EXAMPLES = [
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', alphaThreshold: 0 } },
   { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
   { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'ostromoukhov', copper: true } },
-  { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1.0, copper: true } },
+  { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
   { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'ostromoukhov', copper: true } },
   { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'checker', dualPlayfield: true, scap: true } },
 ]
@@ -188,7 +188,7 @@ export function defaultOptions() {
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',
-    alphaDitherStrength: 1.0,
+    alphaDitherStrength: 1,
     // Crop
     cropX: 0,
     cropY: 0,
@@ -256,18 +256,18 @@ export function isDosMode(mode) {
 //   >1 wide pixels (e.g. CGA composite 160×200 = 1.667)
 const MODE_PAR = {
   'vga-13h':    0.833,
-  'vga-10h':    0.730,
-  'vga-12h':    1.0,
+  'vga-10h':    0.73,
+  'vga-12h':    1,
   'ega-320':    0.833,
   'ega-640':    0.417,
-  'ega-hi':     0.730,
+  'ega-hi':     0.73,
   'cga-320':    0.833,
   'cga-640':    0.417,
   'cga-composite': 1.667,
   'cga-text80x100': 0.417,
 }
 
-export function modePar(mode) { return MODE_PAR[mode] ?? 1.0 }
+export function modePar(mode) { return MODE_PAR[mode] ?? 1 }
 
 const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis', 'ostromoukhov'])
 
@@ -291,7 +291,7 @@ export function previewScale(mode) {
   // preview is readable. 640-wide buffers already fill most screen widths,
   // so don't double them; 320-wide DOS buffers double horizontally.
   if (mode === 'cga-320' || mode === 'ega-320' || mode === 'vga-13h')
-    return { sx: 2, sy: 2 }
+    {return { sx: 2, sy: 2 }}
   if (mode === 'cga-composite')               return { sx: 4, sy: 2 } // 160x200 → stretch
   if (mode === 'vga-12h')                     return { sx: 1, sy: 1 }
   // Text modes: renderer returns cols*8 × rows*cell_h; pixels already

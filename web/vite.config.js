@@ -1,11 +1,12 @@
+import path from 'node:path'
+import fs from 'node:fs'
+
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import path from 'path'
-import fs from 'fs'
 
 function readProjectVersion() {
   const cmake = fs.readFileSync(path.resolve(__dirname, '../CMakeLists.txt'), 'utf8')
-  const m = cmake.match(/project\([^)]*VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)/)
+  const m = cmake.match(/project\([^)]*VERSION\s+(\d+\.\d+\.\d+)/)
   return m ? m[1] : '0.0.0'
 }
 

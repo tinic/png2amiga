@@ -2,7 +2,6 @@
 // Messages: { id, fn, args } -> { id, result } | { id, error }
 
 let Module = null
-let ready = false
 let initError = null
 
 async function init() {
@@ -16,17 +15,16 @@ async function init() {
         return path
       },
     })
-    ready = true
     self.postMessage({ type: 'ready' })
-  } catch (e) {
-    initError = e.message || String(e)
+  } catch (error) {
+    initError = error.message || String(error)
     self.postMessage({ type: 'error', error: initError })
   }
 }
 
 const initPromise = init()
 
-self.onmessage = async (e) => {
+globalThis.addEventListener('message', async (e) => {
   const { id, fn, args, wantProgress } = e.data
   try {
     await initPromise
@@ -48,40 +46,51 @@ self.onmessage = async (e) => {
 
     let result
     switch (fn) {
-      case 'convertRGBA':
+      case 'convertRGBA': {
         result = Module.convertRGBA(args[0], args[1])
         break
-      case 'convert':
+      }
+      case 'convert': {
         result = Module.convert(args[0], args[1])
         break
-      case 'convertIFF':
+      }
+      case 'convertIFF': {
         result = Module.convertIFF(args[0], args[1])
         break
-      case 'convertHeader':
+      }
+      case 'convertHeader': {
         result = Module.convertHeader(args[0], args[1], args[2])
         break
-      case 'convertViewer':
+      }
+      case 'convertViewer': {
         result = Module.convertViewer(args[0], args[1])
         break
-      case 'convertDegas':
+      }
+      case 'convertDegas': {
         result = Module.convertDegas(args[0], args[1])
         break
-      case 'convertRaw':
+      }
+      case 'convertRaw': {
         result = Module.convertRaw(args[0], args[1])
         break
-      case 'convertMask':
+      }
+      case 'convertMask': {
         result = Module.convertMask(args[0], args[1])
         break
-      case 'convertMaskRaw':
+      }
+      case 'convertMaskRaw': {
         result = Module.convertMaskRaw(args[0], args[1])
         break
-      case 'ditherDefaults':
+      }
+      case 'ditherDefaults': {
         // Synchronous one-shot lookup — returns { strength, errorClamp }.
         // The reply path below sends `result` as-is via postMessage.
         self.postMessage({ id, result: Module.ditherDefaults(args[0]) })
         return
-      default:
+      }
+      default: {
         throw new Error(`Unknown function: ${fn}`)
+      }
     }
 
     // Build plain object reply with transferable buffers
@@ -123,7 +132,7 @@ self.onmessage = async (e) => {
     }
 
     self.postMessage({ id, result: reply }, transfers)
-  } catch (err) {
-    self.postMessage({ id, error: err.message || String(err) })
+  } catch (error) {
+    self.postMessage({ id, error: error.message || String(error) })
   }
-}
+})
