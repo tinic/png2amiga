@@ -17,6 +17,8 @@ export default [
       '../service/**',
       '../build-wasm/**',
       'node_modules/**',
+      'playwright-report/**',
+      'test-results/**',
     ],
   },
   js.configs.recommended,
@@ -70,7 +72,7 @@ export default [
   {
     // Type-checked rules require a tsconfig project; config files and the
     // standalone scripts/ helpers aren't part of the app's project.
-    files: ['eslint.config.js', 'vite.config.ts', 'scripts/**/*.mjs'],
+    files: ['eslint.config.js', 'vite.config.ts', 'vitest.config.ts', 'playwright.config.ts', 'scripts/**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
   },
   {
@@ -296,7 +298,9 @@ export default [
     // tsconfig project; the scripts/*.mjs files have type checking
     // disabled via disableTypeChecked above.
     files: ['**/*.{ts,mts,cts,vue}'],
-    ignores: ['vite.config.ts'],  // not in the app tsconfig project
+    // Config files live outside the app tsconfig project — exclude them
+    // here too so type-checked rules don't try to fetch parser services.
+    ignores: ['vite.config.ts', 'vitest.config.ts', 'playwright.config.ts'],
     rules: {
       // Every Promise must be awaited, .then'd, .catch'd, or explicitly
       // `void`'d. Catches the common "kicked off async work, didn't wait,

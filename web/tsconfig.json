@@ -27,7 +27,10 @@
     "src/**/*.ts",
     "src/**/*.d.ts",
     "src/**/*.vue",
+    "tests/**/*.ts",
     "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts",
     "eslint.config.js"
   ],
   "exclude": ["node_modules", "../service", "../build-wasm"]

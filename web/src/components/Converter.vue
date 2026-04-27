@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, watch, nextTick, computed, onBeforeUnmount, useTemplateRef } from 'vue'
-import type { ConvertResult } from '@wasm/png2amiga.js'
+import type { ConvertResult, WasmOptions } from '@wasm/png2amiga.js'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Slider from 'primevue/slider'
@@ -492,12 +492,17 @@ function onHeightCommit() {
 }
 
 // Build the options object to pass to WASM (matches wasm_bindings.cpp field names)
-function buildWasmOptions() {
-  const opts = { ...options }
-  if (opts.alphaDither === 'none') opts.alphaDither = ''
-  if (!opts.paletteData) delete opts.paletteData
-  // Pass compound mode string as-is — C++ decompose_mode_options handles it
-  return opts
+function buildWasmOptions(): WasmOptions {
+  // Strip Options-only `null` from paletteData (WasmOptions wants `Uint8Array
+  // | undefined`) and translate alphaDither's 'none' UI sentinel to the
+  // empty-string the C++ side expects. Conditional spread on paletteData so
+  // we don't write `paletteData: undefined` under exactOptionalPropertyTypes.
+  const { paletteData, alphaDither, ...rest } = options
+  return {
+    ...rest,
+    alphaDither: alphaDither === 'none' ? '' : alphaDither,
+    ...(paletteData ? { paletteData } : {}),
+  }
 }
 
 // Track dither changes

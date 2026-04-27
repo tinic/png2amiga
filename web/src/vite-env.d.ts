@@ -56,10 +56,78 @@ declare module '@wasm/png2amiga.js' {
     errorClamp: number
   }
 
-  /** WASM-side options object. Free-form because every encode mode adds
-   *  more keys; bindings ignore extras. The onProgress callback is injected
-   *  by the worker. */
-  export type WasmOptions = Record<string, unknown> & {
+  /** WASM-side options object. Mirrors `parse_js_options` in
+   *  src/wasm_bindings.cpp — every key the C++ side reads via
+   *  `js_opts.hasOwnProperty(...)`. All fields are optional (the binding
+   *  individually checks each one). Extras are silently ignored by C++,
+   *  but TS will reject them at the call site so we catch typos here.
+   *
+   *  The check:bindings build step verifies the *function* set against the
+   *  C++ EMSCRIPTEN_BINDINGS block; this interface covers the *parameter*
+   *  surface. Keep both in sync when adding a new option. */
+  export interface WasmOptions {
+    // Mode + chipset
+    mode?: string
+    chipset?: string
+    depth?: number
+    interlace?: boolean
+    width?: number
+    height?: number
+    nativePar?: boolean
+
+    // Dithering
+    dither?: string
+    ditherStrength?: number
+    errorClamp?: number
+
+    // HAM
+    hamBeam?: number
+    capBest?: boolean
+    hamCapBest?: boolean
+
+    // Color adjustments (OKLab-space)
+    gamma?: number
+    brightness?: number
+    contrast?: number
+    saturation?: number
+    hueShift?: number
+    sharpen?: number
+    blackPoint?: number
+    whitePoint?: number
+    matchRange?: boolean
+
+    // Alpha / transparency
+    alphaThreshold?: number
+    alphaDither?: string
+    alphaDitherStrength?: number
+    maskInvert?: boolean
+
+    // Crop
+    cropX?: number
+    cropY?: number
+    cropW?: number
+    cropH?: number
+    cropAuto?: boolean
+
+    // Copper / palette extras
+    copper?: boolean
+    copperChanges?: number
+    dualPlayfield?: boolean
+    scap?: boolean
+    scapDebug?: boolean
+    reserveColor0?: boolean
+    paletteDiversity?: number
+    paletteData?: Uint8Array
+    paletteFile?: string
+
+    // CGA text
+    cgaTextMetric?: string
+
+    // C header export
+    symbolName?: string
+
+    // Worker injects this so the WASM encoder can post progress ticks
+    // back to the main thread.
     onProgress?: (p: number, stage: string) => void
   }
 
