@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis'
 
 export interface ModeOption {
   value: string
@@ -141,6 +141,9 @@ const ALL_MODES: ModeOption[] = [
   // SNES Mode 7.
   { value: 'snes-mode7-256',    label: 'Mode 7 (256-colour BGR555)',   chipset: 'snes' },
   { value: 'snes-mode7-direct', label: 'Mode 7 Direct (RGB443)',        chipset: 'snes' },
+  // Sega Genesis / Mega Drive — 8x8 4bpp tiles + 4 palettes × 16 BGR333.
+  { value: 'genesis-h32', label: 'H32 (256x224)', chipset: 'genesis' },
+  { value: 'genesis-h40', label: 'H40 (320x224)', chipset: 'genesis' },
 ]
 
 // Filter modes available for a given chipset
@@ -151,9 +154,10 @@ export function modesForChipset(chipset: Chipset): ModeOption[] {
   if (chipset === 'ega') return ALL_MODES.filter(m => m.chipset === 'ega')
   if (chipset === 'cga') return ALL_MODES.filter(m => m.chipset === 'cga')
   if (chipset === 'snes') return ALL_MODES.filter(m => m.chipset === 'snes')
+  if (chipset === 'genesis') return ALL_MODES.filter(m => m.chipset === 'genesis')
   return ALL_MODES.filter(m =>
     (chipset === 'aga' || m.chipset === 'ocs') &&
-    !['stf', 'ste', 'vga', 'ega', 'cga', 'snes'].includes(m.chipset))
+    !['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis'].includes(m.chipset))
 }
 
 export const MODES: ModeOption[] = ALL_MODES
@@ -167,6 +171,7 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'ega',  label: 'IBM PC EGA (6-bit IrgbIRGB)' },
   { value: 'cga',  label: 'IBM PC CGA (fixed palette)' },
   { value: 'snes', label: 'SNES Mode 7' },
+  { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
 ]
 
 export const DITHER_METHODS: DitherGroup[] = [
@@ -420,6 +425,9 @@ export function isDosMode(mode: string): boolean {
 export function isSnesMode(mode: string): boolean {
   return mode.startsWith('snes-')
 }
+export function isGenesisMode(mode: string): boolean {
+  return mode.startsWith('genesis-')
+}
 // SNES Mode 7 Direct quantises every pixel directly to the RGB443 grid
 // (no palette table). Only the hard-coded FS-style serpentine error
 // diffusion in the encoder is meaningful — every other dither method
@@ -433,7 +441,7 @@ export function isSnesDirectMode(mode: string): boolean {
 // letterbox / pillarbox). DOS + SNES both fit; auto-toggled on mode
 // entry by the web UI.
 export function isFixedBufferMode(mode: string): boolean {
-  return isDosMode(mode) || isSnesMode(mode)
+  return isDosMode(mode) || isSnesMode(mode) || isGenesisMode(mode)
 }
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
@@ -456,6 +464,10 @@ const MODE_PAR: Record<string, number> = {
   // SNES Mode 7 — 256×224 → 4:3 ⇒ PAR ≈ 1.167 (slightly wide pixels).
   'snes-mode7-256':    1.167,
   'snes-mode7-direct': 1.167,
+  // Sega Genesis: H32 256×224 → PAR 1.167 (matches SNES); H40 320×224
+  // → PAR 0.933 (slightly tall pixels).
+  'genesis-h32': 1.167,
+  'genesis-h40': 0.933,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }

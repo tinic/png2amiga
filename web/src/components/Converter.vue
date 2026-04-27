@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -297,7 +297,7 @@ const showHamControls = computed(() => isHamMode(options.mode))
 // AGA hires + DPF (depth=4 → 4+4) is also fine.
 const dpfAvailable = computed(() => {
   const m = options.mode
-  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isDosMode(m) || isSnesMode(m)) return false
+  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isFixedBufferMode(m)) return false
   const cs = effectiveChipset(m, options.chipset)
   if (cs === 'aga') return options.depth === 4
   return options.depth === 3 && !m.includes('hires')
@@ -454,7 +454,7 @@ function maybeResetModeForChipset(): void {
 watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
   maybeResetModeForChipset()
-  if (isAtariMode(options.mode) || isDosMode(options.mode) || isSnesMode(options.mode)) options.copper = false
+  if (isAtariMode(options.mode) || isFixedBufferMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
   if (max > 0 && options.depth > max) options.depth = max
   // SCAP is OCS-only and DPF requires the chipset-specific depth — both
@@ -1194,7 +1194,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               </div>
 
               <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS) -->
-              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !paletteData" class="grid align-items-center">
+              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="CAP — Copper-Augmented Palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">CAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
@@ -1371,7 +1371,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 title="Download a DJGPP-compilable .cpp viewer (sets video mode, loads palette, blits image, waits for key, restores text mode). Build: i586-pc-msdosdjgpp-g++ -O2 -o out.exe out.cpp" />
             </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -1381,7 +1381,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"

@@ -12,7 +12,8 @@
 #include "ham.hpp"
 #include "scap.hpp"
 #include "iff.hpp"
-#include "snes_color.hpp"
+#include "console_color.hpp"
+#include "genesis.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
@@ -86,6 +87,8 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "cga-text80x100")  return amiga::Mode::cga_text80x100;
     if (s == "snes-mode7-256")    return amiga::Mode::snes_mode7_256;
     if (s == "snes-mode7-direct") return amiga::Mode::snes_mode7_direct;
+    if (s == "genesis-h32")       return amiga::Mode::genesis_h32;
+    if (s == "genesis-h40")       return amiga::Mode::genesis_h40;
     return amiga::Mode::lores;
 }
 
@@ -533,7 +536,8 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     if (mode_h > 0) {
         bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
                                amiga::is_ega(mode)   || amiga::is_cga(mode) ||
-                               amiga::is_cga_text(mode) || amiga::is_snes(mode);
+                               amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
+                               amiga::is_genesis(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
@@ -591,9 +595,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Atari modes have fixed depth
     if (amiga::is_atari(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
-    // DOS + SNES modes: depth also fixed by the hardware buffer.
+    // DOS + SNES + Genesis modes: depth also fixed by the hardware buffer.
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) ||
-        amiga::is_snes(mode))
+        amiga::is_snes(mode) || amiga::is_genesis(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
 
     // Dual-playfield: encode the image into PF2 only with a constrained
@@ -624,7 +628,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto mode_w_fixed = mparams.screen_width;
     bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
                            amiga::is_ega(mode)   || amiga::is_cga(mode) ||
-                           amiga::is_cga_text(mode) || amiga::is_snes(mode);
+                           amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
+                               amiga::is_genesis(mode);
     if (mode_h > 0 && is_fixed_buffer &&
         (image->height() < mode_h || image->width() < mode_w_fixed)) {
         auto w = image->width();
@@ -864,7 +869,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                  options.palette_diversity);
             if (!quantized) return std::unexpected{quantized.error()};
             for (auto& c : quantized->colors)
-                c = snes_color::bgr555_quantize(c);
+                c = console_color::bgr555_quantize(c);
             dith_result = dither::apply(*image, quantized->colors, dith);
             palette = quantized->colors;
             for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
@@ -883,10 +888,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 *image, dith,
                 [&](const color_space::OKLab& target,
                     std::size_t x, std::size_t y) -> dither::PickResult {
-                    auto snapped = snes_color::rgb443_quantize(
+                    auto snapped = console_color::rgb443_quantize(
                         color_space::oklab_to_linear(target));
                     rendered.pixels()[y * w + x] = snapped;
-                    raw[y * w + x] = snes_color::pack_rgb443_byte(snapped);
+                    raw[y * w + x] = console_color::pack_rgb443_byte(snapped);
                     return {color_space::linear_to_oklab(snapped), 0.5f};
                 });
             palette.clear();  // No palette table for Direct mode.
@@ -903,6 +908,144 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.finalize_psnr(*image, dith_result.total_error);
+        result.raw_frame = std::move(raw);
+        return result;
+    }
+
+    // --- Sega Genesis / Mega Drive (tile-bitmap title art) ---
+    // 8×8 4bpp tiles + 4 palette lines × 16 BGR333 entries. Each tile is
+    // assigned to one palette line via OKLab k-means; pixels are then
+    // re-quantised against the assigned per-tile palette through the
+    // central dither::diffuse_raw_buffer driver — the same shape as the
+    // SCAP per-strip path, just at 8×8 granularity.
+    if (amiga::is_genesis(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
+        auto w = image->width();
+        auto h = image->height();
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+
+        // 1. BGR333-snap the source so clustering scores against the
+        //    palette grid the hardware actually exposes.
+        Image snapped(w, h);
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < w; ++x)
+                snapped[x, y] = console_color::bgr333_quantize((*image)[x, y]);
+
+        // 2. Cluster tiles → 4 palette lines.
+        auto gres = genesis::cluster_tiles_into_palettes(
+            snapped, static_cast<float>(options.palette_diversity));
+        auto tiles_x = (w + genesis::kTileSide - 1) / genesis::kTileSide;
+
+        // 3. Pre-convert each palette line to OKLab so the picker is cheap.
+        std::array<std::vector<color_space::OKLab>, genesis::kPaletteCount>
+            palette_lab;
+        for (std::size_t k = 0; k < genesis::kPaletteCount; ++k) {
+            palette_lab[k].resize(genesis::kColorsPerPalette);
+            for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i)
+                palette_lab[k][i] = color_space::linear_to_oklab(
+                    gres.palette_lines[k][i]);
+        }
+
+        // 4. Per-pixel re-quantise via the central ED driver. Picker
+        //    selects the palette index in [1..15] (skip transparent 0
+        //    on opaque pixels) against this tile's assigned palette.
+        Image rendered(w, h);
+        std::vector<std::uint8_t>& pixel_index = gres.pixel_index;
+        const std::vector<std::uint8_t>& tile_pal = gres.tile_palette;
+        float te = dither::diffuse_raw_buffer(
+            *image, dith,
+            [&](const color_space::OKLab& target,
+                std::size_t x, std::size_t y) -> dither::PickResult {
+                std::size_t tx = x / genesis::kTileSide;
+                std::size_t ty = y / genesis::kTileSide;
+                std::uint8_t pal = tile_pal[ty * tiles_x + tx];
+                auto& pl = palette_lab[pal];
+                std::span<const color_space::OKLab> pl_span(pl.data(),
+                                                             pl.size());
+                std::size_t k = 1;
+                color_space::OKLab chosen{};
+                float thr = dither::pick_palette_index_with_ostro(
+                    dith.method, target, pl_span, x, y,
+                    dith.strength, /*k_min=*/1, k, chosen);
+                pixel_index[y * w + x] = static_cast<std::uint8_t>(k);
+                rendered[x, y] = gres.palette_lines[pal][k];
+                return {chosen, thr};
+            });
+
+        gres.preview = rendered;
+        gres.total_error = te;
+
+        // 5. Pack tile bytes (32 B per tile, palette-indexed within its
+        //    assigned 16-colour line) and tilemap cells (16 b each).
+        auto tiles_y = (h + genesis::kTileSide - 1) / genesis::kTileSide;
+        std::vector<std::uint8_t> raw;
+        raw.reserve(tiles_x * tiles_y * 32 +     // tile bytes
+                    tiles_x * tiles_y * 2 +      // tilemap
+                    genesis::kPaletteCount *
+                        genesis::kColorsPerPalette * 2);  // CRAM
+        std::vector<std::uint8_t> tile_pixels(genesis::kTileSide *
+                                               genesis::kTileSide);
+        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+                for (std::size_t row = 0; row < genesis::kTileSide; ++row) {
+                    for (std::size_t col = 0; col < genesis::kTileSide; ++col) {
+                        auto px = tx * genesis::kTileSide + col;
+                        auto py = ty * genesis::kTileSide + row;
+                        tile_pixels[row * genesis::kTileSide + col] =
+                            (px < w && py < h) ? pixel_index[py * w + px] : 0;
+                    }
+                }
+                auto bytes = genesis::encode_4bpp_tile(tile_pixels);
+                raw.insert(raw.end(), bytes.begin(), bytes.end());
+            }
+        }
+        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+                std::uint16_t tile_idx = static_cast<std::uint16_t>(
+                    ty * tiles_x + tx);
+                std::uint8_t pal = tile_pal[ty * tiles_x + tx];
+                std::uint16_t cell = genesis::encode_tilemap_cell(
+                    tile_idx, pal);
+                raw.push_back(static_cast<std::uint8_t>(cell >> 8));
+                raw.push_back(static_cast<std::uint8_t>(cell & 0xFF));
+            }
+        }
+        for (std::size_t k = 0; k < genesis::kPaletteCount; ++k) {
+            for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i) {
+                std::uint16_t word = console_color::to_bgr333_word(
+                    gres.palette_lines[k][i]);
+                raw.push_back(static_cast<std::uint8_t>(word >> 8));
+                raw.push_back(static_cast<std::uint8_t>(word & 0xFF));
+            }
+        }
+
+        // Flatten the palette lines into a single 64-entry vector for the
+        // result — index = pal*16 + entry.
+        std::vector<Color3f> flat_palette;
+        flat_palette.reserve(genesis::kPaletteCount *
+                              genesis::kColorsPerPalette);
+        for (std::size_t k = 0; k < genesis::kPaletteCount; ++k)
+            for (auto& c : gres.palette_lines[k])
+                flat_palette.push_back(c);
+
+        PipelineResult result;
+        result.rendered = std::move(rendered);
+        result.palette = std::move(flat_palette);
+        result.indices = std::move(gres.pixel_index);
+        result.planes.depth = 4;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, te);
         result.raw_frame = std::move(raw);
         return result;
     }

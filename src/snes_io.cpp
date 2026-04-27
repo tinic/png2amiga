@@ -1,5 +1,5 @@
 #include "snes_io.hpp"
-#include "snes_color.hpp"
+#include "console_color.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -62,7 +62,7 @@ Result<void> write_snes_mode7_256(std::string_view out_path,
     // palette is shorter than 256.
     std::vector<std::uint8_t> pal_bytes(256 * 2, 0);
     for (std::size_t i = 0; i < palette.size(); ++i) {
-        std::uint16_t w = snes_color::to_bgr555_word(palette[i]);
+        std::uint16_t w = console_color::to_bgr555_word(palette[i]);
         pal_bytes[i * 2 + 0] = static_cast<std::uint8_t>(w & 0xFF);
         pal_bytes[i * 2 + 1] = static_cast<std::uint8_t>((w >> 8) & 0xFF);
     }
@@ -112,7 +112,7 @@ Result<std::vector<std::uint8_t>> encode_snes_mode7_256_header(
     out += std::format("const unsigned short {}_palette[256] = {{\n", symbol);
     for (std::size_t i = 0; i < 256; ++i) {
         std::uint16_t w = (i < palette.size())
-            ? snes_color::to_bgr555_word(palette[i]) : 0;
+            ? console_color::to_bgr555_word(palette[i]) : 0;
         if (i % 8 == 0) out += "    ";
         append_hex_word(out, w);
         if (i + 1 < 256) out += ',';

@@ -548,6 +548,9 @@ void print_usage() {
         "    Nintendo SNES Mode 7 (256x224, 8bpp chunky, 4:3 PAR ≈ 1.167):\n"
         "         snes-mode7-256    (256-entry BGR555 palette, 32K-colour gamut)\n"
         "         snes-mode7-direct (Direct Color, RGB443 effective: 2048 colours)\n"
+        "    Sega Genesis / Mega Drive (8x8 4bpp tiles, 4 palettes × 16 BGR333):\n"
+        "         genesis-h32       (256x224, 4:3 PAR ≈ 1.167)\n"
+        "         genesis-h40       (320x224, 4:3 PAR ≈ 0.933)\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
         "  --dual-playfield, --dpf         Dual playfield: encode image into PF2\n"
@@ -1161,6 +1164,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "snes-mode7-direct" || v == "snes-direct" ||
                          v == "snes-mode7-rgb443")
                     config.mode = amiga::Mode::snes_mode7_direct;
+                else if (v == "genesis-h32" || v == "md-h32")
+                    config.mode = amiga::Mode::genesis_h32;
+                else if (v == "genesis-h40" || v == "md-h40" ||
+                         v == "genesis" || v == "megadrive")
+                    config.mode = amiga::Mode::genesis_h40;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -3181,7 +3189,8 @@ int main(int argc, char* argv[]) {
                                    amiga::is_vga(config->mode) ||
                                    amiga::is_cga(config->mode) ||
                                    amiga::is_ega(config->mode) ||
-                                   amiga::is_snes(config->mode);
+                                   amiga::is_snes(config->mode) ||
+                                   amiga::is_genesis(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
@@ -3524,6 +3533,79 @@ int main(int argc, char* argv[]) {
                          config->output_path, hdr->size());
         } else {
             // PNG preview using st.rendered.
+            auto r = save_preview(config->output_path, st.rendered,
+                                  has_transparency, transparency_mask,
+                                  config->mode, /*hires=*/false,
+                                  /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:    {}", config->output_path);
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{
+                config->input_path, config->palette_file,
+            };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- Sega Genesis / Mega Drive (tile-bitmap title art) ---
+    if (amiga::is_genesis(config->mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "Genesis: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+
+        api::Options aopts;
+        aopts.mode = (config->mode == amiga::Mode::genesis_h32)
+            ? "genesis-h32" : "genesis-h40";
+        aopts.dither = std::string{dither_name(config->dither_method)};
+        aopts.dither_strength = config->dither_strength;
+        aopts.error_clamp = config->error_clamp;
+        aopts.palette_diversity = config->palette_diversity;
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+
+        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "Genesis encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        cli_status("Dither: {} (strength: {:.2f})",
+                     dither_name(config->dither_method),
+                     config->dither_strength);
+        cli_status("Mode:   Sega Genesis ({}), {}x{}, 4 palettes × 16 BGR333",
+                     (config->mode == amiga::Mode::genesis_h32
+                          ? "H32 256-wide" : "H40 320-wide"),
+                     aopts.width, aopts.height);
+        cli_status("Encoded: {} bytes (tiles + tilemap + CRAM), PSNR: {:.2f} dB",
+                     st.raw_frame.size(), st.psnr);
+
+        if (ends_with(config->output_path, ".bin") ||
+            ends_with(config->output_path, ".raw")) {
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
+                     static_cast<std::streamsize>(st.raw_frame.size()));
+            if (!of) {
+                std::println(stderr, "Genesis write error: {}",
+                             config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("Raw:    {} ({} bytes)",
+                         config->output_path, st.raw_frame.size());
+        } else {
+            // PNG preview.
             auto r = save_preview(config->output_path, st.rendered,
                                   has_transparency, transparency_mask,
                                   config->mode, /*hires=*/false,

@@ -11,7 +11,7 @@
 //
 //   write_snes_mode7_direct(path, pixels)
 //       Raw 8bpp pixel array, each byte already in BGGGRRR Direct Color
-//       format (see snes_color::pack_rgb443_byte). No palette companion.
+//       format (see console_color::pack_rgb443_byte). No palette companion.
 //
 // `write_snes_mode7_h` emits a C header equivalent — `const uint8_t pixels[]`
 // + `const uint16_t palette[]` (256 mode) — for inclusion in SNES homebrew

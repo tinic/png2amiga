@@ -68,6 +68,13 @@ enum class Mode : unsigned char {
                         // "Direct Color" sub-palette adds 1 high bit per
                         // channel → effective RGB443 (4/4/3 = 2048 colours)
                         // per-pixel, no palette table needed.
+
+    // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
+    genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
+                        //  Tile-based: 8×8 4bpp tiles + tilemap; each tile
+                        //  picks one palette line. Color 0 of each line is
+                        //  transparent. 60 visible + 1 backdrop colours.
+    genesis_h40,        // 320×224, same colour structure as h32.
 };
 
 // ---------------------------------------------------------------------------
@@ -188,6 +195,14 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         // "palette" is implicit hardware sub-palette; we quantise pixels
         // directly to the 4-4-3 grid with no separate palette table.
         return {256, 224, 8, 2048, false, false, false, false, 1, 1, 1.167f};
+    // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
+    // matches SNES at 224 lines on a 4:3 CRT.
+    //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)
+    //   H40: (4/3) ÷ (320/224) ≈ 0.933  (taller-than-wide pixels)
+    case Mode::genesis_h32:
+        return {256, 224, 4, 64, false, false, false, false, 1, 1, 1.167f};
+    case Mode::genesis_h40:
+        return {320, 224, 4, 64, false, false, false, false, 1, 1, 0.933f};
     }
     std::unreachable();
 }
@@ -268,6 +283,10 @@ constexpr bool is_cga_text(Mode mode) noexcept {
 // Check if a mode uses chunky (1 byte per pixel) output instead of bitplane
 // encoding. VGA 13h, plus the SNES Mode 7 modes — all 8bpp linear pixel
 // arrays.
+constexpr bool is_genesis(Mode mode) noexcept {
+    return mode == Mode::genesis_h32 || mode == Mode::genesis_h40;
+}
+
 constexpr bool is_chunky(Mode mode) noexcept {
     return mode == Mode::vga_13h ||
            mode == Mode::snes_mode7_256 ||
