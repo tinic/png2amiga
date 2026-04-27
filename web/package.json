@@ -3,11 +3,15 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "lint": "eslint .",
     "typecheck": "vue-tsc --noEmit",
-    "build": "vue-tsc --noEmit && eslint . && vite build && cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true",
+    "audit:prod": "npm audit --audit-level=high --omit=dev",
+    "build": "vue-tsc --noEmit && eslint . && npm run audit:prod && vite build && cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true",
     "preview": "vite preview"
   },
   "dependencies": {

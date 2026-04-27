@@ -133,7 +133,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
   return { reply, transfers }
 }
 
-globalThis.addEventListener('message', async (e: MessageEvent<IncomingMessage>) => {
+async function handleMessage(e: MessageEvent<IncomingMessage>): Promise<void> {
   const { id, fn, args, wantProgress } = e.data
   try {
     await initPromise
@@ -158,4 +158,13 @@ globalThis.addEventListener('message', async (e: MessageEvent<IncomingMessage>) 
     const message = error instanceof Error ? error.message : String(error)
     self.postMessage({ id, error: message })
   }
+}
+
+// Origin check is N/A here: this is a same-origin Vite-imported worker
+// (`?worker` import in useWasm.ts). The browser only delivers messages
+// from the parent realm; sonarjs/post-message can't tell that apart from
+// cross-window postMessage flows.
+// eslint-disable-next-line sonarjs/post-message
+globalThis.addEventListener('message', (e: MessageEvent<IncomingMessage>) => {
+  void handleMessage(e)
 })

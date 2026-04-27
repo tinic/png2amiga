@@ -462,14 +462,16 @@ export function defaultDepth(mode: string): number {
   return 5
 }
 
-// Number of displayable colors for a given mode/depth
-export function numColors(mode: string, depth: number): number | string {
-  if (isEhbMode(mode)) return 64
+// Number of displayable colors for a given mode/depth, formatted as a label.
+// HAM modes return "N base + modify" since modify-bits don't count as a flat
+// palette size; standard / EHB return the integer count as a string.
+export function numColors(mode: string, depth: number): string {
+  if (isEhbMode(mode)) return '64'
   if (isHamMode(mode)) {
     const dataBits = defaultDepth(mode) - 2
     return `${1 << dataBits} base + modify`
   }
-  return 1 << depth
+  return String(1 << depth)
 }
 
 // Bitplane count for display

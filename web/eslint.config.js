@@ -19,7 +19,7 @@ export default [
     ],
   },
   js.configs.recommended,
-  ...tseslint.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
   ...vue.configs['flat/recommended'],
   importX.flatConfigs.recommended,
   security.configs.recommended,
@@ -42,6 +42,8 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
     },
   },
@@ -51,8 +53,16 @@ export default [
       parserOptions: {
         parser: tseslint.parser,
         extraFileExtensions: ['.vue'],
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
     },
+  },
+  {
+    // Type-checked rules require a tsconfig project; eslint.config.js / vite.config.ts
+    // aren't part of the app's project. Disable them for these files.
+    files: ['eslint.config.js', 'vite.config.ts'],
+    ...tseslint.configs.disableTypeChecked,
   },
   {
     files: ['**/*.{js,mjs,cjs,ts,mts,cts,vue}'],
@@ -96,6 +106,24 @@ export default [
       'no-throw-literal': 'error',
       'no-return-await': 'error',
       'no-param-reassign': ['error', { props: false }],
+
+      // Block escape hatches: `as any`, @ts-ignore, eval, new Function.
+      // Each requires an explicit per-line eslint-disable to allow.
+      'no-eval': 'error',
+      'no-new-func': 'error',
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/ban-ts-comment': ['error', {
+        'ts-expect-error': 'allow-with-description',
+        'ts-ignore': true,           // banned outright; use ts-expect-error
+        'ts-nocheck': true,
+        'ts-check': false,
+      }],
+      'no-restricted-syntax': ['error',
+        {
+          selector: "TSAsExpression > TSAnyKeyword",
+          message: "`as any` is banned. Cast through `unknown` and explain why if absolutely necessary.",
+        },
+      ],
       // Existing baseline for Converter.vue's larger handlers — tighten over time.
       'complexity': ['error', 20],
       'max-params': ['error', 5],

@@ -513,17 +513,17 @@ async function refreshErrorClamp() {
 watch(
   () => [options.mode, options.copper, options.dualPlayfield, options.scap,
          options.depth, options.chipset],
-  () => refreshErrorClamp())
+  () => { void refreshErrorClamp() })
 // Also refresh once after WASM finishes loading so the very first preview
 // uses the table value (defaultOptions() seeds with a generic 0.35).
-watch(wasmLoading, (loading) => { if (!loading) refreshErrorClamp() })
+watch(wasmLoading, (loading) => { if (!loading) void refreshErrorClamp() })
 
 // Track slider tweaks (debounced)
 let tweakTimer: ReturnType<typeof setTimeout> | null = null
 for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) {
   watch(() => options[s.key], (val) => {
     if (tweakTimer) clearTimeout(tweakTimer)
-    tweakTimer = setTimeout(() => track('setting-tweak', { key: s.key, value: val as string | number }), 500)
+    tweakTimer = setTimeout(() => track('setting-tweak', { key: s.key, value: val }), 500)
   })
 }
 watch(() => options.cgaTextMetric, (val) => {
@@ -539,11 +539,10 @@ watch(() => options.cgaTextMetric, (val) => {
 onBeforeUnmount(() => {
   track('session-duration', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
 })
-if (globalThis.window !== undefined) {
-  window.addEventListener('beforeunload', () => {
-    track('session-duration', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
-  })
-}
+// Component runs only on the main thread; window is always present.
+window.addEventListener('beforeunload', () => {
+  track('session-duration', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
+})
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let spinnerTimer: ReturnType<typeof setTimeout> | null = null
@@ -611,7 +610,8 @@ function doConvert() {
   if (!bytes || wasmLoading.value) return
 
   if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(async () => {
+  debounceTimer = setTimeout(() => { void runConvert(bytes) }, 150)
+  async function runConvert(srcBytes: Uint8Array) {
     errorMsg.value = ''
     const convertStart = performance.now()
 
@@ -627,7 +627,7 @@ function doConvert() {
         progressStage.value = stage || ''
       }
       const result = await convertRGBA(
-        bytes, buildWasmOptions(), onProgress)
+        srcBytes, buildWasmOptions(), onProgress)
 
       if (spinnerTimer) clearTimeout(spinnerTimer)
       progress.value = 0
@@ -694,7 +694,7 @@ function doConvert() {
     }
 
     converting.value = false
-  }, 150)
+  }
 }
 
 watch([imageBytes, () => ({ ...options })], doConvert, { deep: true })
@@ -870,10 +870,11 @@ function resetOptions() {
   track('reset')
 }
 
+const GPL_RGB = /^\s*(\d+)\s+(\d+)\s+(\d+)/
 function parseGimpPalette(text: string): string[] {
   const colors: string[] = []
   for (const line of text.split('\n')) {
-    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/)
+    const m = GPL_RGB.exec(line)
     if (m) colors.push(`rgb(${m[1]},${m[2]},${m[3]})`)
   }
   return colors
@@ -897,10 +898,11 @@ function parseIffCmap(bytes: Uint8Array): string[] {
   return colors
 }
 
+const HEX_LINE = /^#?([0-9a-fA-F]{6})$/
 function parseHexPalette(text: string): string[] {
   const colors: string[] = []
   for (const line of text.split('\n')) {
-    const m = line.trim().match(/^#?([0-9a-fA-F]{6})$/)
+    const m = HEX_LINE.exec(line.trim())
     if (m) colors.push(`#${m[1]}`)
   }
   return colors
@@ -934,7 +936,7 @@ function loadPalette() {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.gpl,.hex,.txt,.pal,.iff,.ilbm,.lbm'
-  input.addEventListener('change', async () => {
+  async function onFile() {
     const file = input.files?.[0]
     if (!file) return
     const buf = await file.arrayBuffer()
@@ -944,7 +946,8 @@ function loadPalette() {
     paletteColors.value = parsePaletteBytes(bytes)
     // Pass raw file bytes to WASM for auto-format detection
     options.paletteData = bytes
-  })
+  }
+  input.addEventListener('change', () => { void onFile() })
   input.click()
 }
 

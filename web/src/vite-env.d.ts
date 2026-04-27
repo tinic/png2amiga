@@ -4,6 +4,15 @@
 // (see vite.config.ts → readProjectVersion()).
 declare const __APP_VERSION__: string
 
+// Shim for Vue Single-File Components — Vite/Vue compile these to a
+// DefineComponent at build time, but the TS type system needs to see them
+// as importable modules.
+declare module '*.vue' {
+  import type { DefineComponent } from 'vue'
+  const component: DefineComponent<object, object, unknown>
+  export default component
+}
+
 // Vite's `?worker` import suffix: gives us a Worker class constructor.
 declare module '*?worker' {
   const Worker: new () => Worker
