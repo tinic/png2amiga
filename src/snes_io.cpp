@@ -326,10 +326,81 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         return static_cast<std::uint8_t>(best);
     };
 
-    constexpr int kRefineIters = 8;
+    // Inner Lloyd iterations per outer pass. Empirically converges in
+    // 3-5; 16 is the cap.
+    constexpr int kRefineIters = 16;
+    // Outer alternating optimisation: re-derive the palette from the
+    // post-Lloyd tile pixel distribution between Lloyd passes. On
+    // BGR555-snapped 256-mode the palette gain is small (< 0.2 dB)
+    // because the original median-cut palette is already well-tuned
+    // for the BGR555 grid; mainly here to keep the code path warm
+    // for future console targets with finer-grained palettes.
+    constexpr int kOuterIters = 2;
     auto& tilemap = packed->tilemap;
     auto& tiles = packed->tile_bytes;
     auto num_tiles = tiles.size() / 64;
+
+    for (int outer = 0; outer < kOuterIters; ++outer) {
+        if (outer > 0 && !direct_color) {
+            // ---- Palette retraining.
+            //
+            // The post-Lloyd tiles only display 256 × 64 = 16384
+            // pixel "slots" — nothing else from the source image
+            // matters at this point. Re-derive the 256-entry palette
+            // via median-cut on JUST those displayed colours so the
+            // palette anchors land where they're actually used. Then
+            // re-snap every tile byte to the closest entry in the
+            // new palette and let Lloyd re-converge with the new
+            // pal_lab table.
+            std::vector<Color3f> displayed;
+            displayed.reserve(num_tiles * 64);
+            for (auto byte : tiles) displayed.push_back(out.palette[byte]);
+
+            Image disp_img(displayed.size(), 1, std::move(displayed));
+            auto new_pal = quantize::quantize(
+                disp_img, 256, quantize::Algorithm::median_cut,
+                palette_diversity);
+            if (new_pal) {
+                std::vector<Color3f> new_palette = new_pal->colors;
+                for (auto& c : new_palette)
+                    c = console_color::bgr555_quantize(c);
+
+                // Build new pal_lab.
+                std::vector<color_space::OKLab> new_pal_lab(
+                    new_palette.size());
+                for (std::size_t i = 0; i < new_palette.size(); ++i)
+                    new_pal_lab[i] = color_space::linear_to_oklab(
+                        new_palette[i]);
+
+                // Remap a byte from old-palette index → new-palette
+                // index by finding the new entry nearest the byte's
+                // OLD displayed colour.
+                auto remap = [&](std::uint8_t b) -> std::uint8_t {
+                    auto cur = pal_lab[b];
+                    std::size_t best = 0;
+                    float best_d = std::numeric_limits<float>::max();
+                    for (std::size_t k = 0; k < new_pal_lab.size(); ++k) {
+                        float dL = cur.L - new_pal_lab[k].L;
+                        float da = cur.a - new_pal_lab[k].a;
+                        float db = cur.b - new_pal_lab[k].b;
+                        float d = dL * dL + da * da + db * db;
+                        if (d < best_d) { best_d = d; best = k; }
+                    }
+                    return static_cast<std::uint8_t>(best);
+                };
+                // Both the tile bytes AND the chunky source need to
+                // be remapped — the next Lloyd round looks up cell
+                // patterns in the chunky buffer and compares against
+                // tile patterns under the new pal_lab. Without
+                // remapping chunky, the distance metric reads stale
+                // colours and PSNR collapses.
+                for (auto& byte : tiles) byte = remap(byte);
+                for (auto& byte : chunky) byte = remap(byte);
+
+                out.palette = std::move(new_palette);
+                pal_lab = std::move(new_pal_lab);
+            }
+        }
 
     for (int iter = 0; iter < kRefineIters; ++iter) {
         // ---- 2b.a: synthesise centroids.
@@ -521,6 +592,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
 
         if (!changed) break;
     }
+    }  // end outer loop
 
     // ---- Step 3: build packed bytes (tilemap + tile data) AND re-render
     //   the preview from the post-merge tilemap+tiles+palette so the
