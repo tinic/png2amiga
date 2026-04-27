@@ -13,12 +13,13 @@
     "audit:prod": "npm audit --audit-level=high --omit=dev",
     "check:size": "node scripts/check-bundle-size.mjs",
     "check:bindings": "node scripts/check-wasm-bindings.mjs",
+    "gen:dither-thumbs": "node scripts/gen-dither-thumbs.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "build": "npm run check:bindings && vue-tsc --noEmit && eslint . && npm run audit:prod && npm test && vite build && (cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true) && npm run check:size",
+    "build": "npm run check:bindings && npm run gen:dither-thumbs && vue-tsc --noEmit && eslint . && npm run audit:prod && npm test && vite build && (cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true) && npm run check:size",
     "preview": "vite preview"
   },
   "dependencies": {

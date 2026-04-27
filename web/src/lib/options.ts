@@ -168,56 +168,67 @@ export const DITHER_METHODS: DitherGroup[] = [
   { group: 'None', items: [
     { value: 'none', label: 'None' },
   ]},
-  { group: 'Ordered (square)', items: [
-    { value: 'bayer2x2', label: 'Bayer 2x2' },
-    { value: 'bayer4x4', label: 'Bayer 4x4' },
-    { value: 'bayer8x8', label: 'Bayer 8x8' },
-  ]},
-  { group: 'Ordered (pattern)', items: [
-    { value: 'checker',       label: 'Checker' },
-    { value: 'clustered-dot', label: 'Clustered Dot' },
-  ]},
-  { group: 'Non-square', items: [
-    { value: 'h2x4',          label: 'H 2x4 (wide pixels)' },
-    { value: 'v4x2',          label: 'V 4x2 (tall pixels)' },
-    { value: 'bayer4x2',      label: 'Bayer 4x2 (hires)' },
-    { value: 'bayer2x4',      label: 'Bayer 2x4 (interlace)' },
-  ]},
-  { group: 'Halftone', items: [
-    { value: 'halftone8x8',   label: 'Halftone 8x8 (45°)' },
-    { value: 'diagonal8x8',   label: 'Diagonal 8x8 (newspaper)' },
-    { value: 'spiral5x5',     label: 'Spiral 5x5' },
-  ]},
-  { group: 'Non-rectangular', items: [
-    { value: 'hex8x8',        label: 'Hexagonal 8x8' },
-    { value: 'hex5x5',        label: 'Hexagonal 5x5' },
-    { value: 'blue-noise',    label: 'Blue Noise' },
-    { value: 'ign',           label: 'IGN (Gradient Noise)' },
-    { value: 'white-noise',  label: 'White Noise' },
-    { value: 'r2',           label: 'R2 Sequence' },
-    { value: 'crosshatch',   label: 'Crosshatch' },
-    { value: 'radial',       label: 'Radial' },
-    { value: 'value-noise',  label: 'Value Noise' },
-  ]},
-  { group: 'Lines', items: [
-    { value: 'line2',         label: 'Line 2' },
-    { value: 'line-checker',  label: 'Line Checker' },
-    { value: 'line4',         label: 'Line 4' },
-    { value: 'line8',         label: 'Line 8' },
-    { value: 'vline2',        label: 'VLine 2' },
-    { value: 'vline-checker', label: 'VLine Checker' },
-    { value: 'vline4',        label: 'VLine 4' },
-    { value: 'vline8',        label: 'VLine 8' },
-  ]},
   { group: 'Error Diffusion', items: [
-    { value: 'ostromoukhov',    label: 'Ostromoukhov' },
-    { value: 'floyd-steinberg', label: 'Floyd-Steinberg' },
+    { value: 'floyd-steinberg', label: 'Floyd–\nSteinberg' },
     { value: 'atkinson',        label: 'Atkinson' },
     { value: 'sierra-lite',     label: 'Sierra Lite' },
     { value: 'stucki',          label: 'Stucki' },
     { value: 'jarvis',          label: 'Jarvis' },
+    { value: 'ostromoukhov',    label: 'Ostromoukhov' },
+  ]},
+  { group: 'Bayer', items: [
+    { value: 'bayer2x2', label: 'Bayer 2×2' },
+    { value: 'bayer4x4', label: 'Bayer 4×4' },
+    { value: 'bayer8x8', label: 'Bayer 8×8' },
+    { value: 'bayer4x2', label: 'Bayer 4×2' },
+    { value: 'bayer2x4', label: 'Bayer 2×4' },
+  ]},
+  { group: 'Halftone', items: [
+    { value: 'halftone8x8',   label: 'Halftone 8×8' },
+    { value: 'diagonal8x8',   label: 'Diagonal\nNewspaper' },
+    { value: 'spiral5x5',     label: 'Spiral 5×5' },
+    { value: 'clustered-dot', label: 'Clustered\nDot' },
+  ]},
+  { group: 'Hatching', items: [
+    { value: 'line2',         label: 'Lines 2' },
+    { value: 'line4',         label: 'Lines 4' },
+    { value: 'line8',         label: 'Lines 8' },
+    { value: 'line-checker',  label: 'Line\nChecker' },
+    { value: 'vline2',        label: 'VLines 2' },
+    { value: 'vline4',        label: 'VLines 4' },
+    { value: 'vline8',        label: 'VLines 8' },
+    { value: 'vline-checker', label: 'VLine\nChecker' },
+    { value: 'crosshatch',    label: 'Crosshatch' },
+  ]},
+  { group: 'Pattern', items: [
+    { value: 'checker', label: 'Checker' },
+    { value: 'h2x4',    label: 'Wide 2×4' },
+    { value: 'v4x2',    label: 'Tall 4×2' },
+    { value: 'hex8x8',  label: 'Hexagonal\n8×8' },
+    { value: 'hex5x5',  label: 'Hexagonal\n5×5' },
+    { value: 'radial',  label: 'Radial' },
+  ]},
+  { group: 'Noise', items: [
+    { value: 'blue-noise',  label: 'Blue\nNoise' },
+    { value: 'ign',         label: 'Interleaved\nGradient' },
+    { value: 'r2',          label: 'R2\nSequence' },
+    { value: 'value-noise', label: 'Value\nNoise' },
+    { value: 'white-noise', label: 'White\nNoise' },
   ]},
 ]
+
+// Dithers that target non-square pixel ratios (C64-lineage 2:1/1:2 cells).
+// They produce mis-proportioned output on Amiga square-pixel modes when
+// HAM is selected (HAM is square-pixel only); the dither selector hides
+// these in HAM modes. Membership-by-value is more stable than by group
+// name as the taxonomy evolves.
+const NON_SQUARE_DITHERS: ReadonlySet<string> = new Set([
+  'h2x4', 'v4x2', 'bayer4x2', 'bayer2x4',
+])
+
+export function isNonSquareDither(value: string): boolean {
+  return NON_SQUARE_DITHERS.has(value)
+}
 
 export const ALPHA_DITHER_METHODS: NamedItem[] = [
   { value: 'none',         label: 'Hard Threshold' },

@@ -12,7 +12,7 @@ import Panel from 'primevue/panel'
 
 import type { CrtRenderer } from '../lib/crt.js'
 import {
-  CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
+  CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
   isDosMode, isVgaMode, isEgaMode, modePar,
@@ -22,6 +22,8 @@ import {
 import { track } from '../lib/analytics.js'
 import { useImageUpload } from '../composables/useImageUpload.js'
 import { useWasm } from '../composables/useWasm.js'
+
+import DitherGallery from './DitherGallery.vue'
 
 const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
 const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
@@ -173,36 +175,21 @@ let exportCount = 0
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
   // HAM: Ostromoukhov's variable-coefficient kernel degrades to plain
-  // F-S in the pre-dither pass (both HAM6 and HAM8), so hide it to
-  // avoid confusion.
+  // F-S in the pre-dither pass (both HAM6 and HAM8), and the C64-lineage
+  // non-square patterns target C64 multicolor pixel ratios, not Amiga
+  // square pixels — both are hidden in HAM modes.
   const hide_ostro = ht !== null
-  // HAM modes: the C64-lineage non-square patterns (h2x4/v4x2/bayer4x2/
-  // bayer2x4) target C64 multicolor pixel ratios, not Amiga square
-  // pixels. They don't crash but produce mis-proportioned dither for
-  // HAM — hide to avoid user confusion.
   const hide_nonsquare = ht !== null
   return DITHER_METHODS
-    .filter(g => !(hide_nonsquare && g.group === 'Non-square'))
     .map(g => ({
       label: g.group,
       items: g.items
         .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
+        .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
         .map(d => ({ value: d.value, label: d.label }))
     }))
+    .filter(g => g.items.length > 0)
 })
-
-// Flat list of all dither values for prev/next cycling
-const allDitherValues = computed(() =>
-  groupedDitherOptions.value.flatMap(g => g.items.map(d => d.value))
-)
-
-function cycleDither(dir: number) {
-  const vals = allDitherValues.value
-  const idx = vals.indexOf(options.dither)
-  const next = (idx + dir + vals.length) % vals.length
-  const v = vals[next]
-  if (v) options.dither = v
-}
 
 // Whether depth slider should be shown. Hidden for modes where depth is
 // fixed by the target hardware: HAM (N-2 data bits), EHB (always 6),
@@ -1159,23 +1146,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="!(options.mode === 'cga-text80x100' && options.cgaTextMetric !== 'mse')"
                 class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
-                <div class="col-8 flex gap-1 align-items-center">
-                  <Select
-                    v-model="options.dither"
-                    :options="groupedDitherOptions"
-                    optionValue="value"
-                    optionLabel="label"
-                    optionGroupLabel="label"
-                    optionGroupChildren="items"
-                    class="flex-1"
-                    style="min-width:0"
-                  />
-                  <div class="flex flex-column" style="gap:1px">
-                    <Button icon="pi pi-chevron-up" severity="secondary" text size="small"
-                      @click="cycleDither(-1)" style="min-width:0;width:1.2rem;height:0.85rem;padding:0" />
-                    <Button icon="pi pi-chevron-down" severity="secondary" text size="small"
-                      @click="cycleDither(1)" style="min-width:0;width:1.2rem;height:0.85rem;padding:0" />
-                  </div>
+                <div class="col-8">
+                  <DitherGallery v-model="options.dither" :groups="groupedDitherOptions" />
                 </div>
               </div>
 
