@@ -65,16 +65,6 @@ export default [
     ...tseslint.configs.disableTypeChecked,
   },
   {
-    // Build / config / helper scripts are short, stand-alone, and are not
-    // user-facing — relax the noisier rules there.
-    files: ['scripts/**/*.mjs'],
-    rules: {
-      'no-console': 'off',
-      'security/detect-non-literal-fs-filename': 'off',
-      'unicorn/no-array-sort': 'off',
-    },
-  },
-  {
     files: ['**/*.{js,mjs,cjs,ts,mts,cts,vue}'],
     languageOptions: {
       ecmaVersion: 'latest',
@@ -189,6 +179,19 @@ export default [
       // we use bracket access on small fixed-shape objects all over the place.
       'security/detect-object-injection': 'off',
       'security/detect-non-literal-regexp': 'off',
+    },
+  },
+  {
+    // Build / config / helper scripts. Last in the chain so this overrides
+    // the global rule block above. They're short, stand-alone, and not
+    // user-facing — relax the noisier rules.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      'no-console': 'off',
+      'security/detect-non-literal-fs-filename': 'off',
+      'unicorn/no-array-sort': 'off',
+      // Drift checks parse build inputs we control; ReDoS not a real risk.
+      'sonarjs/slow-regex': 'off',
     },
   },
 ]
