@@ -181,6 +181,28 @@ export default [
       // `ref(null)` + matching template `ref="foo"`. The new form is
       // type-safe and detaches automatically.
       'vue/prefer-use-template-ref': 'error',
+      // Vue 3.3+: declare component name / inheritAttrs / etc. via
+      // `defineOptions({ name: 'X' })` inside <script setup> instead of
+      // a separate non-setup <script> block. Removes a class of dual-
+      // <script> footguns where the two blocks see different scopes.
+      'vue/prefer-define-options': 'error',
+
+      // Block specific imports that look fine but bypass package entry
+      // contracts (e.g. importing vue/dist/* skips the package's
+      // declared exports field; primevue/*/dist/* same). Add new
+      // patterns here when a reviewer spots a footgun import path.
+      'no-restricted-imports': ['error', {
+        patterns: [
+          {
+            group: ['vue/dist/*', 'primevue/*/dist/*', '@vue/runtime-*'],
+            message: 'Import from the package entry (e.g. `vue`, `primevue/<component>`) — deep dist paths bypass exports/types and may break across upgrades.',
+          },
+          {
+            group: ['../../node_modules/*', '../../../*'],
+            message: 'Imports must stay inside src/ (or use the @wasm alias for the WASM build output). Going up 3+ directories implies a missing alias.',
+          },
+        ],
+      }],
 
       // import-x — resolver doesn't grok @wasm alias / vite-built worker URLs
       'import-x/no-unresolved': ['error', {
