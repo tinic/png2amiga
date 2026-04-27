@@ -38,8 +38,16 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#ifndef _WIN32
 #include <termios.h>
 #include <unistd.h>
+#else
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#endif
 #include <vector>
 
 namespace {
@@ -2699,9 +2707,10 @@ int run_batch(const Config& cfg) {
                 b64));
         }
 
+        bool tty_raw = false;
+#ifndef _WIN32
         bool tty = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
         struct termios saved{};
-        bool tty_raw = false;
         if (tty && tcgetattr(STDIN_FILENO, &saved) == 0) {
             struct termios raw = saved;
             raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
@@ -2710,6 +2719,7 @@ int run_batch(const Config& cfg) {
             if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0)
                 tty_raw = true;
         }
+#endif
         // Hide cursor + clear once for clean playback.
         std::fputs("\033[?25l\033[2J", stdout);
         std::fflush(stdout);
@@ -2728,6 +2738,7 @@ int run_batch(const Config& cfg) {
                 std::fwrite(payload.data(), 1, payload.size(), stdout);
                 std::fflush(stdout);
                 std::this_thread::sleep_for(sleep_dt);
+#ifndef _WIN32
                 if (tty_raw) {
                     char c;
                     if (read(STDIN_FILENO, &c, 1) == 1) {
@@ -2735,12 +2746,15 @@ int run_batch(const Config& cfg) {
                         break;
                     }
                 }
+#endif
             }
             if (!tty_raw) break;  // single pass when no tty (CI capture).
         }
 
         // Restore terminal + cursor.
+#ifndef _WIN32
         if (tty_raw) tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+#endif
         std::fputs("\033[?25h\n", stdout);
         std::fflush(stdout);
     }
