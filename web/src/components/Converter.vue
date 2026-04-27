@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -185,13 +185,20 @@ const groupedDitherOptions = computed(() => {
   // base-color SETs and per-channel MODIFYs — so the plan can't span the
   // achievable HAM colour space. Hide in HAM modes to avoid confusion.
   const hide_yliluoma = ht !== null
+  // Set of palette-aware methods that don't fit HAM's encoder-bit
+  // pipeline — kept in one set so the filter expression stays simple
+  // (and below the eslint complexity limit).
+  const YLIL_FAMILY = new Set([
+    'yliluoma', 'yliluoma2', 'opt-checker', 'knoll', 'tri-tone',
+    'yliluoma1', 'opt-line', 'opt-line-checker',
+  ])
   return DITHER_METHODS
     .map(g => ({
       label: g.group,
       items: g.items
         .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
-        .filter(d => !(hide_yliluoma && (d.value === 'yliluoma' || d.value === 'yliluoma2' || d.value === 'opt-checker' || d.value === 'knoll' || d.value === 'tri-tone' || d.value === 'yliluoma1')))
+        .filter(d => !(hide_yliluoma && YLIL_FAMILY.has(d.value)))
         .map(d => ({ value: d.value, label: d.label }))
     }))
     .filter(g => g.items.length > 0)
@@ -199,10 +206,12 @@ const groupedDitherOptions = computed(() => {
 
 // Whether depth slider should be shown. Hidden for modes where depth is
 // fixed by the target hardware: HAM (N-2 data bits), EHB (always 6),
-// Atari (mode defines depth), and all DOS modes (EGA/VGA/CGA/text — 1/2/4/8).
+// Atari (mode defines depth), DOS modes (EGA/VGA/CGA/text — 1/2/4/8),
+// and SNES Mode 7 (always 8bpp chunky).
 const showDepthSlider = computed(() => {
   return !isHamMode(options.mode) && !isEhbMode(options.mode) &&
-         !isAtariMode(options.mode) && !isDosMode(options.mode)
+         !isAtariMode(options.mode) && !isDosMode(options.mode) &&
+         !isSnesMode(options.mode)
 })
 
 // Raw export tooltip with format layout (HTML for fixed-width font).
@@ -291,7 +300,7 @@ const showHamControls = computed(() => isHamMode(options.mode))
 // AGA hires + DPF (depth=4 → 4+4) is also fine.
 const dpfAvailable = computed(() => {
   const m = options.mode
-  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isDosMode(m)) return false
+  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isDosMode(m) || isSnesMode(m)) return false
   const cs = effectiveChipset(m, options.chipset)
   if (cs === 'aga') return options.depth === 4
   return options.depth === 3 && !m.includes('hires')
@@ -360,18 +369,21 @@ function clampDepthForMode(mode: string): void {
 }
 
 function syncNativeParToMode(mode: string, oldMode: string): void {
-  // DOS modes default to native PAR (letterbox/pillarbox into fixed buffer)
-  // so the preview shows the right aspect. Reset when entering a DOS mode
-  // from non-DOS; leave alone between DOS modes so the user toggle sticks.
-  if (isDosMode(mode) && !isDosMode(oldMode)) options.nativePar = true
-  if (!isDosMode(mode)) options.nativePar = false
+  // Fixed-buffer modes (DOS + SNES) default to native PAR (letterbox /
+  // pillarbox into the fixed hardware buffer) so the preview shows the
+  // right aspect. Reset when entering a fixed-buffer mode from outside;
+  // leave alone within the family so the user toggle sticks.
+  const fixedNew = isFixedBufferMode(mode)
+  const fixedOld = isFixedBufferMode(oldMode)
+  if (fixedNew && !fixedOld) options.nativePar = true
+  if (!fixedNew) options.nativePar = false
 }
 
 // Methods that don't dither in HAM — auto-fallback to F-S on mode change
 // so the dither dropdown never shows a "selected but inactive" pick.
 const HAM_INCOMPATIBLE_DITHERS = new Set([
   'ostromoukhov', 'yliluoma', 'yliluoma2', 'opt-checker', 'knoll',
-  'tri-tone', 'yliluoma1',
+  'tri-tone', 'yliluoma1', 'opt-line', 'opt-line-checker',
 ])
 
 function maybeFallbackHamDither(mode: string): void {
@@ -435,7 +447,7 @@ function maybeResetModeForChipset(): void {
 watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
   maybeResetModeForChipset()
-  if (isAtariMode(options.mode) || isDosMode(options.mode)) options.copper = false
+  if (isAtariMode(options.mode) || isDosMode(options.mode) || isSnesMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
   if (max > 0 && options.depth > max) options.depth = max
   // SCAP is OCS-only and DPF requires the chipset-specific depth — both
@@ -632,7 +644,7 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number; cs
   // PAR > 1 (wide pixels → CGA composite) compresses height DOWN.
   const cssW = dw
   let cssH = dh
-  if (isDosMode(options.mode) && options.nativePar) {
+  if (isFixedBufferMode(options.mode) && options.nativePar) {
     const par = modePar(options.mode)
     cssH = Math.round(dw * result.height / (result.width * par))
   }
@@ -1175,7 +1187,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               </div>
 
               <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS) -->
-              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !paletteData" class="grid align-items-center">
+              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="CAP — Copper-Augmented Palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">CAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
@@ -1209,17 +1221,18 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- Native PAR (DOS modes only): preserve source aspect inside the fixed
-                   hardware buffer by letterboxing/pillarboxing with black padding. -->
-              <div v-if="isDosMode(options.mode)" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on DOS hardware by letterboxing (reduce height) or pillarboxing (reduce width) inside the fixed frame. Off = stretch to fill the full buffer.">Native PAR</label>
+              <!-- Native PAR (DOS + SNES — modes with fixed hardware buffer):
+                   preserve source aspect by letterboxing/pillarboxing the
+                   image inside the fixed frame instead of stretching. -->
+              <div v-if="isFixedBufferMode(options.mode)" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.nativePar" />
                 </div>
               </div>
 
-              <!-- Resize override (not for Atari or DOS — fixed hardware buffer) -->
-              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode)" class="grid align-items-center">
+              <!-- Resize override (not for Atari, DOS, or SNES — fixed hardware buffer) -->
+              <div v-if="!isAtariMode(options.mode) && !isFixedBufferMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold">Resize</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="sizeOverride" />
@@ -1351,7 +1364,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 title="Download a DJGPP-compilable .cpp viewer (sets video mode, loads palette, blits image, waits for key, restores text mode). Build: i586-pc-msdosdjgpp-g++ -O2 -o out.exe out.cpp" />
             </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -1361,7 +1374,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"

@@ -85,6 +85,8 @@ enum class Method : unsigned char {
     yliluoma,         // Yliluoma/Knoll palette-aware pattern dither (8×8 Bayer)
     yliluoma2,        // Yliluoma method 2 — gamma-aware variant
     opt_checker,      // Optimal Checker — Yliluoma N=2 greedy pair on a 2×2 cell
+    opt_line,         // Optimal Line — Yliluoma N=2 pair, y&1 phase (CRT-scanline friendly)
+    opt_line_checker, // Optimal Line-Checker — Yliluoma N=2 pair, line_checker phase
     knoll,            // Knoll pattern dither — N=16 plan on 4×4 Bayer (US 6,606,166 expired 2019)
     tri_tone,         // Yliluoma tri-tone — 2×2 cell, 3 colours (one 50%, two 25%)
     yliluoma1,        // Yliluoma Algorithm 1 — exhaustive pair × ratio search w/ luma threshold
@@ -244,6 +246,23 @@ std::uint8_t pick_yliluoma_index(
 // `strength` scales how often the phase wins vs collapsing to nearest
 // (1.0 = full checker, 0.0 = no visible dither).
 std::uint8_t pick_opt_checker_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength);
+
+// Same Yliluoma N=2 optimal-pair pick, but the phase function is
+// y & 1 — alternating rows. Each scanline alternates between the
+// pair's darker and brighter member. Aligns with CRT scanline
+// structure; no left/right asymmetry.
+std::uint8_t pick_opt_line_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength);
+
+// Yliluoma N=2 optimal-pair pick with the line_checker phase:
+//   row-major dominant, with a subtle column shift inside each row.
+//   Picks `hi` when (x+y) parity says "high" AND y is odd, etc.
+std::uint8_t pick_opt_line_checker_index(
     const png2amiga::color_space::OKLab& target,
     std::span<const png2amiga::color_space::OKLab> palette_lab,
     std::size_t x, std::size_t y, float strength);

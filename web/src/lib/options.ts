@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes'
 
 export interface ModeOption {
   value: string
@@ -138,6 +138,9 @@ const ALL_MODES: ModeOption[] = [
   { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
   { value: 'cga-composite',    label: 'CGA Composite (160x200)',       chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100 (8x8 font)',    chipset: 'cga' },
+  // SNES Mode 7.
+  { value: 'snes-mode7-256',    label: 'Mode 7 (256-colour BGR555)',   chipset: 'snes' },
+  { value: 'snes-mode7-direct', label: 'Mode 7 Direct (RGB443)',        chipset: 'snes' },
 ]
 
 // Filter modes available for a given chipset
@@ -147,9 +150,10 @@ export function modesForChipset(chipset: Chipset): ModeOption[] {
   if (chipset === 'vga') return ALL_MODES.filter(m => m.chipset === 'vga')
   if (chipset === 'ega') return ALL_MODES.filter(m => m.chipset === 'ega')
   if (chipset === 'cga') return ALL_MODES.filter(m => m.chipset === 'cga')
+  if (chipset === 'snes') return ALL_MODES.filter(m => m.chipset === 'snes')
   return ALL_MODES.filter(m =>
     (chipset === 'aga' || m.chipset === 'ocs') &&
-    !['stf', 'ste', 'vga', 'ega', 'cga'].includes(m.chipset))
+    !['stf', 'ste', 'vga', 'ega', 'cga', 'snes'].includes(m.chipset))
 }
 
 export const MODES: ModeOption[] = ALL_MODES
@@ -162,6 +166,7 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'vga',  label: 'IBM PC VGA (18-bit DAC)' },
   { value: 'ega',  label: 'IBM PC EGA (6-bit IrgbIRGB)' },
   { value: 'cga',  label: 'IBM PC CGA (fixed palette)' },
+  { value: 'snes', label: 'SNES Mode 7' },
 ]
 
 export const DITHER_METHODS: DitherGroup[] = [
@@ -177,6 +182,8 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'ostromoukhov',    label: 'Ostromoukhov' },
     { value: 'riemersma',       label: 'Riemersma' },
     { value: 'opt-checker',     label: 'Optimal\nChecker' },
+    { value: 'opt-line',        label: 'Optimal\nLine' },
+    { value: 'opt-line-checker',label: 'Optimal\nLine-Chk' },
     { value: 'tri-tone',        label: 'Tri-tone' },
     { value: 'knoll',           label: 'Knoll' },
     // Naming aligns with Yliluoma's article: Algorithm 1 is the exhaustive
@@ -400,6 +407,16 @@ export function isCgaMode(mode: string): boolean { return mode.startsWith('cga-'
 export function isDosMode(mode: string): boolean {
   return isVgaMode(mode) || isEgaMode(mode) || isCgaMode(mode)
 }
+export function isSnesMode(mode: string): boolean {
+  return mode.startsWith('snes-')
+}
+// Modes with non-square hardware pixels that benefit from --native-par
+// (preserve source aspect ratio inside the fixed hardware buffer via
+// letterbox / pillarbox). DOS + SNES both fit; auto-toggled on mode
+// entry by the web UI.
+export function isFixedBufferMode(mode: string): boolean {
+  return isDosMode(mode) || isSnesMode(mode)
+}
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
 // Mirrors ModeParams::par in src/amiga.hpp. Used to CSS-stretch the preview
@@ -418,6 +435,9 @@ const MODE_PAR: Record<string, number> = {
   'cga-640':    0.417,
   'cga-composite': 1.667,
   'cga-text80x100': 0.417,
+  // SNES Mode 7 — 256×224 → 4:3 ⇒ PAR ≈ 1.167 (slightly wide pixels).
+  'snes-mode7-256':    1.167,
+  'snes-mode7-direct': 1.167,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }

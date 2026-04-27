@@ -752,6 +752,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 bool knoll = (dither_settings.method == dither::Method::knoll);
                 bool tritone = (dither_settings.method == dither::Method::tri_tone);
                 bool yli1 = (dither_settings.method == dither::Method::yliluoma1);
+                bool optline = (dither_settings.method == dither::Method::opt_line);
+                bool optlchk = (dither_settings.method == dither::Method::opt_line_checker);
                 std::uint8_t rel;
                 if (checker) {
                     rel = dither::pick_opt_checker_index(
@@ -764,6 +766,12 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                         pixel_lab, sub, x, y, dither_settings.strength);
                 } else if (yli1) {
                     rel = dither::pick_yliluoma1_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (optline) {
+                    rel = dither::pick_opt_line_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (optlchk) {
+                    rel = dither::pick_opt_line_checker_index(
                         pixel_lab, sub, x, y, dither_settings.strength);
                 } else {
                     rel = dither::pick_yliluoma_index(
@@ -1798,6 +1806,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 bool knoll = (dither_settings.method == dither::Method::knoll);
                 bool tritone = (dither_settings.method == dither::Method::tri_tone);
                 bool yli1 = (dither_settings.method == dither::Method::yliluoma1);
+                bool optline = (dither_settings.method == dither::Method::opt_line);
+                bool optlchk = (dither_settings.method == dither::Method::opt_line_checker);
                 std::uint8_t rel;
                 if (checker) {
                     rel = dither::pick_opt_checker_index(
@@ -1810,6 +1820,12 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                         pixel_lab, sub, x, y, dither_settings.strength);
                 } else if (yli1) {
                     rel = dither::pick_yliluoma1_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (optline) {
+                    rel = dither::pick_opt_line_index(
+                        pixel_lab, sub, x, y, dither_settings.strength);
+                } else if (optlchk) {
+                    rel = dither::pick_opt_line_checker_index(
                         pixel_lab, sub, x, y, dither_settings.strength);
                 } else {
                     rel = dither::pick_yliluoma_index(

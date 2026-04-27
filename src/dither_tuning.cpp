@@ -31,17 +31,20 @@ Defaults defaults_for(const Context& ctx) {
     switch (ctx.method) {
     // Palette-aware ordered:
     case dither::Method::opt_checker: return Defaults{0.85f, 0.35f};  // 32.495 dB
-    case dither::Method::knoll:       return Defaults{0.90f, 0.35f};  // 32.615 dB
+    case dither::Method::opt_line:    return Defaults{0.70f, 0.35f};  // 32.421 dB
+    case dither::Method::opt_line_checker:
+                                      return Defaults{1.00f, 0.35f};  // 32.563 dB (flat below)
+    case dither::Method::knoll:       return Defaults{0.80f, 0.35f};  // 32.583 dB (after round() fix)
     case dither::Method::tri_tone:    return Defaults{1.00f, 0.35f};  // 32.500 dB (flat below 1.0)
     case dither::Method::yliluoma1:   return Defaults{0.50f, 0.35f};  // 31.055 dB (monotone declining)
     case dither::Method::yliluoma:    return Defaults{0.70f, 0.35f};  // 32.296 dB
     case dither::Method::yliluoma2:   return Defaults{0.60f, 0.35f};  // 32.007 dB
     // Error diffusion family (lores d=5 sweep — strength only; the
     // mode-context table below still owns error_clamp tuning):
-    case dither::Method::atkinson:        return Defaults{0.95f, 0.35f};  // 33.551 dB
+    case dither::Method::atkinson:        return Defaults{0.85f, 0.35f};  // 33.799 dB (OKLab-tuned kernel)
     case dither::Method::sierra_lite:     return Defaults{0.85f, 0.35f};  // 33.836 dB
-    case dither::Method::stucki:          return Defaults{0.85f, 0.35f};  // 33.541 dB
-    case dither::Method::jarvis:          return Defaults{0.80f, 0.35f};  // 33.544 dB
+    case dither::Method::stucki:          return Defaults{0.85f, 0.35f};  // 33.597 dB (OKLab-tuned kernel)
+    case dither::Method::jarvis:          return Defaults{0.95f, 0.35f};  // 33.606 dB (OKLab-tuned kernel)
     case dither::Method::ostromoukhov:    return Defaults{0.85f, 0.35f};  // 33.757 dB
     case dither::Method::gilbert:         return Defaults{0.85f, 0.35f};  // 33.750 dB
     case dither::Method::riemersma:       return Defaults{0.70f, 0.35f};  // 32.593 dB

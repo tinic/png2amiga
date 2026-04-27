@@ -60,6 +60,14 @@ enum class Mode : unsigned char {
                         // resolution. 16000 bytes (char+attr per cell). Fits
                         // in real CGA's 16 KB VRAM. Used in 8088 MPH's 1K-
                         // color mode, AREA 5150, many demos.
+
+    // SNES Mode 7 — affine-transformable 8bpp background.
+    snes_mode7_256,     // 256×224, 8bpp pixels = palette index, 256-entry
+                        // CGRAM palette of BGR555 (5/5/5 = 32K colours).
+    snes_mode7_direct,  // 256×224, 8bpp pixels = R3G3B2 low bits + hardware
+                        // "Direct Color" sub-palette adds 1 high bit per
+                        // channel → effective RGB443 (4/4/3 = 2048 colours)
+                        // per-pixel, no palette table needed.
 };
 
 // ---------------------------------------------------------------------------
@@ -168,6 +176,18 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // reports 16 here so the palette-handling logic uses 16 colors.
     case Mode::cga_text80x100:
         return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
+    // SNES Mode 7 — 256×224 native, 8bpp chunky pixels. Display PAR is
+    // (4/3)÷(256/224) = 896/768 ≈ 1.167 — pixels render slightly wider
+    // than tall on a 4:3 CRT. Same auto-native-par opt-in plumbing as
+    // the DOS modes (the web UI toggles options.nativePar on mode
+    // entry).
+    case Mode::snes_mode7_256:
+        return {256, 224, 8, 256,  false, false, false, false, 1, 1, 1.167f};
+    case Mode::snes_mode7_direct:
+        // depth=8 (chunky), max_colors=2048 (effective RGB443 grid). The
+        // "palette" is implicit hardware sub-palette; we quantise pixels
+        // directly to the 4-4-3 grid with no separate palette table.
+        return {256, 224, 8, 2048, false, false, false, false, 1, 1, 1.167f};
     }
     std::unreachable();
 }
@@ -246,10 +266,19 @@ constexpr bool is_cga_text(Mode mode) noexcept {
 }
 
 // Check if a mode uses chunky (1 byte per pixel) output instead of bitplane
-// encoding. Only VGA 256-color mode 13h. VGA Mode 10h/12h are planar
-// (see is_vga_planar); EGA is planar like Amiga.
+// encoding. VGA 13h, plus the SNES Mode 7 modes — all 8bpp linear pixel
+// arrays.
 constexpr bool is_chunky(Mode mode) noexcept {
-    return mode == Mode::vga_13h;
+    return mode == Mode::vga_13h ||
+           mode == Mode::snes_mode7_256 ||
+           mode == Mode::snes_mode7_direct;
+}
+
+// Check if a mode is one of the SNES Mode 7 variants (256-palette or
+// Direct Color RGB443).
+constexpr bool is_snes(Mode mode) noexcept {
+    return mode == Mode::snes_mode7_256 ||
+           mode == Mode::snes_mode7_direct;
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)

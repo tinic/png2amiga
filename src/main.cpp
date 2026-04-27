@@ -1,5 +1,6 @@
 #include "amiga.hpp"
 #include "api.hpp"
+#include "snes_io.hpp"
 #include "bitplane.hpp"
 #include "cheader.hpp"
 #include "cheader_dos_c.hpp"
@@ -624,7 +625,7 @@ void print_usage() {
         "    Structure-aware error diffusion:\n"
         "      structure-fs|contrast-fs|zhoufang\n"
         "    Palette-aware ordered:\n"
-        "      opt-checker|tri-tone|knoll|yliluoma1|yliluoma|yliluoma2\n"
+        "      opt-checker|opt-line|opt-line-checker|tri-tone|knoll|yliluoma1|yliluoma|yliluoma2\n"
         "    none\n"
         "    (default: floyd-steinberg)\n"
         "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
@@ -809,6 +810,8 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "knoll") return dither::Method::knoll;
     if (s == "tri-tone") return dither::Method::tri_tone;
     if (s == "yliluoma1") return dither::Method::yliluoma1;
+    if (s == "opt-line") return dither::Method::opt_line;
+    if (s == "opt-line-checker") return dither::Method::opt_line_checker;
     if (s == "aseprite-old") return dither::Method::aseprite_old;
     if (s == "libcaca3") return dither::Method::libcaca_3x3;
     if (s == "libcaca6") return dither::Method::libcaca_6x6;
@@ -1149,6 +1152,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "cga-text80x100" || v == "cga-text-1k" ||
                          v == "cga-80x100")
                     config.mode = amiga::Mode::cga_text80x100;
+                else if (v == "snes-mode7-256" || v == "snes-256")
+                    config.mode = amiga::Mode::snes_mode7_256;
+                else if (v == "snes-mode7-direct" || v == "snes-direct" ||
+                         v == "snes-mode7-rgb443")
+                    config.mode = amiga::Mode::snes_mode7_direct;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -1552,6 +1560,8 @@ const char* dither_name(dither::Method m) {
     case dither::Method::knoll: return "knoll";
     case dither::Method::tri_tone: return "tri-tone";
     case dither::Method::yliluoma1: return "yliluoma1";
+    case dither::Method::opt_line: return "opt-line";
+    case dither::Method::opt_line_checker: return "opt-line-checker";
     case dither::Method::aseprite_old: return "aseprite-old";
     case dither::Method::libcaca_3x3: return "libcaca3";
     case dither::Method::libcaca_6x6: return "libcaca6";
@@ -3166,7 +3176,8 @@ int main(int argc, char* argv[]) {
             bool is_fixed_buffer = amiga::is_atari(config->mode) ||
                                    amiga::is_vga(config->mode) ||
                                    amiga::is_cga(config->mode) ||
-                                   amiga::is_ega(config->mode);
+                                   amiga::is_ega(config->mode) ||
+                                   amiga::is_snes(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
@@ -3418,6 +3429,116 @@ int main(int argc, char* argv[]) {
 
     // AGA depth 6 in standard mode: set KILLEHB to prevent hardware
     // from triggering EHB. This allows a true 64-color indexed palette.
+
+    // --- SNES Mode 7 (chunky 8bpp + BGR555 palette / RGB443 direct) ---
+    // Routes through api::encode_state's SNES branch — same path the
+    // WASM/web frontend uses — and writes raw bytes, palette, header,
+    // or PNG preview based on the output extension.
+    if (amiga::is_snes(config->mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
+        // we can hand it to api::encode_state as bytes.
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "SNES: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+
+        api::Options aopts;
+        aopts.mode = (config->mode == amiga::Mode::snes_mode7_256)
+            ? "snes-mode7-256" : "snes-mode7-direct";
+        aopts.dither = std::string{dither_name(config->dither_method)};
+        aopts.dither_strength = config->dither_strength;
+        aopts.error_clamp = config->error_clamp;
+        aopts.palette_diversity = config->palette_diversity;
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+
+        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "SNES encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        cli_status("Dither: {} (strength: {:.2f})",
+                     dither_name(config->dither_method),
+                     config->dither_strength);
+        cli_status("Mode:   SNES Mode 7 ({}), {}x{}, {} colors",
+                     (config->mode == amiga::Mode::snes_mode7_256
+                          ? "BGR555 palette" : "Direct Color RGB443"),
+                     aopts.width, aopts.height,
+                     (config->mode == amiga::Mode::snes_mode7_256 ? 256 : 2048));
+        cli_status("Encoded: {} bytes raw, PSNR: {:.2f} dB",
+                     st.raw_frame.size(), st.psnr);
+
+        auto sw = static_cast<std::size_t>(aopts.width);
+        auto sh = static_cast<std::size_t>(aopts.height);
+        if (ends_with(config->output_path, ".bin") ||
+            ends_with(config->output_path, ".raw")) {
+            Result<void> r;
+            if (config->mode == amiga::Mode::snes_mode7_256) {
+                r = snes_io::write_snes_mode7_256(
+                    config->output_path, st.raw_frame, st.palette, sw, sh);
+            } else {
+                r = snes_io::write_snes_mode7_direct(
+                    config->output_path, st.raw_frame, sw, sh);
+            }
+            if (!r) {
+                std::println(stderr, "SNES write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("Raw:    {} ({} bytes)",
+                         config->output_path, st.raw_frame.size());
+        } else if (ends_with(config->output_path, ".h")) {
+            std::string sym = config->symbol_name.empty()
+                ? std::string{"snes_image"} : config->symbol_name;
+            Result<std::vector<std::uint8_t>> hdr;
+            if (config->mode == amiga::Mode::snes_mode7_256) {
+                hdr = snes_io::encode_snes_mode7_256_header(
+                    st.raw_frame, st.palette, sw, sh, sym);
+            } else {
+                hdr = snes_io::encode_snes_mode7_direct_header(
+                    st.raw_frame, sw, sh, sym);
+            }
+            if (!hdr) {
+                std::println(stderr, "SNES header error: {}", hdr.error().message);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(hdr->data()),
+                     static_cast<std::streamsize>(hdr->size()));
+            if (!of) {
+                std::println(stderr, "SNES header write error: {}",
+                             config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("Header: {} ({} bytes)",
+                         config->output_path, hdr->size());
+        } else {
+            // PNG preview using st.rendered.
+            auto r = save_preview(config->output_path, st.rendered,
+                                  has_transparency, transparency_mask,
+                                  config->mode, /*hires=*/false,
+                                  /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:    {}", config->output_path);
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{
+                config->input_path, config->palette_file,
+            };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
 
     // --- Text-mode graphics (glyph-matched, CGA or EGA font) ---
     if (amiga::is_cga_text(config->mode)) {
@@ -3846,10 +3967,37 @@ int main(int argc, char* argv[]) {
 
             bool use_ordered = dither::is_ordered(dith.method) &&
                                dith.method != dither::Method::none;
-            bool use_diffusion = !use_ordered &&
-                                 dith.method != dither::Method::none;
+            bool is_yli = dither::is_yliluoma(dith.method);
+            // Empty-kernel methods (yliluoma family, gilbert) must NOT
+            // take the diffusion path — same fix as copper.cpp / scap.cpp.
+            bool use_diffusion = !use_ordered && !is_yli &&
+                                 dith.method != dither::Method::none &&
+                                 !dither::error_diffusion_kernel(dith.method).empty();
             std::vector<color_space::OKLab> err_buf;
             if (use_diffusion) err_buf.resize(w * h);
+
+            // Structure-aware bias + Riemersma queue, mirroring the
+            // copper.cpp / scap.cpp / ham.cpp integration.
+            auto bias_map = use_diffusion
+                ? dither::compute_structure_bias(*image, dith.method)
+                : std::vector<float>{};
+            bool needs_riem = use_diffusion &&
+                dither::needs_riemersma_queue(dith.method);
+            constexpr std::size_t RIEM_QSIZE = 16;
+            std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
+            std::array<float, RIEM_QSIZE> riem_weights{};
+            std::size_t riem_head = 0;
+            if (needs_riem) {
+                const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+                float w_acc = 1.0f;
+                for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+                    riem_weights[i] = w_acc;
+                    w_acc *= ratio;
+                }
+                float total = 0.0f;
+                for (float wt : riem_weights) total += wt;
+                for (float& wt : riem_weights) wt /= total;
+            }
 
             for (std::size_t y = 0; y < h; ++y) {
                 auto& base32 = copper_result->scanline_palettes[y];
@@ -3864,27 +4012,75 @@ int main(int argc, char* argv[]) {
 
                 for (std::size_t x = 0; x < w; ++x) {
                     auto pixel_lab = color_space::linear_to_oklab(row[x]);
-                    if (!err_buf.empty()) {
+                    auto ec = dith.error_clamp;
+                    if (needs_riem) {
+                        color_space::OKLab carry{};
+                        for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                            std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                            carry.L += riem_queue[age].L * riem_weights[k];
+                            carry.a += riem_queue[age].a * riem_weights[k];
+                            carry.b += riem_queue[age].b * riem_weights[k];
+                        }
+                        pixel_lab.L += std::clamp(carry.L, -ec, ec);
+                        pixel_lab.a += std::clamp(carry.a, -ec, ec);
+                        pixel_lab.b += std::clamp(carry.b, -ec, ec);
+                    } else if (!err_buf.empty()) {
                         auto& e = err_buf[y * w + x];
-                        auto ec = dith.error_clamp;
                         pixel_lab.L += std::clamp(e.L, -ec, ec);
                         pixel_lab.a += std::clamp(e.a, -ec, ec);
                         pixel_lab.b += std::clamp(e.b, -ec, ec);
                     }
+                    if (!bias_map.empty()) pixel_lab.L += bias_map[y * w + x];
                     if (use_ordered) {
                         float thr = dither::ordered_threshold(dith.method, x, y);
                         pixel_lab.L += thr * dith.strength * 0.15f;
                         pixel_lab.a += thr * dith.strength * 0.03f;
                         pixel_lab.b += thr * dith.strength * 0.03f;
                     }
-                    float best_d = std::numeric_limits<float>::max();
                     std::uint8_t best_k = 0;
-                    for (std::size_t k = 0; k < pal_lab.size(); ++k) {
-                        float dL = pixel_lab.L - pal_lab[k].L;
-                        float da = pixel_lab.a - pal_lab[k].a;
-                        float db = pixel_lab.b - pal_lab[k].b;
-                        float d = dL * dL + da * da + db * db;
-                        if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
+                    float best_d = 0.0f;
+                    if (is_yli) {
+                        // Palette-aware methods (yliluoma family) — pick
+                        // index per-pixel against the row's EHB palette.
+                        switch (dith.method) {
+                        case dither::Method::opt_checker:
+                            best_k = dither::pick_opt_checker_index(
+                                pixel_lab, pal_lab, x, y, dith.strength); break;
+                        case dither::Method::opt_line:
+                            best_k = dither::pick_opt_line_index(
+                                pixel_lab, pal_lab, x, y, dith.strength); break;
+                        case dither::Method::opt_line_checker:
+                            best_k = dither::pick_opt_line_checker_index(
+                                pixel_lab, pal_lab, x, y, dith.strength); break;
+                        case dither::Method::knoll:
+                            best_k = dither::pick_knoll_index(
+                                pixel_lab, pal_lab, x, y, dith.strength); break;
+                        case dither::Method::tri_tone:
+                            best_k = dither::pick_tri_tone_index(
+                                pixel_lab, pal_lab, x, y, dith.strength); break;
+                        case dither::Method::yliluoma1:
+                            best_k = dither::pick_yliluoma1_index(
+                                pixel_lab, pal_lab, x, y, dith.strength); break;
+                        case dither::Method::yliluoma2:
+                            best_k = dither::pick_yliluoma_index(
+                                pixel_lab, pal_lab, x, y, true, dith.strength); break;
+                        default:  // yliluoma (alg 2 greedy)
+                            best_k = dither::pick_yliluoma_index(
+                                pixel_lab, pal_lab, x, y, false, dith.strength); break;
+                        }
+                        float dL = pixel_lab.L - pal_lab[best_k].L;
+                        float da = pixel_lab.a - pal_lab[best_k].a;
+                        float db = pixel_lab.b - pal_lab[best_k].b;
+                        best_d = dL * dL + da * da + db * db;
+                    } else {
+                        best_d = std::numeric_limits<float>::max();
+                        for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                            float dL = pixel_lab.L - pal_lab[k].L;
+                            float da = pixel_lab.a - pal_lab[k].a;
+                            float db = pixel_lab.b - pal_lab[k].b;
+                            float d = dL * dL + da * da + db * db;
+                            if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
+                        }
                     }
                     all_indices[y * w + x] = best_k;
                     total_error += best_d;
@@ -3894,17 +4090,22 @@ int main(int argc, char* argv[]) {
                             (pixel_lab.L - cl.L) * dith.strength,
                             (pixel_lab.a - cl.a) * dith.strength,
                             (pixel_lab.b - cl.b) * dith.strength};
-                        auto kernel = dither::error_diffusion_kernel(dith.method);
-                        for (auto& [kdx, kdy, kw] : kernel) {
-                            auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
-                            auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                            if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                                ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                                auto& e = err_buf[static_cast<std::size_t>(ny) * w +
-                                                  static_cast<std::size_t>(nx)];
-                                e.L += qe.L * kw;
-                                e.a += qe.a * kw;
-                                e.b += qe.b * kw;
+                        if (needs_riem) {
+                            riem_queue[riem_head] = qe;
+                            riem_head = (riem_head + 1) % RIEM_QSIZE;
+                        } else {
+                            auto kernel = dither::error_diffusion_kernel(dith.method);
+                            for (auto& [kdx, kdy, kw] : kernel) {
+                                auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                                auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                                if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
+                                    ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                                    auto& e = err_buf[static_cast<std::size_t>(ny) * w +
+                                                      static_cast<std::size_t>(nx)];
+                                    e.L += qe.L * kw;
+                                    e.a += qe.a * kw;
+                                    e.b += qe.b * kw;
+                                }
                             }
                         }
                     }

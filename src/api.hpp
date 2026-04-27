@@ -356,6 +356,12 @@ struct EncodeState {
     float copper_changes{};
     float quant_error{};
     float psnr{};
+
+    // Raw byte stream for chunky modes (VGA 13h, SNES Mode 7). Empty for
+    // bitplane modes (use `planes` instead). For SNES 256 it's the 8bpp
+    // palette-index array; for SNES Direct it's the 8bpp packed
+    // bbgggrrr-format Direct Color pixel byte array.
+    std::vector<std::uint8_t> raw_frame;
 };
 
 // Run the encoder pipeline and return its full intermediate state. Same

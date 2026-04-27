@@ -368,6 +368,8 @@ void dither_row(std::span<const Color3f> row,
         bool knoll = (settings.method == dither::Method::knoll);
         bool tritone = (settings.method == dither::Method::tri_tone);
         bool yli1 = (settings.method == dither::Method::yliluoma1);
+        bool optline = (settings.method == dither::Method::opt_line);
+        bool optlchk = (settings.method == dither::Method::opt_line_checker);
         for (std::size_t x = 0; x < width; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(row[x]);
             std::uint8_t idx;
@@ -382,6 +384,12 @@ void dither_row(std::span<const Color3f> row,
                     pixel_lab, pal_lab, x, y, settings.strength);
             } else if (yli1) {
                 idx = dither::pick_yliluoma1_index(
+                    pixel_lab, pal_lab, x, y, settings.strength);
+            } else if (optline) {
+                idx = dither::pick_opt_line_index(
+                    pixel_lab, pal_lab, x, y, settings.strength);
+            } else if (optlchk) {
+                idx = dither::pick_opt_line_checker_index(
                     pixel_lab, pal_lab, x, y, settings.strength);
             } else {
                 idx = dither::pick_yliluoma_index(
