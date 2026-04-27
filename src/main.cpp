@@ -3486,6 +3486,7 @@ int main(int argc, char* argv[]) {
         aopts.palette_diversity = config->palette_diversity;
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
+        aopts.on_progress = make_cli_progress_reporter();
 
         auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
         if (!enc.ok()) {

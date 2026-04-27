@@ -872,7 +872,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         bool direct_color = (mode == amiga::Mode::snes_mode7_direct);
         auto enc = snes_io::encode_snes_mode7(
-            *image, direct_color, dith, options.palette_diversity);
+            *image, direct_color, dith, options.palette_diversity,
+            options.on_progress);
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;

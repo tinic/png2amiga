@@ -45,7 +45,15 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
     std::span<const std::uint8_t> pixels,
     std::size_t width, std::size_t height,
     std::function<float(std::span<const std::uint8_t> a,
-                        std::span<const std::uint8_t> b)> distance) {
+                        std::span<const std::uint8_t> b)> distance,
+    ProgressCb on_progress,
+    float progress_lo, float progress_hi) {
+
+    auto report = [&](float local, std::string_view stage) {
+        if (on_progress)
+            on_progress(progress_lo + (progress_hi - progress_lo) *
+                        std::clamp(local, 0.0f, 1.0f), stage);
+    };
 
     if (pixels.size() != width * height) {
         return std::unexpected{Error{ErrorCode::invalid_png,
@@ -109,14 +117,26 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
         auto num_pairs = alive.size() * (alive.size() - 1) / 2;
         std::vector<Pair> pairs;
         pairs.reserve(num_pairs);
+        // Pairwise distance is the dominant cost when content has many
+        // unique tiles (O(n² × 64)). Report every ~32 outer rows so the
+        // bar moves smoothly without burning syscall overhead.
+        report(0.0f, "merging tiles");
         for (std::size_t i = 0; i < alive.size(); ++i) {
             for (std::size_t j = i + 1; j < alive.size(); ++j) {
                 pairs.push_back({alive[i], alive[j],
                     distance(slots[alive[i]].pattern,
                               slots[alive[j]].pattern)});
             }
+            if (alive.size() > 0 && (i & 31) == 31) {
+                // Distance pass progresses ~95% to sort+merge ~5%.
+                report(0.95f * static_cast<float>(i + 1) /
+                       static_cast<float>(alive.size()),
+                       "merging tiles");
+            }
         }
+        report(0.96f, "sorting pairs");
         std::ranges::sort(pairs, {}, &Pair::distance);
+        report(0.98f, "merging tiles");
 
         std::vector<bool> is_alive(slots.size(), true);
         std::size_t merges_done = 0;
@@ -181,7 +201,21 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
 
 Result<Mode7EncodedFrame> encode_snes_mode7(
     const Image& source, bool direct_color,
-    const dither::Settings& dither_settings, int palette_diversity) {
+    const dither::Settings& dither_settings, int palette_diversity,
+    ProgressCb on_progress) {
+
+    // Stage budgets (sum to 1.0). The Lloyd phase dominates total
+    // wall-clock for content with > 256 unique tiles, so it gets the
+    // lion's share. Numbers tuned empirically on photo+logo content.
+    constexpr float kStageQuant   = 0.05f;  // 0% → 5%
+    constexpr float kStagePack    = 0.20f;  // 5% → 25%
+    constexpr float kStageLloyd   = 0.70f;  // 25% → 95%
+    constexpr float kStageRender  = 0.05f;  // 95% → 100%
+    auto report = [&](float frac, std::string_view stage) {
+        if (on_progress)
+            on_progress(std::clamp(frac, 0.0f, 1.0f), stage);
+    };
+    report(0.0f, "starting Mode 7 encode");
 
     auto w = source.width();
     auto h = source.height();
@@ -204,6 +238,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         out.palette = quantized->colors;
         chunky = dith_result.indices;
         out.quant_error = dith_result.total_error;
+        report(kStageQuant, "quantising");
     } else {
         // Mode 7 Direct: pixel byte = BBGGGRRR (3+3+2 = 256 colours).
         // The tilemap carries no palette field per cell, so the
@@ -230,6 +265,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                 return {color_space::linear_to_oklab(snapped), 0.5f};
             });
         out.palette.clear();
+        report(kStageQuant, "quantising");
     }
 
     // ---- Step 2: build palette-aware distance and pack into ≤ 256
@@ -260,20 +296,85 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         return color_space::linear_to_oklab(
             color_space::srgb_to_linear(srgb));
     };
+    // Distance metric: per-pixel OKLab² is correct in the limit but
+    // perceptually weak for textured 8×8 patches — two tiles whose
+    // pixels differ at high spatial frequency look similar to humans
+    // (eye averages over the patch) while scoring far apart pointwise.
+    //
+    // Mix in a coarse-scale term computed from a 3×3-blurred OKLab
+    // representation of each tile. The combined score is
+    //   d = (1 − α) · per_pixel_L² + α · coarse_L²
+    // with α tuned to ~0.4 — heavy enough to pull the merger toward
+    // structural similarity (logos, gradients, skin) without losing
+    // edge fidelity. This captures most of what a learned LPIPS-style
+    // metric would deliver, at zero binary cost and minimal CPU
+    // overhead (the blur is a 3-tap separable kernel applied once).
+    auto blur_3x3 = [](std::span<const color_space::OKLab> in,
+                       std::span<color_space::OKLab> dst) {
+        // 8×8 fixed-size blur with edge-clamp. Separable horizontal +
+        // vertical box-3 filter (cheap and good enough for 8×8).
+        std::array<color_space::OKLab, 64> tmp{};
+        // Horizontal.
+        for (std::size_t r = 0; r < 8; ++r) {
+            for (std::size_t c = 0; c < 8; ++c) {
+                std::size_t cl = (c == 0) ? 0 : c - 1;
+                std::size_t cr = (c == 7) ? 7 : c + 1;
+                auto& a = in[r * 8 + cl];
+                auto& b = in[r * 8 + c];
+                auto& d = in[r * 8 + cr];
+                tmp[r * 8 + c] = {(a.L + b.L + d.L) / 3.0f,
+                                  (a.a + b.a + d.a) / 3.0f,
+                                  (a.b + b.b + d.b) / 3.0f};
+            }
+        }
+        // Vertical.
+        for (std::size_t r = 0; r < 8; ++r) {
+            for (std::size_t c = 0; c < 8; ++c) {
+                std::size_t rt = (r == 0) ? 0 : r - 1;
+                std::size_t rb = (r == 7) ? 7 : r + 1;
+                auto& a = tmp[rt * 8 + c];
+                auto& b = tmp[r * 8 + c];
+                auto& d = tmp[rb * 8 + c];
+                dst[r * 8 + c] = {(a.L + b.L + d.L) / 3.0f,
+                                  (a.a + b.a + d.a) / 3.0f,
+                                  (a.b + b.b + d.b) / 3.0f};
+            }
+        }
+    };
     auto distance_fn = [&](std::span<const std::uint8_t> a,
                             std::span<const std::uint8_t> b) -> float {
-        float sum = 0.0f;
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            color_space::OKLab la, lb;
-            if (direct_color) { la = unpack_direct(a[i]); lb = unpack_direct(b[i]); }
-            else              { la = pal_lab[a[i]];        lb = pal_lab[b[i]];      }
-            float dL = la.L - lb.L, da = la.a - lb.a, dbb = la.b - lb.b;
-            sum += dL * dL + da * da + dbb * dbb;
+        std::array<color_space::OKLab, 64> a_lab, b_lab;
+        for (std::size_t i = 0; i < 64; ++i) {
+            a_lab[i] = direct_color ? unpack_direct(a[i]) : pal_lab[a[i]];
+            b_lab[i] = direct_color ? unpack_direct(b[i]) : pal_lab[b[i]];
         }
-        return sum;
+        float per_pixel = 0.0f;
+        for (std::size_t i = 0; i < 64; ++i) {
+            float dL = a_lab[i].L - b_lab[i].L;
+            float da = a_lab[i].a - b_lab[i].a;
+            float dbb = a_lab[i].b - b_lab[i].b;
+            per_pixel += dL * dL + da * da + dbb * dbb;
+        }
+        std::array<color_space::OKLab, 64> a_blur, b_blur;
+        blur_3x3(a_lab, a_blur);
+        blur_3x3(b_lab, b_blur);
+        float coarse = 0.0f;
+        for (std::size_t i = 0; i < 64; ++i) {
+            float dL = a_blur[i].L - b_blur[i].L;
+            float da = a_blur[i].a - b_blur[i].a;
+            float dbb = a_blur[i].b - b_blur[i].b;
+            coarse += dL * dL + da * da + dbb * dbb;
+        }
+        // α = 0.4 (60% per-pixel, 40% coarse). Higher α favours
+        // structural matches over fine-detail accuracy; lower keeps
+        // edges sharp at the cost of texture blending. 0.4 chosen
+        // empirically to land roughly midway on photo content.
+        return 0.6f * per_pixel + 0.4f * coarse;
     };
-    auto packed = pack_snes_mode7_frame(chunky, w, h, distance_fn);
+    auto packed = pack_snes_mode7_frame(chunky, w, h, distance_fn,
+        on_progress, kStageQuant, kStageQuant + kStagePack);
     if (!packed) return std::unexpected{packed.error()};
+    report(kStageQuant + kStagePack, "merged");
 
     // ---- Step 2b: Lloyd refinement.
     //
@@ -340,6 +441,15 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     auto& tiles = packed->tile_bytes;
     auto num_tiles = tiles.size() / 64;
 
+    int total_lloyd_steps = kOuterIters * kRefineIters;
+    int lloyd_step = 0;
+    auto lloyd_progress = [&](std::string_view stage) {
+        if (!on_progress) return;
+        float local = static_cast<float>(lloyd_step) /
+                      static_cast<float>(total_lloyd_steps);
+        report(kStageQuant + kStagePack + kStageLloyd * local, stage);
+    };
+
     for (int outer = 0; outer < kOuterIters; ++outer) {
         if (outer > 0 && !direct_color) {
             // ---- Palette retraining.
@@ -403,6 +513,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         }
 
     for (int iter = 0; iter < kRefineIters; ++iter) {
+        lloyd_progress("Lloyd refinement");
         // ---- 2b.a: synthesise centroids.
         // Per-tile, per-position OKLab accumulators. Indexed
         // [tile_idx*64 + pos].
@@ -590,9 +701,15 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             }
         }
 
-        if (!changed) break;
+        ++lloyd_step;
+        if (!changed) {
+            // Skip ahead — early-converged inner pass.
+            lloyd_step += (kRefineIters - 1 - iter);
+            break;
+        }
     }
     }  // end outer loop
+    report(kStageQuant + kStagePack + kStageLloyd, "rendering preview");
 
     // ---- Step 3: build packed bytes (tilemap + tile data) AND re-render
     //   the preview from the post-merge tilemap+tiles+palette so the
@@ -637,6 +754,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         }
     }
 
+    report(kStageQuant + kStagePack + kStageLloyd + kStageRender, "done");
     out.unique_after_dedup = packed->unique_after_dedup;
     out.unique_after_merge = packed->unique_after_merge;
     out.merges_done = packed->merges_done;

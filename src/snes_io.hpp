@@ -43,9 +43,17 @@ struct Mode7EncodedFrame {
     std::size_t merges_done;
 };
 
+// `on_progress(fraction, stage_name)` reports rough progress through
+// the encode pipeline so long-running runs (Lloyd refinement +
+// pairwise distance for content with > 256 unique tiles) can drive a
+// progress bar. Fraction is in [0, 1]. Pass nullptr to disable.
+using ProgressCb =
+    std::function<void(float, std::string_view)>;
+
 Result<Mode7EncodedFrame> encode_snes_mode7(
     const Image& source, bool direct_color,
-    const dither::Settings& dither, int palette_diversity);
+    const dither::Settings& dither, int palette_diversity,
+    ProgressCb on_progress = nullptr);
 
 // ---------------------------------------------------------------------------
 // SNES Mode 7 packer (low-level, used by encode_snes_mode7).
@@ -82,6 +90,8 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
     std::span<const std::uint8_t> pixels,
     std::size_t width, std::size_t height,
     std::function<float(std::span<const std::uint8_t> a,
-                        std::span<const std::uint8_t> b)> distance);
+                        std::span<const std::uint8_t> b)> distance,
+    ProgressCb on_progress = nullptr,
+    float progress_lo = 0.0f, float progress_hi = 1.0f);
 
 } // namespace png2amiga::snes_io
