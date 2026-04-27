@@ -37,6 +37,8 @@
 #include <unordered_set>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <termios.h>
 #include <unistd.h>
 #include <vector>
 
@@ -491,6 +493,8 @@ struct Config {
 
     // Output
     bool preview = false;              // show terminal image preview (iTerm2)
+    bool  preview_video = false;       // batch: loop frames inline at preview_video_fps
+    float preview_video_fps = 12.5f;   // default playback rate (8mm-ish)
 
     // Palette index manipulation
     std::vector<api::LockSpec> locks;  // --lock-index <id> <rgbhex>
@@ -723,6 +727,10 @@ void print_usage() {
         "\n"
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
+        "  --preview-video                 Batch only: loop generated frames inline\n"
+        "                                  in iTerm2 until any key is pressed.\n"
+        "  --preview-video-fps <fps>       Playback rate for --preview-video.\n"
+        "                                  Default 12.5 (8mm-ish).\n"
         "  .png extension -> preview PNG image\n"
         "  .iff extension -> IFF ILBM Amiga image file\n"
         "  .h extension   -> C header with UWORD bitplane arrays\n"
@@ -797,6 +805,22 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--preview") {
             config.preview = true;
+            continue;
+        }
+
+        if (arg == "--preview-video") {
+            config.preview_video = true;
+            continue;
+        }
+        if (arg == "--preview-video-fps") {
+            if (i + 1 >= argc)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--preview-video-fps requires a numeric argument"}};
+            config.preview_video_fps =
+                std::strtof(argv[++i], nullptr);
+            if (!(config.preview_video_fps > 0.0f))
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--preview-video-fps must be > 0"}};
             continue;
         }
 
@@ -2636,6 +2660,89 @@ int run_batch(const Config& cfg) {
                        fi + 1, n_frames, frames[fi].stem);
             show_terminal_preview(frame_img, st.mode, st.hires, st.interlace);
         }
+    }
+
+    // Inline video preview: loop the rendered frames (sliced from
+    // st.rendered, the internal atlas buffer — not from the output
+    // files) at preview_video_fps using iTerm2 inline images. Exits on
+    // any keypress. Uses raw stdin mode + select() for non-blocking
+    // peek; falls through silently on non-tty stdin.
+    if (cfg.preview_video && !is_quiet()) {
+        // Pre-build frame PNG payloads + their inline-image escape
+        // sequences once so the loop is just a write+sleep cycle.
+        std::vector<std::string> frame_payloads;
+        frame_payloads.reserve(n_frames);
+        // Match show_terminal_preview's lores/hires/lace scaling so the
+        // looped video matches the static --preview output dimensions.
+        std::size_t sx = st.hires ? 1 : 2;
+        std::size_t sy = st.interlace ? 1 : 2;
+        if (st.hires && st.interlace) { sx = 1; sy = 1; }
+        for (std::size_t fi = 0; fi < n_frames; ++fi) {
+            Image frame_img(frame_w, frame_h);
+            auto x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
+            for (std::size_t y = 0; y < frame_h; ++y)
+                for (std::size_t x = 0; x < frame_w; ++x)
+                    frame_img[x, y] = st.rendered[x0 + x, y];
+            auto scaled = scale_preview(frame_img, sx, sy);
+            auto png = png_io::encode(scaled);
+            if (!png) continue;
+            auto b64 = base64_encode(*png);
+            // iTerm2 upscales the inline image to the requested
+            // width/height (in display pixels). 2× the encoded size for
+            // a comfortable viewing scale (matches iterm2_display()).
+            constexpr unsigned kDisplayScale = 2;
+            frame_payloads.push_back(std::format(
+                "\033[H\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
+                png->size(),
+                scaled.width() * kDisplayScale,
+                scaled.height() * kDisplayScale,
+                b64));
+        }
+
+        bool tty = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+        struct termios saved{};
+        bool tty_raw = false;
+        if (tty && tcgetattr(STDIN_FILENO, &saved) == 0) {
+            struct termios raw = saved;
+            raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+            raw.c_cc[VMIN] = 0;
+            raw.c_cc[VTIME] = 0;
+            if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0)
+                tty_raw = true;
+        }
+        // Hide cursor + clear once for clean playback.
+        std::fputs("\033[?25l\033[2J", stdout);
+        std::fflush(stdout);
+
+        auto frame_dt = std::chrono::duration<double>(
+            1.0 / static_cast<double>(cfg.preview_video_fps));
+        auto sleep_dt = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            frame_dt);
+
+        cli_status("Looping {} frames at {:.2f} fps — press any key to stop.",
+                   n_frames, cfg.preview_video_fps);
+
+        bool exit_requested = false;
+        while (!exit_requested && !frame_payloads.empty()) {
+            for (auto& payload : frame_payloads) {
+                std::fwrite(payload.data(), 1, payload.size(), stdout);
+                std::fflush(stdout);
+                std::this_thread::sleep_for(sleep_dt);
+                if (tty_raw) {
+                    char c;
+                    if (read(STDIN_FILENO, &c, 1) == 1) {
+                        exit_requested = true;
+                        break;
+                    }
+                }
+            }
+            if (!tty_raw) break;  // single pass when no tty (CI capture).
+        }
+
+        // Restore terminal + cursor.
+        if (tty_raw) tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+        std::fputs("\033[?25h\n", stdout);
+        std::fflush(stdout);
     }
 
     // Summary. Disk accounting splits per-frame (bitplanes only, the
