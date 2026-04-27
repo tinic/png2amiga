@@ -24,7 +24,7 @@ export interface DitherGroup {
 }
 
 export interface Slider {
-  key: string
+  key: SliderKey | DiffusionSliderKey
   label: string
   min: number
   max: number
@@ -32,6 +32,11 @@ export interface Slider {
   default: number
   tip: string
 }
+
+export type SliderKey =
+  | 'gamma' | 'ditherStrength' | 'brightness' | 'contrast' | 'saturation'
+  | 'hueShift' | 'sharpen' | 'blackPoint' | 'whitePoint'
+export type DiffusionSliderKey = 'errorClamp'
 
 export interface Example {
   name: string
@@ -84,7 +89,18 @@ export interface Options {
   scap: boolean
   cgaTextMetric: string
   paletteData?: Uint8Array | null
-  [key: string]: unknown
+  // Slider numeric fields (declared explicitly so options[s.key] is typed
+  // as number rather than the index-signature wildcard).
+  gamma: number
+  ditherStrength: number
+  brightness: number
+  contrast: number
+  saturation: number
+  hueShift: number
+  sharpen: number
+  blackPoint: number
+  whitePoint: number
+  errorClamp: number
 }
 
 // All modes with chipset availability (ocs = available on both, aga = AGA only)
@@ -304,9 +320,15 @@ export function defaultOptions(): Options {
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
     ...CGA_TEXT_DEFAULTS,
+    ...sliderDefaults(),
   }
-  for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
   return opts
+}
+
+function sliderDefaults(): Record<SliderKey | DiffusionSliderKey, number> {
+  const out = {} as Record<SliderKey | DiffusionSliderKey, number>
+  for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) out[s.key] = s.default
+  return out
 }
 
 // --- Helper functions ---

@@ -1,5 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { ref, reactive, watch, nextTick, computed, onBeforeUnmount } from 'vue'
+import type { ConvertResult } from '@wasm/png2amiga.js'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Slider from 'primevue/slider'
@@ -9,6 +10,7 @@ import ProgressSpinner from 'primevue/progressspinner'
 import ProgressBar from 'primevue/progressbar'
 import Panel from 'primevue/panel'
 
+import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
@@ -30,6 +32,7 @@ const showUploadHint = ref(true)
 watch(wasmLoading, async (loading) => {
   if (loading || wasmError.value || imageBytes.value) return
   const example = EXAMPLES[0]
+  if (!example) return
   try {
     const r = await fetch(`/examples/${example.file}`)
     const buf = await r.arrayBuffer()
@@ -51,8 +54,8 @@ watch(wasmLoading, async (loading) => {
 })
 
 const options = reactive(defaultOptions())
-const canvasRef = ref(null)
-const crtCanvasRef = ref(null)  // WebGL CRT-preview overlay canvas
+const canvasRef = ref<HTMLCanvasElement | null>(null)
+const crtCanvasRef = ref<HTMLCanvasElement | null>(null)  // WebGL CRT-preview overlay canvas
 const crtEnabled = ref(false)
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
@@ -60,17 +63,17 @@ const progressStage = ref('')
 
 // Lazy-init the CRT renderer the first time --crt is toggled on; persist
 // across re-renders. Only torn down on unmount.
-let crtRenderer = null
-let lastRgba = null              // cached source RGBA so a CRT toggle
-let lastSrc = { w: 0, h: 0 }     // change can re-render without re-encoding
+let crtRenderer: CrtRenderer | null = null
+let lastRgba: Uint8Array | null = null   // cached source RGBA so a CRT toggle
+let lastSrc = { w: 0, h: 0 }             // change can re-render without re-encoding
 let lastDst = { w: 0, h: 0 }
-async function ensureCrtRenderer() {
+async function ensureCrtRenderer(): Promise<CrtRenderer | null> {
   if (crtRenderer || !crtCanvasRef.value) return crtRenderer
   const { createCrtRenderer } = await import('../lib/crt.js')
   try {
     crtRenderer = createCrtRenderer(crtCanvasRef.value)
   } catch (error) {
-    errorMsg.value = `CRT: ${error.message}`
+    errorMsg.value = `CRT: ${error instanceof Error ? error.message : String(error)}`
     crtEnabled.value = false
     return null
   }
@@ -111,17 +114,19 @@ const lastChangesPerLine = ref(0)
 const lastMaxMovesPerLine = ref(0)
 const lastAga = ref(false)
 const imageHasAlpha = ref(false)
-const paletteData = ref(null)    // raw palette file bytes (Uint8Array)
-const paletteColors = ref([])    // parsed CSS color strings for preview
+const paletteData = ref<Uint8Array | null>(null)    // raw palette file bytes
+const paletteColors = ref<string[]>([])              // parsed CSS color strings for preview
 const pageLoadTime = Date.now()
 
 // Loupe (4x zoom with drag-to-pan)
+interface DragStart { x: number; y: number; ox: number; oy: number }
+
 const loupeActive = ref(false)
 const loupeX = ref(0)  // pan offset in CSS pixels (negative = scrolled right/down)
 const loupeY = ref(0)
-const loupeHeight = ref(null)
-const previewColRef = ref(null)
-let dragStart = null    // { x, y, ox, oy } while dragging
+const loupeHeight = ref<string | null>(null)
+const previewColRef = ref<HTMLElement | null>(null)
+let dragStart: DragStart | null = null    // { x, y, ox, oy } while dragging
 
 function loupeToggle() {
   loupeActive.value = !loupeActive.value
@@ -134,13 +139,14 @@ function loupeToggle() {
     loupeHeight.value = null
   }
 }
-function loupePointerDown(e) {
+function loupePointerDown(e: PointerEvent) {
   if (!loupeActive.value) return
-  if (e.target.closest('.loupe-btn')) return
+  const target = e.target as HTMLElement | null
+  if (target?.closest('.loupe-btn')) return
   dragStart = { x: e.clientX, y: e.clientY, ox: loupeX.value, oy: loupeY.value }
-  e.currentTarget.setPointerCapture(e.pointerId)
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
 }
-function loupePointerMove(e) {
+function loupePointerMove(e: PointerEvent) {
   if (!dragStart) return
   // Use whichever canvas is currently visible. With v-show, the hidden
   // one's clientWidth/Height is 0 so picking the wrong one would clamp
@@ -190,11 +196,12 @@ const allDitherValues = computed(() =>
   groupedDitherOptions.value.flatMap(g => g.items.map(d => d.value))
 )
 
-function cycleDither(dir) {
+function cycleDither(dir: number) {
   const vals = allDitherValues.value
   const idx = vals.indexOf(options.dither)
   const next = (idx + dir + vals.length) % vals.length
-  options.dither = vals[next]
+  const v = vals[next]
+  if (v) options.dither = v
 }
 
 // Whether depth slider should be shown. Hidden for modes where depth is
@@ -211,7 +218,7 @@ const showDepthSlider = computed(() => {
 // coerced via Number() / Boolean() below so a future regression that
 // smuggles a string with HTML special characters can't turn into XSS.
 const rawTooltipHtml = computed(() => {
-  const n = (v) => Number(v) || 0
+  const n = (v: unknown) => Number(v) || 0
   const w = n(lastWidth.value)
   const h = n(lastHeight.value)
   const d = n(options.depth || defaultDepth(options.mode))
@@ -390,8 +397,11 @@ watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
   const modes = modesForChipset(options.chipset)
   if (!modes.some(m => m.value === options.mode)) {
-    options.mode = modes[0].value
-    options.depth = defaultDepth(options.mode)
+    const fallback = modes[0]
+    if (fallback) {
+      options.mode = fallback.value
+      options.depth = defaultDepth(options.mode)
+    }
   }
   if (isAtariMode(options.mode) || isDosMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
@@ -430,7 +440,7 @@ watch(imageBytes, () => {
 // Resize presets: scale source dimensions and write into width/height.
 // Width is rounded to a 16-pixel boundary (Amiga bitplane requirement).
 // Only callable when sizeOverride is already on (UI hides the buttons otherwise).
-function setSizePreset(scale) {
+function setSizePreset(scale: number) {
   if (!imageWidth.value || !imageHeight.value) return
   options.width = Math.max(16, Math.round(imageWidth.value * scale / 16) * 16)
   options.height = Math.max(2, Math.round(imageHeight.value * scale))
@@ -509,11 +519,11 @@ watch(
 watch(wasmLoading, (loading) => { if (!loading) refreshErrorClamp() })
 
 // Track slider tweaks (debounced)
-let tweakTimer = null
+let tweakTimer: ReturnType<typeof setTimeout> | null = null
 for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) {
   watch(() => options[s.key], (val) => {
-    clearTimeout(tweakTimer)
-    tweakTimer = setTimeout(() => track('setting-tweak', { key: s.key, value: val }), 500)
+    if (tweakTimer) clearTimeout(tweakTimer)
+    tweakTimer = setTimeout(() => track('setting-tweak', { key: s.key, value: val as string | number }), 500)
   })
 }
 watch(() => options.cgaTextMetric, (val) => {
@@ -521,7 +531,7 @@ watch(() => options.cgaTextMetric, (val) => {
   // destroys the precision they need. Force dither=none whenever a
   // perceptual metric is selected.
   if (val !== 'mse' && options.dither !== 'none') options.dither = 'none'
-  clearTimeout(tweakTimer)
+  if (tweakTimer) clearTimeout(tweakTimer)
   tweakTimer = setTimeout(() => track('setting-tweak', { key: 'cgaTextMetric', value: val }), 500)
 })
 
@@ -535,10 +545,10 @@ if (globalThis.window !== undefined) {
   })
 }
 
-let debounceTimer = null
-let spinnerTimer = null
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let spinnerTimer: ReturnType<typeof setTimeout> | null = null
 
-function formatResultInfo(result) {
+function formatResultInfo(result: ConvertResult) {
   let info = `${result.width}x${result.height}, ${statusChipset.value}`
   info += `, ${result.depth || '?'}bpl, ${result.totalColors || result.colors || 0} colors`
   if (result.copperChanges) info += `, ${result.copperChanges.toFixed(1)} avg CAP/line`
@@ -546,18 +556,18 @@ function formatResultInfo(result) {
   // (computed once in api::make_result so they can't go stale across
   // mode additions). Don't re-derive from {planeBytes, copperBytes,
   // changesPerLine, ...} here.
-  if (result.planeBytes > 0) {
-    const fmt = (b) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
-    info += `, disk: ${fmt(result.diskBytes || 0)}, chip: ${fmt(result.chipBytes || 0)}`
+  if (result.planeBytes && result.planeBytes > 0) {
+    const fmt = (b: number) => b >= 1024 ? `${(b / 1024).toFixed(1)}K` : `${b}B`
+    info += `, disk: ${fmt(result.diskBytes ?? 0)}, chip: ${fmt(result.chipBytes ?? 0)}`
   }
   if (result.quantError != null) info += `, error: ${result.quantError.toFixed(2)}`
   if (result.psnr != null && Number.isFinite(result.psnr)) info += `, PSNR: ${result.psnr.toFixed(1)} dB`
   return info
 }
 
-function paintPreviewCanvas(result) {
+function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number } | null {
   const canvas = canvasRef.value
-  if (!canvas) return null
+  if (!canvas || !result.rgba) return null
   const { sx, sy } = previewScale(options.mode)
   const dw = result.width * sx
   const dh = result.height * sy
@@ -580,11 +590,13 @@ function paintPreviewCanvas(result) {
     canvas.style.height = `${dh}px`
   }
   const ctx = canvas.getContext('2d')
+  if (!ctx) return null
   ctx.imageSmoothingEnabled = false
   const tmp = document.createElement('canvas')
   tmp.width = result.width
   tmp.height = result.height
   const tmpCtx = tmp.getContext('2d')
+  if (!tmpCtx) return null
   const imgData = new ImageData(
     new Uint8ClampedArray(result.rgba),
     result.width, result.height
@@ -595,28 +607,29 @@ function paintPreviewCanvas(result) {
 }
 
 function doConvert() {
-  if (!imageBytes.value || wasmLoading.value) return
+  const bytes = imageBytes.value
+  if (!bytes || wasmLoading.value) return
 
-  clearTimeout(debounceTimer)
+  if (debounceTimer) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(async () => {
     errorMsg.value = ''
     const convertStart = performance.now()
 
     // Show spinner only if conversion takes longer than 100ms
-    clearTimeout(spinnerTimer)
+    if (spinnerTimer) clearTimeout(spinnerTimer)
     spinnerTimer = setTimeout(() => { converting.value = true }, 100)
 
     try {
       progress.value = 0
       progressStage.value = ''
-      const onProgress = (p, stage) => {
+      const onProgress = (p: number, stage: string) => {
         progress.value = Math.round(p * 100)
         progressStage.value = stage || ''
       }
       const result = await convertRGBA(
-        imageBytes.value, buildWasmOptions(), onProgress)
+        bytes, buildWasmOptions(), onProgress)
 
-      clearTimeout(spinnerTimer)
+      if (spinnerTimer) clearTimeout(spinnerTimer)
       progress.value = 0
       progressStage.value = ''
 
@@ -628,7 +641,7 @@ function doConvert() {
       }
 
       const painted = paintPreviewCanvas(result)
-      if (!painted) { converting.value = false; return }
+      if (!painted || !result.rgba) { converting.value = false; return }
       const { dw, dh } = painted
 
       // Cache source for CRT re-render on toggle without re-encoding.
@@ -674,9 +687,10 @@ function doConvert() {
         track('first-convert-time', { seconds: Math.round((Date.now() - pageLoadTime) / 1000) })
       }
     } catch (error) {
-      clearTimeout(spinnerTimer)
-      errorMsg.value = error.message
-      track('error', { type: 'convert-exception', message: error.message })
+      if (spinnerTimer) clearTimeout(spinnerTimer)
+      const message = error instanceof Error ? error.message : String(error)
+      errorMsg.value = message
+      track('error', { type: 'convert-exception', message })
     }
 
     converting.value = false
@@ -685,22 +699,39 @@ function doConvert() {
 
 watch([imageBytes, () => ({ ...options })], doConvert, { deep: true })
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+// payload widening: Uint8Array<ArrayBufferLike> isn't accepted by BlobPart in
+// TS 5.7+ due to typed-array buffer variance, but Blob() at runtime accepts
+// any ArrayBufferView. Cast at the boundary.
+type BlobPayload = Uint8Array | ArrayBuffer | string
+function downloadBlob(payload: BlobPayload, filename: string, mime: string) {
+  const blob = new Blob([payload as BlobPart], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function baseStem(): string {
+  return (imageName.value || 'image').replace(/\.[^.]+$/, '')
+}
+
 async function downloadPNG() {
   if (!imageBytes.value) return
   converting.value = true
   try {
     const result = await convertPNG(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
-    const blob = new Blob([result.data], { type: 'image/png' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '-amiga.png'
-    a.click()
-    URL.revokeObjectURL(url)
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '-amiga.png', 'image/png')
     exportCount++
     track('export', { format: 'png', mode: options.mode, exportCount, secsSinceUpload: uploadTimestamp.value ? Math.round((Date.now() - uploadTimestamp.value) / 1000) : undefined })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
@@ -710,19 +741,14 @@ async function downloadDegas() {
   try {
     const result = await convertDegas(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
     let ext = '.pi1'
     if (options.mode.endsWith('-hi')) ext = '.pi3'
     else if (options.mode.endsWith('-med')) ext = '.pi2'
-    const blob = new Blob([result.data], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + ext
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadBlob(result.data, baseStem() + ext, 'application/octet-stream')
     exportCount++
     track('export', { format: ext, mode: options.mode, exportCount })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
@@ -732,16 +758,11 @@ async function downloadIFF() {
   try {
     const result = await convertIFF(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
-    const blob = new Blob([result.data], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.iff'
-    a.click()
-    URL.revokeObjectURL(url)
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.iff', 'application/octet-stream')
     exportCount++
     track('export', { format: 'iff', mode: options.mode, exportCount })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
@@ -755,16 +776,12 @@ async function downloadViewer() {
     opts.symbolName = stem
     const result = await convertViewer(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
-    const blob = new Blob([result.header || result.data], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = stem + '.cpp'
-    a.click()
-    URL.revokeObjectURL(url)
+    const payload: BlobPayload | undefined = result.header ?? result.data
+    if (!payload) return
+    downloadBlob(payload, stem + '.cpp', 'text/plain')
     exportCount++
     track('export', { format: 'cpp', mode: options.mode, exportCount })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
@@ -774,16 +791,11 @@ async function downloadRaw() {
   try {
     const result = await convertRaw(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
-    const blob = new Blob([result.data], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.raw'
-    a.click()
-    URL.revokeObjectURL(url)
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.raw', 'application/octet-stream')
     exportCount++
     track('export', { format: 'raw', mode: options.mode, exportCount })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
@@ -795,16 +807,11 @@ async function downloadMaskPNG() {
     opts.maskInvert = Boolean(options.maskInvert)
     const result = await convertMask(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
-    const blob = new Blob([result.data], { type: 'image/png' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '-mask.png'
-    a.click()
-    URL.revokeObjectURL(url)
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '-mask.png', 'image/png')
     exportCount++
     track('export', { format: 'mask-png', mode: options.mode, exportCount })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
@@ -816,20 +823,15 @@ async function downloadMaskRaw() {
     opts.maskInvert = Boolean(options.maskInvert)
     const result = await convertMaskRaw(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
-    const blob = new Blob([result.data], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '-mask.raw'
-    a.click()
-    URL.revokeObjectURL(url)
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '-mask.raw', 'application/octet-stream')
     exportCount++
     track('export', { format: 'mask-raw', mode: options.mode, exportCount })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
-async function compileAndDownload(format) {
+async function compileAndDownload(format: string) {
   if (!imageBytes.value) return
   converting.value = true
   try {
@@ -839,7 +841,7 @@ async function compileAndDownload(format) {
     opts.symbolName = stem
     const result = await convertViewer(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
-    const source = result.header || new TextDecoder().decode(result.data)
+    const source = result.header || (result.data ? new TextDecoder().decode(result.data) : '')
     const resp = await fetch(`/api/compile?format=${format}`, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
@@ -853,12 +855,12 @@ async function compileAndDownload(format) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = (imageName.value || 'image').replace(/\.[^.]+$/, '') + '.' + format
+    a.download = baseStem() + '.' + format
     a.click()
     URL.revokeObjectURL(url)
     exportCount++
     track('export', { format, mode: options.mode, exportCount })
-  } catch (error) { errorMsg.value = error.message }
+  } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
 
@@ -868,8 +870,8 @@ function resetOptions() {
   track('reset')
 }
 
-function parseGimpPalette(text) {
-  const colors = []
+function parseGimpPalette(text: string): string[] {
+  const colors: string[] = []
   for (const line of text.split('\n')) {
     const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/)
     if (m) colors.push(`rgb(${m[1]},${m[2]},${m[3]})`)
@@ -877,16 +879,16 @@ function parseGimpPalette(text) {
   return colors
 }
 
-function parseIffCmap(bytes) {
-  const colors = []
+function parseIffCmap(bytes: Uint8Array): string[] {
+  const colors: string[] = []
   let pos = 12
   while (pos + 8 <= bytes.length) {
     const id = String.fromCodePoint(...bytes.slice(pos, pos + 4))
-    const size = (bytes[pos+4] << 24) | (bytes[pos+5] << 16) | (bytes[pos+6] << 8) | bytes[pos+7]
+    const size = ((bytes[pos+4] ?? 0) << 24) | ((bytes[pos+5] ?? 0) << 16) | ((bytes[pos+6] ?? 0) << 8) | (bytes[pos+7] ?? 0)
     pos += 8
     if (id === 'CMAP') {
       for (let i = 0; i + 2 < size && pos + i + 2 <= bytes.length; i += 3) {
-        colors.push(`rgb(${bytes[pos+i]},${bytes[pos+i+1]},${bytes[pos+i+2]})`)
+        colors.push(`rgb(${bytes[pos+i] ?? 0},${bytes[pos+i+1] ?? 0},${bytes[pos+i+2] ?? 0})`)
       }
       break
     }
@@ -895,8 +897,8 @@ function parseIffCmap(bytes) {
   return colors
 }
 
-function parseHexPalette(text) {
-  const colors = []
+function parseHexPalette(text: string): string[] {
+  const colors: string[] = []
   for (const line of text.split('\n')) {
     const m = line.trim().match(/^#?([0-9a-fA-F]{6})$/)
     if (m) colors.push(`#${m[1]}`)
@@ -904,11 +906,11 @@ function parseHexPalette(text) {
   return colors
 }
 
-function parseBinaryPalette(bytes) {
+function parseBinaryPalette(bytes: Uint8Array): string[] {
   // Binary .pal: 2 bytes per color, big-endian 0x0RGB.
-  const colors = []
+  const colors: string[] = []
   for (let i = 0; i + 1 < bytes.length; i += 2) {
-    const w = (bytes[i] << 8) | bytes[i + 1]
+    const w = ((bytes[i] ?? 0) << 8) | (bytes[i + 1] ?? 0)
     const r = ((w >> 8) & 0xF) * 17
     const g = ((w >> 4) & 0xF) * 17
     const b = (w & 0xF) * 17
@@ -917,9 +919,9 @@ function parseBinaryPalette(bytes) {
   return colors
 }
 
-function parsePaletteBytes(bytes) {
+function parsePaletteBytes(bytes: Uint8Array): string[] {
   const text = new TextDecoder().decode(bytes)
-  let colors
+  let colors: string[]
   if (text.startsWith('GIMP Palette')) colors = parseGimpPalette(text)
   else if (bytes.length >= 12 && String.fromCodePoint(...bytes.slice(0, 4)) === 'FORM') colors = parseIffCmap(bytes)
   else colors = parseHexPalette(text)
@@ -933,7 +935,7 @@ function loadPalette() {
   input.type = 'file'
   input.accept = '.gpl,.hex,.txt,.pal,.iff,.ilbm,.lbm'
   input.addEventListener('change', async () => {
-    const file = input.files[0]
+    const file = input.files?.[0]
     if (!file) return
     const buf = await file.arrayBuffer()
     const bytes = new Uint8Array(buf)
@@ -956,7 +958,7 @@ function dismissHint() {
   showUploadHint.value = false
 }
 
-async function loadExample(example) {
+async function loadExample(example: typeof EXAMPLES[number]) {
   dismissHint()
   track('example', { name: example.name })
   // Reset to defaults, then apply example-specific settings.
@@ -1016,7 +1018,7 @@ async function loadExample(example) {
                     @click.stop="dismissHint(); openPicker()"
                     @drop.prevent="onDrop($event); dismissHint()"
                     @dragover.prevent="onDragOver($event)"
-                    @dragleave="onDragLeave($event)"
+                    @dragleave="onDragLeave"
                   >
                     <i class="pi pi-images mb-2" style="font-size: 1.5rem"></i>
                     <div class="font-semibold text-sm">Drop or click to load your own image</div>

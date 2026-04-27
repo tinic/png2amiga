@@ -1,8 +1,8 @@
-<script setup>
+<script setup lang="ts">
 import Converter from './components/Converter.vue'
 import { track } from './lib/analytics.js'
 
-const version = __APP_VERSION__
+const version: string = __APP_VERSION__
 </script>
 
 <template>

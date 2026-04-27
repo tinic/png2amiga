@@ -203,39 +203,49 @@ void main() {
 }
 `
 
-function compile(gl, type, src) {
+export interface CrtRenderer {
+  render: (rgba: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number) => void
+  dispose: () => void
+}
+
+function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
   const sh = gl.createShader(type)
+  if (!sh) throw new Error('CRT shader create failed')
   gl.shaderSource(sh, src)
   gl.compileShader(sh)
   if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
     const log = gl.getShaderInfoLog(sh)
     gl.deleteShader(sh)
-    throw new Error(`CRT shader compile error: ${log}`)
+    throw new Error(`CRT shader compile error: ${log ?? '(no log)'}`)
   }
   return sh
 }
 
-function link(gl, vs, fs) {
+function link(gl: WebGLRenderingContext, vs: WebGLShader, fs: WebGLShader): WebGLProgram {
   const p = gl.createProgram()
+  if (!p) throw new Error('CRT program create failed')
   gl.attachShader(p, vs)
   gl.attachShader(p, fs)
   gl.linkProgram(p)
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
     const log = gl.getProgramInfoLog(p)
     gl.deleteProgram(p)
-    throw new Error(`CRT program link error: ${log}`)
+    throw new Error(`CRT program link error: ${log ?? '(no log)'}`)
   }
   return p
 }
 
-export function createCrtRenderer(canvas) {
-  const gl = canvas.getContext('webgl', {
+export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
+  const ctx = canvas.getContext('webgl', {
     premultipliedAlpha: false,
     alpha: false,
     antialias: false,
     preserveDrawingBuffer: false,
   })
-  if (!gl) throw new Error('WebGL not available')
+  if (!ctx) throw new Error('WebGL not available')
+  // Capture into a non-nullable local so TS keeps the narrowing inside
+  // the closures we return (render / dispose).
+  const gl: WebGLRenderingContext = ctx
 
   const vs = compile(gl, gl.VERTEX_SHADER, VERT)
   const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
@@ -268,7 +278,7 @@ export function createCrtRenderer(canvas) {
   }
   const aPos = gl.getAttribLocation(program, 'a_pos')
 
-  function render(rgba, srcW, srcH, dstW, dstH) {
+  function render(rgba: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): void {
     if (canvas.width !== dstW)  canvas.width  = dstW
     if (canvas.height !== dstH) canvas.height = dstH
 
@@ -328,7 +338,7 @@ export function createCrtRenderer(canvas) {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }
 
-  function dispose() {
+  function dispose(): void {
     gl.deleteProgram(program)
     gl.deleteShader(vs)
     gl.deleteShader(fs)

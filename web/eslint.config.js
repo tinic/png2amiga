@@ -85,7 +85,10 @@ export default [
         varsIgnorePattern: '^_',
         caughtErrorsIgnorePattern: '^_',
       }],
-      'no-undef': 'error',
+      // TypeScript already verifies undefined references; the core rule
+      // doesn't know about ambient DOM types, so it false-positives on
+      // BlobPart, FileList, etc. inside `as` casts.
+      'no-undef': 'off',
       'no-var': 'error',
       'prefer-const': 'error',
       'eqeqeq': ['error', 'always', { null: 'ignore' }],
