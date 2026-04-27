@@ -94,24 +94,29 @@ function injectProgressCallback(args: unknown[], id: number, wantProgress: boole
 }
 
 function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: ArrayBuffer[] } {
+  // Build the envelope by spreading optional fields conditionally — under
+  // exactOptionalPropertyTypes, we can't write `key: undefined` for an
+  // optional field, so include only present keys.
+  const opt = <K extends string, V>(k: K, v: V | undefined): Partial<Record<K, V>> =>
+    v === undefined ? {} : ({ [k]: v } as Record<K, V>)
   const reply: ReplyEnvelope = {
     width: result.width,
     height: result.height,
     depth: result.depth,
     colors: result.colors,
-    copperChanges: result.copperChanges,
-    changesPerLine: result.changesPerLine,
-    maxMovesPerLine: result.maxMovesPerLine,
-    aga: result.aga,
-    totalColors: result.totalColors,
-    planeBytes: result.planeBytes,
-    copperBytes: result.copperBytes,
-    diskBytes: result.diskBytes,
-    chipBytes: result.chipBytes,
-    quantError: result.quantError,
-    psnr: result.psnr,
-    hasTransparency: result.hasTransparency,
-    error: result.error,
+    ...opt('copperChanges', result.copperChanges),
+    ...opt('changesPerLine', result.changesPerLine),
+    ...opt('maxMovesPerLine', result.maxMovesPerLine),
+    ...opt('aga', result.aga),
+    ...opt('totalColors', result.totalColors),
+    ...opt('planeBytes', result.planeBytes),
+    ...opt('copperBytes', result.copperBytes),
+    ...opt('diskBytes', result.diskBytes),
+    ...opt('chipBytes', result.chipBytes),
+    ...opt('quantError', result.quantError),
+    ...opt('psnr', result.psnr),
+    ...opt('hasTransparency', result.hasTransparency),
+    ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []
 

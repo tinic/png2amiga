@@ -7,6 +7,12 @@ cmake --build build-wasm
 
 echo "Building web..."
 cd web
+# Lockfile-only deterministic install when node_modules is stale
+# relative to package-lock.json. Then run the full pipeline:
+# typecheck → lint → audit → vite → bundle-size.
+if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ]; then
+  npm ci --no-audit --no-fund
+fi
 npm run build
 
 echo "Done. Output in service/html/"

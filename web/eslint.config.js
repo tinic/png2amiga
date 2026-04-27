@@ -59,10 +59,20 @@ export default [
     },
   },
   {
-    // Type-checked rules require a tsconfig project; eslint.config.js / vite.config.ts
-    // aren't part of the app's project. Disable them for these files.
-    files: ['eslint.config.js', 'vite.config.ts'],
+    // Type-checked rules require a tsconfig project; config files and the
+    // standalone scripts/ helpers aren't part of the app's project.
+    files: ['eslint.config.js', 'vite.config.ts', 'scripts/**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    // Build / config / helper scripts are short, stand-alone, and are not
+    // user-facing — relax the noisier rules there.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      'no-console': 'off',
+      'security/detect-non-literal-fs-filename': 'off',
+      'unicorn/no-array-sort': 'off',
+    },
   },
   {
     files: ['**/*.{js,mjs,cjs,ts,mts,cts,vue}'],
@@ -142,6 +152,11 @@ export default [
       'vue/attributes-order': 'off',
       'vue/first-attribute-linebreak': 'off',
       'vue/attribute-hyphenation': 'off', // PrimeVue uses camelCase props
+      // Lock down HTML injection: no v-html anywhere. Only XSS gadget left
+      // is PrimeVue's `v-tooltip="{ escape: false }"` (used in Converter.vue
+      // for the raw-format tooltip), which already coerces every
+      // interpolation to a number — see the SAFETY comment by rawTooltipHtml.
+      'vue/no-v-html': 'error',
 
       // import-x — resolver doesn't grok @wasm alias / vite-built worker URLs
       'import-x/no-unresolved': ['error', {

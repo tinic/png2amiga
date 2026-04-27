@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "typecheck": "vue-tsc --noEmit",
     "audit:prod": "npm audit --audit-level=high --omit=dev",
-    "build": "vue-tsc --noEmit && eslint . && npm run audit:prod && vite build && cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true",
+    "check:size": "node scripts/check-bundle-size.mjs",
+    "build": "vue-tsc --noEmit && eslint . && npm run audit:prod && vite build && (cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true) && npm run check:size",
     "preview": "vite preview"
   },
   "dependencies": {

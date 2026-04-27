@@ -73,10 +73,13 @@ function handleMessage(msg: WorkerInboundMessage): void {
   const raw = msg.result
   if ('width' in raw) {
     // ConvertResult envelope — wrap transferred ArrayBuffers as Uint8Array.
+    // Conditional spreads (rather than `rgba: ... ?? undefined`) so we don't
+    // explicitly set optional keys to undefined under exactOptionalPropertyTypes.
+    const { rgba, data, ...rest } = raw
     const result: ConvertResult = {
-      ...raw,
-      rgba: raw.rgba ? new Uint8Array(raw.rgba) : undefined,
-      data: raw.data ? new Uint8Array(raw.data) : undefined,
+      ...rest,
+      ...(rgba ? { rgba: new Uint8Array(rgba) } : {}),
+      ...(data ? { data: new Uint8Array(data) } : {}),
     }
     ;(cb.resolve as (r: ConvertResult) => void)(result)
     return
@@ -127,7 +130,7 @@ export function useWasm(): UseWasmReturn {
   function callConvert(fn: string, args: unknown[], onProgress?: ProgressCallback): Promise<ConvertResult> {
     const id = nextId++
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject, onProgress })
+      pending.set(id, onProgress ? { resolve, reject, onProgress } : { resolve, reject })
       const msg: WorkerOutboundMessage = { id, fn, args, wantProgress: Boolean(onProgress) }
       worker!.postMessage(msg)
     })
