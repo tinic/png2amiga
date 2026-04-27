@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 
+// eslint-disable-next-line import-x/default -- `?worker` import is provided by Vite at build time; declared in src/vite-env.d.ts
 import WasmWorker from '../workers/wasm.worker.js?worker'
 
 let worker = null

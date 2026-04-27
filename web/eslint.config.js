@@ -5,6 +5,8 @@ import security from 'eslint-plugin-security'
 import promise from 'eslint-plugin-promise'
 import unicorn from 'eslint-plugin-unicorn'
 import sonarjs from 'eslint-plugin-sonarjs'
+import tseslint from 'typescript-eslint'
+import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescript'
 import globals from 'globals'
 
 export default [
@@ -17,6 +19,7 @@ export default [
     ],
   },
   js.configs.recommended,
+  ...tseslint.configs.recommended,
   ...vue.configs['flat/recommended'],
   importX.flatConfigs.recommended,
   security.configs.recommended,
@@ -33,7 +36,26 @@ export default [
     },
   },
   {
-    files: ['**/*.{js,mjs,cjs,vue}'],
+    files: ['**/*.{ts,mts,cts}'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+    },
+  },
+  {
+    files: ['**/*.vue'],
+    languageOptions: {
+      parserOptions: {
+        parser: tseslint.parser,
+        extraFileExtensions: ['.vue'],
+      },
+    },
+  },
+  {
+    files: ['**/*.{js,mjs,cjs,ts,mts,cts,vue}'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -45,13 +67,19 @@ export default [
       },
     },
     settings: {
-      'import-x/resolver': {
-        node: { extensions: ['.js', '.mjs', '.vue'] },
-      },
+      'import-x/resolver-next': [
+        // typescript-aware resolver: handles tsconfig paths, .ts extensions,
+        // and the convention of importing `'foo.js'` to mean a `.ts` source.
+        createTypeScriptImportResolver({
+          alwaysTryTypes: true,
+          project: './tsconfig.json',
+        }),
+      ],
     },
     rules: {
       // core
-      'no-unused-vars': ['error', {
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', {
         args: 'after-used',
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',

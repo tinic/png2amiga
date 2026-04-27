@@ -1,5 +1,94 @@
+// Type-side declarations.
+
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga'
+
+export interface ModeOption {
+  value: string
+  label: string
+  chipset: Chipset
+}
+
+export interface ChipsetOption {
+  value: Chipset
+  label: string
+}
+
+export interface NamedItem {
+  value: string
+  label: string
+}
+
+export interface DitherGroup {
+  group: string
+  items: NamedItem[]
+}
+
+export interface Slider {
+  key: string
+  label: string
+  min: number
+  max: number
+  step: number
+  default: number
+  tip: string
+}
+
+export interface Example {
+  name: string
+  file: string
+  opts?: Partial<Options>
+}
+
+export type HamType = 'ham6' | 'ham8' | null
+
+export interface PreviewScale {
+  sx: number
+  sy: number
+}
+
+export interface DecomposedMode {
+  mode: string
+  width: number
+  interlace: boolean
+}
+
+// Options shape — Converter.vue mutates this reactively. Slider keys
+// (gamma/brightness/etc.) are written via dynamic [key] in defaultOptions();
+// the index signature lets that type-check.
+export interface Options {
+  mode: string
+  chipset: Chipset
+  depth: number
+  interlace: boolean
+  copper: boolean
+  dither: string
+  width: number
+  height: number
+  hamBeam: number
+  capBest: boolean
+  alphaThreshold: number
+  alphaDither: string
+  alphaDitherStrength: number
+  cropX: number
+  cropY: number
+  cropW: number
+  cropH: number
+  cropAuto: boolean
+  copperChanges: number
+  symbolName: string
+  maskInvert: boolean
+  nativePar: boolean
+  reserveColor0: boolean
+  paletteDiversity: number
+  dualPlayfield: boolean
+  scap: boolean
+  cgaTextMetric: string
+  paletteData?: Uint8Array | null
+  [key: string]: unknown
+}
+
 // All modes with chipset availability (ocs = available on both, aga = AGA only)
-const ALL_MODES = [
+const ALL_MODES: ModeOption[] = [
   { value: 'lores',            label: 'Lores',                        chipset: 'ocs' },
   { value: 'ehb',              label: 'EHB',                          chipset: 'ocs' },
   { value: 'ham6',             label: 'HAM6',                         chipset: 'ocs' },
@@ -36,7 +125,7 @@ const ALL_MODES = [
 ]
 
 // Filter modes available for a given chipset
-export function modesForChipset(chipset) {
+export function modesForChipset(chipset: Chipset): ModeOption[] {
   if (chipset === 'stf') return ALL_MODES.filter(m => m.chipset === 'stf')
   if (chipset === 'ste') return ALL_MODES.filter(m => m.chipset === 'ste')
   if (chipset === 'vga') return ALL_MODES.filter(m => m.chipset === 'vga')
@@ -47,9 +136,9 @@ export function modesForChipset(chipset) {
     !['stf', 'ste', 'vga', 'ega', 'cga'].includes(m.chipset))
 }
 
-export const MODES = ALL_MODES
+export const MODES: ModeOption[] = ALL_MODES
 
-export const CHIPSETS = [
+export const CHIPSETS: ChipsetOption[] = [
   { value: 'ocs',  label: 'Amiga OCS (12-bit)' },
   { value: 'aga',  label: 'Amiga AGA (24-bit)' },
   { value: 'stf',  label: 'Atari STF (9-bit)' },
@@ -59,7 +148,7 @@ export const CHIPSETS = [
   { value: 'cga',  label: 'IBM PC CGA (fixed palette)' },
 ]
 
-export const DITHER_METHODS = [
+export const DITHER_METHODS: DitherGroup[] = [
   { group: 'None', items: [
     { value: 'none', label: 'None' },
   ]},
@@ -114,14 +203,14 @@ export const DITHER_METHODS = [
   ]},
 ]
 
-export const ALPHA_DITHER_METHODS = [
+export const ALPHA_DITHER_METHODS: NamedItem[] = [
   { value: 'none',         label: 'Hard Threshold' },
   { value: 'bayer4x4',    label: 'Bayer 4x4' },
   { value: 'bayer8x8',    label: 'Bayer 8x8' },
   { value: 'checker',     label: 'Checker' },
 ]
 
-export const SLIDERS = [
+export const SLIDERS: Slider[] = [
   { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 3, step: 0.05, default: 1,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
   { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
@@ -142,13 +231,13 @@ export const SLIDERS = [
     tip: 'Clip the brightest fraction of the image. Cleans up highlights.' },
 ]
 
-export const DIFFUSION_SLIDERS = [
+export const DIFFUSION_SLIDERS: Slider[] = [
   { key: 'errorClamp',    label: 'Error Clamp', min: 0,   max: 1, step: 0.025, default: 0.35,
     tip: 'Max error accumulation per channel (squared internally). Lower = cleaner, higher = more dithering noise.' },
 ]
 
 // CGA-text-mode-only options. Shown only when mode === 'cga-text80x100'.
-export const CGA_TEXT_METRICS = [
+export const CGA_TEXT_METRICS: NamedItem[] = [
   { value: 'blur', label: 'Pappas-Neuhoff' },
   { value: 'mse',  label: 'Per-pixel MSE' },
 ]
@@ -156,7 +245,7 @@ export const CGA_TEXT_DEFAULTS = {
   cgaTextMetric: 'blur',
 }
 
-export const EXAMPLES = [
+export const EXAMPLES: Example[] = [
   { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
   { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'ostromoukhov', copper: true } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
@@ -168,8 +257,8 @@ export const EXAMPLES = [
   { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'checker', dualPlayfield: true, scap: true } },
 ]
 
-export function defaultOptions() {
-  const opts = {
+export function defaultOptions(): Options {
+  const opts: Options = {
     mode: 'lores',
     chipset: 'ocs',
     depth: 5,
@@ -214,37 +303,37 @@ export function defaultOptions() {
     // SCAP — Super Copper-Augmented Palette: mid-line palette swaps
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
+    ...CGA_TEXT_DEFAULTS,
   }
   for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) opts[s.key] = s.default
-  Object.assign(opts, CGA_TEXT_DEFAULTS)
   return opts
 }
 
 // --- Helper functions ---
 
 // Extract base HAM type from compound mode (ham6, ham8, or null)
-export function hamType(mode) {
+export function hamType(mode: string): HamType {
   if (mode.startsWith('ham8')) return 'ham8'
   if (mode.startsWith('ham6')) return 'ham6'
   return null
 }
 
-export function isHamMode(mode) {
+export function isHamMode(mode: string): boolean {
   return hamType(mode) !== null
 }
 
-export function isEhbMode(mode) {
+export function isEhbMode(mode: string): boolean {
   return mode === 'ehb' || mode === 'ehb-lace'
 }
 
-export function isAtariMode(mode) {
+export function isAtariMode(mode: string): boolean {
   return mode.startsWith('stf-') || mode.startsWith('ste-')
 }
 
-export function isVgaMode(mode) { return mode.startsWith('vga-') }
-export function isEgaMode(mode) { return mode.startsWith('ega-') }
-export function isCgaMode(mode) { return mode.startsWith('cga-') }
-export function isDosMode(mode) {
+export function isVgaMode(mode: string): boolean { return mode.startsWith('vga-') }
+export function isEgaMode(mode: string): boolean { return mode.startsWith('ega-') }
+export function isCgaMode(mode: string): boolean { return mode.startsWith('cga-') }
+export function isDosMode(mode: string): boolean {
   return isVgaMode(mode) || isEgaMode(mode) || isCgaMode(mode)
 }
 
@@ -254,7 +343,7 @@ export function isDosMode(mode) {
 //   <1 tall pixels (e.g. EGA 640×200 = 0.417 — pixels are 2.4× taller than wide)
 //    1 square
 //   >1 wide pixels (e.g. CGA composite 160×200 = 1.667)
-const MODE_PAR = {
+const MODE_PAR: Record<string, number> = {
   'vga-13h':    0.833,
   'vga-10h':    0.73,
   'vga-12h':    1,
@@ -267,24 +356,24 @@ const MODE_PAR = {
   'cga-text80x100': 0.417,
 }
 
-export function modePar(mode) { return MODE_PAR[mode] ?? 1 }
+export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
 
 const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis', 'ostromoukhov'])
 
-export function isErrorDiffusion(dither) {
+export function isErrorDiffusion(dither: string): boolean {
   return ERROR_DIFFUSION.has(dither)
 }
 
-export function isInterlaceMode(mode) {
+export function isInterlaceMode(mode: string): boolean {
   return mode.endsWith('-lace')
 }
 
-export function isHiresMode(mode) {
+export function isHiresMode(mode: string): boolean {
   return mode.includes('hires')
 }
 
 // Pixel display scale for preview (minimum pixel size on screen)
-export function previewScale(mode) {
+export function previewScale(mode: string): PreviewScale {
   // DOS modes have non-integer PAR (e.g. VGA 13h ~ 0.83 tall). The WASM
   // encoder returns the raw hardware buffer (e.g. 640x350, 640x480, 640x200);
   // we nearest-neighbor scale it on-canvas using whole factors so the
@@ -310,7 +399,7 @@ export function previewScale(mode) {
 
 // Decompose a UI mode into C++ mode string + optional width override.
 // e.g. 'ham6-hires-lace' -> { mode: 'ham6', width: 640, interlace: true }
-export function decomposeMode(uiMode) {
+export function decomposeMode(uiMode: string): DecomposedMode {
   const ham = hamType(uiMode)
   if (ham) {
     const hi = uiMode.includes('hires')
@@ -325,7 +414,7 @@ export function decomposeMode(uiMode) {
 }
 
 // Maximum bitplane depth for a given mode/chipset
-export function maxDepth(mode, chipset) {
+export function maxDepth(mode: string, chipset: Chipset): number {
   if (isHamMode(mode) || isEhbMode(mode) || isAtariMode(mode)) return 0
   if (isDosMode(mode)) return 0  // DOS modes have fixed depth per hardware
   if (isHiresMode(mode)) return chipset === 'aga' ? 8 : 4
@@ -333,7 +422,7 @@ export function maxDepth(mode, chipset) {
 }
 
 // Default bitplane depth for a given mode
-export function defaultDepth(mode) {
+export function defaultDepth(mode: string): number {
   if (isEhbMode(mode)) return 6
   const ham = hamType(mode)
   if (ham === 'ham6') return 6
@@ -352,7 +441,7 @@ export function defaultDepth(mode) {
 }
 
 // Number of displayable colors for a given mode/depth
-export function numColors(mode, depth) {
+export function numColors(mode: string, depth: number): number | string {
   if (isEhbMode(mode)) return 64
   if (isHamMode(mode)) {
     const dataBits = defaultDepth(mode) - 2
@@ -362,14 +451,14 @@ export function numColors(mode, depth) {
 }
 
 // Bitplane count for display
-export function numBitplanes(mode, depth) {
+export function numBitplanes(mode: string, depth: number): number {
   if (isEhbMode(mode)) return 6
   if (isHamMode(mode)) return defaultDepth(mode)
   return depth
 }
 
 // Resolve effective chipset from mode and user selection
-export function effectiveChipset(mode, chipset) {
+export function effectiveChipset(mode: string, chipset: Chipset): Chipset {
   if (hamType(mode) === 'ham8') return 'aga'
   return chipset
 }

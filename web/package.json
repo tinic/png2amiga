@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "lint": "eslint .",
-    "build": "eslint . && vite build && cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "vue-tsc --noEmit && eslint . && vite build && cd ../service/html/assets && gzip -9 -n -k -f *.wasm *.js *.css 2>/dev/null; brotli -9 -k -f *.wasm *.js *.css 2>/dev/null; true",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -17,8 +18,11 @@
     "vue": "^3.5.0"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
     "@vitejs/plugin-vue": "^5.0.0",
+    "@vue/tsconfig": "^0.9.1",
     "eslint": "^9.39.4",
+    "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import-x": "^4.16.2",
     "eslint-plugin-promise": "^7.2.1",
     "eslint-plugin-security": "^4.0.0",
@@ -26,6 +30,9 @@
     "eslint-plugin-unicorn": "^64.0.0",
     "eslint-plugin-vue": "^9.33.0",
     "globals": "^17.5.0",
-    "vite": "^6.0.0"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.0",
+    "vite": "^6.0.0",
+    "vue-tsc": "^3.2.7"
   }
 }
