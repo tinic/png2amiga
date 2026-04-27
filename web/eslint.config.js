@@ -228,4 +228,23 @@ export default [
       'sonarjs/slow-regex': 'off',
     },
   },
+  {
+    // Type-info-aware rules. Pinned explicitly (rather than relying on
+    // recommendedTypeChecked alone) so a future preset bump can't silently
+    // downgrade them. Restricted to .ts / .vue because they need the
+    // tsconfig project; the scripts/*.mjs files have type checking
+    // disabled via disableTypeChecked above.
+    files: ['**/*.{ts,mts,cts,vue}'],
+    ignores: ['vite.config.ts'],  // not in the app tsconfig project
+    rules: {
+      // Every Promise must be awaited, .then'd, .catch'd, or explicitly
+      // `void`'d. Catches the common "kicked off async work, didn't wait,
+      // unhandled rejection later" footgun.
+      '@typescript-eslint/no-floating-promises': 'error',
+      // No Promise where a void return is expected (event handlers,
+      // conditionals, setTimeout). Catches `setTimeout(async () => …)`
+      // and `if (asyncFn())` mistakes.
+      '@typescript-eslint/no-misused-promises': 'error',
+    },
+  },
 ]
