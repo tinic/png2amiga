@@ -16,15 +16,22 @@
   <meta name="twitter:title" content="png2amiga - Amiga Image Converter">
   <meta name="twitter:description" content="Convert PNG/JPEG images to Commodore Amiga graphics formats in your browser. Perceptual OKLab color matching, live preview.">
   <title>png2amiga - Commodore Amiga Image Converter</title>
+  <!-- Umami tracker. Self-hosted on analytics.png2amiga.app. SRI not
+       applied: Umami rotates the bundle on each version upgrade, so a
+       pinned hash would break analytics across upgrades. To enable SRI
+       later, expose a versioned URL (e.g. /script-v2.18.js) on the
+       Umami server and re-add `integrity=`. -->
   <script defer src="https://analytics.png2amiga.app/script.js" data-website-id="d0890304-651b-4748-933b-b3c0156f2aab"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Inter is self-hosted via @fontsource/inter (imported in main.ts).
+       Vite bundles the WOFF2 files into /assets/ with content-hashed
+       filenames, so they're cached forever AND can't be substituted by
+       a network attacker — same-origin removes the SRI question
+       entirely for fonts. -->
   <style>
     body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
   </style>
-  <script type="module" crossorigin src="/assets/index-MqrrW-m6.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-BIdpeXkU.css">
+  <script type="module" crossorigin src="/assets/index-B8GWd6ur.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-Cx5PBlFL.css">
 </head>
 <body>
   <div id="app"></div>

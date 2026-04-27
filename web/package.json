@@ -20,6 +20,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.2.8",
     "@primevue/themes": "^4.5.4",
     "primeflex": "^4.0.0",
     "primeicons": "^7.0.0",
