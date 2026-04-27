@@ -35,7 +35,7 @@ export function useImageUpload(): UseImageUploadReturn {
   async function handleFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return
     const file = files[0]
-    if (!file || !file.type.startsWith('image/')) return
+    if (!file?.type.startsWith('image/')) return
     const buf = await file.arrayBuffer()
     imageBytes.value = new Uint8Array(buf)
     imageName.value = file.name

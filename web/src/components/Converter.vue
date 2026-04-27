@@ -588,7 +588,8 @@ function pushIf(parts: string[], cond: unknown, fragment: string): void {
 }
 
 function formatResultInfo(result: ConvertResult) {
-  const colorCount = result.totalColors || result.colors || 0
+  // result.colors is non-optional in ConvertResult, so the chain stops there.
+  const colorCount = result.totalColors ?? result.colors
   const parts = [`${result.width}x${result.height}, ${statusChipset.value}`,
                  `${result.depth || '?'}bpl, ${colorCount} colors`]
   pushIf(parts, result.copperChanges, `${(result.copperChanges ?? 0).toFixed(1)} avg CAP/line`)
@@ -652,11 +653,11 @@ function maybeSeedSizes(result: ConvertResult): void {
 function updateLastResultRefs(result: ConvertResult): void {
   lastWidth.value = result.width
   lastHeight.value = result.height
-  lastCopPerLine.value = result.copperChanges || 0
-  lastPlaneBytes.value = result.planeBytes || 0
-  lastCopperBytes.value = result.copperBytes || 0
-  lastChangesPerLine.value = result.changesPerLine || 0
-  lastMaxMovesPerLine.value = result.maxMovesPerLine || 0
+  lastCopPerLine.value = result.copperChanges ?? 0
+  lastPlaneBytes.value = result.planeBytes ?? 0
+  lastCopperBytes.value = result.copperBytes ?? 0
+  lastChangesPerLine.value = result.changesPerLine ?? 0
+  lastMaxMovesPerLine.value = result.maxMovesPerLine ?? 0
   lastAga.value = Boolean(result.aga)
   imageHasAlpha.value = Boolean(result.hasTransparency)
   maybeSeedSizes(result)
@@ -883,7 +884,7 @@ async function postCompile(format: string, source: string): Promise<Blob | null>
 }
 
 function viewerSourceFromResult(result: ConvertResult): string {
-  return result.header || (result.data ? new TextDecoder().decode(result.data) : '')
+  return result.header ?? (result.data ? new TextDecoder().decode(result.data) : '')
 }
 
 async function compileAndDownload(format: string) {
@@ -1050,6 +1051,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
           <!-- Upload / Image -->
           <Panel header="Image">
             <div
+              role="button" tabindex="0"
               class="drop-zone border-2 border-round-lg cursor-pointer overflow-hidden"
               :class="{
                 'border-primary': dragOver,
@@ -1060,12 +1062,14 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               @dragover="onDragOver"
               @dragleave="onDragLeave"
               @click="openPicker(); dismissHint()"
+              @keydown.enter.space.prevent="openPicker(); dismissHint()"
             >
               <template v-if="imageUrl">
                 <div class="relative">
-                  <img :src="imageUrl" class="original-preview w-full border-round" />
-                  <div v-if="showUploadHint" class="upload-hint"
+                  <img :src="imageUrl" alt="Source image preview" class="original-preview w-full border-round" />
+                  <div v-if="showUploadHint" role="button" tabindex="0" class="upload-hint"
                     @click.stop="dismissHint(); openPicker()"
+                    @keydown.enter.space.prevent="dismissHint(); openPicker()"
                     @drop.prevent="onDrop($event); dismissHint()"
                     @dragover.prevent="onDragOver($event)"
                     @dragleave="onDragLeave"
@@ -1078,7 +1082,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
                 <div class="text-xs text-color-secondary mt-2 px-1 flex justify-content-between overflow-hidden">
                   <span class="overflow-hidden text-overflow-ellipsis" style="min-width: 0; display: block;">{{ imageName }}<template v-if="imageWidth"> ({{ imageWidth }}&times;{{ imageHeight }}, {{ (imageWidth / imageHeight).toFixed(2) }}:1)</template></span>
-                  <span class="white-space-nowrap ml-2 cursor-pointer flex-shrink-0" @click.stop="openPicker(); dismissHint()">Change</span>
+                  <span role="button" tabindex="0" class="white-space-nowrap ml-2 cursor-pointer flex-shrink-0"
+                    @click.stop="openPicker(); dismissHint()"
+                    @keydown.enter.space.prevent="openPicker(); dismissHint()">Change</span>
                 </div>
               </template>
               <template v-else>
@@ -1092,9 +1098,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div class="flex flex-wrap gap-1">
                 <div
                   v-for="ex in EXAMPLES" :key="ex.name"
+                  role="button" tabindex="0"
                   class="example-thumb cursor-pointer border-round overflow-hidden"
                   :class="{ 'ring-1 ring-primary': imageName === ex.file }"
                   @click="loadExample(ex)"
+                  @keydown.enter.space.prevent="loadExample(ex)"
                   :title="ex.name"
                 >
                   <img :src="`/examples/${ex.file}`" :alt="ex.name" />

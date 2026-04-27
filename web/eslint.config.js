@@ -1,5 +1,6 @@
 import js from '@eslint/js'
 import vue from 'eslint-plugin-vue'
+import vueA11y from 'eslint-plugin-vuejs-accessibility'
 import importX from 'eslint-plugin-import-x'
 import security from 'eslint-plugin-security'
 import promise from 'eslint-plugin-promise'
@@ -20,7 +21,15 @@ export default [
   },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
+  // Stylistic type-aware rules paired with strict — adds consistent-type-imports,
+  // prefer-nullish-coalescing, prefer-optional-chain, prefer-readonly,
+  // consistent-indexed-object-style, etc. Standard 2026 pairing.
+  ...tseslint.configs.stylisticTypeChecked,
   ...vue.configs['flat/recommended'],
+  // a11y rules for Vue templates: alt-less images, click-without-keyboard,
+  // missing form labels, role/aria contradictions. Standard for any
+  // production-facing Vue app.
+  ...vueA11y.configs['flat/recommended'],
   importX.flatConfigs.recommended,
   security.configs.recommended,
   promise.configs['flat/recommended'],
@@ -186,6 +195,36 @@ export default [
       // a separate non-setup <script> block. Removes a class of dual-
       // <script> footguns where the two blocks see different scopes.
       'vue/prefer-define-options': 'error',
+      // Modern Vue 3: composition API only. The Options API still works
+      // but composition + <script setup> is the standard going forward
+      // and mixing the two in one codebase is a recipe for confusion.
+      'vue/component-api-style': ['error', ['script-setup', 'composition']],
+      // Type-based defineProps / defineEmits — the TS-friendly form
+      // (`defineProps<{ foo: string }>()`) instead of the runtime
+      // declaration (`defineProps({ foo: String })`). Plays well with
+      // strictTypeChecked.
+      'vue/define-props-declaration': ['error', 'type-based'],
+      'vue/define-emits-declaration': ['error', 'type-based'],
+      // Catch <SomeComponent /> in templates that doesn't resolve to a
+      // registered component or import — without this, typos render
+      // silently as a "missing custom element" warning at runtime.
+      'vue/no-undef-components': ['error', {
+        // PrimeVue auto-registers a few directives + Suspense / Teleport
+        // are framework-builtins. Add to ignore as we discover more.
+        ignorePatterns: [],
+      }],
+      // Flag template refs that are declared but never used.
+      'vue/no-unused-refs': 'error',
+
+      // a11y: PrimeVue components (Slider, Select, InputNumber, …) wrap
+      // their own focusable form control internally and emit proper
+      // aria-* associations, but the static template lint can't see
+      // through the wrapper — these two rules false-positive on every
+      // <label> + <PrimeComponent> pairing in our UI. Keep the
+      // substantive interaction rules (click-events-have-key-events,
+      // no-static-element-interactions, alt-text, etc.) on.
+      'vuejs-accessibility/label-has-for': 'off',
+      'vuejs-accessibility/form-control-has-label': 'off',
 
       // Block specific imports that look fine but bypass package entry
       // contracts (e.g. importing vue/dist/* skips the package's
