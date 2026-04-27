@@ -61,13 +61,26 @@ enum class Mode : unsigned char {
                         // in real CGA's 16 KB VRAM. Used in 8088 MPH's 1K-
                         // color mode, AREA 5150, many demos.
 
-    // SNES Mode 7 — affine-transformable 8bpp background.
-    snes_mode7_256,     // 256×224, 8bpp pixels = palette index, 256-entry
-                        // CGRAM palette of BGR555 (5/5/5 = 32K colours).
-    snes_mode7_direct,  // 256×224, 8bpp pixels = R3G3B2 low bits + hardware
-                        // "Direct Color" sub-palette adds 1 high bit per
-                        // channel → effective RGB443 (4/4/3 = 2048 colours)
-                        // per-pixel, no palette table needed.
+    // SNES Mode 7 — affine-transformable 8bpp BG1, hardware-loadable.
+    // The encoder packs the 256×224 pixel buffer into ≤ 256 unique 8×8
+    // tiles + a 128×128 tilemap (1 byte per cell = tile index). Mode 7
+    // VRAM holds only 256 unique tiles, so when content has more, the
+    // closest pattern pairs are perceptually merged (greedy distance
+    // ranking, ported from png2c64's charset merger) until they fit.
+    // No tile flipping is supported by the hardware, so dedup is
+    // identity-only.
+    //
+    // Output layout: tilemap (16384 bytes; 128×128 cells, the top-left
+    // 32×28 references real tiles, the rest point to tile 0 = backdrop)
+    // followed by tile data (≤ 16384 bytes, 64 bytes per tile) and, for
+    // the 256-palette variant, a companion 256-entry BGR555 CGRAM file.
+    snes_mode7_256,     // 256-entry BGR555 palette + ≤ 256 unique tiles
+    snes_mode7_direct,  // BBGGGRRR Direct Color pixel bytes (3+3+2 =
+                        // 256 effective colours). The 2048-colour gamut
+                        // documented for Modes 3/4 Direct Color comes
+                        // from a tilemap palette-field byte that Mode 7
+                        // doesn't have, so the hardware really does cap
+                        // at 256 here.
 
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
@@ -75,6 +88,21 @@ enum class Mode : unsigned char {
                         //  picks one palette line. Color 0 of each line is
                         //  transparent. 60 visible + 1 backdrop colours.
     genesis_h40,        // 320×224, same colour structure as h32.
+
+    // Genesis Shadow/Highlight — extends genesis_h{32,40} via the VDP's
+    // S/H mode (register $8C bit 3). When enabled, plane-A LOW-priority
+    // tiles render with each colour halved (3-bit DAC values >> 1),
+    // doubling the effective palette to ~128 colours. The encoder
+    // chooses per-tile whether to use the base or shadowed palette and
+    // sets the tilemap priority bit accordingly. Output requires the
+    // SGDK runtime to call `VDP_setHilightShadow(TRUE)` (or write VDP
+    // register $8C bit 3 directly) before display.
+    //
+    // This is shadow-only S/H: full Highlight requires a sprite-overlay
+    // layer (palette-3 entry 14 = highlight, entry 15 = shadow) that
+    // the encoder doesn't yet generate.
+    genesis_h32_sh,     // 256×224, 4 base palettes + per-tile shadow flag
+    genesis_h40_sh,     // 320×224, same
 };
 
 // ---------------------------------------------------------------------------
@@ -189,12 +217,12 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // the DOS modes (the web UI toggles options.nativePar on mode
     // entry).
     case Mode::snes_mode7_256:
-        return {256, 224, 8, 256,  false, false, false, false, 1, 1, 1.167f};
+        return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
     case Mode::snes_mode7_direct:
-        // depth=8 (chunky), max_colors=2048 (effective RGB443 grid). The
-        // "palette" is implicit hardware sub-palette; we quantise pixels
-        // directly to the 4-4-3 grid with no separate palette table.
-        return {256, 224, 8, 2048, false, false, false, false, 1, 1, 1.167f};
+        // 256 effective colours (BBGGGRRR). Mode 7 has no tilemap
+        // palette-field byte, so the 2048-colour gamut documented for
+        // Modes 3/4 Direct Color isn't reachable here.
+        return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
     // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
     // matches SNES at 224 lines on a 4:3 CRT.
     //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)
@@ -203,6 +231,11 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {256, 224, 4, 64, false, false, false, false, 1, 1, 1.167f};
     case Mode::genesis_h40:
         return {320, 224, 4, 64, false, false, false, false, 1, 1, 0.933f};
+    // S/H modes: same buffer, ~128 effective colours via per-tile shadow.
+    case Mode::genesis_h32_sh:
+        return {256, 224, 4, 128, false, false, false, false, 1, 1, 1.167f};
+    case Mode::genesis_h40_sh:
+        return {320, 224, 4, 128, false, false, false, false, 1, 1, 0.933f};
     }
     std::unreachable();
 }
@@ -284,20 +317,30 @@ constexpr bool is_cga_text(Mode mode) noexcept {
 // encoding. VGA 13h, plus the SNES Mode 7 modes — all 8bpp linear pixel
 // arrays.
 constexpr bool is_genesis(Mode mode) noexcept {
-    return mode == Mode::genesis_h32 || mode == Mode::genesis_h40;
+    return mode == Mode::genesis_h32    || mode == Mode::genesis_h40 ||
+           mode == Mode::genesis_h32_sh || mode == Mode::genesis_h40_sh;
+}
+
+constexpr bool is_genesis_sh(Mode mode) noexcept {
+    return mode == Mode::genesis_h32_sh || mode == Mode::genesis_h40_sh;
 }
 
 constexpr bool is_chunky(Mode mode) noexcept {
+    // 8bpp pixel-byte streams handed to the encoder before any tile-pack
+    // layer. VGA 13h is genuine chunky output; SNES Mode 7 is chunky at
+    // the encoder *input* but gets repacked into tiles before write.
     return mode == Mode::vga_13h ||
            mode == Mode::snes_mode7_256 ||
            mode == Mode::snes_mode7_direct;
 }
 
-// Check if a mode is one of the SNES Mode 7 variants (256-palette or
-// Direct Color RGB443).
 constexpr bool is_snes(Mode mode) noexcept {
     return mode == Mode::snes_mode7_256 ||
            mode == Mode::snes_mode7_direct;
+}
+
+constexpr bool is_snes_direct(Mode mode) noexcept {
+    return mode == Mode::snes_mode7_direct;
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)

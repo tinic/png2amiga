@@ -33,6 +33,7 @@ interface ReplyEnvelope {
   hasTransparency?: boolean
   genesisUniqueTiles?: number
   genesisTotalCells?: number
+  tileDataBytes?: number
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -120,6 +121,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('hasTransparency', result.hasTransparency),
     ...opt('genesisUniqueTiles', result.genesisUniqueTiles),
     ...opt('genesisTotalCells', result.genesisTotalCells),
+    ...opt('tileDataBytes', result.tileDataBytes),
     ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []

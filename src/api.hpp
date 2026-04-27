@@ -250,8 +250,9 @@ struct ConvertResult {
     bool aga{};                         // chipset is AGA (true ⇒ palette has hi+lo halves)
     float quantError{};                 // perceptual encoding error (OKLab ΔE² sum)
     float psnr{};                       // PSNR in dB (Gaussian-blurred sRGB)
-    int genesisUniqueTiles{};           // Sega Genesis: unique VRAM tiles after dedup
-    int genesisTotalCells{};             // Sega Genesis: tilemap cells (W/8 × H/8); 0 = not Genesis
+    int genesisUniqueTiles{};           // Tiled modes: unique tiles in VRAM
+    int genesisTotalCells{};             // Tiled modes: tilemap cells (W/8 × H/8); 0 = not tiled
+    int tileDataBytes{};                 // Tiled modes: unique × bytes-per-tile (32 for Genesis 4bpp, 64 for SNES Mode 7 8bpp)
     bool hasTransparency{};             // source image had alpha channel
     std::string error;                  // error message (empty on success)
 };
@@ -369,9 +370,11 @@ struct EncodeState {
     // bbgggrrr-format Direct Color pixel byte array.
     std::vector<std::uint8_t> raw_frame;
 
-    // Sega Genesis only — tile-dedup stats. 0 means "not a Genesis run".
+    // Tile-dedup stats — Genesis (4bpp 8×8 = 32 B/tile) and SNES Mode 7
+    // (8bpp 8×8 = 64 B/tile). 0 = not a tiled run.
     std::size_t genesis_unique_tiles = 0;
     std::size_t genesis_total_cells = 0;
+    std::size_t tile_data_bytes = 0;
     // Genesis split byte streams (used by the SGDK header generator).
     std::vector<std::uint8_t>  genesis_tile_bytes;
     std::vector<std::uint16_t> genesis_tilemap_cells;

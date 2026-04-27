@@ -138,12 +138,19 @@ const ALL_MODES: ModeOption[] = [
   { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
   { value: 'cga-composite',    label: 'CGA Composite (160x200)',       chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100 (8x8 font)',    chipset: 'cga' },
-  // SNES Mode 7.
-  { value: 'snes-mode7-256',    label: 'Mode 7 (256-colour BGR555)',   chipset: 'snes' },
-  { value: 'snes-mode7-direct', label: 'Mode 7 Direct (RGB443)',        chipset: 'snes' },
+  // SNES Mode 7 — packed tile + tilemap output, ≤ 256 unique tiles via
+  // greedy distance-merging when content has more.
+  { value: 'snes-mode7-256',    label: 'Mode 7 (256 BGR555 palette)',
+                                chipset: 'snes' },
+  { value: 'snes-mode7-direct', label: 'Mode 7 Direct (2048-colour gamut)',
+                                chipset: 'snes' },
   // Sega Genesis / Mega Drive — 8x8 4bpp tiles + 4 palettes × 16 BGR333.
-  { value: 'genesis-h32', label: 'H32 (256x224)', chipset: 'genesis' },
-  { value: 'genesis-h40', label: 'H40 (320x224)', chipset: 'genesis' },
+  // -sh modes use the VDP's Shadow/Highlight (priority bit per tile,
+  // ~128 effective colours; runtime sets VDP_setHilightShadow(TRUE)).
+  { value: 'genesis-h32',    label: 'H32 (256x224)',    chipset: 'genesis' },
+  { value: 'genesis-h40',    label: 'H40 (320x224)',    chipset: 'genesis' },
+  { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
+  { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
 ]
 
 // Filter modes available for a given chipset
@@ -428,11 +435,10 @@ export function isSnesMode(mode: string): boolean {
 export function isGenesisMode(mode: string): boolean {
   return mode.startsWith('genesis-')
 }
-// SNES Mode 7 Direct quantises every pixel directly to the RGB443 grid
-// (no palette table). Only the hard-coded FS-style serpentine error
-// diffusion in the encoder is meaningful — every other dither method
-// silently collapses to it. Restrict the gallery + force a fallback
-// when this mode is selected.
+// SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
+// 2048-colour gamut comes from per-tile palette-field bits. Yliluoma
+// family (palette-aware ordered dithers) doesn't apply here — restrict
+// the gallery + force a fallback when this mode is selected.
 export function isSnesDirectMode(mode: string): boolean {
   return mode === 'snes-mode7-direct'
 }
@@ -466,8 +472,10 @@ const MODE_PAR: Record<string, number> = {
   'snes-mode7-direct': 1.167,
   // Sega Genesis: H32 256×224 → PAR 1.167 (matches SNES); H40 320×224
   // → PAR 0.933 (slightly tall pixels).
-  'genesis-h32': 1.167,
-  'genesis-h40': 0.933,
+  'genesis-h32':    1.167,
+  'genesis-h40':    0.933,
+  'genesis-h32-sh': 1.167,
+  'genesis-h40-sh': 0.933,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }

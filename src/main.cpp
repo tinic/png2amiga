@@ -7,6 +7,7 @@
 #include "cheader_genesis.hpp"
 #include "degas.hpp"
 #include "color_space.hpp"
+#include "console_color.hpp"
 #include "cga_text.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
@@ -546,12 +547,21 @@ void print_usage() {
         "         cga-composite (160x200 effective, 16 colors via NTSC artifacting)\n"
         "    Text-mode graphics (AREA 5150 style glyph matching):\n"
         "         cga-text80x100  (CGA 8x8 font, 2-scanline cells, 80x100 cells)\n"
-        "    Nintendo SNES Mode 7 (256x224, 8bpp chunky, 4:3 PAR ≈ 1.167):\n"
-        "         snes-mode7-256    (256-entry BGR555 palette, 32K-colour gamut)\n"
-        "         snes-mode7-direct (Direct Color, RGB443 effective: 2048 colours)\n"
+        "    Nintendo SNES Mode 7 (256x224, 4:3 PAR ≈ 1.167; tile + tilemap\n"
+        "    output ≤ 256 unique 8x8 tiles via greedy distance-merging):\n"
+        "         snes-mode7-256    (256-entry BGR555 palette companion)\n"
+        "         snes-mode7-direct (BBGGGRRR pixel = 256 effective colours;\n"
+        "                            Mode 7 has no tilemap palette-field byte,\n"
+        "                            so the 2048-colour Direct Color gamut\n"
+        "                            documented for Modes 3/4 isn't reachable)\n"
         "    Sega Genesis / Mega Drive (8x8 4bpp tiles, 4 palettes × 16 BGR333):\n"
         "         genesis-h32       (256x224, 4:3 PAR ≈ 1.167)\n"
         "         genesis-h40       (320x224, 4:3 PAR ≈ 0.933)\n"
+        "         genesis-h32-sh    (256x224 + Shadow/Highlight, ~128 colours)\n"
+        "         genesis-h40-sh    (320x224 + Shadow/Highlight, ~128 colours)\n"
+        "                            S/H modes set the tilemap priority bit per\n"
+        "                            tile; runtime must enable VDP S/H mode\n"
+        "                            (SGDK: VDP_setHilightShadow(TRUE)).\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
         "  --dual-playfield, --dpf         Dual playfield: encode image into PF2\n"
@@ -1170,6 +1180,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "genesis-h40" || v == "md-h40" ||
                          v == "genesis" || v == "megadrive")
                     config.mode = amiga::Mode::genesis_h40;
+                else if (v == "genesis-h32-sh" || v == "md-h32-sh")
+                    config.mode = amiga::Mode::genesis_h32_sh;
+                else if (v == "genesis-h40-sh" || v == "md-h40-sh" ||
+                         v == "genesis-sh" || v == "megadrive-sh")
+                    config.mode = amiga::Mode::genesis_h40_sh;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -3481,57 +3496,55 @@ int main(int argc, char* argv[]) {
         cli_status("Dither: {} (strength: {:.2f})",
                      dither_name(config->dither_method),
                      config->dither_strength);
-        cli_status("Mode:   SNES Mode 7 ({}), {}x{}, {} colors",
+        cli_status("Mode:   SNES Mode 7 ({}), {}x{}, 256 colours",
                      (config->mode == amiga::Mode::snes_mode7_256
-                          ? "BGR555 palette" : "Direct Color RGB443"),
-                     aopts.width, aopts.height,
-                     (config->mode == amiga::Mode::snes_mode7_256 ? 256 : 2048));
-        cli_status("Encoded: {} bytes raw, PSNR: {:.2f} dB",
+                          ? "256-palette BGR555"
+                          : "Direct Color BBGGGRRR"),
+                     aopts.width, aopts.height);
+        cli_status("Quantised: {} bytes (32 KB Mode 7 frame after pack), PSNR: {:.2f} dB",
                      st.raw_frame.size(), st.psnr);
 
-        auto sw = static_cast<std::size_t>(aopts.width);
-        auto sh = static_cast<std::size_t>(aopts.height);
         if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {
-            Result<void> r;
-            if (config->mode == amiga::Mode::snes_mode7_256) {
-                r = snes_io::write_snes_mode7_256(
-                    config->output_path, st.raw_frame, st.palette, sw, sh);
-            } else {
-                r = snes_io::write_snes_mode7_direct(
-                    config->output_path, st.raw_frame, sw, sh);
-            }
-            if (!r) {
-                std::println(stderr, "SNES write error: {}", r.error().message);
-                return exit_code::internal;
-            }
-            cli_status("Raw:    {} ({} bytes)",
-                         config->output_path, st.raw_frame.size());
-        } else if (ends_with(config->output_path, ".h")) {
-            std::string sym = config->symbol_name.empty()
-                ? std::string{"snes_image"} : config->symbol_name;
-            Result<std::vector<std::uint8_t>> hdr;
-            if (config->mode == amiga::Mode::snes_mode7_256) {
-                hdr = snes_io::encode_snes_mode7_256_header(
-                    st.raw_frame, st.palette, sw, sh, sym);
-            } else {
-                hdr = snes_io::encode_snes_mode7_direct_header(
-                    st.raw_frame, sw, sh, sym);
-            }
-            if (!hdr) {
-                std::println(stderr, "SNES header error: {}", hdr.error().message);
-                return exit_code::internal;
-            }
+            // api::encode_state has already packed the Mode 7 frame
+            // (tilemap + tile data) into st.raw_frame. Just write it
+            // out + (for 256 mode) emit the .pal companion.
+            cli_status("Tiles:  {} unique tiles in 32×28 cells",
+                         st.genesis_unique_tiles);
             std::ofstream of(config->output_path, std::ios::binary);
-            of.write(reinterpret_cast<const char*>(hdr->data()),
-                     static_cast<std::streamsize>(hdr->size()));
+            of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
+                     static_cast<std::streamsize>(st.raw_frame.size()));
             if (!of) {
-                std::println(stderr, "SNES header write error: {}",
+                std::println(stderr, "SNES write error: {}",
                              config->output_path);
                 return exit_code::internal;
             }
-            cli_status("Header: {} ({} bytes)",
-                         config->output_path, hdr->size());
+            cli_status("Raw:    {} ({} bytes = 16384 tilemap + {} tiles)",
+                         config->output_path, st.raw_frame.size(),
+                         st.raw_frame.size() - 16384);
+
+            if (config->mode == amiga::Mode::snes_mode7_256) {
+                // Companion palette file: same path with .pal extension.
+                std::filesystem::path pal_path{config->output_path};
+                pal_path.replace_extension(".pal");
+                std::vector<std::uint8_t> pal_bytes(256 * 2, 0);
+                for (std::size_t i = 0; i < st.palette.size() && i < 256; ++i) {
+                    auto w16 = console_color::to_bgr555_word(st.palette[i]);
+                    pal_bytes[i * 2 + 0] = static_cast<std::uint8_t>(w16 & 0xFF);
+                    pal_bytes[i * 2 + 1] = static_cast<std::uint8_t>((w16 >> 8) & 0xFF);
+                }
+                std::ofstream pf(pal_path, std::ios::binary);
+                pf.write(reinterpret_cast<const char*>(pal_bytes.data()),
+                         static_cast<std::streamsize>(pal_bytes.size()));
+                cli_status("Pal:    {} ({} bytes)",
+                             pal_path.string(), pal_bytes.size());
+            }
+        } else if (ends_with(config->output_path, ".h")) {
+            std::println(stderr, "SNES Mode 7: .h output not yet implemented "
+                                  "for the packed format. Use .bin for the "
+                                  "Mode 7-loadable frame (tilemap + tiles + "
+                                  ".pal companion).");
+            return exit_code::internal;
         } else {
             // PNG preview using st.rendered.
             auto r = save_preview(config->output_path, st.rendered,
@@ -3578,8 +3591,13 @@ int main(int argc, char* argv[]) {
             ? config->dither_method : dither::Method::opt_checker;
 
         api::Options aopts;
-        aopts.mode = (config->mode == amiga::Mode::genesis_h32)
-            ? "genesis-h32" : "genesis-h40";
+        switch (config->mode) {
+        case amiga::Mode::genesis_h32:    aopts.mode = "genesis-h32";    break;
+        case amiga::Mode::genesis_h40:    aopts.mode = "genesis-h40";    break;
+        case amiga::Mode::genesis_h32_sh: aopts.mode = "genesis-h32-sh"; break;
+        case amiga::Mode::genesis_h40_sh: aopts.mode = "genesis-h40-sh"; break;
+        default: aopts.mode = "genesis-h40"; break;
+        }
         aopts.dither = std::string{dither_name(genesis_dither)};
         aopts.dither_strength = config->dither_strength;
         aopts.error_clamp = config->error_clamp;
@@ -3596,10 +3614,16 @@ int main(int argc, char* argv[]) {
         cli_status("Dither: {} (strength: {:.2f})",
                      dither_name(genesis_dither),
                      config->dither_strength);
+        const char* mode_label = "";
+        switch (config->mode) {
+        case amiga::Mode::genesis_h32:    mode_label = "H32 256-wide"; break;
+        case amiga::Mode::genesis_h40:    mode_label = "H40 320-wide"; break;
+        case amiga::Mode::genesis_h32_sh: mode_label = "H32 + Shadow"; break;
+        case amiga::Mode::genesis_h40_sh: mode_label = "H40 + Shadow"; break;
+        default: mode_label = "Genesis"; break;
+        }
         cli_status("Mode:   Sega Genesis ({}), {}x{}, 4 palettes × 16 BGR333",
-                     (config->mode == amiga::Mode::genesis_h32
-                          ? "H32 256-wide" : "H40 320-wide"),
-                     aopts.width, aopts.height);
+                     mode_label, aopts.width, aopts.height);
         // Tile-dedup stats. The "after dedup" tile count maps directly to
         // VRAM bytes (×32). Real Genesis VRAM is 64 KB total, with the
         // upper bound for plane-A title art around ~1280 tiles before

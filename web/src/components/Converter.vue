@@ -643,11 +643,13 @@ function formatGenesisTileStats(result: ConvertResult): string {
   const u = result.genesisUniqueTiles
   const t = result.genesisTotalCells
   const pct = t > 0 ? (1 - u / t) * 100 : 0
-  // The 1280-tile threshold is the typical plane-A budget when sharing
-  // VRAM with sprites + plane B. Pure title screens that own all 64 KB
-  // can push to ~2048; we flag the conservative bound so users have a
-  // clear "this may not fit on real hardware" signal.
-  const vram_kb = (u * 32 / 1024).toFixed(1)
+  // tileDataBytes is the authoritative VRAM-bytes number (Genesis = 32
+  // B/tile, SNES Mode 7 = 64 B/tile). Fall back to *32 for older WASM.
+  const bytes = result.tileDataBytes ?? (u * 32)
+  const vram_kb = (bytes / 1024).toFixed(1)
+  // Genesis warning: 1280-tile budget for plane A before sprites/plane B.
+  // SNES Mode 7 hard-caps at 256 (the packer always merges to fit; no
+  // warning needed because it's already in budget).
   const over_budget = u > 1280
   const tag = over_budget ? '⚠ ' : ''
   return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${vram_kb} KB VRAM)`

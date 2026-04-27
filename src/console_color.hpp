@@ -122,6 +122,13 @@ inline Color3f rgb443_quantize(Color3f linear) noexcept {
     return quantise_per_channel(linear, 4, 4, 3);
 }
 
+// SNES Mode 7 Direct Color: pixel byte is BBGGGRRR (3+3+2 bits = 256
+// effective colours). Mode 7 tilemap has no per-cell palette field, so
+// the `ppp` low-bit boost is unavailable — the gamut really is 256.
+inline Color3f rgb332_quantize(Color3f linear) noexcept {
+    return quantise_per_channel(linear, 3, 3, 2);
+}
+
 inline std::uint16_t to_bgr555_word(Color3f linear) noexcept {
     return pack_word_bgr(linear, 5, 5, 5, /*pad_zero_lsb=*/false);
 }

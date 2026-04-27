@@ -255,6 +255,86 @@ GenesisResult cluster_tiles_into_palettes(
     return res;
 }
 
+std::vector<Color3f> shadow_palette_line(std::span<const Color3f> base) {
+    std::vector<Color3f> out(base.size());
+    for (std::size_t i = 0; i < base.size(); ++i) {
+        // Hardware shadow: halve each 3-bit DAC value with truncation.
+        // We approximate via bgr333_quantize(linear × 0.5 in sRGB), then
+        // re-snap to BGR333 to land on a valid CRAM-display value.
+        auto srgb = color_space::linear_to_srgb(base[i]);
+        Color3f half_srgb{srgb.r * 0.5f, srgb.g * 0.5f, srgb.b * 0.5f};
+        auto half_lin = color_space::srgb_to_linear(half_srgb);
+        out[i] = console_color::bgr333_quantize(half_lin);
+    }
+    return out;
+}
+
+GenesisResult cluster_tiles_into_palettes_sh(
+    const Image& image, float palette_diversity) {
+
+    // 1. Same base clustering as the non-S/H path.
+    auto res = cluster_tiles_into_palettes(image, palette_diversity);
+    auto w = image.width();
+    auto h = image.height();
+    auto tiles_x = (w + kTileSide - 1) / kTileSide;
+    auto tiles_y = (h + kTileSide - 1) / kTileSide;
+    res.tile_shadow.assign(tiles_x * tiles_y, 0);
+
+    // 2. Pre-compute the shadowed view of each palette line + Lab variants.
+    std::array<std::vector<Color3f>, kPaletteCount> shadow_lines;
+    std::array<std::array<color_space::OKLab, kColorsPerPalette>,
+               kPaletteCount> base_lab, shadow_lab;
+    for (std::size_t k = 0; k < kPaletteCount; ++k) {
+        shadow_lines[k] = shadow_palette_line(res.palette_lines[k]);
+        for (std::size_t i = 0; i < kColorsPerPalette; ++i) {
+            base_lab[k][i]   = color_space::linear_to_oklab(res.palette_lines[k][i]);
+            shadow_lab[k][i] = color_space::linear_to_oklab(shadow_lines[k][i]);
+        }
+    }
+
+    // 3. Per-tile decision: score normal vs shadow for the tile's
+    //    assigned palette; pick whichever has lower nearest² error.
+    //    The same caveat as before applies (nearest-only, not dither-
+    //    aware) but since the choice is BINARY per tile (not which of 4
+    //    palettes), it's much less prone to the oscillation that bit
+    //    the Lloyd-style refinement attempt.
+    auto score_against = [&](std::span<const color_space::OKLab> pl_lab,
+                             std::size_t tx, std::size_t ty) -> float {
+        auto x0 = tx * kTileSide, y0 = ty * kTileSide;
+        auto x_end = std::min(x0 + kTileSide, w);
+        auto y_end = std::min(y0 + kTileSide, h);
+        float sum = 0.0f;
+        for (std::size_t y = y0; y < y_end; ++y) {
+            for (std::size_t x = x0; x < x_end; ++x) {
+                auto lab = color_space::linear_to_oklab(image[x, y]);
+                float best = std::numeric_limits<float>::max();
+                for (std::size_t i = 1; i < kColorsPerPalette; ++i) {
+                    float dL = lab.L - pl_lab[i].L;
+                    float da = lab.a - pl_lab[i].a;
+                    float db = lab.b - pl_lab[i].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best) best = d;
+                }
+                sum += best;
+            }
+        }
+        return sum;
+    };
+
+    for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+        for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+            std::uint8_t k = res.tile_palette[ty * tiles_x + tx];
+            std::span<const color_space::OKLab> base{base_lab[k]};
+            std::span<const color_space::OKLab> shad{shadow_lab[k]};
+            float base_err = score_against(base, tx, ty);
+            float shad_err = score_against(shad, tx, ty);
+            res.tile_shadow[ty * tiles_x + tx] =
+                (shad_err < base_err) ? 1 : 0;
+        }
+    }
+    return res;
+}
+
 namespace {
 
 // Apply an H or V flip (or both) to a 64-entry 8×8 nibble pattern.

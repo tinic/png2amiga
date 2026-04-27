@@ -14,6 +14,7 @@
 #include "iff.hpp"
 #include "console_color.hpp"
 #include "genesis.hpp"
+#include "snes_io.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
@@ -89,6 +90,8 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "snes-mode7-direct") return amiga::Mode::snes_mode7_direct;
     if (s == "genesis-h32")       return amiga::Mode::genesis_h32;
     if (s == "genesis-h40")       return amiga::Mode::genesis_h40;
+    if (s == "genesis-h32-sh")    return amiga::Mode::genesis_h32_sh;
+    if (s == "genesis-h40-sh")    return amiga::Mode::genesis_h40_sh;
     return amiga::Mode::lores;
 }
 
@@ -465,11 +468,11 @@ struct PipelineResult {
     // means "not a CGA-320 run" (viewer falls back to its default 0x30).
     std::uint8_t cga_mode_ctrl2 = 0xFF;
 
-    // Sega Genesis only — tile-dedup stats reported in the CLI status line
-    // (and useful for the web UI to flag VRAM-budget issues). 0 means
-    // "not a Genesis run".
+    // Tile-dedup stats — set by Genesis (4bpp 8×8 tiles, 32 B each) and
+    // SNES Mode 7 (8bpp 8×8 tiles, 64 B each). 0 = not a tiled run.
     std::size_t genesis_unique_tiles = 0;
     std::size_t genesis_total_cells = 0;
+    std::size_t tile_data_bytes = 0;  // unique_tiles × bytes-per-tile
     // Genesis split byte streams for SGDK header generation. raw_frame
     // remains the single concatenated stream for .bin output.
     std::vector<std::uint8_t>  genesis_tile_bytes;     // unique_tiles × 32
@@ -850,12 +853,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         return result;
     }
 
-    // --- SNES Mode 7 (256-palette and Direct Color RGB443) ---
-    // 8bpp chunky pixels. The 256-palette flavour quantises a 256-entry
-    // BGR555 palette via median-cut + 5-bit-per-channel snap; the Direct
-    // flavour skips the palette table and snaps every pixel to the
-    // 4-4-3 grid (the encoded byte carries the low bits, the implicit
-    // hardware sub-palette supplies the high bits at display time).
+    // --- SNES Mode 7 (256-palette and Direct Color) ---
+    // The full quantise → dither → pack pipeline lives inside
+    // snes_io::encode_snes_mode7. The chunky intermediate (palette
+    // indices for 256, BBGGGRRR pixel bytes for Direct) is internal
+    // to that function — no pre-pack state escapes here.
     if (amiga::is_snes(mode)) {
         if (has_transparency) {
             for (std::size_t i = 0; i < tmask.size(); ++i)
@@ -868,58 +870,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
 
-        std::vector<Color3f> palette;
-        std::vector<std::uint8_t> raw;
-        Image rendered(w, h);
-        dither::DitherResult dith_result;
-
-        if (mode == amiga::Mode::snes_mode7_256) {
-            // 256-colour palette, BGR555-quantised entries.
-            auto quantized = quantize::quantize(*image, 256,
-                                                 quantize::Algorithm::median_cut,
-                                                 options.palette_diversity);
-            if (!quantized) return std::unexpected{quantized.error()};
-            for (auto& c : quantized->colors)
-                c = console_color::bgr555_quantize(c);
-            dith_result = dither::apply(*image, quantized->colors, dith);
-            palette = quantized->colors;
-            for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
-                rendered.pixels()[i] = palette[dith_result.indices[i]];
-            raw = dith_result.indices;
-        } else {
-            // Direct Color RGB443 — no palette table; quantise each
-            // pixel to the 4-4-3 grid. The driver handles all ED /
-            // ordered / structure-aware / Riemersma / Ostromoukhov
-            // scaffolding; we only supply the per-pixel grid snap.
-            // Yliluoma family is filtered out by the UI because
-            // palette-aware planning makes no sense without a palette.
-            raw.assign(w * h, std::uint8_t{0});
-            dith_result.indices.assign(w * h, 0);  // unused; kept for symmetry
-            dith_result.total_error = dither::diffuse_raw_buffer(
-                *image, dith,
-                [&](const color_space::OKLab& target,
-                    std::size_t x, std::size_t y) -> dither::PickResult {
-                    auto snapped = console_color::rgb443_quantize(
-                        color_space::oklab_to_linear(target));
-                    rendered.pixels()[y * w + x] = snapped;
-                    raw[y * w + x] = console_color::pack_rgb443_byte(snapped);
-                    return {color_space::linear_to_oklab(snapped), 0.5f};
-                });
-            palette.clear();  // No palette table for Direct mode.
-        }
+        bool direct_color = (mode == amiga::Mode::snes_mode7_direct);
+        auto enc = snes_io::encode_snes_mode7(
+            *image, direct_color, dith, options.palette_diversity);
+        if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;
-        result.rendered = std::move(rendered);
-        result.palette = palette;
-        result.indices = std::move(dith_result.indices);
+        result.rendered = std::move(enc->rendered);
+        result.palette = std::move(enc->palette);
+        result.indices.clear();  // not meaningful for the packed format
         result.planes.depth = 8;
         result.mode = mode;
         result.hires = false;
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.finalize_psnr(*image, dith_result.total_error);
-        result.raw_frame = std::move(raw);
+        result.finalize_psnr(*image, enc->quant_error);
+        result.raw_frame = std::move(enc->packed_bytes);
+        result.genesis_unique_tiles = enc->unique_after_merge;
+        result.genesis_total_cells = (w / 8) * (h / 8);
+        result.tile_data_bytes = enc->unique_after_merge * 64;
         return result;
     }
 
@@ -949,35 +919,56 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t x = 0; x < w; ++x)
                 snapped[x, y] = console_color::bgr333_quantize((*image)[x, y]);
 
-        // 2. Cluster tiles → 4 palette lines.
-        auto gres = genesis::cluster_tiles_into_palettes(
-            snapped, static_cast<float>(options.palette_diversity));
+        // 2. Cluster tiles → 4 palette lines (+ per-tile shadow decision
+        //    for S/H modes).
+        bool sh_mode = amiga::is_genesis_sh(mode);
+        auto gres = sh_mode
+            ? genesis::cluster_tiles_into_palettes_sh(
+                  snapped, static_cast<float>(options.palette_diversity))
+            : genesis::cluster_tiles_into_palettes(
+                  snapped, static_cast<float>(options.palette_diversity));
         auto tiles_x = (w + genesis::kTileSide - 1) / genesis::kTileSide;
 
         // 3. Pre-convert each palette line to OKLab so the picker is cheap.
+        //    For S/H modes also pre-compute the shadowed-palette views so
+        //    shadow tiles' picker scores against the correct effective
+        //    colour set.
         std::array<std::vector<color_space::OKLab>, genesis::kPaletteCount>
-            palette_lab;
+            palette_lab, shadow_lab;
+        std::array<std::vector<Color3f>, genesis::kPaletteCount>
+            shadow_lines;
         for (std::size_t k = 0; k < genesis::kPaletteCount; ++k) {
             palette_lab[k].resize(genesis::kColorsPerPalette);
             for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i)
                 palette_lab[k][i] = color_space::linear_to_oklab(
                     gres.palette_lines[k][i]);
+            if (sh_mode) {
+                shadow_lines[k] = genesis::shadow_palette_line(
+                    gres.palette_lines[k]);
+                shadow_lab[k].resize(genesis::kColorsPerPalette);
+                for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i)
+                    shadow_lab[k][i] = color_space::linear_to_oklab(
+                        shadow_lines[k][i]);
+            }
         }
 
         // 4. Per-pixel re-quantise via the central ED driver. Picker
-        //    selects the palette index in [1..15] (skip transparent 0
-        //    on opaque pixels) against this tile's assigned palette.
+        //    selects the palette index in [1..15] against this tile's
+        //    assigned palette (base or shadowed for S/H modes).
         Image rendered(w, h);
         std::vector<std::uint8_t>& pixel_index = gres.pixel_index;
         const std::vector<std::uint8_t>& tile_pal = gres.tile_palette;
+        const std::vector<std::uint8_t>& tile_shadow = gres.tile_shadow;
         float te = dither::diffuse_raw_buffer(
             *image, dith,
             [&](const color_space::OKLab& target,
                 std::size_t x, std::size_t y) -> dither::PickResult {
                 std::size_t tx = x / genesis::kTileSide;
                 std::size_t ty = y / genesis::kTileSide;
-                std::uint8_t pal = tile_pal[ty * tiles_x + tx];
-                auto& pl = palette_lab[pal];
+                std::size_t cell = ty * tiles_x + tx;
+                std::uint8_t pal = tile_pal[cell];
+                bool shadowed = sh_mode && tile_shadow[cell] != 0;
+                auto& pl = shadowed ? shadow_lab[pal] : palette_lab[pal];
                 std::span<const color_space::OKLab> pl_span(pl.data(),
                                                              pl.size());
                 std::size_t k = 1;
@@ -986,7 +977,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     dith.method, target, pl_span, x, y,
                     dith.strength, /*k_min=*/1, k, chosen);
                 pixel_index[y * w + x] = static_cast<std::uint8_t>(k);
-                rendered[x, y] = gres.palette_lines[pal][k];
+                rendered[x, y] = shadowed
+                    ? shadow_lines[pal][k]
+                    : gres.palette_lines[pal][k];
                 return {chosen, thr};
             });
 
@@ -1014,10 +1007,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                               genesis::kColorsPerPalette);
         for (auto& bytes : dedup.tiles)
             tile_bytes.insert(tile_bytes.end(), bytes.begin(), bytes.end());
-        for (auto& cell : dedup.tilemap) {
+        // Tilemap encoding: for S/H modes the priority bit doubles as
+        // the shadow flag — HIGH priority = render normally, LOW priority
+        // = render shadowed (when VDP S/H register is set). For non-S/H
+        // modes priority stays low; the user can OR in plane-priority
+        // semantics in their own code if needed.
+        for (std::size_t i = 0; i < dedup.tilemap.size(); ++i) {
+            auto& cell = dedup.tilemap[i];
+            bool priority = false;
+            if (sh_mode) {
+                // tile_shadow[i] == 0 → render normally → priority HIGH.
+                // tile_shadow[i] == 1 → render shadowed → priority LOW.
+                priority = (tile_shadow[i] == 0);
+            }
             tilemap_cells.push_back(genesis::encode_tilemap_cell(
                 cell.tile_index, cell.palette_line,
-                cell.h_flip, cell.v_flip, /*priority=*/false));
+                cell.h_flip, cell.v_flip, priority));
         }
         for (std::size_t k = 0; k < genesis::kPaletteCount; ++k) {
             for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i) {
@@ -1060,6 +1065,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.finalize_psnr(*image, te);
         result.raw_frame = std::move(raw);
         result.genesis_unique_tiles = dedup.tiles.size();
+        result.tile_data_bytes = dedup.tiles.size() * 32;  // 4bpp 8×8
         result.genesis_total_cells = total_cells;
         result.genesis_tile_bytes = std::move(tile_bytes);
         result.genesis_tilemap_cells = std::move(tilemap_cells);
@@ -1955,6 +1961,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.psnr = p.psnr;
     r.hasTransparency = p.has_transparency;
     r.genesisUniqueTiles = static_cast<int>(p.genesis_unique_tiles);
+    r.tileDataBytes      = static_cast<int>(p.tile_data_bytes);
     r.genesisTotalCells  = static_cast<int>(p.genesis_total_cells);
     return r;
 }
@@ -2552,6 +2559,7 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.psnr = p.psnr;
     s.raw_frame = std::move(p.raw_frame);
     s.genesis_unique_tiles = p.genesis_unique_tiles;
+    s.tile_data_bytes      = p.tile_data_bytes;
     s.genesis_total_cells = p.genesis_total_cells;
     s.genesis_tile_bytes = std::move(p.genesis_tile_bytes);
     s.genesis_tilemap_cells = std::move(p.genesis_tilemap_cells);

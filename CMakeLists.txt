@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.17.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.18.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -524,6 +524,32 @@ else()
         )
         set_tests_properties("smoke-degas-${ext}-exists"
                              PROPERTIES DEPENDS "smoke-degas-${ext}")
+    endforeach()
+
+    # Sega Genesis: .bin (tiles + tilemap + CRAM) and .h (SGDK header).
+    set(genesis_outputs
+        "h32.bin|--mode genesis-h32"
+        "h40.bin|--mode genesis-h40"
+        "h40.h|--mode genesis-h40 --symbol genesis_test"
+    )
+    foreach(spec ${genesis_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-genesis-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${CMAKE_SOURCE_DIR}/test.png
+                    ${CMAKE_BINARY_DIR}/smoke-genesis.${ext}
+        )
+        add_test(
+            NAME "smoke-genesis-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-genesis.${ext}
+        )
+        set_tests_properties("smoke-genesis-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-genesis-${ext}")
     endforeach()
 
 endif() # NOT EMSCRIPTEN

@@ -50,6 +50,7 @@ declare module '@wasm/png2amiga.js' {
     hasTransparency?: boolean
     genesisUniqueTiles?: number
     genesisTotalCells?: number
+    tileDataBytes?: number
     error?: string
   }
 

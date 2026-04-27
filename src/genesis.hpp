@@ -46,6 +46,10 @@ struct GenesisResult {
     // Per-tile palette index in [0, kPaletteCount).
     // Layout: row-major over tilemap, size = (W/8) * (H/8).
     std::vector<std::uint8_t> tile_palette;
+    // Per-tile shadow flag (S/H modes only): 1 if the tile renders with
+    // the hardware-shadowed palette (priority bit cleared), 0 for base.
+    // Empty when S/H is not in use.
+    std::vector<std::uint8_t> tile_shadow;
 
     // Per-pixel palette index in [0, kColorsPerPalette).
     // Layout: row-major over pixels, size = W*H. Index 0 is transparent;
@@ -76,6 +80,20 @@ struct GenesisResult {
 // caller fills them via the dither driver.
 GenesisResult cluster_tiles_into_palettes(
     const Image& image, float palette_diversity);
+
+// Same as above + per-tile shadow flag (for S/H modes). After base
+// palettes are picked, each tile chooses normal vs shadowed based on
+// which gives lower nearest-neighbour OKLab² error against the assigned
+// palette. The shadowed palette is the hardware-derived halving of each
+// base entry — no extra CRAM consumed.
+GenesisResult cluster_tiles_into_palettes_sh(
+    const Image& image, float palette_diversity);
+
+// Compute the shadowed view of a base palette line: each entry's RGB
+// halved in sRGB space (matches Genesis VDP's hardware shadow rule
+// closely; bit-exact would halve the 3-bit DAC value with truncation —
+// the float approximation is within 1 DAC step).
+std::vector<Color3f> shadow_palette_line(std::span<const Color3f> base);
 
 // Per-cell tilemap entry resolved after dedup. Mirrors the bit layout of
 // encode_tilemap_cell — kept as a struct so the dedup output is clean
