@@ -312,7 +312,16 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                 auto sx = std::min(crop_x + x * crop_w / target_w,
                                    crop_x + crop_w - 1);
                 float a = src_alpha[sy * width + sx];
-                if (alpha_dither != dither::Method::none) {
+                // Fully transparent (alpha == 0) and fully opaque
+                // (alpha == 1) pixels are locked regardless of
+                // cutoff/dither — dither should only ever shape the
+                // partial-alpha boundary, never punch holes into pixels
+                // the artist explicitly marked visible or invisible.
+                if (a == 0.0f) {
+                    (*out_tmask)[y * target_w + x] = true;
+                } else if (a == 1.0f) {
+                    (*out_tmask)[y * target_w + x] = false;
+                } else if (alpha_dither != dither::Method::none) {
                     float thr = dither::ordered_threshold(alpha_dither, x, y);
                     (*out_tmask)[y * target_w + x] = a < (cutoff + thr * options.alpha_dither_strength);
                 } else {
