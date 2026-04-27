@@ -58,7 +58,9 @@ function unwrapConvertEnvelope(raw: ReplyEnvelope): ConvertResult {
 
 function handleProgress(id: number, p: number, stage: string): void {
   const cb = pending.get(id)
-  if (cb && 'onProgress' in cb && cb.onProgress) cb.onProgress(p, stage)
+  // exactOptionalPropertyTypes makes `'onProgress' in cb` enough — the
+  // property only exists when the caller passed a non-undefined callback.
+  if (cb && 'onProgress' in cb) cb.onProgress(p, stage)
 }
 
 function handleReply(id: number, result: ReplyEnvelope | DitherDefaults): void {

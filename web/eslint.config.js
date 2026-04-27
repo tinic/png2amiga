@@ -19,7 +19,7 @@ export default [
     ],
   },
   js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
+  ...tseslint.configs.strictTypeChecked,
   ...vue.configs['flat/recommended'],
   importX.flatConfigs.recommended,
   security.configs.recommended,
@@ -245,6 +245,16 @@ export default [
       // conditionals, setTimeout). Catches `setTimeout(async () => …)`
       // and `if (asyncFn())` mistakes.
       '@typescript-eslint/no-misused-promises': 'error',
+      // strictTypeChecked turns this on with no implicit-conversion
+      // allowances. This is graphics code: `${width}x${height}` and
+      // similar number/bool template interpolations are everywhere and
+      // safe (JS coerces consistently). Loosen to allow number/boolean
+      // but keep the catch on object/array (where you'd see
+      // [object Object] or "true,false,2"-style accidents).
+      '@typescript-eslint/restrict-template-expressions': ['error', {
+        allowNumber: true,
+        allowBoolean: true,
+      }],
     },
   },
 ]

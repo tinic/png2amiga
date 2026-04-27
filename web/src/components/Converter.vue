@@ -262,7 +262,7 @@ const rawTooltipHtml = computed(() => {
   const dd = n(defaultDepth(options.mode))
   const bpr = Math.ceil(w / 16) * 2
   // Encoder-reported chipset, not the user option (HAM7/8 force AGA).
-  const aga = Boolean(lastAga.value)
+  const aga = lastAga.value
   const colors = 1 << (isHamMode(options.mode) ? dd - 2 : d)
   const pb = n(lastPlaneBytes.value)
   const cb = n(lastCopperBytes.value)
@@ -548,7 +548,7 @@ let tweakTimer: ReturnType<typeof setTimeout> | null = null
 for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) {
   watch(() => options[s.key], (val) => {
     if (tweakTimer) clearTimeout(tweakTimer)
-    tweakTimer = setTimeout(() => track('setting-tweak', { key: s.key, value: val }), 500)
+    tweakTimer = setTimeout(() => { track('setting-tweak', { key: s.key, value: val }); }, 500)
   })
 }
 watch(() => options.cgaTextMetric, (val) => {
@@ -557,7 +557,7 @@ watch(() => options.cgaTextMetric, (val) => {
   // perceptual metric is selected.
   if (val !== 'mse' && options.dither !== 'none') options.dither = 'none'
   if (tweakTimer) clearTimeout(tweakTimer)
-  tweakTimer = setTimeout(() => track('setting-tweak', { key: 'cgaTextMetric', value: val }), 500)
+  tweakTimer = setTimeout(() => { track('setting-tweak', { key: 'cgaTextMetric', value: val }); }, 500)
 })
 
 // Session duration on page unload
@@ -705,7 +705,7 @@ async function runConvert(srcBytes: Uint8Array): Promise<void> {
       progressStage.value = stage || ''
     }
     const result = await convertRGBA(srcBytes, buildWasmOptions(), onProgress)
-    if (spinnerTimer) clearTimeout(spinnerTimer)
+    clearTimeout(spinnerTimer)
     progress.value = 0
     progressStage.value = ''
     if (result.error) {
@@ -718,7 +718,7 @@ async function runConvert(srcBytes: Uint8Array): Promise<void> {
     resultInfo.value = formatResultInfo(result)
     trackConvertSuccess(result, performance.now() - convertStart)
   } catch (error) {
-    if (spinnerTimer) clearTimeout(spinnerTimer)
+    clearTimeout(spinnerTimer)
     const message = errorMessage(error)
     errorMsg.value = message
     track('error', { type: 'convert-exception', message })
@@ -842,7 +842,7 @@ async function downloadMaskPNG() {
   converting.value = true
   try {
     const opts = buildWasmOptions()
-    opts.maskInvert = Boolean(options.maskInvert)
+    opts.maskInvert = options.maskInvert
     const result = await convertMask(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
     if (!result.data) return
@@ -858,7 +858,7 @@ async function downloadMaskRaw() {
   converting.value = true
   try {
     const opts = buildWasmOptions()
-    opts.maskInvert = Boolean(options.maskInvert)
+    opts.maskInvert = options.maskInvert
     const result = await convertMaskRaw(imageBytes.value, opts)
     if (result.error) { errorMsg.value = result.error; return }
     if (!result.data) return

@@ -223,6 +223,9 @@ function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLSha
 
 function link(gl: WebGLRenderingContext, vs: WebGLShader, fs: WebGLShader): WebGLProgram {
   const p = gl.createProgram()
+  // Modern lib.dom.d.ts types createProgram() as non-null, but at runtime it
+  // returns null on lost context / out-of-memory. Keep the guard.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (!p) throw new Error('CRT program create failed')
   gl.attachShader(p, vs)
   gl.attachShader(p, fs)
