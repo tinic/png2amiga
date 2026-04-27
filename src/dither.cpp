@@ -43,6 +43,74 @@ constexpr auto make_bayer4x4() noexcept {
     return m;
 }
 
+// Dispersed-dot matrices for non-power-of-2 sizes. Bayer's recursive
+// construction only gives 2ⁿ; for 3/5/6/7 we use hand-tuned magic-square
+// permutations that scatter consecutive thresholds far apart in the cell
+// (the property that makes Bayer "blue-ish"). Different spectral
+// character from the 4×/8× Bayer ladder — breaks the rigid grid look on
+// integer-scaled pixel art.
+
+constexpr auto make_bayer3x3() noexcept {
+    constexpr std::array<std::array<int, 3>, 3> raw = {{
+        {{0, 7, 3}},
+        {{6, 5, 1}},
+        {{4, 2, 8}},
+    }};
+    std::array<std::array<float, 3>, 3> m{};
+    for (std::size_t y = 0; y < 3; ++y)
+        for (std::size_t x = 0; x < 3; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 9.0f - 0.5f;
+    return m;
+}
+
+constexpr auto make_bayer5x5() noexcept {
+    constexpr std::array<std::array<int, 5>, 5> raw = {{
+        {{ 0, 14,  3, 17,  6}},
+        {{10, 21,  7, 24, 12}},
+        {{ 4, 18,  1, 15,  9}},
+        {{20,  8, 23, 11, 22}},
+        {{ 2, 16,  5, 19, 13}},
+    }};
+    std::array<std::array<float, 5>, 5> m{};
+    for (std::size_t y = 0; y < 5; ++y)
+        for (std::size_t x = 0; x < 5; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 25.0f - 0.5f;
+    return m;
+}
+
+constexpr auto make_bayer6x6() noexcept {
+    constexpr std::array<std::array<int, 6>, 6> raw = {{
+        {{ 0, 22,  6, 28, 12, 33}},
+        {{18,  9, 25, 15, 31,  3}},
+        {{ 5, 27, 14, 35, 20,  8}},
+        {{23, 11, 32, 17, 26,  1}},
+        {{ 7, 30, 19,  4, 29, 13}},
+        {{34, 16, 24, 10, 21,  2}},
+    }};
+    std::array<std::array<float, 6>, 6> m{};
+    for (std::size_t y = 0; y < 6; ++y)
+        for (std::size_t x = 0; x < 6; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 36.0f - 0.5f;
+    return m;
+}
+
+constexpr auto make_bayer7x7() noexcept {
+    constexpr std::array<std::array<int, 7>, 7> raw = {{
+        {{ 0, 30,  6, 36, 12, 42, 18}},
+        {{24, 11, 38, 17, 44, 23,  4}},
+        {{ 7, 33, 20, 27, 14, 47, 31}},
+        {{40, 15, 46,  2, 28, 10, 35}},
+        {{19, 25,  8, 41, 22, 37,  1}},
+        {{43,  3, 32, 13, 48,  5, 26}},
+        {{ 9, 39, 21, 34, 16, 29, 45}},
+    }};
+    std::array<std::array<float, 7>, 7> m{};
+    for (std::size_t y = 0; y < 7; ++y)
+        for (std::size_t x = 0; x < 7; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 49.0f - 0.5f;
+    return m;
+}
+
 constexpr auto make_bayer8x8() noexcept {
     constexpr std::array<std::array<int, 8>, 8> raw = {{
         {{ 0, 32,  8, 40,  2, 34, 10, 42}},
@@ -168,9 +236,122 @@ constexpr auto make_line8() noexcept {
     return m;
 }
 
+// Niklasson surface-stable fractal dither — hierarchical 16×16 tile
+// where every 2× subdivision is itself a valid threshold matrix. Used
+// in *Return of the Obra Dinn*: the recursive structure means the same
+// pattern reads at multiple zoom levels. Built by Bayer-style
+// recursion (B[i,j] = 4·B[i/2,j/2] + B2[i%2, j%2]) up to 16×16, so
+// 256 distinct thresholds. Quieter, more organic-feeling dither than
+// standard 8×8 Bayer.
+constexpr auto make_fractal16() noexcept {
+    constexpr std::array<std::array<int, 2>, 2> b2 = {{ {{0, 2}}, {{3, 1}} }};
+    std::array<std::array<int, 16>, 16> raw{};
+    // Recursively double: B_{2N}[i,j] = 4·B_N[i/2,j/2] + b2[i%2, j%2].
+    for (std::size_t y = 0; y < 16; ++y) {
+        for (std::size_t x = 0; x < 16; ++x) {
+            int v = 0;
+            std::size_t yy = y, xx = x;
+            for (int level = 0; level < 4; ++level) {
+                v = v * 4 + b2[yy & 1][xx & 1];
+                yy >>= 1;
+                xx >>= 1;
+            }
+            // Reverse the level order so finest level is least-significant.
+            int rev = 0, vv = v;
+            for (int i = 0; i < 4; ++i) { rev = rev * 4 + (vv & 3); vv >>= 2; }
+            raw[y][x] = rev;
+        }
+    }
+    std::array<std::array<float, 16>, 16> m{};
+    for (std::size_t y = 0; y < 16; ++y)
+        for (std::size_t x = 0; x < 16; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 256.0f - 0.5f;
+    return m;
+}
+
 constexpr auto bayer2 = make_bayer2x2();
 constexpr auto bayer4 = make_bayer4x4();
 constexpr auto bayer8 = make_bayer8x8();
+constexpr auto fractal16_mat = make_fractal16();
+
+// Aseprite "old" 4×4 — hand-edited by pixel artists for clean reading on
+// integer-scaled LCD displays. Biases on-pixels into a checker phase
+// rather than the Bayer "diagonal sweep". Source: aseprite/src/render/
+// ordered_dither.h (BSD-2 licensed).
+constexpr auto make_aseprite_old() noexcept {
+    constexpr std::array<std::array<int, 4>, 4> raw = {{
+        {{ 0,  8,  2, 10}},
+        {{14,  6, 12,  4}},
+        {{ 3, 11,  1,  9}},
+        {{15,  7, 13,  5}},
+    }};
+    std::array<std::array<float, 4>, 4> m{};
+    for (std::size_t y = 0; y < 4; ++y)
+        for (std::size_t x = 0; x < 4; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 16.0f - 0.5f;
+    return m;
+}
+
+// libcaca hand-tuned dispersed-dot matrices (Hocevar's terminal-phosphor
+// study). Different spectral character than recursive Bayer constructions.
+constexpr auto make_libcaca_3x3() noexcept {
+    constexpr std::array<std::array<int, 3>, 3> raw = {{
+        {{0, 7, 3}},
+        {{6, 4, 1}},
+        {{2, 8, 5}},
+    }};
+    std::array<std::array<float, 3>, 3> m{};
+    for (std::size_t y = 0; y < 3; ++y)
+        for (std::size_t x = 0; x < 3; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 9.0f - 0.5f;
+    return m;
+}
+
+constexpr auto make_libcaca_6x6() noexcept {
+    constexpr std::array<std::array<int, 6>, 6> raw = {{
+        {{ 0, 28,  4, 24, 14, 32}},
+        {{20,  8, 30, 12, 22,  2}},
+        {{ 6, 26, 16, 34, 10, 18}},
+        {{31, 13, 23,  3, 29,  5}},
+        {{15, 35,  9, 19,  7, 25}},
+        {{21,  1, 27, 11, 33, 17}},
+    }};
+    std::array<std::array<float, 6>, 6> m{};
+    for (std::size_t y = 0; y < 6; ++y)
+        for (std::size_t x = 0; x < 6; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 36.0f - 0.5f;
+    return m;
+}
+
+// Pegasus / REXPaint 8×8 mosaic — biases on-pixels toward each tile's
+// centre, producing a "tiled glyph" look that reads on character-cell
+// displays where each pixel is a separate visual unit.
+constexpr auto make_pegasus_8x8() noexcept {
+    constexpr std::array<std::array<int, 8>, 8> raw = {{
+        {{ 0, 48,  8, 40,  2, 50, 10, 42}},
+        {{56, 24, 32, 16, 58, 26, 34, 18}},
+        {{12, 44,  4, 36, 14, 46,  6, 38}},
+        {{28, 60, 20, 52, 30, 62, 22, 54}},
+        {{ 3, 51, 11, 43,  1, 49,  9, 41}},
+        {{59, 27, 35, 19, 57, 25, 33, 17}},
+        {{15, 47,  7, 39, 13, 45,  5, 37}},
+        {{31, 63, 23, 55, 29, 61, 21, 53}},
+    }};
+    std::array<std::array<float, 8>, 8> m{};
+    for (std::size_t y = 0; y < 8; ++y)
+        for (std::size_t x = 0; x < 8; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 64.0f - 0.5f;
+    return m;
+}
+
+constexpr auto aseprite_old_mat = make_aseprite_old();
+constexpr auto libcaca_3x3_mat = make_libcaca_3x3();
+constexpr auto libcaca_6x6_mat = make_libcaca_6x6();
+constexpr auto pegasus_8x8_mat = make_pegasus_8x8();
+constexpr auto bayer3 = make_bayer3x3();
+constexpr auto bayer5 = make_bayer5x5();
+constexpr auto bayer6 = make_bayer6x6();
+constexpr auto bayer7 = make_bayer7x7();
 constexpr auto checker_mat = make_checker();
 constexpr auto h2x4_mat = make_h2x4();
 
@@ -277,6 +458,31 @@ constexpr auto make_hex8x8() noexcept {
     return m;
 }
 
+// Void-and-cluster 64×64 blue noise (Ulichney 1993). Generated by
+// tools/gen_void_cluster.mjs. Per-rank optimal: every threshold
+// percentile is itself blue-noise distributed.
+constexpr auto make_void_cluster64() noexcept {
+    #include "void_cluster_64.inc"
+    std::array<std::array<float, 64>, 64> m{};
+    for (std::size_t y = 0; y < 64; ++y)
+        for (std::size_t x = 0; x < 64; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 4096.0f - 0.5f;
+    return m;
+}
+
+// Cluster blue noise 64×64 — same algorithm with a wider Gaussian
+// (sigma=2.8) so on-pixels form larger clusters. Coarser, more
+// film-grainy texture than the standard void-and-cluster — good for
+// CRT phosphor look and very small palettes.
+constexpr auto make_cluster_noise64() noexcept {
+    #include "cluster_noise_64.inc"
+    std::array<std::array<float, 64>, 64> m{};
+    for (std::size_t y = 0; y < 64; ++y)
+        for (std::size_t x = 0; x < 64; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 4096.0f - 0.5f;
+    return m;
+}
+
 // Blue noise 64x64 — generated from Interleaved Gradient Noise formula
 // fract(52.9829189 * fract(0.06711056*x + 0.00583715*y))
 // Rank-ordered to produce 4096 threshold levels. No visible pattern.
@@ -340,6 +546,8 @@ constexpr auto spiral5x5_mat = make_spiral5x5();
 constexpr auto hex8x8_mat = make_hex8x8();
 constexpr auto hex5x5_mat = make_hex5x5();
 constexpr auto blue_noise_mat = make_blue_noise64();
+constexpr auto void_cluster_mat = make_void_cluster64();
+constexpr auto cluster_noise_mat = make_cluster_noise64();
 
 // ===========================================================================
 // OKLab arithmetic helpers
@@ -873,6 +1081,494 @@ DitherResult apply_gilbert(
     return result;
 }
 
+// ===========================================================================
+// Riemersma dither — Thiadmer Riemersma 1998
+// (https://www.compuphase.com/riemer.htm)
+//
+// Walks the same Gilbert/Hilbert space-filling curve as apply_gilbert but
+// uses Riemersma's canonical exponential-decay error queue: the last 16
+// pixels' errors all influence the current target, weighted so the most
+// recent contributes most and the 16-back ago has weight 1/16.
+//
+// Difference from apply_gilbert: gilbert spreads error to the NEXT few
+// cells with FS-like fixed weights; Riemersma propagates BACKWARDS by
+// reading the queue of past errors at the current cell. Mathematically
+// equivalent in steady-state but Riemersma gives a softer, more
+// painterly result on smooth gradients.
+// ===========================================================================
+
+DitherResult apply_riemersma(
+    const Image& image,
+    std::span<const OKLab> palette_lab,
+    float strength, float error_clamp_val) {
+
+    auto w = image.width();
+    auto h = image.height();
+
+    DitherResult result;
+    result.indices.resize(w * h);
+    result.total_error = 0.0f;
+
+    auto curve = gilbert_curve(static_cast<int>(w), static_cast<int>(h));
+
+    std::vector<OKLab> image_lab(w * h);
+    for (std::size_t y = 0; y < h; ++y)
+        for (std::size_t x = 0; x < w; ++x)
+            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+
+    // Riemersma's canonical queue: 16 entries with exponential decay.
+    // ratio = (1/16)^(1/15) so weight_i = ratio^(QSIZE-1-i) gives oldest
+    // entry weight = 1/16, newest entry weight = 1.0. Sum is normalised
+    // implicitly by error propagation — accumulated error converges.
+    constexpr std::size_t QSIZE = 16;
+    std::array<OKLab, QSIZE> queue{};  // ring buffer of last QSIZE errors
+    std::array<float, QSIZE> weights{};
+    {
+        const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+        float w_acc = 1.0f;
+        for (std::size_t i = QSIZE; i-- > 0; ) {
+            weights[i] = w_acc;
+            w_acc *= ratio;
+        }
+        // Normalise so sum = 1.
+        float total = 0.0f;
+        for (float wt : weights) total += wt;
+        for (float& wt : weights) wt /= total;
+    }
+    std::size_t qhead = 0;  // next slot to overwrite
+
+    float ec = error_clamp_val;
+
+    for (std::size_t i = 0; i < curve.size(); ++i) {
+        auto [x, y] = curve[i];
+        auto idx = static_cast<std::size_t>(y) * w + static_cast<std::size_t>(x);
+
+        // Sum the queue with exponential weights — newest at qhead-1.
+        OKLab carry{};
+        for (std::size_t k = 0; k < QSIZE; ++k) {
+            std::size_t age = (qhead + QSIZE - 1 - k) % QSIZE;
+            carry = oklab_add(carry, oklab_scale(queue[age], weights[k]));
+        }
+        carry = oklab_clamp(carry, ec);
+        auto target = oklab_add(image_lab[idx], carry);
+
+        // Find nearest palette entry.
+        float best_d = std::numeric_limits<float>::max();
+        std::size_t best_k = 0;
+        OKLab best_lab{};
+        for (std::size_t k = 0; k < palette_lab.size(); ++k) {
+            float dL = target.L - palette_lab[k].L;
+            float da = target.a - palette_lab[k].a;
+            float db = target.b - palette_lab[k].b;
+            float d = dL * dL + da * da + db * db;
+            if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
+        }
+
+        result.indices[idx] = static_cast<std::uint8_t>(best_k);
+
+        // Push new error onto queue, dropping oldest.
+        auto err = oklab_sub(target, best_lab);
+        queue[qhead] = oklab_scale(err, strength);
+        qhead = (qhead + 1) % QSIZE;
+
+        float dL = image_lab[idx].L - best_lab.L;
+        float da = image_lab[idx].a - best_lab.a;
+        float db = image_lab[idx].b - best_lab.b;
+        result.total_error += dL * dL + da * da + db * db;
+    }
+
+    return result;
+}
+
+// ===========================================================================
+// Yliluoma / Knoll palette-aware pattern dither
+// (https://bisqwit.iki.fi/story/howto/dither/jy/)
+//
+// At each pixel, *devise a mixing plan* of 64 palette indices whose
+// average colour matches the target. Sort by luma, then index into the
+// plan with the standard 8×8 Bayer threshold. Result: every pixel's
+// output is one of 64 colours pre-selected to make the right *averaged*
+// colour at viewing distance — far better than single-threshold ordered
+// dither when the palette is small (CGA, EHB, 4–16 colours).
+//
+// Greedy plan construction (Yliluoma method 1): at step k, try each
+// palette colour, pick the one whose addition to the plan minimises
+// distance from target. O(N×P) per pixel.
+// ===========================================================================
+
+} // namespace (anon closes — the next two are public API)
+
+// Per-pixel Yliluoma quantizer — exposed so callers can use it on a
+// per-row basis (e.g., copper.cpp's CAP loop) with the absolute y index
+// for Bayer rotation. Bypassing dither::apply on a 1-row sub-image was
+// the root of the "vertical line bias" bug — bayer8[0][x%8] is the
+// same row of thresholds for every scanline.
+std::uint8_t pick_yliluoma_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y,
+    bool mode2, float strength) {
+
+    constexpr std::size_t PLAN_SIZE = 64;
+    const std::size_t P = palette_lab.size();
+    if (P == 0) return 0;
+
+    std::array<std::size_t, PLAN_SIZE> plan{};
+    std::array<float, PLAN_SIZE> plan_luma{};
+    std::array<std::size_t, PLAN_SIZE> sorted{};
+
+    OKLab sum{};
+    for (std::size_t step = 0; step < PLAN_SIZE; ++step) {
+        float best_err = std::numeric_limits<float>::max();
+        std::size_t best_k = 0;
+        float n_inv = 1.0f / static_cast<float>(step + 1);
+        for (std::size_t k = 0; k < P; ++k) {
+            OKLab avg = {
+                (sum.L + palette_lab[k].L) * n_inv,
+                (sum.a + palette_lab[k].a) * n_inv,
+                (sum.b + palette_lab[k].b) * n_inv,
+            };
+            float dL = avg.L - target.L;
+            float da = avg.a - target.a;
+            float db = avg.b - target.b;
+            float err = mode2
+                ? (4.0f * dL * dL + da * da + db * db)
+                : (dL * dL + da * da + db * db);
+            if (err < best_err) { best_err = err; best_k = k; }
+        }
+        plan[step] = best_k;
+        sum = oklab_add(sum, palette_lab[best_k]);
+    }
+
+    for (std::size_t i = 0; i < PLAN_SIZE; ++i) {
+        plan_luma[i] = palette_lab[plan[i]].L;
+        sorted[i] = i;
+    }
+    for (std::size_t i = 1; i < PLAN_SIZE; ++i) {
+        std::size_t j = i;
+        while (j > 0 && plan_luma[sorted[j - 1]] > plan_luma[sorted[j]]) {
+            std::swap(sorted[j], sorted[j - 1]);
+            --j;
+        }
+    }
+
+    int b = static_cast<int>((bayer8[y % 8][x % 8] + 0.5f) * 64.0f);
+    if (b < 0) b = 0;
+    if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
+    int median = static_cast<int>(PLAN_SIZE) / 2;
+    int adjusted = median + static_cast<int>(static_cast<float>(b - median) * strength);
+    if (adjusted < 0) adjusted = 0;
+    if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
+    return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
+}
+
+bool is_yliluoma(Method method) {
+    return method == Method::yliluoma || method == Method::yliluoma2;
+}
+
+namespace { // reopen anon namespace for the apply_* helpers below
+
+// `mode2` selects Yliluoma method 2: weights candidates by closeness to
+// target's luma rather than its full OKLab vector during plan
+// construction. Tends to produce smoother gradients with less colour
+// drift on small palettes than method 1.
+DitherResult apply_yliluoma(
+    const Image& image,
+    std::span<const OKLab> palette_lab,
+    float strength,
+    bool mode2 = false) {
+
+    auto w = image.width();
+    auto h = image.height();
+
+    DitherResult result;
+    result.indices.resize(w * h);
+    result.total_error = 0.0f;
+
+    // Plan size = Bayer matrix area (8×8 = 64).
+    constexpr std::size_t PLAN_SIZE = 64;
+    const std::size_t P = palette_lab.size();
+    if (P == 0) return result;
+
+    // Per-pixel scratch — reused across the loop.
+    std::array<std::size_t, PLAN_SIZE> plan{};
+    std::array<float, PLAN_SIZE> plan_luma{};
+    std::array<std::size_t, PLAN_SIZE> sorted{};
+
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            auto target = color_space::linear_to_oklab(image[x, y]);
+
+            // Build the plan greedily: at each step pick the palette
+            // entry that minimises the average's distance from target.
+            OKLab sum{};
+            for (std::size_t step = 0; step < PLAN_SIZE; ++step) {
+                float best_err = std::numeric_limits<float>::max();
+                std::size_t best_k = 0;
+                float n_inv = 1.0f / static_cast<float>(step + 1);
+                for (std::size_t k = 0; k < P; ++k) {
+                    OKLab avg = {
+                        (sum.L + palette_lab[k].L) * n_inv,
+                        (sum.a + palette_lab[k].a) * n_inv,
+                        (sum.b + palette_lab[k].b) * n_inv,
+                    };
+                    float dL = avg.L - target.L;
+                    float da = avg.a - target.a;
+                    float db = avg.b - target.b;
+                    // Method 1: full Lab distance.
+                    // Method 2: weight luma 4× heavier than chroma — keeps
+                    // gradients smooth at the cost of slightly worse hue
+                    // matching, the canonical Yliluoma-2 trade-off.
+                    float err = mode2
+                        ? (4.0f * dL * dL + da * da + db * db)
+                        : (dL * dL + da * da + db * db);
+                    if (err < best_err) { best_err = err; best_k = k; }
+                }
+                plan[step] = best_k;
+                sum = oklab_add(sum, palette_lab[best_k]);
+            }
+
+            // Sort plan entries by OKLab luma so Bayer's "low threshold"
+            // → darker palette pick. Insertion sort, plan size = 64.
+            for (std::size_t i = 0; i < PLAN_SIZE; ++i) {
+                plan_luma[i] = palette_lab[plan[i]].L;
+                sorted[i] = i;
+            }
+            for (std::size_t i = 1; i < PLAN_SIZE; ++i) {
+                std::size_t j = i;
+                while (j > 0 && plan_luma[sorted[j - 1]] > plan_luma[sorted[j]]) {
+                    std::swap(sorted[j], sorted[j - 1]);
+                    --j;
+                }
+            }
+
+            // Bayer8 threshold gives 0..63, indexes the sorted plan.
+            // Strength scales toward the *median* plan entry so a low
+            // strength collapses to nearest-only.
+            int b = static_cast<int>((bayer8[y % 8][x % 8] + 0.5f) * 64.0f);
+            if (b < 0) b = 0;
+            if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
+            int median = static_cast<int>(PLAN_SIZE) / 2;
+            int adjusted = median + static_cast<int>(static_cast<float>(b - median) * strength);
+            if (adjusted < 0) adjusted = 0;
+            if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
+            std::size_t pick = plan[sorted[static_cast<std::size_t>(adjusted)]];
+
+            result.indices[y * w + x] = static_cast<std::uint8_t>(pick);
+            float dL = target.L - palette_lab[pick].L;
+            float da = target.a - palette_lab[pick].a;
+            float db = target.b - palette_lab[pick].b;
+            result.total_error += dL * dL + da * da + db * db;
+        }
+    }
+
+    return result;
+}
+
+// ===========================================================================
+// Structure-aware FS — Laplacian-modulated Floyd-Steinberg
+// (https://github.com/dalpil/structure-aware-dithering)
+//
+// Plain FS produces "worm" artifacts in flat regions and blurs detail.
+// This variant computes the source image's Laplacian (edge detector)
+// and a sliding-window stddev, then biases the per-pixel dither
+// threshold by K · Laplacian where K scales with local detail. Effect:
+// in flat regions the bias is ~zero (FS behaves normally); near edges
+// the bias pulls the quantization toward the source's local feature so
+// detail is preserved instead of smeared by error diffusion.
+//
+// Adapted from dalpil's bi-level Python reference; here the bias is
+// applied as an OKLab-L offset before nearest-pair selection so it
+// works with N-colour palettes too.
+// ===========================================================================
+
+// Bias mode chooses how the per-pixel threshold is modulated.
+enum class StructureBias { laplacian, contrast, zhoufang };
+
+DitherResult apply_structure_fs(
+    const Image& image,
+    std::span<const OKLab> palette_lab,
+    float strength, float error_clamp_val,
+    bool serpentine,
+    StructureBias bias_mode = StructureBias::laplacian) {
+
+    auto w = image.width();
+    auto h = image.height();
+
+    DitherResult result;
+    result.indices.resize(w * h);
+    result.total_error = 0.0f;
+
+    // Source as OKLab.
+    std::vector<OKLab> image_lab(w * h);
+    for (std::size_t y = 0; y < h; ++y)
+        for (std::size_t x = 0; x < w; ++x)
+            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+
+    // Per-pixel structure signal. For Laplacian mode this is the 4-conn
+    // discrete Laplacian of the OKLab L channel; for contrast mode it's
+    // (local_max - local_min) on a 3×3 window; for zhoufang it's the
+    // raw intensity (used as a multiplicative modulator on noise).
+    std::vector<float> lap(w * h, 0.0f);
+    if (bias_mode == StructureBias::laplacian) {
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                float L = image_lab[y * w + x].L;
+                float Lx0 = (x > 0)     ? image_lab[y * w + (x - 1)].L : L;
+                float Lx1 = (x + 1 < w) ? image_lab[y * w + (x + 1)].L : L;
+                float Ly0 = (y > 0)     ? image_lab[(y - 1) * w + x].L : L;
+                float Ly1 = (y + 1 < h) ? image_lab[(y + 1) * w + x].L : L;
+                float v = 4.0f * L - Lx0 - Lx1 - Ly0 - Ly1;
+                if (v < -0.5f) v = -0.5f;
+                if (v > 0.5f)  v = 0.5f;
+                lap[y * w + x] = v;
+            }
+        }
+    } else if (bias_mode == StructureBias::contrast) {
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                float lo = 1.0f, hi = 0.0f;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                        auto xx = static_cast<std::ptrdiff_t>(x) + dx;
+                        if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
+                        if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
+                        float L = image_lab[static_cast<std::size_t>(yy) * w +
+                                            static_cast<std::size_t>(xx)].L;
+                        if (L < lo) lo = L;
+                        if (L > hi) hi = L;
+                    }
+                }
+                float L = image_lab[y * w + x].L;
+                float center = 0.5f * (lo + hi);
+                lap[y * w + x] = (hi - lo) * ((L > center) ? 1.0f : -1.0f);
+            }
+        }
+    } else { // zhoufang: signal = intensity-noise-amplitude (used below)
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                float L = image_lab[y * w + x].L;
+                // Zhou-Fang's modulator: noise amplitude peaks near the
+                // problematic 25%/75% intensity bands where worms appear,
+                // tapers off at extremes. Triangular weighting around 0.5.
+                float dist = std::abs(L - 0.5f);
+                lap[y * w + x] = (1.0f - 2.0f * dist) * 0.3f;
+            }
+        }
+    }
+
+    // 5×5 windowed stddev — tells us "is this a detailed region?".
+    // We build it cheaply via separable mean + mean-of-squares.
+    std::vector<float> stddev(w * h, 0.0f);
+    constexpr int R = 2;  // 5×5 window
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            float mean = 0.0f, sq = 0.0f;
+            int count = 0;
+            for (int dy = -R; dy <= R; ++dy) {
+                for (int dx = -R; dx <= R; ++dx) {
+                    auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                    auto xx = static_cast<std::ptrdiff_t>(x) + dx;
+                    if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
+                    if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
+                    float L = image_lab[static_cast<std::size_t>(yy) * w +
+                                        static_cast<std::size_t>(xx)].L;
+                    mean += L;
+                    sq += L * L;
+                    ++count;
+                }
+            }
+            mean /= static_cast<float>(count);
+            sq /= static_cast<float>(count);
+            float var = sq - mean * mean;
+            stddev[y * w + x] = (var > 0.0f) ? std::sqrt(var) : 0.0f;
+        }
+    }
+
+    // Floyd-Steinberg-style error buffer.
+    std::vector<OKLab> error_buf(w * h);
+    constexpr std::array<DiffusionEntry, 4> kernel = {{
+        {1, 0, 7.0f / 16.0f},
+        {-1, 1, 3.0f / 16.0f},
+        {0, 1, 5.0f / 16.0f},
+        {1, 1, 1.0f / 16.0f},
+    }};
+
+    // Structure scale: how aggressively the Laplacian modulates the
+    // dither. 0.4 chosen empirically — lower preserves more "FS look",
+    // higher makes structure dominate.
+    constexpr float K_SCALE = 0.4f;
+
+    for (std::size_t y = 0; y < h; ++y) {
+        bool reverse = serpentine && (y % 2 == 1);
+        for (std::size_t step = 0; step < w; ++step) {
+            std::size_t x = reverse ? (w - 1 - step) : step;
+            auto idx = y * w + x;
+
+            auto err = oklab_clamp(error_buf[idx], error_clamp_val);
+            auto target = oklab_add(image_lab[idx], err);
+
+            // Structure bias: shape depends on mode. Laplacian/contrast
+            // scale by local stddev so flat regions stay neutral. ZF uses
+            // its modulator as a noise amplitude — sample a hashed value.
+            float bias = 0.0f;
+            if (bias_mode == StructureBias::zhoufang) {
+                auto seed = static_cast<std::uint32_t>(y * 65537u + x);
+                seed = (seed ^ 61u) ^ (seed >> 16u);
+                seed *= 9u;
+                seed ^= seed >> 4u;
+                seed *= 0x27d4eb2du;
+                seed ^= seed >> 15u;
+                float r = static_cast<float>(seed & 0xFFFFu) / 65536.0f - 0.5f;
+                bias = r * lap[idx];  // lap[idx] holds the modulator here
+            } else {
+                bias = K_SCALE * lap[idx] * (stddev[idx] / 0.1f);
+                if (bias < -0.2f) bias = -0.2f;
+                if (bias > 0.2f)  bias = 0.2f;
+            }
+            target.L += bias;
+
+            // Find nearest palette entry.
+            float best_d = std::numeric_limits<float>::max();
+            std::size_t best_k = 0;
+            OKLab best_lab{};
+            for (std::size_t k = 0; k < palette_lab.size(); ++k) {
+                float dL = target.L - palette_lab[k].L;
+                float da = target.a - palette_lab[k].a;
+                float db = target.b - palette_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
+            }
+
+            result.indices[idx] = static_cast<std::uint8_t>(best_k);
+
+            // Diffuse the *unbiased* error (don't compound the structure bias).
+            auto e = oklab_sub(image_lab[idx], best_lab);
+            auto scaled = oklab_scale(e, strength);
+            for (auto& kr : kernel) {
+                int dx = kr.dx;
+                if (reverse) dx = -dx;
+                auto nx = static_cast<std::ptrdiff_t>(x) + dx;
+                auto ny = static_cast<std::ptrdiff_t>(y) + kr.dy;
+                if (nx < 0 || nx >= static_cast<std::ptrdiff_t>(w)) continue;
+                if (ny < 0 || ny >= static_cast<std::ptrdiff_t>(h)) continue;
+                auto nidx = static_cast<std::size_t>(ny) * w +
+                            static_cast<std::size_t>(nx);
+                error_buf[nidx] = oklab_add(error_buf[nidx],
+                                            oklab_scale(scaled, kr.weight));
+            }
+
+            float dL = image_lab[idx].L - best_lab.L;
+            float da = image_lab[idx].a - best_lab.a;
+            float db = image_lab[idx].b - best_lab.b;
+            result.total_error += dL * dL + da * da + db * db;
+        }
+    }
+
+    return result;
+}
+
 DitherResult apply_ostromoukhov(
     const Image& image,
     std::span<const OKLab> palette_lab,
@@ -1022,6 +1718,18 @@ DitherResult apply(const Image& image,
     case Method::bayer8x8:
         return apply_ordered(image, bayer8, pal_span,
                              settings.strength);
+    case Method::bayer3x3:
+        return apply_ordered(image, bayer3, pal_span,
+                             settings.strength);
+    case Method::bayer5x5:
+        return apply_ordered(image, bayer5, pal_span,
+                             settings.strength);
+    case Method::bayer6x6:
+        return apply_ordered(image, bayer6, pal_span,
+                             settings.strength);
+    case Method::bayer7x7:
+        return apply_ordered(image, bayer7, pal_span,
+                             settings.strength);
     case Method::checker:
         return apply_ordered(image, checker_mat, pal_span,
                              settings.strength);
@@ -1082,12 +1790,38 @@ DitherResult apply(const Image& image,
     case Method::blue_noise:
         return apply_ordered(image, blue_noise_mat, pal_span,
                              settings.strength);
+    case Method::void_cluster:
+        return apply_ordered(image, void_cluster_mat, pal_span,
+                             settings.strength);
+    case Method::cluster_noise:
+        return apply_ordered(image, cluster_noise_mat, pal_span,
+                             settings.strength);
+    case Method::fractal16:
+        return apply_ordered(image, fractal16_mat, pal_span,
+                             settings.strength);
+    case Method::aseprite_old:
+        return apply_ordered(image, aseprite_old_mat, pal_span,
+                             settings.strength);
+    case Method::libcaca_3x3:
+        return apply_ordered(image, libcaca_3x3_mat, pal_span,
+                             settings.strength);
+    case Method::libcaca_6x6:
+        return apply_ordered(image, libcaca_6x6_mat, pal_span,
+                             settings.strength);
+    case Method::pegasus_8x8:
+        return apply_ordered(image, pegasus_8x8_mat, pal_span,
+                             settings.strength);
     case Method::ign:
+    case Method::ign_triangle:
     case Method::white_noise:
     case Method::r2_sequence:
+    case Method::r2_triangle:
     case Method::crosshatch:
     case Method::radial:
-    case Method::value_noise: {
+    case Method::value_noise:
+    case Method::cranley_bayer:
+    case Method::quasicrystal:
+    case Method::truchet: {
         // Analytical threshold methods — same "nearest vs second-nearest"
         // palette selection as matrix-based ordered dithering, but with
         // per-pixel analytical threshold (IGN, R2, white noise, etc.).
@@ -1158,6 +1892,32 @@ DitherResult apply(const Image& image,
         return apply_gilbert(
             image, pal_span,
             settings.strength, settings.error_clamp);
+
+    case Method::riemersma:
+        return apply_riemersma(
+            image, pal_span,
+            settings.strength, settings.error_clamp);
+
+    case Method::yliluoma:
+        return apply_yliluoma(image, pal_span, settings.strength, false);
+    case Method::yliluoma2:
+        return apply_yliluoma(image, pal_span, settings.strength, true);
+
+    case Method::structure_fs:
+        return apply_structure_fs(
+            image, pal_span,
+            settings.strength, settings.error_clamp,
+            settings.serpentine, StructureBias::laplacian);
+    case Method::contrast_fs:
+        return apply_structure_fs(
+            image, pal_span,
+            settings.strength, settings.error_clamp,
+            settings.serpentine, StructureBias::contrast);
+    case Method::zhoufang:
+        return apply_structure_fs(
+            image, pal_span,
+            settings.strength, settings.error_clamp,
+            settings.serpentine, StructureBias::zhoufang);
     }
 
     return apply_none(image, pal_span);
@@ -1171,8 +1931,133 @@ std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
     case Method::stucki:          return stucki_kernel;
     case Method::jarvis:          return jarvis_kernel;
     case Method::ostromoukhov:    return floyd_steinberg_kernel;  // F-S base kernel
+    // Structure-aware variants and Riemersma all build on F-S in CAP mode
+    // — the per-pixel bias / queue is layered on top by the caller.
+    // (Curve walking can't span per-scanline palette swaps cleanly.)
+    case Method::structure_fs:    return floyd_steinberg_kernel;
+    case Method::contrast_fs:     return floyd_steinberg_kernel;
+    case Method::zhoufang:        return floyd_steinberg_kernel;
+    case Method::riemersma:       return floyd_steinberg_kernel;
     default:                      return {};
     }
+}
+
+bool needs_structure_bias(Method method) {
+    return method == Method::structure_fs ||
+           method == Method::contrast_fs ||
+           method == Method::zhoufang;
+}
+
+bool needs_riemersma_queue(Method method) {
+    return method == Method::riemersma;
+}
+
+std::vector<float> compute_structure_bias(const Image& image, Method method) {
+    if (!needs_structure_bias(method)) return {};
+    auto w = image.width();
+    auto h = image.height();
+    std::vector<color_space::OKLab> image_lab(w * h);
+    for (std::size_t y = 0; y < h; ++y)
+        for (std::size_t x = 0; x < w; ++x)
+            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+
+    std::vector<float> sig(w * h, 0.0f);
+    if (method == Method::structure_fs) {
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                float L = image_lab[y * w + x].L;
+                float Lx0 = (x > 0)     ? image_lab[y * w + (x - 1)].L : L;
+                float Lx1 = (x + 1 < w) ? image_lab[y * w + (x + 1)].L : L;
+                float Ly0 = (y > 0)     ? image_lab[(y - 1) * w + x].L : L;
+                float Ly1 = (y + 1 < h) ? image_lab[(y + 1) * w + x].L : L;
+                float v = 4.0f * L - Lx0 - Lx1 - Ly0 - Ly1;
+                if (v < -0.5f) v = -0.5f;
+                if (v > 0.5f)  v = 0.5f;
+                sig[y * w + x] = v;
+            }
+        }
+    } else if (method == Method::contrast_fs) {
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                float lo = 1.0f, hi = 0.0f;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                        auto xx = static_cast<std::ptrdiff_t>(x) + dx;
+                        if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
+                        if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
+                        float L = image_lab[static_cast<std::size_t>(yy) * w +
+                                            static_cast<std::size_t>(xx)].L;
+                        if (L < lo) lo = L;
+                        if (L > hi) hi = L;
+                    }
+                }
+                float L = image_lab[y * w + x].L;
+                float center = 0.5f * (lo + hi);
+                sig[y * w + x] = (hi - lo) * ((L > center) ? 1.0f : -1.0f);
+            }
+        }
+    } else { // zhoufang: triangular intensity-modulated noise amplitude
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                float L = image_lab[y * w + x].L;
+                float dist = std::abs(L - 0.5f);
+                sig[y * w + x] = (1.0f - 2.0f * dist) * 0.3f;
+            }
+        }
+    }
+
+    // Local stddev gate (5×5) so flat regions stay neutral.
+    std::vector<float> stddev(w * h, 0.0f);
+    constexpr int R = 2;
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            float mean = 0.0f, sq = 0.0f;
+            int count = 0;
+            for (int dy = -R; dy <= R; ++dy) {
+                for (int dx = -R; dx <= R; ++dx) {
+                    auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                    auto xx = static_cast<std::ptrdiff_t>(x) + dx;
+                    if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
+                    if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
+                    float L = image_lab[static_cast<std::size_t>(yy) * w +
+                                        static_cast<std::size_t>(xx)].L;
+                    mean += L;
+                    sq += L * L;
+                    ++count;
+                }
+            }
+            mean /= static_cast<float>(count);
+            sq /= static_cast<float>(count);
+            float var = sq - mean * mean;
+            stddev[y * w + x] = (var > 0.0f) ? std::sqrt(var) : 0.0f;
+        }
+    }
+
+    constexpr float K_SCALE = 0.4f;
+    std::vector<float> bias(w * h, 0.0f);
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            std::size_t idx = y * w + x;
+            float b;
+            if (method == Method::zhoufang) {
+                auto seed = static_cast<std::uint32_t>(y * 65537u + x);
+                seed = (seed ^ 61u) ^ (seed >> 16u);
+                seed *= 9u;
+                seed ^= seed >> 4u;
+                seed *= 0x27d4eb2du;
+                seed ^= seed >> 15u;
+                float r = static_cast<float>(seed & 0xFFFFu) / 65536.0f - 0.5f;
+                b = r * sig[idx];
+            } else {
+                b = K_SCALE * sig[idx] * (stddev[idx] / 0.1f);
+                if (b < -0.2f) b = -0.2f;
+                if (b > 0.2f)  b = 0.2f;
+            }
+            bias[idx] = b;
+        }
+    }
+    return bias;
 }
 
 float ordered_threshold(Method method, std::size_t x, std::size_t y) {
@@ -1180,6 +2065,10 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
     case Method::bayer2x2:      return bayer2[y % 2][x % 2];
     case Method::bayer4x4:      return bayer4[y % 4][x % 4];
     case Method::bayer8x8:      return bayer8[y % 8][x % 8];
+    case Method::bayer3x3:      return bayer3[y % 3][x % 3];
+    case Method::bayer5x5:      return bayer5[y % 5][x % 5];
+    case Method::bayer6x6:      return bayer6[y % 6][x % 6];
+    case Method::bayer7x7:      return bayer7[y % 7][x % 7];
     case Method::checker:       return checker_mat[y % 2][x % 2];
     case Method::h2x4:          return h2x4_mat[y % 4][x % 2];
     case Method::v4x2:          return v4x2_mat[y % 2][x % 4];
@@ -1200,12 +2089,87 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
     case Method::hex8x8:       return hex8x8_mat[y % 8][x % 8];
     case Method::hex5x5:       return hex5x5_mat[y % 5][x % 5];
     case Method::blue_noise:   return blue_noise_mat[y % 64][x % 64];
+    case Method::void_cluster: return void_cluster_mat[y % 64][x % 64];
+    case Method::cluster_noise: return cluster_noise_mat[y % 64][x % 64];
+    case Method::fractal16:    return fractal16_mat[y % 16][x % 16];
+    case Method::aseprite_old: return aseprite_old_mat[y % 4][x % 4];
+    case Method::libcaca_3x3:  return libcaca_3x3_mat[y % 3][x % 3];
+    case Method::libcaca_6x6:  return libcaca_6x6_mat[y % 6][x % 6];
+    case Method::pegasus_8x8:  return pegasus_8x8_mat[y % 8][x % 8];
+    case Method::cranley_bayer: {
+        // Bayer 8×8 with a deterministic per-tile random rotation
+        // (Iñigo Quílez "Free dithering" — Cranley-Patterson rotation).
+        // Hash the 8×8 tile index into a uniform [0,1) offset and add to
+        // Bayer's threshold mod 1; breaks Bayer's regular grid into a
+        // patchwork of randomly-phased Bayer tiles.
+        std::size_t tx = x / 8, ty = y / 8;
+        auto seed = static_cast<std::uint32_t>(tx * 73856093u ^ ty * 19349663u);
+        seed ^= seed >> 13u;
+        seed *= 0x5BD1E995u;
+        seed ^= seed >> 15u;
+        float offset = static_cast<float>(seed & 0xFFFFu) / 65536.0f;
+        float v = bayer8[y % 8][x % 8] + 0.5f + offset;
+        return std::fmod(v, 1.0f) - 0.5f;
+    }
+    case Method::quasicrystal: {
+        // Sloan's quasicrystal: sum of N cosine waves at evenly-spaced
+        // angles. Aperiodic without blue-noise's randomness — produces
+        // a "shimmer" pattern. N=5 gives 10-fold symmetry.
+        constexpr int N = 5;
+        constexpr float scale = 0.40f;
+        float fx = static_cast<float>(x) * scale;
+        float fy = static_cast<float>(y) * scale;
+        float sum = 0.0f;
+        for (int k = 0; k < N; ++k) {
+            float a = 3.14159265f * static_cast<float>(k) / static_cast<float>(N);
+            sum += std::cos(fx * std::cos(a) + fy * std::sin(a));
+        }
+        // Normalize sum (range roughly [-N, N]) → [-0.5, 0.5)
+        return sum / (2.0f * static_cast<float>(N));
+    }
+    case Method::truchet: {
+        // Truchet-tile threshold: each 8×8 cell gets one of 4 rotations
+        // of a quarter-arc gradient; reads as a woven/tiled texture
+        // distinct from the rectangular Bayer/blue-noise look.
+        std::size_t cx = x / 8, cy = y / 8;
+        auto seed = static_cast<std::uint32_t>(cx * 73856093u ^ cy * 19349663u);
+        seed ^= seed >> 13u; seed *= 0x5BD1E995u; seed ^= seed >> 15u;
+        int rot = static_cast<int>(seed & 3u);
+        float lx = static_cast<float>(x % 8) / 8.0f - 0.5f;
+        float ly = static_cast<float>(y % 8) / 8.0f - 0.5f;
+        // Apply rotation
+        float rx = lx, ry = ly;
+        switch (rot) {
+        case 1: rx = -ly; ry = lx; break;
+        case 2: rx = -lx; ry = -ly; break;
+        case 3: rx = ly; ry = -lx; break;
+        default: break;
+        }
+        float r = std::sqrt((rx + 0.5f) * (rx + 0.5f) + (ry + 0.5f) * (ry + 0.5f));
+        return (r - 0.5f);
+    }
     case Method::ign: {
         // Jimenez 2014 Interleaved Gradient Noise
         auto fx = static_cast<float>(x);
         auto fy = static_cast<float>(y);
         float v = 52.9829189f * std::fmod(0.06711056f * fx + 0.00583715f * fy, 1.0f);
         return std::fmod(v, 1.0f) - 0.5f;
+    }
+    case Method::ign_triangle: {
+        // IGN with U(0,1) → triangle(-1,1) remap (Wronski 2016) — kills
+        // the banding near 0% / 100% intensity that plain IGN exhibits
+        // on dark CRT gradients.
+        auto fx = static_cast<float>(x);
+        auto fy = static_cast<float>(y);
+        float v = 52.9829189f * std::fmod(0.06711056f * fx + 0.00583715f * fy, 1.0f);
+        float u = std::fmod(v, 1.0f);
+        float t;
+        if (u < 0.5f) {
+            t = -1.0f + std::sqrt(2.0f * u);
+        } else {
+            t = 1.0f - std::sqrt(2.0f - 2.0f * u);
+        }
+        return t * 0.5f;
     }
     case Method::white_noise: {
         // Integer hash (Wang) for pure random noise
@@ -1224,6 +2188,24 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         float v = std::fmod(static_cast<float>(x) * phi1 +
                             static_cast<float>(y) * phi2 + 0.5f, 1.0f);
         return v - 0.5f;
+    }
+    case Method::r2_triangle: {
+        // R2 with U(0,1) → triangle(-1,1) remap (Wronski 2016, "Dithering
+        // part three"). Triangular noise PDF removes the DC bias plain R2
+        // has near 0% / 100% intensity, so dark and bright gradients
+        // dither evenly instead of clipping to flat colour.
+        constexpr float phi1 = 0.7548776662f;
+        constexpr float phi2 = 0.5698402910f;
+        float u = std::fmod(static_cast<float>(x) * phi1 +
+                            static_cast<float>(y) * phi2 + 0.5f, 1.0f);
+        // Remap U(0,1) → triangle(-1,1): u<0.5 → -1+sqrt(2u); u>=0.5 → 1-sqrt(2-2u)
+        float t;
+        if (u < 0.5f) {
+            t = -1.0f + std::sqrt(2.0f * u);
+        } else {
+            t = 1.0f - std::sqrt(2.0f - 2.0f * u);
+        }
+        return t * 0.5f;  // scale back to [-0.5, 0.5)
     }
     case Method::crosshatch: {
         // Overlaid line patterns at 0°, 45°, 90°, 135° — threshold is

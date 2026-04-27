@@ -303,9 +303,14 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // perceptually proportional and DPF's tight 8-colour palette has
     // gaps wider than the residuals could absorb.
     bool ordered = dither::is_ordered(dither_settings.method);
+    bool yli_method = dither::is_yliluoma(dither_settings.method);
+    // Same kernel-empty fix as copper.cpp: methods with no FS-shaped
+    // kernel (yliluoma, gilbert, …) must NOT enter the err_diffuse path
+    // — empty kernel = nothing to scatter, and all dithering is lost.
     bool err_diffuse =
         dither_settings.method != dither::Method::none &&
-        dither_settings.strength > 0.0f && !ordered;
+        dither_settings.strength > 0.0f && !ordered && !yli_method &&
+        !dither::error_diffusion_kernel(dither_settings.method).empty();
     auto kernel = err_diffuse
         ? dither::error_diffusion_kernel(dither_settings.method)
         : std::span<const dither::DiffusionEntry>{};
@@ -314,6 +319,29 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     std::vector<color_space::OKLab> err_buf;
     if (err_diffuse) err_buf.assign(width * height,
                                     color_space::OKLab{0.0f, 0.0f, 0.0f});
+
+    // Structure-aware bias (Laplacian / contrast / zhoufang) and the
+    // Riemersma decay queue work the same way as in CAP — see copper.cpp.
+    auto bias_map = err_diffuse
+        ? dither::compute_structure_bias(src, dither_settings.method)
+        : std::vector<float>{};
+    bool needs_riem = err_diffuse &&
+        dither::needs_riemersma_queue(dither_settings.method);
+    constexpr std::size_t RIEM_QSIZE = 16;
+    std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
+    std::array<float, RIEM_QSIZE> riem_weights{};
+    std::size_t riem_head = 0;
+    if (needs_riem) {
+        const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+        float w_acc = 1.0f;
+        for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+            riem_weights[i] = w_acc;
+            w_acc *= ratio;
+        }
+        float total = 0.0f;
+        for (float wt : riem_weights) total += wt;
+        for (float& wt : riem_weights) wt /= total;
+    }
 
     constexpr int kVStart = 44;
     constexpr std::uint8_t kFillerReg = 31;       // COLOR31 — unread in OCS DPF 3+3
@@ -685,12 +713,25 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             auto& pl_lab = strip_pal_lab[s];
 
             auto pixel_lab = color_space::linear_to_oklab(src[x, y]);
-            if (err_diffuse) {
+            if (err_diffuse && !needs_riem) {
                 auto& e = err_buf[y * width + x];
                 pixel_lab.L += std::clamp(e.L, -clamp_v, clamp_v);
                 pixel_lab.a += std::clamp(e.a, -clamp_v, clamp_v);
                 pixel_lab.b += std::clamp(e.b, -clamp_v, clamp_v);
             }
+            if (needs_riem) {
+                color_space::OKLab carry{};
+                for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                    std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                    carry.L += riem_queue[age].L * riem_weights[k];
+                    carry.a += riem_queue[age].a * riem_weights[k];
+                    carry.b += riem_queue[age].b * riem_weights[k];
+                }
+                pixel_lab.L += std::clamp(carry.L, -clamp_v, clamp_v);
+                pixel_lab.a += std::clamp(carry.a, -clamp_v, clamp_v);
+                pixel_lab.b += std::clamp(carry.b, -clamp_v, clamp_v);
+            }
+            if (!bias_map.empty()) pixel_lab.L += bias_map[y * width + x];
             if (ordered &&
                 dither_settings.method != dither::Method::none &&
                 dither_settings.strength > 0.0f) {
@@ -701,14 +742,24 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 pixel_lab.b += th * dither_settings.strength * 0.03f;
             }
 
-            float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = k_min;
-            for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                float dL = pixel_lab.L - pl_lab[k].L;
-                float da = pixel_lab.a - pl_lab[k].a;
-                float db = pixel_lab.b - pl_lab[k].b;
-                float d = dL * dL + da * da + db * db;
-                if (d < best_d) { best_d = d; best_k = k; }
+            if (yli_method) {
+                // Per-pixel mixing-plan against this strip's palette.
+                std::span<const color_space::OKLab> sub{
+                    pl_lab.data() + k_min, kBaseColors - k_min};
+                bool mode2 = (dither_settings.method == dither::Method::yliluoma2);
+                auto rel = dither::pick_yliluoma_index(
+                    pixel_lab, sub, x, y, mode2, dither_settings.strength);
+                best_k = k_min + static_cast<std::size_t>(rel);
+            } else {
+                float best_d = std::numeric_limits<float>::max();
+                for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    float dL = pixel_lab.L - pl_lab[k].L;
+                    float da = pixel_lab.a - pl_lab[k].a;
+                    float db = pixel_lab.b - pl_lab[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) { best_d = d; best_k = k; }
+                }
             }
             indices[y * width + x] = static_cast<std::uint8_t>(best_k);
             preview[x, y] = pal[best_k];
@@ -720,17 +771,22 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     (pixel_lab.a - cl.a) * dither_settings.strength,
                     (pixel_lab.b - cl.b) * dither_settings.strength,
                 };
-                for (auto& [kdx, kdy, kw] : kernel) {
-                    auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
-                    auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                    if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
-                        ny >= 0 && static_cast<std::size_t>(ny) < height) {
-                        auto& e = err_buf[
-                            static_cast<std::size_t>(ny) * width +
-                            static_cast<std::size_t>(nx)];
-                        e.L += qe.L * kw;
-                        e.a += qe.a * kw;
-                        e.b += qe.b * kw;
+                if (needs_riem) {
+                    riem_queue[riem_head] = qe;
+                    riem_head = (riem_head + 1) % RIEM_QSIZE;
+                } else {
+                    for (auto& [kdx, kdy, kw] : kernel) {
+                        auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                        auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                        if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
+                            ny >= 0 && static_cast<std::size_t>(ny) < height) {
+                            auto& e = err_buf[
+                                static_cast<std::size_t>(ny) * width +
+                                static_cast<std::size_t>(nx)];
+                            e.L += qe.L * kw;
+                            e.a += qe.a * kw;
+                            e.b += qe.b * kw;
+                        }
                     }
                 }
             }
@@ -1144,9 +1200,11 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     std::size_t k_min = reserve_color0 ? 1u : 0u;
 
     bool ordered = dither::is_ordered(dither_settings.method);
+    bool yli_method = dither::is_yliluoma(dither_settings.method);
     bool err_diffuse =
         dither_settings.method != dither::Method::none &&
-        dither_settings.strength > 0.0f && !ordered;
+        dither_settings.strength > 0.0f && !ordered && !yli_method &&
+        !dither::error_diffusion_kernel(dither_settings.method).empty();
     auto kernel = err_diffuse
         ? dither::error_diffusion_kernel(dither_settings.method)
         : std::span<const dither::DiffusionEntry>{};
@@ -1161,6 +1219,27 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     std::vector<color_space::OKLab> err_buf;
     if (err_diffuse) err_buf.assign(width * height,
                                     color_space::OKLab{0.0f, 0.0f, 0.0f});
+
+    auto bias_map = err_diffuse
+        ? dither::compute_structure_bias(src, dither_settings.method)
+        : std::vector<float>{};
+    bool needs_riem = err_diffuse &&
+        dither::needs_riemersma_queue(dither_settings.method);
+    constexpr std::size_t RIEM_QSIZE = 16;
+    std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
+    std::array<float, RIEM_QSIZE> riem_weights{};
+    std::size_t riem_head = 0;
+    if (needs_riem) {
+        const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+        float w_acc = 1.0f;
+        for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+            riem_weights[i] = w_acc;
+            w_acc *= ratio;
+        }
+        float total = 0.0f;
+        for (float wt : riem_weights) total += wt;
+        for (float& wt : riem_weights) wt /= total;
+    }
 
     constexpr int kVStart = 44;
     double total_error = 0.0;
@@ -1662,12 +1741,25 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             auto& eff_lab = strip_eff_lab[s];
 
             auto pixel_lab = color_space::linear_to_oklab(src[x, y]);
-            if (err_diffuse) {
+            if (err_diffuse && !needs_riem) {
                 auto& e = err_buf[y * width + x];
                 pixel_lab.L += std::clamp(e.L, -clamp_v, clamp_v);
                 pixel_lab.a += std::clamp(e.a, -clamp_v, clamp_v);
                 pixel_lab.b += std::clamp(e.b, -clamp_v, clamp_v);
             }
+            if (needs_riem) {
+                color_space::OKLab carry{};
+                for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                    std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                    carry.L += riem_queue[age].L * riem_weights[k];
+                    carry.a += riem_queue[age].a * riem_weights[k];
+                    carry.b += riem_queue[age].b * riem_weights[k];
+                }
+                pixel_lab.L += std::clamp(carry.L, -clamp_v, clamp_v);
+                pixel_lab.a += std::clamp(carry.a, -clamp_v, clamp_v);
+                pixel_lab.b += std::clamp(carry.b, -clamp_v, clamp_v);
+            }
+            if (!bias_map.empty()) pixel_lab.L += bias_map[y * width + x];
             if (ordered &&
                 dither_settings.method != dither::Method::none &&
                 dither_settings.strength > 0.0f) {
@@ -1678,14 +1770,23 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 pixel_lab.b += th * dither_settings.strength * 0.03f;
             }
 
-            float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = k_min;
-            for (std::size_t k = k_min; k < kEffective; ++k) {
-                float dL = pixel_lab.L - eff_lab[k].L;
-                float da = pixel_lab.a - eff_lab[k].a;
-                float db = pixel_lab.b - eff_lab[k].b;
-                float d = dL * dL + da * da + db * db;
-                if (d < best_d) { best_d = d; best_k = k; }
+            if (yli_method) {
+                std::span<const color_space::OKLab> sub{
+                    eff_lab.data() + k_min, kEffective - k_min};
+                bool mode2 = (dither_settings.method == dither::Method::yliluoma2);
+                auto rel = dither::pick_yliluoma_index(
+                    pixel_lab, sub, x, y, mode2, dither_settings.strength);
+                best_k = k_min + static_cast<std::size_t>(rel);
+            } else {
+                float best_d = std::numeric_limits<float>::max();
+                for (std::size_t k = k_min; k < kEffective; ++k) {
+                    float dL = pixel_lab.L - eff_lab[k].L;
+                    float da = pixel_lab.a - eff_lab[k].a;
+                    float db = pixel_lab.b - eff_lab[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) { best_d = d; best_k = k; }
+                }
             }
             indices[y * width + x] = static_cast<std::uint8_t>(best_k);
             preview[x, y] = eff_pal[best_k];
@@ -1697,17 +1798,22 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     (pixel_lab.a - cl.a) * dither_settings.strength,
                     (pixel_lab.b - cl.b) * dither_settings.strength,
                 };
-                for (auto& [kdx, kdy, kw] : kernel) {
-                    auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
-                    auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                    if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
-                        ny >= 0 && static_cast<std::size_t>(ny) < height) {
-                        auto& e = err_buf[
-                            static_cast<std::size_t>(ny) * width +
-                            static_cast<std::size_t>(nx)];
-                        e.L += qe.L * kw;
-                        e.a += qe.a * kw;
-                        e.b += qe.b * kw;
+                if (needs_riem) {
+                    riem_queue[riem_head] = qe;
+                    riem_head = (riem_head + 1) % RIEM_QSIZE;
+                } else {
+                    for (auto& [kdx, kdy, kw] : kernel) {
+                        auto nx = static_cast<std::ptrdiff_t>(x) + kdx;
+                        auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                        if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
+                            ny >= 0 && static_cast<std::size_t>(ny) < height) {
+                            auto& e = err_buf[
+                                static_cast<std::size_t>(ny) * width +
+                                static_cast<std::size_t>(nx)];
+                            e.L += qe.L * kw;
+                            e.a += qe.a * kw;
+                            e.b += qe.b * kw;
+                        }
                     }
                 }
             }

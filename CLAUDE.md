@@ -27,7 +27,7 @@ src/
   palette.hpp         OCS 12-bit / AGA 24-bit palette types, quantization, find_nearest(),
                       EHB half-brite palette generation (make_ehb_palette)
   quantize.hpp/.cpp   Median-cut palette quantization (auto-generate optimal N-color palette)
-  dither.hpp/.cpp     Ordered (Bayer 2x2/4x4/8x8) + error diffusion (Floyd-Steinberg,
+  dither.hpp/.cpp     Ordered + structure-aware + palette-aware + error diffusion (Floyd-Steinberg,
                       Atkinson, Sierra Lite, Stucki, Jarvis), all in OKLab space
   png_io.hpp/.cpp     Load/save/encode PNG via stb_image
   palette_io.hpp/.cpp Load/save palettes: GIMP .gpl, IFF CMAP, hex text, OCS .pal binary
@@ -99,7 +99,7 @@ fixed hardware buffer (default is to stretch-fill).
 - **Error handling**: `Result<T> = std::expected<T, Error>` throughout, no exceptions
 - **Color math**: All perceptual operations use OKLab color space
 - **Preprocessing pipeline**: gamma -> sharpen -> levels -> brightness/contrast/saturation/hue (OKLab)
-- **Dithering**: 16 methods available — 10 ordered (Bayer 2x2/4x4/8x8, checker, h2x4, clustered-dot, line2, line-checker, line4, line8) and 6 error-diffusion (Floyd-Steinberg, Atkinson, Sierra Lite, Stucki, Jarvis, and no-dither). All error diffusion operates in OKLab space with serpentine scanning and configurable error clamping.
+- **Dithering**: 58 methods. Ordered: Bayer 2×2 / 4×4 / 8×8 plus dispersed-dot 3×3 / 5×5 / 6×6 / 7×7, non-square Bayer 4×2 / 2×4, h2x4 / v4x2, halftone8x8 / diagonal8x8 / spiral5x5 / clustered-dot, line / vline 2 / 4 / 8 / -checker, crosshatch, hex 5×5 / 8×8, radial, Aseprite "old", libcaca 3×3 / 6×6, Pegasus 8×8, Cranley-Patterson rotated Bayer, Niklasson 16×16 self-nested fractal, quasicrystal, Truchet. Aperiodic / noise: Ulichney void-and-cluster, cluster-noise, blue-noise, IGN, IGN-triangle (Wronski remap), R2, R2-triangle, value-noise, white-noise. Error diffusion: Floyd-Steinberg, Atkinson, Sierra Lite, Stucki, Jarvis, Ostromoukhov, Gilbert, Riemersma. Structure-aware ED: structure-fs (Laplacian-modulated), contrast-fs (Mould 2009), Zhou-Fang. Palette-aware ordered: Yliluoma method 1, Yliluoma method 2. All operate in OKLab with serpentine scanning and configurable error clamping. CAP and SCAP modes properly support all error-diffusion / structure-aware / Yliluoma variants — bias maps and Riemersma queues are precomputed once over the full image so per-scanline palette swaps don't degrade them to 1-row strips.
 - **Chipset**: `--chipset ocs|aga` selects OCS (12-bit, 4096 colors) or AGA (24-bit, 16M colors). Auto-detected from mode: HAM7/HAM8 force AGA; all others default to OCS but can be overridden (e.g., `--chipset aga --mode ham6` for 24-bit base palette precision on AGA hardware).
 - **Palette quantization**: Two algorithms depending on chipset. OCS: brute-force histogram + k-means refinement over all 4096 OCS colors with threaded cluster optimization — produces genuinely optimal OCS palettes. AGA: standard median-cut in continuous linear RGB space. Auto-palette is the default; `--palette <file>` loads an external palette instead.
 - **EHB palette**: Extra Half-Brite mode auto-generates 32 base colors via median-cut, then derives 32 half-brightness copies (halving sRGB DAC values, matching Amiga hardware). Dithering uses all 64 colors. IFF CMAP only stores the 32 base colors; hardware generates the half-brite entries. CAMG flag 0x80.

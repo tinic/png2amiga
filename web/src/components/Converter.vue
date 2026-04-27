@@ -180,12 +180,18 @@ const groupedDitherOptions = computed(() => {
   // square pixels — both are hidden in HAM modes.
   const hide_ostro = ht !== null
   const hide_nonsquare = ht !== null
+  // Yliluoma is palette-aware (computes mixing plans against a fixed
+  // palette). HAM doesn't have a fixed palette — pixels are reached via
+  // base-color SETs and per-channel MODIFYs — so the plan can't span the
+  // achievable HAM colour space. Hide in HAM modes to avoid confusion.
+  const hide_yliluoma = ht !== null
   return DITHER_METHODS
     .map(g => ({
       label: g.group,
       items: g.items
         .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
+        .filter(d => !(hide_yliluoma && (d.value === 'yliluoma' || d.value === 'yliluoma2')))
         .map(d => ({ value: d.value, label: d.label }))
     }))
     .filter(g => g.items.length > 0)

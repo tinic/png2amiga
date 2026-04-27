@@ -602,18 +602,31 @@ void print_usage() {
         "                                  default: 0/black)\n"
         "\n"
         "Dithering:\n"
-        "  --dither <method>               none|bayer2x2|bayer4x4|bayer8x8|\n"
-        "                                  checker|clustered-dot|\n"
-        "                                  h2x4|v4x2|bayer4x2|bayer2x4|\n"
-        "                                  line2|line-checker|line4|line8|\n"
-        "                                  vline2|vline-checker|vline4|vline8|\n"
-        "                                  halftone8x8|diagonal8x8|spiral5x5|\n"
-        "                                  hex8x8|hex5x5|blue-noise|\n"
-        "                                  ign|white-noise|r2|crosshatch|\n"
-        "                                  radial|value-noise|\n"
-        "                                  floyd-steinberg|atkinson|sierra-lite|\n"
-        "                                  stucki|jarvis|ostromoukhov\n"
-        "                                  (default: floyd-steinberg)\n"
+        "  --dither <method>\n"
+        "    Bayer (square / non-square / non-2^n):\n"
+        "      bayer2x2|bayer4x4|bayer8x8|bayer4x2|bayer2x4|\n"
+        "      bayer3x3|bayer5x5|bayer6x6|bayer7x7|aseprite-old|\n"
+        "      libcaca3|libcaca6|cranley-bayer|fractal16\n"
+        "    Halftone / clustered:\n"
+        "      checker|clustered-dot|halftone8x8|diagonal8x8|spiral5x5|\n"
+        "      pegasus|h2x4|v4x2\n"
+        "    Hatching / lines:\n"
+        "      line2|line4|line8|line-checker|\n"
+        "      vline2|vline4|vline8|vline-checker|crosshatch\n"
+        "    Pattern / geometric:\n"
+        "      hex8x8|hex5x5|radial|quasicrystal|truchet\n"
+        "    Aperiodic / noise:\n"
+        "      blue-noise|void-cluster|cluster-noise|\n"
+        "      ign|ign-tri|r2|r2-tri|white-noise|value-noise\n"
+        "    Error diffusion:\n"
+        "      floyd-steinberg|atkinson|sierra-lite|stucki|jarvis|\n"
+        "      ostromoukhov|riemersma|gilbert\n"
+        "    Structure-aware error diffusion:\n"
+        "      structure-fs|contrast-fs|zhoufang\n"
+        "    Palette-aware ordered:\n"
+        "      yliluoma|yliluoma2\n"
+        "    none\n"
+        "    (default: floyd-steinberg)\n"
         "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
         "  --error-clamp <float>           Max error per channel, squared internally\n"
         "                                  (default: 0.35; useful range 0.0-1.0)\n"
@@ -752,6 +765,10 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "bayer2x2") return dither::Method::bayer2x2;
     if (s == "bayer4x4") return dither::Method::bayer4x4;
     if (s == "bayer8x8") return dither::Method::bayer8x8;
+    if (s == "bayer3x3") return dither::Method::bayer3x3;
+    if (s == "bayer5x5") return dither::Method::bayer5x5;
+    if (s == "bayer6x6") return dither::Method::bayer6x6;
+    if (s == "bayer7x7") return dither::Method::bayer7x7;
     if (s == "checker") return dither::Method::checker;
     if (s == "h2x4") return dither::Method::h2x4;
     if (s == "clustered-dot") return dither::Method::clustered_dot;
@@ -772,6 +789,9 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "hex8x8") return dither::Method::hex8x8;
     if (s == "hex5x5") return dither::Method::hex5x5;
     if (s == "blue-noise") return dither::Method::blue_noise;
+    if (s == "void-cluster") return dither::Method::void_cluster;
+    if (s == "cluster-noise") return dither::Method::cluster_noise;
+    if (s == "fractal16") return dither::Method::fractal16;
     if (s == "floyd-steinberg") return dither::Method::floyd_steinberg;
     if (s == "atkinson") return dither::Method::atkinson;
     if (s == "sierra-lite") return dither::Method::sierra_lite;
@@ -779,9 +799,24 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "jarvis") return dither::Method::jarvis;
     if (s == "ostromoukhov") return dither::Method::ostromoukhov;
     if (s == "gilbert") return dither::Method::gilbert;
+    if (s == "riemersma") return dither::Method::riemersma;
+    if (s == "structure-fs") return dither::Method::structure_fs;
+    if (s == "contrast-fs") return dither::Method::contrast_fs;
+    if (s == "zhoufang") return dither::Method::zhoufang;
+    if (s == "yliluoma") return dither::Method::yliluoma;
+    if (s == "yliluoma2") return dither::Method::yliluoma2;
+    if (s == "aseprite-old") return dither::Method::aseprite_old;
+    if (s == "libcaca3") return dither::Method::libcaca_3x3;
+    if (s == "libcaca6") return dither::Method::libcaca_6x6;
+    if (s == "pegasus") return dither::Method::pegasus_8x8;
+    if (s == "cranley-bayer") return dither::Method::cranley_bayer;
+    if (s == "quasicrystal") return dither::Method::quasicrystal;
+    if (s == "truchet") return dither::Method::truchet;
     if (s == "ign") return dither::Method::ign;
+    if (s == "ign-tri") return dither::Method::ign_triangle;
     if (s == "white-noise") return dither::Method::white_noise;
     if (s == "r2") return dither::Method::r2_sequence;
+    if (s == "r2-tri") return dither::Method::r2_triangle;
     if (s == "crosshatch") return dither::Method::crosshatch;
     if (s == "radial") return dither::Method::radial;
     if (s == "value-noise") return dither::Method::value_noise;
@@ -1469,6 +1504,10 @@ const char* dither_name(dither::Method m) {
     case dither::Method::bayer2x2: return "bayer2x2";
     case dither::Method::bayer4x4: return "bayer4x4";
     case dither::Method::bayer8x8: return "bayer8x8";
+    case dither::Method::bayer3x3: return "bayer3x3";
+    case dither::Method::bayer5x5: return "bayer5x5";
+    case dither::Method::bayer6x6: return "bayer6x6";
+    case dither::Method::bayer7x7: return "bayer7x7";
     case dither::Method::checker: return "checker";
     case dither::Method::h2x4: return "h2x4";
     case dither::Method::clustered_dot: return "clustered-dot";
@@ -1489,6 +1528,9 @@ const char* dither_name(dither::Method m) {
     case dither::Method::hex8x8: return "hex8x8";
     case dither::Method::hex5x5: return "hex5x5";
     case dither::Method::blue_noise: return "blue-noise";
+    case dither::Method::void_cluster: return "void-cluster";
+    case dither::Method::cluster_noise: return "cluster-noise";
+    case dither::Method::fractal16: return "fractal16";
     case dither::Method::floyd_steinberg: return "floyd-steinberg";
     case dither::Method::atkinson: return "atkinson";
     case dither::Method::sierra_lite: return "sierra-lite";
@@ -1496,9 +1538,24 @@ const char* dither_name(dither::Method m) {
     case dither::Method::jarvis: return "jarvis";
     case dither::Method::ostromoukhov: return "ostromoukhov";
     case dither::Method::gilbert: return "gilbert";
+    case dither::Method::riemersma: return "riemersma";
+    case dither::Method::structure_fs: return "structure-fs";
+    case dither::Method::contrast_fs: return "contrast-fs";
+    case dither::Method::zhoufang: return "zhoufang";
+    case dither::Method::yliluoma: return "yliluoma";
+    case dither::Method::yliluoma2: return "yliluoma2";
+    case dither::Method::aseprite_old: return "aseprite-old";
+    case dither::Method::libcaca_3x3: return "libcaca3";
+    case dither::Method::libcaca_6x6: return "libcaca6";
+    case dither::Method::pegasus_8x8: return "pegasus";
+    case dither::Method::cranley_bayer: return "cranley-bayer";
+    case dither::Method::quasicrystal: return "quasicrystal";
+    case dither::Method::truchet: return "truchet";
     case dither::Method::ign: return "ign";
+    case dither::Method::ign_triangle: return "ign-tri";
     case dither::Method::white_noise: return "white-noise";
     case dither::Method::r2_sequence: return "r2";
+    case dither::Method::r2_triangle: return "r2-tri";
     case dither::Method::crosshatch: return "crosshatch";
     case dither::Method::radial: return "radial";
     case dither::Method::value_noise: return "value-noise";

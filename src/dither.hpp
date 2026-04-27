@@ -1,5 +1,6 @@
 #pragma once
 
+#include "color_space.hpp"
 #include "types.hpp"
 
 #include <cstddef>
@@ -23,6 +24,10 @@ enum class Method : unsigned char {
     bayer2x2,
     bayer4x4,
     bayer8x8,
+    bayer3x3,         // dispersed-dot 3×3 (non-power-of-2)
+    bayer5x5,         // dispersed-dot 5×5 (non-power-of-2)
+    bayer6x6,         // dispersed-dot 6×6 (non-power-of-2)
+    bayer7x7,         // dispersed-dot 7×7 (non-power-of-2)
     checker,          // 2x2 checkerboard
     clustered_dot,    // 4x4 clustered dot
 
@@ -51,9 +56,14 @@ enum class Method : unsigned char {
     hex8x8,           // non-rectangular hexagonal tiling
     hex5x5,           // non-rectangular slanted square tiling
     blue_noise,       // 64x64 blue noise (film-grain look, no visible pattern)
+    void_cluster,     // 64x64 Ulichney void-and-cluster (per-rank optimal)
+    cluster_noise,    // 64x64 cluster blue noise (wider clusters, libcaca-style)
+    fractal16,        // 16×16 self-nested Bayer recursion (Niklasson/Obra Dinn)
     ign,              // Interleaved Gradient Noise (analytical, no LUT)
+    ign_triangle,     // IGN with U(0,1)→triangle(-1,1) remap
     white_noise,      // pure random hash per pixel (film grain)
     r2_sequence,      // Martin Roberts R2 low-discrepancy sequence
+    r2_triangle,      // R2 with U(0,1)→triangle(-1,1) remap (Wronski 2016)
     crosshatch,       // pen-and-ink crosshatching
     radial,           // concentric circles (engraving look)
     value_noise,      // coherent noise (organic clumping)
@@ -68,6 +78,19 @@ enum class Method : unsigned char {
     // Advanced error diffusion
     ostromoukhov,     // variable-coefficient error diffusion
     gilbert,          // Gilbert space-filling-curve error diffusion
+    riemersma,        // Riemersma curve dither (exponential-decay error queue)
+    structure_fs,     // FS with Laplacian-modulated threshold (dalpil/structure-aware)
+    contrast_fs,      // FS with local-contrast modulated threshold (Mould 2009)
+    zhoufang,         // Zhou-Fang adaptive-coefficient ED (intensity-dependent)
+    yliluoma,         // Yliluoma/Knoll palette-aware pattern dither (8×8 Bayer)
+    yliluoma2,        // Yliluoma method 2 — gamma-aware variant
+    aseprite_old,     // Aseprite "old" 4×4 — hand-tuned, checker-biased
+    libcaca_3x3,      // libcaca hand-tuned 3×3 dispersed dot
+    libcaca_6x6,      // libcaca hand-tuned 6×6 dispersed dot
+    pegasus_8x8,      // Pegasus/REXPaint 8×8 mosaic (centre-biased)
+    cranley_bayer,    // Bayer 8×8 with Cranley-Patterson random offset (Quilez)
+    quasicrystal,     // Sum-of-cosines quasicrystal pattern (Sloan 2010)
+    truchet,          // Truchet-tile threshold pattern
 };
 
 // ---------------------------------------------------------------------------
@@ -114,6 +137,10 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::bayer2x2:
     case Method::bayer4x4:
     case Method::bayer8x8:
+    case Method::bayer3x3:
+    case Method::bayer5x5:
+    case Method::bayer6x6:
+    case Method::bayer7x7:
     case Method::checker:
     case Method::h2x4:
     case Method::clustered_dot:
@@ -129,9 +156,21 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::hex8x8:
     case Method::hex5x5:
     case Method::blue_noise:
+    case Method::void_cluster:
+    case Method::cluster_noise:
+    case Method::fractal16:
+    case Method::aseprite_old:
+    case Method::libcaca_3x3:
+    case Method::libcaca_6x6:
+    case Method::pegasus_8x8:
+    case Method::cranley_bayer:
+    case Method::quasicrystal:
+    case Method::truchet:
     case Method::ign:
+    case Method::ign_triangle:
     case Method::white_noise:
     case Method::r2_sequence:
+    case Method::r2_triangle:
     case Method::crosshatch:
     case Method::radial:
     case Method::value_noise:
@@ -165,5 +204,34 @@ struct DiffusionEntry {
 // span for ordered / none. Floyd-Steinberg, Atkinson, Sierra Lite,
 // Stucki, Jarvis are supported.
 std::span<const DiffusionEntry> error_diffusion_kernel(Method method);
+
+// True if `method` is a structure-aware FS variant that needs per-pixel
+// L-channel bias precomputed from the whole image.
+bool needs_structure_bias(Method method);
+
+// Precompute per-pixel L-channel bias for structure-aware FS variants.
+// Empty if `method` is not a structure-aware variant. The returned vector
+// is row-major, width×height, applied as `pixel.L += bias[idx]` before
+// nearest-palette selection in the caller's diffusion loop.
+std::vector<float> compute_structure_bias(const Image& image, Method method);
+
+// True if `method` is the Riemersma curve dither — caller should add a
+// 16-element exponential-decay error queue on top of the FS kernel.
+bool needs_riemersma_queue(Method method);
+
+// True if `method` is a Yliluoma palette-aware pattern dither — needs
+// per-pixel mixing-plan construction with absolute (x, y) for the Bayer
+// indexing. Use `pick_yliluoma_index` instead of routing through
+// `apply()` on a 1-row sub-image (which would fix y=0 and stripe).
+bool is_yliluoma(Method method);
+
+// Per-pixel Yliluoma quantizer. Builds the 64-step mixing plan against
+// `palette_lab`, sorts by luma, and picks via Bayer8 at absolute (x,y).
+// `mode2` selects Yliluoma method 2 (luma-weighted distance).
+std::uint8_t pick_yliluoma_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y,
+    bool mode2, float strength);
 
 } // namespace png2amiga::dither

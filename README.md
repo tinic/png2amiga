@@ -44,10 +44,18 @@ colors) / 80×100 text-mode glyph matching, EGA 320×200 / 640×200 /
 4096 OCS colors), PNN agglomerative (auto-selected for HAM8 / AGA), and
 median-cut + k-means refinement in OKLab.
 
-**Dithering**: 22 methods including Floyd-Steinberg, Atkinson,
-Sierra-Lite, Stucki, Jarvis, Ostromoukhov variable-coefficient, Gilbert
-space-filling-curve, Bayer, blue-noise, and several analytical
-per-pixel patterns. All operate in OKLab.
+**Dithering**: 58 methods spanning ordered (Bayer 2×2…8×8 plus 3×3 /
+5×5 / 6×6 / 7×7 dispersed-dot, non-square Bayer, halftone, hatching,
+hexagonal, Aseprite/libcaca/Pegasus hand-tuned matrices, Cranley–
+Patterson rotated Bayer, Niklasson 16×16 self-nested fractal,
+quasicrystal, Truchet), aperiodic (Ulichney
+void-and-cluster, cluster-noise, blue-noise, IGN ± triangle remap,
+R2 ± triangle remap, value-noise, white-noise), error-diffusion
+(Floyd–Steinberg, Atkinson, Sierra-Lite, Stucki, Jarvis,
+Ostromoukhov variable-coefficient, Riemersma Hilbert-curve, Gilbert
+space-filling-curve), structure-aware variants
+(structure-FS / contrast-FS / Zhou–Fang), and palette-aware pattern
+(Yliluoma method 1 + 2). All operate in OKLab.
 
 **HAM encoding**: DP beam search with a triple-pixel refinement pass
 (default on) that catches the fringe-lag artifacts 1-pixel DP misses.

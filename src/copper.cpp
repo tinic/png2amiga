@@ -360,7 +360,21 @@ void dither_row(std::span<const Color3f> row,
     auto width = row.size();
     auto num_colors = pal_lab.size();
 
-    if (dither::is_ordered(settings.method)) {
+    if (dither::is_yliluoma(settings.method)) {
+        // Yliluoma needs the absolute y to rotate Bayer per scanline,
+        // not y=0 from a 1-row sub-image (root of the vertical-line bias).
+        bool mode2 = (settings.method == dither::Method::yliluoma2);
+        for (std::size_t x = 0; x < width; ++x) {
+            auto pixel_lab = color_space::linear_to_oklab(row[x]);
+            auto idx = dither::pick_yliluoma_index(
+                pixel_lab, pal_lab, x, y, mode2, settings.strength);
+            out_indices[out_offset + x] = idx;
+            float dL = pixel_lab.L - pal_lab[idx].L;
+            float da = pixel_lab.a - pal_lab[idx].a;
+            float db = pixel_lab.b - pal_lab[idx].b;
+            out_error += dL * dL + da * da + db * db;
+        }
+    } else if (dither::is_ordered(settings.method)) {
         for (std::size_t x = 0; x < width; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(row[x]);
             float threshold = dither::ordered_threshold(settings.method, x, y);
@@ -543,8 +557,15 @@ Result<CopperResult> encode_copper(const Image& image,
     constexpr float jlo = 0.0f;
     constexpr float jhi = 1.0f;
 
+    // Use the in-loop FS path only for methods that actually have an
+    // F-S-shaped kernel. Methods that are non-ordered but kernel-less
+    // (yliluoma, yliluoma2, gilbert) need their full dither::apply path
+    // — which dither_row invokes via a 1-row Image, picking up each
+    // row's per-scanline palette correctly for CAP.
     bool use_diffusion = dither_settings.method != dither::Method::none &&
-                         !dither::is_ordered(dither_settings.method);
+                         !dither::is_ordered(dither_settings.method) &&
+                         !dither::error_diffusion_kernel(
+                             dither_settings.method).empty();
     std::vector<color_space::OKLab> err_buf;
 
     // Precompute all rows in OKLab for neighbor lookups
@@ -906,6 +927,30 @@ Result<CopperResult> encode_copper(const Image& image,
         err_buf.assign(width * height, color_space::OKLab{0, 0, 0});
     }
 
+    // Structure-aware variants (structure-fs, contrast-fs, zhoufang) need
+    // a 2D bias map computed from the whole image once. The 1D row-by-row
+    // path would have collapsed Laplacian/contrast to a horizontal strip
+    // and lost the structure-awareness — defeating the point.
+    auto bias_map = dither::compute_structure_bias(image, dither_settings.method);
+
+    // Riemersma queue parameters for the curve-aware fallback.
+    constexpr std::size_t RIEM_QSIZE = 16;
+    bool needs_riem = dither::needs_riemersma_queue(dither_settings.method);
+    std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
+    std::array<float, RIEM_QSIZE> riem_weights{};
+    std::size_t riem_head = 0;
+    if (needs_riem) {
+        const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+        float w_acc = 1.0f;
+        for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+            riem_weights[i] = w_acc;
+            w_acc *= ratio;
+        }
+        float total = 0.0f;
+        for (float wt : riem_weights) total += wt;
+        for (float& wt : riem_weights) wt /= total;
+    }
+
     // --- Pass 2: Dither with the predetermined per-scanline palettes ---
     //
     // Now that every scanline's effective palette is known, error diffusion
@@ -939,10 +984,33 @@ Result<CopperResult> encode_copper(const Image& image,
                 std::size_t x = reverse ? (width - 1 - step) : step;
                 auto pixel_lab = color_space::linear_to_oklab(row[x]);
 
-                auto& e = err_buf[y * width + x];
-                pixel_lab.L += std::clamp(e.L, -ec, ec);
-                pixel_lab.a += std::clamp(e.a, -ec, ec);
-                pixel_lab.b += std::clamp(e.b, -ec, ec);
+                // Riemersma owns its own error propagation via the queue
+                // — applying both the FS error buffer AND the queue would
+                // double-count, swamping the dither into nearest-colour.
+                if (needs_riem) {
+                    color_space::OKLab carry{};
+                    for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                        std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                        carry.L += riem_queue[age].L * riem_weights[k];
+                        carry.a += riem_queue[age].a * riem_weights[k];
+                        carry.b += riem_queue[age].b * riem_weights[k];
+                    }
+                    pixel_lab.L += std::clamp(carry.L, -ec, ec);
+                    pixel_lab.a += std::clamp(carry.a, -ec, ec);
+                    pixel_lab.b += std::clamp(carry.b, -ec, ec);
+                } else {
+                    auto& e = err_buf[y * width + x];
+                    pixel_lab.L += std::clamp(e.L, -ec, ec);
+                    pixel_lab.a += std::clamp(e.a, -ec, ec);
+                    pixel_lab.b += std::clamp(e.b, -ec, ec);
+                }
+
+                // Structure-aware bias: precomputed Laplacian / contrast /
+                // intensity-modulated noise gets added to the L channel
+                // before nearest-palette selection.
+                if (!bias_map.empty()) {
+                    pixel_lab.L += bias_map[y * width + x];
+                }
 
                 float best_d = std::numeric_limits<float>::max();
                 float second_d = std::numeric_limits<float>::max();
@@ -976,16 +1044,26 @@ Result<CopperResult> encode_copper(const Image& image,
                     (orig_lab.a - pal_lab[best_k].a) * str,
                     (orig_lab.b - pal_lab[best_k].b) * str,
                 };
-                for (auto& [kdx, kdy, kw] : kernel) {
-                    auto nx = static_cast<std::ptrdiff_t>(x) + (reverse ? -kdx : kdx);
-                    auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
-                    if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
-                        ny >= 0 && static_cast<std::size_t>(ny) < height) {
-                        auto idx = static_cast<std::size_t>(ny) * width +
-                                   static_cast<std::size_t>(nx);
-                        err_buf[idx].L += qerr.L * kw * ostro_scale;
-                        err_buf[idx].a += qerr.a * kw * ostro_scale;
-                        err_buf[idx].b += qerr.b * kw * ostro_scale;
+
+                // Push current error onto the Riemersma queue (newest at
+                // riem_head, dropping the oldest). The accumulator is
+                // independent of the FS error_buf.
+                if (needs_riem) {
+                    riem_queue[riem_head] = qerr;
+                    riem_head = (riem_head + 1) % RIEM_QSIZE;
+                }
+                if (!needs_riem) {
+                    for (auto& [kdx, kdy, kw] : kernel) {
+                        auto nx = static_cast<std::ptrdiff_t>(x) + (reverse ? -kdx : kdx);
+                        auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                        if (nx >= 0 && static_cast<std::size_t>(nx) < width &&
+                            ny >= 0 && static_cast<std::size_t>(ny) < height) {
+                            auto idx = static_cast<std::size_t>(ny) * width +
+                                       static_cast<std::size_t>(nx);
+                            err_buf[idx].L += qerr.L * kw * ostro_scale;
+                            err_buf[idx].a += qerr.a * kw * ostro_scale;
+                            err_buf[idx].b += qerr.b * kw * ostro_scale;
+                        }
                     }
                 }
             }

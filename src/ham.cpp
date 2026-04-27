@@ -90,6 +90,15 @@ bool is_error_diffusion(dither::Method m) {
     case dither::Method::jarvis:
     case dither::Method::ostromoukhov:
         return true;
+    // Structure-aware FS variants and Riemersma all build on F-S kernel —
+    // routed through HAM's standard error-diffusion path so they actually
+    // dither instead of silently no-op'ing. The structure bias / queue
+    // logic is added on top in the diffusion loop below.
+    case dither::Method::structure_fs:
+    case dither::Method::contrast_fs:
+    case dither::Method::zhoufang:
+    case dither::Method::riemersma:
+        return true;
     default:
         return false;
     }
@@ -960,6 +969,27 @@ Result<HamResult> encode_ham_generic(
         auto strength = opts.dither_strength;
         auto error_clamp_val = opts.error_clamp;
 
+        // Structure-aware bias and Riemersma queue, same as copper.cpp /
+        // scap.cpp: compute the 2D bias map once over the full image so
+        // pre-quantization tone shaping survives HAM's pre-dither pass.
+        auto bias_map = dither::compute_structure_bias(image, opts.dither_method);
+        bool needs_riem = dither::needs_riemersma_queue(opts.dither_method);
+        constexpr std::size_t RIEM_QSIZE = 16;
+        std::array<OKLab, RIEM_QSIZE> riem_queue{};
+        std::array<float, RIEM_QSIZE> riem_weights{};
+        std::size_t riem_head = 0;
+        if (needs_riem) {
+            const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+            float w_acc = 1.0f;
+            for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+                riem_weights[i] = w_acc;
+                w_acc *= ratio;
+            }
+            float total = 0.0f;
+            for (float wt : riem_weights) total += wt;
+            for (float& wt : riem_weights) wt /= total;
+        }
+
         // Pre-dither: quantize each pixel to chipset precision with error diffusion
         Image dithered_image(w, h);
         std::vector<OKLab> error_buf(w * h, OKLab{0, 0, 0});
@@ -973,8 +1003,21 @@ Result<HamResult> encode_ham_generic(
 
                 // Add accumulated error to original color
                 auto target_lab = color_space::linear_to_oklab(row[x]);
-                auto clamped_err = oklab_clamp(error_buf[buf_idx], error_clamp_val);
+                OKLab carry;
+                if (needs_riem) {
+                    carry = OKLab{0, 0, 0};
+                    for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                        std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                        carry.L += riem_queue[age].L * riem_weights[k];
+                        carry.a += riem_queue[age].a * riem_weights[k];
+                        carry.b += riem_queue[age].b * riem_weights[k];
+                    }
+                } else {
+                    carry = error_buf[buf_idx];
+                }
+                auto clamped_err = oklab_clamp(carry, error_clamp_val);
                 auto adjusted_lab = oklab_add(target_lab, clamped_err);
+                if (!bias_map.empty()) adjusted_lab.L += bias_map[buf_idx];
                 auto adjusted = color_space::oklab_to_linear(adjusted_lab);
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
@@ -1002,18 +1045,25 @@ Result<HamResult> encode_ham_generic(
                 auto quant_error = oklab_scale(
                     oklab_sub(adjusted_lab, actual_lab), strength);
 
-                for (auto& entry : kernel) {
-                    auto nx = static_cast<std::ptrdiff_t>(x) +
-                              (reverse ? -entry.dx : entry.dx);
-                    auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
-                    if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                        ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                        auto nidx = static_cast<std::size_t>(ny) * w +
-                                    static_cast<std::size_t>(nx);
-                        error_buf[nidx] = oklab_clamp(
-                            oklab_add(error_buf[nidx],
-                                      oklab_scale(quant_error, entry.weight)),
-                            error_clamp_val);
+                if (needs_riem) {
+                    // Riemersma owns its propagation through the queue —
+                    // mixing with the FS kernel double-counts.
+                    riem_queue[riem_head] = quant_error;
+                    riem_head = (riem_head + 1) % RIEM_QSIZE;
+                } else {
+                    for (auto& entry : kernel) {
+                        auto nx = static_cast<std::ptrdiff_t>(x) +
+                                  (reverse ? -entry.dx : entry.dx);
+                        auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
+                        if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
+                            ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                            auto nidx = static_cast<std::size_t>(ny) * w +
+                                        static_cast<std::size_t>(nx);
+                            error_buf[nidx] = oklab_clamp(
+                                oklab_add(error_buf[nidx],
+                                          oklab_scale(quant_error, entry.weight)),
+                                error_clamp_val);
+                        }
                     }
                 }
             }
@@ -1412,6 +1462,26 @@ Result<HamResult> encode_ham_copper_generic(
         auto error_clamp_val = opts.error_clamp;
         std::vector<OKLab> error_buf(w * h, OKLab{0, 0, 0});
 
+        // Structure bias / Riemersma queue, same pattern as the other
+        // HAM ED site (and copper.cpp / scap.cpp).
+        auto bias_map = dither::compute_structure_bias(image, opts.dither_method);
+        bool needs_riem = dither::needs_riemersma_queue(opts.dither_method);
+        constexpr std::size_t RIEM_QSIZE = 16;
+        std::array<OKLab, RIEM_QSIZE> riem_queue{};
+        std::array<float, RIEM_QSIZE> riem_weights{};
+        std::size_t riem_head = 0;
+        if (needs_riem) {
+            const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
+            float w_acc = 1.0f;
+            for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+                riem_weights[i] = w_acc;
+                w_acc *= ratio;
+            }
+            float total = 0.0f;
+            for (float wt : riem_weights) total += wt;
+            for (float& wt : riem_weights) wt /= total;
+        }
+
         for (std::size_t y = 0; y < h; ++y) {
             bool reverse = (y % 2 == 1);
             auto row = image.row(y);
@@ -1419,8 +1489,21 @@ Result<HamResult> encode_ham_copper_generic(
                 std::size_t x = reverse ? (w - 1 - step) : step;
                 auto buf_idx = y * w + x;
                 auto target_lab = color_space::linear_to_oklab(row[x]);
-                auto clamped_err = oklab_clamp(error_buf[buf_idx], error_clamp_val);
+                OKLab carry;
+                if (needs_riem) {
+                    carry = OKLab{0, 0, 0};
+                    for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                        std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                        carry.L += riem_queue[age].L * riem_weights[k];
+                        carry.a += riem_queue[age].a * riem_weights[k];
+                        carry.b += riem_queue[age].b * riem_weights[k];
+                    }
+                } else {
+                    carry = error_buf[buf_idx];
+                }
+                auto clamped_err = oklab_clamp(carry, error_clamp_val);
                 auto adjusted_lab = oklab_add(target_lab, clamped_err);
+                if (!bias_map.empty()) adjusted_lab.L += bias_map[buf_idx];
                 auto adjusted = color_space::oklab_to_linear(adjusted_lab);
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
@@ -1431,18 +1514,23 @@ Result<HamResult> encode_ham_copper_generic(
                 auto actual_lab = color_space::linear_to_oklab(quantized);
                 auto quant_error = oklab_scale(
                     oklab_sub(adjusted_lab, actual_lab), strength);
-                for (auto& entry : kernel) {
-                    auto nx = static_cast<std::ptrdiff_t>(x) +
-                              (reverse ? -entry.dx : entry.dx);
-                    auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
-                    if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                        ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                        auto nidx = static_cast<std::size_t>(ny) * w +
-                                    static_cast<std::size_t>(nx);
-                        error_buf[nidx] = oklab_clamp(
-                            oklab_add(error_buf[nidx],
-                                      oklab_scale(quant_error, entry.weight)),
-                            error_clamp_val);
+                if (needs_riem) {
+                    riem_queue[riem_head] = quant_error;
+                    riem_head = (riem_head + 1) % RIEM_QSIZE;
+                } else {
+                    for (auto& entry : kernel) {
+                        auto nx = static_cast<std::ptrdiff_t>(x) +
+                                  (reverse ? -entry.dx : entry.dx);
+                        auto ny = static_cast<std::ptrdiff_t>(y) + entry.dy;
+                        if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
+                            ny >= 0 && static_cast<std::size_t>(ny) < h) {
+                            auto nidx = static_cast<std::size_t>(ny) * w +
+                                        static_cast<std::size_t>(nx);
+                            error_buf[nidx] = oklab_clamp(
+                                oklab_add(error_buf[nidx],
+                                          oklab_scale(quant_error, entry.weight)),
+                                error_clamp_val);
+                        }
                     }
                 }
             }

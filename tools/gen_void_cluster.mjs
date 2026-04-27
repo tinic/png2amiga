@@ -1,0 +1,153 @@
+#!/usr/bin/env node
+// Generate a 64×64 void-and-cluster blue noise threshold matrix
+// (Ulichney 1993). Output: src/void_cluster_64.inc with a constexpr
+// std::array<std::array<int, 64>, 64> raw = {{ ... }} suitable for
+// inclusion in dither.cpp.
+//
+// Run: node tools/gen_void_cluster.mjs
+//
+// The matrix has the property that for every quantization threshold k
+// in [0, N²-1], the set of cells with rank < k is itself blue-noise
+// distributed. That gives uniform perceptual quality across the whole
+// palette, unlike plain Bayer or hashed-IGN "blue noise".
+
+import { writeFileSync } from 'node:fs'
+import path from 'node:path'
+
+// CLI args: [sigma] [seed-fraction] [outfile]. Defaults produce the
+// standard void-and-cluster (sigma=1.5). Pass sigma=2.5 to generate
+// the cluster blue noise variant (libcaca-style — wider on-pixel
+// clusters give a coarser, more film-grainy look).
+const N = 64
+const SIGMA = parseFloat(process.argv[2] ?? '1.5')
+const KERNEL_RADIUS = Math.max(6, Math.ceil(SIGMA * 4))
+const SEED_FRACTION = parseFloat(process.argv[3] ?? '0.1')
+const OUTFILE = path.resolve(import.meta.dirname,
+  process.argv[4] ?? '../src/void_cluster_64.inc')
+
+// Toroidal Gaussian kernel — precompute weights once.
+const kernel = []
+for (let dy = -KERNEL_RADIUS; dy <= KERNEL_RADIUS; dy++) {
+  for (let dx = -KERNEL_RADIUS; dx <= KERNEL_RADIUS; dx++) {
+    const w = Math.exp(-(dx * dx + dy * dy) / (2 * SIGMA * SIGMA))
+    kernel.push({ dx, dy, w })
+  }
+}
+
+// energy[y][x] = Gaussian-blurred density of the binary pattern at (x, y).
+// Maintain incrementally: when a cell flips, update neighbours.
+function makeEnergy() { return Array.from({ length: N }, () => new Float64Array(N)) }
+
+function updateEnergy(energy, x, y, sign) {
+  for (const { dx, dy, w } of kernel) {
+    const xx = ((x + dx) % N + N) % N
+    const yy = ((y + dy) % N + N) % N
+    energy[yy][xx] += sign * w
+  }
+}
+
+// Find the position of max (cluster) or min (void) in the energy field,
+// restricted to cells matching `wantOn` in the pattern.
+function findExtreme(energy, pattern, wantOn, findMax) {
+  let bestX = 0, bestY = 0
+  let best = findMax ? -Infinity : Infinity
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (Boolean(pattern[y][x]) !== wantOn) continue
+      const e = energy[y][x]
+      if (findMax ? (e > best) : (e < best)) {
+        best = e
+        bestX = x
+        bestY = y
+      }
+    }
+  }
+  return { x: bestX, y: bestY }
+}
+
+// 1. Build initial random binary pattern with ~SEED_FRACTION density.
+function rand() {
+  // mulberry32 — deterministic seed for reproducible output.
+  rand.s = (rand.s + 0x6D2B79F5) >>> 0
+  let t = rand.s
+  t = Math.imul(t ^ (t >>> 15), t | 1)
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+  return ((t ^ (t >>> 14)) >>> 0) / 0x1_0000_0000
+}
+rand.s = 0xDEADBEEF
+
+const pattern = Array.from({ length: N }, () =>
+  Array.from({ length: N }, () => 0))
+let onCount = 0
+const target = Math.floor(N * N * SEED_FRACTION)
+while (onCount < target) {
+  const x = Math.floor(rand() * N)
+  const y = Math.floor(rand() * N)
+  if (!pattern[y][x]) {
+    pattern[y][x] = 1
+    onCount++
+  }
+}
+
+// Build initial energy field.
+const energy = makeEnergy()
+for (let y = 0; y < N; y++)
+  for (let x = 0; x < N; x++)
+    if (pattern[y][x]) updateEnergy(energy, x, y, +1)
+
+// 2. Iteratively swap tightest cluster with largest void until stable.
+console.log(`[void-cluster] seeding stable pattern (${target} on-pixels)…`)
+for (let iter = 0; iter < 4096; iter++) {
+  const cluster = findExtreme(energy, pattern, true, true)
+  pattern[cluster.y][cluster.x] = 0
+  updateEnergy(energy, cluster.x, cluster.y, -1)
+  const voidPos = findExtreme(energy, pattern, false, false)
+  if (voidPos.x === cluster.x && voidPos.y === cluster.y) {
+    pattern[cluster.y][cluster.x] = 1
+    updateEnergy(energy, cluster.x, cluster.y, +1)
+    console.log(`  converged after ${iter} iterations`)
+    break
+  }
+  pattern[voidPos.y][voidPos.x] = 1
+  updateEnergy(energy, voidPos.x, voidPos.y, +1)
+}
+
+// 3. Phase 1: rank existing on-pixels from "tightest cluster first" down
+//    to 0 (= darkest threshold).
+const rank = Array.from({ length: N }, () => new Int32Array(N))
+console.log(`[void-cluster] phase 1: ranking ${onCount} on-pixels…`)
+for (let r = onCount - 1; r >= 0; r--) {
+  const c = findExtreme(energy, pattern, true, true)
+  rank[c.y][c.x] = r
+  pattern[c.y][c.x] = 0
+  updateEnergy(energy, c.x, c.y, -1)
+}
+
+// 4. Phase 2: rank off-pixels by "largest void first", from onCount up
+//    to N²-1 (= brightest threshold).
+console.log(`[void-cluster] phase 2: ranking ${N * N - onCount} off-pixels…`)
+for (let r = onCount; r < N * N; r++) {
+  const v = findExtreme(energy, pattern, false, false)
+  rank[v.y][v.x] = r
+  pattern[v.y][v.x] = 1
+  updateEnergy(energy, v.x, v.y, +1)
+}
+
+// 5. Emit .inc file.
+const lines = []
+lines.push('// Auto-generated by tools/gen_void_cluster.mjs — do not edit.')
+lines.push('// 64×64 Ulichney void-and-cluster blue noise threshold matrix.')
+lines.push('// Values 0..4095, normalised in dither.cpp.')
+lines.push('')
+lines.push('constexpr std::array<std::array<int, 64>, 64> raw = {{')
+for (let y = 0; y < N; y++) {
+  const row = '    {{' +
+    Array.from(rank[y], v => v.toString().padStart(4)).join(', ') +
+    '}},'
+  lines.push(row)
+}
+lines.push('}};')
+lines.push('')
+
+writeFileSync(OUTFILE, lines.join('\n'))
+console.log(`[void-cluster] wrote ${OUTFILE}`)
