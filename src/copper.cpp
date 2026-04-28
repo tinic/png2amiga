@@ -1071,13 +1071,23 @@ Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
         return cands;
     };
 
+    // The diff source for the top-K pick must match cheader's lace_rebuild
+    // exactly: previous TARGET-row palette (pals[y-2] in lace, pals[y-1]
+    // progressive, base for the first row). Picking against running state
+    // would let the preview "rescue" registers whose change got dropped at
+    // an earlier row — the next row's diff (state → target) looks bigger
+    // than (prev_target → target) and may sneak back into the top-K.
+    // Hardware never gets that second chance: it ranks against prev_target
+    // and permanently drops anything past K. Using prev_target here keeps
+    // the preview faithful to the chip on K-exceeded rows (the failure
+    // mode for OCS hires-lace + depth ≤ 4 with vertical palette dither).
     for (std::size_t y = 0; y < height; ++y) {
         auto& state = (is_lace && (y & 1)) ? state_f2 : state_f1;
         const auto& target = scanline_palettes[y];
-        // For y < 2 in lace, both fields' first row diffs against base
-        // (matching cheader's lace_rebuild). Progressive: y=0 diffs
-        // against base, y>=1 against y-1 same-state.
-        auto cands = pick_topk_diffs(state, target);
+        const auto& prev_target = is_lace
+            ? (y < 2 ? base_vec : scanline_palettes[y - 2])
+            : (y == 0 ? base_vec : scanline_palettes[y - 1]);
+        auto cands = pick_topk_diffs(prev_target, target);
         for (auto& c : cands) state[c.reg] = c.color;
         applied[y] = state;
     }
