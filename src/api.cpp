@@ -500,6 +500,9 @@ Options decompose_mode_options(const Options& opts) {
     return o;
 }
 
+}  // close anon namespace so run_pipeline gets external linkage and can
+   // be reached from pipeline.cpp via the api:: forwarder.
+
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     std::size_t input_size,
                                     const Options& orig_options) {
@@ -1847,6 +1850,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.cga_mode_ctrl2 = cga_mode_ctrl2;
     return result;
 }
+
+namespace {  // reopen anon for the trailing helpers
 
 ConvertResult make_error(const std::string& msg) {
     ConvertResult r;

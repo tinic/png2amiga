@@ -14,6 +14,8 @@
 #include <string_view>
 #include <vector>
 
+namespace png2amiga::api { struct Options; }
+
 namespace png2amiga::pipeline {
 
 // Filename stem -> C identifier (lowercased, non-alphanumeric -> '_',
@@ -122,5 +124,15 @@ struct PipelineResult {
     // preview. Replaces the same 4 lines repeated at every mode branch.
     void finalize_psnr(const Image& src, float total_error);
 };
+
+// Run the full preprocessing → quantize → dither → encode pipeline against
+// an in-memory image (PNG/JPEG/WebP autodetected). Single entry point
+// shared by the WASM bindings (api.cpp's convert_*) and — once
+// REFACTOR_PLAN.md step 3 lands — the CLI dispatch in main.cpp. The
+// implementation currently lives in src/api.cpp; this declaration is the
+// canonical surface.
+Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
+                                    std::size_t input_size,
+                                    const api::Options& options);
 
 }  // namespace png2amiga::pipeline

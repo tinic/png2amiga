@@ -1,8 +1,18 @@
 #include "pipeline.hpp"
 
+#include "api.hpp"
 #include "color_space.hpp"
 
 #include <cctype>
+
+namespace png2amiga::api {
+// The workhorse defined in src/api.cpp (post-anon-namespace, external
+// linkage). Forward-declared here so the pipeline:: forwarder below can
+// reach it without pulling api-internal types into pipeline.hpp.
+Result<pipeline::PipelineResult> run_pipeline(const std::uint8_t* input_data,
+                                              std::size_t input_size,
+                                              const Options& options);
+}  // namespace png2amiga::api
 
 namespace png2amiga::pipeline {
 
@@ -50,6 +60,12 @@ void PipelineResult::finalize_psnr(const Image& src, float total_error) {
     psnr = color_space::compute_psnr_blurred(
         src.pixels(), rendered.pixels(),
         src.width(), src.height());
+}
+
+Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
+                                    std::size_t input_size,
+                                    const api::Options& options) {
+    return api::run_pipeline(input_data, input_size, options);
 }
 
 cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base) {
