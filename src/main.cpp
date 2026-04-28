@@ -4666,8 +4666,20 @@ int main(int argc, char* argv[]) {
         // Render preview BEFORE any DPF expansion: render_copper decodes
         // a combined index from all planes, which would land on
         // non-contiguous slots once PF1 zeros are interleaved.
-        auto preview = copper::render_copper(copper_result->planes,
-                                             copper_result->scanline_palettes);
+        // Use the capped renderer so the preview reflects the top-K-
+        // clipped diff cascade the cheader emitter applies to lace
+        // copper lists. Without the cap, the preview shows the
+        // planner's idealised per-row palette and silently diverges
+        // from what the chip actually displays — most visibly on OCS
+        // depth ≤ 4 where the vertical palette dither inflates the
+        // per-row-pair diff count past the K budget.
+        auto preview = copper::render_copper_capped(
+            copper_result->planes,
+            copper_result->scanline_palettes,
+            copper_result->base_palette,
+            copper_result->changes_per_line,
+            config->interlace,
+            chipset);
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;

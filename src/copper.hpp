@@ -234,4 +234,23 @@ Result<CopperResult> encode_copper(const Image& image,
 Result<Image> render_copper(const bitplane::BitplaneData& planes,
                             const std::vector<std::vector<Color3f>>& scanline_palettes);
 
+// Lace-aware overload: simulates the K-swap budget the cheader emitter
+// applies in lace mode (lace_rebuild picks the top-K diffs against the
+// previous SAME-FIELD row, drops anything past `cap_changes_per_line`).
+// Use this for the preview path so the rendered image matches what the
+// generated viewer will actually display on hardware — without it, the
+// preview shows the planner's idealised per-row palette, but the chip
+// only gets the budget-clipped version.
+//
+// `chipset` is also applied to the rendered colors: OCS quantises every
+// palette entry through `quantize_to_ocs` (12-bit RGB nibble-replicated
+// to 24-bit) so the preview shows true 12-bit OCS colors instead of the
+// planner's full-precision Color3f.
+Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
+                                   const std::vector<std::vector<Color3f>>& scanline_palettes,
+                                   std::span<const Color3f> base_palette,
+                                   std::size_t cap_changes_per_line,
+                                   bool is_lace,
+                                   amiga::Chipset chipset);
+
 } // namespace png2amiga::copper

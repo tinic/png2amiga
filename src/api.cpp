@@ -1527,9 +1527,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         // Render preview BEFORE any DPF expansion: render_copper builds a
         // combined palette index from all planes which would land on
-        // non-contiguous slots once PF1 zeros are interleaved.
-        auto preview = copper::render_copper(copper_result->planes,
-                                             copper_result->scanline_palettes);
+        // non-contiguous slots once PF1 zeros are interleaved. Capped
+        // version replays the same top-K-by-distance diff clipping the
+        // cheader emitter does, so the preview matches what a generated
+        // viewer will actually display on hardware.
+        auto preview = copper::render_copper_capped(
+            copper_result->planes,
+            copper_result->scanline_palettes,
+            copper_result->base_palette,
+            copper_result->changes_per_line,
+            options.interlace,
+            chipset);
         if (!preview) return std::unexpected{preview.error()};
 
         // Dual-playfield expansion (copper path): same as standard branch —

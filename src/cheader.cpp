@@ -447,6 +447,24 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "static APTR SystemIrq;\n";
     out += "struct View *ActiView;\n\n";
 
+    // Lace field-swap handler — file-scope (not a lambda) so the
+    // __attribute__((interrupt)) attribute reliably emits RTE rather than
+    // RTS, and so cop_odd/cop_even references resolve at the same scope
+    // as the handler itself. The captureless-lambda pattern caused field 2
+    // to receive zero copper instructions on m68k-amiga-elf-gcc 14.
+    if (options.interlace) {
+        out += "// Lace field-swap globals (set in main, read in VBL handler).\n";
+        out += "static volatile ULONG cop_odd, cop_even;\n";
+        out += "static __attribute__((interrupt)) void VblHandler() {\n";
+        out += "    volatile struct Custom* c = (volatile struct Custom*)0xdff000;\n";
+        out += "    c->intreq = (1<<5); c->intreq = (1<<5);  // ack VBL\n";
+        out += "    if (*(volatile UWORD*)0xdff004 & 0x8000)\n";
+        out += "        c->cop1lc = cop_even;\n";
+        out += "    else\n";
+        out += "        c->cop1lc = cop_odd;\n";
+        out += "}\n\n";
+    }
+
     out += "// Read VBR via Supervisor mode (movec VBR,d0)\n";
     out += "static __attribute__((interrupt)) void SupervisorGetVBR() {\n";
     out += "    __asm__ volatile(\".short 0x4e7a, 0x0801\");\n";
@@ -1031,7 +1049,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
     cop_size += 128;  // padding for blank-below, 256-boundary WAITs, end markers
 
-    out += std::format("    USHORT* copper1 = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
+    // MEMF_CLEAR: zero the tail past our end-sentinel. Empirically the
+    // canonical halt-WAIT (0xFFFF, 0xFFFE) does not actually halt copper
+    // on every chip / chipset state — without zero-fill, copper walks past
+    // the sentinel into uninitialized chip RAM, can hit a stray bit
+    // pattern that parses as `MOVE → VPOSR` (CDANG-blocked, undefined),
+    // and ends up corrupting the field. Zero-fill makes the runaway path
+    // a stream of harmless `MOVE 0 → BLTDDAT` until the next vblank's
+    // auto-COPJMP1 properly enters the swapped list.
+    out += std::format("    USHORT* copper1 = (USHORT*)AllocMem({}, MEMF_CHIP | MEMF_CLEAR);\n",
                        cop_size);
     out += "    USHORT* cl = copper1;\n\n";
 
@@ -1397,10 +1423,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // In interlace mode, field 1 renders even image rows (0, 2, 4, ...)
         // so row 0's changes go here; field 2 renders odd rows so its
         // first pre-display write is row 1's changes (emitted in cl2).
-        if (!is_lace) {
-            out += "    // Line 0 copper changes (before display)\n";
-            emit_copper_changes("cl", "0", aga_banks);
-        }
+        // Both lace and progressive need this seed: the encoder builds row
+        // y's diff vs row y-1 (progressive) or row y-2 (lace), so the
+        // very first row of each field must be applied against the base
+        // palette before any per-line WAIT'd diff cascades from it.
+        out += "    // Line 0 copper changes (before display)\n";
+        emit_copper_changes("cl", "0", aga_banks);
 
         // Per-scanline copper palette changes. One WAIT per visible
         // scanline of the field. For non-interlace each VPOS line maps
@@ -1538,7 +1566,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // For interlace: build a second copper list for the even field
     // and a vblank interrupt handler that swaps cop1lc based on LOF bit.
     if (is_lace) {
-        out += std::format("    USHORT* copper2 = (USHORT*)AllocMem({}, MEMF_CHIP);\n",
+        out += std::format("    USHORT* copper2 = (USHORT*)AllocMem({}, MEMF_CHIP | MEMF_CLEAR);\n",
                            cop_size);
         out += "    USHORT* cl2 = copper2;\n\n";
 
@@ -1632,6 +1660,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             }
         }
 
+        // Field 2 row-1 seed (before display): mirrors field 1's row-0
+        // seed. Field 2 renders odd image rows; row 1 diffs against the
+        // base palette in the encoder's lace-rebuild scheme, and rows 3,
+        // 5, ... cascade from it. Without this, the per-line loop's first
+        // iteration writes row 3's diffs against a row-1 state that was
+        // never applied, breaking the cascade for the entire field.
+        if (has_copper) {
+            out += "    // Field 2 line 1 copper changes (before display)\n";
+            emit_copper_changes("cl2", "1", aga_banks);
+        }
+
         // Field 2 per-scanline palette changes (odd image rows 1, 3, 5, ...)
         if (has_copper) {
             out += "    // Field 2 per-scanline palette changes\n";
@@ -1665,9 +1704,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
         out += "    *cl2++ = 0xffff; *cl2++ = 0xfffe;\n\n";
 
-        // Store pointers for the interrupt handler
-        out += "    // Globals for vblank interrupt field switching\n";
-        out += "    static volatile ULONG cop_odd, cop_even;\n";
+        // Set the file-scope swap pointers used by VblHandler.
+        out += "    // Field-swap pointers for VblHandler (declared at file scope)\n";
         out += "    cop_odd = (ULONG)copper1;\n";
         out += "    cop_even = (ULONG)copper2;\n\n";
     }
@@ -1691,17 +1729,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     if (is_lace) {
-        // Vblank interrupt handler: swap copper list based on LOF bit
-        // LOF (Long Frame) is bit 15 of VPOSR (0xDFF004)
+        // Vblank handler swaps cop1lc based on LOF (Long Frame) bit
+        // in VPOSR (bit 15 of $DFF004). Installed via plain function
+        // pointer; see VblHandler at file scope.
         out += "    // Install vblank interrupt for interlace field switching\n";
-        out += "    *(volatile APTR*)(((UBYTE*)VBR) + 0x6c) = (APTR)+[]() __attribute__((interrupt)) {\n";
-        out += "        volatile struct Custom* c = (volatile struct Custom*)0xdff000;\n";
-        out += "        c->intreq = (1<<5); c->intreq = (1<<5); // ack VBL\n";
-        out += "        if (*(volatile UWORD*)0xdff004 & 0x8000)\n";
-        out += "            c->cop1lc = cop_even;\n";
-        out += "        else\n";
-        out += "            c->cop1lc = cop_odd;\n";
-        out += "    };\n";
+        out += "    *(volatile APTR*)(((UBYTE*)VBR) + 0x6c) = (APTR)VblHandler;\n";
         out += "    custom->intena = 0x8000 | (1<<5);  // enable VBL interrupt\n";
         out += "    Enable();  // allow CPU to service interrupts\n\n";
     }

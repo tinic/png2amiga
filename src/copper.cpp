@@ -769,74 +769,99 @@ Result<CopperResult> encode_copper(const Image& image,
         constexpr float hard_switch_de2 = 0.50f;
         float merge_de2 = 0.01f + static_cast<float>(gap) * 0.02f;
 
-        for (std::size_t r = 1; r < num_colors; ++r) {
-            Color3f committed = scanline_palettes[0][r];
-            Color3f candidate = committed;
-            int candidate_count = 0;
+        // Per-register dither walk parameterised by (start, stride). For
+        // progressive: stride 1 over every row. For interlace: run twice —
+        // stride 2 starting at row 0 (field 1) and stride 2 starting at row 1
+        // (field 2). Without per-field segregation, the committed/candidate
+        // state cross-leaks between fields, and the golden-ratio alternation
+        // pattern uses linear y so its phase is wrong relative to either
+        // field's actual scan order. The visible symptom is every transition
+        // appearing ~half max_spread image rows too early (eg. d1 hires-lace
+        // ⇒ ~9 image rows = ~8 CRT raster lines premature).
+        auto run_pass = [&](std::size_t start, std::size_t stride) {
+            for (std::size_t r = 1; r < num_colors; ++r) {
+                Color3f committed = scanline_palettes[start][r];
+                Color3f candidate = committed;
+                int candidate_count = 0;
 
-            for (std::size_t y = 1; y < height; ++y) {
-                Color3f ideal = scanline_palettes[y][r];
+                std::size_t seq_idx = 0;  // field-local row count (post-increment per step)
+                for (std::size_t y = start + stride; y < height; y += stride) {
+                    ++seq_idx;
+                    Color3f ideal = scanline_palettes[y][r];
 
-                if (ideal == committed) {
-                    candidate = committed;
-                    candidate_count = 0;
-                    continue;
-                }
+                    if (ideal == committed) {
+                        candidate = committed;
+                        candidate_count = 0;
+                        continue;
+                    }
 
-                // Track how long the candidate has been active
-                if (ideal == candidate) {
-                    candidate_count++;
-                } else {
-                    // Gradual drift (close to previous candidate)?  Keep ramping.
-                    auto c_lab = color_space::linear_to_oklab(candidate);
-                    auto i_lab = color_space::linear_to_oklab(ideal);
-                    float dd = (c_lab.L - i_lab.L) * (c_lab.L - i_lab.L) +
-                               (c_lab.a - i_lab.a) * (c_lab.a - i_lab.a) +
-                               (c_lab.b - i_lab.b) * (c_lab.b - i_lab.b);
-                    if (dd < merge_de2 && candidate != committed) {
-                        candidate = ideal;
+                    // Track how long the candidate has been active
+                    if (ideal == candidate) {
                         candidate_count++;
                     } else {
-                        candidate = ideal;
-                        candidate_count = 1;
+                        // Gradual drift (close to previous candidate)?  Keep ramping.
+                        auto c_lab = color_space::linear_to_oklab(candidate);
+                        auto i_lab = color_space::linear_to_oklab(ideal);
+                        float dd = (c_lab.L - i_lab.L) * (c_lab.L - i_lab.L) +
+                                   (c_lab.a - i_lab.a) * (c_lab.a - i_lab.a) +
+                                   (c_lab.b - i_lab.b) * (c_lab.b - i_lab.b);
+                        if (dd < merge_de2 && candidate != committed) {
+                            candidate = ideal;
+                            candidate_count++;
+                        } else {
+                            candidate = ideal;
+                            candidate_count = 1;
+                        }
+                    }
+
+                    // Distance committed → candidate
+                    auto com_lab = color_space::linear_to_oklab(committed);
+                    auto can_lab = color_space::linear_to_oklab(candidate);
+                    float dL = com_lab.L - can_lab.L;
+                    float da = com_lab.a - can_lab.a;
+                    float db = com_lab.b - can_lab.b;
+                    float dist = dL * dL + da * da + db * db;
+
+                    if (dist >= hard_switch_de2) {
+                        committed = candidate;
+                        candidate_count = 0;
+                        scanline_palettes[y][r] = committed;
+                        continue;
+                    }
+
+                    // Effective spread: close colors → long transition,
+                    // distant colors → short (almost hard-switch).
+                    float norm = dist / hard_switch_de2;  // 0..1
+                    int eff_spread = std::max(2, static_cast<int>(
+                        static_cast<float>(max_spread) * (1.0f - norm)));
+
+                    float ramp = std::min(
+                        1.0f,
+                        static_cast<float>(candidate_count) /
+                            static_cast<float>(eff_spread));
+                    // Use the field-local row index for the golden-ratio
+                    // phase so successive in-field rows step through the
+                    // sequence cleanly. Using raw y under stride=2 would
+                    // skip every other φ value, producing a 50/50 phase
+                    // that looks like noise rather than a smooth ramp.
+                    float threshold = std::fmod(
+                        static_cast<float>(seq_idx) * phi + 0.5f, 1.0f);
+                    scanline_palettes[y][r] =
+                        (ramp > threshold) ? candidate : committed;
+
+                    if (candidate_count >= eff_spread) {
+                        committed = candidate;
+                        candidate_count = 0;
                     }
                 }
-
-                // Distance committed → candidate
-                auto com_lab = color_space::linear_to_oklab(committed);
-                auto can_lab = color_space::linear_to_oklab(candidate);
-                float dL = com_lab.L - can_lab.L;
-                float da = com_lab.a - can_lab.a;
-                float db = com_lab.b - can_lab.b;
-                float dist = dL * dL + da * da + db * db;
-
-                if (dist >= hard_switch_de2) {
-                    committed = candidate;
-                    candidate_count = 0;
-                    scanline_palettes[y][r] = committed;
-                    continue;
-                }
-
-                // Effective spread: close colors → long transition,
-                // distant colors → short (almost hard-switch).
-                float norm = dist / hard_switch_de2;  // 0..1
-                int eff_spread = std::max(2, static_cast<int>(
-                    static_cast<float>(max_spread) * (1.0f - norm)));
-
-                float ramp = std::min(
-                    1.0f,
-                    static_cast<float>(candidate_count) /
-                        static_cast<float>(eff_spread));
-                float threshold = std::fmod(
-                    static_cast<float>(y) * phi + 0.5f, 1.0f);
-                scanline_palettes[y][r] =
-                    (ramp > threshold) ? candidate : committed;
-
-                if (candidate_count >= eff_spread) {
-                    committed = candidate;
-                    candidate_count = 0;
-                }
             }
+        };
+
+        if (is_lace) {
+            run_pass(0, 2);                       // field 1: rows 0, 2, 4, …
+            if (height >= 2) run_pass(1, 2);      // field 2: rows 1, 3, 5, …
+        } else {
+            run_pass(0, 1);                       // progressive: every row
         }
     }
 
@@ -974,6 +999,96 @@ Result<Image> render_copper(const bitplane::BitplaneData& planes,
             auto idx = (*indices)[y * width + x];
             if (idx < pal.size()) {
                 result[x, y] = pal[idx];
+            } else {
+                result[x, y] = Color3f{0.0f, 0.0f, 0.0f};
+            }
+        }
+    }
+
+    return result;
+}
+
+// Simulates the cheader-side lace_rebuild: at each image row, computes
+// the diff vs the previous SAME-FIELD row (y-2 in lace, y-1 in
+// progressive), keeps only the top-K diffs by squared OKLab distance,
+// and cascades the result. The eventual per-row palette is what the
+// CHIP actually displays — which can differ from `scanline_palettes[y]`
+// when the K budget is exceeded (typical for OCS depth ≤ 4 with
+// vertical palette dithering active, since the dither spreads palette
+// transitions across many rows and inflates the per-row-pair diff
+// count past the swap budget).
+Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
+                                   const std::vector<std::vector<Color3f>>& scanline_palettes,
+                                   std::span<const Color3f> base_palette,
+                                   std::size_t cap_changes_per_line,
+                                   bool is_lace,
+                                   amiga::Chipset chipset) {
+    auto width = planes.width;
+    auto height = planes.height;
+    auto quantize = [&](const Color3f& c) {
+        return chipset == amiga::Chipset::aga ? c : palette::quantize_to_ocs(c);
+    };
+
+    if (scanline_palettes.size() < height) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("Expected {} scanline palettes, got {}",
+                        height, scanline_palettes.size()),
+        }};
+    }
+
+    auto indices = bitplane::decode(planes);
+    if (!indices) return std::unexpected{indices.error()};
+
+    // Reconstruct the chip-applied per-row palette by replaying the
+    // top-K-clipped diff cascade. Each field carries its own state.
+    std::vector<std::vector<Color3f>> applied(height);
+    std::vector<Color3f> base_vec(base_palette.begin(), base_palette.end());
+    std::vector<Color3f> state_f1 = base_vec;
+    std::vector<Color3f> state_f2 = base_vec;
+
+    auto pick_topk_diffs = [&](const std::vector<Color3f>& prev,
+                               const std::vector<Color3f>& cur) {
+        struct Cand { std::size_t reg; float dist; Color3f color; };
+        std::vector<Cand> cands;
+        auto n_regs = std::min(prev.size(), cur.size());
+        cands.reserve(n_regs);
+        for (std::size_t r = 0; r < n_regs; ++r) {
+            auto dr = cur[r].r - prev[r].r;
+            auto dg = cur[r].g - prev[r].g;
+            auto db = cur[r].b - prev[r].b;
+            auto d2 = dr * dr + dg * dg + db * db;
+            if (d2 > 0.0f) cands.push_back({r, d2, cur[r]});
+        }
+        if (cands.size() > cap_changes_per_line) {
+            std::partial_sort(
+                cands.begin(),
+                cands.begin() + static_cast<std::ptrdiff_t>(cap_changes_per_line),
+                cands.end(),
+                [](auto& a, auto& b) { return a.dist > b.dist; });
+            cands.resize(cap_changes_per_line);
+        }
+        return cands;
+    };
+
+    for (std::size_t y = 0; y < height; ++y) {
+        auto& state = (is_lace && (y & 1)) ? state_f2 : state_f1;
+        const auto& target = scanline_palettes[y];
+        // For y < 2 in lace, both fields' first row diffs against base
+        // (matching cheader's lace_rebuild). Progressive: y=0 diffs
+        // against base, y>=1 against y-1 same-state.
+        auto cands = pick_topk_diffs(state, target);
+        for (auto& c : cands) state[c.reg] = c.color;
+        applied[y] = state;
+    }
+
+    Image result(width, height);
+    for (std::size_t y = 0; y < height; ++y) {
+        auto& pal = applied[y];
+        for (std::size_t x = 0; x < width; ++x) {
+            auto idx = (*indices)[y * width + x];
+            if (idx < pal.size()) {
+                result[x, y] = quantize(pal[idx]);
             } else {
                 result[x, y] = Color3f{0.0f, 0.0f, 0.0f};
             }
