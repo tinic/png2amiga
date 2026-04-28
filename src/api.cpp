@@ -1748,14 +1748,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     //     Refinement's per-iteration snap-to-gamut collapses centroids onto
     //     the same gamut entry (reduces 16 slots → ~11 effective colors)
     //     and drops PSNR by 3+ dB.
-    if (!has_user_palette(options) && dith.method != dither::Method::none &&
+    if (options.refine_iterations > 0 && !has_user_palette(options) &&
+        dith.method != dither::Method::none &&
         !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
         !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             *image,
             Palette{"refined", {pal.colors.begin(),
                                 pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
-            dith, chipset, mode, 4, locked_mask);
+            dith, chipset, mode,
+            static_cast<std::size_t>(options.refine_iterations), locked_mask);
         if (refined) {
             pal.colors = std::move(refined->colors);
             pal_size = pal.colors.size();

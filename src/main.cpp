@@ -368,6 +368,15 @@ void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode,
 // Build-system integration flags (--quiet, --json, --depfile, --list-modes).
 // Centralised so the CLI dispatcher can route status output through one
 // helper instead of sprinkling `if (config.quiet)` everywhere.
+// CLI-side config struct. Holds (a) the raw CLI parse target — output
+// path, batch flags, preview flags, *_explicit metadata used by
+// auto-tuning — and (b) a near-mirror of api::Options' encoder fields.
+// api::Options (in api.hpp) is the canonical encoder schema; the bridge
+// is make_api_options() below. Any new encoder knob should land in
+// api::Options first, then get a CLI parse line that fills in the same
+// field on this struct (or — when REFACTOR_PLAN.md target #5 finishes
+// the Amiga branch migrations — directly on an embedded api::Options
+// member). See REFACTOR_PLAN.md target #5.
 struct Config {
     std::string input_path;
     std::string output_path;           // .png for preview, .iff for ILBM, .h for C header
@@ -1665,6 +1674,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.quantizer = cfg.quantizer;
     opts.ham_fast = cfg.ham_fast;
     opts.ham_beam = static_cast<int>(cfg.ham_beam);
+    opts.refine_iterations = cfg.refine_iterations;
     opts.cap_best = cfg.cap_best;
     opts.copper = cfg.copper;
     opts.copper_changes = static_cast<int>(cfg.copper_changes);

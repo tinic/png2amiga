@@ -91,6 +91,12 @@ struct PinSpec {
     int x, y;        // source pixel coordinates
 };
 
+// Canonical encoder schema. Every parameter the pipeline (preprocess →
+// quantize → dither → encode) honours lives here. The CLI parses into
+// main.cpp's Config and translates via make_api_options() (one-line
+// bridge in main.cpp); the WASM frontend builds Options directly from
+// JS. New encoder knobs should land here FIRST, then the bridge picks
+// them up — see REFACTOR_PLAN.md target #5.
 struct Options {
     std::string mode = "lores";         // lores, hires, ham6, ham8, ehb
     std::string chipset;                // "ocs", "aga", or "" for auto
@@ -131,6 +137,12 @@ struct Options {
 
     // HAM greedy encoder (realtime profile)
     bool ham_fast = false;
+
+    // Dither-aware palette refinement iterations (0 = off). Run after
+    // initial quantization to tighten the palette against the actual
+    // dithered output. Skipped for chunky / fixed-palette modes
+    // (CGA / EGA / VGA / Atari hi-res) inside run_pipeline.
+    int refine_iterations = 4;
 
     // HAM encoding
     int ham_beam = 16;                   // beam width for DP search (1-256)
