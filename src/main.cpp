@@ -18,6 +18,7 @@
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
+#include "pipeline.hpp"
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
@@ -1444,36 +1445,7 @@ bool ends_with(std::string_view s, std::string_view suffix) {
 }
 
 // Derive a C symbol name from a filename path
-std::string derive_symbol_name(std::string_view path) {
-    // Extract filename without directory
-    auto slash = path.rfind('/');
-    if (slash != std::string_view::npos)
-        path = path.substr(slash + 1);
-    auto backslash = path.rfind('\\');
-    if (backslash != std::string_view::npos)
-        path = path.substr(backslash + 1);
-
-    // Remove extension
-    auto dot = path.rfind('.');
-    if (dot != std::string_view::npos)
-        path = path.substr(0, dot);
-
-    // Sanitize: replace non-alphanumeric with underscore
-    std::string result;
-    result.reserve(path.size());
-    for (auto c : path) {
-        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
-            result.push_back(static_cast<char>(
-                std::tolower(static_cast<unsigned char>(c))));
-        } else {
-            result.push_back('_');
-        }
-    }
-    if (result.empty()) return "image";
-    if (std::isdigit(static_cast<unsigned char>(result[0])))
-        result.insert(result.begin(), '_');
-    return result;
-}
+using pipeline::derive_symbol_name;
 
 // Crop an image to a sub-region
 Result<Image> crop_image(const Image& src,
@@ -2734,12 +2706,13 @@ int run_batch(const Config& cfg) {
         auto prefix = sanitise_symbol(dir_name);
         auto cpp_path = (out_dir / (prefix + ".cpp")).string();
 
-        cheader::CHeaderOptions ch;
-        ch.symbol_name = prefix;
-        ch.hires = st.hires;
-        ch.interlace = st.interlace;
-        ch.aga = st.aga;
-        ch.dpf = st.dpf;
+        auto ch = pipeline::make_ch_opts({
+            .symbol_override = prefix,
+            .hires = st.hires,
+            .interlace = st.interlace,
+            .aga = st.aga,
+            .dpf = st.dpf,
+        });
         std::span<const bitplane::BitplaneData> extras{
             frame_planes.data() + 1, frame_planes.size() - 1};
         ch.extra_frame_planes = extras;
@@ -3036,13 +3009,13 @@ int main(int argc, char* argv[]) {
         if (res.palette.size() < 16)
             res.palette.resize(16, Color3f{0.0f, 0.0f, 0.0f});
 
-        cheader::CHeaderOptions ch_opts;
-        ch_opts.symbol_name = config->symbol_name.empty()
-            ? std::string("scap_") + res.probe_label
-            : config->symbol_name;
-        ch_opts.aga = false;            // OCS DPF for Phase 1
-        ch_opts.dpf = true;
-        ch_opts.fade_in = false;
+        auto fallback_sym = std::string("scap_") + res.probe_label;
+        auto ch_opts = pipeline::make_ch_opts({
+            .symbol_override = config->symbol_name.empty()
+                ? std::string_view{fallback_sym}
+                : std::string_view{config->symbol_name},
+            .dpf = true,                // OCS DPF for Phase 1
+        });
         ch_opts.scap_line_moves = &res.line_moves;
         ch_opts.scap_label = res.probe_label;
         ch_opts.scap_anchor_hpos = res.slot_table.line_gate_hpos;
@@ -3983,16 +3956,14 @@ int main(int argc, char* argv[]) {
                 }
                 cli_status("IFF:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
@@ -4011,16 +3982,14 @@ int main(int argc, char* argv[]) {
                 cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
                 if (!ham_result->copper_changes.empty()) {
                     ch_opts.copper_changes = &ham_result->copper_changes;
                     ch_opts.copper_changes_per_line = ham_result->changes_per_line;
@@ -4242,13 +4211,13 @@ int main(int argc, char* argv[]) {
                     cli_status("PNG:    {}", config->output_path);
                 } else if (ends_with(config->output_path, ".cpp") ||
                            ends_with(config->output_path, ".c")) {
-                    cheader::CHeaderOptions ch_opts;
-                    ch_opts.symbol_name = config->symbol_name.empty()
-                        ? derive_symbol_name(config->output_path)
-                        : config->symbol_name;
-                    ch_opts.hires = config->hires;
-                    ch_opts.interlace = config->interlace;
-                    ch_opts.fade_in = config->fade_in;
+                    auto ch_opts = pipeline::make_ch_opts({
+                        .output_path = config->output_path,
+                        .symbol_override = config->symbol_name,
+                        .hires = config->hires,
+                        .interlace = config->interlace,
+                        .fade_in = config->fade_in,
+                    });
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line = copper_result->changes_per_line;
                     ch_opts.copper_scanline_palettes = &copper_result->scanline_palettes;
@@ -4293,12 +4262,12 @@ int main(int argc, char* argv[]) {
                 } else if (ends_with(config->output_path, ".h")) {
                     // .h header for EHB+CAP: bitplanes + base CMAP +
                     // copper change data, no viewer init code.
-                    cheader::CHeaderOptions ch_opts;
-                    ch_opts.symbol_name = config->symbol_name.empty()
-                        ? derive_symbol_name(config->output_path)
-                        : config->symbol_name;
-                    ch_opts.hires = config->hires;
-                    ch_opts.interlace = config->interlace;
+                    auto ch_opts = pipeline::make_ch_opts({
+                        .output_path = config->output_path,
+                        .symbol_override = config->symbol_name,
+                        .hires = config->hires,
+                        .interlace = config->interlace,
+                    });
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line =
                         copper_result->changes_per_line;
@@ -4514,16 +4483,14 @@ int main(int argc, char* argv[]) {
                 cli_status("IFF:    {} ({} bytes)",
                              config->output_path, planes->total_bytes());
             } else if (ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
 
                 auto result = cheader::save(
                     config->output_path, planes.value(), full_palette,
@@ -4536,14 +4503,14 @@ int main(int argc, char* argv[]) {
                 cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                cheader::CHeaderOptions ch_opts2;
-                ch_opts2.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts2.hires = config->hires;
-                ch_opts2.interlace = config->interlace;
-                ch_opts2.aga = (chipset == amiga::Chipset::aga);
-                ch_opts2.fade_in = config->fade_in;
+                auto ch_opts2 = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
@@ -4758,15 +4725,15 @@ int main(int argc, char* argv[]) {
                              config->output_path,
                              copper_result->planes.total_bytes());
             } else if (ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.dpf = use_dpf_std;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                    .dpf = use_dpf_std,
+                });
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
 
@@ -4781,15 +4748,15 @@ int main(int argc, char* argv[]) {
                 cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                cheader::CHeaderOptions ch_opts2;
-                ch_opts2.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts2.hires = config->hires;
-                ch_opts2.interlace = config->interlace;
-                ch_opts2.aga = (chipset == amiga::Chipset::aga);
-                ch_opts2.fade_in = config->fade_in;
-                ch_opts2.dpf = use_dpf_std;
+                auto ch_opts2 = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                    .dpf = use_dpf_std,
+                });
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
 
@@ -4949,13 +4916,11 @@ int main(int argc, char* argv[]) {
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c") ||
                        ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.aga = false;
-                ch_opts.dpf = scap_dpf;     // false for EHB SCAP
-                ch_opts.fade_in = false;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .dpf = scap_dpf,        // false for EHB SCAP
+                });
                 ch_opts.scap_line_moves = &scap_res->line_moves;
                 ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs"
                                               : "scap_dpf_ocs";
@@ -5330,15 +5295,15 @@ int main(int argc, char* argv[]) {
             cli_status("IFF:    {} ({} bytes)",
                          config->output_path, planes->total_bytes());
         } else if (ends_with(config->output_path, ".h")) {
-            cheader::CHeaderOptions ch_opts;
-            ch_opts.symbol_name = config->symbol_name.empty()
-                ? derive_symbol_name(config->output_path)
-                : config->symbol_name;
-            ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.dpf = use_dpf_std;
+            auto ch_opts = pipeline::make_ch_opts({
+                .output_path = config->output_path,
+                .symbol_override = config->symbol_name,
+                .hires = config->hires,
+                .interlace = config->interlace,
+                .aga = (chipset == amiga::Chipset::aga),
+                .fade_in = config->fade_in,
+                .dpf = use_dpf_std,
+            });
 
             auto result = cheader::save(
                 config->output_path, planes.value(), used_palette,
@@ -5482,13 +5447,14 @@ int main(int argc, char* argv[]) {
                     "(ia16-elf-gcc, 16-bit real mode).");
                 return 1;
             } else {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = symbol;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.dpf = use_dpf_std;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .symbol_override = symbol,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                    .dpf = use_dpf_std,
+                });
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result = cheader::save_viewer(

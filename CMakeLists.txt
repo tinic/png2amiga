@@ -69,6 +69,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/cheader_genesis.cpp
     src/snes_io.cpp
     src/genesis.cpp
+    src/pipeline.cpp
     src/api.cpp
 )
 

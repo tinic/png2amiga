@@ -18,6 +18,7 @@
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
+#include "pipeline.hpp"
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
@@ -2080,11 +2081,11 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
-    cheader::CHeaderOptions ch_opts;
-    if (!options.symbol_name.empty())
-        ch_opts.symbol_name = options.symbol_name;
-    ch_opts.dpf = result->dpf;
-    ch_opts.aga = result->aga;
+    auto ch_opts = pipeline::make_ch_opts({
+        .symbol_override = options.symbol_name,
+        .aga = result->aga,
+        .dpf = result->dpf,
+    });
     // CAP per-line copper data, when present.
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
@@ -2222,14 +2223,14 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
         planes.bytes_per_row = new_bpr;
     }
 
-    cheader::CHeaderOptions ch_opts;
-    if (!options.symbol_name.empty())
-        ch_opts.symbol_name = options.symbol_name;
-    ch_opts.hires = result->hires;
-    ch_opts.interlace = result->interlace;
-    ch_opts.aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga);
-    ch_opts.dpf = result->dpf;
-    ch_opts.fade_in = true;  // always enable fade-in for web/compile exports
+    auto ch_opts = pipeline::make_ch_opts({
+        .symbol_override = options.symbol_name,
+        .hires = result->hires,
+        .interlace = result->interlace,
+        .aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga),
+        .fade_in = true,            // always enable fade-in for web/compile exports
+        .dpf = result->dpf,
+    });
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
