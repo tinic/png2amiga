@@ -637,7 +637,7 @@ void print_usage() {
         "\n"
         "Dithering:\n"
         "  --dither <method>\n"
-        "    Palette-aware ordered (best for limited palettes — try first):\n"
+        "    Palette-aware ordered:\n"
         "      opt-checker|opt-line|opt-line-checker|tri-tone|knoll|yliluoma1|yliluoma|yliluoma2\n"
         "    Error diffusion (ranked by mean PSNR across 10 images × 6 modes):\n"
         "      ostromoukhov|sierra-lite|atkinson|jarvis|floyd-steinberg|\n"
