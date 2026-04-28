@@ -1514,13 +1514,24 @@ std::string base64_encode(std::span<const std::uint8_t> data) {
     return out;
 }
 
-void iterm2_display(const Image& image, unsigned scale = 2) {
+// Build the iTerm2 inline-image OSC 1337 sequence at the image's native
+// pixel dimensions. Caller pre-scales via scale_for_display() so the
+// per-mode aspect rules (Amiga 2× horizontal for lores, 2× vertical for
+// non-lace, PAR-aware NN for DOS) are encoded once. No additional
+// display-scale doubling here — that's how we used to land at 4× the
+// source dimensions on the terminal.
+std::string iterm2_inline_escape(const Image& image) {
     auto png = png_io::encode(image);
-    if (!png) return;
+    if (!png) return {};
     auto encoded = base64_encode(*png);
-    cli_status("\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-                 png->size(), image.width() * scale, image.height() * scale,
-                 encoded);
+    return std::format(
+        "\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
+        png->size(), image.width(), image.height(), encoded);
+}
+
+void iterm2_display(const Image& image) {
+    auto seq = iterm2_inline_escape(image);
+    if (!seq.empty()) cli_status("{}", seq);
 }
 
 const char* dither_name(dither::Method m) {
@@ -2808,34 +2819,23 @@ int run_batch(const Config& cfg) {
     // peek; falls through silently on non-tty stdin.
     if (cfg.preview_video && !is_quiet()) {
         // Pre-build frame PNG payloads + their inline-image escape
-        // sequences once so the loop is just a write+sleep cycle.
+        // sequences once so the loop is just a write+sleep cycle. Goes
+        // through the same scale_for_display + iterm2_inline_escape
+        // path as the static --preview, so the looped video matches the
+        // single-shot terminal preview pixel-for-pixel.
         std::vector<std::string> frame_payloads;
         frame_payloads.reserve(n_frames);
-        // Match show_terminal_preview's lores/hires/lace scaling so the
-        // looped video matches the static --preview output dimensions.
-        std::size_t sx = st.hires ? 1 : 2;
-        std::size_t sy = st.interlace ? 1 : 2;
-        if (st.hires && st.interlace) { sx = 1; sy = 1; }
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             Image frame_img(frame_w, frame_h);
             auto x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
             for (std::size_t y = 0; y < frame_h; ++y)
                 for (std::size_t x = 0; x < frame_w; ++x)
                     frame_img[x, y] = st.rendered[x0 + x, y];
-            auto scaled = scale_preview(frame_img, sx, sy);
-            auto png = png_io::encode(scaled);
-            if (!png) continue;
-            auto b64 = base64_encode(*png);
-            // iTerm2 upscales the inline image to the requested
-            // width/height (in display pixels). 2× the encoded size for
-            // a comfortable viewing scale (matches iterm2_display()).
-            constexpr unsigned kDisplayScale = 2;
-            frame_payloads.push_back(std::format(
-                "\033[H\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-                png->size(),
-                scaled.width() * kDisplayScale,
-                scaled.height() * kDisplayScale,
-                b64));
+            auto scaled = scale_for_display(frame_img, st.mode,
+                                            st.hires, st.interlace);
+            auto seq = iterm2_inline_escape(scaled);
+            if (seq.empty()) continue;
+            frame_payloads.push_back("\033[H" + seq);
         }
 
         bool tty_raw = false;
