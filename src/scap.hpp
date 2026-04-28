@@ -235,7 +235,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int palette_diversity = 0,
                                        std::function<void(float, std::string_view)>
                                            on_progress = {},
-                                       bool cap_best = false);
+                                       bool cap_best = false,
+                                       std::string_view cap_best_metric =
+                                           "msssim");
 
 // ---------------------------------------------------------------------------
 // SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
@@ -263,7 +265,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        bool debug_overlay = false,
                                        std::function<void(float, std::string_view)>
                                            on_progress = {},
-                                       bool cap_best = false);
+                                       bool cap_best = false,
+                                       std::string_view cap_best_metric =
+                                           "msssim");
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).

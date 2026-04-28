@@ -434,6 +434,7 @@ struct Config {
     // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
     // Off by default — opt-in for offline / final exports.
     bool cap_best = false;
+    std::string cap_best_metric = "msssim";  // "msssim" | "psnr"
 
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
@@ -783,6 +784,10 @@ void print_usage() {
         "\n"
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
+        "  --cap-best-metric msssim|psnr   Ranking metric for --cap-best\n"
+        "                                  (default: msssim — catches local\n"
+        "                                  banding; psnr is the previous pure\n"
+        "                                  pixel-MSE rank, useful for A/B testing)\n"
         "  --preview-scale <1-8>           Preview display scale (default on macOS:\n"
         "                                  2 on iTerm.app / Kitty / Ghostty via env\n"
         "                                  vars; 1 elsewhere. Other OSes: 1 always —\n"
@@ -894,6 +899,18 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--preview") {
             config.preview = true;
+            continue;
+        }
+
+        if (arg == "--cap-best-metric") {
+            if (i + 1 >= argc)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--cap-best-metric requires msssim or psnr"}};
+            std::string v = argv[++i];
+            if (v != "msssim" && v != "psnr")
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--cap-best-metric must be msssim or psnr"}};
+            config.cap_best_metric = std::move(v);
             continue;
         }
 
@@ -1911,6 +1928,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.ham_triple = static_cast<int>(cfg.ham_triple);
     opts.refine_iterations = cfg.refine_iterations;
     opts.cap_best = cfg.cap_best;
+    opts.cap_best_metric = cfg.cap_best_metric;
     opts.copper = cfg.copper;
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
     opts.reserve_color0 = cfg.reserve_color0;
@@ -4776,6 +4794,9 @@ int main(int argc, char* argv[]) {
             // OCS's discrete 12-bit gamut already snaps small nudges.
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
+            auto cap_metric = (config->cap_best_metric == "psnr")
+                ? pipeline::CapBestMetric::psnr
+                : pipeline::CapBestMetric::msssim;
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, config->palette_diversity,
                 /*jitter_count=*/8,
@@ -4792,7 +4813,8 @@ int main(int argc, char* argv[]) {
                 },
                 [](const CapTrial& t) -> const Image& { return t.rendered; },
                 make_cli_progress_reporter(),
-                jitter_amp);
+                jitter_amp,
+                cap_metric);
             if (best.has_value()) {
                 copper_result = std::move(best->result);
             } else {

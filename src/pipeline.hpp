@@ -228,6 +228,12 @@ float compute_msssim(std::span<const Color3f> a,
                      std::size_t width,
                      std::size_t height);
 
+// Ranking metric for cap_best_sweep. msssim (default) catches local
+// structural differences (banding, swap shimmer); psnr is the previous
+// pure pixel-MSE rank — left as an option so the user can flip and
+// compare on a per-image basis via --cap-best-metric.
+enum class CapBestMetric { msssim, psnr };
+
 // Multi-restart parallel sweep for any --cap-best CAP-aware encoder.
 // Sweeps:
 //   - dither_strength: 5 multipliers (0.7, 0.85, 1.0, 1.15, 1.3)
@@ -263,7 +269,8 @@ std::optional<T> cap_best_sweep(
     EncodeFn encode_fn,
     RenderedFn rendered_fn,
     const std::function<void(float, std::string_view)>& on_progress,
-    float jitter_amplitude = 1.0f) {
+    float jitter_amplitude = 1.0f,
+    CapBestMetric metric = CapBestMetric::msssim) {
     struct Trial {
         dither::Settings settings;
         int diversity;
@@ -312,13 +319,17 @@ std::optional<T> cap_best_sweep(
         }
         if (!retry) return;
         const Image& rendered = rendered_fn(*retry);
-        // MS-SSIM beats PSNR for ranking on banding/shimmer cases —
-        // PSNR averages pixel error across the frame and misses local
-        // structural artefacts that --cap (per-line swaps) and DPF
-        // (8-colour PF2) frequently produce.
-        float score = compute_msssim(
-            source.pixels(), rendered.pixels(),
-            source.width(), source.height());
+        float score;
+        if (metric == CapBestMetric::psnr) {
+            score = color_space::compute_psnr_blurred(
+                source.pixels(), rendered.pixels(),
+                source.width(), source.height());
+        } else {
+            // MS-SSIM beats PSNR for ranking on banding/shimmer cases.
+            score = compute_msssim(
+                source.pixels(), rendered.pixels(),
+                source.width(), source.height());
+        }
         std::lock_guard lk(best_mu);
         if (!best.has_value() || score > best_psnr) {
             best = std::move(*retry);

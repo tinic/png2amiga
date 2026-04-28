@@ -1472,6 +1472,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             };
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
+            auto cap_metric = (options.cap_best_metric == "psnr")
+                ? pipeline::CapBestMetric::psnr
+                : pipeline::CapBestMetric::msssim;
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, options.palette_diversity,
                 /*jitter_count=*/8,
@@ -1489,7 +1492,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 },
                 [](const CapTrial& t) -> const Image& { return t.rendered; },
                 options.on_progress,
-                jitter_amp);
+                jitter_amp,
+                cap_metric);
             if (best.has_value()) {
                 copper_result = std::move(best->result);
             } else {
@@ -1606,7 +1610,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.palette_diversity,
                 options.scap_debug,
                 options.on_progress,
-                options.cap_best)
+                options.cap_best,
+                options.cap_best_metric)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
@@ -1617,7 +1622,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
                 options.on_progress,
-                options.cap_best);
+                options.cap_best,
+                options.cap_best_metric);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;

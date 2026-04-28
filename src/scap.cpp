@@ -166,7 +166,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int palette_diversity,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
-                                       bool cap_best) {
+                                       bool cap_best,
+                                       std::string_view cap_best_metric) {
     // --cap-best: multi-restart with varied palette_diversity + dither
     // strength. The SCAP planner is deterministic for a given input, so
     // varying these knobs is the only way to sample different
@@ -177,6 +178,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // sensitive to which colours win the median-cut, so heavy jitter
         // sampling buys more here than for wider palettes (EHB stays at
         // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
+        auto metric = (cap_best_metric == "psnr")
+            ? pipeline::CapBestMetric::psnr
+            : pipeline::CapBestMetric::msssim;
         auto best = pipeline::cap_best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/24,
             [&](const Image& jittered_in,
@@ -187,7 +191,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     /*on_progress=*/{}, /*cap_best=*/false);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
-            on_progress);
+            on_progress,
+            /*jitter_amplitude=*/1.0f,
+            metric);
         if (best.has_value()) return std::move(*best);
         // Fall through to the single-pass path if every restart failed
         // (shouldn't happen with valid input, but degrade gracefully).
@@ -1052,11 +1058,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        bool debug_overlay,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
-                                       bool cap_best) {
+                                       bool cap_best,
+                                       std::string_view cap_best_metric) {
     // --cap-best: 8 jitter seeds (32-base palette has shallower basins
     // than DPF's 8-base, so heavy jitter sampling buys less here).
     // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
     if (cap_best) {
+        auto metric = (cap_best_metric == "psnr")
+            ? pipeline::CapBestMetric::psnr
+            : pipeline::CapBestMetric::msssim;
         auto best = pipeline::cap_best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,
@@ -1067,7 +1077,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     /*on_progress=*/{}, /*cap_best=*/false);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
-            on_progress);
+            on_progress,
+            /*jitter_amplitude=*/1.0f,
+            metric);
         if (best.has_value()) return std::move(*best);
     }
     auto& table = kScap6bplEhb;
