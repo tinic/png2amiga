@@ -783,9 +783,10 @@ void print_usage() {
         "\n"
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
-        "  --preview-scale <1-8>           Preview display scale (default: 2 on\n"
-        "                                  iTerm.app / Ghostty / Kitty via env vars,\n"
-        "                                  1 elsewhere)\n"
+        "  --preview-scale <1-8>           Preview display scale (default on macOS:\n"
+        "                                  2 on iTerm.app / Kitty / Ghostty via env\n"
+        "                                  vars; 1 elsewhere. Other OSes: 1 always —\n"
+        "                                  pass --preview-scale 2 on Linux HiDPI)\n"
         "  --preview-video                 Batch only: loop generated frames inline\n"
         "                                  in iTerm2 until any key is pressed.\n"
         "  --preview-video-fps <fps>       Playback rate for --preview-video.\n"
@@ -1532,26 +1533,31 @@ std::string base64_encode(std::span<const std::uint8_t> data) {
     return out;
 }
 
-// Display-scale multiplier applied to OSC 1337 inline-image width/height.
-// Resolved once in main() from --preview-scale (CLI override 1..8) or
-// $TERM_PROGRAM (2 on iTerm.app, 1 elsewhere). Until main() sets it the
+// Forward declaration: scale_preview() is defined later in this file
+// (alongside the other display-scaling helpers), but inline_image_escape
+// below needs it to pre-scale by g_preview_scale.
+Image scale_preview(const Image& src, std::size_t sx, std::size_t sy);
+
+// Display-scale multiplier applied to inline preview images. Resolved
+// once in main() from --preview-scale (CLI override 1..8) or auto
+// (2× on macOS iTerm/Kitty/Ghostty, 1× everywhere else — Linux HiDPI
+// is rare enough not to be worth a default). Until main() sets it the
 // fallback is 1 — safe for non-interactive paths.
 unsigned g_preview_scale = 1;
 
-// Heuristic: which terminals render OSC 1337 / Kitty graphics inline
-// images at *device* pixels (so on Retina the image looks half-sized
-// without an explicit 2× multiplier)? Detected via env vars; no I/O.
-//   - iTerm:   TERM_PROGRAM=iTerm.app
-//   - Ghostty: TERM_PROGRAM=ghostty (Ghostty also exports
-//              GHOSTTY_RESOURCES_DIR; either signal is enough)
-//   - Kitty:   TERM=xterm-kitty or KITTY_WINDOW_ID set inside the
-//              terminal. Kitty implements iTerm's OSC 1337 protocol
-//              alongside its own graphics protocol for compatibility.
-// Anywhere else (Terminal.app, GNU Screen / tmux without passthrough,
-// ssh, non-iTerm-protocol terminals) → 1×, harmless: they either
-// render inline images at the right size already or don't render
-// them at all.
-bool terminal_renders_inline_at_device_pixels() {
+// Which inline-image protocol does this terminal speak?
+//   - iTerm: OSC 1337 ;File=inline=1; ... <BEL>. iTerm.app only —
+//     Kitty literally dumps the base64 to screen, contrary to a
+//     plausible "compat" assumption.
+//   - Kitty: APC _G a=T,f=100, ... <ST>. Kitty's native protocol.
+//     Ghostty implements Kitty graphics (alongside its own UI), no
+//     OSC 1337 fallback. Kitty likewise does NOT speak OSC 1337.
+//   - none:  Anywhere else (Terminal.app, ssh w/o env passthrough,
+//     non-image terminals). Skip the inline emit; preview becomes
+//     a no-op.
+enum class InlineImageProtocol { none, iterm, kitty };
+
+InlineImageProtocol detect_inline_image_protocol() {
     auto eq = [](const char* a, const char* b) {
         return a && std::strcmp(a, b) == 0;
     };
@@ -1563,44 +1569,87 @@ bool terminal_renders_inline_at_device_pixels() {
         return v && *v;
     };
 
-    auto term_program = std::getenv("TERM_PROGRAM");
-    if (eq(term_program, "iTerm.app")) return true;
-    if (eq(term_program, "ghostty")) return true;
-    if (set("GHOSTTY_RESOURCES_DIR"))   return true;
-
     auto term = std::getenv("TERM");
-    if (contains(term, "kitty"))     return true;
-    if (contains(term, "ghostty"))   return true;
-    if (set("KITTY_WINDOW_ID"))      return true;
+    auto term_program = std::getenv("TERM_PROGRAM");
 
-    return false;
+    // Kitty / Ghostty — both speak the Kitty graphics protocol.
+    if (contains(term, "kitty"))         return InlineImageProtocol::kitty;
+    if (contains(term, "ghostty"))       return InlineImageProtocol::kitty;
+    if (set("KITTY_WINDOW_ID"))          return InlineImageProtocol::kitty;
+    if (eq(term_program, "ghostty"))     return InlineImageProtocol::kitty;
+    if (set("GHOSTTY_RESOURCES_DIR"))    return InlineImageProtocol::kitty;
+
+    // iTerm.app — OSC 1337 only.
+    if (eq(term_program, "iTerm.app"))   return InlineImageProtocol::iterm;
+
+    return InlineImageProtocol::none;
 }
 
 unsigned resolve_preview_scale(int user_override) {
     if (user_override >= 1 && user_override <= 8)
         return static_cast<unsigned>(user_override);
-    return terminal_renders_inline_at_device_pixels() ? 2u : 1u;
+#ifdef __APPLE__
+    // HiDPI is the default on Apple laptops since 2012; doubling on a
+    // recognised inline-image terminal makes preview readable. Other
+    // platforms default to 1× — Linux + Windows HiDPI exists but isn't
+    // common enough to assume; users on those setups can pass
+    // --preview-scale 2 explicitly.
+    if (detect_inline_image_protocol() != InlineImageProtocol::none) return 2;
+#endif
+    return 1;
 }
 
-// Build the iTerm2 inline-image OSC 1337 sequence. Width/height go out
-// at scale_for_display()'s output dimensions × g_preview_scale, where
-// the multiplier corrects for iTerm rendering OSC `Npx` as native
-// device pixels (so on Retina the visual image is half-sized without
-// it). Caller pre-scales via scale_for_display() to encode the per-
-// mode aspect rules.
-std::string iterm2_inline_escape(const Image& image) {
-    auto png = png_io::encode(image);
+// Build the inline-image escape sequence for the current terminal.
+// Pre-scales the image by g_preview_scale so both protocols can use
+// their native-pixel render path uniformly: iTerm renders OSC `Npx`
+// at device pixels, Kitty renders the PNG at its encoded pixel size,
+// so a pre-scaled image looks the right visual size on either path
+// without per-protocol display-size arithmetic. Returns empty string
+// when the terminal speaks neither protocol — caller suppresses the
+// preview emit.
+std::string inline_image_escape(const Image& image) {
+    auto proto = detect_inline_image_protocol();
+    if (proto == InlineImageProtocol::none) return {};
+
+    Image scaled = (g_preview_scale > 1)
+        ? scale_preview(image, g_preview_scale, g_preview_scale)
+        : image;
+    auto png = png_io::encode(scaled);
     if (!png) return {};
     auto encoded = base64_encode(*png);
-    auto w = image.width() * g_preview_scale;
-    auto h = image.height() * g_preview_scale;
-    return std::format(
-        "\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-        png->size(), w, h, encoded);
+
+    if (proto == InlineImageProtocol::iterm) {
+        return std::format(
+            "\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
+            png->size(), scaled.width(), scaled.height(), encoded);
+    }
+
+    // Kitty graphics protocol — same chunking pattern as constixel.hpp's
+    // png_to_kitty(), with q=2 added to suppress OK / failure responses
+    // from the terminal (otherwise they'd land on stdin).
+    //   First chunk:      \033_Ga=T,f=100,q=2,m=<0|1>;<base64><\033\\>
+    //   Subsequent:       \033_Gm=<0|1>;<base64><\033\\>
+    //   m=0 → final chunk; m=1 → more to come. Per spec all chunks but
+    //   the last must be ≤4096 bytes of base64.
+    std::string out;
+    constexpr std::size_t kMaxChunk = 4096;
+    bool first = true;
+    std::size_t pos = 0;
+    while (pos < encoded.size()) {
+        auto bytes = std::min(encoded.size() - pos, kMaxChunk);
+        bool last = (pos + bytes == encoded.size());
+        out.append(first ? "\033_Ga=T,f=100,q=2,"  : "\033_G");
+        first = false;
+        out.append(last  ? "m=0;" : "m=1;");
+        out.append(encoded, pos, bytes);
+        out.append("\033\\");
+        pos += bytes;
+    }
+    return out;
 }
 
 void iterm2_display(const Image& image) {
-    auto seq = iterm2_inline_escape(image);
+    auto seq = inline_image_escape(image);
     if (!seq.empty()) cli_status("{}", seq);
 }
 
@@ -2914,7 +2963,7 @@ int run_batch(const Config& cfg) {
     if (cfg.preview_video && !is_quiet()) {
         // Pre-build frame PNG payloads + their inline-image escape
         // sequences once so the loop is just a write+sleep cycle. Goes
-        // through the same scale_for_display + iterm2_inline_escape
+        // through the same scale_for_display + inline_image_escape
         // path as the static --preview, so the looped video matches the
         // single-shot terminal preview pixel-for-pixel.
         std::vector<std::string> frame_payloads;
@@ -2927,7 +2976,7 @@ int run_batch(const Config& cfg) {
                     frame_img[x, y] = st.rendered[x0 + x, y];
             auto scaled = scale_for_display(frame_img, st.mode,
                                             st.hires, st.interlace);
-            auto seq = iterm2_inline_escape(scaled);
+            auto seq = inline_image_escape(scaled);
             if (seq.empty()) continue;
             frame_payloads.push_back("\033[H" + seq);
         }
