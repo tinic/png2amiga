@@ -874,6 +874,19 @@ Result<CopperResult> encode_copper(const Image& image,
             all_indices[y * width + x] = static_cast<std::uint8_t>(k);
             return {chosen, thr};
         });
+
+    // DBS post-pass refinement for CAP. The base picker above already
+    // picked a sensible per-row palette index per pixel; DBS sweeps
+    // and toggles indices to lower the HVS-blurred OKLab cost,
+    // respecting that each row has a different palette.
+    if (dither_settings.method == dither::Method::dbs) {
+        dither::apply_dbs_post_pass(
+            image, all_indices,
+            [&](std::size_t /*x*/, std::size_t y)
+                -> std::span<const color_space::OKLab> {
+                return pal_lab_per_row[y];
+            });
+    }
     pd_progress(1.0f);
 
     // --- Feedback: compute per-column dithered error for next iteration ---

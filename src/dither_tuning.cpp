@@ -51,6 +51,12 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::structure_fs:    return Defaults{0.80f, 0.35f};  // 29.184 dB
     case dither::Method::contrast_fs:     return Defaults{1.00f, 0.35f};  // 28.574 dB
     case dither::Method::zhoufang:        return Defaults{0.60f, 0.35f};  // 30.436 dB
+    // DBS: warm-starts from FS, then optimises blurred-OKLab cost via
+    // greedy toggles. Use the same context-tuned (mode/depth/CAP/SCAP)
+    // FS defaults as plain Floyd-Steinberg — DBS converges to a local
+    // minimum, so the warm start matters and per-context FS values are
+    // already empirically optimal for that bucket. Falling through.
+    case dither::Method::dbs: break;
     default: break;
     }
 

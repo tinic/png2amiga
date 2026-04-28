@@ -2095,7 +2095,6 @@ DitherResult apply_ostromoukhov(
 }
 
 // ===========================================================================
-// ===========================================================================
 // Direct Binary Search (Allebach et al. ~1992)
 //
 // The perceptual-optimum halftone via greedy descent on an HVS-blurred
@@ -2373,6 +2372,170 @@ DitherResult apply_dbs(
     res.total_error = total_err;
     return res;
 }
+
+} // namespace (close anon ns; apply_dbs_post_pass is public API)
+
+// ===========================================================================
+// DBS post-pass refinement with per-pixel palette lookup.
+//
+// Same algorithm as apply_dbs but the candidate palette can vary by
+// pixel — provided by the caller via a callback. Used by CAP / SCAP /
+// EHB+CAP / EHB+SCAP encoders, where the "valid palette at this
+// pixel" depends on which scanline (or scanline+strip) it falls in.
+// The base encoder has already filled `indices`; we just refine in
+// place.
+// ===========================================================================
+
+void apply_dbs_post_pass(
+    const Image& image,
+    std::vector<std::uint8_t>& indices,
+    const PalettePerPixel& palette_for_pixel,
+    int max_sweeps) {
+
+    auto w = image.width();
+    auto h = image.height();
+    if (indices.size() != w * h) return;
+
+    // Build source-Lab buffer + halftone-Lab buffer (the rendered colour
+    // for the current per-pixel palette index).
+    std::vector<OKLab> source_lab(w * h);
+    std::vector<OKLab> halftone_lab(w * h);
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            std::size_t idx = y * w + x;
+            source_lab[idx] = color_space::linear_to_oklab(image[x, y]);
+            auto pal = palette_for_pixel(x, y);
+            halftone_lab[idx] = pal[indices[idx]];
+        }
+    }
+
+    // Two-stage HVS blur (same kernel as apply_dbs).
+    std::vector<OKLab> source_h(w * h), source_blur(w * h);
+    std::vector<OKLab> half_h(w * h), half_blur(w * h);
+    auto vertical = [&](std::span<const OKLab> in, std::span<OKLab> out) {
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                OKLab acc{};
+                for (int dy = -2; dy <= 2; ++dy) {
+                    auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                    if (yy < 0) yy = 0;
+                    if (yy >= static_cast<std::ptrdiff_t>(h))
+                        yy = static_cast<std::ptrdiff_t>(h) - 1;
+                    float kw = kHvsKernel[dy + 2];
+                    auto& s = in[static_cast<std::size_t>(yy) * w + x];
+                    acc.L += s.L * kw;
+                    acc.a += s.a * kw;
+                    acc.b += s.b * kw;
+                }
+                out[y * w + x] = acc;
+            }
+        }
+    };
+    hvs_blur_horizontal(source_lab, source_h, w, h);
+    hvs_blur_horizontal(halftone_lab, half_h, w, h);
+    vertical(source_h, source_blur);
+    vertical(half_h, half_blur);
+
+    auto cost_at = [&](std::size_t idx) -> float {
+        auto& s = source_blur[idx];
+        auto& g = half_blur[idx];
+        float dL = s.L - g.L, da = s.a - g.a, db = s.b - g.b;
+        return dL * dL + da * da + db * db;
+    };
+
+    for (int sweep = 0; sweep < max_sweeps; ++sweep) {
+        bool changed = false;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                std::size_t pix = y * w + x;
+                std::uint8_t cur_idx = indices[pix];
+                auto pal = palette_for_pixel(x, y);
+
+                // Current cost over the 5×5 window.
+                float current_cost = 0.0f;
+                for (int dy = -2; dy <= 2; ++dy) {
+                    auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                    if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
+                    for (int dx = -2; dx <= 2; ++dx) {
+                        auto xx = static_cast<std::ptrdiff_t>(x) + dx;
+                        if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
+                        current_cost += cost_at(
+                            static_cast<std::size_t>(yy) * w +
+                            static_cast<std::size_t>(xx));
+                    }
+                }
+
+                std::size_t best_idx = cur_idx;
+                float best_delta = 0.0f;
+                for (std::size_t pi = 0; pi < pal.size(); ++pi) {
+                    if (pi == cur_idx) continue;
+                    OKLab old_pal = pal[cur_idx];
+                    OKLab new_pal = pal[pi];
+                    OKLab delta_h{
+                        new_pal.L - old_pal.L,
+                        new_pal.a - old_pal.a,
+                        new_pal.b - old_pal.b,
+                    };
+                    float new_cost = 0.0f;
+                    for (int dy = -2; dy <= 2; ++dy) {
+                        auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                        if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
+                        for (int dx = -2; dx <= 2; ++dx) {
+                            auto xx = static_cast<std::ptrdiff_t>(x) + dx;
+                            if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
+                            float kk = kHvsKernel[dx + 2] * kHvsKernel[dy + 2];
+                            std::size_t nidx =
+                                static_cast<std::size_t>(yy) * w +
+                                static_cast<std::size_t>(xx);
+                            auto& s = source_blur[nidx];
+                            auto& g = half_blur[nidx];
+                            float dL = s.L - (g.L + delta_h.L * kk);
+                            float da = s.a - (g.a + delta_h.a * kk);
+                            float db = s.b - (g.b + delta_h.b * kk);
+                            new_cost += dL * dL + da * da + db * db;
+                        }
+                    }
+                    float delta = new_cost - current_cost;
+                    if (delta < best_delta) {
+                        best_delta = delta;
+                        best_idx = pi;
+                    }
+                }
+
+                if (best_idx != cur_idx) {
+                    OKLab old_pal = pal[cur_idx];
+                    OKLab new_pal = pal[best_idx];
+                    OKLab delta_h{
+                        new_pal.L - old_pal.L,
+                        new_pal.a - old_pal.a,
+                        new_pal.b - old_pal.b,
+                    };
+                    indices[pix] = static_cast<std::uint8_t>(best_idx);
+                    halftone_lab[pix] = new_pal;
+                    for (int dy = -2; dy <= 2; ++dy) {
+                        auto yy = static_cast<std::ptrdiff_t>(y) + dy;
+                        if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
+                        for (int dx = -2; dx <= 2; ++dx) {
+                            auto xx = static_cast<std::ptrdiff_t>(x) + dx;
+                            if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
+                            float kk = kHvsKernel[dx + 2] * kHvsKernel[dy + 2];
+                            std::size_t nidx =
+                                static_cast<std::size_t>(yy) * w +
+                                static_cast<std::size_t>(xx);
+                            half_blur[nidx].L += delta_h.L * kk;
+                            half_blur[nidx].a += delta_h.a * kk;
+                            half_blur[nidx].b += delta_h.b * kk;
+                        }
+                    }
+                    changed = true;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+namespace { // reopen anon ns for the rest of the helpers
 
 // ===========================================================================
 // No-dither fallback (plain nearest-color mapping)

@@ -189,6 +189,9 @@ const groupedDitherOptions = computed(() => {
   const hide_ostro = ht !== null
   const hide_nonsquare = ht !== null
   const hide_yliluoma = ht !== null || isSnesDirectMode(options.mode)
+  // DBS sweeps palette indices and so doesn't apply in HAM (no fixed
+  // palette) or SNES Mode 7 Direct (RGB443 grid quantisation).
+  const hide_dbs = ht !== null || isSnesDirectMode(options.mode)
   return DITHER_METHODS
     .map(g => ({
       label: g.group,
@@ -196,6 +199,7 @@ const groupedDitherOptions = computed(() => {
         .filter(d => !(hide_ostro && d.value === 'ostromoukhov'))
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
         .filter(d => !(hide_yliluoma && YLIL_FAMILY.has(d.value)))
+        .filter(d => !(hide_dbs && d.value === 'dbs'))
         .map(d => ({ value: d.value, label: d.label }))
     }))
     .filter(g => g.items.length > 0)
@@ -385,6 +389,7 @@ function syncNativeParToMode(mode: string, oldMode: string): void {
 const HAM_INCOMPATIBLE_DITHERS = new Set([
   'ostromoukhov', 'yliluoma', 'yliluoma2', 'opt-checker', 'knoll',
   'tri-tone', 'yliluoma1', 'opt-line', 'opt-line-checker',
+  'dbs',  // DBS sweeps palette indices; HAM has none
 ])
 
 function maybeFallbackHamDither(mode: string): void {

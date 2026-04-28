@@ -196,7 +196,6 @@ export const DITHER_METHODS: DitherGroup[] = [
   // (yliluoma family / knoll / opt-* / tri-tone) follow.
   { group: 'Error Diffusion', items: [
     { value: 'ostromoukhov',    label: 'Ostromoukhov' },
-    { value: 'dbs',             label: 'DBS\n(slow)' },
     { value: 'sierra-lite',     label: 'Sierra Lite' },
     { value: 'atkinson',        label: 'Atkinson' },
     { value: 'jarvis',          label: 'Jarvis' },
@@ -219,6 +218,7 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'structure-fs',    label: 'Structure\nFS' },
     { value: 'contrast-fs',     label: 'Contrast\nFS' },
     { value: 'zhoufang',        label: 'Zhou–\nFang' },
+    { value: 'dbs',             label: 'DBS\n(slow)' },
   ]},
   { group: 'Bayer', items: [
     { value: 'bayer2x2', label: 'Bayer 2×2' },

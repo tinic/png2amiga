@@ -3857,6 +3857,12 @@ int main(int argc, char* argv[]) {
         auto ham_default_dither = dither::Method::ostromoukhov;
         auto ham_dither = config->dither_explicit
             ? config->dither_method : ham_default_dither;
+        // HAM doesn't have a fixed palette — DBS sweeps palette indices
+        // and so doesn't apply. Auto-fall-back to FS so users selecting
+        // DBS still get a sensible result.
+        if (ham_dither == dither::Method::dbs) {
+            ham_dither = dither::Method::floyd_steinberg;
+        }
         cli_status("Mode:   HAM{} (beam: {}, dither: {})",
                      ham_params.bitplane_depth,
                      config->ham_beam,
@@ -3872,6 +3878,7 @@ int main(int argc, char* argv[]) {
             .scap    = false,
             .copper  = config->copper,
             .chipset = chipset,
+            .method  = ham_dither,
         });
         ham_opts.dither_strength = config->dither_strength_explicit
                                    ? config->dither_strength : ham_tune.strength;
@@ -4103,6 +4110,7 @@ int main(int argc, char* argv[]) {
                 .scap    = false,
                 .copper  = true,
                 .chipset = chipset,
+                .method  = config->dither_method,
             });
             dith.strength = config->dither_strength_explicit
                             ? config->dither_strength : ehb_cap_tune.strength;
@@ -4164,6 +4172,17 @@ int main(int argc, char* argv[]) {
                     all_indices[y * w + x] = static_cast<std::uint8_t>(k);
                     return {chosen, thr};
                 });
+
+            // DBS post-pass for EHB+CAP via the CLI path. Mirrors the
+            // api.cpp branch above — per-row 64-entry EHB palette.
+            if (dith.method == dither::Method::dbs) {
+                dither::apply_dbs_post_pass(
+                    *image, all_indices,
+                    [&](std::size_t /*x*/, std::size_t y)
+                        -> std::span<const color_space::OKLab> {
+                        return pal_lab_per_row[y];
+                    });
+            }
 
             if (has_transparency) {
                 for (std::size_t i = 0; i < transparency_mask.size() && i < all_indices.size(); ++i)
@@ -4382,6 +4401,7 @@ int main(int argc, char* argv[]) {
             .scap    = false,
             .copper  = false,
             .chipset = chipset,
+            .method  = config->dither_method,
         });
         dith.strength = config->dither_strength_explicit
                         ? config->dither_strength : ehb_tune.strength;
@@ -4594,6 +4614,7 @@ int main(int argc, char* argv[]) {
             .scap    = false,
             .copper  = true,
             .chipset = chipset,
+            .method  = config->dither_method,
         });
         dith.strength = config->dither_strength_explicit
                         ? config->dither_strength : cap_tune.strength;
@@ -4829,6 +4850,7 @@ int main(int argc, char* argv[]) {
             .scap    = true,
             .copper  = true,    // SCAP layers on top of CAP since b0be343
             .chipset = chipset,
+            .method  = config->dither_method,
         });
         scap_dith.error_clamp = config->error_clamp_explicit
                                 ? config->error_clamp : tune.error_clamp;

@@ -714,6 +714,32 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             });
         total_error = static_cast<double>(te);
     }
+
+    // DBS post-pass refinement. Per-row, per-strip palettes resolve
+    // through the same x_strip[x] lookup as the picker above; DBS
+    // sweeps each pixel and tries all 8 candidates in that pixel's
+    // effective strip palette, keeping any toggle that lowers the
+    // HVS-blurred OKLab cost. After this pass we re-render `preview`
+    // from the (possibly-changed) indices so caller-visible buffers
+    // stay consistent.
+    if (dither_settings.method == dither::Method::dbs) {
+        dither::apply_dbs_post_pass(
+            src, indices,
+            [&](std::size_t x, std::size_t y)
+                -> std::span<const color_space::OKLab> {
+                auto s = static_cast<std::size_t>(x_strip[x]);
+                auto& pl_lab = strip_pal_lab_per_row[y][s];
+                return std::span<const color_space::OKLab>(
+                    pl_lab.data(), kBaseColors);
+            });
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                auto s = static_cast<std::size_t>(x_strip[x]);
+                preview[x, y] =
+                    strip_palettes_per_row[y][s][indices[y * width + x]];
+            }
+        }
+    }
     report_pass(pass + 1, 0.0f);
     }  // kPasses
     if (on_progress) on_progress(1.0f, "done");
@@ -1642,6 +1668,29 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 return {chosen, thr};
             });
         total_error = static_cast<double>(te);
+    }
+
+    // DBS post-pass for SCAP+EHB. Same shape as the DPF SCAP path, but
+    // the candidate set is the 64-entry effective palette (32 base +
+    // 32 half-brites). DBS picks any of the 64 indices; the half-brite
+    // bit is just bit 5 of the resulting index.
+    if (dither_settings.method == dither::Method::dbs) {
+        dither::apply_dbs_post_pass(
+            src, indices,
+            [&](std::size_t x, std::size_t y)
+                -> std::span<const color_space::OKLab> {
+                auto s = static_cast<std::size_t>(x_strip[x]);
+                auto& eff_lab = strip_eff_lab_per_row[y][s];
+                return std::span<const color_space::OKLab>(
+                    eff_lab.data(), kEffective);
+            });
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                auto s = static_cast<std::size_t>(x_strip[x]);
+                preview[x, y] =
+                    strip_eff_per_row[y][s][indices[y * width + x]];
+            }
+        }
     }
     report_pass(pass + 1, 0.0f);
     }  // kPasses

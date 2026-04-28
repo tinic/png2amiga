@@ -293,6 +293,30 @@ std::uint8_t pick_tri_tone_index(
     std::size_t x, std::size_t y, float strength);
 
 // ---------------------------------------------------------------------------
+// Direct Binary Search post-pass refinement for tiled-palette modes
+// (CAP per-line, SCAP per-strip). The base CAP/SCAP encoder has
+// already filled `indices` with an initial assignment; DBS sweeps
+// each pixel and tries every candidate in that pixel's effective
+// palette (looked up via `palette_for_pixel(x, y)`). Accepts any
+// toggle that lowers the HVS-blurred OKLab cost.
+//
+// This complements the global-palette `Method::dbs` path in apply()
+// by delegating palette resolution to the caller — so CAP/SCAP can
+// supply per-row or per-strip palette spans without the DBS code
+// needing to know about CAP/SCAP layout.
+// ---------------------------------------------------------------------------
+
+using PalettePerPixel =
+    std::function<std::span<const png2amiga::color_space::OKLab>(
+        std::size_t x, std::size_t y)>;
+
+void apply_dbs_post_pass(
+    const Image& image,
+    std::vector<std::uint8_t>& indices,  // in/out, size w*h
+    const PalettePerPixel& palette_for_pixel,
+    int max_sweeps = 8);
+
+// ---------------------------------------------------------------------------
 // diffuse_raw_buffer — single source of truth for per-pixel error-diffusion
 // scaffolding across all "raw buffer" mode pipelines (HAM, EHB+CAP, copper,
 // SCAP, SNES Mode 7, EHB main path). Owns:

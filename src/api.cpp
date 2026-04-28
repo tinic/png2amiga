@@ -1089,8 +1089,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.beam_width = static_cast<std::size_t>(
             std::clamp(options.ham_beam, 1, 256));
 
-        // Wire dither settings into HAM options
+        // Wire dither settings into HAM options. DBS doesn't apply
+        // (HAM uses ops, not palette indices) — silently fall back to
+        // FS so users picking DBS still get a sensible result.
         ham_opts.dither_method = parse_dither(options.dither);
+        if (ham_opts.dither_method == dither::Method::dbs) {
+            ham_opts.dither_method = dither::Method::floyd_steinberg;
+        }
         ham_opts.dither_strength = options.dither_strength;
         ham_opts.error_clamp = options.error_clamp;
         ham_opts.palette_diversity = options.palette_diversity;
@@ -1247,6 +1252,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     all_indices[y * w + x] = static_cast<std::uint8_t>(k);
                     return {chosen, thr};
                 });
+
+            // DBS post-pass: refine indices against per-row 64-entry
+            // EHB palettes. The half-brite bit is just bit 5 of the
+            // index, so DBS picks any of the 64 effective entries.
+            if (dith.method == dither::Method::dbs) {
+                dither::apply_dbs_post_pass(
+                    *image, all_indices,
+                    [&](std::size_t /*x*/, std::size_t y)
+                        -> std::span<const color_space::OKLab> {
+                        return pal_lab_per_row[y];
+                    });
+            }
 
             // Handle transparency
             if (has_transparency) {
