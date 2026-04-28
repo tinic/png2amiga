@@ -1,7 +1,9 @@
 #pragma once
 
+#include "amiga.hpp"
 #include "cheader.hpp"
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -10,6 +12,16 @@ namespace png2amiga::pipeline {
 // Filename stem -> C identifier (lowercased, non-alphanumeric -> '_',
 // leading digit prefixed with '_'). Empty result becomes "image".
 std::string derive_symbol_name(std::string_view path);
+
+// Canonical chipset resolution. Modes that need >6 bitplanes force AGA;
+// otherwise the user's request wins (explicit Chipset::ocs is preserved),
+// and an empty/unrecognised request defaults to OCS. Used by both CLI
+// (Config::chipset is std::optional<Chipset>) and WASM (Options::chipset
+// is a string parsed from JS).
+amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested,
+                               amiga::Mode mode);
+amiga::Chipset resolve_chipset(std::string_view requested,
+                               amiga::Mode mode);
 
 // Source-of-truth for the "core" CHeaderOptions fields. Each output site
 // fills this from its current context (Config / api::Options / pipeline

@@ -28,6 +28,21 @@ std::string derive_symbol_name(std::string_view path) {
     return result;
 }
 
+amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested,
+                               amiga::Mode mode) {
+    auto params = amiga::get_mode_params(mode);
+    if (params.bitplane_depth > 6) return amiga::Chipset::aga;
+    if (requested.has_value()) return *requested;
+    return amiga::Chipset::ocs;
+}
+
+amiga::Chipset resolve_chipset(std::string_view requested, amiga::Mode mode) {
+    std::optional<amiga::Chipset> req;
+    if (requested == "aga") req = amiga::Chipset::aga;
+    else if (requested == "ocs") req = amiga::Chipset::ocs;
+    return resolve_chipset(req, mode);
+}
+
 cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base) {
     cheader::CHeaderOptions ch;
     ch.symbol_name = base.symbol_override.empty()

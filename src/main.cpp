@@ -1591,11 +1591,7 @@ const char* dither_name(dither::Method m) {
 // All other modes default to OCS but can be overridden with --chipset aga
 // (e.g., HAM6 on AGA gives 24-bit base palette precision).
 amiga::Chipset effective_chipset(const Config& cfg) {
-    auto params = amiga::get_mode_params(cfg.mode);
-    bool requires_aga = params.bitplane_depth > 6;
-    if (requires_aga) return amiga::Chipset::aga;
-    if (cfg.chipset.has_value()) return *cfg.chipset;
-    return amiga::Chipset::ocs;
+    return pipeline::resolve_chipset(cfg.chipset, cfg.mode);
 }
 
 // Quantize palette: OCS uses brute-force, AGA uses median-cut

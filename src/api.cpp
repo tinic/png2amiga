@@ -96,12 +96,7 @@ amiga::Mode parse_mode(const std::string& s) {
     return amiga::Mode::lores;
 }
 
-amiga::Chipset resolve_chipset(const std::string& s, amiga::Mode mode) {
-    auto params = amiga::get_mode_params(mode);
-    if (params.bitplane_depth > 6) return amiga::Chipset::aga;
-    if (s == "aga") return amiga::Chipset::aga;
-    return amiga::Chipset::ocs;
-}
+using pipeline::resolve_chipset;
 
 quantize::Algorithm quantize_algo(amiga::Chipset chipset, amiga::Mode mode = amiga::Mode::lores) {
     // STF uses brute-force over 512 colors (same algorithm, different precision)
