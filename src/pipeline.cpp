@@ -1,5 +1,7 @@
 #include "pipeline.hpp"
 
+#include "color_space.hpp"
+
 #include <cctype>
 
 namespace png2amiga::pipeline {
@@ -41,6 +43,13 @@ amiga::Chipset resolve_chipset(std::string_view requested, amiga::Mode mode) {
     if (requested == "aga") req = amiga::Chipset::aga;
     else if (requested == "ocs") req = amiga::Chipset::ocs;
     return resolve_chipset(req, mode);
+}
+
+void PipelineResult::finalize_psnr(const Image& src, float total_error) {
+    quant_error = total_error;
+    psnr = color_space::compute_psnr_blurred(
+        src.pixels(), rendered.pixels(),
+        src.width(), src.height());
 }
 
 cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base) {
