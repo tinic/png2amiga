@@ -9,17 +9,14 @@
 #include "pipeline.hpp"
 #include "types.hpp"
 
+// scap.cpp's parallel sweep machinery is delegated to
+// pipeline::cap_best_sweep / pipeline::parallel_for, so this TU itself
+// doesn't need <thread> / <atomic> / <mutex> any more.
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <mutex>
 #include <optional>
-#ifndef __EMSCRIPTEN__
-#include <thread>
-#endif
 #include <cstdint>
 #include <format>
-#include <limits>
 #include <vector>
 
 namespace png2amiga::scap {

@@ -15,6 +15,17 @@ target_compile_definitions(spng PUBLIC SPNG_STATIC)
 target_include_directories(spng SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libspng)
 target_link_libraries(spng PRIVATE miniz)
 
+# WASM pthreads link mode propagates -shared-memory across the whole
+# program, so every TU (including these vendored C libraries) must be
+# compiled with -pthread / atomics+bulk-memory or wasm-ld rejects the
+# link. -pthread on the C-only targets is harmless on native (just
+# enables -D_REENTRANT / -lpthread which they don't use).
+if(EMSCRIPTEN)
+    target_compile_options(stb   PRIVATE -pthread)
+    target_compile_options(miniz PRIVATE -pthread)
+    target_compile_options(spng  PRIVATE -pthread)
+endif()
+
 # libwebp: decoder only, no tools, no threading (for WASM portability)
 set(WEBP_BUILD_ANIM_UTILS OFF CACHE BOOL "" FORCE)
 set(WEBP_BUILD_CWEBP OFF CACHE BOOL "" FORCE)
