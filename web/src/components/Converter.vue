@@ -1248,10 +1248,31 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
                 </div>
               </div>
-              <!-- CAP / SCAP best quality. Parallel multi-restart sweep
-                   over (dither_strength × diversity × image-jitter); picks
-                   the best-scoring trial. Active for: HAM+CAP (centroid
-                   refinement), plain CAP (lores/hires + copper), EHB+CAP,
+              <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
+              <div v-if="dpfAvailable" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.dualPlayfield" />
+                  <span style="color: #888; font-size: 0.625rem;">PF2 only, upper color regs</span>
+                </div>
+              </div>
+
+              <!-- SCAP — mid-line palette swaps (OCS lores only, DPF or EHB) -->
+              <div v-if="scapAvailable" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP — Super CAP: mid-line palette swaps inside the displayed area, on top of CAP's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">SCAP</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.scap" />
+                  <span style="color: #888; font-size: 0.625rem;">mid-line palette swaps (19/line)</span>
+                </div>
+              </div>
+
+              <!-- CAP / SCAP best quality. Sits LAST in the cap section so
+                   the user enables it after they've chosen mode + cap +
+                   scap + dpf — flipping cap-best earlier doesn't change
+                   the algorithmic choices, just the time budget. Parallel
+                   multi-restart sweep over (dither_strength × diversity
+                   × image-jitter); picks the best-scoring trial. Active
+                   for: HAM+CAP (centroid refinement), plain CAP, EHB+CAP,
                    SCAP DPF, SCAP EHB. -->
               <div v-if="options.copper || options.scap" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality CAP/SCAP search. Spends ~5–10× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">CAP best</label>
@@ -1270,24 +1291,6 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                     :allowEmpty="false"
                     size="small"
                   />
-                </div>
-              </div>
-
-              <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
-              <div v-if="dpfAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
-                <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.dualPlayfield" />
-                  <span style="color: #888; font-size: 0.625rem;">PF2 only, upper color regs</span>
-                </div>
-              </div>
-
-              <!-- SCAP — mid-line palette swaps (OCS lores only, DPF or EHB) -->
-              <div v-if="scapAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP — Super CAP: mid-line palette swaps inside the displayed area, on top of CAP's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">SCAP</label>
-                <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.scap" />
-                  <span style="color: #888; font-size: 0.625rem;">mid-line palette swaps (19/line)</span>
                 </div>
               </div>
 
