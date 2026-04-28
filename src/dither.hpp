@@ -98,6 +98,14 @@ enum class Method : unsigned char {
     cranley_bayer,    // Bayer 8×8 with Cranley-Patterson random offset (Quilez)
     quasicrystal,     // Sum-of-cosines quasicrystal pattern (Sloan 2010)
     truchet,          // Truchet-tile threshold pattern
+
+    // Direct Binary Search (Allebach et al. ~1992) — the perceptual-
+    // optimum halftone via greedy-descent on an HVS-blurred OKLab cost.
+    // Warm-start from FS, then sweep over pixels trying every palette
+    // alternative, accepting any toggle that lowers cost. Far slower
+    // than ED (5-30s typical) but produces the best quality reachable
+    // by any per-pixel dither — every other method approximates this.
+    dbs,
 };
 
 // ---------------------------------------------------------------------------

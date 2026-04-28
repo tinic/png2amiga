@@ -196,6 +196,7 @@ export const DITHER_METHODS: DitherGroup[] = [
   // (yliluoma family / knoll / opt-* / tri-tone) follow.
   { group: 'Error Diffusion', items: [
     { value: 'ostromoukhov',    label: 'Ostromoukhov' },
+    { value: 'dbs',             label: 'DBS\n(slow)' },
     { value: 'sierra-lite',     label: 'Sierra Lite' },
     { value: 'atkinson',        label: 'Atkinson' },
     { value: 'jarvis',          label: 'Jarvis' },
@@ -333,14 +334,14 @@ export const CGA_TEXT_DEFAULTS = {
 
 export const EXAMPLES: Example[] = [
   { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
-  { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'ostromoukhov', copper: true } },
+  { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', alphaThreshold: 0 } },
-  { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
-  { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'ostromoukhov', copper: true } },
+  { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'opt-checker', ditherStrength: 0.5 } },
+  { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
   { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'ostromoukhov', copper: true } },
-  { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'checker', dualPlayfield: true, scap: true } },
+  { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'opt-checker', dualPlayfield: true, scap: true } },
   { name: 'asterix',      file: 'asterix.png',         opts: { mode: 'cga-text80x100', chipset: 'cga', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
 ]
 
@@ -480,7 +481,7 @@ const MODE_PAR: Record<string, number> = {
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
 
-const ERROR_DIFFUSION = new Set(['ostromoukhov', 'sierra-lite', 'atkinson', 'jarvis', 'floyd-steinberg', 'stucki', 'gilbert', 'riemersma'])
+const ERROR_DIFFUSION = new Set(['ostromoukhov', 'sierra-lite', 'atkinson', 'jarvis', 'floyd-steinberg', 'stucki', 'gilbert', 'riemersma', 'dbs'])
 
 export function isErrorDiffusion(dither: string): boolean {
   return ERROR_DIFFUSION.has(dither)

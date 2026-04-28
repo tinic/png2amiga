@@ -640,6 +640,9 @@ void print_usage() {
         "    Error diffusion (ranked by mean PSNR across 10 images × 6 modes):\n"
         "      ostromoukhov|sierra-lite|atkinson|jarvis|floyd-steinberg|\n"
         "      stucki|gilbert|riemersma\n"
+        "    Direct Binary Search (Allebach et al. — perceptual optimum;\n"
+        "    5-30s/image but ~+1 dB over best ED):\n"
+        "      dbs\n"
         "    Structure-aware error diffusion:\n"
         "      structure-fs|contrast-fs|zhoufang\n"
         "    Palette-aware ordered:\n"
@@ -817,6 +820,7 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
     if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "dbs") return dither::Method::dbs;
     if (s == "gilbert") return dither::Method::gilbert;
     if (s == "riemersma") return dither::Method::riemersma;
     if (s == "structure-fs") return dither::Method::structure_fs;
@@ -1577,6 +1581,7 @@ const char* dither_name(dither::Method m) {
     case dither::Method::stucki: return "stucki";
     case dither::Method::jarvis: return "jarvis";
     case dither::Method::ostromoukhov: return "ostromoukhov";
+    case dither::Method::dbs: return "dbs";
     case dither::Method::gilbert: return "gilbert";
     case dither::Method::riemersma: return "riemersma";
     case dither::Method::structure_fs: return "structure-fs";

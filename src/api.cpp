@@ -167,6 +167,7 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
     if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "dbs") return dither::Method::dbs;
     if (s == "gilbert") return dither::Method::gilbert;
     if (s == "riemersma") return dither::Method::riemersma;
     if (s == "structure-fs") return dither::Method::structure_fs;

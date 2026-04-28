@@ -389,7 +389,12 @@ const HAM_INCOMPATIBLE_DITHERS = new Set([
 
 function maybeFallbackHamDither(mode: string): void {
   if (hamType(mode) !== null && HAM_INCOMPATIBLE_DITHERS.has(options.dither)) {
-    options.dither = 'ostromoukhov'
+    // Atkinson wins HAM6 7/10 in our sweep and ties HAM8 4/10. The
+    // previous fallback to ostromoukhov was a self-loop bug — ostro
+    // is in the incompatible set above (no palette pair to compute
+    // its variable scaling against, so it silently degenerates to FS
+    // in HAM modes).
+    options.dither = 'atkinson'
   }
 }
 
