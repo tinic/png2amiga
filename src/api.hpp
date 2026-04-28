@@ -373,6 +373,14 @@ struct EncodeState {
     std::size_t changes_per_line{};
     std::size_t max_moves_per_line{};
     float copper_changes{};
+
+    // SCAP-only stats — see PipelineResult for descriptions.
+    float scap_avg_total_moves_per_line{};
+    float scap_avg_hblank_moves_per_line{};
+    std::size_t scap_max_hblank_moves_per_line{};
+    float scap_avg_visible_moves_per_line{};
+    std::size_t scap_max_visible_moves_per_line{};
+    std::size_t scap_slot_count{};
     float quant_error{};
     float psnr{};
 

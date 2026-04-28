@@ -1577,6 +1577,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.copper_changes = scap_res->avg_changes_per_line;
+        result.max_moves_per_line = scap_res->max_moves_per_line;
+        result.scap_avg_total_moves_per_line   = scap_res->avg_total_moves_per_line;
+        result.scap_avg_hblank_moves_per_line  = scap_res->avg_hblank_moves_per_line;
+        result.scap_max_hblank_moves_per_line  = scap_res->max_hblank_moves_per_line;
+        result.scap_avg_visible_moves_per_line = scap_res->avg_visible_moves_per_line;
+        result.scap_max_visible_moves_per_line = scap_res->max_visible_moves_per_line;
+        result.scap_slot_count                 = scap_res->slot_table.slots.size();
         result.finalize_psnr(*image, scap_res->total_error);
         return result;
     }
@@ -2507,6 +2514,12 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.changes_per_line = p.changes_per_line;
     s.max_moves_per_line = p.max_moves_per_line;
     s.copper_changes = p.copper_changes;
+    s.scap_avg_total_moves_per_line   = p.scap_avg_total_moves_per_line;
+    s.scap_avg_hblank_moves_per_line  = p.scap_avg_hblank_moves_per_line;
+    s.scap_max_hblank_moves_per_line  = p.scap_max_hblank_moves_per_line;
+    s.scap_avg_visible_moves_per_line = p.scap_avg_visible_moves_per_line;
+    s.scap_max_visible_moves_per_line = p.scap_max_visible_moves_per_line;
+    s.scap_slot_count                 = p.scap_slot_count;
     s.quant_error = p.quant_error;
     s.psnr = p.psnr;
     s.raw_frame = std::move(p.raw_frame);

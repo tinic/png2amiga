@@ -4868,93 +4868,79 @@ int main(int argc, char* argv[]) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        dither::Settings scap_dith;
-        scap_dith.method = config->dither_method;
-        // Per-mode dither defaults from dither_tuning.cpp's empirical
-        // sweep — see that file for grid + numbers. Explicit user
-        // values via --dither-strength / --error-clamp always override.
-        auto tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = config->mode,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = config->dual_playfield,
-            .scap    = true,
-            .copper  = true,    // SCAP layers on top of CAP since b0be343
-            .chipset = chipset,
-            .method  = config->dither_method,
-        });
-        scap_dith.error_clamp = config->error_clamp_explicit
-                                ? config->error_clamp : tune.error_clamp;
-        scap_dith.strength    = config->dither_strength_explicit
-                                ? config->dither_strength : tune.strength;
-        auto scap_progress = make_cli_progress_reporter();
-        auto scap_res =
-            scap_ehb
-            ? scap::encode_scap_ehb_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                config->reserve_color0,
-                scap_dith,
-                static_cast<std::size_t>(config->copper_changes),
-                config->palette_diversity,
-                config->scap_debug,
-                scap_progress)
-            : scap::encode_scap_dpf_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                config->reserve_color0,
-                scap_dith,
-                config->scap_debug,
-                static_cast<std::size_t>(config->copper_changes),
-                config->palette_diversity,
-                scap_progress);
-        if (!scap_res) {
-            std::println(stderr, "SCAP encode error: {}",
-                         scap_res.error().message);
+        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
+        // we can hand it to api::encode_state — same shape as the
+        // SNES/Genesis paths. encode_state runs the canonical SCAP
+        // pipeline (scap::encode_scap_*_ocs internally) and populates
+        // st.scap_* + the per-line move-budget breakdown the printer
+        // below consumes. NOTE: encode_state will preprocess again
+        // using the opts.gamma/brightness/... fields populated by
+        // make_api_options(). For default values that's a no-op; if a
+        // user sets explicit preprocess values they'd be applied
+        // twice. Same latent issue as the SNES/Genesis paths — fix
+        // for all three together is REFACTOR_PLAN.md follow-up.
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "SCAP: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+        auto sopts = make_api_options(*config);
+        sopts.scap = true;
+        sopts.scap_debug = config->scap_debug;
+        sopts.width = static_cast<int>(image->width());
+        sopts.height = static_cast<int>(image->height());
+        sopts.on_progress = make_cli_progress_reporter();
+        // SCAP layers on top of CAP since b0be343; force the flag so
+        // dither_tuning's per-mode defaults inside run_pipeline match
+        // what the inline path computed.
+        sopts.copper = true;
+
+        auto enc = api::encode_state(src_png->data(), src_png->size(), sopts);
+        if (!enc.ok()) {
+            std::println(stderr, "SCAP encode error: {}", enc.error_msg);
             return 1;
         }
-        float scap_psnr = color_space::compute_psnr_blurred(
-            image->pixels(), scap_res->rendered.pixels(),
-            image->width(), image->height());
+        auto& st = enc.state;
+
         const char* scap_label = scap_ehb
             ? "OCS EHB 6bpp investigation"
             : "OCS DPF";
         cli_status("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line)",
                      scap_label,
-                     scap_res->slot_table.slots.size(),
-                     scap_res->avg_changes_per_line);
+                     st.scap_slot_count,
+                     st.copper_changes);
         cli_status("Copper load: hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
-                     scap_res->avg_hblank_moves_per_line,
-                     scap_res->max_hblank_moves_per_line,
-                     scap_res->avg_visible_moves_per_line,
-                     scap_res->max_visible_moves_per_line,
-                     scap_res->avg_total_moves_per_line,
-                     scap_res->max_moves_per_line);
+                     st.scap_avg_hblank_moves_per_line,
+                     st.scap_max_hblank_moves_per_line,
+                     st.scap_avg_visible_moves_per_line,
+                     st.scap_max_visible_moves_per_line,
+                     st.scap_avg_total_moves_per_line,
+                     st.max_moves_per_line);
         int scap_ops = 0;
-        for (auto& moves : scap_res->line_moves) scap_ops += static_cast<int>(moves.size());
+        for (auto& moves : st.scap_line_moves) scap_ops += static_cast<int>(moves.size());
         cli_print_encoded(
-            static_cast<int>(scap_res->planes.depth),
-            static_cast<int>(scap_res->planes.total_bytes()),
-            static_cast<int>(scap_res->palette.size()),
+            static_cast<int>(st.planes.depth),
+            static_cast<int>(st.planes.total_bytes()),
+            static_cast<int>(st.palette.size()),
             /*aga=*/false,
             /*cap_grid_entries=*/0,
             scap_ops,
-            static_cast<int>(scap_res->rendered.height()),
-            static_cast<int>(scap_res->max_moves_per_line),
-            static_cast<int>(count_unique_colors(scap_res->rendered)),
-            std::optional<float>{scap_res->avg_changes_per_line},
-            static_cast<double>(scap_res->total_error), scap_psnr);
+            static_cast<int>(st.rendered.height()),
+            static_cast<int>(st.max_moves_per_line),
+            static_cast<int>(count_unique_colors(st.rendered)),
+            std::optional<float>{st.copper_changes},
+            static_cast<double>(st.quant_error), st.psnr);
 
         if (config->preview)
-            show_terminal_preview(scap_res->rendered, config->mode,
+            show_terminal_preview(st.rendered, config->mode,
                                   config->hires, config->interlace);
 
         if (!config->output_path.empty()) {
             if (ends_with(config->output_path, ".png")) {
                 auto r = save_preview(config->output_path,
-                                      scap_res->rendered,
+                                      st.rendered,
                                       has_transparency, transparency_mask,
                                       config->mode, config->hires,
                                       config->interlace);
@@ -4972,23 +4958,24 @@ int main(int argc, char* argv[]) {
                     .symbol_override = config->symbol_name,
                     .dpf = scap_dpf,        // false for EHB SCAP
                 });
-                ch_opts.scap_line_moves = &scap_res->line_moves;
+                ch_opts.scap_line_moves = &st.scap_line_moves;
                 ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs"
                                               : "scap_dpf_ocs";
-                ch_opts.scap_anchor_hpos =
-                    scap_res->slot_table.line_gate_hpos;
-                ch_opts.scap_total_planes =
-                    scap_res->slot_table.total_planes;
-                pad_planes_to_mode(scap_res->planes, config->mode,
-                                   config->hires);
+                // Use the static slot tables (same shape encode_state
+                // ran against); matches api.cpp::convert_viewer.
+                auto& table = scap_ehb ? scap::kScap6bplEhb
+                                       : scap::kScap6bplOcs;
+                ch_opts.scap_anchor_hpos = table.line_gate_hpos;
+                ch_opts.scap_total_planes = table.total_planes;
+                pad_planes_to_mode(st.planes, config->mode, config->hires);
                 bool is_h = ends_with(config->output_path, ".h");
                 auto r = is_h
                     ? cheader::save(
-                        config->output_path, scap_res->planes,
-                        scap_res->palette, config->mode, ch_opts)
+                        config->output_path, st.planes,
+                        st.palette, config->mode, ch_opts)
                     : cheader::save_viewer(
-                        config->output_path, scap_res->planes,
-                        scap_res->palette, config->mode, ch_opts);
+                        config->output_path, st.planes,
+                        st.palette, config->mode, ch_opts);
                 if (!r) {
                     std::println(stderr, "{} write error: {}",
                                  is_h ? "Header" : "Viewer",

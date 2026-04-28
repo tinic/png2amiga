@@ -95,6 +95,17 @@ struct PipelineResult {
     std::size_t changes_per_line{};
     std::size_t max_moves_per_line{};   // worst-case copper MOVEs/line for chip-RAM sizing
 
+    // SCAP-only stats. Populated when scap=true; zero otherwise. Match
+    // the same fields on scap::ScapResult so the CLI / web UI can show
+    // the planner's per-line move budget breakdown without re-running
+    // the encoder.
+    float scap_avg_total_moves_per_line{};
+    float scap_avg_hblank_moves_per_line{};
+    std::size_t scap_max_hblank_moves_per_line{};
+    float scap_avg_visible_moves_per_line{};
+    std::size_t scap_max_visible_moves_per_line{};
+    std::size_t scap_slot_count{};
+
     // Set after construction.
     bool has_transparency = false;
     std::vector<bool> transparency_mask;
