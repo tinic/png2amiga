@@ -1285,7 +1285,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               </div>
               <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
               <div v-if="dpfAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual PF</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.dualPlayfield" />
                   <span style="color: #888; font-size: 0.625rem;">PF2 only, upper color regs</span>
