@@ -70,15 +70,25 @@ constructions in `main.cpp`. Lives in `api.cpp` (or a new
 ### 3. Preview quantize-cap-scale stage
 
 After the encoder runs, the preview goes through a single canonical
-transformation:
+transformation. Split into three substeps so each commit lands cleanly:
 
-1. `render_copper_capped(planes, scanline_palettes, base, K, lace,
-   chipset)` (already exists, post-fix-5).
-2. Optional PAR/scale step (currently lives in `show_terminal_preview`
-   and `save_preview` separately).
-3. Final `Image` is what every consumer sees — terminal, PNG, WASM.
+- **3a — display-rescale stage.** `scale_for_display(image, mode,
+  hires, interlace)` + `scale_mask_for_display(...)` collapse the per-mode
+  PAR / integer-scale rules used by `save_preview()` and
+  `show_terminal_preview()`. **DONE** in commit `ebcc01e`.
+- **3b — render dispatch.** Single `pipeline::render_preview(...)`
+  helper that picks the right per-mode renderer
+  (`bitplane::render` / `ham::render_ham` / `ham::render_ham_copper` /
+  `copper::render_copper_capped`) from PipelineResult fields. The five
+  current inline call sites (3 in main.cpp, 2-3 in api.cpp) all call
+  into it.
+- **3c — PipelineResult.rendered as canonical source.** After 3b,
+  `run_pipeline` already populates `result.rendered` via the dispatch.
+  Migrate main.cpp's branches to consume that field instead of
+  re-rendering inline.
 
-Goal: any future preview correctness fix lands in **one** place.
+Goal: any future preview correctness fix — including the deferred OCS
+preview-vs-chip bug below — lands in **one** place.
 
 ### 4. `Chipset chipset = resolve(...)` — single source
 

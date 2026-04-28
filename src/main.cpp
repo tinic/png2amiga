@@ -3929,12 +3929,11 @@ int main(int argc, char* argv[]) {
         }
 
         // Render preview first so we can count unique colors for the stats line.
-        auto data_bits = ham_result->planes.depth - 2;
-        auto ham_preview = !ham_result->scanline_palettes.empty()
-            ? ham::render_ham_copper(ham_result->planes,
-                                    ham_result->scanline_palettes, data_bits)
-            : ham::render_ham(ham_result->planes,
-                             ham_result->base_palette, data_bits);
+        auto ham_preview = pipeline::render_preview(
+            ham_result->planes, ham_result->base_palette,
+            /*is_ham=*/true, config->interlace, chipset,
+            ham_result->scanline_palettes.empty()
+                ? nullptr : &ham_result->scanline_palettes);
         int ham_unique = ham_preview ? count_unique_colors(*ham_preview) : 0;
 
         float ham_psnr = ham_preview
@@ -4484,7 +4483,9 @@ int main(int argc, char* argv[]) {
                                           ehb_pal.colors.end());
 
         // Render preview
-        auto preview = bitplane::render(*planes, full_palette);
+        auto preview = pipeline::render_preview(
+            *planes, full_palette,
+            /*is_ham=*/false, config->interlace, chipset);
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
@@ -4683,13 +4684,11 @@ int main(int argc, char* argv[]) {
         // from what the chip actually displays — most visibly on OCS
         // depth ≤ 4 where the vertical palette dither inflates the
         // per-row-pair diff count past the K budget.
-        auto preview = copper::render_copper_capped(
-            copper_result->planes,
-            copper_result->scanline_palettes,
-            copper_result->base_palette,
-            copper_result->changes_per_line,
-            config->interlace,
-            chipset);
+        auto preview = pipeline::render_preview(
+            copper_result->planes, copper_result->base_palette,
+            /*is_ham=*/false, config->interlace, chipset,
+            &copper_result->scanline_palettes,
+            copper_result->changes_per_line);
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
@@ -5262,7 +5261,9 @@ int main(int argc, char* argv[]) {
 
     // Render preview before any DPF expansion (combined indices read from
     // the expanded planes would be non-contiguous).
-    auto preview = bitplane::render(*planes, used_palette);
+    auto preview = pipeline::render_preview(
+        *planes, used_palette,
+        /*is_ham=*/false, config->interlace, chipset);
     if (!preview) {
         std::println(stderr, "Render error: {}", preview.error().message);
         return 1;

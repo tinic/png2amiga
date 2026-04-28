@@ -1055,17 +1055,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (!ham_result) return std::unexpected{ham_result.error()};
 
         // Render preview using HAM decoder (not simple palette lookup)
-        auto data_bits = ham_result->planes.depth - 2;
-        Result<Image> preview;
-        if (options.copper && !ham_result->scanline_palettes.empty()) {
-            preview = ham::render_ham_copper(ham_result->planes,
-                                            ham_result->scanline_palettes,
-                                            data_bits);
-        } else {
-            preview = ham::render_ham(ham_result->planes,
-                                     ham_result->base_palette,
-                                     data_bits);
-        }
+        auto preview = pipeline::render_preview(
+            ham_result->planes, ham_result->base_palette,
+            /*is_ham=*/true, options.interlace, chipset,
+            (options.copper && !ham_result->scanline_palettes.empty())
+                ? &ham_result->scanline_palettes : nullptr);
         if (!preview) return std::unexpected{preview.error()};
 
         PipelineResult result;
@@ -1376,7 +1370,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::vector<Color3f> full_palette(ehb_pal.colors.begin(),
                                           ehb_pal.colors.end());
 
-        auto preview = bitplane::render(*planes, full_palette);
+        auto preview = pipeline::render_preview(
+            *planes, full_palette,
+            /*is_ham=*/false, options.interlace, chipset);
         if (!preview) return std::unexpected{preview.error()};
 
         PipelineResult result;
@@ -1456,13 +1452,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // version replays the same top-K-by-distance diff clipping the
         // cheader emitter does, so the preview matches what a generated
         // viewer will actually display on hardware.
-        auto preview = copper::render_copper_capped(
-            copper_result->planes,
-            copper_result->scanline_palettes,
-            copper_result->base_palette,
-            copper_result->changes_per_line,
-            options.interlace,
-            chipset);
+        auto preview = pipeline::render_preview(
+            copper_result->planes, copper_result->base_palette,
+            /*is_ham=*/false, options.interlace, chipset,
+            &copper_result->scanline_palettes,
+            copper_result->changes_per_line);
         if (!preview) return std::unexpected{preview.error()};
 
         // Dual-playfield expansion (copper path): same as standard branch —
@@ -1812,7 +1806,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // direct color preview. (After expansion the "combined" indices read
     // from all planes would be non-contiguous, so render the unexpanded
     // image then transform the planes/palette to their final DPF layout.)
-    auto preview = bitplane::render(*planes, used_palette);
+    auto preview = pipeline::render_preview(
+        *planes, used_palette,
+        /*is_ham=*/false, options.interlace, chipset);
 
     // Dual-playfield expansion: place the encoded N-plane image into the
     // even hardware planes (PF2), leave the odd planes (PF1) zeroed, and

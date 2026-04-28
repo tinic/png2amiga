@@ -2,6 +2,7 @@
 
 #include "api.hpp"
 #include "color_space.hpp"
+#include "ham.hpp"
 
 #include <cctype>
 
@@ -60,6 +61,30 @@ void PipelineResult::finalize_psnr(const Image& src, float total_error) {
     psnr = color_space::compute_psnr_blurred(
         src.pixels(), rendered.pixels(),
         src.width(), src.height());
+}
+
+Result<Image> render_preview(
+    const bitplane::BitplaneData& planes,
+    std::span<const Color3f> base_palette,
+    bool is_ham,
+    bool is_lace,
+    amiga::Chipset chipset,
+    const std::vector<std::vector<Color3f>>* scanline_palettes,
+    std::size_t cap_changes_per_line) {
+    bool has_scanline_pal = scanline_palettes && !scanline_palettes->empty();
+    if (is_ham) {
+        auto data_bits = planes.depth - 2;
+        if (has_scanline_pal) {
+            return ham::render_ham_copper(planes, *scanline_palettes, data_bits);
+        }
+        return ham::render_ham(planes, base_palette, data_bits);
+    }
+    if (has_scanline_pal) {
+        return copper::render_copper_capped(
+            planes, *scanline_palettes, base_palette,
+            cap_changes_per_line, is_lace, chipset);
+    }
+    return bitplane::render(planes, base_palette);
 }
 
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,

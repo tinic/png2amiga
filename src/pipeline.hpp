@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -124,6 +125,43 @@ struct PipelineResult {
     // preview. Replaces the same 4 lines repeated at every mode branch.
     void finalize_psnr(const Image& src, float total_error);
 };
+
+// Single per-mode preview-render dispatcher. Picks the right back-end:
+//   - HAM (no scanline palettes)        → ham::render_ham
+//   - HAM + CAP (scanline_palettes set) → ham::render_ham_copper
+//   - indexed + CAP (scanline_palettes) → copper::render_copper_capped
+//                                         (top-K diff cascade — matches
+//                                         the cheader-side lace_rebuild
+//                                         so the preview tracks what
+//                                         hardware actually displays)
+//   - indexed plain                     → bitplane::render
+// Used by main.cpp's CLI dispatchers and api.cpp's run_pipeline so all
+// preview-correctness fixes land in one place.
+//
+// Known per-back-end behavioural divergences preserved by this
+// dispatcher (don't unify silently — each was an explicit choice):
+//   - chipset / OCS quantization: only render_copper_capped snaps
+//     output pixels to the 12-bit OCS gamut. bitplane::render and the
+//     two HAM renderers don't — their callers rely on the supplied
+//     palette already being mode-quantized (or, for HAM, on the modify
+//     ops being intrinsically lossy).
+//   - is_lace: only render_copper_capped is lace-aware (each field
+//     replays its own diff cascade via cheader's lace_rebuild). The
+//     other renderers ignore the flag — non-CAP outputs are
+//     field-agnostic.
+//   - data_bits: HAM-only; computed from planes.depth - 2 internally.
+// Callers must still pass is_lace and chipset; they're forwarded only
+// where each back-end honours them. The deferred OCS preview-vs-chip
+// gradient bug (REFACTOR_PLAN.md target #3 step 5) lives entirely in
+// the render_copper_capped branch.
+Result<Image> render_preview(
+    const bitplane::BitplaneData& planes,
+    std::span<const Color3f> base_palette,
+    bool is_ham,
+    bool is_lace,
+    amiga::Chipset chipset,
+    const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr,
+    std::size_t cap_changes_per_line = 0);
 
 // Run the full preprocessing → quantize → dither → encode pipeline against
 // an in-memory image (PNG/JPEG/WebP autodetected). Single entry point
