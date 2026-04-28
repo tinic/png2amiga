@@ -4778,6 +4778,12 @@ int main(int argc, char* argv[]) {
                 });
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
+                // Pass scanline_palettes so cheader's lace_rebuild can
+                // recompute per-field same-row diffs in interlace; without
+                // it the emitted .h carries the encoder's progressive
+                // per-row list (which is wrong for lace, where field 1
+                // walks 0,2,4,... and field 2 walks 1,3,5,...).
+                ch_opts.copper_scanline_palettes = &copper_result->scanline_palettes;
 
                 auto result = cheader::save(
                     config->output_path, copper_result->planes,
@@ -4801,6 +4807,9 @@ int main(int argc, char* argv[]) {
                 });
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
+                // Pass scanline_palettes so cheader's lace_rebuild can
+                // recompute per-field same-row diffs (see .h branch above).
+                ch_opts2.copper_scanline_palettes = &copper_result->scanline_palettes;
 
                 pad_planes_to_mode(copper_result->planes, config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
