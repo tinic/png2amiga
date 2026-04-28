@@ -31,6 +31,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -514,6 +515,8 @@ struct Config {
 
     // Output
     bool preview = false;              // show terminal image preview (iTerm2)
+    int  preview_scale = 0;            // 0 = auto (2× on iTerm.app, 1× elsewhere);
+                                       // any value 1..8 forces that integer scale.
     bool  preview_video = false;       // batch: loop frames inline at preview_video_fps
     float preview_video_fps = 12.5f;   // default playback rate (8mm-ish)
 
@@ -780,6 +783,8 @@ void print_usage() {
         "\n"
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
+        "  --preview-scale <1-8>           Preview display scale (default: 2 on\n"
+        "                                  iTerm.app via $TERM_PROGRAM, 1 elsewhere)\n"
         "  --preview-video                 Batch only: loop generated frames inline\n"
         "                                  in iTerm2 until any key is pressed.\n"
         "  --preview-video-fps <fps>       Playback rate for --preview-video.\n"
@@ -887,6 +892,18 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--preview") {
             config.preview = true;
+            continue;
+        }
+
+        if (arg == "--preview-scale") {
+            if (i + 1 >= argc)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--preview-scale requires an integer argument"}};
+            auto v = std::atoi(argv[++i]);
+            if (v < 1 || v > 8)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--preview-scale must be in 1..8"}};
+            config.preview_scale = v;
             continue;
         }
 
@@ -1514,19 +1531,35 @@ std::string base64_encode(std::span<const std::uint8_t> data) {
     return out;
 }
 
-// Build the iTerm2 inline-image OSC 1337 sequence at the image's native
-// pixel dimensions. Caller pre-scales via scale_for_display() so the
-// per-mode aspect rules (Amiga 2× horizontal for lores, 2× vertical for
-// non-lace, PAR-aware NN for DOS) are encoded once. No additional
-// display-scale doubling here — that's how we used to land at 4× the
-// source dimensions on the terminal.
+// Display-scale multiplier applied to OSC 1337 inline-image width/height.
+// Resolved once in main() from --preview-scale (CLI override 1..8) or
+// $TERM_PROGRAM (2 on iTerm.app, 1 elsewhere). Until main() sets it the
+// fallback is 1 — safe for non-interactive paths.
+unsigned g_preview_scale = 1;
+
+unsigned resolve_preview_scale(int user_override) {
+    if (user_override >= 1 && user_override <= 8)
+        return static_cast<unsigned>(user_override);
+    auto term = std::getenv("TERM_PROGRAM");
+    if (term && std::strcmp(term, "iTerm.app") == 0) return 2;
+    return 1;
+}
+
+// Build the iTerm2 inline-image OSC 1337 sequence. Width/height go out
+// at scale_for_display()'s output dimensions × g_preview_scale, where
+// the multiplier corrects for iTerm rendering OSC `Npx` as native
+// device pixels (so on Retina the visual image is half-sized without
+// it). Caller pre-scales via scale_for_display() to encode the per-
+// mode aspect rules.
 std::string iterm2_inline_escape(const Image& image) {
     auto png = png_io::encode(image);
     if (!png) return {};
     auto encoded = base64_encode(*png);
+    auto w = image.width() * g_preview_scale;
+    auto h = image.height() * g_preview_scale;
     return std::format(
         "\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-        png->size(), image.width(), image.height(), encoded);
+        png->size(), w, h, encoded);
 }
 
 void iterm2_display(const Image& image) {
@@ -2998,6 +3031,7 @@ int main(int argc, char* argv[]) {
     }
     g_quiet = config->quiet;
     g_json  = config->json;
+    g_preview_scale = resolve_preview_scale(config->preview_scale);
 
     // --no-scale + .cpp/.c viewer is incoherent: the generated viewer
     // sets BPLCON0/DDFSTRT/DDFSTOP/BPLxMOD for a specific Amiga screen
