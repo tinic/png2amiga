@@ -26,7 +26,27 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+
+function onStopEncode(): void {
+  abortWasm()
+  converting.value = false
+  progress.value = 0
+  progressStage.value = ''
+  errorMsg.value = ''
+  // Paint the preview canvas black so the user has a clear "aborted"
+  // signal rather than the stale half-finished output. Re-encode runs
+  // on the next option change.
+  const canvas = canvasRef.value
+  if (canvas) {
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, canvas.width || 320, canvas.height || 200)
+    }
+  }
+  resultInfo.value = 'stopped'
+}
 const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
@@ -1578,7 +1598,17 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
                 <ProgressSpinner v-if="!progress" style="width: 2rem; height: 2rem" />
                 <div v-else style="width: 70%; max-width: 22rem; text-align: center;">
-                  <ProgressBar :value="progress" :show-value="true" style="height: 1.5rem" />
+                  <div class="flex align-items-center gap-2">
+                    <ProgressBar :value="progress" :show-value="true" style="height: 1.5rem; flex: 1 1 auto" />
+                    <button
+                      class="stop-btn"
+                      type="button"
+                      title="Stop encode (terminates the WASM worker)"
+                      @click.stop="onStopEncode"
+                    >
+                      <i class="pi pi-times"></i>
+                    </button>
+                  </div>
                   <div class="text-xs text-color-secondary mt-1" v-if="progressStage">{{ progressStage }}</div>
                 </div>
               </div>
@@ -1829,6 +1859,25 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 .loupe-btn.crt-btn {
   /* Sit immediately to the left of the loupe button. */
   right: 2.4rem;
+}
+
+.stop-btn {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.5rem;
+  border: none;
+  border-radius: 4px;
+  background: rgba(220, 50, 50, 0.85);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  transition: background 0.15s;
+}
+.stop-btn:hover {
+  background: rgba(200, 30, 30, 1);
 }
 
 .preview-canvas {

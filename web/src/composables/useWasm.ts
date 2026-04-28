@@ -101,6 +101,27 @@ function ensureWorker(): void {
   })
 }
 
+// Stop button: terminate the current worker, reject every in-flight
+// promise with a "aborted" error, and let the next convert call
+// re-spawn a fresh worker. Cheap (~few hundred ms WASM re-instantiate)
+// but reliable — works regardless of where in the encode we are
+// (parallel_for, beam search, cap_best_sweep), because the whole
+// WASM runtime + its pthread workers go down with the host worker.
+export function abortWasm(): void {
+  if (!worker) return
+  worker.terminate()
+  worker = null
+  // Reject every pending operation. abortWasm is the only path that
+  // closes a promise without a matching reply, so the dispatcher's
+  // map gets emptied here.
+  for (const cb of pending.values()) {
+    cb.reject(new Error('aborted'))
+  }
+  pending.clear()
+  sharedLoading.value = true   // next convert call ensureWorker()s a fresh one
+  sharedError.value = ''
+}
+
 // Call this as early as possible (e.g. from main.ts before app.mount) so the
 // worker — and therefore the WASM fetch + streaming compile — starts in
 // parallel with Vue/PrimeVue bootstrapping, rather than after Converter.vue's
@@ -110,6 +131,7 @@ export function prewarmWasm(): void { ensureWorker() }
 export interface UseWasmReturn {
   loading: Ref<boolean>
   error: Ref<string>
+  abort: () => void
   convertRGBA: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertPNG: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertIFF: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
@@ -156,6 +178,7 @@ export function useWasm(): UseWasmReturn {
   return {
     loading,
     error,
+    abort: abortWasm,
     convertRGBA:    (b, o, p) => callConvert('convertRGBA',    [b, o],    p),
     convertPNG:     (b, o, p) => callConvert('convert',        [b, o],    p),
     convertIFF:     (b, o, p) => callConvert('convertIFF',     [b, o],    p),
