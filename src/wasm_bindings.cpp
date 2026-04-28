@@ -4,8 +4,35 @@
 #include <emscripten/threading.h>
 #include <emscripten/val.h>
 
+#include <atomic>
+#include <utility>
+
 using namespace emscripten;
 using namespace png2amiga::api;
+
+// File-scope progress slot. emscripten::val handles are thread-bound,
+// so when a pthread worker calls the encoder's on_progress lambda we
+// can't invoke the captured JS callback directly. Instead the worker
+// async-dispatches main_thread_progress_tick() onto the WASM main
+// runtime thread (which processes the dispatch queue while it's
+// blocked on pthread_join), and main reads the cb out of this slot
+// and calls it. WASM is single-threaded at the JS layer so one slot
+// is enough — only one encode runs at a time.
+namespace {
+val g_progress_cb = val::null();
+std::atomic<bool> g_progress_active{false};
+}
+
+extern "C" void EMSCRIPTEN_KEEPALIVE
+main_thread_progress_tick(float p) {
+    if (g_progress_active.load(std::memory_order_acquire) &&
+        !g_progress_cb.isNull()) {
+        // Stage label is dropped on the proxy path — only the float
+        // is cheap to marshal across the dispatch queue. UI bars use
+        // the value alone so the label loss is invisible.
+        g_progress_cb(p, std::string("encoding"));
+    }
+}
 
 // Convert JS options object to C++ Options
 Options parse_js_options(val js_opts) {
@@ -114,20 +141,27 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("onProgress")) {
         // The encoder may call this from worker threads (parallel_for
         // bodies, HAM beam search, cap_best_sweep trials). emscripten
-        // ::val handles are bound to the thread that captured them
-        // (this thread = the WASM module's main runtime thread), so a
-        // pthread worker calling cb() crashes with
-        //   TypeError: toValue(...) is not a function
-        // Gate on emscripten_is_main_runtime_thread() — main-thread
-        // calls (sequential phases, the cap-best outer loop's progress
-        // ticks) still report; pthread-worker calls drop silently.
-        // Future improvement: proxy_to_main_thread + queue to deliver
-        // worker-side progress without losing it.
+        // ::val handles are bound to the thread that captured them, so
+        // pthread-worker calls would crash on the captured cb. Main-
+        // runtime-thread calls invoke the cb directly; worker calls
+        // async-dispatch main_thread_progress_tick() onto the main
+        // runtime thread (which processes the dispatch queue while
+        // blocked on pthread_join). The cb is stashed in a file-scope
+        // slot since the dispatched function takes a primitive float
+        // — emscripten can't marshal a captured val across threads.
         val cb = js_opts["onProgress"];
         if (cb.typeOf().as<std::string>() == "function") {
+            g_progress_cb = cb;
+            g_progress_active.store(true, std::memory_order_release);
             opts.on_progress = [cb](float p, std::string_view stage) {
-                if (!emscripten_is_main_runtime_thread()) return;
-                cb(p, std::string(stage));
+                if (emscripten_is_main_runtime_thread()) {
+                    cb(p, std::string(stage));
+                } else {
+                    emscripten_async_run_in_main_runtime_thread(
+                        EM_FUNC_SIG_VF,
+                        reinterpret_cast<void*>(&main_thread_progress_tick),
+                        p);
+                }
             };
         }
     }

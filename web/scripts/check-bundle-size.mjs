@@ -15,7 +15,11 @@ const ASSETS = path.resolve(import.meta.dirname, '../../service/html/assets')
 // pattern → max bytes. Patterns checked in order; first match wins.
 const BUDGETS = [
   { match: /^index-.*\.js$/,        max: 700 * 1024, label: 'app bundle' },
-  { match: /^png2amiga-.*\.js$/,    max:  50 * 1024, label: 'wasm glue'  },
+  // 64 KB up from 50 KB — Emscripten's pthread shim adds the worker
+  // bootstrap + Atomics.wait helpers + dispatch-queue plumbing to the
+  // glue. Without pthreads we sit at ~24 KB; with pthreads ~50 KB.
+  // Headroom for future Emscripten updates.
+  { match: /^png2amiga-.*\.js$/,    max:  64 * 1024, label: 'wasm glue'  },
   { match: /^png2amiga-.*\.wasm$/,  max:   2 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
