@@ -1,6 +1,7 @@
 #include "api.hpp"
 
 #include <emscripten/bind.h>
+#include <emscripten/threading.h>
 #include <emscripten/val.h>
 
 using namespace emscripten;
@@ -111,14 +112,21 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("capBestMetric"))
         opts.cap_best_metric = js_opts["capBestMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("onProgress")) {
-        // The encoder may call this from worker threads. Under Emscripten
-        // (single-threaded by default) all calls land back on the worker
-        // thread invoking the JS function — safe. The callback dispatch
-        // posts back to the main UI thread via the Web Worker's own
-        // postMessage in the JS adapter.
+        // The encoder may call this from worker threads (parallel_for
+        // bodies, HAM beam search, cap_best_sweep trials). emscripten
+        // ::val handles are bound to the thread that captured them
+        // (this thread = the WASM module's main runtime thread), so a
+        // pthread worker calling cb() crashes with
+        //   TypeError: toValue(...) is not a function
+        // Gate on emscripten_is_main_runtime_thread() — main-thread
+        // calls (sequential phases, the cap-best outer loop's progress
+        // ticks) still report; pthread-worker calls drop silently.
+        // Future improvement: proxy_to_main_thread + queue to deliver
+        // worker-side progress without losing it.
         val cb = js_opts["onProgress"];
         if (cb.typeOf().as<std::string>() == "function") {
             opts.on_progress = [cb](float p, std::string_view stage) {
+                if (!emscripten_is_main_runtime_thread()) return;
                 cb(p, std::string(stage));
             };
         }
