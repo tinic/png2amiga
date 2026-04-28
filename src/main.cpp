@@ -592,7 +592,7 @@ void print_usage() {
         "                                  budget; auto mode also tries K+1..K+3).\n"
         "                                  (Legacy alias: --copper-changes)\n"
         "  --cap-best, --scap-best         Best-quality CAP/SCAP search.\n"
-        "                                  Spends ~5–10× the time but searches\n"
+        "                                  Spends ~20–30× the time but searches\n"
         "                                  many more candidates and picks the\n"
         "                                  one that looks best. Both names work.\n"
         "  --cap-best-metric psnr|msssim   With --cap-best, choose how candidates\n"
