@@ -784,7 +784,8 @@ void print_usage() {
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
         "  --preview-scale <1-8>           Preview display scale (default: 2 on\n"
-        "                                  iTerm.app via $TERM_PROGRAM, 1 elsewhere)\n"
+        "                                  iTerm.app / Ghostty / Kitty via env vars,\n"
+        "                                  1 elsewhere)\n"
         "  --preview-video                 Batch only: loop generated frames inline\n"
         "                                  in iTerm2 until any key is pressed.\n"
         "  --preview-video-fps <fps>       Playback rate for --preview-video.\n"
@@ -1537,12 +1538,48 @@ std::string base64_encode(std::span<const std::uint8_t> data) {
 // fallback is 1 — safe for non-interactive paths.
 unsigned g_preview_scale = 1;
 
+// Heuristic: which terminals render OSC 1337 / Kitty graphics inline
+// images at *device* pixels (so on Retina the image looks half-sized
+// without an explicit 2× multiplier)? Detected via env vars; no I/O.
+//   - iTerm:   TERM_PROGRAM=iTerm.app
+//   - Ghostty: TERM_PROGRAM=ghostty (Ghostty also exports
+//              GHOSTTY_RESOURCES_DIR; either signal is enough)
+//   - Kitty:   TERM=xterm-kitty or KITTY_WINDOW_ID set inside the
+//              terminal. Kitty implements iTerm's OSC 1337 protocol
+//              alongside its own graphics protocol for compatibility.
+// Anywhere else (Terminal.app, GNU Screen / tmux without passthrough,
+// ssh, non-iTerm-protocol terminals) → 1×, harmless: they either
+// render inline images at the right size already or don't render
+// them at all.
+bool terminal_renders_inline_at_device_pixels() {
+    auto eq = [](const char* a, const char* b) {
+        return a && std::strcmp(a, b) == 0;
+    };
+    auto contains = [](const char* hay, const char* needle) {
+        return hay && std::strstr(hay, needle) != nullptr;
+    };
+    auto set = [](const char* name) {
+        auto v = std::getenv(name);
+        return v && *v;
+    };
+
+    auto term_program = std::getenv("TERM_PROGRAM");
+    if (eq(term_program, "iTerm.app")) return true;
+    if (eq(term_program, "ghostty")) return true;
+    if (set("GHOSTTY_RESOURCES_DIR"))   return true;
+
+    auto term = std::getenv("TERM");
+    if (contains(term, "kitty"))     return true;
+    if (contains(term, "ghostty"))   return true;
+    if (set("KITTY_WINDOW_ID"))      return true;
+
+    return false;
+}
+
 unsigned resolve_preview_scale(int user_override) {
     if (user_override >= 1 && user_override <= 8)
         return static_cast<unsigned>(user_override);
-    auto term = std::getenv("TERM_PROGRAM");
-    if (term && std::strcmp(term, "iTerm.app") == 0) return 2;
-    return 1;
+    return terminal_renders_inline_at_device_pixels() ? 2u : 1u;
 }
 
 // Build the iTerm2 inline-image OSC 1337 sequence. Width/height go out
