@@ -1594,6 +1594,105 @@ amiga::Chipset effective_chipset(const Config& cfg) {
     return pipeline::resolve_chipset(cfg.chipset, cfg.mode);
 }
 
+// Mode → api::Options.mode string. api::parse_mode is the inverse used
+// by run_pipeline / encode_state. Modes not listed fall back to "lores"
+// — callers that care (SNES/Genesis) override explicitly post-build.
+std::string_view mode_to_options_string(amiga::Mode m) {
+    switch (m) {
+    case amiga::Mode::lores:            return "lores";
+    case amiga::Mode::lores_interlace:  return "lores-lace";
+    case amiga::Mode::hires:            return "hires";
+    case amiga::Mode::hires_interlace:  return "hires-lace";
+    case amiga::Mode::ham6:             return "ham6";
+    case amiga::Mode::ham8:             return "ham8";
+    case amiga::Mode::ehb:              return "ehb";
+    case amiga::Mode::stf_low:          return "stf-low";
+    case amiga::Mode::stf_med:          return "stf-med";
+    case amiga::Mode::stf_hi:           return "stf-hi";
+    case amiga::Mode::ste_low:          return "ste-low";
+    case amiga::Mode::ste_med:          return "ste-med";
+    case amiga::Mode::ste_hi:           return "ste-hi";
+    default: return "lores";
+    }
+}
+
+// dither::Method → api::Options.dither string. api::parse_dither is the
+// inverse. Falls back to "floyd-steinberg" for unmapped methods.
+std::string_view dither_to_options_string(dither::Method m) {
+    switch (m) {
+    case dither::Method::none:            return "none";
+    case dither::Method::bayer2x2:        return "bayer2x2";
+    case dither::Method::bayer4x4:        return "bayer4x4";
+    case dither::Method::bayer8x8:        return "bayer8x8";
+    case dither::Method::checker:         return "checker";
+    case dither::Method::floyd_steinberg: return "floyd-steinberg";
+    case dither::Method::atkinson:        return "atkinson";
+    case dither::Method::sierra_lite:     return "sierra-lite";
+    case dither::Method::stucki:          return "stucki";
+    case dither::Method::jarvis:          return "jarvis";
+    case dither::Method::ostromoukhov:    return "ostromoukhov";
+    default: return "floyd-steinberg";
+    }
+}
+
+// Build an api::Options from a CLI Config. Single source of truth for
+// the field-by-field translation that previously lived inline at every
+// api::encode_state call site (batch atlas, SNES Mode 7, Genesis tile
+// pipeline). Caller may still override any field after the call —
+// notably opts.mode for SNES/Genesis where the string isn't covered by
+// mode_to_options_string, and opts.width/height when the source has
+// already been scaled to a non-default size.
+api::Options make_api_options(const Config& cfg) {
+    api::Options opts;
+    opts.mode = std::string{mode_to_options_string(cfg.mode)};
+    if (cfg.chipset)
+        opts.chipset = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
+    opts.depth = static_cast<int>(cfg.depth);
+    opts.interlace = cfg.interlace;
+    opts.gamma = cfg.preprocess.gamma;
+    opts.brightness = cfg.preprocess.brightness;
+    opts.contrast = cfg.preprocess.contrast;
+    opts.saturation = cfg.preprocess.saturation;
+    opts.hue_shift = cfg.preprocess.hue_shift;
+    opts.sharpen = cfg.preprocess.sharpen;
+    opts.black_point = cfg.preprocess.black_point;
+    opts.white_point = cfg.preprocess.white_point;
+    opts.match_range = cfg.match_range;
+    opts.dither = std::string{dither_to_options_string(cfg.dither_method)};
+    opts.dither_strength = cfg.dither_strength;
+    opts.error_clamp = cfg.error_clamp;
+    opts.palette_diversity = cfg.palette_diversity;
+    opts.quantizer = cfg.quantizer;
+    opts.ham_fast = cfg.ham_fast;
+    opts.ham_beam = static_cast<int>(cfg.ham_beam);
+    opts.cap_best = cfg.cap_best;
+    opts.copper = cfg.copper;
+    opts.copper_changes = static_cast<int>(cfg.copper_changes);
+    opts.reserve_color0 = cfg.reserve_color0;
+    opts.dual_playfield = cfg.dual_playfield;
+    opts.scap = cfg.scap;
+    opts.scap_debug = cfg.scap_debug;
+    opts.scap_probe = cfg.scap_probe;
+    opts.alpha_threshold = cfg.alpha_threshold;
+    opts.alpha_dither = std::string{dither_to_options_string(cfg.alpha_dither)};
+    opts.alpha_dither_strength = cfg.alpha_dither_strength;
+    opts.symbol_name = cfg.symbol_name;
+    opts.mask_invert = cfg.mask_invert;
+    opts.crop_x = cfg.crop_x;
+    opts.crop_y = cfg.crop_y;
+    opts.crop_w = cfg.crop_w;
+    opts.crop_h = cfg.crop_h;
+    opts.crop_auto = cfg.crop_auto;
+    opts.native_par = cfg.native_par;
+    opts.cga_text_metric = cfg.cga_text_metric;
+    opts.locks = cfg.locks;
+    opts.pins = cfg.pins;
+    opts.palette_file = cfg.palette_file;
+    if (cfg.width)  opts.width  = static_cast<int>(*cfg.width);
+    if (cfg.height) opts.height = static_cast<int>(*cfg.height);
+    return opts;
+}
+
 // Quantize palette: OCS uses brute-force, AGA uses median-cut
 // Build a K-color palette from a discrete 64-entry EGA histogram using
 // k-means++-style weighted seeding, then one round of weighted-mean refine
@@ -2350,68 +2449,11 @@ int run_batch(const Config& cfg) {
         return exit_code::internal;
     }
 
-    // 3. Run encoder on atlas. Map Config → api::Options for the subset
-    //    of fields the encoder honours; the rest stay at api defaults.
-    auto mode_name = [](amiga::Mode m) -> std::string_view {
-        switch (m) {
-        case amiga::Mode::lores: return "lores";
-        case amiga::Mode::lores_interlace: return "lores-lace";
-        case amiga::Mode::hires: return "hires";
-        case amiga::Mode::hires_interlace: return "hires-lace";
-        case amiga::Mode::ham6: return "ham6";
-        case amiga::Mode::ham8: return "ham8";
-        case amiga::Mode::ehb: return "ehb";
-        case amiga::Mode::stf_low: return "stf-low";
-        case amiga::Mode::stf_med: return "stf-med";
-        case amiga::Mode::stf_hi:  return "stf-hi";
-        case amiga::Mode::ste_low: return "ste-low";
-        case amiga::Mode::ste_med: return "ste-med";
-        case amiga::Mode::ste_hi:  return "ste-hi";
-        default: return "lores";
-        }
-    };
-    auto dither_name = [](dither::Method m) -> std::string_view {
-        switch (m) {
-        case dither::Method::none: return "none";
-        case dither::Method::bayer2x2: return "bayer2x2";
-        case dither::Method::bayer4x4: return "bayer4x4";
-        case dither::Method::bayer8x8: return "bayer8x8";
-        case dither::Method::checker: return "checker";
-        case dither::Method::floyd_steinberg: return "floyd-steinberg";
-        case dither::Method::atkinson: return "atkinson";
-        case dither::Method::sierra_lite: return "sierra-lite";
-        case dither::Method::stucki: return "stucki";
-        case dither::Method::jarvis: return "jarvis";
-        case dither::Method::ostromoukhov: return "ostromoukhov";
-        default: return "floyd-steinberg";
-        }
-    };
-    api::Options opts;
-    opts.mode = std::string{mode_name(cfg.mode)};
-    if (cfg.chipset)
-        opts.chipset = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
-    opts.depth = static_cast<int>(cfg.depth);
-    opts.interlace = cfg.interlace;
-    opts.gamma = cfg.preprocess.gamma;
-    opts.brightness = cfg.preprocess.brightness;
-    opts.contrast = cfg.preprocess.contrast;
-    opts.saturation = cfg.preprocess.saturation;
-    opts.hue_shift = cfg.preprocess.hue_shift;
-    opts.sharpen = cfg.preprocess.sharpen;
-    opts.match_range = cfg.match_range;
-    opts.dither = std::string{dither_name(cfg.dither_method)};
-    opts.dither_strength = cfg.dither_strength;
-    opts.error_clamp = cfg.error_clamp;
-    opts.palette_diversity = cfg.palette_diversity;
-    opts.quantizer = cfg.quantizer;
-    opts.ham_fast = cfg.ham_fast;
-    opts.ham_beam = static_cast<int>(cfg.ham_beam);
-    opts.cap_best = cfg.cap_best;
-    opts.copper = cfg.copper;
-    opts.copper_changes = static_cast<int>(cfg.copper_changes);
-    opts.reserve_color0 = cfg.reserve_color0;
-    opts.dual_playfield = cfg.dual_playfield;
-    opts.scap = false;  // already rejected at parse time
+    // 3. Run encoder on atlas. Map Config → api::Options via the shared
+    //    builder; override width/height to the atlas dimensions and
+    //    force scap off (already rejected at parse time).
+    auto opts = make_api_options(cfg);
+    opts.scap = false;
     opts.width = static_cast<int>(atlas.width());
     opts.height = static_cast<int>(atlas.height());
 
@@ -3451,13 +3493,9 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
 
-        api::Options aopts;
+        auto aopts = make_api_options(*config);
         aopts.mode = (config->mode == amiga::Mode::snes_mode7_256)
             ? "snes-mode7-256" : "snes-mode7-direct";
-        aopts.dither = std::string{dither_name(config->dither_method)};
-        aopts.dither_strength = config->dither_strength;
-        aopts.error_clamp = config->error_clamp;
-        aopts.palette_diversity = config->palette_diversity;
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
@@ -3565,7 +3603,7 @@ int main(int argc, char* argv[]) {
         auto genesis_dither = config->dither_explicit
             ? config->dither_method : dither::Method::opt_checker;
 
-        api::Options aopts;
+        auto aopts = make_api_options(*config);
         switch (config->mode) {
         case amiga::Mode::genesis_h32:    aopts.mode = "genesis-h32";    break;
         case amiga::Mode::genesis_h40:    aopts.mode = "genesis-h40";    break;
@@ -3573,10 +3611,7 @@ int main(int argc, char* argv[]) {
         case amiga::Mode::genesis_h40_sh: aopts.mode = "genesis-h40-sh"; break;
         default: aopts.mode = "genesis-h40"; break;
         }
-        aopts.dither = std::string{dither_name(genesis_dither)};
-        aopts.dither_strength = config->dither_strength;
-        aopts.error_clamp = config->error_clamp;
-        aopts.palette_diversity = config->palette_diversity;
+        aopts.dither = std::string{dither_to_options_string(genesis_dither)};
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
 
