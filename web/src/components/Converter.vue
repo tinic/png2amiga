@@ -30,6 +30,17 @@ const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, c
 
 function onStopEncode(): void {
   abortWasm()
+  // Tear down EVERY in-flight encode handle. The aborted promise's
+  // catch + finally still run on the next microtask but they only
+  // touch state we're already resetting here, so the order doesn't
+  // matter. What DOES matter: clear both timers so the next options
+  // change (e.g. user toggling cap-best off) starts fresh — without
+  // this, a stale debounce timer that was queued mid-stop could re-
+  // fire runConvert with options captured BEFORE the toggle was
+  // observed, which is the most plausible "still encoding with cap-
+  // best on" symptom.
+  if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
+  if (spinnerTimer)  { clearTimeout(spinnerTimer);  spinnerTimer = null }
   converting.value = false
   progress.value = 0
   progressStage.value = ''
