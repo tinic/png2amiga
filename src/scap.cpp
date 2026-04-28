@@ -197,13 +197,17 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // Dither method stays as the user picked it — sweep only the
         // knobs that are auto-tunable. Strength tweaks at fixed method,
         // diversity, and PRE-IMAGE jitter (the strongest knob — gives
-        // the encoder a different median-cut basis per trial). With 8
-        // jitter seeds × 5 strengths × 4 diversities = 160 trials, the
-        // search space is large but parallel-dispatched across all CPU
-        // cores so wall time stays around 5–10 s on a desktop CLI.
+        // the encoder a different median-cut basis per trial). DPF gets
+        // a beefier jitter axis than EHB (24 vs 8) since DPF has only
+        // 8 PF2 colours so the median-cut basin matters more — every
+        // jitter seed shifts which colours win, and DPF artefact
+        // reduction has more headroom. Total 24 × 5 × 4 = 480 trials,
+        // ~30–60 s on an 8-core CLI.
         const float strengths[] = { 0.7f, 0.85f, 1.0f, 1.15f, 1.3f };
         const int diversities[] = { 0, 1, 2, 3 };
-        const int jitter_seeds[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        const int jitter_seeds[] = { 0, 1, 2, 3, 4, 5, 6, 7,
+                                     8, 9, 10, 11, 12, 13, 14, 15,
+                                     16, 17, 18, 19, 20, 21, 22, 23 };
         for (auto s : strengths) {
             for (auto div : diversities) {
                 for (auto js : jitter_seeds) {
@@ -222,7 +226,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // Hash-based deterministic per-pixel nudge of ±1/255 per channel
         // — small enough not to perceptually shift colour, big enough to
         // tip the median-cut into a different cluster boundary.
-        std::vector<Image> jittered_images(8);  // index = jitter_seed
+        std::vector<Image> jittered_images(24);  // index = jitter_seed
         for (auto js : jitter_seeds) {
             if (js == 0) continue;  // index 0 = unused sentinel
             Image j(image.width(), image.height());
@@ -1178,41 +1182,31 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         };
         std::vector<TrialSpec> trials;
         trials.push_back({dither_settings, palette_diversity, 0});
-        const dither::Method methods[] = {
-            dither::Method::floyd_steinberg,
-            dither::Method::atkinson,
-            dither::Method::stucki,
-            dither::Method::ostromoukhov,
-            dither::Method::sierra_lite,
-            dither::Method::jarvis,
-            dither::Method::bayer8x8,
-        };
+        // Same shape as the DPF variant — strength × diversity × jitter,
+        // dither method untouched. EHB has 32 base colours so the
+        // median-cut basin matters less than DPF's 8; 8 jitter seeds is
+        // already enough headroom on natural + HDR test images, and
+        // wall time stays under a minute on an 8-core CLI.
         const float strengths[] = { 0.7f, 0.85f, 1.0f, 1.15f, 1.3f };
         const int diversities[] = { 0, 1, 2, 3 };
-        const int jitter_seeds[] = { 0, 1, 2, 3 };
-        for (auto m : methods) {
-            for (auto s : strengths) {
-                for (auto div : diversities) {
-                    for (auto js : jitter_seeds) {
-                        auto d = dither_settings;
-                        d.method = m;
-                        d.strength = std::clamp(
-                            dither_settings.strength * s, 0.0f, 2.0f);
-                        int retry_div = (palette_diversity > 0)
-                            ? palette_diversity : div;
-                        trials.push_back({d, retry_div, js});
-                    }
+        const int jitter_seeds[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        for (auto s : strengths) {
+            for (auto div : diversities) {
+                for (auto js : jitter_seeds) {
+                    auto d = dither_settings;
+                    d.strength = std::clamp(
+                        dither_settings.strength * s, 0.0f, 2.0f);
+                    int retry_div = (palette_diversity > 0)
+                        ? palette_diversity : div;
+                    trials.push_back({d, retry_div, js});
                 }
             }
         }
 
-        std::vector<Image> jittered_images;
-        jittered_images.reserve(std::size(jitter_seeds));
+        std::vector<Image> jittered_images(8);
         for (auto js : jitter_seeds) {
-            if (js == 0) {
-                jittered_images.emplace_back();
-                continue;
-            }
+            if (js == 0) continue;
+            {
             Image j(image.width(), image.height());
             const float scale = 1.0f / 255.0f;
             for (std::size_t y = 0; y < image.height(); ++y) {
@@ -1233,6 +1227,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 }
             }
             jittered_images[static_cast<std::size_t>(js)] = std::move(j);
+            }
         }
 
         std::optional<ScapResult> best;
