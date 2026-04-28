@@ -102,24 +102,31 @@ function ensureWorker(): void {
 }
 
 // Stop button: terminate the current worker, reject every in-flight
-// promise with a "aborted" error, and let the next convert call
+// promise with an "aborted" error, and let the next convert call
 // re-spawn a fresh worker. Cheap (~few hundred ms WASM re-instantiate)
 // but reliable — works regardless of where in the encode we are
 // (parallel_for, beam search, cap_best_sweep), because the whole
 // WASM runtime + its pthread workers go down with the host worker.
+//
+// IMPORTANT: do NOT flip sharedLoading to true here. The loading
+// state means "WASM hasn't initialised yet"; the UI uses it to gate
+// the entire converter and falls back to the "Loading converter…"
+// splash. Setting it after an abort visually resembled a page reload.
+// Instead, eagerly re-spawn the worker so it's hot when the next
+// convert call arrives — the user sees the canvas turn black (paint
+// in the Converter handler) and progress reset, but no splash screen.
 export function abortWasm(): void {
   if (!worker) return
   worker.terminate()
   worker = null
-  // Reject every pending operation. abortWasm is the only path that
-  // closes a promise without a matching reply, so the dispatcher's
-  // map gets emptied here.
   for (const cb of pending.values()) {
     cb.reject(new Error('aborted'))
   }
   pending.clear()
-  sharedLoading.value = true   // next convert call ensureWorker()s a fresh one
   sharedError.value = ''
+  // Eagerly re-create the worker so the next convert request doesn't
+  // pay the cold-start cost. ensureWorker() is idempotent.
+  ensureWorker()
 }
 
 // Call this as early as possible (e.g. from main.ts before app.mount) so the
