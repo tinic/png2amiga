@@ -1310,7 +1310,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    for: HAM+CAP (centroid refinement), plain CAP, EHB+CAP,
                    SCAP DPF, SCAP EHB. -->
               <div v-if="options.copper || options.scap" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality CAP/SCAP search. Spends ~5–10× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">CAP best</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality CAP/SCAP search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">CAP best</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.capBest" />
                   <span style="color: #888; font-size: 0.625rem;">~5–10× slower, parallel</span>
