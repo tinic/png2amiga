@@ -91,6 +91,12 @@ struct PinSpec {
     int x, y;        // source pixel coordinates
 };
 
+// Canonical encoder schema. Every parameter the pipeline (preprocess →
+// quantize → dither → encode) honours lives here. The CLI parses into
+// main.cpp's Config and translates via make_api_options() (one-line
+// bridge in main.cpp); the WASM frontend builds Options directly from
+// JS. New encoder knobs should land here FIRST, then the bridge picks
+// them up — see REFACTOR_PLAN.md target #5.
 struct Options {
     std::string mode = "lores";         // lores, hires, ham6, ham8, ehb
     std::string chipset;                // "ocs", "aga", or "" for auto
@@ -132,8 +138,21 @@ struct Options {
     // HAM greedy encoder (realtime profile)
     bool ham_fast = false;
 
+    // Dither-aware palette refinement iterations (0 = off). Run after
+    // initial quantization to tighten the palette against the actual
+    // dithered output. Skipped for chunky / fixed-palette modes
+    // (CGA / EGA / VGA / Atari hi-res) inside run_pipeline.
+    int refine_iterations = 4;
+
     // HAM encoding
     int ham_beam = 16;                   // beam width for DP search (1-256)
+    int ham_triple = 16;                 // triple-pixel refinement post-pass
+                                         // beam width (0 = off, 16 default)
+
+    // cap-best ranking metric. "psnr" (default) keeps fine detail;
+    // "msssim" produces a cleaner image at the cost of some detail.
+    // User flips via --cap-best-metric.
+    std::string cap_best_metric = "psnr";
     bool cap_best = false;               // multi-candidate CAP planner +
                                          // joint base-palette refinement.
                                          // HAM6 + copper and HAM8 + copper
@@ -361,6 +380,14 @@ struct EncodeState {
     std::size_t changes_per_line{};
     std::size_t max_moves_per_line{};
     float copper_changes{};
+
+    // SCAP-only stats — see PipelineResult for descriptions.
+    float scap_avg_total_moves_per_line{};
+    float scap_avg_hblank_moves_per_line{};
+    std::size_t scap_max_hblank_moves_per_line{};
+    float scap_avg_visible_moves_per_line{};
+    std::size_t scap_max_visible_moves_per_line{};
+    std::size_t scap_slot_count{};
     float quant_error{};
     float psnr{};
 

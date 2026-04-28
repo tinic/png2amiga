@@ -1387,19 +1387,45 @@ Result<HamResult> encode_ham_copper_generic(
         float total_error;
     };
 
+    // Single shared global progress counter so cap_best's many run_passes
+    // calls together cover 0..100% in one monotone sweep instead of N
+    // visually-distinct sub-bars. Each row processed contributes one
+    // weighted "work unit":
+    //   - pass 1 (sequential CAP planning) ≈ 5% of run_passes time
+    //   - pass 2 (parallel DP beam search)  ≈ 95%
+    // so weighting per-row bumps gives a near-linear bar in wall time.
+    //
+    // cap_best does the initial encode plus kCapBestRefineIters extra
+    // refinement passes (no early-stop — predictable progress + every
+    // iteration is a chance to find a lower-error palette centroid).
+    // User explicitly OK'd more compute for better quality.
+    constexpr float kPass1Weight = 0.05f;
+    constexpr float kPass2Weight = 0.95f;
+    constexpr int kCapBestRefineIters = 4;
+    float run_passes_count = opts.cap_best
+        ? static_cast<float>(1 + kCapBestRefineIters) : 1.0f;
+    float total_units = run_passes_count *
+        (kPass1Weight * static_cast<float>(h) +
+         kPass2Weight * static_cast<float>(h));
+    std::atomic<float> work_done{0.0f};
+    auto add_work = [&](float weight) {
+        // Lock-free float accumulate: load → add → CAS-with-retry.
+        float old = work_done.load(std::memory_order_relaxed);
+        while (!work_done.compare_exchange_weak(old, old + weight)) {}
+    };
+    auto report_global = [&](std::string_view stage) {
+        if (!opts.on_progress) return;
+        float p = std::clamp(work_done.load() / total_units, 0.0f, 1.0f);
+        opts.on_progress(p, stage);
+    };
+
+    // Beam width is per-call so refinement passes (cap_best loop below)
+    // can ask for a wider DP beam than the initial encode. Wider beam
+    // = higher PSNR per row at proportional CPU cost — exactly the
+    // tradeoff cap_best trades on.
     auto run_passes = [&](std::vector<Color3f> initial_base,
-                          float progress_lo, float progress_hi,
-                          std::string_view stage) -> PassResult {
-        auto report = [&](float local) {
-            if (opts.on_progress) {
-                opts.on_progress(
-                    progress_lo + (progress_hi - progress_lo) * local,
-                    stage);
-            }
-        };
-        // Pass 1 ≈ 5% of run_passes total time (CAP planning is cheap),
-        // Pass 2 ≈ 95% (parallel DP beam search dominates).
-        constexpr float kPass1Share = 0.05f;
+                          std::string_view stage,
+                          std::size_t beam_width) -> PassResult {
         PassResult out;
         out.ham_values.assign(w * h, 0);
         out.scanline_palettes.assign(h, {});
@@ -1412,7 +1438,7 @@ Result<HamResult> encode_ham_copper_generic(
 
         // Pass 1 (sequential): per-row CAP planning. Each row mutates
         // current_pal, so this must be serial. Cheap vs the beam search.
-        report(0.0f);
+        report_global(stage);
         std::size_t pass1_step = std::max<std::size_t>(1, h / 20);
         for (std::size_t y = 0; y < h; ++y) {
             auto row = encode_image.row(y);
@@ -1430,12 +1456,9 @@ Result<HamResult> encode_ham_copper_generic(
             }
             out.all_changes[y] = std::move(line_changes);
             out.scanline_palettes[y] = pal_for_row;
-            if ((y + 1) % pass1_step == 0) {
-                report(kPass1Share *
-                       (static_cast<float>(y + 1) / static_cast<float>(h)));
-            }
+            add_work(kPass1Weight);
+            if ((y + 1) % pass1_step == 0) report_global(stage);
         }
-        report(kPass1Share);
 
         // Pass 2 (parallel): DP beam search per row, independent across rows.
         std::atomic<std::size_t> next_y{0};
@@ -1481,7 +1504,7 @@ Result<HamResult> encode_ham_copper_generic(
                     std::span<const Color3f> dr{dithered_row};
                     auto scanline = encode_scanline_dp(dr, start, line_pre,
                                                        srgb_span,
-                                                       opts.beam_width);
+                                                       beam_width);
                     if (opts.triple_beam > 0) {
                         refine_triple(scanline.values, dr, start, line_pre,
                                       srgb_span, opts.triple_beam);
@@ -1493,7 +1516,7 @@ Result<HamResult> encode_ham_copper_generic(
                 } else {
                     auto scanline = encode_scanline_dp(row, start, line_pre,
                                                        srgb_span,
-                                                       opts.beam_width);
+                                                       beam_width);
                     if (opts.triple_beam > 0) {
                         refine_triple(scanline.values, row, start, line_pre,
                                       srgb_span, opts.triple_beam);
@@ -1506,13 +1529,9 @@ Result<HamResult> encode_ham_copper_generic(
                 double old = atomic_err.load(std::memory_order_relaxed);
                 while (!atomic_err.compare_exchange_weak(
                     old, old + static_cast<double>(err))) {}
-                auto done = rows_done.fetch_add(1) + 1;
-                if (opts.on_progress && (done & 0x3) == 0) {
-                    report(kPass1Share +
-                           (1.0f - kPass1Share) *
-                               (static_cast<float>(done) /
-                                static_cast<float>(h)));
-                }
+                rows_done.fetch_add(1);
+                add_work(kPass2Weight);
+                report_global(stage);
             }
         };
 
@@ -1529,29 +1548,38 @@ Result<HamResult> encode_ham_copper_generic(
         worker();
 #endif
         out.total_error = static_cast<float>(atomic_err.load());
-        report(1.0f);
+        report_global(stage);
         return out;
     };
 
-    // Two-pass progress range: with cap_best, the second encode runs after
-    // refinement, so split 0..50% / 50..100%. Without cap_best, the single
-    // encode covers 0..100%.
-    float first_hi = opts.cap_best ? 0.5f : 1.0f;
-    auto best = run_passes(base_pal.colors, 0.0f, first_hi, "encoding");
+    // Single-counter progress: both run_passes calls feed the same
+    // global work_done/total_units accumulator above, so the bar walks
+    // 0..100 monotonically across both passes (and across pass1+pass2
+    // inside each).
+    auto best = run_passes(base_pal.colors, "encoding", opts.beam_width);
 
-    // Joint base-palette + CAP refinement (--ham-cap-best only). Pass 1's
-    // base is fixed by choose_ham_palette without knowing what CAP will do.
-    // Re-pick the base as the per-slot OKLab centroid of the row palettes
-    // pass 1 actually settled into, then re-encode. The second encode starts
-    // closer to each row's "ideal" state, freeing CAP slots from catch-up
-    // duty. Cost: 2× total encode time. Skipped on the fast path.
-    if (opts.cap_best && changes_per_line > 0 && h > 0) {
-        std::vector<Color3f> refined = base_pal.colors;
+    // Joint base-palette + CAP refinement (--cap-best only). The
+    // initial choose_ham_palette base is fixed without knowing what
+    // CAP will do per row; refinement re-picks each slot as the OKLab
+    // centroid of the per-row palettes the previous pass settled into,
+    // then re-encodes from that better starting point. Each iteration
+    // either lowers total_error (kept) or doesn't (kept anyway as the
+    // basis for the next centroid — different palettes can break out
+    // of local minima even when this one didn't help). Always tracks
+    // `best` so we keep the lowest-error result regardless of which
+    // iteration produced it.
+    //
+    // Fixed kCapBestRefineIters iterations rather than convergence-
+    // based early stop: predictable progress, and the centroid update
+    // is non-monotonic in error (one bad iter can be followed by a
+    // good one).
+    auto centroid_refine = [&](const PassResult& src) {
+        std::vector<Color3f> refined = src.base_used;
         for (std::size_t k = 1; k < num_base_colors; ++k) {
             double sumL = 0.0, suma = 0.0, sumb = 0.0;
             for (std::size_t y = 0; y < h; ++y) {
                 auto lab = color_space::linear_to_oklab(
-                    best.scanline_palettes[y][k]);
+                    src.scanline_palettes[y][k]);
                 sumL += static_cast<double>(lab.L);
                 suma += static_cast<double>(lab.a);
                 sumb += static_cast<double>(lab.b);
@@ -1568,9 +1596,62 @@ Result<HamResult> encode_ham_copper_generic(
             refined[k] = (chipset != amiga::Chipset::aga)
                 ? palette::quantize_to_ocs(lin) : lin;
         }
-        auto retry = run_passes(std::move(refined), 0.5f, 1.0f, "refining");
-        if (retry.total_error < best.total_error) {
-            best = std::move(retry);
+        return refined;
+    };
+    if (opts.cap_best && changes_per_line > 0 && h > 0) {
+        // Pure centroid refinement is a fixed-point iteration — it
+        // converges in 1–2 passes and pure looping doesn't gain past
+        // that. To keep finding real improvements we alternate centroid
+        // refine with JITTERED centroid refine: every odd iter we add a
+        // small deterministic OKLab nudge to each slot, giving the next
+        // pass a perturbed starting state that can escape the local
+        // minimum the pure centroid sat in.
+        //
+        // Quadruple the beam for refinement passes (default 16 → 64).
+        // Wider DP beam typically buys +0.3..1 dB on top of the centroid
+        // refine, moving cap_best clearly into "visibly better"
+        // territory.
+        auto refine_beam = std::max(opts.beam_width, std::size_t{64});
+        auto jitter = [&](std::vector<Color3f>& pal, std::uint32_t seed) {
+            // Low-discrepancy hash → deterministic per-slot OKLab nudge
+            // of ≤0.02 (≈ ΔE 7) on every channel. Small enough to keep
+            // each slot near its centroid, big enough to break ties at
+            // the per-row swap-pick step.
+            for (std::size_t k = 1; k < pal.size(); ++k) {
+                auto h32 = seed * 2654435761u +
+                           static_cast<std::uint32_t>(k) * 0x9E3779B9u;
+                auto unit = [&](unsigned shift) {
+                    return (static_cast<float>((h32 >> shift) & 0xFFFFu) /
+                            65535.0f - 0.5f) * 0.04f;
+                };
+                auto lab = color_space::linear_to_oklab(pal[k]);
+                lab.L += unit(0);
+                lab.a += unit(8);
+                lab.b += unit(16);
+                auto lin = color_space::oklab_to_linear(lab);
+                lin.r = std::clamp(lin.r, 0.0f, 1.0f);
+                lin.g = std::clamp(lin.g, 0.0f, 1.0f);
+                lin.b = std::clamp(lin.b, 0.0f, 1.0f);
+                pal[k] = (chipset != amiga::Chipset::aga)
+                    ? palette::quantize_to_ocs(lin) : lin;
+            }
+        };
+
+        PassResult latest = best;  // copy — must not move-from best
+                                    // (retry may never improve and we'd
+                                    // be left with empty vectors).
+        for (int iter = 0; iter < kCapBestRefineIters; ++iter) {
+            auto refined = centroid_refine(latest);
+            // Odd iters: jitter (escape fixed point). Even iters: pure
+            // centroid (consolidate after the perturbation).
+            if (iter & 1)
+                jitter(refined, static_cast<std::uint32_t>(iter + 1));
+            auto retry = run_passes(std::move(refined), "refining",
+                                    refine_beam);
+            if (retry.total_error < best.total_error) {
+                best = retry;  // copy: still need retry as next `latest`
+            }
+            latest = std::move(retry);
         }
     }
     if (opts.on_progress) opts.on_progress(1.0f, "done");

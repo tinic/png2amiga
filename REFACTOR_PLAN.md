@@ -70,15 +70,25 @@ constructions in `main.cpp`. Lives in `api.cpp` (or a new
 ### 3. Preview quantize-cap-scale stage
 
 After the encoder runs, the preview goes through a single canonical
-transformation:
+transformation. Split into three substeps so each commit lands cleanly:
 
-1. `render_copper_capped(planes, scanline_palettes, base, K, lace,
-   chipset)` (already exists, post-fix-5).
-2. Optional PAR/scale step (currently lives in `show_terminal_preview`
-   and `save_preview` separately).
-3. Final `Image` is what every consumer sees — terminal, PNG, WASM.
+- **3a — display-rescale stage.** `scale_for_display(image, mode,
+  hires, interlace)` + `scale_mask_for_display(...)` collapse the per-mode
+  PAR / integer-scale rules used by `save_preview()` and
+  `show_terminal_preview()`. **DONE** in commit `ebcc01e`.
+- **3b — render dispatch.** Single `pipeline::render_preview(...)`
+  helper that picks the right per-mode renderer
+  (`bitplane::render` / `ham::render_ham` / `ham::render_ham_copper` /
+  `copper::render_copper_capped`) from PipelineResult fields. The five
+  current inline call sites (3 in main.cpp, 2-3 in api.cpp) all call
+  into it.
+- **3c — PipelineResult.rendered as canonical source.** After 3b,
+  `run_pipeline` already populates `result.rendered` via the dispatch.
+  Migrate main.cpp's branches to consume that field instead of
+  re-rendering inline.
 
-Goal: any future preview correctness fix lands in **one** place.
+Goal: any future preview correctness fix — including the deferred OCS
+preview-vs-chip bug below — lands in **one** place.
 
 ### 4. `Chipset chipset = resolve(...)` — single source
 
@@ -96,25 +106,16 @@ The latter forces `api::Options` to be the canonical schema.
 
 ## Open / deferred issue
 
-**Preview vs hardware OCS color discrepancy** — even after merging fix
-#5 (`render_copper_capped` with `palette::quantize_to_ocs`), the user
-reports the preview shows a smoother gradient than the hardware does
-(this is reproducible on the saved PNG, not just terminal display, so
-not iTerm2 bilinear smoothing). Hypotheses to investigate **after**
-the refactor:
-
-- The vertical palette dither alternation pattern visible to the user
-  on hardware is NOT being faithfully reproduced in the
-  preview-quantize step.
-- There's a render path I missed that doesn't go through
-  `render_copper_capped` (current grep shows no other callers, so
-  likely not, but easier to verify after consolidation).
-- `cheader.cpp:lace_rebuild` may differ subtly from what
-  `render_copper_capped` emulates (e.g. order of operations, what
-  counts as "previous same-field row" for a given y).
-
-The refactor consolidates preview rendering to one site, which makes
-this investigation cheaper.
+**Preview vs hardware OCS color discrepancy.** **FIXED** (commit
+`0a884f6`). The actual bug was main.cpp's plain CAP `.h`/`.cpp` emit
+sites missing `ch_opts.copper_scanline_palettes`, which silently
+no-op'd `cheader::lace_rebuild` and caused the viewer to ship the
+encoder's progressive change list into a lace context. With that
+field wired through, the preview matches hardware on
+`hires-lace + chuck31 + CAP`. A separate per-row diff-source change
+in `render_copper_capped` (commit `69ec0f9`) ensures the preview
+ranks against the same prev_target as cheader, so K-budget-exceeded
+rows show the same banding both places.
 
 ## Out of scope for the refactor
 
@@ -131,13 +132,43 @@ this investigation cheaper.
 
 1. Define `PipelineInput` / `PipelineResult` / `run_pipeline`. Land
    alongside the existing duplicated paths (don't delete yet).
+   **DONE:** `pipeline::PipelineResult` and `pipeline::run_pipeline`
+   live in `src/pipeline.hpp`. `api.cpp` keeps the workhorse body;
+   `pipeline.cpp` is a one-line forwarder.
 2. Migrate `api.cpp::convert_viewer` to call `run_pipeline`. Verify
-   WASM still works.
+   WASM still works. **DONE** as a side effect of step 1 — the
+   `convert_*` family already shares the single `run_pipeline`
+   workhorse; the `pipeline::` forwarder exists for outside callers.
 3. Migrate `main.cpp` CAP/SCAP/HAM/plain paths one at a time. Verify
-   each via existing ctest cases.
+   each via existing ctest cases. **MOSTLY DONE:**
+   - SCAP production: **DONE** (commit `2b49f93`).
+   - HAM standard / HAM + CAP: **DONE** (commit `a54b10d`).
+   - EHB without copper: **DONE** (commit `a54b10d`).
+   - Plain CAP (lores/hires + copper): inline `cap_best_sweep` wired
+     in main.cpp's CAP branch (commit `c976de5`). Encoder call still
+     `copper::encode_copper` directly rather than via
+     `api::encode_state`; the duplication is purely architectural and
+     was kept to avoid invasive surgery on the DPF expansion + IFF
+     CMAP + mask paths it shares with EHB+CAP.
+   - EHB + CAP: same as plain CAP — `cap_best` works via the path
+     above. Migration would deduplicate but the EHB-specific palette
+     preprocessing (locks, pins, base+half-brite split) is intricate
+     and migrating risks subtle regressions without comprehensive
+     visual testing.
+   - Plain lores/hires/Atari/EGA/CGA fallback (main.cpp ~5040-5500):
+     **NOT MIGRATED.** This branch handles CGA hardware palettes,
+     EGA gamut snapping, Atari mono, palette-file loading, locks,
+     pins, dither-aware refinement. All of this is also in
+     `api::run_pipeline`'s standard branch, but the CGA/EGA edge
+     cases aren't well-covered by ctest. Migration is left as
+     a follow-up that should include comprehensive output diffing.
+   - SCAP probe: **STAYS PUT** (synthesises bitplanes without a
+     source image — nothing to route through `run_pipeline`).
 4. Delete the now-orphan duplicated code in `main.cpp` and `api.cpp`.
+   **N/A** — see #3 notes; remaining duplication is intentional
+   architectural debt with documented rationale, not orphan code.
 5. Tackle preview-OCS-discrepancy bug with the consolidated preview
-   path as the only relevant code.
+   path as the only relevant code. **DONE** (commit `0a884f6`).
 
 ## Test coverage
 

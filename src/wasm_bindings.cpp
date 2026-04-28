@@ -25,6 +25,14 @@ Options parse_js_options(val js_opts) {
         opts.error_clamp = js_opts["errorClamp"].as<float>();
     if (js_opts.hasOwnProperty("hamBeam"))
         opts.ham_beam = js_opts["hamBeam"].as<int>();
+    if (js_opts.hasOwnProperty("hamTriple"))
+        opts.ham_triple = js_opts["hamTriple"].as<int>();
+    if (js_opts.hasOwnProperty("hamFast"))
+        opts.ham_fast = js_opts["hamFast"].as<bool>();
+    if (js_opts.hasOwnProperty("quantizer"))
+        opts.quantizer = js_opts["quantizer"].as<std::string>();
+    if (js_opts.hasOwnProperty("refineIterations"))
+        opts.refine_iterations = js_opts["refineIterations"].as<int>();
     if (js_opts.hasOwnProperty("copper"))
         opts.copper = js_opts["copper"].as<bool>();
     if (js_opts.hasOwnProperty("gamma"))
@@ -96,8 +104,12 @@ Options parse_js_options(val js_opts) {
         opts.scap_debug = js_opts["scapDebug"].as<bool>();
     if (js_opts.hasOwnProperty("capBest"))
         opts.cap_best = js_opts["capBest"].as<bool>();
+    else if (js_opts.hasOwnProperty("scapBest"))    // alias
+        opts.cap_best = js_opts["scapBest"].as<bool>();
     else if (js_opts.hasOwnProperty("hamCapBest"))  // legacy alias
         opts.cap_best = js_opts["hamCapBest"].as<bool>();
+    if (js_opts.hasOwnProperty("capBestMetric"))
+        opts.cap_best_metric = js_opts["capBestMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("onProgress")) {
         // The encoder may call this from worker threads. Under Emscripten
         // (single-threaded by default) all calls land back on the worker

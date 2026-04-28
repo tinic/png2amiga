@@ -18,6 +18,7 @@
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
+#include "pipeline.hpp"
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
@@ -95,12 +96,7 @@ amiga::Mode parse_mode(const std::string& s) {
     return amiga::Mode::lores;
 }
 
-amiga::Chipset resolve_chipset(const std::string& s, amiga::Mode mode) {
-    auto params = amiga::get_mode_params(mode);
-    if (params.bitplane_depth > 6) return amiga::Chipset::aga;
-    if (s == "aga") return amiga::Chipset::aga;
-    return amiga::Chipset::ocs;
-}
+using pipeline::resolve_chipset;
 
 quantize::Algorithm quantize_algo(amiga::Chipset chipset, amiga::Mode mode = amiga::Mode::lores) {
     // STF uses brute-force over 512 colors (same algorithm, different precision)
@@ -414,81 +410,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     return image;
 }
 
-struct PipelineResult {
-    Image rendered;
-    bitplane::BitplaneData planes;
-    std::vector<Color3f> palette;
-    amiga::Mode mode;
-    bool hires = false;
-    bool interlace;
-
-    // Per-pixel palette indices, populated only for modes with a single
-    // global palette (lores/hires/EHB without copper). Empty for HAM and
-    // copper modes where the palette varies. Used by the PNG encoder to
-    // emit a palettized PNG-8 instead of full RGB.
-    std::vector<std::uint8_t> indices;
-
-    // Copper mode
-    bool copper = false;
-    bool aga = false;
-    bool dpf = false;
-    bool scap = false;
-    std::vector<std::vector<Color3f>> scanline_palettes;
-    std::vector<std::vector<copper::CopperChange>> scanline_changes;
-    // Populated by the SCAP planner. Each inner vector is the raw
-    // WAIT/MOVE op stream for one image scanline — fed verbatim to
-    // cheader::CHeaderOptions::scap_line_moves.
-    std::vector<std::vector<scap::ScapMove>> scap_line_moves;
-    std::size_t copper_num_colors{};
-    std::size_t changes_per_line{};
-    std::size_t max_moves_per_line{};   // worst-case copper MOVEs/line for chip-RAM sizing
-
-    // Set after construction:
-    bool has_transparency = false;
-    std::vector<bool> transparency_mask;
-    float copper_changes{};
-    float quant_error{};
-    float psnr{};
-
-    // Mode-specific raw hardware bytes — used by DOS modes that don't flow
-    // through the bitplane encoder (chunky VGA indices, CGA-banked planar
-    // frame, composite pair-packed frame, text-mode char+attr pairs).
-    // If non-empty, convert_raw emits these bytes followed by any palette
-    // bytes the mode requires (VGA DAC for chunky, none for CGA/text).
-    std::vector<std::uint8_t> raw_frame;
-
-    // Text-mode-graphics only (ega_text / cga_text). Needed by the DJGPP
-    // viewer generator to build the shifted custom font and program the
-    // CRTC max-scan-line register; zero for all other modes.
-    std::uint8_t text_scanline_offset = 0;
-    std::uint8_t text_cell_height = 0;
-
-    // CGA 320x200 (mode 4): byte the DJGPP viewer must write to port 0x3D9
-    // so the hardware matches the auto-picked palette+bg variant. Low nibble =
-    // bg color (master index), bit 4 = bright, bit 5 = palette select. 0xFF
-    // means "not a CGA-320 run" (viewer falls back to its default 0x30).
-    std::uint8_t cga_mode_ctrl2 = 0xFF;
-
-    // Tile-dedup stats — set by Genesis (4bpp 8×8 tiles, 32 B each) and
-    // SNES Mode 7 (8bpp 8×8 tiles, 64 B each). 0 = not a tiled run.
-    std::size_t genesis_unique_tiles = 0;
-    std::size_t genesis_total_cells = 0;
-    std::size_t tile_data_bytes = 0;  // unique_tiles × bytes-per-tile
-    // Genesis split byte streams for SGDK header generation. raw_frame
-    // remains the single concatenated stream for .bin output.
-    std::vector<std::uint8_t>  genesis_tile_bytes;     // unique_tiles × 32
-    std::vector<std::uint16_t> genesis_tilemap_cells;  // total_cells
-    std::vector<std::uint16_t> genesis_palette_words;  // 64 BGR333 words
-
-    // Fill quant_error + psnr from the source image and the rendered
-    // preview. Replaces the same 4 lines repeated at every mode branch.
-    void finalize_psnr(const Image& src, float total_error) {
-        quant_error = total_error;
-        psnr = color_space::compute_psnr_blurred(
-            src.pixels(), rendered.pixels(),
-            src.width(), src.height());
-    }
-};
+using pipeline::PipelineResult;
 
 // Round height. Only force even for interlace (fields must be equal).
 std::size_t round_height(double v, bool interlace) {
@@ -577,6 +499,9 @@ Options decompose_mode_options(const Options& opts) {
     if (has_lace) o.interlace = true;
     return o;
 }
+
+}  // close anon namespace so run_pipeline gets external linkage and can
+   // be reached from pipeline.cpp via the api:: forwarder.
 
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     std::size_t input_size,
@@ -1100,6 +1025,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.error_clamp = options.error_clamp;
         ham_opts.palette_diversity = options.palette_diversity;
         ham_opts.quantizer = options.quantizer;
+        ham_opts.triple_beam = static_cast<std::size_t>(
+            std::clamp(options.ham_triple, 0, 256));
         ham_opts.greedy = options.ham_fast;
         // cap_best only applies to HAM6 and HAM8 — HAM4/5/7 are skipped
         // because their tiny base palettes (4/8/32 colors) don't benefit
@@ -1130,17 +1057,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (!ham_result) return std::unexpected{ham_result.error()};
 
         // Render preview using HAM decoder (not simple palette lookup)
-        auto data_bits = ham_result->planes.depth - 2;
-        Result<Image> preview;
-        if (options.copper && !ham_result->scanline_palettes.empty()) {
-            preview = ham::render_ham_copper(ham_result->planes,
-                                            ham_result->scanline_palettes,
-                                            data_bits);
-        } else {
-            preview = ham::render_ham(ham_result->planes,
-                                     ham_result->base_palette,
-                                     data_bits);
-        }
+        auto preview = pipeline::render_preview(
+            ham_result->planes, ham_result->base_palette,
+            /*is_ham=*/true, options.interlace, chipset,
+            (options.copper && !ham_result->scanline_palettes.empty())
+                ? &ham_result->scanline_palettes : nullptr);
         if (!preview) return std::unexpected{preview.error()};
 
         PipelineResult result;
@@ -1451,7 +1372,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::vector<Color3f> full_palette(ehb_pal.colors.begin(),
                                           ehb_pal.colors.end());
 
-        auto preview = bitplane::render(*planes, full_palette);
+        auto preview = pipeline::render_preview(
+            *planes, full_palette,
+            /*is_ham=*/false, options.interlace, chipset);
         if (!preview) return std::unexpected{preview.error()};
 
         PipelineResult result;
@@ -1515,14 +1438,73 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
 
         std::size_t skip_initial_lace = options.interlace ? 2 : 0;
-        auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
-                                                     static_cast<std::size_t>(options.copper_changes),
-                                                     copper_user_pal.empty() ? nullptr : &copper_user_pal,
-                                                     options.reserve_color0, copper_locks,
-                                                     options.palette_diversity,
-                                                     skip_initial_lace, options.interlace,
-                                                     /*is_ehb=*/false,
-                                                     options.on_progress);
+
+        // Single-pass encoder, factored out so cap_best below can replay
+        // it under a parallel jitter sweep without duplicating the
+        // argument list.
+        auto encode_once = [&](const Image& img,
+                               const dither::Settings& d, int diversity) {
+            return copper::encode_copper(
+                img, depth, d, chipset,
+                static_cast<std::size_t>(options.copper_changes),
+                copper_user_pal.empty() ? nullptr : &copper_user_pal,
+                options.reserve_color0, copper_locks,
+                diversity,
+                skip_initial_lace, options.interlace,
+                /*is_ehb=*/false,
+                /*on_progress=*/{});
+        };
+
+        Result<copper::CopperResult> copper_result;
+        if (options.cap_best) {
+            // Plain CAP: 8 jitter seeds. Same shape as SCAP EHB —
+            // 16-colour (or wider) palette so the median-cut basin is
+            // less acute than DPF's 8-colour PF2; 8 seeds × 5×4 = 161
+            // trials is the sweet spot.
+            //
+            // copper::encode_copper returns the rendered preview via
+            // copper::render_copper_capped on (planes, scanline_palettes).
+            // We pre-render here per trial so cap_best_sweep can rank by
+            // PSNR.
+            struct CapTrial {
+                copper::CopperResult result;
+                Image rendered;
+            };
+            float jitter_amp = (chipset == amiga::Chipset::aga)
+                ? 0.4f : 1.0f;
+            auto cap_metric = (options.cap_best_metric == "msssim")
+                ? pipeline::CapBestMetric::msssim
+                : pipeline::CapBestMetric::psnr;
+            auto best = pipeline::cap_best_sweep<CapTrial>(
+                *image, dith, options.palette_diversity,
+                /*jitter_count=*/8,
+                [&](const Image& jittered_in,
+                    const dither::Settings& d, int div) -> Result<CapTrial> {
+                    auto enc = encode_once(jittered_in, d, div);
+                    if (!enc) return std::unexpected{enc.error()};
+                    auto preview = pipeline::render_preview(
+                        enc->planes, enc->base_palette,
+                        /*is_ham=*/false, options.interlace, chipset,
+                        &enc->scanline_palettes,
+                        enc->changes_per_line);
+                    if (!preview) return std::unexpected{preview.error()};
+                    return CapTrial{*std::move(enc), *std::move(preview)};
+                },
+                [](const CapTrial& t) -> const Image& { return t.rendered; },
+                options.on_progress,
+                jitter_amp,
+                cap_metric);
+            if (best.has_value()) {
+                copper_result = std::move(best->result);
+            } else {
+                copper_result = encode_once(*image, dith,
+                                            options.palette_diversity);
+            }
+        } else {
+            copper_result = encode_once(*image, dith,
+                                        options.palette_diversity);
+            if (options.on_progress) options.on_progress(1.0f, "done");
+        }
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         // Render preview BEFORE any DPF expansion: render_copper builds a
@@ -1531,13 +1513,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // version replays the same top-K-by-distance diff clipping the
         // cheader emitter does, so the preview matches what a generated
         // viewer will actually display on hardware.
-        auto preview = copper::render_copper_capped(
-            copper_result->planes,
-            copper_result->scanline_palettes,
-            copper_result->base_palette,
-            copper_result->changes_per_line,
-            options.interlace,
-            chipset);
+        auto preview = pipeline::render_preview(
+            copper_result->planes, copper_result->base_palette,
+            /*is_ham=*/false, options.interlace, chipset,
+            &copper_result->scanline_palettes,
+            copper_result->changes_per_line);
         if (!preview) return std::unexpected{preview.error()};
 
         // Dual-playfield expansion (copper path): same as standard branch —
@@ -1629,7 +1609,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
                 options.scap_debug,
-                options.on_progress)
+                options.on_progress,
+                options.cap_best,
+                options.cap_best_metric)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
@@ -1639,7 +1621,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.scap_debug,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
-                options.on_progress);
+                options.on_progress,
+                options.cap_best,
+                options.cap_best_metric);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;
@@ -1658,6 +1642,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.copper_changes = scap_res->avg_changes_per_line;
+        result.max_moves_per_line = scap_res->max_moves_per_line;
+        result.scap_avg_total_moves_per_line   = scap_res->avg_total_moves_per_line;
+        result.scap_avg_hblank_moves_per_line  = scap_res->avg_hblank_moves_per_line;
+        result.scap_max_hblank_moves_per_line  = scap_res->max_hblank_moves_per_line;
+        result.scap_avg_visible_moves_per_line = scap_res->avg_visible_moves_per_line;
+        result.scap_max_visible_moves_per_line = scap_res->max_visible_moves_per_line;
+        result.scap_slot_count                 = scap_res->slot_table.slots.size();
         result.finalize_psnr(*image, scap_res->total_error);
         return result;
     }
@@ -1823,14 +1814,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     //     Refinement's per-iteration snap-to-gamut collapses centroids onto
     //     the same gamut entry (reduces 16 slots → ~11 effective colors)
     //     and drops PSNR by 3+ dB.
-    if (!has_user_palette(options) && dith.method != dither::Method::none &&
+    if (options.refine_iterations > 0 && !has_user_palette(options) &&
+        dith.method != dither::Method::none &&
         !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
         !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             *image,
             Palette{"refined", {pal.colors.begin(),
                                 pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
-            dith, chipset, mode, 4, locked_mask);
+            dith, chipset, mode,
+            static_cast<std::size_t>(options.refine_iterations), locked_mask);
         if (refined) {
             pal.colors = std::move(refined->colors);
             pal_size = pal.colors.size();
@@ -1885,7 +1878,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // direct color preview. (After expansion the "combined" indices read
     // from all planes would be non-contiguous, so render the unexpanded
     // image then transform the planes/palette to their final DPF layout.)
-    auto preview = bitplane::render(*planes, used_palette);
+    auto preview = pipeline::render_preview(
+        *planes, used_palette,
+        /*is_ham=*/false, options.interlace, chipset);
 
     // Dual-playfield expansion: place the encoded N-plane image into the
     // even hardware planes (PF2), leave the odd planes (PF1) zeroed, and
@@ -1925,6 +1920,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     result.cga_mode_ctrl2 = cga_mode_ctrl2;
     return result;
 }
+
+namespace {  // reopen anon for the trailing helpers
 
 ConvertResult make_error(const std::string& msg) {
     ConvertResult r;
@@ -2080,11 +2077,11 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
-    cheader::CHeaderOptions ch_opts;
-    if (!options.symbol_name.empty())
-        ch_opts.symbol_name = options.symbol_name;
-    ch_opts.dpf = result->dpf;
-    ch_opts.aga = result->aga;
+    auto ch_opts = pipeline::make_ch_opts({
+        .symbol_override = options.symbol_name,
+        .aga = result->aga,
+        .dpf = result->dpf,
+    });
     // CAP per-line copper data, when present.
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
@@ -2222,14 +2219,14 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
         planes.bytes_per_row = new_bpr;
     }
 
-    cheader::CHeaderOptions ch_opts;
-    if (!options.symbol_name.empty())
-        ch_opts.symbol_name = options.symbol_name;
-    ch_opts.hires = result->hires;
-    ch_opts.interlace = result->interlace;
-    ch_opts.aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga);
-    ch_opts.dpf = result->dpf;
-    ch_opts.fade_in = true;  // always enable fade-in for web/compile exports
+    auto ch_opts = pipeline::make_ch_opts({
+        .symbol_override = options.symbol_name,
+        .hires = result->hires,
+        .interlace = result->interlace,
+        .aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga),
+        .fade_in = true,            // always enable fade-in for web/compile exports
+        .dpf = result->dpf,
+    });
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
@@ -2582,6 +2579,12 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.changes_per_line = p.changes_per_line;
     s.max_moves_per_line = p.max_moves_per_line;
     s.copper_changes = p.copper_changes;
+    s.scap_avg_total_moves_per_line   = p.scap_avg_total_moves_per_line;
+    s.scap_avg_hblank_moves_per_line  = p.scap_avg_hblank_moves_per_line;
+    s.scap_max_hblank_moves_per_line  = p.scap_max_hblank_moves_per_line;
+    s.scap_avg_visible_moves_per_line = p.scap_avg_visible_moves_per_line;
+    s.scap_max_visible_moves_per_line = p.scap_max_visible_moves_per_line;
+    s.scap_slot_count                 = p.scap_slot_count;
     s.quant_error = p.quant_error;
     s.psnr = p.psnr;
     s.raw_frame = std::move(p.raw_frame);

@@ -18,6 +18,7 @@
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
+#include "pipeline.hpp"
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
@@ -30,6 +31,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -367,6 +369,15 @@ void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode,
 // Build-system integration flags (--quiet, --json, --depfile, --list-modes).
 // Centralised so the CLI dispatcher can route status output through one
 // helper instead of sprinkling `if (config.quiet)` everywhere.
+// CLI-side config struct. Holds (a) the raw CLI parse target — output
+// path, batch flags, preview flags, *_explicit metadata used by
+// auto-tuning — and (b) a near-mirror of api::Options' encoder fields.
+// api::Options (in api.hpp) is the canonical encoder schema; the bridge
+// is make_api_options() below. Any new encoder knob should land in
+// api::Options first, then get a CLI parse line that fills in the same
+// field on this struct (or — when REFACTOR_PLAN.md target #5 finishes
+// the Amiga branch migrations — directly on an embedded api::Options
+// member). See REFACTOR_PLAN.md target #5.
 struct Config {
     std::string input_path;
     std::string output_path;           // .png for preview, .iff for ILBM, .h for C header
@@ -423,6 +434,7 @@ struct Config {
     // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
     // Off by default — opt-in for offline / final exports.
     bool cap_best = false;
+    std::string cap_best_metric = "psnr";  // "psnr" (default) | "msssim"
 
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
@@ -504,6 +516,8 @@ struct Config {
 
     // Output
     bool preview = false;              // show terminal image preview (iTerm2)
+    int  preview_scale = 0;            // 0 = auto (2× on iTerm.app, 1× elsewhere);
+                                       // any value 1..8 forces that integer scale.
     bool  preview_video = false;       // batch: loop frames inline at preview_video_fps
     float preview_video_fps = 12.5f;   // default playback rate (8mm-ish)
 
@@ -577,13 +591,14 @@ void print_usage() {
         "                                  worst-case K that fits the 14-MOVE\n"
         "                                  budget; auto mode also tries K+1..K+3).\n"
         "                                  (Legacy alias: --copper-changes)\n"
-        "  --cap-best                      Slower (~4-5×) CAP planner: multi-candidate\n"
-        "                                  slot search + joint base-palette refinement.\n"
-        "                                  HAM6 + CAP and HAM8 + CAP only — the indexed\n"
-        "                                  CAP planner (lores/hires/EHB) is already\n"
-        "                                  mature and the refinement gives ≤+0.10 dB\n"
-        "                                  there. +0.5 to +2 dB PSNR on HAM. Off by\n"
-        "                                  default.\n"
+        "  --cap-best, --scap-best         Best-quality CAP/SCAP search.\n"
+        "                                  Spends ~5–10× the time but searches\n"
+        "                                  many more candidates and picks the\n"
+        "                                  one that looks best. Both names work.\n"
+        "  --cap-best-metric psnr|msssim   With --cap-best, choose how candidates\n"
+        "                                  are scored: psnr (default) keeps more\n"
+        "                                  detail; msssim gives a cleaner image\n"
+        "                                  at the cost of some detail.\n"
         "\n"
         "SCAP — Super CAP (mid-line swaps):\n"
         "  --scap                          Mid-line palette swaps inside the displayed\n"
@@ -770,6 +785,10 @@ void print_usage() {
         "\n"
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
+        "  --preview-scale <1-8>           Preview display scale (default on macOS:\n"
+        "                                  2 on iTerm.app / Kitty / Ghostty via env\n"
+        "                                  vars; 1 elsewhere. Other OSes: 1 always —\n"
+        "                                  pass --preview-scale 2 on Linux HiDPI)\n"
         "  --preview-video                 Batch only: loop generated frames inline\n"
         "                                  in iTerm2 until any key is pressed.\n"
         "  --preview-video-fps <fps>       Playback rate for --preview-video.\n"
@@ -880,6 +899,30 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--cap-best-metric") {
+            if (i + 1 >= argc)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--cap-best-metric requires msssim or psnr"}};
+            std::string v = argv[++i];
+            if (v != "msssim" && v != "psnr")
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--cap-best-metric must be msssim or psnr"}};
+            config.cap_best_metric = std::move(v);
+            continue;
+        }
+
+        if (arg == "--preview-scale") {
+            if (i + 1 >= argc)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--preview-scale requires an integer argument"}};
+            auto v = std::atoi(argv[++i]);
+            if (v < 1 || v > 8)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--preview-scale must be in 1..8"}};
+            config.preview_scale = v;
+            continue;
+        }
+
         if (arg == "--preview-video") {
             config.preview_video = true;
             continue;
@@ -918,8 +961,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg == "--cap-best" || arg == "--ham-cap-best") {
-            // --ham-cap-best kept as legacy alias.
+        if (arg == "--cap-best" || arg == "--scap-best" ||
+            arg == "--ham-cap-best") {
+            // --scap-best is an alias for --cap-best (same parallel
+            // jitter sweep; the encoder route is selected by --cap /
+            // --scap, not by which best-flag the user typed).
+            // --ham-cap-best is the legacy alias.
             config.cap_best = true;
             continue;
         }
@@ -1444,36 +1491,7 @@ bool ends_with(std::string_view s, std::string_view suffix) {
 }
 
 // Derive a C symbol name from a filename path
-std::string derive_symbol_name(std::string_view path) {
-    // Extract filename without directory
-    auto slash = path.rfind('/');
-    if (slash != std::string_view::npos)
-        path = path.substr(slash + 1);
-    auto backslash = path.rfind('\\');
-    if (backslash != std::string_view::npos)
-        path = path.substr(backslash + 1);
-
-    // Remove extension
-    auto dot = path.rfind('.');
-    if (dot != std::string_view::npos)
-        path = path.substr(0, dot);
-
-    // Sanitize: replace non-alphanumeric with underscore
-    std::string result;
-    result.reserve(path.size());
-    for (auto c : path) {
-        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
-            result.push_back(static_cast<char>(
-                std::tolower(static_cast<unsigned char>(c))));
-        } else {
-            result.push_back('_');
-        }
-    }
-    if (result.empty()) return "image";
-    if (std::isdigit(static_cast<unsigned char>(result[0])))
-        result.insert(result.begin(), '_');
-    return result;
-}
+using pipeline::derive_symbol_name;
 
 // Crop an image to a sub-region
 Result<Image> crop_image(const Image& src,
@@ -1533,13 +1551,124 @@ std::string base64_encode(std::span<const std::uint8_t> data) {
     return out;
 }
 
-void iterm2_display(const Image& image, unsigned scale = 2) {
-    auto png = png_io::encode(image);
-    if (!png) return;
+// Forward declaration: scale_preview() is defined later in this file
+// (alongside the other display-scaling helpers), but inline_image_escape
+// below needs it to pre-scale by g_preview_scale.
+Image scale_preview(const Image& src, std::size_t sx, std::size_t sy);
+
+// Display-scale multiplier applied to inline preview images. Resolved
+// once in main() from --preview-scale (CLI override 1..8) or auto
+// (2× on macOS iTerm/Kitty/Ghostty, 1× everywhere else — Linux HiDPI
+// is rare enough not to be worth a default). Until main() sets it the
+// fallback is 1 — safe for non-interactive paths.
+unsigned g_preview_scale = 1;
+
+// Which inline-image protocol does this terminal speak?
+//   - iTerm: OSC 1337 ;File=inline=1; ... <BEL>. iTerm.app only —
+//     Kitty literally dumps the base64 to screen, contrary to a
+//     plausible "compat" assumption.
+//   - Kitty: APC _G a=T,f=100, ... <ST>. Kitty's native protocol.
+//     Ghostty implements Kitty graphics (alongside its own UI), no
+//     OSC 1337 fallback. Kitty likewise does NOT speak OSC 1337.
+//   - none:  Anywhere else (Terminal.app, ssh w/o env passthrough,
+//     non-image terminals). Skip the inline emit; preview becomes
+//     a no-op.
+enum class InlineImageProtocol { none, iterm, kitty };
+
+InlineImageProtocol detect_inline_image_protocol() {
+    auto eq = [](const char* a, const char* b) {
+        return a && std::strcmp(a, b) == 0;
+    };
+    auto contains = [](const char* hay, const char* needle) {
+        return hay && std::strstr(hay, needle) != nullptr;
+    };
+    auto set = [](const char* name) {
+        auto v = std::getenv(name);
+        return v && *v;
+    };
+
+    auto term = std::getenv("TERM");
+    auto term_program = std::getenv("TERM_PROGRAM");
+
+    // Kitty / Ghostty — both speak the Kitty graphics protocol.
+    if (contains(term, "kitty"))         return InlineImageProtocol::kitty;
+    if (contains(term, "ghostty"))       return InlineImageProtocol::kitty;
+    if (set("KITTY_WINDOW_ID"))          return InlineImageProtocol::kitty;
+    if (eq(term_program, "ghostty"))     return InlineImageProtocol::kitty;
+    if (set("GHOSTTY_RESOURCES_DIR"))    return InlineImageProtocol::kitty;
+
+    // iTerm.app — OSC 1337 only.
+    if (eq(term_program, "iTerm.app"))   return InlineImageProtocol::iterm;
+
+    return InlineImageProtocol::none;
+}
+
+unsigned resolve_preview_scale(int user_override) {
+    if (user_override >= 1 && user_override <= 8)
+        return static_cast<unsigned>(user_override);
+#ifdef __APPLE__
+    // HiDPI is the default on Apple laptops since 2012; doubling on a
+    // recognised inline-image terminal makes preview readable. Other
+    // platforms default to 1× — Linux + Windows HiDPI exists but isn't
+    // common enough to assume; users on those setups can pass
+    // --preview-scale 2 explicitly.
+    if (detect_inline_image_protocol() != InlineImageProtocol::none) return 2;
+#endif
+    return 1;
+}
+
+// Build the inline-image escape sequence for the current terminal.
+// Pre-scales the image by g_preview_scale so both protocols can use
+// their native-pixel render path uniformly: iTerm renders OSC `Npx`
+// at device pixels, Kitty renders the PNG at its encoded pixel size,
+// so a pre-scaled image looks the right visual size on either path
+// without per-protocol display-size arithmetic. Returns empty string
+// when the terminal speaks neither protocol — caller suppresses the
+// preview emit.
+std::string inline_image_escape(const Image& image) {
+    auto proto = detect_inline_image_protocol();
+    if (proto == InlineImageProtocol::none) return {};
+
+    Image scaled = (g_preview_scale > 1)
+        ? scale_preview(image, g_preview_scale, g_preview_scale)
+        : image;
+    auto png = png_io::encode(scaled);
+    if (!png) return {};
     auto encoded = base64_encode(*png);
-    cli_status("\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-                 png->size(), image.width() * scale, image.height() * scale,
-                 encoded);
+
+    if (proto == InlineImageProtocol::iterm) {
+        return std::format(
+            "\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
+            png->size(), scaled.width(), scaled.height(), encoded);
+    }
+
+    // Kitty graphics protocol — same chunking pattern as constixel.hpp's
+    // png_to_kitty(), with q=2 added to suppress OK / failure responses
+    // from the terminal (otherwise they'd land on stdin).
+    //   First chunk:      \033_Ga=T,f=100,q=2,m=<0|1>;<base64><\033\\>
+    //   Subsequent:       \033_Gm=<0|1>;<base64><\033\\>
+    //   m=0 → final chunk; m=1 → more to come. Per spec all chunks but
+    //   the last must be ≤4096 bytes of base64.
+    std::string out;
+    constexpr std::size_t kMaxChunk = 4096;
+    bool first = true;
+    std::size_t pos = 0;
+    while (pos < encoded.size()) {
+        auto bytes = std::min(encoded.size() - pos, kMaxChunk);
+        bool last = (pos + bytes == encoded.size());
+        out.append(first ? "\033_Ga=T,f=100,q=2,"  : "\033_G");
+        first = false;
+        out.append(last  ? "m=0;" : "m=1;");
+        out.append(encoded, pos, bytes);
+        out.append("\033\\");
+        pos += bytes;
+    }
+    return out;
+}
+
+void iterm2_display(const Image& image) {
+    auto seq = inline_image_escape(image);
+    if (!seq.empty()) cli_status("{}", seq);
 }
 
 const char* dither_name(dither::Method m) {
@@ -1619,11 +1748,213 @@ const char* dither_name(dither::Method m) {
 // All other modes default to OCS but can be overridden with --chipset aga
 // (e.g., HAM6 on AGA gives 24-bit base palette precision).
 amiga::Chipset effective_chipset(const Config& cfg) {
-    auto params = amiga::get_mode_params(cfg.mode);
-    bool requires_aga = params.bitplane_depth > 6;
-    if (requires_aga) return amiga::Chipset::aga;
-    if (cfg.chipset.has_value()) return *cfg.chipset;
-    return amiga::Chipset::ocs;
+    return pipeline::resolve_chipset(cfg.chipset, cfg.mode);
+}
+
+// Mode → api::Options.mode string. api::parse_mode is the inverse used
+// by run_pipeline / encode_state. Modes not listed fall back to "lores"
+// — callers that care (SNES/Genesis) override explicitly post-build.
+std::string_view mode_to_options_string(amiga::Mode m) {
+    switch (m) {
+    case amiga::Mode::lores:            return "lores";
+    case amiga::Mode::lores_interlace:  return "lores-lace";
+    case amiga::Mode::hires:            return "hires";
+    case amiga::Mode::hires_interlace:  return "hires-lace";
+    case amiga::Mode::ham6:             return "ham6";
+    case amiga::Mode::ham8:             return "ham8";
+    case amiga::Mode::ehb:              return "ehb";
+    case amiga::Mode::stf_low:          return "stf-low";
+    case amiga::Mode::stf_med:          return "stf-med";
+    case amiga::Mode::stf_hi:           return "stf-hi";
+    case amiga::Mode::ste_low:          return "ste-low";
+    case amiga::Mode::ste_med:          return "ste-med";
+    case amiga::Mode::ste_hi:           return "ste-hi";
+    default: return "lores";
+    }
+}
+
+// dither::Method → api::Options.dither string. api::parse_dither is the
+// inverse. Falls back to "floyd-steinberg" for unmapped methods.
+// Mirror of api::parse_dither — must stay in sync. Any method exposed
+// to --dither MUST round-trip through this so cap_best / SCAP / SNES /
+// Genesis paths that route through api::encode_state see the user's
+// actual choice (silent fallback to floyd-steinberg here was a real
+// bug that hid opt-checker / yliluoma / structure-fs / knoll / etc.).
+std::string_view dither_to_options_string(dither::Method m) {
+    switch (m) {
+    case dither::Method::none:            return "none";
+    case dither::Method::bayer2x2:        return "bayer2x2";
+    case dither::Method::bayer4x4:        return "bayer4x4";
+    case dither::Method::bayer8x8:        return "bayer8x8";
+    case dither::Method::bayer3x3:        return "bayer3x3";
+    case dither::Method::bayer5x5:        return "bayer5x5";
+    case dither::Method::bayer6x6:        return "bayer6x6";
+    case dither::Method::bayer7x7:        return "bayer7x7";
+    case dither::Method::checker:         return "checker";
+    case dither::Method::h2x4:            return "h2x4";
+    case dither::Method::clustered_dot:   return "clustered-dot";
+    case dither::Method::line2:           return "line2";
+    case dither::Method::line_checker:    return "line-checker";
+    case dither::Method::line4:           return "line4";
+    case dither::Method::line8:           return "line8";
+    case dither::Method::v4x2:            return "v4x2";
+    case dither::Method::bayer4x2:        return "bayer4x2";
+    case dither::Method::bayer2x4:        return "bayer2x4";
+    case dither::Method::vline2:          return "vline2";
+    case dither::Method::vline_checker:   return "vline-checker";
+    case dither::Method::vline4:          return "vline4";
+    case dither::Method::vline8:          return "vline8";
+    case dither::Method::halftone8x8:     return "halftone8x8";
+    case dither::Method::diagonal8x8:     return "diagonal8x8";
+    case dither::Method::spiral5x5:       return "spiral5x5";
+    case dither::Method::hex8x8:          return "hex8x8";
+    case dither::Method::hex5x5:          return "hex5x5";
+    case dither::Method::blue_noise:      return "blue-noise";
+    case dither::Method::void_cluster:    return "void-cluster";
+    case dither::Method::cluster_noise:   return "cluster-noise";
+    case dither::Method::fractal16:       return "fractal16";
+    case dither::Method::floyd_steinberg: return "floyd-steinberg";
+    case dither::Method::atkinson:        return "atkinson";
+    case dither::Method::sierra_lite:     return "sierra-lite";
+    case dither::Method::stucki:          return "stucki";
+    case dither::Method::jarvis:          return "jarvis";
+    case dither::Method::ostromoukhov:    return "ostromoukhov";
+    case dither::Method::dbs:             return "dbs";
+    case dither::Method::gilbert:         return "gilbert";
+    case dither::Method::riemersma:       return "riemersma";
+    case dither::Method::structure_fs:    return "structure-fs";
+    case dither::Method::contrast_fs:     return "contrast-fs";
+    case dither::Method::zhoufang:        return "zhoufang";
+    case dither::Method::yliluoma:        return "yliluoma";
+    case dither::Method::yliluoma2:       return "yliluoma2";
+    case dither::Method::opt_checker:     return "opt-checker";
+    case dither::Method::knoll:           return "knoll";
+    case dither::Method::tri_tone:        return "tri-tone";
+    case dither::Method::yliluoma1:       return "yliluoma1";
+    case dither::Method::opt_line:        return "opt-line";
+    case dither::Method::opt_line_checker:return "opt-line-checker";
+    case dither::Method::aseprite_old:    return "aseprite-old";
+    case dither::Method::libcaca_3x3:     return "libcaca3";
+    case dither::Method::libcaca_6x6:     return "libcaca6";
+    case dither::Method::pegasus_8x8:     return "pegasus";
+    case dither::Method::cranley_bayer:   return "cranley-bayer";
+    case dither::Method::quasicrystal:    return "quasicrystal";
+    case dither::Method::truchet:         return "truchet";
+    case dither::Method::ign:             return "ign";
+    case dither::Method::ign_triangle:    return "ign-tri";
+    case dither::Method::white_noise:     return "white-noise";
+    case dither::Method::r2_sequence:     return "r2";
+    case dither::Method::r2_triangle:     return "r2-tri";
+    case dither::Method::crosshatch:      return "crosshatch";
+    case dither::Method::radial:          return "radial";
+    case dither::Method::value_noise:     return "value-noise";
+    }
+    return "floyd-steinberg";
+}
+
+// Build an api::Options from a CLI Config. Single source of truth for
+// the field-by-field translation that previously lived inline at every
+// api::encode_state call site (batch atlas, SNES Mode 7, Genesis tile
+// pipeline). Caller may still override any field after the call —
+// notably opts.mode for SNES/Genesis where the string isn't covered by
+// mode_to_options_string, and opts.width/height when the source has
+// already been scaled to a non-default size.
+// Zero out the preprocess fields on an api::Options so a downstream
+// api::encode_state / run_pipeline call won't apply preprocess again.
+//
+// CLI paths that re-encode an already-preprocessed Image to PNG bytes
+// (SNES, Genesis, SCAP, batch atlas) previously passed make_api_options()
+// straight through — opts carried Config's gamma / brightness /
+// contrast / saturation / hue_shift / sharpen / black_point /
+// white_point / match_range, and run_pipeline preprocessed those bytes
+// AGAIN. For default Config values the second pass is a no-op; with
+// explicit user preprocess flags the result was applied twice (e.g.
+// --gamma 1.5 → ~1.5² ≈ 2.25 effective). Call this helper right after
+// make_api_options() at any site that has already run preprocess locally.
+void neutralize_preprocess(api::Options& opts) {
+    opts.gamma = 1.0f;
+    opts.brightness = 0.0f;
+    opts.contrast = 1.0f;
+    opts.saturation = 1.0f;
+    opts.hue_shift = 0.0f;
+    opts.sharpen = 0.0f;
+    opts.black_point = 0.0f;
+    opts.white_point = 0.0f;
+    opts.match_range = false;
+}
+
+api::Options make_api_options(const Config& cfg) {
+    api::Options opts;
+    opts.mode = std::string{mode_to_options_string(cfg.mode)};
+    if (cfg.chipset)
+        opts.chipset = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
+    opts.depth = static_cast<int>(cfg.depth);
+    opts.interlace = cfg.interlace;
+    opts.gamma = cfg.preprocess.gamma;
+    opts.brightness = cfg.preprocess.brightness;
+    opts.contrast = cfg.preprocess.contrast;
+    opts.saturation = cfg.preprocess.saturation;
+    opts.hue_shift = cfg.preprocess.hue_shift;
+    opts.sharpen = cfg.preprocess.sharpen;
+    opts.black_point = cfg.preprocess.black_point;
+    opts.white_point = cfg.preprocess.white_point;
+    opts.match_range = cfg.match_range;
+    opts.dither = std::string{dither_to_options_string(cfg.dither_method)};
+    // Per-mode dither auto-tuning. Inline Amiga branches (HAM, EHB,
+    // plain CAP, plain Amiga fallback) all call dither_tuning::defaults_for
+    // and override dither_strength/error_clamp when the user didn't
+    // pass them explicitly. Migrating any of those branches to
+    // api::encode_state without applying the same tuning here would
+    // silently regress CLI-side defaults. Apply at the bridge so any
+    // downstream encode_state caller gets the same tuned values the
+    // inline branches use.
+    auto tune_ctx = dither_tuning::Context{
+        .mode    = cfg.mode,
+        .depth   = static_cast<int>(cfg.depth),
+        .dpf     = cfg.dual_playfield,
+        .scap    = cfg.scap,
+        .copper  = cfg.copper,
+        .chipset = pipeline::resolve_chipset(cfg.chipset, cfg.mode),
+        .method  = cfg.dither_method,
+    };
+    auto tune = dither_tuning::defaults_for(tune_ctx);
+    opts.dither_strength = cfg.dither_strength_explicit
+        ? cfg.dither_strength : tune.strength;
+    opts.error_clamp = cfg.error_clamp_explicit
+        ? cfg.error_clamp : tune.error_clamp;
+    opts.palette_diversity = cfg.palette_diversity;
+    opts.quantizer = cfg.quantizer;
+    opts.ham_fast = cfg.ham_fast;
+    opts.ham_beam = static_cast<int>(cfg.ham_beam);
+    opts.ham_triple = static_cast<int>(cfg.ham_triple);
+    opts.refine_iterations = cfg.refine_iterations;
+    opts.cap_best = cfg.cap_best;
+    opts.cap_best_metric = cfg.cap_best_metric;
+    opts.copper = cfg.copper;
+    opts.copper_changes = static_cast<int>(cfg.copper_changes);
+    opts.reserve_color0 = cfg.reserve_color0;
+    opts.dual_playfield = cfg.dual_playfield;
+    opts.scap = cfg.scap;
+    opts.scap_debug = cfg.scap_debug;
+    opts.scap_probe = cfg.scap_probe;
+    opts.alpha_threshold = cfg.alpha_threshold;
+    opts.alpha_dither = std::string{dither_to_options_string(cfg.alpha_dither)};
+    opts.alpha_dither_strength = cfg.alpha_dither_strength;
+    opts.symbol_name = cfg.symbol_name;
+    opts.mask_invert = cfg.mask_invert;
+    opts.crop_x = cfg.crop_x;
+    opts.crop_y = cfg.crop_y;
+    opts.crop_w = cfg.crop_w;
+    opts.crop_h = cfg.crop_h;
+    opts.crop_auto = cfg.crop_auto;
+    opts.native_par = cfg.native_par;
+    opts.cga_text_metric = cfg.cga_text_metric;
+    opts.locks = cfg.locks;
+    opts.pins = cfg.pins;
+    opts.palette_file = cfg.palette_file;
+    if (cfg.width)  opts.width  = static_cast<int>(*cfg.width);
+    if (cfg.height) opts.height = static_cast<int>(*cfg.height);
+    return opts;
 }
 
 // Quantize palette: OCS uses brute-force, AGA uses median-cut
@@ -2237,51 +2568,69 @@ void save_raw_vga(std::string_view path,
     cli_status("Raw:    {} ({} bytes, VGA Mode 13h chunky)", path, total);
 }
 
-Result<void> save_preview(std::string_view path, const Image& preview,
-                          bool has_trans, const std::vector<bool>& mask,
-                          amiga::Mode mode, bool hires = false,
-                          bool interlace = false) {
-    // DOS modes (EGA, VGA, CGA) have non-integer PAR (e.g. VGA 13h = 5:6
-    // tall pixel). Use nearest-neighbor resampling to the display-aspect
-    // preview dimensions, so the PNG shows the image at roughly 4:3 as
-    // the CRT would. Amiga/Atari modes keep the existing integer-scale
-    // path which handles their 1:1/1:2/2:1 PARs exactly.
+// Single canonical preview-scaling stage. Encodes the per-mode aspect
+// rules every consumer needs:
+//   - DOS modes (CGA / EGA / VGA): nearest-neighbour to the PAR-aware
+//     display dimensions so the PNG / iTerm2 inline image shows the
+//     scene at roughly 4:3 like a CRT would. CGA text modes skip the
+//     2× base scale since 640x200 cell rendering is already comfortable.
+//   - Amiga / Atari modes: integer 2× horizontal for lores, 2× vertical
+//     for non-interlaced; 1×1 for hires-lace. Matches hardware PAR.
+// Used by save_preview() (PNG output), show_terminal_preview() (iTerm2),
+// and the batch / video preview loops.
+Image scale_for_display(const Image& preview, amiga::Mode mode,
+                        bool hires, bool interlace) {
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
         auto params = amiga::get_mode_params(mode);
-        // Text modes render their cells at 640x200 (logical display); no
-        // need for 2x upscale since that's already comfortable viewing size.
         std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
                                              static_cast<double>(params.par),
                                              base_scale);
-        auto scaled = scale_preview_nn(preview, pw, ph);
-        if (has_trans) {
-            // Mask resample (bool → bool via nearest).
-            std::vector<bool> scaled_mask(pw * ph, false);
-            for (std::size_t y = 0; y < ph; ++y) {
-                auto sy = std::min(preview.height() - 1,
-                                   (y * preview.height()) / ph);
-                for (std::size_t x = 0; x < pw; ++x) {
-                    auto sx = std::min(preview.width() - 1,
-                                       (x * preview.width()) / pw);
-                    scaled_mask[y * pw + x] =
-                        mask[sy * preview.width() + sx];
-                }
-            }
-            return png_io::save(path, scaled, scaled_mask);
-        }
-        return png_io::save(path, scaled);
+        return scale_preview_nn(preview, pw, ph);
     }
+    std::size_t sx = hires ? 1 : 2;
+    std::size_t sy = interlace ? 1 : 2;
+    if (hires && interlace) { sx = 1; sy = 1; }
+    return scale_preview(preview, sx, sy);
+}
 
-    bool is_hires = hires;
-    bool is_lace = interlace;
-    std::size_t sx = is_hires ? 1 : 2;
-    std::size_t sy = is_lace ? 1 : 2;
-    if (is_hires && is_lace) { sx = 1; sy = 1; }
-    auto scaled = scale_preview(preview, sx, sy);
+// Companion mask-scaler for the same display rules. Source mask is
+// (preview_w × preview_h); returned mask matches the dimensions
+// scale_for_display() would produce for the same (mode, hires, interlace).
+std::vector<bool> scale_mask_for_display(const std::vector<bool>& mask,
+                                         std::size_t src_w, std::size_t src_h,
+                                         amiga::Mode mode,
+                                         bool hires, bool interlace) {
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
+        auto params = amiga::get_mode_params(mode);
+        std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
+        auto [pw, ph] = preview_dims_for_par(src_w, src_h,
+                                             static_cast<double>(params.par),
+                                             base_scale);
+        std::vector<bool> scaled(pw * ph, false);
+        for (std::size_t y = 0; y < ph; ++y) {
+            auto sy = std::min(src_h - 1, (y * src_h) / ph);
+            for (std::size_t x = 0; x < pw; ++x) {
+                auto sx = std::min(src_w - 1, (x * src_w) / pw);
+                scaled[y * pw + x] = mask[sy * src_w + sx];
+            }
+        }
+        return scaled;
+    }
+    std::size_t sx = hires ? 1 : 2;
+    std::size_t sy = interlace ? 1 : 2;
+    if (hires && interlace) { sx = 1; sy = 1; }
+    return scale_mask(mask, src_w, src_h, sx, sy);
+}
+
+Result<void> save_preview(std::string_view path, const Image& preview,
+                          bool has_trans, const std::vector<bool>& mask,
+                          amiga::Mode mode, bool hires = false,
+                          bool interlace = false) {
+    auto scaled = scale_for_display(preview, mode, hires, interlace);
     if (has_trans) {
-        auto scaled_mask = scale_mask(mask, preview.width(), preview.height(),
-                                      sx, sy);
+        auto scaled_mask = scale_mask_for_display(
+            mask, preview.width(), preview.height(), mode, hires, interlace);
         return png_io::save(path, scaled, scaled_mask);
     }
     return png_io::save(path, scaled);
@@ -2290,23 +2639,7 @@ Result<void> save_preview(std::string_view path, const Image& preview,
 // Show preview in terminal (iTerm2 inline image protocol)
 void show_terminal_preview(const Image& preview, amiga::Mode mode,
                            bool hires = false, bool interlace = false) {
-    // DOS modes use PAR-aware nearest-neighbor (same logic as save_preview).
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
-        auto params = amiga::get_mode_params(mode);
-        std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
-        auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
-                                             static_cast<double>(params.par),
-                                             base_scale);
-        iterm2_display(scale_preview_nn(preview, pw, ph));
-        return;
-    }
-    bool is_hires = hires;
-    bool is_lace = interlace;
-    std::size_t sx = is_hires ? 1 : 2;
-    std::size_t sy = is_lace ? 1 : 2;
-    if (is_hires && is_lace) { sx = 1; sy = 1; }
-    auto scaled = scale_preview(preview, sx, sy);
-    iterm2_display(scaled);
+    iterm2_display(scale_for_display(preview, mode, hires, interlace));
 }
 
 // CLI progress reporter. Throttles to ~20Hz redraw, writes "\rEncoding NN.N%
@@ -2323,8 +2656,12 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
         std::lock_guard lk(state->first);
         auto now = std::chrono::steady_clock::now();
         bool final_tick = (stage == "done") || p >= 1.0f;
+        // 16 ms throttle ≈ 60 Hz — gives the user actual visible
+        // motion on fast parallel passes (previous 50 ms swallowed
+        // most updates from a 25-50 ms HAM6 beam search and made the
+        // bar look frozen).
         if (!final_tick &&
-            now - state->second < std::chrono::milliseconds(50)) {
+            now - state->second < std::chrono::milliseconds(16)) {
             return;
         }
         state->second = now;
@@ -2382,68 +2719,11 @@ int run_batch(const Config& cfg) {
         return exit_code::internal;
     }
 
-    // 3. Run encoder on atlas. Map Config → api::Options for the subset
-    //    of fields the encoder honours; the rest stay at api defaults.
-    auto mode_name = [](amiga::Mode m) -> std::string_view {
-        switch (m) {
-        case amiga::Mode::lores: return "lores";
-        case amiga::Mode::lores_interlace: return "lores-lace";
-        case amiga::Mode::hires: return "hires";
-        case amiga::Mode::hires_interlace: return "hires-lace";
-        case amiga::Mode::ham6: return "ham6";
-        case amiga::Mode::ham8: return "ham8";
-        case amiga::Mode::ehb: return "ehb";
-        case amiga::Mode::stf_low: return "stf-low";
-        case amiga::Mode::stf_med: return "stf-med";
-        case amiga::Mode::stf_hi:  return "stf-hi";
-        case amiga::Mode::ste_low: return "ste-low";
-        case amiga::Mode::ste_med: return "ste-med";
-        case amiga::Mode::ste_hi:  return "ste-hi";
-        default: return "lores";
-        }
-    };
-    auto dither_name = [](dither::Method m) -> std::string_view {
-        switch (m) {
-        case dither::Method::none: return "none";
-        case dither::Method::bayer2x2: return "bayer2x2";
-        case dither::Method::bayer4x4: return "bayer4x4";
-        case dither::Method::bayer8x8: return "bayer8x8";
-        case dither::Method::checker: return "checker";
-        case dither::Method::floyd_steinberg: return "floyd-steinberg";
-        case dither::Method::atkinson: return "atkinson";
-        case dither::Method::sierra_lite: return "sierra-lite";
-        case dither::Method::stucki: return "stucki";
-        case dither::Method::jarvis: return "jarvis";
-        case dither::Method::ostromoukhov: return "ostromoukhov";
-        default: return "floyd-steinberg";
-        }
-    };
-    api::Options opts;
-    opts.mode = std::string{mode_name(cfg.mode)};
-    if (cfg.chipset)
-        opts.chipset = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
-    opts.depth = static_cast<int>(cfg.depth);
-    opts.interlace = cfg.interlace;
-    opts.gamma = cfg.preprocess.gamma;
-    opts.brightness = cfg.preprocess.brightness;
-    opts.contrast = cfg.preprocess.contrast;
-    opts.saturation = cfg.preprocess.saturation;
-    opts.hue_shift = cfg.preprocess.hue_shift;
-    opts.sharpen = cfg.preprocess.sharpen;
-    opts.match_range = cfg.match_range;
-    opts.dither = std::string{dither_name(cfg.dither_method)};
-    opts.dither_strength = cfg.dither_strength;
-    opts.error_clamp = cfg.error_clamp;
-    opts.palette_diversity = cfg.palette_diversity;
-    opts.quantizer = cfg.quantizer;
-    opts.ham_fast = cfg.ham_fast;
-    opts.ham_beam = static_cast<int>(cfg.ham_beam);
-    opts.cap_best = cfg.cap_best;
-    opts.copper = cfg.copper;
-    opts.copper_changes = static_cast<int>(cfg.copper_changes);
-    opts.reserve_color0 = cfg.reserve_color0;
-    opts.dual_playfield = cfg.dual_playfield;
-    opts.scap = false;  // already rejected at parse time
+    // 3. Run encoder on atlas. Map Config → api::Options via the shared
+    //    builder; override width/height to the atlas dimensions and
+    //    force scap off (already rejected at parse time).
+    auto opts = make_api_options(cfg);
+    opts.scap = false;
     opts.width = static_cast<int>(atlas.width());
     opts.height = static_cast<int>(atlas.height());
 
@@ -2734,12 +3014,13 @@ int run_batch(const Config& cfg) {
         auto prefix = sanitise_symbol(dir_name);
         auto cpp_path = (out_dir / (prefix + ".cpp")).string();
 
-        cheader::CHeaderOptions ch;
-        ch.symbol_name = prefix;
-        ch.hires = st.hires;
-        ch.interlace = st.interlace;
-        ch.aga = st.aga;
-        ch.dpf = st.dpf;
+        auto ch = pipeline::make_ch_opts({
+            .symbol_override = prefix,
+            .hires = st.hires,
+            .interlace = st.interlace,
+            .aga = st.aga,
+            .dpf = st.dpf,
+        });
         std::span<const bitplane::BitplaneData> extras{
             frame_planes.data() + 1, frame_planes.size() - 1};
         ch.extra_frame_planes = extras;
@@ -2785,34 +3066,23 @@ int run_batch(const Config& cfg) {
     // peek; falls through silently on non-tty stdin.
     if (cfg.preview_video && !is_quiet()) {
         // Pre-build frame PNG payloads + their inline-image escape
-        // sequences once so the loop is just a write+sleep cycle.
+        // sequences once so the loop is just a write+sleep cycle. Goes
+        // through the same scale_for_display + inline_image_escape
+        // path as the static --preview, so the looped video matches the
+        // single-shot terminal preview pixel-for-pixel.
         std::vector<std::string> frame_payloads;
         frame_payloads.reserve(n_frames);
-        // Match show_terminal_preview's lores/hires/lace scaling so the
-        // looped video matches the static --preview output dimensions.
-        std::size_t sx = st.hires ? 1 : 2;
-        std::size_t sy = st.interlace ? 1 : 2;
-        if (st.hires && st.interlace) { sx = 1; sy = 1; }
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             Image frame_img(frame_w, frame_h);
             auto x0 = kBatchGutter + fi * (frame_w + kBatchGutter);
             for (std::size_t y = 0; y < frame_h; ++y)
                 for (std::size_t x = 0; x < frame_w; ++x)
                     frame_img[x, y] = st.rendered[x0 + x, y];
-            auto scaled = scale_preview(frame_img, sx, sy);
-            auto png = png_io::encode(scaled);
-            if (!png) continue;
-            auto b64 = base64_encode(*png);
-            // iTerm2 upscales the inline image to the requested
-            // width/height (in display pixels). 2× the encoded size for
-            // a comfortable viewing scale (matches iterm2_display()).
-            constexpr unsigned kDisplayScale = 2;
-            frame_payloads.push_back(std::format(
-                "\033[H\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-                png->size(),
-                scaled.width() * kDisplayScale,
-                scaled.height() * kDisplayScale,
-                b64));
+            auto scaled = scale_for_display(frame_img, st.mode,
+                                            st.hires, st.interlace);
+            auto seq = inline_image_escape(scaled);
+            if (seq.empty()) continue;
+            frame_payloads.push_back("\033[H" + seq);
         }
 
         bool tty_raw = false;
@@ -2951,6 +3221,7 @@ int main(int argc, char* argv[]) {
     }
     g_quiet = config->quiet;
     g_json  = config->json;
+    g_preview_scale = resolve_preview_scale(config->preview_scale);
 
     // --no-scale + .cpp/.c viewer is incoherent: the generated viewer
     // sets BPLCON0/DDFSTRT/DDFSTOP/BPLxMOD for a specific Amiga screen
@@ -3036,13 +3307,13 @@ int main(int argc, char* argv[]) {
         if (res.palette.size() < 16)
             res.palette.resize(16, Color3f{0.0f, 0.0f, 0.0f});
 
-        cheader::CHeaderOptions ch_opts;
-        ch_opts.symbol_name = config->symbol_name.empty()
-            ? std::string("scap_") + res.probe_label
-            : config->symbol_name;
-        ch_opts.aga = false;            // OCS DPF for Phase 1
-        ch_opts.dpf = true;
-        ch_opts.fade_in = false;
+        auto fallback_sym = std::string("scap_") + res.probe_label;
+        auto ch_opts = pipeline::make_ch_opts({
+            .symbol_override = config->symbol_name.empty()
+                ? std::string_view{fallback_sym}
+                : std::string_view{config->symbol_name},
+            .dpf = true,                // OCS DPF for Phase 1
+        });
         ch_opts.scap_line_moves = &res.line_moves;
         ch_opts.scap_label = res.probe_label;
         ch_opts.scap_anchor_hpos = res.slot_table.line_gate_hpos;
@@ -3482,13 +3753,13 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
 
-        api::Options aopts;
+        auto aopts = make_api_options(*config);
+        // *image already went through preprocess::apply above; src_png
+        // re-encodes that processed Image. Stop run_pipeline from
+        // preprocessing again on top.
+        neutralize_preprocess(aopts);
         aopts.mode = (config->mode == amiga::Mode::snes_mode7_256)
             ? "snes-mode7-256" : "snes-mode7-direct";
-        aopts.dither = std::string{dither_name(config->dither_method)};
-        aopts.dither_strength = config->dither_strength;
-        aopts.error_clamp = config->error_clamp;
-        aopts.palette_diversity = config->palette_diversity;
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
@@ -3596,7 +3867,10 @@ int main(int argc, char* argv[]) {
         auto genesis_dither = config->dither_explicit
             ? config->dither_method : dither::Method::opt_checker;
 
-        api::Options aopts;
+        auto aopts = make_api_options(*config);
+        // *image already preprocessed; the PNG-encoded src bytes feed
+        // run_pipeline which would otherwise re-apply preprocess.
+        neutralize_preprocess(aopts);
         switch (config->mode) {
         case amiga::Mode::genesis_h32:    aopts.mode = "genesis-h32";    break;
         case amiga::Mode::genesis_h40:    aopts.mode = "genesis-h40";    break;
@@ -3604,10 +3878,7 @@ int main(int argc, char* argv[]) {
         case amiga::Mode::genesis_h40_sh: aopts.mode = "genesis-h40-sh"; break;
         default: aopts.mode = "genesis-h40"; break;
         }
-        aopts.dither = std::string{dither_name(genesis_dither)};
-        aopts.dither_strength = config->dither_strength;
-        aopts.error_clamp = config->error_clamp;
-        aopts.palette_diversity = config->palette_diversity;
+        aopts.dither = std::string{dither_to_options_string(genesis_dither)};
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
 
@@ -3868,99 +4139,73 @@ int main(int argc, char* argv[]) {
                      config->ham_beam,
                      dither_name(ham_dither));
 
-        ham::HamOptions ham_opts;
-        ham_opts.beam_width = config->ham_beam;
-        ham_opts.dither_method = ham_dither;
-        auto ham_tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = config->mode,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = config->dual_playfield,
-            .scap    = false,
-            .copper  = config->copper,
-            .chipset = chipset,
-            .method  = ham_dither,
-        });
-        ham_opts.dither_strength = config->dither_strength_explicit
-                                   ? config->dither_strength : ham_tune.strength;
-        ham_opts.error_clamp = config->error_clamp_explicit
-                              ? config->error_clamp : ham_tune.error_clamp;
-        ham_opts.palette_diversity = config->palette_diversity;
-        ham_opts.quantizer = config->quantizer;
-        ham_opts.triple_beam = config->ham_triple;
-        ham_opts.greedy = config->ham_fast;
-        // cap_best gates HAM4/5/7 — only HAM6 and HAM8 are eligible.
-        bool ham_eligible_for_cap_best =
-            (ham_params.bitplane_depth == 6 ||
-             ham_params.bitplane_depth == 8);
-        ham_opts.cap_best = config->cap_best && ham_eligible_for_cap_best;
-        ham_opts.on_progress = make_cli_progress_reporter();
-        ham_opts.skip_initial_swap_rows = config->interlace ? 2 : 0;
-
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
 
-        Result<ham::HamResult> ham_result = config->copper
-            ? ham::encode_ham_copper(*image, config->mode, chipset, ham_opts,
-                                   config->hires, static_cast<std::size_t>(config->copper_changes))
-            : ham::encode_ham(*image, config->mode, chipset, ham_opts);
+        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
+        // we can route through api::encode_state — same shape as
+        // SNES/Genesis/SCAP. Auto-tuning lives in make_api_options now;
+        // dither method already includes the HAM-specific override
+        // applied above (ham_dither). neutralize_preprocess prevents
+        // run_pipeline's own preprocess from double-applying.
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "HAM: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.dither = std::string{dither_to_options_string(ham_dither)};
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+        aopts.on_progress = make_cli_progress_reporter();
 
-        if (!ham_result) {
-            std::println(stderr, "HAM encode error: {}", ham_result.error().message);
+        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "HAM encode error: {}", enc.error_msg);
             return 1;
         }
-
-        // Render preview first so we can count unique colors for the stats line.
-        auto data_bits = ham_result->planes.depth - 2;
-        auto ham_preview = !ham_result->scanline_palettes.empty()
-            ? ham::render_ham_copper(ham_result->planes,
-                                    ham_result->scanline_palettes, data_bits)
-            : ham::render_ham(ham_result->planes,
-                             ham_result->base_palette, data_bits);
-        int ham_unique = ham_preview ? count_unique_colors(*ham_preview) : 0;
-
-        float ham_psnr = ham_preview
-            ? color_space::compute_psnr_blurred(image->pixels(),
-                                                ham_preview->pixels(),
-                                                image->width(), image->height())
-            : 0.0f;
-        if (config->copper && !ham_result->copper_changes.empty()) {
+        auto& st = enc.state;
+        int ham_unique = count_unique_colors(st.rendered);
+        if (config->copper && !st.scanline_changes.empty()) {
             std::size_t total_ch = 0;
-            for (auto& ch : ham_result->copper_changes) total_ch += ch.size();
-            float avg_ch = ham_result->copper_changes.size() > 0
-                ? static_cast<float>(total_ch) / static_cast<float>(ham_result->copper_changes.size())
+            for (auto& ch : st.scanline_changes) total_ch += ch.size();
+            float avg_ch = st.scanline_changes.size() > 0
+                ? static_cast<float>(total_ch) / static_cast<float>(st.scanline_changes.size())
                 : 0.0f;
             int ham_cap_entries = static_cast<int>(
-                ham_result->copper_changes.size() *
-                ham_result->changes_per_line);
+                st.scanline_changes.size() * st.changes_per_line);
             cli_print_encoded(
-                static_cast<int>(ham_result->planes.depth),
-                static_cast<int>(ham_result->planes.total_bytes()),
-                static_cast<int>(ham_result->base_palette.size()),
+                static_cast<int>(st.planes.depth),
+                static_cast<int>(st.planes.total_bytes()),
+                static_cast<int>(st.palette.size()),
                 chipset == amiga::Chipset::aga,
                 ham_cap_entries, /*scap=*/0,
-                static_cast<int>(ham_result->planes.height),
-                static_cast<int>(ham_result->changes_per_line),
+                static_cast<int>(st.planes.height),
+                static_cast<int>(st.changes_per_line),
                 ham_unique,
                 std::optional<float>{avg_ch},
-                static_cast<double>(ham_result->total_error), ham_psnr);
+                static_cast<double>(st.quant_error), st.psnr);
         } else {
             cli_print_encoded(
-                static_cast<int>(ham_result->planes.depth),
-                static_cast<int>(ham_result->planes.total_bytes()),
-                static_cast<int>(ham_result->base_palette.size()),
+                static_cast<int>(st.planes.depth),
+                static_cast<int>(st.planes.total_bytes()),
+                static_cast<int>(st.palette.size()),
                 chipset == amiga::Chipset::aga,
                 /*cap=*/0, /*scap=*/0,
-                static_cast<int>(ham_result->planes.height),
+                static_cast<int>(st.planes.height),
                 /*max_moves=*/0,
                 ham_unique, std::nullopt,
-                static_cast<double>(ham_result->total_error), ham_psnr);
+                static_cast<double>(st.quant_error), st.psnr);
         }
 
-        if (ham_preview)
-            if (config->preview) show_terminal_preview(*ham_preview, config->mode, config->hires, config->interlace);
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode,
+                                  config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -3970,39 +4215,37 @@ int main(int argc, char* argv[]) {
                 iff_opts.hires = config->hires;
                 iff_opts.interlace = config->interlace;
                 iff_opts.has_transparency = has_transparency;
-                if (!ham_result->scanline_palettes.empty()) {
-                    iff_opts.scanline_palettes = &ham_result->scanline_palettes;
+                if (!st.scanline_palettes.empty()) {
+                    iff_opts.scanline_palettes = &st.scanline_palettes;
                 }
 
                 auto result = iff::save_ilbm(
-                    config->output_path, ham_result->planes,
-                    ham_result->base_palette, config->mode, iff_opts);
+                    config->output_path, st.planes,
+                    st.palette, config->mode, iff_opts);
                 if (!result) {
                     std::println(stderr, "IFF write error: {}", result.error().message);
                     return 1;
                 }
                 cli_status("IFF:    {}", config->output_path);
             } else if (ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                if (!ham_result->copper_changes.empty()) {
-                    ch_opts.copper_changes = &ham_result->copper_changes;
-                    ch_opts.copper_changes_per_line = ham_result->changes_per_line;
-                    if (!ham_result->scanline_palettes.empty())
-                        ch_opts.copper_scanline_palettes = &ham_result->scanline_palettes;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
+                if (!st.scanline_changes.empty()) {
+                    ch_opts.copper_changes = &st.scanline_changes;
+                    ch_opts.copper_changes_per_line = st.changes_per_line;
+                    if (!st.scanline_palettes.empty())
+                        ch_opts.copper_scanline_palettes = &st.scanline_palettes;
                 }
 
                 auto result = cheader::save(
-                    config->output_path, ham_result->planes,
-                    ham_result->base_palette, config->mode, ch_opts);
+                    config->output_path, st.planes,
+                    st.palette, config->mode, ch_opts);
                 if (!result) {
                     std::println(stderr, "C header write error: {}",
                                  result.error().message);
@@ -4011,27 +4254,25 @@ int main(int argc, char* argv[]) {
                 cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                if (!ham_result->copper_changes.empty()) {
-                    ch_opts.copper_changes = &ham_result->copper_changes;
-                    ch_opts.copper_changes_per_line = ham_result->changes_per_line;
-                    if (!ham_result->scanline_palettes.empty())
-                        ch_opts.copper_scanline_palettes = &ham_result->scanline_palettes;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
+                if (!st.scanline_changes.empty()) {
+                    ch_opts.copper_changes = &st.scanline_changes;
+                    ch_opts.copper_changes_per_line = st.changes_per_line;
+                    if (!st.scanline_palettes.empty())
+                        ch_opts.copper_scanline_palettes = &st.scanline_palettes;
                 }
 
-                pad_planes_to_mode(ham_result->planes, config->mode, config->hires);
+                pad_planes_to_mode(st.planes, config->mode, config->hires);
                 auto result = cheader::save_viewer(
-                    config->output_path, ham_result->planes,
-                    ham_result->base_palette, config->mode, ch_opts);
+                    config->output_path, st.planes,
+                    st.palette, config->mode, ch_opts);
                 if (!result) {
                     std::println(stderr, "Viewer write error: {}",
                                  result.error().message);
@@ -4039,13 +4280,14 @@ int main(int argc, char* argv[]) {
                 }
                 cli_status("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
-                save_raw(config->output_path, ham_result->planes,
-                         ham_result->base_palette, chipset,
-                         config->copper ? &ham_result->copper_changes : nullptr,
-                         ham_result->changes_per_line);
+                save_raw(config->output_path, st.planes,
+                         st.palette, chipset,
+                         config->copper && !st.scanline_changes.empty()
+                             ? &st.scanline_changes : nullptr,
+                         st.changes_per_line);
             } else if (ends_with(config->output_path, ".pal")) {
                 auto result = palette_io::save_ocs_palette(
-                    config->output_path, ham_result->base_palette);
+                    config->output_path, st.palette);
                 if (!result) {
                     std::println(stderr, "Palette write error: {}",
                                  result.error().message);
@@ -4053,15 +4295,10 @@ int main(int argc, char* argv[]) {
                 }
                 cli_status("Pal:    {} ({} colors, {} bytes)",
                              config->output_path,
-                             ham_result->base_palette.size(),
-                             ham_result->base_palette.size() * 2);
+                             st.palette.size(),
+                             st.palette.size() * 2);
             } else {
-                // Use the preview rendered earlier for the stats line.
-                if (!ham_preview) {
-                    std::println(stderr, "Render error: {}", ham_preview.error().message);
-                    return 1;
-                }
-                auto result = save_preview(config->output_path, *ham_preview,
+                auto result = save_preview(config->output_path, st.rendered,
                                            has_transparency, transparency_mask,
                                            config->mode, config->hires, config->interlace);
                 if (!result) {
@@ -4242,13 +4479,13 @@ int main(int argc, char* argv[]) {
                     cli_status("PNG:    {}", config->output_path);
                 } else if (ends_with(config->output_path, ".cpp") ||
                            ends_with(config->output_path, ".c")) {
-                    cheader::CHeaderOptions ch_opts;
-                    ch_opts.symbol_name = config->symbol_name.empty()
-                        ? derive_symbol_name(config->output_path)
-                        : config->symbol_name;
-                    ch_opts.hires = config->hires;
-                    ch_opts.interlace = config->interlace;
-                    ch_opts.fade_in = config->fade_in;
+                    auto ch_opts = pipeline::make_ch_opts({
+                        .output_path = config->output_path,
+                        .symbol_override = config->symbol_name,
+                        .hires = config->hires,
+                        .interlace = config->interlace,
+                        .fade_in = config->fade_in,
+                    });
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line = copper_result->changes_per_line;
                     ch_opts.copper_scanline_palettes = &copper_result->scanline_palettes;
@@ -4293,12 +4530,12 @@ int main(int argc, char* argv[]) {
                 } else if (ends_with(config->output_path, ".h")) {
                     // .h header for EHB+CAP: bitplanes + base CMAP +
                     // copper change data, no viewer init code.
-                    cheader::CHeaderOptions ch_opts;
-                    ch_opts.symbol_name = config->symbol_name.empty()
-                        ? derive_symbol_name(config->output_path)
-                        : config->symbol_name;
-                    ch_opts.hires = config->hires;
-                    ch_opts.interlace = config->interlace;
+                    auto ch_opts = pipeline::make_ch_opts({
+                        .output_path = config->output_path,
+                        .symbol_override = config->symbol_name,
+                        .hires = config->hires,
+                        .interlace = config->interlace,
+                    });
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line =
                         copper_result->changes_per_line;
@@ -4333,166 +4570,62 @@ int main(int argc, char* argv[]) {
         // --- EHB without copper ---
         cli_status("Mode:   EHB (Extra Half-Brite)");
 
-        // Validate locks/pins for EHB (target must be 0-31)
-        if (auto v = palette_locks::validate_locks(config->locks, 32); !v) {
-            std::println(stderr, "{}", v.error().message);
+        // Force transparency to black before encoding (api::run_pipeline
+        // does the same internally, but also do it on *image so the
+        // mask export below references a consistent source).
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
+        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
+        // we can route through api::encode_state. EHB's full palette
+        // logic (64-color base+half-brite, locks, pins, user palette,
+        // make_ehb_palette) lives in api::run_pipeline's EHB branch and
+        // runs the same code path the web frontend uses.
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "EHB: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+        aopts.on_progress = make_cli_progress_reporter();
+
+        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "EHB encode error: {}", enc.error_msg);
             return 1;
         }
-        bool reserve_zero_ehb = !config->palette_file.empty() ? false : config->reserve_color0;
-        if (auto v = palette_locks::validate_pins(config->pins, config->locks, 32,
-                                                  image->width(), image->height(),
-                                                  reserve_zero_ehb); !v) {
-            std::println(stderr, "{}", v.error().message);
-            return 1;
-        }
-
-        Palette base_pal;
-        std::vector<bool> base_locked(32, false);
-        if (!config->palette_file.empty()) {
-            auto loaded = palette_io::load_palette(config->palette_file);
-            if (!loaded) {
-                std::println(stderr, "Palette load error: {}",
-                             loaded.error().message);
-                return 1;
-            }
-            base_pal = *std::move(loaded);
-            if (base_pal.colors.size() > 32)
-                base_pal.colors.resize(32);
-            snap_palette(base_pal, chipset, config->mode);
-            // Apply locks on top of user palette
-            for (auto& lock : config->locks) {
-                auto idx = static_cast<std::size_t>(lock.index);
-                if (idx < base_pal.colors.size()) {
-                    base_pal.colors[idx] = palette_locks::to_color(lock, chipset, config->mode);
-                    base_locked[idx] = true;
-                }
-            }
-            cli_status("Palette: {} colors loaded from {}",
-                         base_pal.size(), config->palette_file);
-        } else {
-            // 32 base colors total: locks + reserved black at 0 + quantized fill
-            auto qcount = palette_locks::quant_count(32, config->locks, true);
-            auto quantized = auto_quantize(*image, qcount, chipset, config->palette_diversity, config->quantizer);
-            if (!quantized) {
-                std::println(stderr, "Quantize error: {}",
-                             quantized.error().message);
-                return 1;
-            }
-            auto assembled = palette_locks::assemble_locked_palette(
-                *quantized, config->locks, 32, true, chipset, config->mode);
-            base_pal = std::move(assembled.palette);
-            base_locked = std::move(assembled.locked);
-        }
-
-        // Build full 64-color EHB palette
-        auto ehb_pal = palette::make_ehb_palette(base_pal.colors);
-
-        if (config->match_range) {
-            preprocess::match_palette_range(*image, ehb_pal);
-        }
-
-        // Dither against all 64 colors
-        dither::Settings dith;
-        dith.method = config->dither_method;
-        auto ehb_tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = config->mode,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = config->dual_playfield,
-            .scap    = false,
-            .copper  = false,
-            .chipset = chipset,
-            .method  = config->dither_method,
-        });
-        dith.strength = config->dither_strength_explicit
-                        ? config->dither_strength : ehb_tune.strength;
-        dith.error_clamp = config->error_clamp_explicit
-                          ? config->error_clamp : ehb_tune.error_clamp;
-
-        // Note: dither-aware refinement is skipped for EHB because the
-        // hardware-derived half-brite colors (sRGB DAC halving) create a
-        // non-linear constraint that the linear centroid approach can't
-        // capture correctly.
-
+        auto& st = enc.state;
+        auto ehb_full_pal = palette::make_ehb_palette(st.palette);
         cli_status("Palette: {} base + {} half-brite = {} colors",
-                     base_pal.size(), base_pal.size(), ehb_pal.size());
+                     st.palette.size(), st.palette.size(),
+                     ehb_full_pal.size());
         cli_status("Dither: {} (strength: {:.2f})",
-                     dither_name(dith.method), dith.strength);
-
-        auto dither_result = dither::apply(*image, ehb_pal.colors, dith);
-
-        // Apply EHB pin-index swaps. Pins act on the BASE 32 only;
-        // half-brite copies (32-63) auto-track via re-derivation.
-        for (auto& pin : config->pins) {
-            auto target = static_cast<std::size_t>(pin.index);
-            auto pixel_offset = static_cast<std::size_t>(pin.y) * image->width() +
-                                static_cast<std::size_t>(pin.x);
-            if (pixel_offset >= dither_result.indices.size()) {
-                std::println(stderr, "--pin-index-at {}: pixel out of bounds",
-                             pin.index);
-                return 1;
-            }
-            auto src = static_cast<std::size_t>(dither_result.indices[pixel_offset]);
-            if (src >= 32) {
-                std::println(stderr,
-                    "--pin-index-at {}: source pixel ({},{}) dithered to "
-                    "half-brite slot {} (EHB pins must land on a base color, slots 0-31)",
-                    pin.index, pin.x, pin.y, src);
-                return 1;
-            }
-            if (src == target) { base_locked[target] = true; continue; }
-            if (base_locked[target]) {
-                std::println(stderr, "--pin-index-at {}: target is locked", pin.index);
-                return 1;
-            }
-            std::swap(base_pal.colors[src], base_pal.colors[target]);
-            auto src_u8 = static_cast<std::uint8_t>(src);
-            auto tgt_u8 = static_cast<std::uint8_t>(target);
-            auto src_hb = static_cast<std::uint8_t>(src + 32);
-            auto tgt_hb = static_cast<std::uint8_t>(target + 32);
-            for (auto& idx : dither_result.indices) {
-                if (idx == src_u8) idx = tgt_u8;
-                else if (idx == tgt_u8) idx = src_u8;
-                else if (idx == src_hb) idx = tgt_hb;
-                else if (idx == tgt_hb) idx = src_hb;
-            }
-            base_locked[target] = true;
-            ehb_pal = palette::make_ehb_palette(base_pal.colors);
-        }
-
-        // Encode to 6 bitplanes
-        auto planes = bitplane::encode(dither_result.indices,
-                                       image->width(), image->height(),
-                                       ehb_depth);
-        if (!planes) {
-            std::println(stderr, "Encode error: {}", planes.error().message);
-            return 1;
-        }
-
-        std::vector<Color3f> full_palette(ehb_pal.colors.begin(),
-                                          ehb_pal.colors.end());
-
-        // Render preview
-        auto preview = bitplane::render(*planes, full_palette);
-        if (!preview) {
-            std::println(stderr, "Render error: {}", preview.error().message);
-            return 1;
-        }
-
-        float ehb_psnr = color_space::compute_psnr_blurred(
-            image->pixels(), preview->pixels(),
-            image->width(), image->height());
+                     dither_name(config->dither_method),
+                     aopts.dither_strength);
         cli_print_encoded(
-            static_cast<int>(planes->depth),
-            static_cast<int>(planes->total_bytes()),
-            static_cast<int>(ehb_pal.colors.size()),
+            static_cast<int>(st.planes.depth),
+            static_cast<int>(st.planes.total_bytes()),
+            static_cast<int>(ehb_full_pal.size()),
             /*aga=*/false,
             /*cap=*/0, /*scap=*/0,
-            static_cast<int>(planes->height), /*max_moves=*/0,
-            static_cast<int>(count_unique_colors(*preview)),
+            static_cast<int>(st.planes.height), /*max_moves=*/0,
+            static_cast<int>(count_unique_colors(st.rendered)),
             std::nullopt,
-            static_cast<double>(dither_result.total_error), ehb_psnr);
+            static_cast<double>(st.quant_error), st.psnr);
 
-        if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode,
+                                  config->hires, config->interlace);
+
+        // Alias so the existing output-dispatch code below — which
+        // expects a `full_palette` Color3f vector — compiles unchanged.
+        auto& full_palette = ehb_full_pal.colors;
 
         // Output
         if (!config->output_path.empty()) {
@@ -4504,7 +4637,7 @@ int main(int argc, char* argv[]) {
 
                 // IFF writer will trim palette to 32 base colors for EHB
                 auto result = iff::save_ilbm(
-                    config->output_path, planes.value(), full_palette,
+                    config->output_path, st.planes, full_palette,
                     config->mode, iff_opts);
                 if (!result) {
                     std::println(stderr, "IFF write error: {}",
@@ -4512,21 +4645,19 @@ int main(int argc, char* argv[]) {
                     return 1;
                 }
                 cli_status("IFF:    {} ({} bytes)",
-                             config->output_path, planes->total_bytes());
+                             config->output_path, st.planes.total_bytes());
             } else if (ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
 
                 auto result = cheader::save(
-                    config->output_path, planes.value(), full_palette,
+                    config->output_path, st.planes, full_palette,
                     config->mode, ch_opts);
                 if (!result) {
                     std::println(stderr, "C header write error: {}",
@@ -4536,18 +4667,18 @@ int main(int argc, char* argv[]) {
                 cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                cheader::CHeaderOptions ch_opts2;
-                ch_opts2.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts2.hires = config->hires;
-                ch_opts2.interlace = config->interlace;
-                ch_opts2.aga = (chipset == amiga::Chipset::aga);
-                ch_opts2.fade_in = config->fade_in;
+                auto ch_opts2 = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                });
 
-                pad_planes_to_mode(planes.value(), config->mode, config->hires);
+                pad_planes_to_mode(st.planes, config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
-                    config->output_path, planes.value(), full_palette,
+                    config->output_path, st.planes, full_palette,
                     config->mode, ch_opts2);
                 if (!result2) {
                     std::println(stderr, "Viewer write error: {}",
@@ -4556,7 +4687,7 @@ int main(int argc, char* argv[]) {
                 }
                 cli_status("Viewer: {}", config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
-                save_raw(config->output_path, planes.value(),
+                save_raw(config->output_path, st.planes,
                          full_palette, chipset);
             } else if (ends_with(config->output_path, ".pal")) {
                 auto result = palette_io::save_ocs_palette(
@@ -4570,7 +4701,7 @@ int main(int argc, char* argv[]) {
                              config->output_path, full_palette.size(),
                              full_palette.size() * 2);
             } else {
-                auto result = save_preview(config->output_path, *preview,
+                auto result = save_preview(config->output_path, st.rendered,
                                            has_transparency, transparency_mask,
                                            config->mode, config->hires, config->interlace);
                 if (!result) {
@@ -4633,11 +4764,70 @@ int main(int argc, char* argv[]) {
         }
 
         std::size_t skip_initial_lace = config->interlace ? 2 : 0;
-        auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
-            static_cast<std::size_t>(config->copper_changes), nullptr,
-            config->reserve_color0, copper_locks, config->palette_diversity,
-            skip_initial_lace, config->interlace, /*is_ehb=*/false,
-            make_cli_progress_reporter());
+
+        // Single-pass encoder factored so cap-best below can replay it
+        // under a parallel jitter sweep without duplicating the args.
+        auto encode_once = [&](const Image& img,
+                               const dither::Settings& d, int diversity,
+                               std::function<void(float, std::string_view)>
+                                   prog) {
+            return copper::encode_copper(
+                img, config->depth, d, chipset,
+                static_cast<std::size_t>(config->copper_changes), nullptr,
+                config->reserve_color0, copper_locks, diversity,
+                skip_initial_lace, config->interlace, /*is_ehb=*/false,
+                std::move(prog));
+        };
+
+        Result<copper::CopperResult> copper_result;
+        if (config->cap_best) {
+            // Plain CAP: 8 jitter seeds (16-colour palette has shallower
+            // basins than DPF's 8-colour PF2; 8 seeds × 5×4 = 161 trials,
+            // ~30–60 s on 8 cores). Same parallel-sweep machinery as
+            // SCAP DPF/EHB via pipeline::cap_best_sweep.
+            struct CapTrial {
+                copper::CopperResult result;
+                Image rendered;
+            };
+            // AGA's continuous-RGB median-cut means a full ±1/255 jitter
+            // amplitude can drift the picked palette far enough to
+            // introduce per-line swap shimmer that PSNR doesn't see.
+            // OCS's discrete 12-bit gamut already snaps small nudges.
+            float jitter_amp = (chipset == amiga::Chipset::aga)
+                ? 0.4f : 1.0f;
+            auto cap_metric = (config->cap_best_metric == "msssim")
+                ? pipeline::CapBestMetric::msssim
+                : pipeline::CapBestMetric::psnr;
+            auto best = pipeline::cap_best_sweep<CapTrial>(
+                *image, dith, config->palette_diversity,
+                /*jitter_count=*/8,
+                [&](const Image& jittered_in,
+                    const dither::Settings& d, int div) -> Result<CapTrial> {
+                    auto enc = encode_once(jittered_in, d, div, {});
+                    if (!enc) return std::unexpected{enc.error()};
+                    auto preview = pipeline::render_preview(
+                        enc->planes, enc->base_palette,
+                        /*is_ham=*/false, config->interlace, chipset,
+                        &enc->scanline_palettes, enc->changes_per_line);
+                    if (!preview) return std::unexpected{preview.error()};
+                    return CapTrial{*std::move(enc), *std::move(preview)};
+                },
+                [](const CapTrial& t) -> const Image& { return t.rendered; },
+                make_cli_progress_reporter(),
+                jitter_amp,
+                cap_metric);
+            if (best.has_value()) {
+                copper_result = std::move(best->result);
+            } else {
+                copper_result = encode_once(*image, dith,
+                                            config->palette_diversity,
+                                            make_cli_progress_reporter());
+            }
+        } else {
+            copper_result = encode_once(*image, dith,
+                                        config->palette_diversity,
+                                        make_cli_progress_reporter());
+        }
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);
@@ -4673,13 +4863,11 @@ int main(int argc, char* argv[]) {
         // from what the chip actually displays — most visibly on OCS
         // depth ≤ 4 where the vertical palette dither inflates the
         // per-row-pair diff count past the K budget.
-        auto preview = copper::render_copper_capped(
-            copper_result->planes,
-            copper_result->scanline_palettes,
-            copper_result->base_palette,
-            copper_result->changes_per_line,
-            config->interlace,
-            chipset);
+        auto preview = pipeline::render_preview(
+            copper_result->planes, copper_result->base_palette,
+            /*is_ham=*/false, config->interlace, chipset,
+            &copper_result->scanline_palettes,
+            copper_result->changes_per_line);
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
@@ -4758,17 +4946,23 @@ int main(int argc, char* argv[]) {
                              config->output_path,
                              copper_result->planes.total_bytes());
             } else if (ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.dpf = use_dpf_std;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                    .dpf = use_dpf_std,
+                });
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
+                // Pass scanline_palettes so cheader's lace_rebuild can
+                // recompute per-field same-row diffs in interlace; without
+                // it the emitted .h carries the encoder's progressive
+                // per-row list (which is wrong for lace, where field 1
+                // walks 0,2,4,... and field 2 walks 1,3,5,...).
+                ch_opts.copper_scanline_palettes = &copper_result->scanline_palettes;
 
                 auto result = cheader::save(
                     config->output_path, copper_result->planes,
@@ -4781,17 +4975,20 @@ int main(int argc, char* argv[]) {
                 cli_status("Header: {}", config->output_path);
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
-                cheader::CHeaderOptions ch_opts2;
-                ch_opts2.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts2.hires = config->hires;
-                ch_opts2.interlace = config->interlace;
-                ch_opts2.aga = (chipset == amiga::Chipset::aga);
-                ch_opts2.fade_in = config->fade_in;
-                ch_opts2.dpf = use_dpf_std;
+                auto ch_opts2 = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                    .dpf = use_dpf_std,
+                });
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
+                // Pass scanline_palettes so cheader's lace_rebuild can
+                // recompute per-field same-row diffs (see .h branch above).
+                ch_opts2.copper_scanline_palettes = &copper_result->scanline_palettes;
 
                 pad_planes_to_mode(copper_result->planes, config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
@@ -4850,93 +5047,77 @@ int main(int argc, char* argv[]) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        dither::Settings scap_dith;
-        scap_dith.method = config->dither_method;
-        // Per-mode dither defaults from dither_tuning.cpp's empirical
-        // sweep — see that file for grid + numbers. Explicit user
-        // values via --dither-strength / --error-clamp always override.
-        auto tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = config->mode,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = config->dual_playfield,
-            .scap    = true,
-            .copper  = true,    // SCAP layers on top of CAP since b0be343
-            .chipset = chipset,
-            .method  = config->dither_method,
-        });
-        scap_dith.error_clamp = config->error_clamp_explicit
-                                ? config->error_clamp : tune.error_clamp;
-        scap_dith.strength    = config->dither_strength_explicit
-                                ? config->dither_strength : tune.strength;
-        auto scap_progress = make_cli_progress_reporter();
-        auto scap_res =
-            scap_ehb
-            ? scap::encode_scap_ehb_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                config->reserve_color0,
-                scap_dith,
-                static_cast<std::size_t>(config->copper_changes),
-                config->palette_diversity,
-                config->scap_debug,
-                scap_progress)
-            : scap::encode_scap_dpf_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                config->reserve_color0,
-                scap_dith,
-                config->scap_debug,
-                static_cast<std::size_t>(config->copper_changes),
-                config->palette_diversity,
-                scap_progress);
-        if (!scap_res) {
-            std::println(stderr, "SCAP encode error: {}",
-                         scap_res.error().message);
+        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
+        // we can hand it to api::encode_state — same shape as the
+        // SNES/Genesis paths. encode_state runs the canonical SCAP
+        // pipeline (scap::encode_scap_*_ocs internally) and populates
+        // st.scap_* + the per-line move-budget breakdown the printer
+        // below consumes.
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "SCAP: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+        auto sopts = make_api_options(*config);
+        // *image already preprocessed; stop run_pipeline preprocessing
+        // these bytes a second time.
+        neutralize_preprocess(sopts);
+        sopts.scap = true;
+        sopts.scap_debug = config->scap_debug;
+        sopts.width = static_cast<int>(image->width());
+        sopts.height = static_cast<int>(image->height());
+        sopts.on_progress = make_cli_progress_reporter();
+        // SCAP layers on top of CAP since b0be343; force the flag so
+        // dither_tuning's per-mode defaults inside run_pipeline match
+        // what the inline path computed.
+        sopts.copper = true;
+
+        auto enc = api::encode_state(src_png->data(), src_png->size(), sopts);
+        if (!enc.ok()) {
+            std::println(stderr, "SCAP encode error: {}", enc.error_msg);
             return 1;
         }
-        float scap_psnr = color_space::compute_psnr_blurred(
-            image->pixels(), scap_res->rendered.pixels(),
-            image->width(), image->height());
+        auto& st = enc.state;
+
         const char* scap_label = scap_ehb
             ? "OCS EHB 6bpp investigation"
             : "OCS DPF";
         cli_status("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line)",
                      scap_label,
-                     scap_res->slot_table.slots.size(),
-                     scap_res->avg_changes_per_line);
+                     st.scap_slot_count,
+                     st.copper_changes);
         cli_status("Copper load: hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
-                     scap_res->avg_hblank_moves_per_line,
-                     scap_res->max_hblank_moves_per_line,
-                     scap_res->avg_visible_moves_per_line,
-                     scap_res->max_visible_moves_per_line,
-                     scap_res->avg_total_moves_per_line,
-                     scap_res->max_moves_per_line);
+                     st.scap_avg_hblank_moves_per_line,
+                     st.scap_max_hblank_moves_per_line,
+                     st.scap_avg_visible_moves_per_line,
+                     st.scap_max_visible_moves_per_line,
+                     st.scap_avg_total_moves_per_line,
+                     st.max_moves_per_line);
         int scap_ops = 0;
-        for (auto& moves : scap_res->line_moves) scap_ops += static_cast<int>(moves.size());
+        for (auto& moves : st.scap_line_moves) scap_ops += static_cast<int>(moves.size());
         cli_print_encoded(
-            static_cast<int>(scap_res->planes.depth),
-            static_cast<int>(scap_res->planes.total_bytes()),
-            static_cast<int>(scap_res->palette.size()),
+            static_cast<int>(st.planes.depth),
+            static_cast<int>(st.planes.total_bytes()),
+            static_cast<int>(st.palette.size()),
             /*aga=*/false,
             /*cap_grid_entries=*/0,
             scap_ops,
-            static_cast<int>(scap_res->rendered.height()),
-            static_cast<int>(scap_res->max_moves_per_line),
-            static_cast<int>(count_unique_colors(scap_res->rendered)),
-            std::optional<float>{scap_res->avg_changes_per_line},
-            static_cast<double>(scap_res->total_error), scap_psnr);
+            static_cast<int>(st.rendered.height()),
+            static_cast<int>(st.max_moves_per_line),
+            static_cast<int>(count_unique_colors(st.rendered)),
+            std::optional<float>{st.copper_changes},
+            static_cast<double>(st.quant_error), st.psnr);
 
         if (config->preview)
-            show_terminal_preview(scap_res->rendered, config->mode,
+            show_terminal_preview(st.rendered, config->mode,
                                   config->hires, config->interlace);
 
         if (!config->output_path.empty()) {
             if (ends_with(config->output_path, ".png")) {
                 auto r = save_preview(config->output_path,
-                                      scap_res->rendered,
+                                      st.rendered,
                                       has_transparency, transparency_mask,
                                       config->mode, config->hires,
                                       config->interlace);
@@ -4949,30 +5130,29 @@ int main(int argc, char* argv[]) {
             } else if (ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c") ||
                        ends_with(config->output_path, ".h")) {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = config->symbol_name.empty()
-                    ? derive_symbol_name(config->output_path)
-                    : config->symbol_name;
-                ch_opts.aga = false;
-                ch_opts.dpf = scap_dpf;     // false for EHB SCAP
-                ch_opts.fade_in = false;
-                ch_opts.scap_line_moves = &scap_res->line_moves;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .output_path = config->output_path,
+                    .symbol_override = config->symbol_name,
+                    .dpf = scap_dpf,        // false for EHB SCAP
+                });
+                ch_opts.scap_line_moves = &st.scap_line_moves;
                 ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs"
                                               : "scap_dpf_ocs";
-                ch_opts.scap_anchor_hpos =
-                    scap_res->slot_table.line_gate_hpos;
-                ch_opts.scap_total_planes =
-                    scap_res->slot_table.total_planes;
-                pad_planes_to_mode(scap_res->planes, config->mode,
-                                   config->hires);
+                // Use the static slot tables (same shape encode_state
+                // ran against); matches api.cpp::convert_viewer.
+                auto& table = scap_ehb ? scap::kScap6bplEhb
+                                       : scap::kScap6bplOcs;
+                ch_opts.scap_anchor_hpos = table.line_gate_hpos;
+                ch_opts.scap_total_planes = table.total_planes;
+                pad_planes_to_mode(st.planes, config->mode, config->hires);
                 bool is_h = ends_with(config->output_path, ".h");
                 auto r = is_h
                     ? cheader::save(
-                        config->output_path, scap_res->planes,
-                        scap_res->palette, config->mode, ch_opts)
+                        config->output_path, st.planes,
+                        st.palette, config->mode, ch_opts)
                     : cheader::save_viewer(
-                        config->output_path, scap_res->planes,
-                        scap_res->palette, config->mode, ch_opts);
+                        config->output_path, st.planes,
+                        st.palette, config->mode, ch_opts);
                 if (!r) {
                     std::println(stderr, "{} write error: {}",
                                  is_h ? "Header" : "Viewer",
@@ -5254,7 +5434,9 @@ int main(int argc, char* argv[]) {
 
     // Render preview before any DPF expansion (combined indices read from
     // the expanded planes would be non-contiguous).
-    auto preview = bitplane::render(*planes, used_palette);
+    auto preview = pipeline::render_preview(
+        *planes, used_palette,
+        /*is_ham=*/false, config->interlace, chipset);
     if (!preview) {
         std::println(stderr, "Render error: {}", preview.error().message);
         return 1;
@@ -5330,15 +5512,15 @@ int main(int argc, char* argv[]) {
             cli_status("IFF:    {} ({} bytes)",
                          config->output_path, planes->total_bytes());
         } else if (ends_with(config->output_path, ".h")) {
-            cheader::CHeaderOptions ch_opts;
-            ch_opts.symbol_name = config->symbol_name.empty()
-                ? derive_symbol_name(config->output_path)
-                : config->symbol_name;
-            ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.dpf = use_dpf_std;
+            auto ch_opts = pipeline::make_ch_opts({
+                .output_path = config->output_path,
+                .symbol_override = config->symbol_name,
+                .hires = config->hires,
+                .interlace = config->interlace,
+                .aga = (chipset == amiga::Chipset::aga),
+                .fade_in = config->fade_in,
+                .dpf = use_dpf_std,
+            });
 
             auto result = cheader::save(
                 config->output_path, planes.value(), used_palette,
@@ -5482,13 +5664,14 @@ int main(int argc, char* argv[]) {
                     "(ia16-elf-gcc, 16-bit real mode).");
                 return 1;
             } else {
-                cheader::CHeaderOptions ch_opts;
-                ch_opts.symbol_name = symbol;
-                ch_opts.hires = config->hires;
-                ch_opts.interlace = config->interlace;
-                ch_opts.aga = (chipset == amiga::Chipset::aga);
-                ch_opts.fade_in = config->fade_in;
-                ch_opts.dpf = use_dpf_std;
+                auto ch_opts = pipeline::make_ch_opts({
+                    .symbol_override = symbol,
+                    .hires = config->hires,
+                    .interlace = config->interlace,
+                    .aga = (chipset == amiga::Chipset::aga),
+                    .fade_in = config->fade_in,
+                    .dpf = use_dpf_std,
+                });
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result = cheader::save_viewer(

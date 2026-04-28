@@ -25,7 +25,8 @@ Artifacts for each combo land under build/recoil_check/<combo>/:
 Usage:
     python3 tools/recoil_roundtrip.py [--input PATH] [--build DIR]
 
-Exits 0 on full sweep completion, 1 on any encode failure or PSNR < 25 dB.
+Exits 0 on full sweep completion, 1 on any encode failure or PSNR < 25 dB,
+77 when recoil2png isn't available (ctest interprets 77 as "skip").
 Prints a Markdown table to stdout with PSNR per combo.
 """
 import argparse
@@ -76,12 +77,14 @@ COMBOS = [
     # HAM6 (OCS / AGA)
     ("ham6",            6, "ocs", [],          "ham6"),
     ("ham6",            6, "ocs", ["--cap"],   "ham6-cap"),
+    ("ham6",            6, "ocs", ["--cap", "--cap-best"], "ham6-cap-best"),
     ("ham6-lace",       6, "ocs", [],          "ham6-lace"),
     ("ham6-hires",      6, "aga", [],          "ham6-hires"),
     ("ham6-hires-lace", 6, "aga", [],          "ham6-hires-lace"),
     # HAM8 (AGA only)
     ("ham8",            8, "aga", [],          "ham8"),
     ("ham8",            8, "aga", ["--cap"],   "ham8-cap"),
+    ("ham8",            8, "aga", ["--cap", "--cap-best"], "ham8-cap-best"),
     ("ham8-lace",       8, "aga", [],          "ham8-lace"),
     ("ham8-hires",      8, "aga", [],          "ham8-hires"),
     # EHB (OCS, fixed 6 planes)
@@ -161,13 +164,13 @@ def main():
 
     recoil = find_recoil()
     if not recoil:
-        print("ERROR: recoil2png not found in PATH or "
-              "/Applications/RECOIL.app/.\n\n"
+        print("recoil2png not found in PATH or "
+              "/Applications/RECOIL.app/. Skipping RECOIL round-trip.\n\n"
               "Install RECOIL from https://recoil.sourceforge.net/macos.html\n"
               "  1. Download recoil-X.Y.Z-macos.dmg\n"
               "  2. Drag recoil2png from the DMG to /usr/local/bin\n",
               file=sys.stderr)
-        return 2
+        return 77  # ctest: skip
 
     if not Path(args.input).exists():
         print(f"ERROR: input not found: {args.input}", file=sys.stderr)

@@ -71,6 +71,7 @@ export interface Options {
   height: number
   hamBeam: number
   capBest: boolean
+  capBestMetric: string
   alphaThreshold: number
   alphaDither: string
   alphaDitherStrength: number
@@ -362,6 +363,9 @@ export function defaultOptions(): Options {
     // indexed copper modes ignore this flag (their planner is already
     // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
     capBest: false,
+    // Ranking metric for cap-best. 'psnr' keeps fine detail (default);
+    // 'msssim' produces a cleaner image at the cost of some detail.
+    capBestMetric: 'psnr',
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',
