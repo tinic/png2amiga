@@ -25,6 +25,10 @@ declare module '*?worker' {
 declare module '@wasm/png2amiga.js' {
   export interface Png2AmigaModuleOptions {
     locateFile?: (path: string) => string
+    /** Required by Emscripten's pthread shim when the WASM module itself
+     *  runs inside a Web Worker (nested-worker setup). Tells the shim
+     *  which JS URL to load when spawning pthread child workers. */
+    mainScriptUrlOrBlob?: string
   }
 
   /** Result shape from convert/convertRGBA/convertIFF/etc. */

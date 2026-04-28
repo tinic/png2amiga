@@ -45,14 +45,23 @@ let initError: string | null = null
 
 async function init(): Promise<void> {
   try {
+    // Resolve the JS module URL up front so Emscripten's pthread shim
+    // can spawn child workers from it. Without mainScriptUrlOrBlob
+    // the pthread workers try to load `./png2amiga.js` relative to
+    // the parent worker's blob URL → 404 → silent "worker sent an
+    // error! undefined" in the console and the module never resolves.
+    const wasmJsUrl = new URL(
+      '../../../build-wasm/png2amiga.js', import.meta.url).href
+    const wasmBinUrl = new URL(
+      '../../../build-wasm/png2amiga.wasm', import.meta.url).href
     const { default: createPng2Amiga } = await import('@wasm/png2amiga.js')
     Module = await createPng2Amiga({
       locateFile: (path: string) => {
-        if (path.endsWith('.wasm')) {
-          return new URL('../../../build-wasm/png2amiga.wasm', import.meta.url).href
-        }
+        if (path.endsWith('.wasm')) return wasmBinUrl
+        if (path.endsWith('.js'))   return wasmJsUrl
         return path
       },
+      mainScriptUrlOrBlob: wasmJsUrl,
     })
     self.postMessage({ type: 'ready' })
   } catch (error) {
