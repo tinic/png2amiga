@@ -1766,6 +1766,20 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   min-width: 22rem;
   flex: 0 0 auto;
 }
+/* Make label/control rows inside the controls column hug the label text
+   instead of reserving a fixed 33% slot. PrimeFlex's .col-4 is
+   flex:0 0 auto + width:33.3333% — we keep the flex side and drop the
+   fixed width so the gap collapses against the control. */
+.controls-col .grid.align-items-center > label.col-4 {
+  width: auto;
+  padding-right: 0.5rem;
+  white-space: nowrap;
+}
+.controls-col .grid.align-items-center > .col-8 {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
 .preview-col {
   position: sticky;
   top: 1rem;
