@@ -59,6 +59,14 @@ cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base);
 // bitplane data, derived palette, mode-specific raw hardware bytes,
 // copper / SCAP per-line state, and a rendered preview.
 struct PipelineResult {
+    // Canonical preview image — what the chip would display, post-encoder
+    // and post-CAP-cascade. Always populated by run_pipeline via
+    // pipeline::render_preview(); downstream consumers (convert_*, web
+    // frontend, future main.cpp branches) read this rather than
+    // re-rendering. Centralising the render here means preview
+    // correctness fixes (e.g. the deferred OCS preview-vs-chip gradient
+    // bug — REFACTOR_PLAN.md target #3 follow-up) only need to land in
+    // one place.
     Image rendered;
     bitplane::BitplaneData planes;
     std::vector<Color3f> palette;
