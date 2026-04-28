@@ -208,6 +208,26 @@ Image jitter_image(const Image& source, std::uint32_t seed,
 void parallel_for(std::size_t n,
                   std::function<void(std::size_t)> body);
 
+// MS-SSIM (multi-scale Structural Similarity Index) between two
+// linear-RGB images, computed on Rec. 709 luminance Y. Returns a value
+// in (0, 1] — higher = more similar; 1.0 = identical inputs. Five
+// scales with standard Wang et al. 2003 weights {0.0448, 0.2856,
+// 0.3001, 0.2363, 0.1333}; per-scale SSIM uses an 11×11 Gaussian
+// window (σ=1.5).
+//
+// Used by cap_best_sweep as a more perceptual ranking metric than
+// PSNR. Captures local structure changes (banding, contour breakup,
+// per-line swap shimmer) that pixel-MSE PSNR averages away — the
+// horizontal-banding failure mode --cap especially produces in tight
+// palettes.
+//
+// Both images must have identical (width, height); a/b sized at
+// least width*height. Returns 0 on shape mismatch.
+float compute_msssim(std::span<const Color3f> a,
+                     std::span<const Color3f> b,
+                     std::size_t width,
+                     std::size_t height);
+
 // Multi-restart parallel sweep for any --cap-best CAP-aware encoder.
 // Sweeps:
 //   - dither_strength: 5 multipliers (0.7, 0.85, 1.0, 1.15, 1.3)
@@ -292,13 +312,17 @@ std::optional<T> cap_best_sweep(
         }
         if (!retry) return;
         const Image& rendered = rendered_fn(*retry);
-        float psnr = color_space::compute_psnr_blurred(
+        // MS-SSIM beats PSNR for ranking on banding/shimmer cases —
+        // PSNR averages pixel error across the frame and misses local
+        // structural artefacts that --cap (per-line swaps) and DPF
+        // (8-colour PF2) frequently produce.
+        float score = compute_msssim(
             source.pixels(), rendered.pixels(),
             source.width(), source.height());
         std::lock_guard lk(best_mu);
-        if (!best.has_value() || psnr > best_psnr) {
+        if (!best.has_value() || score > best_psnr) {
             best = std::move(*retry);
-            best_psnr = psnr;
+            best_psnr = score;
         }
     });
     if (on_progress) on_progress(1.0f, "done");

@@ -146,6 +146,8 @@ struct Options {
 
     // HAM encoding
     int ham_beam = 16;                   // beam width for DP search (1-256)
+    int ham_triple = 16;                 // triple-pixel refinement post-pass
+                                         // beam width (0 = off, 16 default)
     bool cap_best = false;               // multi-candidate CAP planner +
                                          // joint base-palette refinement.
                                          // HAM6 + copper and HAM8 + copper

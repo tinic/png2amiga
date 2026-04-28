@@ -1025,6 +1025,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.error_clamp = options.error_clamp;
         ham_opts.palette_diversity = options.palette_diversity;
         ham_opts.quantizer = options.quantizer;
+        ham_opts.triple_beam = static_cast<std::size_t>(
+            std::clamp(options.ham_triple, 0, 256));
         ham_opts.greedy = options.ham_fast;
         // cap_best only applies to HAM6 and HAM8 — HAM4/5/7 are skipped
         // because their tiny base palettes (4/8/32 colors) don't benefit
