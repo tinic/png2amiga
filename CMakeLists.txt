@@ -124,6 +124,13 @@ else()
 
     enable_testing()
 
+    # Single shared test input. Lives under examples/ (tracked) so a
+    # fresh checkout has everything ctest needs — no more local test.png
+    # in the repo root that has to be hand-restored after a checkout.
+    # Matches recoil_roundtrip.py's default so smoke + RECOIL tests
+    # exercise the same source image.
+    set(PNG2AMIGA_TEST_INPUT "${CMAKE_SOURCE_DIR}/examples/lovers.jpg")
+
     # Basic build test: verify the binary runs and shows help
     add_test(
         NAME "help"
@@ -169,7 +176,7 @@ else()
     # --- Raw bitplane output ---
     add_test(
         NAME "raw-output"
-        COMMAND png2amiga ${CMAKE_SOURCE_DIR}/test.png
+        COMMAND png2amiga ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_output.raw
     )
     add_test(
@@ -181,7 +188,7 @@ else()
     # --- Palette output (.pal) ---
     add_test(
         NAME "pal-output"
-        COMMAND png2amiga ${CMAKE_SOURCE_DIR}/test.png
+        COMMAND png2amiga ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_output.pal
     )
     add_test(
@@ -200,7 +207,7 @@ else()
         NAME "palette-load-hex"
         COMMAND png2amiga --palette ${CMAKE_BINARY_DIR}/test_palette.txt
                 --depth 4
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_from_hex_palette.iff
     )
 
@@ -212,7 +219,7 @@ else()
         NAME "palette-load-gpl"
         COMMAND png2amiga --palette ${CMAKE_BINARY_DIR}/test_palette.gpl
                 --depth 2
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_from_gpl_palette.png
     )
 
@@ -220,7 +227,7 @@ else()
     add_test(
         NAME "ham6-fast"
         COMMAND png2amiga --mode ham6
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_ham6_fast.iff
     )
 
@@ -228,7 +235,7 @@ else()
     add_test(
         NAME "ham6-optimal"
         COMMAND png2amiga --mode ham6 --ham-beam 32
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_ham6_optimal.iff
     )
 
@@ -236,7 +243,7 @@ else()
     add_test(
         NAME "ham6-optimal-png"
         COMMAND png2amiga --mode ham6 --ham-beam 16
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_ham6_optimal.png
     )
 
@@ -244,7 +251,7 @@ else()
     add_test(
         NAME "ham8-optimal"
         COMMAND png2amiga --mode ham8 --ham-beam 16
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_ham8_optimal.iff
     )
 
@@ -262,7 +269,7 @@ else()
     add_test(
         NAME "ham6-dithered-fast"
         COMMAND png2amiga --mode ham6 --dither floyd-steinberg
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_ham6_dithered_fast.png
     )
 
@@ -271,7 +278,7 @@ else()
         NAME "ham6-dithered-optimal"
         COMMAND png2amiga --mode ham6 --ham-beam 16
                 --dither floyd-steinberg
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_ham6_dithered_optimal.png
     )
 
@@ -279,7 +286,7 @@ else()
     add_test(
         NAME "ham8-dithered-atkinson"
         COMMAND png2amiga --mode ham8 --dither atkinson
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_ham8_dithered_atkinson.iff
     )
 
@@ -287,14 +294,14 @@ else()
     add_test(
         NAME "palette-iff-gen"
         COMMAND png2amiga --depth 4
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_iff_for_pal.iff
     )
     add_test(
         NAME "palette-load-iff"
         COMMAND png2amiga --palette ${CMAKE_BINARY_DIR}/test_iff_for_pal.iff
                 --depth 4
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_from_iff_palette.png
     )
     set_tests_properties("palette-load-iff" PROPERTIES DEPENDS "palette-iff-gen")
@@ -306,7 +313,7 @@ else()
         NAME "lock-index-lores-single"
         COMMAND png2amiga --mode lores --depth 5
                 --lock-index 0 ff00ff
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_lock_lores_single.iff
     )
 
@@ -317,7 +324,7 @@ else()
                 --lock-index 0 000000
                 --lock-index 5 ff0000
                 --lock-index 31 ffffff
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_lock_lores_multi.iff
     )
 
@@ -326,7 +333,7 @@ else()
         NAME "lock-index-roundtrip"
         COMMAND png2amiga --mode lores --depth 5
                 --palette ${CMAKE_BINARY_DIR}/test_lock_lores_multi.iff
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_lock_roundtrip.iff
     )
     set_tests_properties("lock-index-roundtrip" PROPERTIES DEPENDS "lock-index-lores-multi")
@@ -337,7 +344,7 @@ else()
         NAME "pin-index-lores"
         COMMAND png2amiga --mode lores --depth 5 --dither bayer4x4
                 --pin-index-at 5 100 50
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_pin_lores.iff
     )
 
@@ -348,7 +355,7 @@ else()
                 --lock-index 0 ff00ff
                 --lock-index 31 ffff00
                 --pin-index-at 5 100 50
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_lock_and_pin.iff
     )
 
@@ -359,7 +366,7 @@ else()
                 --lock-index 0 "#ff00ff"
                 --lock-index 1 0xff0000
                 --lock-index 2 f0c
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_lock_hex_prefix.iff
     )
 
@@ -370,7 +377,7 @@ else()
                 --lock-index 0 000000
                 --lock-index 1 ff0000
                 --lock-index 31 ffffff
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_lock_ehb.iff
     )
 
@@ -379,7 +386,7 @@ else()
         NAME "pin-index-ehb"
         COMMAND png2amiga --mode ehb --dither bayer4x4
                 --pin-index-at 5 100 50
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_pin_ehb.iff
     )
 
@@ -390,7 +397,7 @@ else()
                 --palette ${CMAKE_BINARY_DIR}/test_palette.txt
                 --lock-index 0 ffffff
                 --lock-index 15 000000
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_lock_user_pal.iff
     )
     set_tests_properties("lock-index-with-user-palette"
@@ -403,7 +410,7 @@ else()
         NAME "lock-index-ham-rejected"
         COMMAND png2amiga --mode ham6
                 --lock-index 0 ff0000
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_reject_ham_lock.iff
     )
     set_tests_properties("lock-index-ham-rejected" PROPERTIES WILL_FAIL TRUE)
@@ -413,7 +420,7 @@ else()
         NAME "pin-index-ham-rejected"
         COMMAND png2amiga --mode ham6
                 --pin-index-at 5 100 50
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_reject_ham_pin.iff
     )
     set_tests_properties("pin-index-ham-rejected" PROPERTIES WILL_FAIL TRUE)
@@ -423,7 +430,7 @@ else()
         NAME "lock-index-copper-accepted"
         COMMAND png2amiga --mode lores --depth 5 --copper
                 --lock-index 0 ff0000
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 -o ${CMAKE_BINARY_DIR}/test_copper_lock.png
     )
 
@@ -432,7 +439,7 @@ else()
         NAME "lock-index-out-of-range"
         COMMAND png2amiga --mode lores --depth 5
                 --lock-index 32 ff0000
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_reject_lock_oob.iff
     )
     set_tests_properties("lock-index-out-of-range" PROPERTIES WILL_FAIL TRUE)
@@ -443,7 +450,7 @@ else()
         COMMAND png2amiga --mode lores --depth 5
                 --lock-index 5 ff0000
                 --lock-index 5 00ff00
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_reject_lock_dup.iff
     )
     set_tests_properties("lock-index-duplicate" PROPERTIES WILL_FAIL TRUE)
@@ -453,7 +460,7 @@ else()
         NAME "pin-index-out-of-bounds"
         COMMAND png2amiga --mode lores --depth 5
                 --pin-index-at 5 9999 9999
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_reject_pin_oob.iff
     )
     set_tests_properties("pin-index-out-of-bounds" PROPERTIES WILL_FAIL TRUE)
@@ -464,7 +471,7 @@ else()
         COMMAND png2amiga --mode lores --depth 5
                 --lock-index 5 ff0000
                 --pin-index-at 5 100 50
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_reject_pin_locked.iff
     )
     set_tests_properties("pin-index-targets-locked" PROPERTIES WILL_FAIL TRUE)
@@ -474,7 +481,7 @@ else()
         NAME "lock-index-bad-hex"
         COMMAND png2amiga --mode lores --depth 5
                 --lock-index 0 zzzzzz
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/test_reject_lock_hex.iff
     )
     set_tests_properties("lock-index-bad-hex" PROPERTIES WILL_FAIL TRUE)
@@ -505,7 +512,7 @@ else()
         add_test(
             NAME "smoke-${mode_slug}"
             COMMAND png2amiga --mode ${mode_flag}
-                    ${CMAKE_SOURCE_DIR}/test.png
+                    ${PNG2AMIGA_TEST_INPUT}
                     ${CMAKE_BINARY_DIR}/smoke_${mode_slug}.png
         )
         add_test(
@@ -521,19 +528,19 @@ else()
     add_test(
         NAME "smoke-degas-pi1"
         COMMAND png2amiga --mode ste-low
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/smoke.pi1
     )
     add_test(
         NAME "smoke-degas-pi2"
         COMMAND png2amiga --mode ste-med
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/smoke.pi2
     )
     add_test(
         NAME "smoke-degas-pi3"
         COMMAND png2amiga --mode ste-hi
-                ${CMAKE_SOURCE_DIR}/test.png
+                ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/smoke.pi3
     )
     foreach(ext pi1 pi2 pi3)
@@ -560,7 +567,7 @@ else()
         add_test(
             NAME "smoke-genesis-${ext}"
             COMMAND png2amiga ${mode_args}
-                    ${CMAKE_SOURCE_DIR}/test.png
+                    ${PNG2AMIGA_TEST_INPUT}
                     ${CMAKE_BINARY_DIR}/smoke-genesis.${ext}
         )
         add_test(
