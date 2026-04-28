@@ -131,10 +131,12 @@ else()
     )
 
     # RECOIL round-trip suite. Encodes one input through every IFF-
-    # producing combo, decodes each IFF via Piotr Fusik's recoil2png,
-    # and PSNR-compares against png2amiga's own preview. Skips cleanly
-    # if recoil2png isn't installed. Run with:
+    # producing combo (including --cap-best HAM6/HAM8), decodes each IFF
+    # via Piotr Fusik's recoil2png, and PSNR-compares against png2amiga's
+    # own preview. Skips cleanly if recoil2png isn't installed. Run with:
     #     cmake --build build --target recoil_check
+    # or as part of ctest (the recoil ctest case runs the same script
+    # and reports SKIP when recoil2png is absent, exit code 77).
     # Artifacts land in build/recoil_check/<combo>/ for inspection.
     add_custom_target(recoil_check
         COMMAND python3
@@ -145,6 +147,23 @@ else()
         COMMENT "RECOIL round-trip suite — encode → IFF → recoil2png → PSNR"
         VERBATIM
         USES_TERMINAL
+    )
+
+    # Same script as a ctest case. Skips cleanly (exit 77) when recoil2png
+    # isn't installed, so CI / fresh checkouts don't fail. Tagged with the
+    # "recoil" label so it can be filtered in/out via `ctest -L recoil`
+    # or `ctest -LE recoil`.
+    add_test(
+        NAME "recoil-roundtrip"
+        COMMAND python3
+                ${CMAKE_SOURCE_DIR}/tools/recoil_roundtrip.py
+                --build ${CMAKE_BINARY_DIR}/recoil_check
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    set_tests_properties("recoil-roundtrip" PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS "recoil"
+        TIMEOUT 600
     )
 
     # --- Raw bitplane output ---
