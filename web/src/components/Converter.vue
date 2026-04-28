@@ -1155,8 +1155,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
     <!-- Main layout -->
     <div v-else class="grid">
-      <!-- Controls sidebar -->
-      <div class="col-12 md:col-4 lg:col-3">
+      <!-- Controls sidebar — give it priority over the preview when the
+           viewport narrows. The percentage classes (md:col-4 lg:col-3)
+           determine the BASE share, but `controls-col` adds a hard
+           min-width so the labels never wrap awkwardly; the preview
+           column eats any remaining space (CSS below). -->
+      <div class="col-12 md:col-4 lg:col-3 controls-col">
         <div class="flex flex-column gap-3">
 
           <!-- Upload / Image -->
@@ -1293,7 +1297,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP — Super CAP: mid-line palette swaps inside the displayed area, on top of CAP's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">SCAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.scap" />
-                  <span style="color: #888; font-size: 0.625rem;">mid-line palette swaps (19/line)</span>
+                  <span style="color: #888; font-size: 0.625rem;">mid-line swaps</span>
                 </div>
               </div>
 
@@ -1754,10 +1758,23 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   opacity: 0.25;
 }
 
+/* Layout priority: controls keep a hard floor; preview shrinks first.
+   Without this, PrimeFlex's % grid splits both columns proportionally
+   and the controls column squeezes its labels long before the preview
+   has run out of slack. */
+.controls-col {
+  min-width: 22rem;
+  flex: 0 0 auto;
+}
 .preview-col {
   position: sticky;
   top: 1rem;
   align-self: start;
+  /* Take whatever's left after the controls column claims its
+     min-width. flex-basis: 0 + flex-grow: 1 means the preview
+     shrinks first when the viewport narrows. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 .preview-col.loupe-expanded {
   position: sticky;
