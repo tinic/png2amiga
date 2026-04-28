@@ -5,6 +5,7 @@ import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Slider from 'primevue/slider'
 import ToggleSwitch from 'primevue/toggleswitch'
+import SelectButton from 'primevue/selectbutton'
 import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 import ProgressBar from 'primevue/progressbar'
@@ -1247,12 +1248,28 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
                 </div>
               </div>
-              <!-- CAP best quality (HAM modes only — flag is a no-op elsewhere) -->
-              <div v-if="options.copper && showHamControls" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Slower (~4-5x) CAP planner: multi-candidate slot search + joint base-palette refinement. +0.5..2 dB PSNR on HAM6/HAM8 + CAP. Off by default.">CAP best</label>
+              <!-- CAP / SCAP best quality. Parallel multi-restart sweep
+                   over (dither_strength × diversity × image-jitter); picks
+                   the best-scoring trial. Active for: HAM+CAP (centroid
+                   refinement), plain CAP (lores/hires + copper), EHB+CAP,
+                   SCAP DPF, SCAP EHB. -->
+              <div v-if="options.copper || options.scap" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality CAP/SCAP search. Spends ~5–10× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">CAP best</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.capBest" />
-                  <span style="color: #888; font-size: 0.625rem;">~4-5× slower</span>
+                  <span style="color: #888; font-size: 0.625rem;">~5–10× slower, parallel</span>
+                </div>
+              </div>
+              <div v-if="options.capBest" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for CAP best: psnr keeps more detail; msssim gives a cleaner image at the cost of some detail.">CAP metric</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <SelectButton
+                    v-model="options.capBestMetric"
+                    :options="[{label:'PSNR', value:'psnr'}, {label:'MS-SSIM', value:'msssim'}]"
+                    optionLabel="label" optionValue="value"
+                    :allowEmpty="false"
+                    size="small"
+                  />
                 </div>
               </div>
 
