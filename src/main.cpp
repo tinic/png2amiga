@@ -1757,21 +1757,81 @@ std::string_view mode_to_options_string(amiga::Mode m) {
 
 // dither::Method → api::Options.dither string. api::parse_dither is the
 // inverse. Falls back to "floyd-steinberg" for unmapped methods.
+// Mirror of api::parse_dither — must stay in sync. Any method exposed
+// to --dither MUST round-trip through this so cap_best / SCAP / SNES /
+// Genesis paths that route through api::encode_state see the user's
+// actual choice (silent fallback to floyd-steinberg here was a real
+// bug that hid opt-checker / yliluoma / structure-fs / knoll / etc.).
 std::string_view dither_to_options_string(dither::Method m) {
     switch (m) {
     case dither::Method::none:            return "none";
     case dither::Method::bayer2x2:        return "bayer2x2";
     case dither::Method::bayer4x4:        return "bayer4x4";
     case dither::Method::bayer8x8:        return "bayer8x8";
+    case dither::Method::bayer3x3:        return "bayer3x3";
+    case dither::Method::bayer5x5:        return "bayer5x5";
+    case dither::Method::bayer6x6:        return "bayer6x6";
+    case dither::Method::bayer7x7:        return "bayer7x7";
     case dither::Method::checker:         return "checker";
+    case dither::Method::h2x4:            return "h2x4";
+    case dither::Method::clustered_dot:   return "clustered-dot";
+    case dither::Method::line2:           return "line2";
+    case dither::Method::line_checker:    return "line-checker";
+    case dither::Method::line4:           return "line4";
+    case dither::Method::line8:           return "line8";
+    case dither::Method::v4x2:            return "v4x2";
+    case dither::Method::bayer4x2:        return "bayer4x2";
+    case dither::Method::bayer2x4:        return "bayer2x4";
+    case dither::Method::vline2:          return "vline2";
+    case dither::Method::vline_checker:   return "vline-checker";
+    case dither::Method::vline4:          return "vline4";
+    case dither::Method::vline8:          return "vline8";
+    case dither::Method::halftone8x8:     return "halftone8x8";
+    case dither::Method::diagonal8x8:     return "diagonal8x8";
+    case dither::Method::spiral5x5:       return "spiral5x5";
+    case dither::Method::hex8x8:          return "hex8x8";
+    case dither::Method::hex5x5:          return "hex5x5";
+    case dither::Method::blue_noise:      return "blue-noise";
+    case dither::Method::void_cluster:    return "void-cluster";
+    case dither::Method::cluster_noise:   return "cluster-noise";
+    case dither::Method::fractal16:       return "fractal16";
     case dither::Method::floyd_steinberg: return "floyd-steinberg";
     case dither::Method::atkinson:        return "atkinson";
     case dither::Method::sierra_lite:     return "sierra-lite";
     case dither::Method::stucki:          return "stucki";
     case dither::Method::jarvis:          return "jarvis";
     case dither::Method::ostromoukhov:    return "ostromoukhov";
-    default: return "floyd-steinberg";
+    case dither::Method::dbs:             return "dbs";
+    case dither::Method::gilbert:         return "gilbert";
+    case dither::Method::riemersma:       return "riemersma";
+    case dither::Method::structure_fs:    return "structure-fs";
+    case dither::Method::contrast_fs:     return "contrast-fs";
+    case dither::Method::zhoufang:        return "zhoufang";
+    case dither::Method::yliluoma:        return "yliluoma";
+    case dither::Method::yliluoma2:       return "yliluoma2";
+    case dither::Method::opt_checker:     return "opt-checker";
+    case dither::Method::knoll:           return "knoll";
+    case dither::Method::tri_tone:        return "tri-tone";
+    case dither::Method::yliluoma1:       return "yliluoma1";
+    case dither::Method::opt_line:        return "opt-line";
+    case dither::Method::opt_line_checker:return "opt-line-checker";
+    case dither::Method::aseprite_old:    return "aseprite-old";
+    case dither::Method::libcaca_3x3:     return "libcaca3";
+    case dither::Method::libcaca_6x6:     return "libcaca6";
+    case dither::Method::pegasus_8x8:     return "pegasus";
+    case dither::Method::cranley_bayer:   return "cranley-bayer";
+    case dither::Method::quasicrystal:    return "quasicrystal";
+    case dither::Method::truchet:         return "truchet";
+    case dither::Method::ign:             return "ign";
+    case dither::Method::ign_triangle:    return "ign-tri";
+    case dither::Method::white_noise:     return "white-noise";
+    case dither::Method::r2_sequence:     return "r2";
+    case dither::Method::r2_triangle:     return "r2-tri";
+    case dither::Method::crosshatch:      return "crosshatch";
+    case dither::Method::radial:          return "radial";
+    case dither::Method::value_noise:     return "value-noise";
     }
+    return "floyd-steinberg";
 }
 
 // Build an api::Options from a CLI Config. Single source of truth for
@@ -4824,6 +4884,12 @@ int main(int argc, char* argv[]) {
                 copper::CopperResult result;
                 Image rendered;
             };
+            // AGA's continuous-RGB median-cut means a full ±1/255 jitter
+            // amplitude can drift the picked palette far enough to
+            // introduce per-line swap shimmer that PSNR doesn't see.
+            // OCS's discrete 12-bit gamut already snaps small nudges.
+            float jitter_amp = (chipset == amiga::Chipset::aga)
+                ? 0.4f : 1.0f;
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, config->palette_diversity,
                 /*jitter_count=*/8,
@@ -4839,7 +4905,8 @@ int main(int argc, char* argv[]) {
                     return CapTrial{*std::move(enc), *std::move(preview)};
                 },
                 [](const CapTrial& t) -> const Image& { return t.rendered; },
-                make_cli_progress_reporter());
+                make_cli_progress_reporter(),
+                jitter_amp);
             if (best.has_value()) {
                 copper_result = std::move(best->result);
             } else {

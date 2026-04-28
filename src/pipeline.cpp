@@ -66,19 +66,20 @@ void PipelineResult::finalize_psnr(const Image& src, float total_error) {
         src.width(), src.height());
 }
 
-Image jitter_image(const Image& source, std::uint32_t seed) {
+Image jitter_image(const Image& source, std::uint32_t seed,
+                   float amplitude) {
     Image j(source.width(), source.height());
-    constexpr float kAmp = 1.0f / 255.0f;
+    const float amp = amplitude / 255.0f;
     for (std::size_t y = 0; y < source.height(); ++y) {
         for (std::size_t x = 0; x < source.width(); ++x) {
             auto p = source[x, y];
-            // Per-pixel hash → ±1/255 nudge per channel.
+            // Per-pixel hash → ±amplitude/255 nudge per channel.
             auto h32 = seed * 2654435761u
                      + static_cast<std::uint32_t>(y) * 0x9E3779B9u
                      + static_cast<std::uint32_t>(x) * 0x85EBCA6Bu;
             auto nudge = [&](unsigned shift) {
                 return (static_cast<float>((h32 >> shift) & 0xFFu) /
-                        255.0f - 0.5f) * kAmp;
+                        255.0f - 0.5f) * amp;
             };
             j[x, y] = Color3f{
                 std::clamp(p.r + nudge(0),  0.0f, 1.0f),

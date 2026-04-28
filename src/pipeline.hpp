@@ -189,14 +189,17 @@ Result<Image> render_preview(
     const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr,
     std::size_t cap_changes_per_line = 0);
 
-// Build a deterministically jittered copy of `source` (per-pixel ±1/255
-// hash-based perturbation). Used by cap_best_sweep to give an encoder
-// a different median-cut basin per trial — small enough that PSNR
-// against the original never visibly degrades, big enough to tip
-// cluster boundaries during quantisation. seed > 0 produces a unique
-// perturbation; seed == 0 returns a default-constructed (empty) Image
-// — caller should special-case and use the unjittered source.
-Image jitter_image(const Image& source, std::uint32_t seed);
+// Build a deterministically jittered copy of `source` (per-pixel
+// hash-based perturbation, ±0.5*amplitude/255 per channel). Used by
+// cap_best_sweep to give an encoder a different median-cut basin per
+// trial. amplitude=1.0 = ±1/255 nudge (default; right for OCS where
+// the discrete 12-bit gamut means small input nudges produce
+// meaningful palette divergence). amplitude=0.4 = ±0.4/255 (right for
+// AGA where continuous-RGB median-cut already gives natural variation
+// and big nudges can drift the picked palette far enough to introduce
+// per-line swap shimmer the rendered-preview PSNR doesn't capture).
+Image jitter_image(const Image& source, std::uint32_t seed,
+                   float amplitude = 1.0f);
 
 // Run body(i) for i in [0, n) — parallel-dispatched across
 // hardware_concurrency() jthreads on native, sequential under WASM.
@@ -239,7 +242,8 @@ std::optional<T> cap_best_sweep(
     int jitter_count,
     EncodeFn encode_fn,
     RenderedFn rendered_fn,
-    const std::function<void(float, std::string_view)>& on_progress) {
+    const std::function<void(float, std::string_view)>& on_progress,
+    float jitter_amplitude = 1.0f) {
     struct Trial {
         dither::Settings settings;
         int diversity;
@@ -265,7 +269,8 @@ std::optional<T> cap_best_sweep(
     std::vector<Image> jittered(static_cast<std::size_t>(jitter_count));
     for (int js = 1; js < jitter_count; ++js) {
         jittered[static_cast<std::size_t>(js)] =
-            jitter_image(source, static_cast<std::uint32_t>(js));
+            jitter_image(source, static_cast<std::uint32_t>(js),
+                         jitter_amplitude);
     }
 
     std::optional<T> best;

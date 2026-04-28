@@ -1468,6 +1468,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 copper::CopperResult result;
                 Image rendered;
             };
+            float jitter_amp = (chipset == amiga::Chipset::aga)
+                ? 0.4f : 1.0f;
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, options.palette_diversity,
                 /*jitter_count=*/8,
@@ -1484,7 +1486,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     return CapTrial{*std::move(enc), *std::move(preview)};
                 },
                 [](const CapTrial& t) -> const Image& { return t.rendered; },
-                options.on_progress);
+                options.on_progress,
+                jitter_amp);
             if (best.has_value()) {
                 copper_result = std::move(best->result);
             } else {
