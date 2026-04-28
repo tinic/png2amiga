@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <cstdint>
 #include <format>
 #include <limits>
@@ -158,7 +159,57 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        std::size_t copper_changes_override,
                                        int palette_diversity,
                                        std::function<void(float, std::string_view)>
-                                           on_progress) {
+                                           on_progress,
+                                       bool cap_best) {
+    // --cap-best: multi-restart with varied palette_diversity + dither
+    // strength. The SCAP planner is deterministic for a given input, so
+    // varying these knobs is the only way to sample different
+    // optimisation landscapes. Each restart is a full encode (~100 ms);
+    // user OK'd unbounded compute. Keep the lowest-error result.
+    if (cap_best) {
+        constexpr int kRestarts = 6;
+        std::optional<ScapResult> best;
+        float best_psnr = -1.0f;
+        for (int iter = 0; iter < kRestarts; ++iter) {
+            auto retry_dither = dither_settings;
+            int retry_div = palette_diversity;
+            // iter 0 reproduces the non-cap-best baseline so the
+            // multi-restart can never lose to it. Iters 1..N-1 sweep
+            // dither strength ±20% and palette diversity 1..3 to sample
+            // varied optimisation landscapes.
+            if (iter > 0) {
+                float t = static_cast<float>(iter) /
+                          static_cast<float>(kRestarts - 1);
+                float scale = 0.8f + 0.4f * t;
+                retry_dither.strength = std::clamp(
+                    dither_settings.strength * scale, 0.0f, 2.0f);
+                retry_div = (palette_diversity > 0)
+                    ? palette_diversity : (((iter - 1) % 3) + 1);
+            }
+            auto retry = encode_scap_dpf_ocs(image, width_arg, height_arg,
+                                             reserve_color0, retry_dither,
+                                             debug_overlay,
+                                             copper_changes_override,
+                                             retry_div,
+                                             on_progress,
+                                             /*cap_best=*/false);
+            if (!retry) continue;
+            // Rank by actual rendered-preview PSNR vs source — planner
+            // total_error doesn't track final pixel MSE reliably (half-
+            // brite reflections in EHB break the correlation).
+            float psnr = color_space::compute_psnr_blurred(
+                image.pixels(), retry->rendered.pixels(),
+                image.width(), image.height());
+            if (!best.has_value() || psnr > best_psnr) {
+                best = std::move(*retry);
+                best_psnr = psnr;
+            }
+        }
+        if (best.has_value()) return std::move(*best);
+        // Fall through to the single-pass path if every restart failed
+        // (shouldn't happen with valid input, but degrade gracefully).
+    }
+
     auto& table = scap_table_for(6);
     if (table.slots.empty()) {
         return std::unexpected{Error{
@@ -1017,7 +1068,46 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        int palette_diversity,
                                        bool debug_overlay,
                                        std::function<void(float, std::string_view)>
-                                           on_progress) {
+                                           on_progress,
+                                       bool cap_best) {
+    // --cap-best: same multi-restart shape as the DPF variant. Uses
+    // rendered-preview PSNR as the ranking metric (not planner
+    // total_error) — half-brite reflection means EHB's total_error
+    // doesn't track final pixel MSE reliably.
+    if (cap_best) {
+        constexpr int kRestarts = 6;
+        std::optional<ScapResult> best;
+        float best_psnr = -1.0f;
+        for (int iter = 0; iter < kRestarts; ++iter) {
+            auto retry_dither = dither_settings;
+            int retry_div = palette_diversity;
+            if (iter > 0) {
+                float t = static_cast<float>(iter) /
+                          static_cast<float>(kRestarts - 1);
+                float scale = 0.8f + 0.4f * t;
+                retry_dither.strength = std::clamp(
+                    dither_settings.strength * scale, 0.0f, 2.0f);
+                retry_div = (palette_diversity > 0)
+                    ? palette_diversity : (((iter - 1) % 3) + 1);
+            }
+            auto retry = encode_scap_ehb_ocs(image, width_arg, height_arg,
+                                             reserve_color0, retry_dither,
+                                             copper_changes_override,
+                                             retry_div, debug_overlay,
+                                             on_progress,
+                                             /*cap_best=*/false);
+            if (!retry) continue;
+            float psnr = color_space::compute_psnr_blurred(
+                image.pixels(), retry->rendered.pixels(),
+                image.width(), image.height());
+            if (!best.has_value() || psnr > best_psnr) {
+                best = std::move(*retry);
+                best_psnr = psnr;
+            }
+        }
+        if (best.has_value()) return std::move(*best);
+    }
+
     auto& table = kScap6bplEhb;
     if (table.slots.empty()) {
         return std::unexpected{Error{

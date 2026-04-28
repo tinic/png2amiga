@@ -1548,7 +1548,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
                 options.scap_debug,
-                options.on_progress)
+                options.on_progress,
+                options.cap_best)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
@@ -1558,7 +1559,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.scap_debug,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
-                options.on_progress);
+                options.on_progress,
+                options.cap_best);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;
