@@ -434,7 +434,7 @@ struct Config {
     // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
     // Off by default — opt-in for offline / final exports.
     bool cap_best = false;
-    std::string cap_best_metric = "msssim";  // "msssim" | "psnr"
+    std::string cap_best_metric = "psnr";  // "psnr" (default) | "msssim"
 
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
@@ -591,13 +591,14 @@ void print_usage() {
         "                                  worst-case K that fits the 14-MOVE\n"
         "                                  budget; auto mode also tries K+1..K+3).\n"
         "                                  (Legacy alias: --copper-changes)\n"
-        "  --cap-best                      Slower (~4-5×) CAP planner: multi-candidate\n"
-        "                                  slot search + joint base-palette refinement.\n"
-        "                                  HAM6 + CAP and HAM8 + CAP only — the indexed\n"
-        "                                  CAP planner (lores/hires/EHB) is already\n"
-        "                                  mature and the refinement gives ≤+0.10 dB\n"
-        "                                  there. +0.5 to +2 dB PSNR on HAM. Off by\n"
-        "                                  default.\n"
+        "  --cap-best, --scap-best         Best-quality CAP/SCAP search.\n"
+        "                                  Spends ~5–10× the time but searches\n"
+        "                                  many more candidates and picks the\n"
+        "                                  one that looks best. Both names work.\n"
+        "  --cap-best-metric psnr|msssim   With --cap-best, choose how candidates\n"
+        "                                  are scored: psnr (default) keeps more\n"
+        "                                  detail; msssim gives a cleaner image\n"
+        "                                  at the cost of some detail.\n"
         "\n"
         "SCAP — Super CAP (mid-line swaps):\n"
         "  --scap                          Mid-line palette swaps inside the displayed\n"
@@ -784,10 +785,6 @@ void print_usage() {
         "\n"
         "Output:\n"
         "  --preview                       Show iTerm2 inline image preview\n"
-        "  --cap-best-metric msssim|psnr   Ranking metric for --cap-best\n"
-        "                                  (default: msssim — catches local\n"
-        "                                  banding; psnr is the previous pure\n"
-        "                                  pixel-MSE rank, useful for A/B testing)\n"
         "  --preview-scale <1-8>           Preview display scale (default on macOS:\n"
         "                                  2 on iTerm.app / Kitty / Ghostty via env\n"
         "                                  vars; 1 elsewhere. Other OSes: 1 always —\n"
@@ -964,8 +961,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg == "--cap-best" || arg == "--ham-cap-best") {
-            // --ham-cap-best kept as legacy alias.
+        if (arg == "--cap-best" || arg == "--scap-best" ||
+            arg == "--ham-cap-best") {
+            // --scap-best is an alias for --cap-best (same parallel
+            // jitter sweep; the encoder route is selected by --cap /
+            // --scap, not by which best-flag the user typed).
+            // --ham-cap-best is the legacy alias.
             config.cap_best = true;
             continue;
         }
@@ -4794,9 +4795,9 @@ int main(int argc, char* argv[]) {
             // OCS's discrete 12-bit gamut already snaps small nudges.
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto cap_metric = (config->cap_best_metric == "psnr")
-                ? pipeline::CapBestMetric::psnr
-                : pipeline::CapBestMetric::msssim;
+            auto cap_metric = (config->cap_best_metric == "msssim")
+                ? pipeline::CapBestMetric::msssim
+                : pipeline::CapBestMetric::psnr;
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, config->palette_diversity,
                 /*jitter_count=*/8,

@@ -228,10 +228,9 @@ float compute_msssim(std::span<const Color3f> a,
                      std::size_t width,
                      std::size_t height);
 
-// Ranking metric for cap_best_sweep. msssim (default) catches local
-// structural differences (banding, swap shimmer); psnr is the previous
-// pure pixel-MSE rank — left as an option so the user can flip and
-// compare on a per-image basis via --cap-best-metric.
+// Ranking metric for cap_best_sweep. psnr (default) keeps fine detail
+// and matches the historical behaviour; msssim produces a cleaner
+// image at the cost of some detail. User flips via --cap-best-metric.
 enum class CapBestMetric { msssim, psnr };
 
 // Multi-restart parallel sweep for any --cap-best CAP-aware encoder.
@@ -270,7 +269,7 @@ std::optional<T> cap_best_sweep(
     RenderedFn rendered_fn,
     const std::function<void(float, std::string_view)>& on_progress,
     float jitter_amplitude = 1.0f,
-    CapBestMetric metric = CapBestMetric::msssim) {
+    CapBestMetric metric = CapBestMetric::psnr) {
     struct Trial {
         dither::Settings settings;
         int diversity;

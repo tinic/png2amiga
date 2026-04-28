@@ -149,10 +149,10 @@ struct Options {
     int ham_triple = 16;                 // triple-pixel refinement post-pass
                                          // beam width (0 = off, 16 default)
 
-    // cap-best ranking metric. "msssim" (default) catches local
-    // structural artefacts (banding, swap shimmer); "psnr" is pure
-    // pixel-MSE rank. User flips via --cap-best-metric to compare.
-    std::string cap_best_metric = "msssim";
+    // cap-best ranking metric. "psnr" (default) keeps fine detail;
+    // "msssim" produces a cleaner image at the cost of some detail.
+    // User flips via --cap-best-metric.
+    std::string cap_best_metric = "psnr";
     bool cap_best = false;               // multi-candidate CAP planner +
                                          // joint base-palette refinement.
                                          // HAM6 + copper and HAM8 + copper

@@ -178,9 +178,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // sensitive to which colours win the median-cut, so heavy jitter
         // sampling buys more here than for wider palettes (EHB stays at
         // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
-        auto metric = (cap_best_metric == "psnr")
-            ? pipeline::CapBestMetric::psnr
-            : pipeline::CapBestMetric::msssim;
+        auto metric = (cap_best_metric == "msssim")
+            ? pipeline::CapBestMetric::msssim
+            : pipeline::CapBestMetric::psnr;
         auto best = pipeline::cap_best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/24,
             [&](const Image& jittered_in,
@@ -1064,9 +1064,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // than DPF's 8-base, so heavy jitter sampling buys less here).
     // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
     if (cap_best) {
-        auto metric = (cap_best_metric == "psnr")
-            ? pipeline::CapBestMetric::psnr
-            : pipeline::CapBestMetric::msssim;
+        auto metric = (cap_best_metric == "msssim")
+            ? pipeline::CapBestMetric::msssim
+            : pipeline::CapBestMetric::psnr;
         auto best = pipeline::cap_best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,

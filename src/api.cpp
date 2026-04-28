@@ -1472,9 +1472,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             };
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto cap_metric = (options.cap_best_metric == "psnr")
-                ? pipeline::CapBestMetric::psnr
-                : pipeline::CapBestMetric::msssim;
+            auto cap_metric = (options.cap_best_metric == "msssim")
+                ? pipeline::CapBestMetric::msssim
+                : pipeline::CapBestMetric::psnr;
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, options.palette_diversity,
                 /*jitter_count=*/8,
