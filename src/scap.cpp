@@ -6,6 +6,7 @@
 #include "copper.hpp"
 #include "dither.hpp"
 #include "palette.hpp"
+#include "pipeline.hpp"
 #include "types.hpp"
 
 #include <algorithm>
@@ -172,141 +173,21 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // optimisation landscapes. Each restart is a full encode (~100 ms);
     // user OK'd unbounded compute. Keep the lowest-error result.
     if (cap_best) {
-        // Aggressive parallel sweep: dither method × strength × diversity
-        // × image-pre-jitter = many trials, dispatched across
-        // hardware_concurrency() threads on the CLI. Each trial is
-        // independent (different dither_settings + diversity + jittered
-        // input), and the SCAP encoder body is mostly sequential, so
-        // outer parallelism gives near-linear speedup. Rank by rendered-
-        // preview PSNR (planner total_error doesn't track final MSE
-        // reliably for EHB half-brite). Iter 0 = pristine baseline so
-        // the multi-restart can never lose ground.
-        //
-        // Image-pre-jitter adds noise to the source image bytes per
-        // trial, which makes the internal median-cut → different base
-        // palette → fundamentally different optimisation landscape than
-        // sweeping just dither/diversity (those leave the base palette
-        // identical). This is the strongest tool against local minima.
-        struct TrialSpec {
-            dither::Settings settings;
-            int diversity;
-            int jitter_seed;  // 0 = no jitter (uses original image).
-        };
-        std::vector<TrialSpec> trials;
-        trials.push_back({dither_settings, palette_diversity, 0});  // baseline
-        // Dither method stays as the user picked it — sweep only the
-        // knobs that are auto-tunable. Strength tweaks at fixed method,
-        // diversity, and PRE-IMAGE jitter (the strongest knob — gives
-        // the encoder a different median-cut basis per trial). DPF gets
-        // a beefier jitter axis than EHB (24 vs 8) since DPF has only
-        // 8 PF2 colours so the median-cut basin matters more — every
-        // jitter seed shifts which colours win, and DPF artefact
-        // reduction has more headroom. Total 24 × 5 × 4 = 480 trials,
-        // ~30–60 s on an 8-core CLI.
-        const float strengths[] = { 0.7f, 0.85f, 1.0f, 1.15f, 1.3f };
-        const int diversities[] = { 0, 1, 2, 3 };
-        const int jitter_seeds[] = { 0, 1, 2, 3, 4, 5, 6, 7,
-                                     8, 9, 10, 11, 12, 13, 14, 15,
-                                     16, 17, 18, 19, 20, 21, 22, 23 };
-        for (auto s : strengths) {
-            for (auto div : diversities) {
-                for (auto js : jitter_seeds) {
-                    auto d = dither_settings;
-                    d.strength = std::clamp(
-                        dither_settings.strength * s, 0.0f, 2.0f);
-                    int retry_div = (palette_diversity > 0)
-                        ? palette_diversity : div;
-                    trials.push_back({d, retry_div, js});
-                }
-            }
-        }
-
-        // Pre-build jittered image variants once (shared across trials
-        // that use the same seed) to avoid re-jittering per worker.
-        // Hash-based deterministic per-pixel nudge of ±1/255 per channel
-        // — small enough not to perceptually shift colour, big enough to
-        // tip the median-cut into a different cluster boundary.
-        std::vector<Image> jittered_images(24);  // index = jitter_seed
-        for (auto js : jitter_seeds) {
-            if (js == 0) continue;  // index 0 = unused sentinel
-            Image j(image.width(), image.height());
-            const float scale = 1.0f / 255.0f;
-            for (std::size_t y = 0; y < image.height(); ++y) {
-                for (std::size_t x = 0; x < image.width(); ++x) {
-                    auto p = image[x, y];
-                    auto h32 = static_cast<std::uint32_t>(js) * 2654435761u
-                             + static_cast<std::uint32_t>(y) * 0x9E3779B9u
-                             + static_cast<std::uint32_t>(x) * 0x85EBCA6Bu;
-                    auto nudge = [&](unsigned shift) {
-                        return (static_cast<float>((h32 >> shift) & 0xFFu) /
-                                255.0f - 0.5f) * scale;
-                    };
-                    j[x, y] = Color3f{
-                        std::clamp(p.r + nudge(0),  0.0f, 1.0f),
-                        std::clamp(p.g + nudge(8),  0.0f, 1.0f),
-                        std::clamp(p.b + nudge(16), 0.0f, 1.0f),
-                    };
-                }
-            }
-            jittered_images[static_cast<std::size_t>(js)] = std::move(j);
-        }
-
-        std::optional<ScapResult> best;
-        float best_psnr = -1.0f;
-        std::mutex best_mu;
-        std::atomic<std::size_t> next_trial{0};
-        std::atomic<std::size_t> trials_done{0};
-        auto worker = [&]() {
-            while (true) {
-                auto i = next_trial.fetch_add(1);
-                if (i >= trials.size()) break;
-                auto& t = trials[i];
-                const Image& trial_input = (t.jitter_seed == 0)
-                    ? image
-                    : jittered_images[static_cast<std::size_t>(t.jitter_seed)];
-                // Suppress per-trial encoder progress — 100+ concurrent
-                // streams would be chaos. Outer scope emits a
-                // multi-restart-level bar (trials_done / total).
-                auto retry = encode_scap_dpf_ocs(trial_input,
-                                                 width_arg, height_arg,
-                                                 reserve_color0, t.settings,
-                                                 debug_overlay,
-                                                 copper_changes_override,
-                                                 t.diversity, {},
-                                                 /*cap_best=*/false);
-                auto done = trials_done.fetch_add(1) + 1;
-                if (on_progress) {
-                    on_progress(static_cast<float>(done) /
-                                static_cast<float>(trials.size()),
-                                "cap-best");
-                }
-                if (!retry) continue;
-                // PSNR is always vs the ORIGINAL image — we don't reward
-                // matching the jittered variant, only the true source.
-                float psnr = color_space::compute_psnr_blurred(
-                    image.pixels(), retry->rendered.pixels(),
-                    image.width(), image.height());
-                std::lock_guard lk(best_mu);
-                if (!best.has_value() || psnr > best_psnr) {
-                    best = std::move(*retry);
-                    best_psnr = psnr;
-                }
-            }
-        };
-#ifndef __EMSCRIPTEN__
-        auto n_threads = std::max<unsigned>(1,
-            std::thread::hardware_concurrency());
-        n_threads = std::min(n_threads,
-            static_cast<unsigned>(trials.size()));
-        std::vector<std::jthread> threads;
-        threads.reserve(n_threads);
-        for (unsigned t = 0; t < n_threads; ++t)
-            threads.emplace_back(worker);
-        threads.clear();  // join on destruction
-#else
-        worker();
-#endif
-        if (on_progress) on_progress(1.0f, "done");
+        // DPF: 24 jitter seeds — the 8-colour PF2 palette is highly
+        // sensitive to which colours win the median-cut, so heavy jitter
+        // sampling buys more here than for wider palettes (EHB stays at
+        // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
+        auto best = pipeline::cap_best_sweep<ScapResult>(
+            image, dither_settings, palette_diversity, /*jitter_count=*/24,
+            [&](const Image& jittered_in,
+                const dither::Settings& d, int div) {
+                return encode_scap_dpf_ocs(
+                    jittered_in, width_arg, height_arg, reserve_color0,
+                    d, debug_overlay, copper_changes_override, div,
+                    /*on_progress=*/{}, /*cap_best=*/false);
+            },
+            [](const ScapResult& r) -> const Image& { return r.rendered; },
+            on_progress);
         if (best.has_value()) return std::move(*best);
         // Fall through to the single-pass path if every restart failed
         // (shouldn't happen with valid input, but degrade gracefully).
@@ -1172,118 +1053,23 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
                                        bool cap_best) {
-    // --cap-best: same parallel sweep + image pre-jitter as the DPF
-    // variant — see that branch for design notes.
+    // --cap-best: 8 jitter seeds (32-base palette has shallower basins
+    // than DPF's 8-base, so heavy jitter sampling buys less here).
+    // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
     if (cap_best) {
-        struct TrialSpec {
-            dither::Settings settings;
-            int diversity;
-            int jitter_seed;
-        };
-        std::vector<TrialSpec> trials;
-        trials.push_back({dither_settings, palette_diversity, 0});
-        // Same shape as the DPF variant — strength × diversity × jitter,
-        // dither method untouched. EHB has 32 base colours so the
-        // median-cut basin matters less than DPF's 8; 8 jitter seeds is
-        // already enough headroom on natural + HDR test images, and
-        // wall time stays under a minute on an 8-core CLI.
-        const float strengths[] = { 0.7f, 0.85f, 1.0f, 1.15f, 1.3f };
-        const int diversities[] = { 0, 1, 2, 3 };
-        const int jitter_seeds[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
-        for (auto s : strengths) {
-            for (auto div : diversities) {
-                for (auto js : jitter_seeds) {
-                    auto d = dither_settings;
-                    d.strength = std::clamp(
-                        dither_settings.strength * s, 0.0f, 2.0f);
-                    int retry_div = (palette_diversity > 0)
-                        ? palette_diversity : div;
-                    trials.push_back({d, retry_div, js});
-                }
-            }
-        }
-
-        std::vector<Image> jittered_images(8);
-        for (auto js : jitter_seeds) {
-            if (js == 0) continue;
-            {
-            Image j(image.width(), image.height());
-            const float scale = 1.0f / 255.0f;
-            for (std::size_t y = 0; y < image.height(); ++y) {
-                for (std::size_t x = 0; x < image.width(); ++x) {
-                    auto p = image[x, y];
-                    auto h32 = static_cast<std::uint32_t>(js) * 2654435761u
-                             + static_cast<std::uint32_t>(y) * 0x9E3779B9u
-                             + static_cast<std::uint32_t>(x) * 0x85EBCA6Bu;
-                    auto nudge = [&](unsigned shift) {
-                        return (static_cast<float>((h32 >> shift) & 0xFFu) /
-                                255.0f - 0.5f) * scale;
-                    };
-                    j[x, y] = Color3f{
-                        std::clamp(p.r + nudge(0),  0.0f, 1.0f),
-                        std::clamp(p.g + nudge(8),  0.0f, 1.0f),
-                        std::clamp(p.b + nudge(16), 0.0f, 1.0f),
-                    };
-                }
-            }
-            jittered_images[static_cast<std::size_t>(js)] = std::move(j);
-            }
-        }
-
-        std::optional<ScapResult> best;
-        float best_psnr = -1.0f;
-        std::mutex best_mu;
-        std::atomic<std::size_t> next_trial{0};
-        std::atomic<std::size_t> trials_done{0};
-        auto worker = [&]() {
-            while (true) {
-                auto i = next_trial.fetch_add(1);
-                if (i >= trials.size()) break;
-                auto& t = trials[i];
-                const Image& trial_input = (t.jitter_seed == 0)
-                    ? image
-                    : jittered_images[static_cast<std::size_t>(t.jitter_seed)];
-                auto retry = encode_scap_ehb_ocs(trial_input,
-                                                 width_arg, height_arg,
-                                                 reserve_color0, t.settings,
-                                                 copper_changes_override,
-                                                 t.diversity, debug_overlay,
-                                                 {},
-                                                 /*cap_best=*/false);
-                auto done = trials_done.fetch_add(1) + 1;
-                if (on_progress) {
-                    on_progress(static_cast<float>(done) /
-                                static_cast<float>(trials.size()),
-                                "cap-best");
-                }
-                if (!retry) continue;
-                float psnr = color_space::compute_psnr_blurred(
-                    image.pixels(), retry->rendered.pixels(),
-                    image.width(), image.height());
-                std::lock_guard lk(best_mu);
-                if (!best.has_value() || psnr > best_psnr) {
-                    best = std::move(*retry);
-                    best_psnr = psnr;
-                }
-            }
-        };
-#ifndef __EMSCRIPTEN__
-        auto n_threads = std::max<unsigned>(1,
-            std::thread::hardware_concurrency());
-        n_threads = std::min(n_threads,
-            static_cast<unsigned>(trials.size()));
-        std::vector<std::jthread> threads;
-        threads.reserve(n_threads);
-        for (unsigned t = 0; t < n_threads; ++t)
-            threads.emplace_back(worker);
-        threads.clear();
-#else
-        worker();
-#endif
-        if (on_progress) on_progress(1.0f, "done");
+        auto best = pipeline::cap_best_sweep<ScapResult>(
+            image, dither_settings, palette_diversity, /*jitter_count=*/8,
+            [&](const Image& jittered_in,
+                const dither::Settings& d, int div) {
+                return encode_scap_ehb_ocs(
+                    jittered_in, width_arg, height_arg, reserve_color0,
+                    d, copper_changes_override, div, debug_overlay,
+                    /*on_progress=*/{}, /*cap_best=*/false);
+            },
+            [](const ScapResult& r) -> const Image& { return r.rendered; },
+            on_progress);
         if (best.has_value()) return std::move(*best);
     }
-
     auto& table = kScap6bplEhb;
     if (table.slots.empty()) {
         return std::unexpected{Error{

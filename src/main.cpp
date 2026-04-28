@@ -4799,11 +4799,59 @@ int main(int argc, char* argv[]) {
         }
 
         std::size_t skip_initial_lace = config->interlace ? 2 : 0;
-        auto copper_result = copper::encode_copper(*image, config->depth, dith, chipset,
-            static_cast<std::size_t>(config->copper_changes), nullptr,
-            config->reserve_color0, copper_locks, config->palette_diversity,
-            skip_initial_lace, config->interlace, /*is_ehb=*/false,
-            make_cli_progress_reporter());
+
+        // Single-pass encoder factored so cap-best below can replay it
+        // under a parallel jitter sweep without duplicating the args.
+        auto encode_once = [&](const Image& img,
+                               const dither::Settings& d, int diversity,
+                               std::function<void(float, std::string_view)>
+                                   prog) {
+            return copper::encode_copper(
+                img, config->depth, d, chipset,
+                static_cast<std::size_t>(config->copper_changes), nullptr,
+                config->reserve_color0, copper_locks, diversity,
+                skip_initial_lace, config->interlace, /*is_ehb=*/false,
+                std::move(prog));
+        };
+
+        Result<copper::CopperResult> copper_result;
+        if (config->cap_best) {
+            // Plain CAP: 8 jitter seeds (16-colour palette has shallower
+            // basins than DPF's 8-colour PF2; 8 seeds × 5×4 = 161 trials,
+            // ~30–60 s on 8 cores). Same parallel-sweep machinery as
+            // SCAP DPF/EHB via pipeline::cap_best_sweep.
+            struct CapTrial {
+                copper::CopperResult result;
+                Image rendered;
+            };
+            auto best = pipeline::cap_best_sweep<CapTrial>(
+                *image, dith, config->palette_diversity,
+                /*jitter_count=*/8,
+                [&](const Image& jittered_in,
+                    const dither::Settings& d, int div) -> Result<CapTrial> {
+                    auto enc = encode_once(jittered_in, d, div, {});
+                    if (!enc) return std::unexpected{enc.error()};
+                    auto preview = pipeline::render_preview(
+                        enc->planes, enc->base_palette,
+                        /*is_ham=*/false, config->interlace, chipset,
+                        &enc->scanline_palettes, enc->changes_per_line);
+                    if (!preview) return std::unexpected{preview.error()};
+                    return CapTrial{*std::move(enc), *std::move(preview)};
+                },
+                [](const CapTrial& t) -> const Image& { return t.rendered; },
+                make_cli_progress_reporter());
+            if (best.has_value()) {
+                copper_result = std::move(best->result);
+            } else {
+                copper_result = encode_once(*image, dith,
+                                            config->palette_diversity,
+                                            make_cli_progress_reporter());
+            }
+        } else {
+            copper_result = encode_once(*image, dith,
+                                        config->palette_diversity,
+                                        make_cli_progress_reporter());
+        }
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
                          copper_result.error().message);

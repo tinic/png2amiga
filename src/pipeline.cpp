@@ -5,6 +5,9 @@
 #include "ham.hpp"
 
 #include <cctype>
+#ifndef __EMSCRIPTEN__
+#include <thread>
+#endif
 
 namespace png2amiga::api {
 // The workhorse defined in src/api.cpp (post-anon-namespace, external
@@ -61,6 +64,55 @@ void PipelineResult::finalize_psnr(const Image& src, float total_error) {
     psnr = color_space::compute_psnr_blurred(
         src.pixels(), rendered.pixels(),
         src.width(), src.height());
+}
+
+Image jitter_image(const Image& source, std::uint32_t seed) {
+    Image j(source.width(), source.height());
+    constexpr float kAmp = 1.0f / 255.0f;
+    for (std::size_t y = 0; y < source.height(); ++y) {
+        for (std::size_t x = 0; x < source.width(); ++x) {
+            auto p = source[x, y];
+            // Per-pixel hash → ±1/255 nudge per channel.
+            auto h32 = seed * 2654435761u
+                     + static_cast<std::uint32_t>(y) * 0x9E3779B9u
+                     + static_cast<std::uint32_t>(x) * 0x85EBCA6Bu;
+            auto nudge = [&](unsigned shift) {
+                return (static_cast<float>((h32 >> shift) & 0xFFu) /
+                        255.0f - 0.5f) * kAmp;
+            };
+            j[x, y] = Color3f{
+                std::clamp(p.r + nudge(0),  0.0f, 1.0f),
+                std::clamp(p.g + nudge(8),  0.0f, 1.0f),
+                std::clamp(p.b + nudge(16), 0.0f, 1.0f),
+            };
+        }
+    }
+    return j;
+}
+
+void parallel_for(std::size_t n,
+                  std::function<void(std::size_t)> body) {
+    if (n == 0) return;
+#ifndef __EMSCRIPTEN__
+    auto n_threads = std::max<unsigned>(1,
+        std::thread::hardware_concurrency());
+    n_threads = std::min(n_threads, static_cast<unsigned>(n));
+    std::atomic<std::size_t> next{0};
+    auto worker = [&]() {
+        while (true) {
+            auto i = next.fetch_add(1);
+            if (i >= n) break;
+            body(i);
+        }
+    };
+    std::vector<std::jthread> threads;
+    threads.reserve(n_threads);
+    for (unsigned t = 0; t < n_threads; ++t)
+        threads.emplace_back(worker);
+    threads.clear();  // join on destruction
+#else
+    for (std::size_t i = 0; i < n; ++i) body(i);
+#endif
 }
 
 Result<Image> render_preview(

@@ -1436,14 +1436,66 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
 
         std::size_t skip_initial_lace = options.interlace ? 2 : 0;
-        auto copper_result = copper::encode_copper(*image, depth, dith, chipset,
-                                                     static_cast<std::size_t>(options.copper_changes),
-                                                     copper_user_pal.empty() ? nullptr : &copper_user_pal,
-                                                     options.reserve_color0, copper_locks,
-                                                     options.palette_diversity,
-                                                     skip_initial_lace, options.interlace,
-                                                     /*is_ehb=*/false,
-                                                     options.on_progress);
+
+        // Single-pass encoder, factored out so cap_best below can replay
+        // it under a parallel jitter sweep without duplicating the
+        // argument list.
+        auto encode_once = [&](const Image& img,
+                               const dither::Settings& d, int diversity) {
+            return copper::encode_copper(
+                img, depth, d, chipset,
+                static_cast<std::size_t>(options.copper_changes),
+                copper_user_pal.empty() ? nullptr : &copper_user_pal,
+                options.reserve_color0, copper_locks,
+                diversity,
+                skip_initial_lace, options.interlace,
+                /*is_ehb=*/false,
+                /*on_progress=*/{});
+        };
+
+        Result<copper::CopperResult> copper_result;
+        if (options.cap_best) {
+            // Plain CAP: 8 jitter seeds. Same shape as SCAP EHB —
+            // 16-colour (or wider) palette so the median-cut basin is
+            // less acute than DPF's 8-colour PF2; 8 seeds × 5×4 = 161
+            // trials is the sweet spot.
+            //
+            // copper::encode_copper returns the rendered preview via
+            // copper::render_copper_capped on (planes, scanline_palettes).
+            // We pre-render here per trial so cap_best_sweep can rank by
+            // PSNR.
+            struct CapTrial {
+                copper::CopperResult result;
+                Image rendered;
+            };
+            auto best = pipeline::cap_best_sweep<CapTrial>(
+                *image, dith, options.palette_diversity,
+                /*jitter_count=*/8,
+                [&](const Image& jittered_in,
+                    const dither::Settings& d, int div) -> Result<CapTrial> {
+                    auto enc = encode_once(jittered_in, d, div);
+                    if (!enc) return std::unexpected{enc.error()};
+                    auto preview = pipeline::render_preview(
+                        enc->planes, enc->base_palette,
+                        /*is_ham=*/false, options.interlace, chipset,
+                        &enc->scanline_palettes,
+                        enc->changes_per_line);
+                    if (!preview) return std::unexpected{preview.error()};
+                    return CapTrial{*std::move(enc), *std::move(preview)};
+                },
+                [](const CapTrial& t) -> const Image& { return t.rendered; },
+                options.on_progress);
+            if (best.has_value()) {
+                copper_result = std::move(best->result);
+            } else {
+                copper_result = encode_once(*image, dith,
+                                            options.palette_diversity);
+            }
+        } else {
+            copper_result = encode_once(*image, dith,
+                                        options.palette_diversity);
+            if (options.on_progress) options.on_progress(1.0f, "done");
+        }
         if (!copper_result) return std::unexpected{copper_result.error()};
 
         // Render preview BEFORE any DPF expansion: render_copper builds a

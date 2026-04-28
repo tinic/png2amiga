@@ -3,16 +3,23 @@
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "cheader.hpp"
+#include "color_space.hpp"
 #include "copper.hpp"
+#include "dither.hpp"
 #include "scap.hpp"
 #include "types.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace png2amiga::api { struct Options; }
@@ -181,6 +188,117 @@ Result<Image> render_preview(
     amiga::Chipset chipset,
     const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr,
     std::size_t cap_changes_per_line = 0);
+
+// Build a deterministically jittered copy of `source` (per-pixel ±1/255
+// hash-based perturbation). Used by cap_best_sweep to give an encoder
+// a different median-cut basin per trial — small enough that PSNR
+// against the original never visibly degrades, big enough to tip
+// cluster boundaries during quantisation. seed > 0 produces a unique
+// perturbation; seed == 0 returns a default-constructed (empty) Image
+// — caller should special-case and use the unjittered source.
+Image jitter_image(const Image& source, std::uint32_t seed);
+
+// Run body(i) for i in [0, n) — parallel-dispatched across
+// hardware_concurrency() jthreads on native, sequential under WASM.
+// Used by cap_best_sweep but generic; any caller with N independent
+// units of work can use it.
+void parallel_for(std::size_t n,
+                  std::function<void(std::size_t)> body);
+
+// Multi-restart parallel sweep for any --cap-best CAP-aware encoder.
+// Sweeps:
+//   - dither_strength: 5 multipliers (0.7, 0.85, 1.0, 1.15, 1.3)
+//   - palette_diversity: 4 values when caller's base is 0; otherwise
+//     pinned to caller's value (user override always wins)
+//   - pre-image jitter: `jitter_count` deterministic hash-based variants
+//     of the source (the strongest knob — feeds the encoder's
+//     median-cut a different cluster basin per trial)
+// Plus 1 baseline trial (caller's exact base_settings + base_diversity
+// against the unjittered source) so the multi-restart can never lose
+// ground. Iter 0 = baseline.
+//
+// EncodeFn signature:
+//   Result<T>(const Image& trial_input,
+//             const dither::Settings& trial_dither,
+//             int trial_diversity)
+// RenderedFn signature:
+//   const Image& (const T& result)
+//
+// Ranks by rendered-preview PSNR vs the ORIGINAL source — never the
+// jittered variant — and returns the highest-PSNR T (or std::nullopt
+// if every trial failed). Caller picks jitter_count: SCAP DPF uses
+// 24 (8-colour PF2 palette is highly basin-sensitive), SCAP EHB and
+// plain CAP use 8 (32-colour and 16-colour palettes have shallower
+// basins). User explicitly OK'd unbounded compute on cap_best, so the
+// large trial count (5×4×N + 1) is a feature.
+template <typename T, typename EncodeFn, typename RenderedFn>
+std::optional<T> cap_best_sweep(
+    const Image& source,
+    const dither::Settings& base_settings,
+    int base_diversity,
+    int jitter_count,
+    EncodeFn encode_fn,
+    RenderedFn rendered_fn,
+    const std::function<void(float, std::string_view)>& on_progress) {
+    struct Trial {
+        dither::Settings settings;
+        int diversity;
+        int jitter_seed;
+    };
+    std::vector<Trial> trials;
+    trials.push_back({base_settings, base_diversity, 0});  // baseline
+    const float strengths[] = { 0.7f, 0.85f, 1.0f, 1.15f, 1.3f };
+    const int diversities[] = { 0, 1, 2, 3 };
+    for (auto s : strengths) {
+        for (auto div : diversities) {
+            for (int js = 0; js < jitter_count; ++js) {
+                auto d = base_settings;
+                d.strength = std::clamp(
+                    base_settings.strength * s, 0.0f, 2.0f);
+                int retry_div = (base_diversity > 0)
+                    ? base_diversity : div;
+                trials.push_back({d, retry_div, js});
+            }
+        }
+    }
+
+    std::vector<Image> jittered(static_cast<std::size_t>(jitter_count));
+    for (int js = 1; js < jitter_count; ++js) {
+        jittered[static_cast<std::size_t>(js)] =
+            jitter_image(source, static_cast<std::uint32_t>(js));
+    }
+
+    std::optional<T> best;
+    float best_psnr = -1.0f;
+    std::mutex best_mu;
+    std::atomic<std::size_t> done{0};
+    auto total = trials.size();
+    parallel_for(total, [&](std::size_t i) {
+        const auto& t = trials[i];
+        const Image& trial_input = (t.jitter_seed == 0)
+            ? source
+            : jittered[static_cast<std::size_t>(t.jitter_seed)];
+        auto retry = encode_fn(trial_input, t.settings, t.diversity);
+        auto n_done = done.fetch_add(1) + 1;
+        if (on_progress) {
+            on_progress(static_cast<float>(n_done) /
+                        static_cast<float>(total),
+                        "cap-best");
+        }
+        if (!retry) return;
+        const Image& rendered = rendered_fn(*retry);
+        float psnr = color_space::compute_psnr_blurred(
+            source.pixels(), rendered.pixels(),
+            source.width(), source.height());
+        std::lock_guard lk(best_mu);
+        if (!best.has_value() || psnr > best_psnr) {
+            best = std::move(*retry);
+            best_psnr = psnr;
+        }
+    });
+    if (on_progress) on_progress(1.0f, "done");
+    return best;
+}
 
 // Run the full preprocessing → quantize → dither → encode pipeline against
 // an in-memory image (PNG/JPEG/WebP autodetected). Single entry point
