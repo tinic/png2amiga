@@ -131,11 +131,27 @@ this investigation cheaper.
 
 1. Define `PipelineInput` / `PipelineResult` / `run_pipeline`. Land
    alongside the existing duplicated paths (don't delete yet).
+   **DONE:** `pipeline::PipelineResult` and `pipeline::run_pipeline`
+   live in `src/pipeline.hpp`. `api.cpp` keeps the workhorse body;
+   `pipeline.cpp` is a one-line forwarder.
 2. Migrate `api.cpp::convert_viewer` to call `run_pipeline`. Verify
-   WASM still works.
+   WASM still works. **DONE** as a side effect of step 1 — the
+   `convert_*` family already shares the single `run_pipeline`
+   workhorse; the `pipeline::` forwarder exists for outside callers.
 3. Migrate `main.cpp` CAP/SCAP/HAM/plain paths one at a time. Verify
-   each via existing ctest cases.
+   each via existing ctest cases. **PARTIAL:** `make_api_options(Config)`
+   builder landed (commit `af28eec`) so any future branch migration
+   has a one-line Config → api::Options translation. Branches still
+   pending migration (each its own commit + ctest sweep):
+   - Plain lores/hires standard `.iff`/`.h`/`.cpp` fallback
+     (main.cpp ~5240-5500).
+   - EHB without copper (main.cpp ~4150-4280).
+   - EHB + CAP (main.cpp ~4080-4330).
+   - HAM standard / HAM + CAP (main.cpp ~3870-4060).
+   - CAP standard (lores/hires + copper) (main.cpp ~4500-4820).
+   - SCAP probe + production (main.cpp ~3030-3085, ~4830-5005).
 4. Delete the now-orphan duplicated code in `main.cpp` and `api.cpp`.
+   **BLOCKED on #3 finishing** — nothing yet orphaned.
 5. Tackle preview-OCS-discrepancy bug with the consolidated preview
    path as the only relevant code.
 

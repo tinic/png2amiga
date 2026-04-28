@@ -2304,51 +2304,69 @@ void save_raw_vga(std::string_view path,
     cli_status("Raw:    {} ({} bytes, VGA Mode 13h chunky)", path, total);
 }
 
-Result<void> save_preview(std::string_view path, const Image& preview,
-                          bool has_trans, const std::vector<bool>& mask,
-                          amiga::Mode mode, bool hires = false,
-                          bool interlace = false) {
-    // DOS modes (EGA, VGA, CGA) have non-integer PAR (e.g. VGA 13h = 5:6
-    // tall pixel). Use nearest-neighbor resampling to the display-aspect
-    // preview dimensions, so the PNG shows the image at roughly 4:3 as
-    // the CRT would. Amiga/Atari modes keep the existing integer-scale
-    // path which handles their 1:1/1:2/2:1 PARs exactly.
+// Single canonical preview-scaling stage. Encodes the per-mode aspect
+// rules every consumer needs:
+//   - DOS modes (CGA / EGA / VGA): nearest-neighbour to the PAR-aware
+//     display dimensions so the PNG / iTerm2 inline image shows the
+//     scene at roughly 4:3 like a CRT would. CGA text modes skip the
+//     2× base scale since 640x200 cell rendering is already comfortable.
+//   - Amiga / Atari modes: integer 2× horizontal for lores, 2× vertical
+//     for non-interlaced; 1×1 for hires-lace. Matches hardware PAR.
+// Used by save_preview() (PNG output), show_terminal_preview() (iTerm2),
+// and the batch / video preview loops.
+Image scale_for_display(const Image& preview, amiga::Mode mode,
+                        bool hires, bool interlace) {
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
         auto params = amiga::get_mode_params(mode);
-        // Text modes render their cells at 640x200 (logical display); no
-        // need for 2x upscale since that's already comfortable viewing size.
         std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
                                              static_cast<double>(params.par),
                                              base_scale);
-        auto scaled = scale_preview_nn(preview, pw, ph);
-        if (has_trans) {
-            // Mask resample (bool → bool via nearest).
-            std::vector<bool> scaled_mask(pw * ph, false);
-            for (std::size_t y = 0; y < ph; ++y) {
-                auto sy = std::min(preview.height() - 1,
-                                   (y * preview.height()) / ph);
-                for (std::size_t x = 0; x < pw; ++x) {
-                    auto sx = std::min(preview.width() - 1,
-                                       (x * preview.width()) / pw);
-                    scaled_mask[y * pw + x] =
-                        mask[sy * preview.width() + sx];
-                }
-            }
-            return png_io::save(path, scaled, scaled_mask);
-        }
-        return png_io::save(path, scaled);
+        return scale_preview_nn(preview, pw, ph);
     }
+    std::size_t sx = hires ? 1 : 2;
+    std::size_t sy = interlace ? 1 : 2;
+    if (hires && interlace) { sx = 1; sy = 1; }
+    return scale_preview(preview, sx, sy);
+}
 
-    bool is_hires = hires;
-    bool is_lace = interlace;
-    std::size_t sx = is_hires ? 1 : 2;
-    std::size_t sy = is_lace ? 1 : 2;
-    if (is_hires && is_lace) { sx = 1; sy = 1; }
-    auto scaled = scale_preview(preview, sx, sy);
+// Companion mask-scaler for the same display rules. Source mask is
+// (preview_w × preview_h); returned mask matches the dimensions
+// scale_for_display() would produce for the same (mode, hires, interlace).
+std::vector<bool> scale_mask_for_display(const std::vector<bool>& mask,
+                                         std::size_t src_w, std::size_t src_h,
+                                         amiga::Mode mode,
+                                         bool hires, bool interlace) {
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
+        auto params = amiga::get_mode_params(mode);
+        std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
+        auto [pw, ph] = preview_dims_for_par(src_w, src_h,
+                                             static_cast<double>(params.par),
+                                             base_scale);
+        std::vector<bool> scaled(pw * ph, false);
+        for (std::size_t y = 0; y < ph; ++y) {
+            auto sy = std::min(src_h - 1, (y * src_h) / ph);
+            for (std::size_t x = 0; x < pw; ++x) {
+                auto sx = std::min(src_w - 1, (x * src_w) / pw);
+                scaled[y * pw + x] = mask[sy * src_w + sx];
+            }
+        }
+        return scaled;
+    }
+    std::size_t sx = hires ? 1 : 2;
+    std::size_t sy = interlace ? 1 : 2;
+    if (hires && interlace) { sx = 1; sy = 1; }
+    return scale_mask(mask, src_w, src_h, sx, sy);
+}
+
+Result<void> save_preview(std::string_view path, const Image& preview,
+                          bool has_trans, const std::vector<bool>& mask,
+                          amiga::Mode mode, bool hires = false,
+                          bool interlace = false) {
+    auto scaled = scale_for_display(preview, mode, hires, interlace);
     if (has_trans) {
-        auto scaled_mask = scale_mask(mask, preview.width(), preview.height(),
-                                      sx, sy);
+        auto scaled_mask = scale_mask_for_display(
+            mask, preview.width(), preview.height(), mode, hires, interlace);
         return png_io::save(path, scaled, scaled_mask);
     }
     return png_io::save(path, scaled);
@@ -2357,23 +2375,7 @@ Result<void> save_preview(std::string_view path, const Image& preview,
 // Show preview in terminal (iTerm2 inline image protocol)
 void show_terminal_preview(const Image& preview, amiga::Mode mode,
                            bool hires = false, bool interlace = false) {
-    // DOS modes use PAR-aware nearest-neighbor (same logic as save_preview).
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
-        auto params = amiga::get_mode_params(mode);
-        std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
-        auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
-                                             static_cast<double>(params.par),
-                                             base_scale);
-        iterm2_display(scale_preview_nn(preview, pw, ph));
-        return;
-    }
-    bool is_hires = hires;
-    bool is_lace = interlace;
-    std::size_t sx = is_hires ? 1 : 2;
-    std::size_t sy = is_lace ? 1 : 2;
-    if (is_hires && is_lace) { sx = 1; sy = 1; }
-    auto scaled = scale_preview(preview, sx, sy);
-    iterm2_display(scaled);
+    iterm2_display(scale_for_display(preview, mode, hires, interlace));
 }
 
 // CLI progress reporter. Throttles to ~20Hz redraw, writes "\rEncoding NN.N%
