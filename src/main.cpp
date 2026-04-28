@@ -2556,8 +2556,12 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
         std::lock_guard lk(state->first);
         auto now = std::chrono::steady_clock::now();
         bool final_tick = (stage == "done") || p >= 1.0f;
+        // 16 ms throttle ≈ 60 Hz — gives the user actual visible
+        // motion on fast parallel passes (previous 50 ms swallowed
+        // most updates from a 25-50 ms HAM6 beam search and made the
+        // bar look frozen).
         if (!final_tick &&
-            now - state->second < std::chrono::milliseconds(50)) {
+            now - state->second < std::chrono::milliseconds(16)) {
             return;
         }
         state->second = now;
