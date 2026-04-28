@@ -1662,6 +1662,30 @@ std::string_view dither_to_options_string(dither::Method m) {
 // notably opts.mode for SNES/Genesis where the string isn't covered by
 // mode_to_options_string, and opts.width/height when the source has
 // already been scaled to a non-default size.
+// Zero out the preprocess fields on an api::Options so a downstream
+// api::encode_state / run_pipeline call won't apply preprocess again.
+//
+// CLI paths that re-encode an already-preprocessed Image to PNG bytes
+// (SNES, Genesis, SCAP, batch atlas) previously passed make_api_options()
+// straight through — opts carried Config's gamma / brightness /
+// contrast / saturation / hue_shift / sharpen / black_point /
+// white_point / match_range, and run_pipeline preprocessed those bytes
+// AGAIN. For default Config values the second pass is a no-op; with
+// explicit user preprocess flags the result was applied twice (e.g.
+// --gamma 1.5 → ~1.5² ≈ 2.25 effective). Call this helper right after
+// make_api_options() at any site that has already run preprocess locally.
+void neutralize_preprocess(api::Options& opts) {
+    opts.gamma = 1.0f;
+    opts.brightness = 0.0f;
+    opts.contrast = 1.0f;
+    opts.saturation = 1.0f;
+    opts.hue_shift = 0.0f;
+    opts.sharpen = 0.0f;
+    opts.black_point = 0.0f;
+    opts.white_point = 0.0f;
+    opts.match_range = false;
+}
+
 api::Options make_api_options(const Config& cfg) {
     api::Options opts;
     opts.mode = std::string{mode_to_options_string(cfg.mode)};
@@ -3506,6 +3530,10 @@ int main(int argc, char* argv[]) {
         }
 
         auto aopts = make_api_options(*config);
+        // *image already went through preprocess::apply above; src_png
+        // re-encodes that processed Image. Stop run_pipeline from
+        // preprocessing again on top.
+        neutralize_preprocess(aopts);
         aopts.mode = (config->mode == amiga::Mode::snes_mode7_256)
             ? "snes-mode7-256" : "snes-mode7-direct";
         aopts.width = static_cast<int>(image->width());
@@ -3616,6 +3644,9 @@ int main(int argc, char* argv[]) {
             ? config->dither_method : dither::Method::opt_checker;
 
         auto aopts = make_api_options(*config);
+        // *image already preprocessed; the PNG-encoded src bytes feed
+        // run_pipeline which would otherwise re-apply preprocess.
+        neutralize_preprocess(aopts);
         switch (config->mode) {
         case amiga::Mode::genesis_h32:    aopts.mode = "genesis-h32";    break;
         case amiga::Mode::genesis_h40:    aopts.mode = "genesis-h40";    break;
@@ -4873,12 +4904,7 @@ int main(int argc, char* argv[]) {
         // SNES/Genesis paths. encode_state runs the canonical SCAP
         // pipeline (scap::encode_scap_*_ocs internally) and populates
         // st.scap_* + the per-line move-budget breakdown the printer
-        // below consumes. NOTE: encode_state will preprocess again
-        // using the opts.gamma/brightness/... fields populated by
-        // make_api_options(). For default values that's a no-op; if a
-        // user sets explicit preprocess values they'd be applied
-        // twice. Same latent issue as the SNES/Genesis paths — fix
-        // for all three together is REFACTOR_PLAN.md follow-up.
+        // below consumes.
         auto src_png = png_io::encode(*image);
         if (!src_png) {
             std::println(stderr, "SCAP: source re-encode failed: {}",
@@ -4886,6 +4912,9 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
         auto sopts = make_api_options(*config);
+        // *image already preprocessed; stop run_pipeline preprocessing
+        // these bytes a second time.
+        neutralize_preprocess(sopts);
         sopts.scap = true;
         sopts.scap_debug = config->scap_debug;
         sopts.width = static_cast<int>(image->width());
