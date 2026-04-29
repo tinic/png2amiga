@@ -1181,10 +1181,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     skip_initial, options.interlace,
                     /*is_ehb=*/true,
                     /*on_progress=*/{},
+                    // Forward the sentinel when the CLI flag wasn't set
+                    // so encode_copper picks its depth/is_ehb-aware default.
                     options.cap_spread_radius >= 0
-                        ? static_cast<std::size_t>(options.cap_spread_radius) : std::size_t{4},
+                        ? static_cast<std::size_t>(options.cap_spread_radius)
+                        : std::numeric_limits<std::size_t>::max(),
                     options.cap_spread_decay >= 0.0f
-                        ? options.cap_spread_decay : 0.85f);
+                        ? options.cap_spread_decay : -1.0f);
                 if (!cr) return std::unexpected{cr.error()};
 
                 auto w = img.width();
@@ -1511,10 +1514,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Single-pass encoder, factored out so cap_best below can replay
         // it under a parallel jitter sweep without duplicating the
         // argument list.
+        // Forward sentinel when CLI flag absent → encode_copper picks
+        // its depth/is_ehb-aware default.
         auto spread_r = options.cap_spread_radius >= 0
-            ? static_cast<std::size_t>(options.cap_spread_radius) : std::size_t{4};
+            ? static_cast<std::size_t>(options.cap_spread_radius)
+            : std::numeric_limits<std::size_t>::max();
         auto spread_d = options.cap_spread_decay >= 0.0f
-            ? options.cap_spread_decay : 0.85f;
+            ? options.cap_spread_decay : -1.0f;
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d, int diversity) {
             return copper::encode_copper(

@@ -16,6 +16,7 @@
 #include <array>
 #include <optional>
 #include <cstdint>
+#include <limits>
 #include <format>
 #include <vector>
 
@@ -295,8 +296,10 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         /*is_lace=*/false,
         /*is_ehb=*/false,
         /*on_progress=*/{},
-        cap_spread_radius >= 0 ? static_cast<std::size_t>(cap_spread_radius) : std::size_t{4},
-        cap_spread_decay  >= 0.0f ? cap_spread_decay : 0.85f);
+        cap_spread_radius >= 0
+            ? static_cast<std::size_t>(cap_spread_radius)
+            : std::numeric_limits<std::size_t>::max(),
+        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f);
     if (!copper_result) return std::unexpected{copper_result.error()};
     auto& cap_palettes = copper_result->scanline_palettes;
     auto& base_palette_vec = copper_result->base_palette;
@@ -1160,8 +1163,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         /*is_lace=*/false,
         /*is_ehb=*/true,
         /*on_progress=*/{},
-        cap_spread_radius >= 0 ? static_cast<std::size_t>(cap_spread_radius) : std::size_t{4},
-        cap_spread_decay  >= 0.0f ? cap_spread_decay : 0.85f);
+        cap_spread_radius >= 0
+            ? static_cast<std::size_t>(cap_spread_radius)
+            : std::numeric_limits<std::size_t>::max(),
+        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f);
     if (!copper_result) return std::unexpected{copper_result.error()};
     // Copies (not refs) so the joint-refinement pass below can reassign
     // them when it re-runs CAP with a refined base palette.

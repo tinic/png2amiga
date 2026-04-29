@@ -31,6 +31,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <cstring>
 #include <expected>
 #include <filesystem>
@@ -4433,10 +4434,12 @@ int main(int argc, char* argv[]) {
                         ? std::function<void(float, std::string_view)>(
                               make_cli_progress_reporter())
                         : std::function<void(float, std::string_view)>{},
+                    // Sentinel → encode_copper picks depth-aware default.
                     config->cap_spread_radius >= 0
-                        ? static_cast<std::size_t>(config->cap_spread_radius) : std::size_t{4},
+                        ? static_cast<std::size_t>(config->cap_spread_radius)
+                        : std::numeric_limits<std::size_t>::max(),
                     config->cap_spread_decay >= 0.0f
-                        ? config->cap_spread_decay : 0.85f);
+                        ? config->cap_spread_decay : -1.0f);
                 if (!cr) return std::unexpected{cr.error()};
 
                 std::vector<std::uint8_t> indices(w * h);
@@ -4893,9 +4896,10 @@ int main(int argc, char* argv[]) {
                 skip_initial_lace, config->interlace, /*is_ehb=*/false,
                 std::move(prog),
                 config->cap_spread_radius >= 0
-                    ? static_cast<std::size_t>(config->cap_spread_radius) : std::size_t{4},
+                    ? static_cast<std::size_t>(config->cap_spread_radius)
+                    : std::numeric_limits<std::size_t>::max(),
                 config->cap_spread_decay >= 0.0f
-                    ? config->cap_spread_decay : 0.85f);
+                    ? config->cap_spread_decay : -1.0f);
         };
 
         Result<copper::CopperResult> copper_result;

@@ -603,6 +603,32 @@ Result<CopperResult> encode_copper(const Image& image,
     // iteration's dithered feedback, or zeros on first iteration)
     auto pass1_column_error = column_error;
 
+    // Depth/is_ehb-aware spread defaults from the 25-config A/B sweep
+    // on FS encodes (320×213, 4 hero images). User-supplied values via
+    // --cap-spread-radius / --cap-spread-decay override.
+    //
+    //   key  → (radius, decay)   Δ vs r=4,d=0.85 (was prior global default)
+    //   --------------------------------------------------------------
+    //   EHB+CAP                    r=4, d=0.30    +1.23 dB
+    //   depth ≤ 3 (DPF+CAP)        r=3, d=0.85    +0.71
+    //   depth = 5 (lores+CAP d5)   r=2, d=0.85    +0.54
+    //   else (HAM6+CAP / SCAP)     r=4, d=0.85    marginal (≤±0.15)
+    struct SpreadDefault { std::size_t radius; float decay; };
+    constexpr SpreadDefault kSpreadEHB    {4, 0.30f};
+    constexpr SpreadDefault kSpreadDPF    {3, 0.85f};
+    constexpr SpreadDefault kSpreadLoresD5{2, 0.85f};
+    constexpr SpreadDefault kSpreadOther  {4, 0.85f};
+    SpreadDefault sd =
+        is_ehb       ? kSpreadEHB     :
+        depth <= 3   ? kSpreadDPF     :
+        depth == 5   ? kSpreadLoresD5 :
+                       kSpreadOther;
+    const std::size_t resolved_radius =
+        (neighbor_radius == std::numeric_limits<std::size_t>::max())
+        ? sd.radius : neighbor_radius;
+    const float resolved_decay =
+        (neighbor_decay < 0.0f) ? sd.decay : neighbor_decay;
+
     for (std::size_t y = 0; y < height; ++y) {
         auto row = image.row(y);
         auto& current_pal = (is_lace && (y & 1)) ? current_pal_f2 : current_pal_f1;
@@ -617,16 +643,11 @@ Result<CopperResult> encode_copper(const Image& image,
         }
 
         // Build neighbor rows with weights for smoothing.
-        // Current row weight=1.0, neighbors decay with distance.
-        // Defaults (radius=1, decay=1.0) match ham_convert's "3 lines
-        // (last+current+next)" DynamicHires recipe; cap_best_sweep
-        // varies these as a trial dimension so banded/demoscene images
-        // can pick wider smoothing when it helps.
-        const float decay = neighbor_decay;
+        const float decay = resolved_decay;
         std::vector<std::span<const Color3f>> rows;
         std::vector<std::span<const color_space::OKLab>> rows_lab;
         std::vector<float> weights;
-        for (std::size_t dy = 0; dy <= neighbor_radius; ++dy) {
+        for (std::size_t dy = 0; dy <= resolved_radius; ++dy) {
             float w = (dy == 0) ? 1.0f : std::pow(decay, static_cast<float>(dy));
             if (dy == 0) {
                 rows.push_back(row);

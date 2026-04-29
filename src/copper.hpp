@@ -6,6 +6,7 @@
 #include "types.hpp"
 
 #include <cstddef>
+#include <limits>
 #include <cstdint>
 #include <functional>
 #include <string_view>
@@ -224,19 +225,22 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::function<void(float, std::string_view)>
                                        on_progress = {},
                                    // Per-line palette planner neighbour-row
-                                   // smoothing. radius=4 + decay=0.85 won
-                                   // the 25-config A/B sweep across
-                                   // EHB+SCAP and DPF+SCAP. The earlier
-                                   // hcstyle (r=1,d=1.0) result was a
-                                   // snap-defer preview-inflation artefact
-                                   // and regresses 0.3–4 dB with honest
-                                   // preview. Old default was 0.5 decay;
-                                   // the bump to 0.85 buys ~+0.09 dB
-                                   // averaged across 8 (mode×image) cells.
-                                   // CLI exposes --cap-spread-radius /
-                                   // --cap-spread-decay for further tuning.
-                                   std::size_t neighbor_radius = 4,
-                                   float neighbor_decay = 0.85f);
+                                   // smoothing. SIZE_MAX / -1.0f means
+                                   // "use the depth/is_ehb-aware default";
+                                   // explicit values from the CLI flags
+                                   // --cap-spread-radius / --cap-spread-decay
+                                   // override that derivation. The
+                                   // depth-conditional defaults come from
+                                   // a 25-config A/B sweep on FS encodes:
+                                   //   is_ehb (EHB+CAP):     r=4, d=0.3
+                                   //   depth=3 (DPF):        r=3, d=0.85
+                                   //   depth=5 (lores+CAP):  r=2, d=0.85
+                                   //   else (HAM6+CAP/SCAP): r=4, d=0.85
+                                   // Net wins of +0.5–1.2 dB on plain
+                                   // CAP modes, marginal elsewhere.
+                                   std::size_t neighbor_radius =
+                                       std::numeric_limits<std::size_t>::max(),
+                                   float neighbor_decay = -1.0f);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.
