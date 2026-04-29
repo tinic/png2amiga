@@ -240,6 +240,14 @@ bool needs_riemersma_queue(Method method);
 // `apply()` on a 1-row sub-image (which would fix y=0 and stripe).
 bool is_yliluoma(Method method);
 
+// Methods that need a discrete palette to operate on: yliluoma family
+// (palette-aware ordered), ostromoukhov (variable scaling against the
+// nearest palette pair), and DBS (sweeps palette indices). HAM modes
+// have no palette to dither against per pixel — the encoder picks
+// SET/MODIFY ops dynamically — so these methods silently degenerate.
+// Also true of SNES Mode 7 Direct (no palette table at all).
+bool needs_discrete_palette(Method method);
+
 // Per-pixel Yliluoma quantizer. Builds the 64-step mixing plan against
 // `palette_lab`, sorts by luma, and picks via Bayer8 at absolute (x,y).
 // `mode2` selects Yliluoma method 2 (luma-weighted distance).

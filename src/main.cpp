@@ -3371,6 +3371,47 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // Reject dither methods that don't apply to the chosen mode —
+        // but only when the user passed --dither explicitly. The
+        // default (ostromoukhov) hits the same incompatibility on
+        // HAM, so silent auto-fallback there matches the web's
+        // HAM_INCOMPATIBLE_DITHERS watcher and keeps existing scripts
+        // / CMake invocations working without --dither. Explicit
+        // picks fail loud — scripted callers chose them for a reason.
+        if (config->dither_explicit &&
+            dither::needs_discrete_palette(config->dither_method)) {
+            auto dname = dither_name(config->dither_method);
+            if (amiga::is_ham(config->mode)) {
+                std::println(stderr,
+                    "Error: dither '{}' needs a discrete palette and "
+                    "silently degenerates in HAM modes (no per-pixel "
+                    "palette index — encoder picks SET/MODIFY ops). "
+                    "Use atkinson, floyd-steinberg, sierra-lite, jarvis, "
+                    "stucki, or an ordered method.",
+                    dname);
+                return 1;
+            }
+            if (amiga::is_snes_direct(config->mode) &&
+                dither::is_yliluoma(config->dither_method)) {
+                std::println(stderr,
+                    "Error: dither '{}' is palette-aware but Mode 7 "
+                    "Direct has no palette table. Use a non-yliluoma "
+                    "method (atkinson, floyd-steinberg, ordered).",
+                    dname);
+                return 1;
+            }
+        }
+        // Implicit default + incompatible mode: auto-fallback. Atkinson
+        // wins HAM6 7/10 and ties HAM8 4/10 in the dither sweep, so
+        // it's the right default for HAM. SNES Mode 7 Direct uses
+        // ostromoukhov instead — yliluoma-family is the only thing
+        // that really breaks there and the default isn't yliluoma.
+        if (!config->dither_explicit &&
+            dither::needs_discrete_palette(config->dither_method) &&
+            amiga::is_ham(config->mode)) {
+            config->dither_method = dither::Method::atkinson;
+        }
+
         // HAM modes with explicit --chipset ocs that need AGA
         if (amiga::is_ham(config->mode) && config->chipset.has_value() &&
             *config->chipset == amiga::Chipset::ocs) {
@@ -4125,15 +4166,11 @@ int main(int argc, char* argv[]) {
         // (~4 sRGB-value-per-step), and FS improves blurred PSNR by
         // +0.1 to +0.7 dB on all test images. User can disable with
         // `--dither none`.
-        auto ham_default_dither = dither::Method::ostromoukhov;
-        auto ham_dither = config->dither_explicit
-            ? config->dither_method : ham_default_dither;
-        // HAM doesn't have a fixed palette — DBS sweeps palette indices
-        // and so doesn't apply. Auto-fall-back to FS so users selecting
-        // DBS still get a sensible result.
-        if (ham_dither == dither::Method::dbs) {
-            ham_dither = dither::Method::floyd_steinberg;
-        }
+        // The validation block above has already either errored on an
+        // explicit HAM-incompatible pick or auto-fallbacked the
+        // implicit default to atkinson, so config->dither_method is
+        // guaranteed safe for HAM here. Just trust it.
+        auto ham_dither = config->dither_method;
         cli_status("Mode:   HAM{} (beam: {}, dither: {})",
                      ham_params.bitplane_depth,
                      config->ham_beam,

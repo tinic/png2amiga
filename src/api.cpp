@@ -510,6 +510,37 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto mode = parse_mode(options.mode);
     bool compound_hires = orig_options.mode.find("hires") != std::string::npos;
 
+    // Reject dither methods that don't apply to the chosen mode rather
+    // than silently fall through to a degraded encode. HAM has no
+    // discrete palette per pixel — the encoder picks SET/MODIFY ops
+    // dynamically — so palette-pair / palette-index methods (yliluoma
+    // family, ostromoukhov, dbs) silently degenerate. SNES Mode 7
+    // Direct has no palette table at all, same problem for the
+    // yliluoma family. Web frontend has matching auto-fallback gates
+    // (see Converter.vue HAM_INCOMPATIBLE_DITHERS); CLI errors out
+    // because scripted callers picked the dither for a reason.
+    if (auto dm = parse_dither(options.dither);
+        dither::needs_discrete_palette(dm)) {
+        if (amiga::is_ham(mode)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "Dither '" + options.dither + "' needs a discrete palette "
+                "and silently degenerates in HAM modes (no per-pixel "
+                "palette index — encoder picks SET/MODIFY ops). Use "
+                "atkinson, floyd-steinberg, sierra-lite, jarvis, "
+                "stucki, or an ordered method.",
+            }};
+        }
+        if (amiga::is_snes_direct(mode) && dither::is_yliluoma(dm)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "Dither '" + options.dither + "' is palette-aware but "
+                "Mode 7 Direct has no palette table. Use a non-yliluoma "
+                "method (atkinson, floyd-steinberg, ordered).",
+            }};
+        }
+    }
+
     // We need source dimensions to compute the target size.
     // Peek at the source image dimensions first.
     int peek_w{}, peek_h{};

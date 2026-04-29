@@ -1527,6 +1527,12 @@ bool is_yliluoma(Method method) {
            method == Method::opt_line || method == Method::opt_line_checker;
 }
 
+bool needs_discrete_palette(Method method) {
+    return is_yliluoma(method) ||
+           method == Method::ostromoukhov ||
+           method == Method::dbs;
+}
+
 // Per-pixel optimal-pair quantizer for the 2×2 checker variant.
 // Brute-force search over all palette pairs (i, j) — including i==j —
 // picks the pair whose linear-OKLab AVERAGE most closely matches target.
