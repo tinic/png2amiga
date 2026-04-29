@@ -301,7 +301,10 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         std::function<void(float, std::string_view)>
                                             on_progress = {},
                                         int cap_spread_radius = -1,
-                                        float cap_spread_decay = -1.0f);
+                                        float cap_spread_decay = -1.0f,
+                                        bool cap_best = false,
+                                        std::string_view cap_best_metric =
+                                            "psnr");
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).

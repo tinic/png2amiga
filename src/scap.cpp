@@ -1920,7 +1920,33 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         std::function<void(float, std::string_view)>
                                             on_progress,
                                         int cap_spread_radius,
-                                        float cap_spread_decay) {
+                                        float cap_spread_decay,
+                                        bool cap_best,
+                                        std::string_view cap_best_metric) {
+    // --cap-best: 8 jitter seeds × 5 strengths × 4 diversities + 1
+    // baseline = 161 trials. Same shape as EHB SCAP since HAM6's 16
+    // base palette has comparable basin depth.
+    if (cap_best) {
+        auto metric = (cap_best_metric == "msssim")
+            ? pipeline::CapBestMetric::msssim
+            : pipeline::CapBestMetric::psnr;
+        auto best = pipeline::cap_best_sweep<ScapResult>(
+            image, dither_settings, palette_diversity, /*jitter_count=*/8,
+            [&](const Image& jittered_in,
+                const dither::Settings& d, int div) {
+                return encode_scap_ham6_ocs(
+                    jittered_in, width_arg, height_arg, reserve_color0,
+                    d, copper_changes_override, div,
+                    /*on_progress=*/{},
+                    cap_spread_radius, cap_spread_decay,
+                    /*cap_best=*/false, "psnr");
+            },
+            [](const ScapResult& r) -> const Image& { return r.rendered; },
+            on_progress,
+            /*jitter_amplitude=*/1.0f,
+            metric);
+        if (best.has_value()) return std::move(*best);
+    }
     auto& table = kScap6bplEhb;  // HAM6 shares 6-plane DMA with EHB
     if (table.slots.empty()) {
         return std::unexpected{Error{

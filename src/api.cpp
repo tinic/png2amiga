@@ -1695,7 +1695,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.palette_diversity,
                 options.on_progress,
                 options.cap_spread_radius,
-                options.cap_spread_decay)
+                options.cap_spread_decay,
+                options.cap_best,
+                options.cap_best_metric)
             : scap_ehb
             ? scap::encode_scap_ehb_ocs(
                 *image,
