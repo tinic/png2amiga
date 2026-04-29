@@ -336,7 +336,7 @@ export const CGA_TEXT_DEFAULTS = {
 export const EXAMPLES: Example[] = [
   { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
   { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
-  { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', ditherStrength: 0.5 } },
+  { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'ehb', dither: 'sierra-lite', copper: true, scap: true } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'ostromoukhov', alphaThreshold: 0 } },
   { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'opt-checker', ditherStrength: 0.5 } },
   { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
