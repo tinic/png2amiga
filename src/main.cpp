@@ -5309,12 +5309,18 @@ int main(int argc, char* argv[]) {
             "SCAP ({}, {} slots, {:.1f} useful swaps/line)",
             scap_label, st.scap_slot_count, st.copper_changes));
         if (scap_ehb) {
+            // EHB SCAP: st.palette holds 32 base; halfbrites are derived.
             cli_print_palette(std::format(
                 "{} base + {} half-brite = {} colors",
                 st.palette.size(), st.palette.size(), st.palette.size() * 2));
         } else {
+            // DPF SCAP: st.palette is the 16-entry COLOR00..15 register
+            // layout (output_palette in scap.cpp); only 8 of those slots
+            // are actually used (PF2 has 3 bitplanes → 8 colours).
+            // Report the visible-colour count, not the register count.
+            std::size_t pf2_colors = std::size_t{1} << 3;  // OCS DPF lores
             cli_print_palette(std::format(
-                "{} colors (PF2 3bpl)", st.palette.size()));
+                "{} colors (PF2 3bpl)", pf2_colors));
         }
         cli_print_dither(config->dither_method, config->dither_strength);
         cli_status("Copper:   hblank avg {:.1f} (max {}), visible avg "
