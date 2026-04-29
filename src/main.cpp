@@ -13,6 +13,7 @@
 #include "dither.hpp"
 #include "dither_tuning.hpp"
 #include "scap.hpp"
+#include "ssimulacra2.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
 #include "palette.hpp"
@@ -128,20 +129,21 @@ void cli_print_encoded(int depth, int plane_bytes, int palette_size,
                        bool aga, int cap_grid_entries, int scap_op_count,
                        int height, int max_moves, int num_colors,
                        std::optional<float> avg_cap,
-                       double quant_error, float psnr) {
+                       double quant_error, float psnr, float s2) {
     auto sb = api::compute_size_breakdown(plane_bytes, palette_size, aga,
                                           cap_grid_entries, scap_op_count,
                                           height, max_moves);
     if (avg_cap) {
         cli_status("Encoded: {} bitplanes, disk: {}, chip: {}, {} colors, "
-                   "{:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB",
+                   "{:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB, "
+                   "S2: {:.2f}",
                    depth, fmt_size(sb.disk_bytes), fmt_size(sb.chip_bytes),
-                   num_colors, *avg_cap, quant_error, psnr);
+                   num_colors, *avg_cap, quant_error, psnr, s2);
     } else {
         cli_status("Encoded: {} bitplanes, disk: {}, chip: {}, {} colors, "
-                   "error: {:.4f}, PSNR: {:.2f} dB",
+                   "error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
                    depth, fmt_size(sb.disk_bytes), fmt_size(sb.chip_bytes),
-                   num_colors, quant_error, psnr);
+                   num_colors, quant_error, psnr, s2);
     }
 }
 
@@ -3856,8 +3858,8 @@ int main(int argc, char* argv[]) {
                           ? "256-palette BGR555"
                           : "Direct Color BBGGGRRR"),
                      aopts.width, aopts.height);
-        cli_status("Quantised: {} bytes (32 KB Mode 7 frame after pack), PSNR: {:.2f} dB",
-                     st.raw_frame.size(), st.psnr);
+        cli_status("Quantised: {} bytes (32 KB Mode 7 frame after pack), PSNR: {:.2f} dB, S2: {:.2f}",
+                     st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
 
         if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {
@@ -3998,8 +4000,8 @@ int main(int argc, char* argv[]) {
             }
         }
         cli_status("Encoded: {} bytes total (tiles + tilemap + CRAM), "
-                     "PSNR: {:.2f} dB",
-                     st.raw_frame.size(), st.psnr);
+                     "PSNR: {:.2f} dB, S2: {:.2f}",
+                     st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
 
         if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {
@@ -4263,7 +4265,7 @@ int main(int argc, char* argv[]) {
                 static_cast<int>(st.changes_per_line),
                 ham_unique,
                 std::optional<float>{avg_ch},
-                static_cast<double>(st.quant_error), st.psnr);
+                static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
         } else {
             cli_print_encoded(
                 static_cast<int>(st.planes.depth),
@@ -4274,7 +4276,7 @@ int main(int argc, char* argv[]) {
                 static_cast<int>(st.planes.height),
                 /*max_moves=*/0,
                 ham_unique, std::nullopt,
-                static_cast<double>(st.quant_error), st.psnr);
+                static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
         }
 
         if (config->preview)
@@ -4590,6 +4592,8 @@ int main(int argc, char* argv[]) {
 
             float ehb_psnr = color_space::compute_psnr_blurred(
                 image->pixels(), rendered.pixels(), w, h);
+            float ehb_s2 = ssimulacra2::compute(
+                image->pixels(), rendered.pixels(), w, h);
             int ehb_cap_entries = static_cast<int>(
                 h * copper_result->changes_per_line);
             cli_print_encoded(
@@ -4602,7 +4606,7 @@ int main(int argc, char* argv[]) {
                 static_cast<int>(copper_result->max_moves_per_line),
                 static_cast<int>(count_unique_colors(rendered)),
                 std::optional<float>{copper_result->avg_changes_per_line},
-                static_cast<double>(total_error), ehb_psnr);
+                static_cast<double>(total_error), ehb_psnr, ehb_s2);
 
             if (config->preview) show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
 
@@ -4759,7 +4763,7 @@ int main(int argc, char* argv[]) {
             static_cast<int>(st.planes.height), /*max_moves=*/0,
             static_cast<int>(count_unique_colors(st.rendered)),
             std::nullopt,
-            static_cast<double>(st.quant_error), st.psnr);
+            static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
 
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
@@ -5052,6 +5056,9 @@ int main(int argc, char* argv[]) {
         float cop_psnr = color_space::compute_psnr_blurred(
             image->pixels(), preview->pixels(),
             image->width(), image->height());
+        float cop_s2 = ssimulacra2::compute(
+            image->pixels(), preview->pixels(),
+            image->width(), image->height());
         int cop_cap_entries = static_cast<int>(
             copper_result->planes.height * copper_result->changes_per_line);
         cli_print_encoded(
@@ -5064,7 +5071,7 @@ int main(int argc, char* argv[]) {
             static_cast<int>(copper_result->max_moves_per_line),
             static_cast<int>(count_unique_colors(*preview)),
             std::optional<float>{copper_result->avg_changes_per_line},
-            static_cast<double>(copper_result->total_error), cop_psnr);
+            static_cast<double>(copper_result->total_error), cop_psnr, cop_s2);
 
         if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
@@ -5253,7 +5260,7 @@ int main(int argc, char* argv[]) {
             static_cast<int>(st.max_moves_per_line),
             static_cast<int>(count_unique_colors(st.rendered)),
             std::optional<float>{st.copper_changes},
-            static_cast<double>(st.quant_error), st.psnr);
+            static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
 
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
@@ -5609,6 +5616,9 @@ int main(int argc, char* argv[]) {
     float std_psnr = color_space::compute_psnr_blurred(
         image->pixels(), preview->pixels(),
         image->width(), image->height());
+    float std_s2 = ssimulacra2::compute(
+        image->pixels(), preview->pixels(),
+        image->width(), image->height());
     cli_print_encoded(
         static_cast<int>(planes->depth),
         static_cast<int>(planes->total_bytes()),
@@ -5618,7 +5628,7 @@ int main(int argc, char* argv[]) {
         static_cast<int>(planes->height), /*max_moves=*/0,
         static_cast<int>(count_unique_colors(*preview)),
         std::nullopt,
-        static_cast<double>(dither_result.total_error), std_psnr);
+        static_cast<double>(dither_result.total_error), std_psnr, std_s2);
 
     // Terminal preview
     if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);

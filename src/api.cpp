@@ -2107,6 +2107,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.maxMovesPerLine = max_moves;
     r.quantError = p.quant_error;
     r.psnr = p.psnr;
+    r.s2 = p.ssimulacra2_score;
     r.hasTransparency = p.has_transparency;
     r.genesisUniqueTiles = static_cast<int>(p.genesis_unique_tiles);
     r.tileDataBytes      = static_cast<int>(p.tile_data_bytes);
@@ -2711,6 +2712,7 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.scap_slot_count                 = p.scap_slot_count;
     s.quant_error = p.quant_error;
     s.psnr = p.psnr;
+    s.ssimulacra2_score = p.ssimulacra2_score;
     s.raw_frame = std::move(p.raw_frame);
     s.genesis_unique_tiles = p.genesis_unique_tiles;
     s.tile_data_bytes      = p.tile_data_bytes;

@@ -67,6 +67,9 @@ void PipelineResult::finalize_psnr(const Image& src, float total_error) {
     psnr = color_space::compute_psnr_blurred(
         src.pixels(), rendered.pixels(),
         src.width(), src.height());
+    ssimulacra2_score = ssimulacra2::compute(
+        src.pixels(), rendered.pixels(),
+        src.width(), src.height());
 }
 
 // MS-SSIM: 5-scale, 11×11 Gaussian window σ=1.5 per Wang et al. 2003.

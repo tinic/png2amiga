@@ -51,6 +51,7 @@ declare module '@wasm/png2amiga.js' {
     chipBytes?: number
     quantError?: number
     psnr?: number
+    s2?: number
     hasTransparency?: boolean
     genesisUniqueTiles?: number
     genesisTotalCells?: number

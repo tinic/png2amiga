@@ -56,7 +56,11 @@ jobs:
       # release archive that's far more reliably cached. Bump as needed.
       - uses: mymindstorm/setup-emsdk@v14
         with:
-          version: 3.1.74
+          # 4.0.10 ships libc++ 21 — needed for <jthread> (used by
+          # pipeline::parallel_for and ham.cpp's threaded encoder).
+          # 3.1.74 (the prior pin) shipped libc++ 19 which doesn't
+          # expose std::jthread at the -std=c++23 we use.
+          version: 4.0.10
           actions-cache-folder: emsdk-cache
 
       - name: Install build tools

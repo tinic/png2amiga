@@ -707,6 +707,7 @@ function formatResultInfo(result: ConvertResult) {
   pushIf(parts, sizeStats, sizeStats.slice(2))  // strip leading ", "
   pushIf(parts, result.quantError != null, `error: ${(result.quantError ?? 0).toFixed(2)}`)
   pushIf(parts, result.psnr != null && Number.isFinite(result.psnr), `PSNR: ${(result.psnr ?? 0).toFixed(1)} dB`)
+  pushIf(parts, result.s2 != null && Number.isFinite(result.s2), `S2: ${(result.s2 ?? 0).toFixed(1)}`)
   const tileStats = formatGenesisTileStats(result)
   pushIf(parts, tileStats, tileStats)
   return parts.join(', ')

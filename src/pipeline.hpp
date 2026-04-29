@@ -120,6 +120,10 @@ struct PipelineResult {
     float copper_changes{};
     float quant_error{};
     float psnr{};
+    // SSIMULACRA2 score (Cloudinary 2022) of rendered preview vs source.
+    // Range ~(-inf, 100]; 30=low, 50=fair, 70=high, 90=visually lossless.
+    // Reported as "S2" alongside PSNR in CLI / web UI.
+    float ssimulacra2_score{};
 
     // Mode-specific raw hardware bytes — used by DOS modes that don't flow
     // through the bitplane encoder (chunky VGA indices, CGA-banked planar

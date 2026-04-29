@@ -30,6 +30,7 @@ interface ReplyEnvelope {
   chipBytes?: number
   quantError?: number
   psnr?: number
+  s2?: number
   hasTransparency?: boolean
   genesisUniqueTiles?: number
   genesisTotalCells?: number
@@ -127,6 +128,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('chipBytes', result.chipBytes),
     ...opt('quantError', result.quantError),
     ...opt('psnr', result.psnr),
+    ...opt('s2', result.s2),
     ...opt('hasTransparency', result.hasTransparency),
     ...opt('genesisUniqueTiles', result.genesisUniqueTiles),
     ...opt('genesisTotalCells', result.genesisTotalCells),

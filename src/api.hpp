@@ -283,6 +283,7 @@ struct ConvertResult {
     bool aga{};                         // chipset is AGA (true ⇒ palette has hi+lo halves)
     float quantError{};                 // perceptual encoding error (OKLab ΔE² sum)
     float psnr{};                       // PSNR in dB (Gaussian-blurred sRGB)
+    float s2{};                         // SSIMULACRA2 score (Cloudinary 2022)
     int genesisUniqueTiles{};           // Tiled modes: unique tiles in VRAM
     int genesisTotalCells{};             // Tiled modes: tilemap cells (W/8 × H/8); 0 = not tiled
     int tileDataBytes{};                 // Tiled modes: unique × bytes-per-tile (32 for Genesis 4bpp, 64 for SNES Mode 7 8bpp)
@@ -404,6 +405,7 @@ struct EncodeState {
     std::size_t scap_slot_count{};
     float quant_error{};
     float psnr{};
+    float ssimulacra2_score{};
 
     // Raw byte stream for chunky modes (VGA 13h, SNES Mode 7). Empty for
     // bitplane modes (use `planes` instead). For SNES 256 it's the 8bpp
