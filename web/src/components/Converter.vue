@@ -30,15 +30,17 @@ const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, c
 
 function onStopEncode(): void {
   abortWasm()
-  // Tear down EVERY in-flight encode handle. The aborted promise's
-  // catch + finally still run on the next microtask but they only
-  // touch state we're already resetting here, so the order doesn't
-  // matter. What DOES matter: clear both timers so the next options
-  // change (e.g. user toggling cap-best off) starts fresh — without
-  // this, a stale debounce timer that was queued mid-stop could re-
-  // fire runConvert with options captured BEFORE the toggle was
-  // observed, which is the most plausible "still encoding with cap-
-  // best on" symptom.
+  // Bump the generation so any in-flight runConvert that's still
+  // suspended on its await sees myGen != convertGen and refuses to
+  // mutate UI state when its catch/finally fire on the next microtask.
+  // Without this, the aborted encode's catch could overwrite errorMsg
+  // ('aborted'), spinner state, or the canvas paint with stale data
+  // after the user had already moved on.
+  convertGen++
+  // Tear down EVERY in-flight encode handle. What DOES matter: clear
+  // both timers so the next options change (e.g. user toggling cap-best
+  // off) starts fresh — without this, a stale debounce timer that was
+  // queued mid-stop could re-fire runConvert.
   if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
   if (spinnerTimer)  { clearTimeout(spinnerTimer);  spinnerTimer = null }
   converting.value = false
@@ -818,47 +820,82 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   return true
 }
 
-async function runConvert(srcBytes: Uint8Array): Promise<void> {
-  errorMsg.value = ''
-  const convertStart = performance.now()
-  // Spinner only if conversion is slower than 100 ms.
-  if (spinnerTimer) clearTimeout(spinnerTimer)
-  spinnerTimer = setTimeout(() => { converting.value = true }, 100)
-  progress.value = 0
-  progressStage.value = ''
-  try {
-    const onProgress = (p: number, stage: string) => {
-      progress.value = Math.round(p * 100)
-      progressStage.value = stage || ''
-    }
-    const result = await convertRGBA(srcBytes, buildWasmOptions(), onProgress)
-    clearTimeout(spinnerTimer)
-    progress.value = 0
-    progressStage.value = ''
-    if (result.error) {
-      errorMsg.value = result.error
-      track('error', { type: 'convert', message: result.error, mode: options.mode })
-      return
-    }
-    if (!await paintAndCacheResult(result)) return
+// Generation counter: every runConvert increments it; abortWasm /
+// onStopEncode also bumps it. Each in-flight runConvert closes over its
+// own gen and refuses to mutate UI state if a newer encode (or a stop)
+// has happened in the meantime. Without this, a slow cap-best encode
+// followed by a fast no-cap-best encode can have the SLOW one resolve
+// last and overwrite the UI with stale options' result — visible as
+// "settings out of sync with UI" / "encode ignored cap-best".
+let convertGen = 0
+
+function handleConvertSuccess(result: ConvertResult,
+                               myGen: number,
+                               convertStart: number): void {
+  if (result.error) {
+    errorMsg.value = result.error
+    track('error', { type: 'convert', message: result.error, mode: options.mode })
+    return
+  }
+  // paintAndCacheResult awaits internally; commit only if our generation
+  // is still latest after the paint completes (caller already paints
+  // synchronously before awaiting CRT — gating here protects the
+  // resultInfo/lastResult-refs writes from a stale encode winning the
+  // race against a newer one).
+  void (async () => {
+    let ok = false
+    try { ok = await paintAndCacheResult(result) } catch { /* nop */ }
+    if (!ok || myGen !== convertGen) return
     updateLastResultRefs(result)
     resultInfo.value = formatResultInfo(result)
     trackConvertSuccess(result, performance.now() - convertStart)
+  })()
+}
+
+async function runConvert(srcBytes: Uint8Array): Promise<void> {
+  const myGen = ++convertGen
+  errorMsg.value = ''
+  const convertStart = performance.now()
+  if (spinnerTimer) clearTimeout(spinnerTimer)
+  spinnerTimer = setTimeout(() => {
+    if (myGen === convertGen) converting.value = true
+  }, 100)
+  progress.value = 0
+  progressStage.value = ''
+  const onProgress = (p: number, stage: string) => {
+    if (myGen !== convertGen) return
+    progress.value = Math.round(p * 100)
+    progressStage.value = stage || ''
+  }
+  try {
+    const result = await convertRGBA(srcBytes, buildWasmOptions(), onProgress)
+    if (myGen !== convertGen) return
+    clearTimeout(spinnerTimer)
+    progress.value = 0
+    progressStage.value = ''
+    handleConvertSuccess(result, myGen, convertStart)
   } catch (error) {
+    if (myGen !== convertGen) return
     clearTimeout(spinnerTimer)
     const message = errorMessage(error)
     errorMsg.value = message
     track('error', { type: 'convert-exception', message })
   } finally {
-    converting.value = false
+    if (myGen === convertGen) converting.value = false
   }
 }
 
 function doConvert() {
-  const bytes = imageBytes.value
-  if (!bytes || wasmLoading.value) return
   if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => { void runConvert(bytes) }, 150)
+  // Capture bytes at FIRE time, not schedule time — the active image
+  // can change during the 150 ms debounce window (drag-drop while a
+  // slow encode is still queued) and we want the encode to use the
+  // image that's actually selected when the timer fires.
+  debounceTimer = setTimeout(() => {
+    const bytes = imageBytes.value
+    if (!bytes || wasmLoading.value) return
+    void runConvert(bytes)
+  }, 150)
 }
 
 watch([imageBytes, () => ({ ...options })], doConvert, { deep: true })
