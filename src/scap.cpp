@@ -1206,13 +1206,14 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         return eff;
     };
 
-    // ---- 2. Global dither vs the FRAME-INIT 64 palette.
-    // base_index drives the strip-swap planner's centroid math.
-    // (Owned by value so the joint-refinement pass can rebuild it.)
-    auto effective_init = build_effective_64(base_palette);
-    std::span<const Color3f> eff_init_span(effective_init.data(), kEffective);
-    auto dith_result = dither::apply(src, eff_init_span, dither_settings);
-    auto base_index = std::move(dith_result.indices);
+    // ---- 2. base_index storage. The SCAP swap planner needs a
+    // per-pixel-to-effective-slot binding for cluster centroid math.
+    // We rebuild this per-row inside the planner against the actual
+    // per-line CAP-evolved palette (lines ~1325+). The previous code
+    // ran a global dither against the FRAME-INIT (line-0) palette
+    // here, which produced stale bindings — fixed in v1.26.2 / v1.26.3
+    // by removing that pass and rebuilding per-line.
+    std::vector<std::uint8_t> base_index(width * height, 0);
 
     std::vector<color_space::OKLab> img_lab(width * height);
     for (std::size_t y = 0; y < height; ++y)
@@ -1232,7 +1233,13 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             P_eff_lab[k] = color_space::linear_to_oklab(P_eff[k]);
     };
 
-    std::size_t k_min = reserve_color0 ? 1u : 0u;
+    // The dither picker should be free to pick any of the 64 effective
+    // entries — `reserve_color0` only constrains palette GENERATION
+    // (forces base[0] = black for the Amiga border). Excluding it from
+    // the picker forces dark pixels to a non-black slot, producing
+    // visible colored noise in shadows. copper.cpp uses k_min=0 here
+    // for the same reason (cap path, see copper.cpp:1003).
+    std::size_t k_min = 0;
 
     // ED scaffolding (kernel, error buf, structure bias, Riemersma queue,
     // ostromoukhov scaling, ordered offsets) lives inside
@@ -1303,8 +1310,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         for (std::size_t k = 0; k < kBaseColors; ++k)
             hw_state[k] = base_palette[k];
         if (pass > 0) {
-            for (std::size_t i = 0; i < indices.size(); ++i)
-                base_index[i] = indices[i];
+            // base_index is rebuilt per-row inside the planner against
+            // the per-line CAP-evolved palette (no carry-over between
+            // passes needed; stale bindings were the root cause of
+            // dark-content regressions in v1.26.0/.1).
             for (auto& v : line_moves) v.clear();
             // err_buf is owned by dither::diffuse_raw_buffer (allocated
             // fresh each pass-2 call), so no manual reset is needed.
@@ -1759,6 +1768,65 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         // 4. End-of-line WAIT.
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
+
+        // Quality gate: estimate per-row error with vs. without the
+        // SCAP swaps (every strip = entry palette). The planner's
+        // cluster-centroid objective can recommend swaps that score
+        // well on k-means but lose on the actual nearest-of-64 picker
+        // — visible as 16-pixel-wide colored bars on dark/HDR content.
+        // The underlying issue is that the planner doesn't model
+        // pixel re-binding when a slot color changes; this gate is a
+        // correctness backstop until the planner is reworked. Same
+        // shape as the HAM6+SCAP gate (commit 6c516d9).
+        bool any_scap_swap = false;
+        for (auto& m : line_moves[y]) {
+            if (m.kind == ScapOpKind::kMove && m.slot_index >= 0) {
+                any_scap_swap = true;
+                break;
+            }
+        }
+        if (any_scap_swap) {
+            auto pixel_min_err = [&](const std::vector<color_space::OKLab>& pal_lab,
+                                     std::size_t px, std::size_t py) -> float {
+                auto& src_lab = img_lab[py * width + px];
+                float best_d = std::numeric_limits<float>::max();
+                for (std::size_t k = k_min; k < kEffective; ++k) {
+                    float dL = src_lab.L - pal_lab[k].L;
+                    float da = src_lab.a - pal_lab[k].a;
+                    float db = src_lab.b - pal_lab[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) best_d = d;
+                }
+                return best_d;
+            };
+            double err_with = 0.0, err_without = 0.0;
+            for (std::size_t x = 0; x < width; ++x) {
+                auto s = static_cast<std::size_t>(x_strip[x]);
+                err_with += static_cast<double>(
+                    pixel_min_err(strip_eff_lab[s], x, y));
+                err_without += static_cast<double>(
+                    pixel_min_err(strip_eff_lab[0], x, y));
+            }
+            if (err_without + 1e-9 < err_with) {
+                for (std::size_t s = 1; s < num_strips; ++s) {
+                    strip_eff[s] = strip_eff[0];
+                    strip_eff_lab[s] = strip_eff_lab[0];
+                }
+                auto& lm = line_moves[y];
+                std::size_t removed = 0;
+                lm.erase(std::remove_if(lm.begin(), lm.end(),
+                    [&](const ScapMove& m) {
+                        if (m.kind == ScapOpKind::kMove &&
+                            m.slot_index >= 0) {
+                            ++removed;
+                            return true;
+                        }
+                        return false;
+                    }), lm.end());
+                if (removed > total_moves) total_moves = 0;
+                else total_moves -= removed;
+            }
+        }
 
         // Snapshot pass-1 strip state for this row; pass-2 dither runs
         // over the whole image once, after the per-row loop.
