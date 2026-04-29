@@ -319,10 +319,13 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     for (std::size_t k = 0; k < kBaseColors && k < base_palette_vec.size(); ++k)
         base_palette[k] = base_palette_vec[k];
 
-    // ---- 2. Global dither vs FRAME-INIT base palette.
-    std::span<const Color3f> base_pal_span(base_palette.data(), kBaseColors);
-    auto dith_result = dither::apply(src, base_pal_span, dither_settings);
-    auto& base_index = dith_result.indices;
+    // ---- 2. base_index storage. Rebuilt per-row inside the planner
+    // against the per-line CAP-evolved palette (lines below) so the
+    // per-strip cluster math sees the bindings the encoder will actually
+    // produce. The previous code ran a global dither against the
+    // FRAME-INIT (line-0) palette here, which produced stale bindings —
+    // same root cause as the EHB v1.26.2 fix.
+    std::vector<std::uint8_t> base_index(width * height, 0);
 
     // OKLab cache of the SOURCE pixels (used by per-strip swap planning).
     std::vector<color_space::OKLab> img_lab(width * height);
@@ -419,8 +422,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     if (on_progress) on_progress(0.0f, "encoding");
     for (int pass = 0; pass < kPasses; ++pass) {
         if (pass > 0) {
-            for (std::size_t i = 0; i < indices.size(); ++i)
-                base_index[i] = indices[i];
+            // base_index is rebuilt per-row inside the planner against
+            // the per-line CAP-evolved palette (no carry-over between
+            // passes needed; matches EHB SCAP's v1.26.2+ behaviour).
             for (auto& v : line_moves) v.clear();
             // err_buf is owned by dither::diffuse_raw_buffer (allocated
             // fresh each pass-2 call), so no manual reset is needed.
@@ -463,6 +467,27 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
 
+        // Re-bind base_index for this row against the per-line CAP-
+        // evolved 8-palette. Previously the bindings came from a frame-
+        // level dither against the FRAME-INIT palette; CAP evolves the
+        // palette across lines so frame-init bindings make the cluster
+        // planner score against stale clusters and pick swaps that hurt
+        // the actual rendered output. Cost: width × 8 distance compares
+        // per row, negligible at width=320.
+        for (std::size_t x = 0; x < width; ++x) {
+            auto& tgt = img_lab[y * width + x];
+            std::size_t best_k = 0;
+            float best_d = std::numeric_limits<float>::max();
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                float dL = tgt.L - P_lab[k].L;
+                float da = tgt.a - P_lab[k].a;
+                float db = tgt.b - P_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            base_index[y * width + x] = static_cast<std::uint8_t>(best_k);
+        }
+
         // 2. Line-gate WAIT — opens the SCAP chain at HPOS=line_gate_hpos.
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
@@ -483,15 +508,10 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         //    given palette P = Σ_k count[k]·||centroid[k]-P[k]||² +
         //    spread[k]. O(8) per state-evaluation.
 
-        struct ClusterStat {
-            float L = 0, a = 0, b = 0;
-            double spread = 0;
-            std::uint16_t count = 0;
-        };
         struct StripStats {
-            std::array<ClusterStat, kBaseColors> clusters{};
             std::vector<Color3f> cands;          // OCS-quantized
             std::vector<color_space::OKLab> cands_lab;
+            std::array<std::uint32_t, kBaseColors> cnt{};
         };
 
         // Pre-compute per-strip stats. strips[0] = pixels [0..slot0).
@@ -499,6 +519,13 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // controls. Slot s's MOVE affects strips[s+1] (and beyond if no
         // later slot overrides P[k]).
         std::vector<StripStats> strips(num_strips);
+        // Per-strip pixel OKLab arrays for the per-strip dither error
+        // scorer. Replaces cluster-centroid math: we evaluate candidate
+        // swaps against each pixel's nearest-of-8 picker outcome — which
+        // is what the actual encoder's picker does. Same fix as
+        // EHB v1.26.4. Cost: ~16 px per strip × 16 strips = 256 entries
+        // per row, cheap.
+        std::vector<std::vector<color_space::OKLab>> strip_pixels_lab(num_strips);
         auto strip_x_range = [&](std::size_t s) {
             std::size_t lo = (s == 0) ? std::size_t{0}
                 : std::min(width,
@@ -512,35 +539,20 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         for (std::size_t s = 0; s < num_strips; ++s) {
             auto [x_lo, x_hi] = strip_x_range(s);
             if (x_lo >= x_hi) continue;
+            strip_pixels_lab[s].reserve(x_hi - x_lo);
+            for (std::size_t x = x_lo; x < x_hi; ++x)
+                strip_pixels_lab[s].push_back(img_lab[y * width + x]);
+            // Per-cluster centroid is still used to seed candidate set —
+            // pixels near a cluster centroid are good swap targets even
+            // though the SCORING is now per-pixel min-of-8.
             std::array<double, kBaseColors> sumL{}, suma{}, sumb{};
-            std::array<std::uint32_t, kBaseColors> cnt{};
             for (std::size_t x = x_lo; x < x_hi; ++x) {
                 auto k = static_cast<std::size_t>(base_index[y * width + x]);
                 auto& lab = img_lab[y * width + x];
                 sumL[k] += static_cast<double>(lab.L);
                 suma[k] += static_cast<double>(lab.a);
                 sumb[k] += static_cast<double>(lab.b);
-                ++cnt[k];
-            }
-            for (std::size_t k = 0; k < kBaseColors; ++k) {
-                if (cnt[k] == 0) continue;
-                strips[s].clusters[k].count =
-                    static_cast<std::uint16_t>(cnt[k]);
-                strips[s].clusters[k].L =
-                    static_cast<float>(sumL[k] / cnt[k]);
-                strips[s].clusters[k].a =
-                    static_cast<float>(suma[k] / cnt[k]);
-                strips[s].clusters[k].b =
-                    static_cast<float>(sumb[k] / cnt[k]);
-            }
-            for (std::size_t x = x_lo; x < x_hi; ++x) {
-                auto k = static_cast<std::size_t>(base_index[y * width + x]);
-                auto& lab = img_lab[y * width + x];
-                float dL = lab.L - strips[s].clusters[k].L;
-                float da = lab.a - strips[s].clusters[k].a;
-                float db = lab.b - strips[s].clusters[k].b;
-                strips[s].clusters[k].spread +=
-                    static_cast<double>(dL * dL + da * da + db * db);
+                ++strips[s].cnt[k];
             }
             std::array<bool, 4096> seen{};
             auto ocs_key = [](const Color3f& c) {
@@ -561,27 +573,36 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             };
             for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(src[x, y]);
             for (std::size_t k = 0; k < kBaseColors; ++k) {
-                if (cnt[k] == 0) continue;
-                color_space::OKLab cd{strips[s].clusters[k].L,
-                                      strips[s].clusters[k].a,
-                                      strips[s].clusters[k].b};
+                if (strips[s].cnt[k] == 0) continue;
+                auto cnt_d = static_cast<double>(strips[s].cnt[k]);
+                color_space::OKLab cd{
+                    static_cast<float>(sumL[k] / cnt_d),
+                    static_cast<float>(suma[k] / cnt_d),
+                    static_cast<float>(sumb[k] / cnt_d)};
                 add_cand(color_space::oklab_to_linear(cd).clamped());
             }
         }
 
-        auto strip_err =
-            [&](const StripStats& st,
+        // Per-strip dither error scorer. For each pixel in the strip,
+        // computes the OKLab² distance to its nearest-of-8 entry in the
+        // 8-base palette — matches what the actual encoder picker does.
+        // Replaces cluster-centroid math (which scored against frozen
+        // mean colors that the picker doesn't actually use).
+        auto strip_err_dither =
+            [&](std::size_t s,
                 const std::array<color_space::OKLab, kBaseColors>& P_lab_v) {
                 double e = 0;
-                for (std::size_t k = 0; k < kBaseColors; ++k) {
-                    auto& cl = st.clusters[k];
-                    if (cl.count == 0) continue;
-                    float dL = cl.L - P_lab_v[k].L;
-                    float da = cl.a - P_lab_v[k].a;
-                    float db = cl.b - P_lab_v[k].b;
-                    e += static_cast<double>(cl.count) *
-                         static_cast<double>(dL * dL + da * da + db * db);
-                    e += cl.spread;
+                auto& pixels = strip_pixels_lab[s];
+                for (auto& tgt : pixels) {
+                    float best_d = std::numeric_limits<float>::max();
+                    for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                        float dL = tgt.L - P_lab_v[k].L;
+                        float da = tgt.a - P_lab_v[k].a;
+                        float db = tgt.b - P_lab_v[k].b;
+                        float d = dL * dL + da * da + db * db;
+                        if (d < best_d) best_d = d;
+                    }
+                    e += static_cast<double>(best_d);
                 }
                 return e;
             };
@@ -606,7 +627,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         beam[0].P = P;
         beam[0].P_lab = P_lab;
         for (auto& d : beam[0].dec_reg) d = -1;
-        beam[0].cum_err = strip_err(strips[0], P_lab);
+        beam[0].cum_err = strip_err_dither(0, P_lab);
 
         std::vector<BeamNode> next;
         next.reserve(kBeamWidth * (kCandsPerSlot + 1));
@@ -614,14 +635,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             next.clear();
             auto& st = strips[s + 1];
-            bool strip_empty = true;
-            for (std::size_t k = 0; k < kBaseColors; ++k) {
-                if (st.clusters[k].count > 0) { strip_empty = false; break; }
-            }
+            bool strip_empty = (strip_pixels_lab[s + 1].empty());
 
             for (auto& state : beam) {
                 double filler_err =
-                    strip_empty ? 0.0 : strip_err(st, state.P_lab);
+                    strip_empty ? 0.0 : strip_err_dither(s + 1, state.P_lab);
                 {
                     BeamNode child = state;
                     child.dec_reg[s] = -1;
@@ -630,6 +648,13 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 }
                 if (strip_empty) continue;
 
+                // Per-strip dither error candidate scoring. EHB-style
+                // pixel_min_excl_k cache: for each candidate slot k,
+                // precompute every pixel's min distance over the 7 OTHER
+                // base slots. Then per candidate we just compare against
+                // c_lab once per pixel — O(width × |cands|) instead of
+                // O(width × 8 × |cands|).
+                auto& pixels = strip_pixels_lab[s + 1];
                 struct Move {
                     int reg;
                     std::size_t cand_idx;
@@ -637,22 +662,33 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 };
                 std::vector<Move> moves;
                 moves.reserve(kBaseColors * st.cands.size());
+
                 for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    std::vector<float> pixel_min_excl_k(pixels.size(),
+                        std::numeric_limits<float>::max());
+                    for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
+                        if (k2 == k) continue;
+                        for (std::size_t i = 0; i < pixels.size(); ++i) {
+                            auto& tgt = pixels[i];
+                            float dL = tgt.L - state.P_lab[k2].L;
+                            float da = tgt.a - state.P_lab[k2].a;
+                            float db = tgt.b - state.P_lab[k2].b;
+                            float d = dL * dL + da * da + db * db;
+                            if (d < pixel_min_excl_k[i]) pixel_min_excl_k[i] = d;
+                        }
+                    }
                     for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
                         auto& c_lab = st.cands_lab[ci];
                         double e = 0;
-                        for (std::size_t k2 = 0; k2 < kBaseColors; ++k2) {
-                            auto& cl = st.clusters[k2];
-                            if (cl.count == 0) continue;
-                            const auto& P2 =
-                                (k2 == k) ? c_lab : state.P_lab[k2];
-                            float dL = cl.L - P2.L;
-                            float da = cl.a - P2.a;
-                            float db = cl.b - P2.b;
-                            e += static_cast<double>(cl.count) *
-                                 static_cast<double>(
-                                     dL * dL + da * da + db * db);
-                            e += cl.spread;
+                        for (std::size_t i = 0; i < pixels.size(); ++i) {
+                            auto& tgt = pixels[i];
+                            float best_d = pixel_min_excl_k[i];
+                            float dL = tgt.L - c_lab.L;
+                            float da = tgt.a - c_lab.a;
+                            float db = tgt.b - c_lab.b;
+                            float d = dL * dL + da * da + db * db;
+                            if (d < best_d) best_d = d;
+                            e += static_cast<double>(best_d);
                         }
                         if (e >= filler_err) continue;
                         moves.push_back({static_cast<int>(k), ci, e});
