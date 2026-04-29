@@ -255,7 +255,7 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 |
 |-------------|-----------------------------------|----------:|------------:|
-| **png2amiga** | **EHB + SCAP + cap-best**       | 31.73     | **74.91**   |
+| **png2amiga** | **EHB + SCAP + cap-best**       | 32.93     | **74.53**   |
 | png2amiga   | HAM6 + CAP + cap-best             | 30.94     | 69.15       |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |

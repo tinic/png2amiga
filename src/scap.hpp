@@ -239,7 +239,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                            on_progress = {},
                                        bool cap_best = false,
                                        std::string_view cap_best_metric =
-                                           "psnr",
+                                           "msssim",
                                        int cap_spread_radius = -1,
                                        float cap_spread_decay = -1.0f,
                                        std::span<const Color3f>
@@ -273,7 +273,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                            on_progress = {},
                                        bool cap_best = false,
                                        std::string_view cap_best_metric =
-                                           "psnr",
+                                           "msssim",
                                        int cap_spread_radius = -1,
                                        float cap_spread_decay = -1.0f,
                                        std::span<const Color3f>
@@ -310,7 +310,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         float cap_spread_decay = -1.0f,
                                         bool cap_best = false,
                                         std::string_view cap_best_metric =
-                                            "psnr",
+                                            "msssim",
                                         std::span<const Color3f>
                                             external_palette = {},
                                         ham::HamMetric ham_metric =

@@ -363,9 +363,9 @@ export function defaultOptions(): Options {
     // indexed copper modes ignore this flag (their planner is already
     // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
     capBest: false,
-    // Ranking metric for cap-best. 'psnr' keeps fine detail (default);
-    // 'msssim' produces a cleaner image at the cost of some detail.
-    capBestMetric: 'psnr',
+    // Ranking metric for cap-best. 'msssim' (default) is a cleaner
+    // image and tracks SSIMULACRA2; 'psnr' keeps maximum fine detail.
+    capBestMetric: 'msssim',
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',

@@ -1317,11 +1317,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
               <div v-if="options.capBest" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for CAP best: psnr keeps more detail; msssim gives a cleaner image at the cost of some detail.">CAP metric</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for CAP best: ms-ssim (default) gives a cleaner image and tracks SSIMULACRA2; psnr keeps maximum fine detail.">CAP metric</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <SelectButton
                     v-model="options.capBestMetric"
-                    :options="[{label:'PSNR', value:'psnr'}, {label:'MS-SSIM', value:'msssim'}]"
+                    :options="[{label:'MS-SSIM', value:'msssim'}, {label:'PSNR', value:'psnr'}]"
                     optionLabel="label" optionValue="value"
                     :allowEmpty="false"
                     size="small"
