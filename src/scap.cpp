@@ -1829,6 +1829,373 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 }
 
 // ---------------------------------------------------------------------------
+// HAM6 + SCAP — v0 implementation
+//
+// HAM6 has the same 6-plane DMA pattern as EHB and DPF, so the
+// kScap6bplEhb slot table (19 mid-line MOVE positions) transfers
+// directly. We mid-line-swap the 16 BASE palette registers; HAM SET ops
+// resolve against whichever strip palette is currently active, while
+// MODIFY ops continue to mutate the rolling output colour irrespective
+// of palette state.
+//
+// v0 simplifications (deliberate, see commit msg):
+//   * Greedy single-pass strip swap planner: per-strip pixel histogram,
+//     swap the K least-used base slots with the strip's most-frequent
+//     RGB444-bucketed colours.
+//   * No multi-pass joint refinement (EHB SCAP runs 6 passes).
+//   * No cap-best wiring.
+//   * Inline HAM op selector — keeps scap.cpp self-contained without
+//     needing to expose ham.cpp's anonymous-namespace helpers.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct HamPickResult {
+    std::uint8_t value;     // 6-bit encoded HAM op (control<<4 | data)
+    Color3f      out_lin;   // output colour after this op (linear RGB)
+    float        error;     // OKLab² distance to target
+};
+
+// HAM6 control encoding (Amiga chip convention):
+//   00 = SET (data = palette index 0..15)
+//   01 = MODIFY blue (data = blue nibble)
+//   10 = MODIFY red
+//   11 = MODIFY green
+// Data bits = 4 → MODIFY values are nibble-replicated (n*17) to 8-bit sRGB.
+HamPickResult pick_ham6_op(
+    Color3f prev_lin,
+    const color_space::OKLab& target_lab,
+    std::span<const Color3f> base_pal,
+    std::span<const color_space::OKLab> base_pal_lab) {
+    HamPickResult best{0, prev_lin, std::numeric_limits<float>::max()};
+    auto score = [&](const color_space::OKLab& lab) {
+        float dL = target_lab.L - lab.L;
+        float da = target_lab.a - lab.a;
+        float db = target_lab.b - lab.b;
+        return dL * dL + da * da + db * db;
+    };
+    // SET ops (control=00).
+    for (std::size_t k = 0; k < base_pal.size() && k < 16; ++k) {
+        float e = score(base_pal_lab[k]);
+        if (e < best.error) {
+            best = {static_cast<std::uint8_t>((0u << 4) | k),
+                    base_pal[k], e};
+        }
+    }
+    // MODIFY ops (control=01 blue, 10 red, 11 green).
+    auto modify = [&](std::uint8_t ctrl, int channel) {
+        for (int n = 0; n < 16; ++n) {
+            float v = static_cast<float>(n * 17) / 255.0f;  // nibble→sRGB
+            // Linearise the new channel; keep the other two from prev_lin.
+            // Prev is already linear RGB; we need to re-quantise the
+            // modified channel through sRGB → linear so the value
+            // matches what the chip emits.
+            Color3f new_lin = prev_lin;
+            float v_lin = color_space::srgb_to_linear(v);
+            if (channel == 0) new_lin.r = v_lin;
+            else if (channel == 1) new_lin.g = v_lin;
+            else                   new_lin.b = v_lin;
+            auto new_lab = color_space::linear_to_oklab(new_lin);
+            float e = score(new_lab);
+            if (e < best.error) {
+                best = {static_cast<std::uint8_t>((ctrl << 4) | n),
+                        new_lin, e};
+            }
+        }
+    };
+    modify(0b01, 2);  // 01 = MODIFY blue
+    modify(0b10, 0);  // 10 = MODIFY red
+    modify(0b11, 1);  // 11 = MODIFY green
+    return best;
+}
+
+}  // namespace
+
+Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
+                                        int width_arg,
+                                        int height_arg,
+                                        bool reserve_color0,
+                                        const dither::Settings& dither_settings,
+                                        std::size_t copper_changes_override,
+                                        int palette_diversity,
+                                        std::function<void(float, std::string_view)>
+                                            on_progress,
+                                        int cap_spread_radius,
+                                        float cap_spread_decay) {
+    auto& table = kScap6bplEhb;  // HAM6 shares 6-plane DMA with EHB
+    if (table.slots.empty()) {
+        return std::unexpected{Error{
+            ErrorCode::unsupported_mode,
+            "SCAP HAM6 planner: kScap6bplEhb slot table is empty",
+        }};
+    }
+    auto width = (width_arg > 0) ? static_cast<std::size_t>(width_arg)
+                                  : image.width();
+    auto height = (height_arg > 0) ? static_cast<std::size_t>(height_arg)
+                                    : image.height();
+    if (image.width() != width || image.height() != height) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("SCAP HAM6 planner: image is {}x{} but caller asked "
+                        "for {}x{} — resize before calling",
+                        image.width(), image.height(), width, height),
+        }};
+    }
+
+    constexpr std::size_t kBaseColors = 16;
+    constexpr std::size_t kHblankCeiling = 14;
+    constexpr std::size_t kMaxCombined = 20;
+    std::size_t total_budget = (copper_changes_override > 0)
+        ? std::min<std::size_t>(copper_changes_override, kMaxCombined)
+        : kMaxCombined;
+    std::size_t cap_share = std::min<std::size_t>(total_budget, 2u);
+
+    // ---- 1. Per-line CAP base palette (16 colours, evolving across rows).
+    auto copper_result = copper::encode_copper(
+        image, /*depth=*/4, dither_settings,
+        amiga::Chipset::ocs,
+        cap_share,
+        /*user_palette=*/nullptr,
+        reserve_color0,
+        /*locked=*/{},
+        palette_diversity,
+        /*skip_initial_swap_rows=*/0,
+        /*is_lace=*/false,
+        /*is_ehb=*/false,
+        /*on_progress=*/{},
+        cap_spread_radius >= 0
+            ? static_cast<std::size_t>(cap_spread_radius)
+            : std::numeric_limits<std::size_t>::max(),
+        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f);
+    if (!copper_result) return std::unexpected{copper_result.error()};
+    auto cap_palettes = copper_result->scanline_palettes;
+    auto base_palette = copper_result->base_palette;
+
+    // Strip layout helpers (same shape as EHB SCAP).
+    std::size_t num_strips = table.slots.size() + 1;
+    auto strip_for_x = [&](std::size_t x) -> std::size_t {
+        for (std::size_t s = 0; s < table.slots.size(); ++s) {
+            if (x < static_cast<std::size_t>(table.slots[s].pixel_x))
+                return s;
+        }
+        return table.slots.size();
+    };
+    auto strip_x_range = [&](std::size_t s)
+        -> std::pair<std::size_t, std::size_t> {
+        std::size_t lo = (s == 0) ? std::size_t{0}
+            : std::min(width,
+                static_cast<std::size_t>(table.slots[s - 1].pixel_x));
+        std::size_t hi = (s < table.slots.size())
+            ? std::min(width,
+                static_cast<std::size_t>(table.slots[s].pixel_x))
+            : width;
+        return {lo, hi};
+    };
+
+    // Pre-compute pixel OKLab.
+    std::vector<color_space::OKLab> img_lab(width * height);
+    for (std::size_t y = 0; y < height; ++y) {
+        for (std::size_t x = 0; x < width; ++x)
+            img_lab[y * width + x] = color_space::linear_to_oklab(
+                image[x, y]);
+    }
+
+    // ---- 2. Per-line HAM6+SCAP encoding -------------------------------
+    constexpr int kVStart = 44;
+    std::vector<std::uint8_t> ham_values(width * height, 0);
+    std::vector<std::vector<ScapMove>> line_moves(height);
+    std::vector<std::vector<Color3f>> scanline_palettes_full(height);
+    Image preview(width, height);
+    double total_error = 0.0;
+    std::size_t total_moves = 0;
+
+    if (on_progress) on_progress(0.0f, "encoding");
+    for (std::size_t y = 0; y < height; ++y) {
+        if (on_progress && (y & 0xF) == 0) {
+            on_progress(static_cast<float>(y) / static_cast<float>(height),
+                        "encoding");
+        }
+        int abs_vpos = static_cast<int>(y) + kVStart;
+        auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
+
+        // Strip working palette: starts as cap_palettes[y] (16 colours),
+        // mutates as SCAP MOVEs land. The HAM op picker uses whichever
+        // strip palette is active at the current pixel.
+        std::vector<Color3f> strip_pal = cap_palettes[y];
+        if (strip_pal.size() < kBaseColors) strip_pal.resize(kBaseColors);
+        std::vector<color_space::OKLab> strip_pal_lab(kBaseColors);
+        auto refresh_lab = [&]() {
+            for (std::size_t k = 0; k < kBaseColors; ++k)
+                strip_pal_lab[k] = color_space::linear_to_oklab(
+                    strip_pal[k]);
+        };
+        refresh_lab();
+
+        // Per-line CAP MOVEs (line entry palette). v0: assume the previous
+        // line's hardware state is cap_palettes[y-1] (we don't track SCAP
+        // mid-line swaps' carryover for v0 — every CAP transition emits a
+        // MOVE, even ones that match prior swap state).
+        std::vector<Color3f> prev_line_pal = (y == 0)
+            ? base_palette : cap_palettes[y - 1];
+        if (prev_line_pal.size() < kBaseColors)
+            prev_line_pal.resize(kBaseColors);
+        for (std::size_t k = 0; k < kBaseColors; ++k) {
+            if (strip_pal[k].r != prev_line_pal[k].r ||
+                strip_pal[k].g != prev_line_pal[k].g ||
+                strip_pal[k].b != prev_line_pal[k].b) {
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(k),
+                    palette::linear_to_ocs(strip_pal[k]), -1));
+            }
+        }
+        // Line gate WAIT.
+        line_moves[y].push_back(make_wait(
+            static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
+
+        // ---- 3. Per-strip greedy swap planner -------------------------
+        // For each strip after the first: build a 16-bucket histogram of
+        // strip pixel RGB444 keys, pick the most-frequent colour that
+        // isn't already in the strip palette, and swap it into the
+        // base slot whose strip-pixel coverage is lowest.
+        std::size_t scap_budget = total_budget - cap_share;
+        std::size_t scap_used = 0;
+        for (std::size_t s = 1; s < num_strips; ++s) {
+            if (scap_used >= scap_budget) break;
+            auto [x_lo, x_hi] = strip_x_range(s);
+            if (x_lo >= x_hi) continue;
+            // Pixel coverage by current strip palette index.
+            std::array<std::size_t, kBaseColors> cover{};
+            std::array<std::size_t, 4096> hist{};
+            for (std::size_t x = x_lo; x < x_hi; ++x) {
+                auto& lab = img_lab[y * width + x];
+                float best_d = std::numeric_limits<float>::max();
+                std::size_t best_k = 0;
+                for (std::size_t k = 0; k < kBaseColors; ++k) {
+                    float dL = lab.L - strip_pal_lab[k].L;
+                    float da = lab.a - strip_pal_lab[k].a;
+                    float db = lab.b - strip_pal_lab[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) { best_d = d; best_k = k; }
+                }
+                ++cover[best_k];
+                auto rgb12 = palette::linear_to_ocs(image[x, y]);
+                if (rgb12 < 4096) ++hist[rgb12];
+            }
+            // Top RGB444 candidate not already in palette.
+            std::array<bool, 4096> in_pal{};
+            for (std::size_t k = 0; k < kBaseColors; ++k)
+                in_pal[palette::linear_to_ocs(strip_pal[k]) & 0xFFFu] = true;
+            std::uint16_t best_key = 0;
+            std::size_t best_count = 0;
+            for (std::uint32_t key = 0; key < 4096; ++key) {
+                if (in_pal[key]) continue;
+                if (hist[key] > best_count) {
+                    best_count = hist[key];
+                    best_key = static_cast<std::uint16_t>(key);
+                }
+            }
+            if (best_count == 0) continue;
+            // Slot to swap = least-covered, skipping reserved/colour 0.
+            std::size_t swap_slot = (reserve_color0 ? 1u : 0u);
+            std::size_t min_cover = std::numeric_limits<std::size_t>::max();
+            for (std::size_t k = (reserve_color0 ? 1u : 0u);
+                 k < kBaseColors; ++k) {
+                if (cover[k] < min_cover) {
+                    min_cover = cover[k];
+                    swap_slot = k;
+                }
+            }
+            // Skip if the candidate is no better than what's already there.
+            if (min_cover >= best_count) continue;
+            // Apply the swap and emit the SCAP MOVE.
+            float r = static_cast<float>((best_key >> 8) & 0xF) / 15.0f;
+            float g = static_cast<float>((best_key >> 4) & 0xF) / 15.0f;
+            float b = static_cast<float>(best_key & 0xF) / 15.0f;
+            strip_pal[swap_slot] = color_space::srgb_to_linear(
+                Color3f{r, g, b});
+            strip_pal_lab[swap_slot] = color_space::linear_to_oklab(
+                strip_pal[swap_slot]);
+            line_moves[y].push_back(make_move(
+                static_cast<std::uint8_t>(swap_slot),
+                best_key,
+                static_cast<int>(s - 1)));
+            ++scap_used;
+            (void)kHblankCeiling;
+        }
+        scanline_palettes_full[y] = strip_pal;  // end-of-line state
+        total_moves += line_moves[y].size();
+
+        // ---- 4. Per-pixel HAM op selection with active strip palette --
+        Color3f rolling = strip_pal.empty() ? Color3f{0, 0, 0}
+                                            : strip_pal[0];
+        // Re-walk the line, applying SCAP swaps as we cross strip
+        // boundaries. line_moves is in emission order; strip swaps are
+        // attached to slot positions which correspond to strip boundaries.
+        std::size_t move_idx = 0;
+        std::vector<Color3f> active_pal = cap_palettes[y];
+        if (active_pal.size() < kBaseColors) active_pal.resize(kBaseColors);
+        std::vector<color_space::OKLab> active_pal_lab(kBaseColors);
+        for (std::size_t k = 0; k < kBaseColors; ++k)
+            active_pal_lab[k] = color_space::linear_to_oklab(active_pal[k]);
+        for (std::size_t x = 0; x < width; ++x) {
+            // At each strip boundary (pixel_x of slot[s-1]) apply any
+            // SCAP MOVEs whose slot_index matches. v0 attribution: we
+            // matched moves via slot_index = s-1 above, so process
+            // them at the strip's first pixel column.
+            std::size_t s = strip_for_x(x);
+            if (s > 0 && x == static_cast<std::size_t>(
+                    table.slots[s - 1].pixel_x)) {
+                for (auto& m : line_moves[y]) {
+                    if (m.kind == ScapOpKind::kMove &&
+                        m.slot_index == static_cast<int>(s - 1) &&
+                        m.reg < kBaseColors) {
+                        auto rgb12 = m.rgb_ocs & 0xFFFu;
+                        float r = static_cast<float>((rgb12 >> 8) & 0xF) / 15.0f;
+                        float g = static_cast<float>((rgb12 >> 4) & 0xF) / 15.0f;
+                        float bv = static_cast<float>(rgb12 & 0xF) / 15.0f;
+                        active_pal[m.reg] = color_space::srgb_to_linear(
+                            Color3f{r, g, bv});
+                        active_pal_lab[m.reg] =
+                            color_space::linear_to_oklab(active_pal[m.reg]);
+                    }
+                }
+            }
+            (void)move_idx;
+            auto& target_lab = img_lab[y * width + x];
+            auto pick = pick_ham6_op(rolling, target_lab,
+                                     active_pal, active_pal_lab);
+            ham_values[y * width + x] = pick.value;
+            preview[x, y] = pick.out_lin;
+            rolling = pick.out_lin;
+            total_error += static_cast<double>(pick.error);
+        }
+    }
+
+    // ---- 5. Pack 6-plane bitplane data --------------------------------
+    auto planes = bitplane::encode(ham_values, width, height, 6);
+    if (!planes) return std::unexpected{planes.error()};
+
+    // ---- 6. Assemble result ------------------------------------------
+    ScapResult res;
+    res.planes = *std::move(planes);
+    res.palette = base_palette;
+    res.line_moves = std::move(line_moves);
+    res.rendered = std::move(preview);
+    res.total_error = static_cast<float>(total_error);
+    res.avg_changes_per_line = static_cast<float>(
+        copper_result->avg_changes_per_line);
+    auto h_div = static_cast<float>(height ? height : 1);
+    res.avg_total_moves_per_line = static_cast<float>(total_moves) / h_div;
+    res.max_moves_per_line = 1 + table.slots.size();
+    res.avg_hblank_moves_per_line = 1.0f;
+    res.max_hblank_moves_per_line = 1;
+    res.avg_visible_moves_per_line = static_cast<float>(table.slots.size());
+    res.max_visible_moves_per_line = table.slots.size();
+    if (on_progress) on_progress(1.0f, "done");
+    for (auto& p : res.rendered.pixels()) p = palette::quantize_to_ocs(p);
+    return res;
+}
+
+// ---------------------------------------------------------------------------
 // Probe A — sweep one COLOR09 write across HPOS 0x00..0xE3, one per line,
 // on a 6-plane OCS DPF frame.
 // ---------------------------------------------------------------------------

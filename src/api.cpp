@@ -1032,7 +1032,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // --- HAM modes: use dedicated HAM encoder ---
-    if (amiga::is_ham(mode)) {
+    // HAM6+SCAP: defer to the SCAP branch downstream (skip the
+    // standard HAM dispatch). HAM6 has the same 6-plane DMA pattern
+    // as EHB so kScap6bplEhb transfers; the SCAP branch routes to
+    // scap::encode_scap_ham6_ocs.
+    if (amiga::is_ham(mode) && !(options.scap && mode == amiga::Mode::ham6)) {
         if (!options.locks.empty() || !options.pins.empty()) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
@@ -1661,12 +1665,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (options.scap) {
         bool scap_ehb = mode == amiga::Mode::ehb;
         bool scap_dpf = options.dual_playfield && mode == amiga::Mode::lores;
+        bool scap_ham6 = mode == amiga::Mode::ham6;
         if (chipset != amiga::Chipset::ocs || options.interlace ||
-            (!scap_ehb && !scap_dpf)) {
+            (!scap_ehb && !scap_dpf && !scap_ham6)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "SCAP requires OCS (no interlace) with either --dpf lores "
-                "depth=3 or --mode ehb",
+                "SCAP requires OCS (no interlace) with --dpf lores depth=3, "
+                "--mode ehb, or --mode ham6",
             }};
         }
         if (has_transparency) {
@@ -1679,7 +1684,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         scap_dith.error_clamp = options.error_clamp;
 
         Result<scap::ScapResult> scap_res =
-            scap_ehb
+            scap_ham6
+            ? scap::encode_scap_ham6_ocs(
+                *image,
+                static_cast<int>(image->width()),
+                static_cast<int>(image->height()),
+                options.reserve_color0,
+                scap_dith,
+                static_cast<std::size_t>(options.copper_changes),
+                options.palette_diversity,
+                options.on_progress,
+                options.cap_spread_radius,
+                options.cap_spread_decay)
+            : scap_ehb
             ? scap::encode_scap_ehb_ocs(
                 *image,
                 static_cast<int>(image->width()),

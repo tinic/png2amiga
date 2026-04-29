@@ -274,6 +274,36 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        float cap_spread_decay = -1.0f);
 
 // ---------------------------------------------------------------------------
+// SCAP for HAM6 (6 bitplanes — 2 control + 4 data, 16-colour base palette
+// with HAM SET / MODIFY ops at pixel granularity).
+//
+// HAM6 has the same BPL DMA pattern as EHB and OCS DPF (6 plane fetches
+// per 16-pixel slot), so the empirically-calibrated kScap6bplEhb slot
+// table transfers directly. The encoder mid-line-swaps the 16 BASE
+// palette registers on the same 19-slot grid; HAM op selection happens
+// per pixel against whichever strip palette is currently active. The
+// rolling "previous output colour" HAM state crosses strip boundaries
+// unchanged — MODIFY ops apply to the prior colour irrespective of
+// palette, SET ops resolve against the new strip palette.
+//
+// Output: 6-plane bitplane data, 16-entry base palette, per-line SCAP
+// MOVE tables, and a rendered preview Image.
+//
+// v0: single greedy pass, no joint refinement, no cap-best wiring.
+// ---------------------------------------------------------------------------
+Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
+                                        int width,
+                                        int height,
+                                        bool reserve_color0 = true,
+                                        const dither::Settings& dither_settings = {},
+                                        std::size_t copper_changes_override = 0,
+                                        int palette_diversity = 0,
+                                        std::function<void(float, std::string_view)>
+                                            on_progress = {},
+                                        int cap_spread_radius = -1,
+                                        float cap_spread_decay = -1.0f);
+
+// ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).
 //
 // Builds a 6-plane DPF frame where every pixel = PF2 index 1, i.e. the
