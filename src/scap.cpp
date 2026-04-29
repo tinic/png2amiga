@@ -527,14 +527,18 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
                 return static_cast<std::size_t>((r << 8) | (g << 4) | b);
             };
+            // Dedup by OCS RGB444 12-bit key but store the candidate at
+            // full 8-bit linear precision. Same fix as ham.cpp::add_cand
+            // and copper.cpp::find_best_swap_ehb. Per-line A/B on
+            // DPF+SCAP+cap-best (FS, 320×213): chuck31 +1.75 dB,
+            // electrichues02 +0.49 dB, lovers +0.20 dB, fromthe +0.08 dB.
             auto add_cand = [&](Color3f c) {
-                auto cs = palette::quantize_to_ocs(c);
-                auto key = ocs_key(cs);
+                auto key = ocs_key(c);
                 if (!seen[key]) {
                     seen[key] = true;
-                    strips[s].cands.push_back(cs);
+                    strips[s].cands.push_back(c);
                     strips[s].cands_lab.push_back(
-                        color_space::linear_to_oklab(cs));
+                        color_space::linear_to_oklab(c));
                 }
             };
             for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(src[x, y]);
