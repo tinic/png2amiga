@@ -3776,9 +3776,25 @@ int main(int argc, char* argv[]) {
         actual_depth = amiga::get_mode_params(config->mode).bitplane_depth;
         config->depth = actual_depth;
     }
+    // DPF override: --dpf turns OCS lores depth-3 PF2 + zeroed PF1 into a
+    // 6-plane DPF frame. Detect early so the Target line reports the
+    // actual encoded plane count (6 for OCS DPF, 8 for AGA DPF) rather
+    // than the user's --depth or mode-default for the standard path.
+    bool use_dpf_early = config->dual_playfield &&
+                          !amiga::is_ham(config->mode) &&
+                          config->mode != amiga::Mode::ehb &&
+                          !amiga::is_atari(config->mode) &&
+                          !amiga::is_vga(config->mode) &&
+                          !amiga::is_ega(config->mode) &&
+                          !amiga::is_cga(config->mode);
+    int print_depth = static_cast<int>(actual_depth);
+    if (use_dpf_early) {
+        auto early_chipset = effective_chipset(*config);
+        print_depth = (early_chipset == amiga::Chipset::aga) ? 8 : 6;
+    }
     cli_print_target(static_cast<std::size_t>(target_w),
                      static_cast<std::size_t>(target_h),
-                     static_cast<int>(actual_depth));
+                     print_depth);
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
@@ -5034,7 +5050,8 @@ int main(int argc, char* argv[]) {
         // Print actual cpl after orchestration (auto mode may have stretched
         // or fallen back).
         cli_print_mode(std::format(
-            "CAP ({} changes/line, max {} MOVEs/line)",
+            "{}CAP ({} changes/line, max {} MOVEs/line)",
+            config->dual_playfield ? "DPF + " : "",
             copper_result->changes_per_line,
             copper_result->max_moves_per_line));
         cli_print_palette(std::format(
@@ -5389,9 +5406,12 @@ int main(int argc, char* argv[]) {
     // label so every Amiga / DOS / Atari path prints a Mode: header,
     // matching CAP / SCAP / HAM / EHB.
     cli_print_mode(std::format(
-        "{} ({}bpp)",
+        "{}{} ({}bpp)",
+        config->dual_playfield ? "DPF + " : "",
         mode_to_options_string(config->mode),
-        amiga::get_mode_params(config->mode).bitplane_depth));
+        config->dual_playfield
+            ? ((chipset == amiga::Chipset::aga) ? 8 : 6)
+            : static_cast<int>(amiga::get_mode_params(config->mode).bitplane_depth)));
 
     // Force transparent pixels to black before quantization/encoding
     if (has_transparency) {
