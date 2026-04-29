@@ -78,6 +78,14 @@ struct CHeaderOptions {
     // is automatic). Interlace is unsupported and rejected up the stack.
     std::span<const bitplane::BitplaneData> extra_frame_planes;
     std::vector<std::string> frame_labels;  // one per frame, for stem-named symbols
+
+    // Caller-provided count of unique RGB colours actually present in the
+    // rendered preview. Differs from palette.size() for HAM (MODIFY ops
+    // create intermediate colours), EHB (halfbrites get used), CAP / SCAP
+    // (per-scanline palette evolution). Reported in the viewer's exit
+    // message as "Colors: N". 0 = caller didn't compute it; viewer
+    // omits the line.
+    std::size_t total_unique_colors = 0;
 };
 
 // ---------------------------------------------------------------------------

@@ -3099,6 +3099,8 @@ int run_batch(const Config& cfg) {
             .interlace = st.interlace,
             .aga = st.aga,
             .dpf = st.dpf,
+            .total_unique_colors =
+                static_cast<std::size_t>(count_unique_colors(st.rendered)),
         });
         std::span<const bitplane::BitplaneData> extras{
             frame_planes.data() + 1, frame_planes.size() - 1};
@@ -4372,6 +4374,8 @@ int main(int argc, char* argv[]) {
                     .interlace = config->interlace,
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
                 });
                 if (!st.scanline_changes.empty()) {
                     ch_opts.copper_changes = &st.scanline_changes;
@@ -4398,6 +4402,8 @@ int main(int argc, char* argv[]) {
                     .interlace = config->interlace,
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
                 });
                 if (!st.scanline_changes.empty()) {
                     ch_opts.copper_changes = &st.scanline_changes;
@@ -4699,6 +4705,8 @@ int main(int argc, char* argv[]) {
                         .hires = config->hires,
                         .interlace = config->interlace,
                         .fade_in = config->fade_in,
+                        .total_unique_colors =
+                            static_cast<std::size_t>(count_unique_colors(rendered)),
                     });
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line = copper_result->changes_per_line;
@@ -4749,6 +4757,8 @@ int main(int argc, char* argv[]) {
                         .symbol_override = config->symbol_name,
                         .hires = config->hires,
                         .interlace = config->interlace,
+                        .total_unique_colors =
+                            static_cast<std::size_t>(count_unique_colors(rendered)),
                     });
                     ch_opts.copper_changes = &copper_result->scanline_changes;
                     ch_opts.copper_changes_per_line =
@@ -5176,6 +5186,8 @@ int main(int argc, char* argv[]) {
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
                     .dpf = use_dpf_std,
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(*preview)),
                 });
                 ch_opts.copper_changes = &copper_result->scanline_changes;
                 ch_opts.copper_changes_per_line = copper_result->changes_per_line;
@@ -5205,6 +5217,8 @@ int main(int argc, char* argv[]) {
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
                     .dpf = use_dpf_std,
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(*preview)),
                 });
                 ch_opts2.copper_changes = &copper_result->scanline_changes;
                 ch_opts2.copper_changes_per_line = copper_result->changes_per_line;

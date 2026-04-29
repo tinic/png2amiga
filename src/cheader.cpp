@@ -409,7 +409,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("// Mode:     {}\n", mode_label);
         out += std::format("// Bitplane: {} bytes ({} planes, {} bytes/row)\n",
                            planes.total_bytes(), depth, bpr);
-        out += std::format("// Palette:  {} colors\n", pal_count);
+        std::size_t visible_pal_count = options.dpf
+            ? (std::size_t{1} << (depth / 2))
+            : pal_count;
+        out += std::format("// Palette:  {} colors\n", visible_pal_count);
+        if (options.total_unique_colors > 0) {
+            out += std::format("// Colors:   {} unique\n",
+                               options.total_unique_colors);
+        }
         if (_has_cop)
             out += std::format("// CAP:      {} swaps/line max\n",
                                options.copper_changes_per_line);
@@ -1832,7 +1839,18 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         msg += std::format("  Display:  {}x{}, {} ({}-bit palette)\\n",
                            planes.width, planes.height, chipset_str,
                            options.aga ? 24 : 12);
-        msg += std::format("  Palette:  {} colors\\n", palette.size());
+        // Visible palette count: for DPF the palette span is the
+        // COLOR00..15 register layout (16 entries) but PF2 only uses
+        // 1 << (depth/2) of them. Report the visible count so the
+        // viewer matches the CLI / web Palette: line.
+        std::size_t visible_pal = options.dpf
+            ? (std::size_t{1} << (planes.depth / 2))
+            : palette.size();
+        msg += std::format("  Palette:  {} colors\\n", visible_pal);
+        if (options.total_unique_colors > 0) {
+            msg += std::format("  Colors:   {} unique\\n",
+                               options.total_unique_colors);
+        }
         msg += std::format("  Bitplane: {} bytes\\n", total_bytes);
         if (has_cop)
             msg += std::format("  CAP:      {} swaps/line max\\n",

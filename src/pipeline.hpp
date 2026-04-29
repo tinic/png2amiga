@@ -56,6 +56,7 @@ struct ChOptsBase {
     bool fade_in = false;
     bool dpf = false;
     bool interleaved = false;
+    std::size_t total_unique_colors = 0;   // 0 = caller didn't compute
 };
 
 cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base);

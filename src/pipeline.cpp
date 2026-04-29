@@ -370,6 +370,7 @@ cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base) {
     ch.fade_in = base.fade_in;
     ch.dpf = base.dpf;
     ch.interleaved = base.interleaved;
+    ch.total_unique_colors = base.total_unique_colors;
     return ch;
 }
 
