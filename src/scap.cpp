@@ -1324,6 +1324,28 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         strip_eff[0] = P_eff;
         strip_eff_lab[0] = P_eff_lab;
 
+        // Re-bind base_index for this row against the per-line effective
+        // 64-palette. Stage 2's pre-pass dithered against the FRAME-INIT
+        // (line-0) palette, but the per-line CAP-evolved palette is
+        // typically very different — frame-init bindings make the SCAP
+        // cluster planner score against stale clusters and pick swaps
+        // that hurt the actual rendered output (the gap was -10
+        // SSIMULACRA2 on saturated content vs EHB+CAP). Cost: 320 × 64
+        // distance comparisons per row, cheap.
+        for (std::size_t x = 0; x < width; ++x) {
+            auto& tgt = img_lab[y * width + x];
+            std::size_t best_k = 0;
+            float best_d = std::numeric_limits<float>::max();
+            for (std::size_t k = 0; k < kEffective; ++k) {
+                float dL = tgt.L - P_eff_lab[k].L;
+                float da = tgt.a - P_eff_lab[k].a;
+                float db = tgt.b - P_eff_lab[k].b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            base_index[y * width + x] = static_cast<std::uint8_t>(best_k);
+        }
+
         // 1. Per-line CAP MOVEs: diff vs the ACTUAL hardware register
         // state at end of the previous line. SCAP's mid-line swaps on
         // line y-1 may have left registers holding swap-colours rather
