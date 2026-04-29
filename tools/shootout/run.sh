@@ -24,7 +24,7 @@ VENDOR="$SCRIPT_DIR/vendor"
 OUT="$SCRIPT_DIR/output"
 mkdir -p "$OUT"
 
-SRC="${1:-$REPO_ROOT/examples/chuck31.png}"
+SRC="${1:-$REPO_ROOT/examples/electrichues02.jpg}"
 if [ ! -f "$SRC" ]; then
   echo "ERROR: source image not found: $SRC" >&2
   exit 1
@@ -123,12 +123,14 @@ run_ham_convert() {
       fi
     done
   )
-  local hc_png hc_iff
-  hc_png=$(ls "$tmp"/in_*.png 2>/dev/null | head -1)
-  hc_iff=$(ls "$tmp"/in_*.iff 2>/dev/null | head -1)
-  [ -n "$hc_png" ] && cp "$hc_png" "$OUT/$label.png"
-  [ -n "$hc_iff" ] && cp "$hc_iff" "$OUT/$label.iff"
-  if [ -z "$hc_iff" ]; then
+  # ham_convert writes <basename>_output.{png,iff} for the actual preview,
+  # plus in_palettes.png (and similar) for sliced modes. Pin to "_output"
+  # so the palette debug image doesn't confuse PSNR ranking.
+  local hc_png="$tmp/in_output.png"
+  local hc_iff="$tmp/in_output.iff"
+  [ -f "$hc_png" ] && cp "$hc_png" "$OUT/$label.png"
+  [ -f "$hc_iff" ] && cp "$hc_iff" "$OUT/$label.iff"
+  if [ ! -f "$hc_iff" ]; then
     echo "    !! ham_convert produced no IFF — see $tmp/hc.log"
   fi
 }

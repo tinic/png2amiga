@@ -251,35 +251,42 @@ We benchmarked png2amiga against the two other modern headless
 PNG-to-Amiga HAM/SHAM converters — `arnaud-carre/abc` and Solo761's
 `ham_convert` — with **Floyd-Steinberg dither across every entry** for
 an apples-to-apples comparison. Each encoder ran in its
-highest-quality configuration. Source: `examples/chuck31.png` resized
-to 320×213 (Lanczos), PSNR computed on per-channel sRGB byte distance.
+highest-quality configuration. Source: `examples/electrichues02.jpg`
+resized to 320×213 (Lanczos), PSNR computed on per-channel sRGB byte
+distance.
 
 | Encoder     | Mode                              | PSNR (dB) |
 |-------------|-----------------------------------|----------:|
-| **png2amiga** | **EHB + SCAP + cap-best**       | **34.20** |
-| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 33.15     |
-| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 32.86     |
-| abc         | HAM6 (`-floyd`)                   | 32.13     |
-| png2amiga   | HAM6 + CAP + cap-best             | 32.12     |
-| png2amiga   | HAM6 (no copper)                  | 31.99     |
-| abc         | SHAM6 (`-floyd`)                  | 29.46     |
+| **png2amiga** | **EHB + SCAP + cap-best**       | **31.30** |
+| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     |
+| png2amiga   | HAM6 + CAP + cap-best             | 30.97     |
+| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     |
+| png2amiga   | HAM6 (no copper)                  | 29.90     |
+| abc         | HAM6 (`-floyd`)                   | 29.02     |
+| abc         | SHAM6 (`-floyd`)                  | 26.40     |
 
-png2amiga's **EHB + SCAP + cap-best** wins outright by **+1.05 dB**
-over ham_convert's SHAM6 and **+1.34 dB** over ham_convert's HAM6
-max-quality mode. The lead comes from SCAP's ~19 mid-line palette
-swaps fitting inside the real OCS 14-MOVE hblank budget, plus the
-cap-best multi-restart sweep finding a base palette that's hard to
-beat. (HAM6+CAP — same line budget but no mid-line swaps — is in the
-middle of the pack on this image; on others, particularly photographic
-content with strong horizontal banding, HAM6+CAP+cap-best leads the
-HAM6 race instead.)
+png2amiga's **EHB + SCAP + cap-best** wins outright by **+0.12 dB**
+over ham_convert's SHAM6, and **png2amiga HAM6 + CAP + cap-best**
+beats ham_convert's HAM6 q7 max-quality mode by **+1.05 dB** despite
+running in real-OCS-hardware-faithful copper mode (≤14 MOVEs/line in
+the hblank budget). On the per-line palette modes the gap to
+ham_convert SHAM6 is **not** because we're hitting a bandwidth wall —
+both encoders pack changes well under the OCS limit (parsed from the
+PCHG chunks: ham_convert 7 changes/line max, png2amiga 10/line max,
+vs the 14-MOVE hardware ceiling) — the residual gap is algorithmic.
+ham_convert SHAM6 also runs as software-rendered PCHG; png2amiga's
+copper output is the actual instruction stream the hardware executes.
 
-The shootout is reproducible end-to-end:
+This is one image. On smoother photographic content (tested on
+`fantasy1.png`, `lovers.jpg`, `fromthe.png`) ham_convert SHAM6 still
+edges out the png2amiga modes by 0.4–0.6 dB; on demoscene / banded
+content (tested on `chuck31.png`) png2amiga widens the lead to
++1.05 dB. The harness lives at `tools/shootout/`:
 
 ```bash
 cd tools/shootout
 ./setup.sh   # downloads ham_convert.jar, clones + builds abc on macOS
-./run.sh     # encodes examples/chuck31.png (or pass your own)
+./run.sh     # encodes examples/electrichues02.jpg (or pass your own)
 ```
 
 `tools/shootout/README.md` has the full method, the rationale for the
