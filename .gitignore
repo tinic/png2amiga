@@ -30,3 +30,5 @@ test.cpp
 # outputs; both are reproducible from the scripts so we don't ship them.
 /tools/shootout/vendor/
 /tools/shootout/output/
+# Internal research / design notes — keep local
+/docs/*_research.md
