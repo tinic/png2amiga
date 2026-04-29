@@ -239,21 +239,13 @@ SwapCandidate find_best_swap(
 
         auto reduction = static_cast<float>(stats[k].total_error - new_error);
         if (reduction > best.error_reduction) {
-            // Keep candidate at OKLab-derived 8-bit linear precision —
-            // do NOT snap to OCS RGB444 here. The OCS snap happens at
-            // chip write-out (cheader / IFF emitters call
-            // palette::linear_to_ocs) and at preview render time
-            // (render_copper_capped). Snapping during the iterative
-            // swap loop makes subsequent rows compute pixel
-            // assignments against a 4-bit-quantized palette and
-            // forfeits ~0.1–0.2 dB of palette-planning headroom that
-            // ham_convert's DynamicHires generator captures since
-            // 1.10.3 ("increased color precision from 4 to 8 bits per
-            // channel").
             auto linear = color_space::oklab_to_linear(centroid).clamped();
+            // Snap to chipset precision
+            if (chipset != amiga::Chipset::aga) {
+                linear = palette::quantize_to_ocs(linear);
+            }
             best = {k, linear, reduction};
         }
-        (void)chipset;
     }
 
     return best;
@@ -297,8 +289,7 @@ SwapCandidate find_best_swap_ehb(
         double cur_err = stats[k].total_error + stats[k + kBase].total_error;
 
         auto try_candidate = [&](Color3f c_lin) {
-            // Match find_best_swap: keep candidate at full 8-bit linear
-            // precision. Snap to OCS happens at chip write-out only.
+            c_lin = palette::quantize_to_ocs(c_lin);
             auto c_lab = color_space::linear_to_oklab(c_lin);
             auto h_lab = color_space::linear_to_oklab(palette::half_brite(c_lin));
             double new_err = 0.0;
