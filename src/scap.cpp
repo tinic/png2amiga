@@ -341,13 +341,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     std::vector<std::vector<ScapMove>> line_moves(height);
     Image preview(width, height);
 
-    auto P = base_palette;
-    std::array<color_space::OKLab, kBaseColors> P_lab{};
-    auto recompute_lab = [&]() {
-        for (std::size_t k = 0; k < kBaseColors; ++k)
-            P_lab[k] = color_space::linear_to_oklab(P[k]);
-    };
-    recompute_lab();
+    // P / P_lab / strip_palettes are now per-row local state inside
+    // the parallel worker (each row owns a private copy so the per-
+    // row planner is thread-safe).
 
     // Force k_min=1 for DPF SCAP regardless of --reserve-color0. PF2
     // index 0 maps to COLOR00 on OCS and COLOR08 on AGA (per BPLCON3
@@ -383,8 +379,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // strip 0 = entry palette (P at start of line); strip s+1 = palette
     // after slot s's MOVEs are applied. There are slots.size()+1 strips.
     std::size_t num_strips = table.slots.size() + 1;
-    std::vector<std::array<Color3f, kBaseColors>> strip_palettes(num_strips);
-    std::vector<std::array<color_space::OKLab, kBaseColors>> strip_pal_lab(num_strips);
+    // strip_palettes / strip_pal_lab are per-row scratch — declared
+    // inside the parallel worker so each thread has its own copy.
 
     // Captured per-row strip palettes for the post-loop driver call
     // (pass 2). Pass 1 fills strip_palettes[s] for the current row and
@@ -423,6 +419,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         }
     };
     if (on_progress) on_progress(0.0f, "encoding");
+    std::atomic<std::size_t> total_moves_atomic{0};
+    std::atomic<double> total_error_atomic{0.0};
+    std::atomic<std::size_t> rows_done{0};
     for (int pass = 0; pass < kPasses; ++pass) {
         if (pass > 0) {
             // base_index is rebuilt per-row inside the planner against
@@ -433,8 +432,25 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             // fresh each pass-2 call), so no manual reset is needed.
             total_moves = 0;
             total_error = 0.0;
+            total_moves_atomic.store(0);
+            total_error_atomic.store(0.0);
+            rows_done.store(0);
         }
-    for (std::size_t y = 0; y < height; ++y) {
+    pipeline::parallel_for(height, [&](std::size_t y) {
+        // Per-row working state: must be local for thread safety.
+        // P / P_lab / strip_palettes / strip_pal_lab were captured-by-
+        // ref outside the loop; declared inside now so each parallel
+        // worker has its own copy.
+        auto P = base_palette;
+        std::array<color_space::OKLab, kBaseColors> P_lab{};
+        auto recompute_lab_local = [&]() {
+            for (std::size_t k = 0; k < kBaseColors; ++k)
+                P_lab[k] = color_space::linear_to_oklab(P[k]);
+        };
+        recompute_lab_local();
+        std::vector<std::array<Color3f, kBaseColors>> strip_palettes(num_strips);
+        std::vector<std::array<color_space::OKLab, kBaseColors>>
+            strip_pal_lab(num_strips);
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
@@ -466,7 +482,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // After per-line CAP MOVEs, hardware state == target. Plug it
         // into the strip-0 palette for the SCAP swap planner.
         for (std::size_t k = 0; k < kBaseColors; ++k) P[k] = target[k];
-        recompute_lab();
+        recompute_lab_local();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
 
@@ -764,7 +780,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     static_cast<std::uint8_t>(8 + reg_idx),
                     palette::linear_to_ocs(col),
                     static_cast<int>(s)));
-                ++total_moves;
+                total_moves_atomic.fetch_add(1);
             }
             strip_palettes[s + 1] = P;
             strip_pal_lab[s + 1] = P_lab;
@@ -779,11 +795,15 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         strip_palettes_per_row[y] = strip_palettes;
         strip_pal_lab_per_row[y] = strip_pal_lab;
 
-        if (height > 0 && (y & 0xF) == 0xF) {
-            report_pass(pass, static_cast<float>(y + 1) /
-                              static_cast<float>(height));
+        if (on_progress) {
+            auto done = rows_done.fetch_add(1) + 1;
+            if (height > 0 && (done & 0xF) == 0xF) {
+                report_pass(pass, static_cast<float>(done) /
+                                  static_cast<float>(height));
+            }
         }
-    }
+    });
+    total_moves = total_moves_atomic.load();
 
     // ---- Pass 2: whole-image dither against per-row, per-strip
     // palettes. Driver owns ED scaffolding (kernel, serpentine, bias
