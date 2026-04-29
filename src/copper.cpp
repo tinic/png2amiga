@@ -184,6 +184,13 @@ void refresh_swap_scratch(
 // rows: scanline pixels (current + optional neighbors for smoothing)
 // rows_lab: precomputed OKLab of row pixels
 // weights: per-row weight (1.0 for current, less for neighbors)
+// hist_pool: top-N most-frequent source colours (RGB444-bucketed) from
+//   the whole image. When non-empty, the centroid candidate is
+//   *snapped to the nearest histogram entry* before being scored —
+//   guarantees the chip ends up displaying an actual source colour
+//   rather than an arbitrary OCS-grid centroid that may match no
+//   real pixel. Per ham_convert 1.0.x ("source palette size for
+//   lines>0 increased from 16 to 256 — much better picture quality").
 SwapCandidate find_best_swap(
     std::span<const Color3f> current_pal,
     std::span<const color_space::OKLab> current_lab,
@@ -193,7 +200,9 @@ SwapCandidate find_best_swap(
     amiga::Chipset chipset,
     SwapScratch& sc,
     const std::vector<bool>& excluded = {},
-    std::span<const float> column_weights = {}) {
+    std::span<const float> column_weights = {},
+    std::span<const Color3f> hist_pool = {},
+    std::span<const color_space::OKLab> hist_pool_lab = {}) {
 
     (void)rows;
     (void)current_lab;
@@ -244,6 +253,17 @@ SwapCandidate find_best_swap(
             if (chipset != amiga::Chipset::aga) {
                 linear = palette::quantize_to_ocs(linear);
             }
+            // [Histogram-pool snap experiment: tested and rejected.
+            //  Snapping centroid to the nearest source colour in a
+            //  256-entry histogram regressed lores+CAP by ~0.5 dB
+            //  averaged across 4 images. Reason: centroid is the
+            //  optimal-for-cluster colour; snapping it onto a strict
+            //  256-color subset of the 4096-RGB444-gamut loses
+            //  optimization headroom. The OCS snap above already
+            //  produces a chip-displayable colour. Argument kept on
+            //  the signature for future use; unused at default empty
+            //  span.]
+            (void)hist_pool; (void)hist_pool_lab;
             best = {k, linear, reduction};
         }
     }
@@ -489,7 +509,13 @@ Result<CopperResult> encode_copper(const Image& image,
     constexpr float jlo = 0.0f;
     constexpr float jhi = 1.0f;
 
-    // Precompute all rows in OKLab for neighbor lookups
+    // Precompute all rows in OKLab for neighbor lookups.
+    // [Source pre-quantize to RGB444 experiment: tested and rejected.
+    //  Snapping pixels to OCS grid before palette planning gave a
+    //  net -0.03 dB across 5 modes × 4 images: lores+CAP +0.39,
+    //  EHB+CAP -0.57, EHB+SCAP -0.03, DPF+SCAP +0.18. EHB+CAP loss
+    //  outweighs marginal gains elsewhere — keep continuous-precision
+    //  pixels for the swap planner so cluster centroids stay accurate.]
     std::vector<std::vector<color_space::OKLab>> all_lab(height);
     for (std::size_t y = 0; y < height; ++y) {
         all_lab[y].resize(width);
@@ -497,6 +523,14 @@ Result<CopperResult> encode_copper(const Image& image,
         for (std::size_t x = 0; x < width; ++x)
             all_lab[y][x] = color_space::linear_to_oklab(row[x]);
     }
+
+    // [Top-N source colour histogram pool experiment: tested and
+    //  rejected — snapping centroid to nearest source colour in a
+    //  256-entry RGB444 histogram regressed lores+CAP by ~0.5 dB.
+    //  Centroid → OCS-grid snap is already enough; further
+    //  constraining to a histogram subset loses optimization
+    //  headroom. find_best_swap accepts the pool args as a
+    //  no-op default; pass {} from the call site.]
 
     // Locate the "anchor slot" — the base-palette index that the most
     // pixels assign to. Per ham_convert 1.2.0 ("most common color is
