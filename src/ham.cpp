@@ -1087,7 +1087,16 @@ std::vector<HamSwap> find_ham_swaps(
     std::size_t data_bits,
     std::size_t changes_per_line,
     amiga::Chipset chipset,
-    bool best_quality) {
+    bool best_quality,
+    // Optional neighbour rows (prev_row, next_row) and per-row weights.
+    // When non-empty, measure_row_error scores each candidate palette by
+    // running independent rolling HAM-state encodes on every row and
+    // summing weighted errors — same idea as copper.cpp's swap planner.
+    // ham_convert's DynamicHires uses 3-line context (last+current+next)
+    // since 0.8.1 to reduce per-line palette flicker. Caller passes
+    // {prev,curr,next} with weights {decay,1.0,decay}.
+    std::span<const std::span<const Color3f>> extra_rows,
+    std::span<const float>                    extra_weights) {
 
     auto w = row.size();
     std::vector<HamSwap> swaps;
@@ -1099,13 +1108,29 @@ std::vector<HamSwap> find_ham_swaps(
         for (std::size_t i = 0; i < num_base_colors; ++i)
             ps[i] = linear_to_srgb8(pal[i]);
         HamPrecomp pre{pal, data_bits};
-        SRGBColor p = ps.empty() ? SRGBColor{0, 0, 0} : ps[0];
-        float err = 0.0f;
-        for (std::size_t x = 0; x < w; ++x) {
-            auto r = encode_ham_pixel(p, row[x], pre,
-                                      std::span<const SRGBColor>{ps});
-            err += r.error;
-            p = r.result_color;
+        auto encode_one_row = [&](std::span<const Color3f> r) {
+            SRGBColor p = ps.empty() ? SRGBColor{0, 0, 0} : ps[0];
+            float err = 0.0f;
+            for (std::size_t x = 0; x < r.size(); ++x) {
+                auto res = encode_ham_pixel(p, r[x], pre,
+                                            std::span<const SRGBColor>{ps});
+                err += res.error;
+                p = res.result_color;
+            }
+            return err;
+        };
+        float err = encode_one_row(row);
+        // Add weighted neighbour-row contributions when provided. Each
+        // neighbour row gets its own rolling HAM state (same algorithm
+        // hardware would run on it), and the weighted error sums into
+        // the per-trial score. This gives the planner a "what palette
+        // works for this row AND its neighbours" signal — the inner-
+        // loop equivalent of copper.cpp's neighbour-row weighting.
+        for (std::size_t i = 0; i < extra_rows.size(); ++i) {
+            auto& nr = extra_rows[i];
+            if (nr.empty()) continue;
+            float wgt = (i < extra_weights.size()) ? extra_weights[i] : 1.0f;
+            err += wgt * encode_one_row(nr);
         }
         return err;
     };
@@ -1441,15 +1466,45 @@ Result<HamResult> encode_ham_copper_generic(
         // current_pal, so this must be serial. Cheap vs the beam search.
         report_global(stage);
         std::size_t pass1_step = std::max<std::size_t>(1, h / 20);
+        // 3-line neighbour context experimentally hurt HAM6+CAP across
+        // 4 hero images at both weight=0.25 and weight=0.5 (chuck31
+        // -0.46/-0.50 dB, electrichues02 -0.09/-0.10, lovers -0.40,
+        // fromthe +0.08). HAM op selection is sequential-state-bound
+        // within a row, so scoring a palette against neighbour rows
+        // (which roll their own HAM state from the same palette) adds
+        // noise that doesn't represent real chip behaviour. The
+        // ham_convert 3-line trick applies to palette quantisation,
+        // not the per-line CAP swap planner. Disabled by default;
+        // structure preserved for future experimentation.
+        constexpr float kHamNeighbourDecay = 0.0f;
+        std::array<std::span<const Color3f>, 2> neighbour_rows;
+        std::array<float, 2> neighbour_weights = {kHamNeighbourDecay,
+                                                  kHamNeighbourDecay};
         for (std::size_t y = 0; y < h; ++y) {
             auto row = encode_image.row(y);
             auto& pal_for_row = (is_lace && (y & 1))
                 ? current_pal_f2 : current_pal;
             auto row_k = (y < opts.skip_initial_swap_rows)
                 ? std::size_t{0} : changes_per_line;
+            std::size_t nb_count = 0;
+            if (y > 0) {
+                neighbour_rows[nb_count] = encode_image.row(y - 1);
+                neighbour_weights[nb_count] = kHamNeighbourDecay;
+                ++nb_count;
+            }
+            if (y + 1 < h) {
+                neighbour_rows[nb_count] = encode_image.row(y + 1);
+                neighbour_weights[nb_count] = kHamNeighbourDecay;
+                ++nb_count;
+            }
+            std::span<const std::span<const Color3f>> rows_view(
+                neighbour_rows.data(), nb_count);
+            std::span<const float> weights_view(
+                neighbour_weights.data(), nb_count);
             auto swaps = find_ham_swaps(row, pal_for_row, num_base_colors,
                                         data_bits, row_k, chipset,
-                                        opts.cap_best);
+                                        opts.cap_best,
+                                        rows_view, weights_view);
             std::vector<copper::CopperChange> line_changes;
             for (auto& [slot, color] : swaps) {
                 line_changes.push_back({
