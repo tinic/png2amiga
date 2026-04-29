@@ -4361,90 +4361,154 @@ int main(int argc, char* argv[]) {
             // Interlace: skip swaps on rows 0 and 1 (each field's first
             // displayed line must show base palette only).
             std::size_t skip_initial = config->interlace ? 2 : 0;
-            auto copper_result = copper::encode_copper(*image, 5, dith, chipset,
-                static_cast<std::size_t>(config->copper_changes),
-                nullptr, true, {}, config->palette_diversity,
-                skip_initial, config->interlace, /*is_ehb=*/true,
-                make_cli_progress_reporter());
-            if (!copper_result) {
-                std::println(stderr, "Copper encode error: {}",
-                             copper_result.error().message);
-                return 1;
-            }
-            cli_status("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line)",
-                         copper_result->changes_per_line,
-                         copper_result->max_moves_per_line);
-
-            // Re-dither each scanline against its 64-color EHB palette.
-            // Driver owns ED scaffolding (kernel, serpentine, structure
-            // bias, Riemersma queue, ostromoukhov scaling, ordered
-            // offsets); picker resolves the per-row EHB palette and
-            // dispatches to the yliluoma family or nearest-pair pick.
             auto w = image->width();
             auto h = image->height();
-            std::vector<std::uint8_t> all_indices(w * h);
 
-            std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
-            for (std::size_t y = 0; y < h; ++y) {
-                auto& base32 = copper_result->scanline_palettes[y];
-                Palette bp;
-                bp.colors.assign(base32.begin(), base32.end());
-                auto ehb64 = palette::make_ehb_palette(bp.colors);
-                pal_lab_per_row[y].resize(ehb64.colors.size());
-                for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                    pal_lab_per_row[y][i] =
-                        color_space::linear_to_oklab(ehb64.colors[i]);
-            }
+            // Single-pass EHB+CAP encode. Body factored so cap_best
+            // below can replay it under a parallel jitter sweep without
+            // duplicating the (copper → re-dither → render) flow.
+            struct EhbCapTrial {
+                copper::CopperResult copper_result;
+                std::vector<std::uint8_t> indices;
+                Image rendered;
+                float total_error;
+            };
+            auto encode_once = [&](const Image& img,
+                                   const dither::Settings& d,
+                                   int diversity,
+                                   bool report_progress) -> Result<EhbCapTrial> {
+                auto cr = copper::encode_copper(
+                    img, 5, d, chipset,
+                    static_cast<std::size_t>(config->copper_changes),
+                    nullptr, true, {}, diversity,
+                    skip_initial, config->interlace, /*is_ehb=*/true,
+                    report_progress
+                        ? std::function<void(float, std::string_view)>(
+                              make_cli_progress_reporter())
+                        : std::function<void(float, std::string_view)>{});
+                if (!cr) return std::unexpected{cr.error()};
 
-            float total_error = dither::diffuse_raw_buffer(
-                *image, dith,
-                [&](const color_space::OKLab& target,
-                    std::size_t x, std::size_t y) -> dither::PickResult {
-                    auto& pal_lab = pal_lab_per_row[y];
-                    std::size_t k = 0;
-                    color_space::OKLab chosen{};
-                    float thr = dither::pick_palette_index_with_ostro(
-                        dith.method, target, pal_lab, x, y,
-                        dith.strength, /*k_min=*/0, k, chosen);
-                    all_indices[y * w + x] = static_cast<std::uint8_t>(k);
-                    return {chosen, thr};
-                });
+                std::vector<std::uint8_t> indices(w * h);
+                std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
+                for (std::size_t y = 0; y < h; ++y) {
+                    auto& base32 = cr->scanline_palettes[y];
+                    Palette bp;
+                    bp.colors.assign(base32.begin(), base32.end());
+                    auto ehb64 = palette::make_ehb_palette(bp.colors);
+                    pal_lab_per_row[y].resize(ehb64.colors.size());
+                    for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
+                        pal_lab_per_row[y][i] =
+                            color_space::linear_to_oklab(ehb64.colors[i]);
+                }
 
-            // DBS post-pass for EHB+CAP via the CLI path. Mirrors the
-            // api.cpp branch above — per-row 64-entry EHB palette.
-            if (dith.method == dither::Method::dbs) {
-                dither::apply_dbs_post_pass(
-                    *image, all_indices,
-                    [&](std::size_t /*x*/, std::size_t y)
-                        -> std::span<const color_space::OKLab> {
-                        return pal_lab_per_row[y];
+                float total_err = dither::diffuse_raw_buffer(
+                    img, d,
+                    [&](const color_space::OKLab& target,
+                        std::size_t x, std::size_t y) -> dither::PickResult {
+                        auto& pal_lab = pal_lab_per_row[y];
+                        std::size_t k = 0;
+                        color_space::OKLab chosen{};
+                        float thr = dither::pick_palette_index_with_ostro(
+                            d.method, target, pal_lab, x, y,
+                            d.strength, /*k_min=*/0, k, chosen);
+                        indices[y * w + x] = static_cast<std::uint8_t>(k);
+                        return {chosen, thr};
                     });
+
+                if (d.method == dither::Method::dbs) {
+                    dither::apply_dbs_post_pass(
+                        img, indices,
+                        [&](std::size_t /*x*/, std::size_t y)
+                            -> std::span<const color_space::OKLab> {
+                            return pal_lab_per_row[y];
+                        });
+                }
+
+                if (has_transparency) {
+                    for (std::size_t i = 0; i < transparency_mask.size() && i < indices.size(); ++i)
+                        if (transparency_mask[i]) indices[i] = 0;
+                }
+
+                Image rendered(w, h);
+                for (std::size_t y = 0; y < h; ++y) {
+                    auto& base32 = cr->scanline_palettes[y];
+                    Palette bp;
+                    bp.colors.assign(base32.begin(), base32.end());
+                    auto ehb64 = palette::make_ehb_palette(bp.colors);
+                    for (std::size_t x = 0; x < w; ++x) {
+                        auto idx = indices[y * w + x];
+                        if (idx < ehb64.colors.size())
+                            rendered[x, y] = ehb64.colors[idx];
+                    }
+                }
+
+                return EhbCapTrial{
+                    *std::move(cr),
+                    std::move(indices),
+                    std::move(rendered),
+                    total_err,
+                };
+            };
+
+            std::optional<EhbCapTrial> winner;
+            if (config->cap_best) {
+                // Same sweep shape as plain CAP and SCAP EHB: 8 jitter
+                // seeds × 5 strengths × 4 diversities + 1 baseline.
+                // 32-colour base palette (depth=5 copper); EHB is
+                // OCS-bound so amplitude=1.0 (no AGA shimmer concern).
+                auto cap_metric = (config->cap_best_metric == "msssim")
+                    ? pipeline::CapBestMetric::msssim
+                    : pipeline::CapBestMetric::psnr;
+                auto progress_fn = make_cli_progress_reporter();
+                winner = pipeline::cap_best_sweep<EhbCapTrial>(
+                    *image, dith, config->palette_diversity,
+                    /*jitter_count=*/8,
+                    [&](const Image& jittered_in,
+                        const dither::Settings& d, int div)
+                            -> Result<EhbCapTrial> {
+                        return encode_once(jittered_in, d, div,
+                                           /*report_progress=*/false);
+                    },
+                    [](const EhbCapTrial& t) -> const Image& {
+                        return t.rendered;
+                    },
+                    progress_fn,
+                    /*jitter_amp=*/1.0f,
+                    cap_metric);
+            }
+            if (!winner.has_value()) {
+                auto r = encode_once(*image, dith,
+                                     config->palette_diversity,
+                                     /*report_progress=*/true);
+                if (!r) {
+                    std::println(stderr, "Copper encode error: {}",
+                                 r.error().message);
+                    return 1;
+                }
+                winner = std::move(*r);
             }
 
-            if (has_transparency) {
-                for (std::size_t i = 0; i < transparency_mask.size() && i < all_indices.size(); ++i)
-                    if (transparency_mask[i]) all_indices[i] = 0;
-            }
+            auto& copper_result_obj = winner->copper_result;
+            cli_status("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line)",
+                         copper_result_obj.changes_per_line,
+                         copper_result_obj.max_moves_per_line);
 
-            auto planes = bitplane::encode(all_indices, w, h, ehb_depth);
+            auto& all_indices = winner->indices;
+            float total_error = winner->total_error;
+            (void)all_indices;  // kept for downstream compatibility
+
+            auto planes = bitplane::encode(winner->indices, w, h, ehb_depth);
             if (!planes) {
                 std::println(stderr, "Encode error: {}", planes.error().message);
                 return 1;
             }
 
-            // Per-scanline preview
-            Image rendered(w, h);
-            for (std::size_t y = 0; y < h; ++y) {
-                auto& base32 = copper_result->scanline_palettes[y];
-                Palette bp;
-                bp.colors.assign(base32.begin(), base32.end());
-                auto ehb64 = palette::make_ehb_palette(bp.colors);
-                for (std::size_t x = 0; x < w; ++x) {
-                    auto idx = all_indices[y * w + x];
-                    if (idx < ehb64.colors.size())
-                        rendered[x, y] = ehb64.colors[idx];
-                }
-            }
+            Image rendered = std::move(winner->rendered);
+            // Pointer-rebind so the rest of the existing block (which
+            // reads copper_result->...) keeps compiling without
+            // wholesale renaming below.
+            auto* copper_result_ptr = &copper_result_obj;
+            auto& copper_result = copper_result_ptr;
 
             float ehb_psnr = color_space::compute_psnr_blurred(
                 image->pixels(), rendered.pixels(), w, h);
