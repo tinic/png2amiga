@@ -255,12 +255,12 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 |
 |-------------|-----------------------------------|----------:|------------:|
-| **png2amiga** | **HAM6 + CAP + cap-best**       | 31.14     | **67.26**   |
+| **png2amiga** | **HAM6 + CAP + cap-best**       | 30.94     | **69.15**   |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |
 | png2amiga   | HAM6 (no copper)                  | 29.90     | 61.68       |
+| png2amiga   | EHB + SCAP + cap-best             | 29.38     | 51.67       |
 | abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |
-| png2amiga   | EHB + SCAP + cap-best             | 29.58     | 48.89       |
 | abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |
 
 The harness lives at `tools/shootout/`:
