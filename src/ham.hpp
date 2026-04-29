@@ -139,6 +139,21 @@ ScanlineResult encode_scanline_dp_per_strip(
     std::span<const std::uint16_t> strip_for_x,
     std::size_t beam_width);
 
+// Triple-pixel refinement post-pass for per-strip encoded scanlines.
+// Same algorithm as the single-palette refine_triple inside ham.cpp,
+// but each pixel's HAM op is scored against pres[strip_for_x[i]] /
+// base_srgbs[strip_for_x[i]]. Triples that straddle a strip boundary
+// pick ops valid for each pixel's own palette. Mutates `values` in
+// place when a strictly-better window is found.
+void refine_scanline_triple_per_strip(
+    std::vector<std::uint8_t>& values,
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    std::size_t beam_k);
+
 // ---------------------------------------------------------------------------
 // HAM encoding options
 // ---------------------------------------------------------------------------

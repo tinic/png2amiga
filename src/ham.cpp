@@ -773,6 +773,174 @@ void refine_triple(
     }
 }
 
+// Per-strip variant of refine_triple. Each pixel's HAM op is scored
+// against pres[strip_for_x[i]] / base_srgbs[strip_for_x[i]]. Window
+// expansion uses the strip palette of the pixel being expanded — so a
+// triple straddling a strip boundary picks ops valid for each pixel's
+// own palette.
+void refine_triple_per_strip(
+    std::vector<std::uint8_t>& values,
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    std::size_t beam_k) {
+
+    auto width = values.size();
+    if (width < 3) return;
+    if (pres.empty() || base_srgbs.empty()) return;
+
+    auto strip_at = [&](std::size_t x) -> std::size_t {
+        auto si = static_cast<std::size_t>(strip_for_x[x]);
+        if (si >= pres.size()) si = pres.size() - 1;
+        return si;
+    };
+
+    std::vector<SRGBColor> states(width + 1);
+    states[0] = start_color;
+    for (std::size_t x = 0; x < width; ++x) {
+        auto si = strip_at(x);
+        auto& pre = pres[si];
+        auto base_srgb = base_srgbs[si];
+        auto [ctrl, data] = split_ham_value(values[x], pre.data_bits);
+        auto prev = states[x];
+        SRGBColor out = prev;
+        switch (ctrl) {
+        case 0b00: if (data < base_srgb.size()) out = base_srgb[data]; break;
+        case 0b01: out = {prev.r, prev.g, pre.expand_lut[data]}; break;
+        case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
+        case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
+        }
+        states[x + 1] = out;
+    }
+
+    std::vector<OKLab> row_lab(width);
+    std::vector<SRGBColor> row_srgb(width);
+    for (std::size_t x = 0; x < width; ++x) {
+        row_lab[x] = color_space::linear_to_oklab(target_row[x]);
+        row_srgb[x] = linear_to_srgb8(target_row[x]);
+    }
+
+    bump_ham_oklab_cache_gen();
+    auto cached_oklab = [](SRGBColor c) -> OKLab {
+        return cached_srgb_to_oklab(c);
+    };
+
+    auto op_error = [&](SRGBColor prev, std::uint8_t ham_value,
+                        OKLab target_lab, std::size_t pixel_x)
+        -> std::pair<float, SRGBColor> {
+        auto si = strip_at(pixel_x);
+        auto& pre = pres[si];
+        auto base_srgb = base_srgbs[si];
+        auto [ctrl, data] = split_ham_value(ham_value, pre.data_bits);
+        SRGBColor out = prev;
+        switch (ctrl) {
+        case 0b00: if (data < base_srgb.size()) out = base_srgb[data]; break;
+        case 0b01: out = {prev.r, prev.g, pre.expand_lut[data]}; break;
+        case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
+        case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
+        }
+        auto out_lab = cached_oklab(out);
+        float dL = target_lab.L - out_lab.L;
+        float da = target_lab.a - out_lab.a;
+        float db = target_lab.b - out_lab.b;
+        return { dL * dL + da * da + db * db, out };
+    };
+
+    std::vector<BeamState> window_candidates;
+    std::vector<BeamState> window_beam;
+    auto ops_per_state = pres[0].palette_lab.size()
+        + 3 * pres[0].num_data_values;
+    window_candidates.reserve(beam_k * ops_per_state);
+
+    constexpr float skip_threshold_per_pixel = 5e-5f;
+
+    for (std::size_t i = 0; i + 3 <= width; ++i) {
+        auto prev_state = states[i];
+
+        OKLab tgt0 = row_lab[i];
+        OKLab tgt1 = row_lab[i + 1];
+        OKLab tgt2 = row_lab[i + 2];
+
+        auto [e0_cur, s0_cur] = op_error(prev_state, values[i], tgt0, i);
+        auto [e1_cur, s1_cur] = op_error(s0_cur, values[i + 1], tgt1, i + 1);
+        auto [e2_cur, s2_cur] = op_error(s1_cur, values[i + 2], tgt2, i + 2);
+        float cur_err = e0_cur + e1_cur + e2_cur;
+
+        if (e0_cur < skip_threshold_per_pixel &&
+            e1_cur < skip_threshold_per_pixel &&
+            e2_cur < skip_threshold_per_pixel) {
+            continue;
+        }
+
+        bool has_next = (i + 3) < width;
+        float cur_next_err = 0.0f;
+        if (has_next) {
+            OKLab tgt3 = row_lab[i + 3];
+            auto [e3, _] = op_error(s2_cur, values[i + 3], tgt3, i + 3);
+            cur_next_err = e3;
+        }
+        float cur_total = cur_err + cur_next_err;
+
+        std::vector<BeamState> prev_beam{{prev_state, 0.0f, 0, 0}};
+        std::vector<std::vector<BeamState>> hist(3);
+
+        SRGBColor tgt_srgb[3] = {
+            row_srgb[i], row_srgb[i + 1], row_srgb[i + 2],
+        };
+
+        for (std::size_t p = 0; p < 3; ++p) {
+            OKLab tgt = (p == 0) ? tgt0 : (p == 1) ? tgt1 : tgt2;
+            auto si = strip_at(i + p);
+            window_candidates.clear();
+            for (std::size_t s = 0; s < prev_beam.size(); ++s) {
+                expand_ham(prev_beam[s].color, tgt, tgt_srgb[p],
+                           prev_beam[s].cumulative_error,
+                           static_cast<std::uint16_t>(s),
+                           pres[si], base_srgbs[si], window_candidates);
+            }
+            prune_beam(window_candidates, window_beam, beam_k);
+            hist[p] = window_beam;
+            prev_beam.swap(window_beam);
+        }
+
+        std::size_t best_idx = 0;
+        float best_total = std::numeric_limits<float>::max();
+        auto& last = hist[2];
+        OKLab tgt3 = has_next ? row_lab[i + 3] : OKLab{};
+        for (std::size_t j = 0; j < last.size(); ++j) {
+            float total = last[j].cumulative_error;
+            if (has_next) {
+                auto [e3, _] = op_error(last[j].color, values[i + 3],
+                                        tgt3, i + 3);
+                total += e3;
+            }
+            if (total < best_total) {
+                best_total = total;
+                best_idx = j;
+            }
+        }
+
+        if (best_total + 1e-9f < cur_total) {
+            std::size_t idx = best_idx;
+            std::uint8_t new_ops[3];
+            for (auto p = static_cast<std::ptrdiff_t>(2); p >= 0; --p) {
+                new_ops[p] = hist[static_cast<std::size_t>(p)][idx].ham_value;
+                idx = hist[static_cast<std::size_t>(p)][idx].parent_idx;
+            }
+            for (std::size_t p = 0; p < 3; ++p) values[i + p] = new_ops[p];
+
+            auto [_e0, ns0] = op_error(prev_state,    values[i],     tgt0, i);
+            auto [_e1, ns1] = op_error(ns0,           values[i + 1], tgt1, i + 1);
+            auto [_e2, ns2] = op_error(ns1,           values[i + 2], tgt2, i + 2);
+            states[i + 1] = ns0;
+            states[i + 2] = ns1;
+            states[i + 3] = ns2;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Greedy scanline encoder (generic)
 // ---------------------------------------------------------------------------
@@ -1782,6 +1950,18 @@ ScanlineResult encode_scanline_dp_per_strip(
     return encode_scanline_dp_per_strip_impl(
         target_row, start_color, pres, base_srgbs,
         strip_for_x, beam_width);
+}
+
+void refine_scanline_triple_per_strip(
+    std::vector<std::uint8_t>& values,
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    std::size_t beam_k) {
+    refine_triple_per_strip(values, target_row, start_color,
+                            pres, base_srgbs, strip_for_x, beam_k);
 }
 
 // ===========================================================================
