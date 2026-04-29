@@ -2694,11 +2694,16 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
     return [state](float p, std::string_view stage) {
         std::lock_guard lk(state->first);
         auto now = std::chrono::steady_clock::now();
-        bool final_tick = (stage == "done") || p >= 1.0f;
+        // "done" is the terminal stage — end-cap the line with a
+        // newline so the next "Mode:" / "Encoded:" prints cleanly.
+        // Encoders also fire (p=1.0, stage="encoding") when their
+        // own pass completes; that's NOT terminal (a pass-2 or
+        // refinement pass may follow), so don't newline there.
+        bool final_tick = (stage == "done");
         // 16 ms throttle ≈ 60 Hz — gives the user actual visible
         // motion on fast parallel passes (previous 50 ms swallowed
         // most updates from a 25-50 ms HAM6 beam search and made the
-        // bar look frozen).
+        // bar look frozen). Final tick always emits.
         if (!final_tick &&
             now - state->second < std::chrono::milliseconds(16)) {
             return;
@@ -4569,9 +4574,11 @@ int main(int argc, char* argv[]) {
             }
 
             auto& copper_result_obj = winner->copper_result;
-            cli_status("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line)",
+            cli_status("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line, "
+                         "dither: {})",
                          copper_result_obj.changes_per_line,
-                         copper_result_obj.max_moves_per_line);
+                         copper_result_obj.max_moves_per_line,
+                         dither_name(config->dither_method));
 
             auto& all_indices = winner->indices;
             float total_error = winner->total_error;
@@ -4714,7 +4721,8 @@ int main(int argc, char* argv[]) {
         }
 
         // --- EHB without copper ---
-        cli_status("Mode:   EHB (Extra Half-Brite)");
+        cli_status("Mode:   EHB (Extra Half-Brite, dither: {})",
+                     dither_name(config->dither_method));
 
         // Force transparency to black before encoding (api::run_pipeline
         // does the same internally, but also do it on *image so the
@@ -4984,9 +4992,11 @@ int main(int argc, char* argv[]) {
         }
         // Print actual cpl after orchestration (auto mode may have stretched
         // or fallen back).
-        cli_status("Mode:   CAP ({} changes/line, max {} MOVEs/line)",
+        cli_status("Mode:   CAP ({} changes/line, max {} MOVEs/line, "
+                     "dither: {})",
                      copper_result->changes_per_line,
-                     copper_result->max_moves_per_line);
+                     copper_result->max_moves_per_line,
+                     dither_name(config->dither_method));
 
         // Apply transparency mask: transparent pixels → index 0
         if (has_transparency) {
@@ -5233,12 +5243,14 @@ int main(int argc, char* argv[]) {
         auto& st = enc.state;
 
         const char* scap_label = scap_ehb
-            ? "OCS EHB 6bpp investigation"
+            ? "OCS EHB 6bpp"
             : "OCS DPF";
-        cli_status("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line)",
+        cli_status("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line, "
+                     "dither: {})",
                      scap_label,
                      st.scap_slot_count,
-                     st.copper_changes);
+                     st.copper_changes,
+                     dither_name(config->dither_method));
         cli_status("Copper load: hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
                      st.scap_avg_hblank_moves_per_line,
