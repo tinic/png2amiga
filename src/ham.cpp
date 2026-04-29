@@ -2,6 +2,7 @@
 #include "color_space.hpp"
 #include "dither.hpp"
 #include "palette.hpp"
+#include "pipeline.hpp"
 #include "quantize.hpp"
 
 #include <algorithm>
@@ -1684,25 +1685,42 @@ std::vector<HamSwap> find_ham_swaps(
             });
         std::size_t slot_trials = slot_order.size();
 
+        // Parallelise the candidate × slot search. Each trial is
+        // independent given a thread-local palette copy with the swap
+        // applied; measure_row_error reads but doesn't write shared
+        // state. Sequential trials are the dominant cost in --cap-best
+        // mode (16 cands × 15 slots × 7 swaps × ~213 rows × 5 passes
+        // = ~1.8M row encodes), so parallelising here lifts the whole
+        // HAM6+CAP+cap-best path from single-thread to N-core.
+        struct TrialResult {
+            float    err = std::numeric_limits<float>::max();
+            Color3f  color{};
+            std::size_t slot = 0;
+        };
+        std::size_t total_trials = cands.size() * slot_trials;
+        std::vector<TrialResult> trials(total_trials);
+        pipeline::parallel_for(total_trials, [&](std::size_t idx) {
+            std::size_t ci = idx / slot_trials;
+            std::size_t si = idx % slot_trials;
+            auto slot = slot_order[si];
+            std::vector<Color3f> local_pal(current_pal.begin(),
+                                            current_pal.end());
+            local_pal[slot] = cands[ci];
+            float trial = measure_row_error(
+                std::span<const Color3f>{local_pal.data(),
+                                         num_base_colors});
+            trials[idx] = {trial, cands[ci], slot};
+        });
         float best_trial = base_err;
         Color3f best_color{};
         std::size_t best_slot = 0;
         bool any_improve = false;
-        for (auto& cand : cands) {
-            for (std::size_t si = 0; si < slot_trials; ++si) {
-                auto slot = slot_order[si];
-                auto old = current_pal[slot];
-                current_pal[slot] = cand;
-                float trial = measure_row_error(
-                    std::span<const Color3f>{current_pal.data(),
-                                             num_base_colors});
-                current_pal[slot] = old;
-                if (trial < best_trial) {
-                    best_trial = trial;
-                    best_color = cand;
-                    best_slot = slot;
-                    any_improve = true;
-                }
+        for (auto& t : trials) {
+            if (t.err < best_trial) {
+                best_trial = t.err;
+                best_color = t.color;
+                best_slot = t.slot;
+                any_improve = true;
             }
         }
 
