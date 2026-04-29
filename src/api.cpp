@@ -1280,9 +1280,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // 32-colour base palette → shallower median-cut basins,
                 // amplitude 1.0 (AGA-only weakening doesn't apply here
                 // since EHB is OCS-bound).
-                auto cap_metric = (options.cap_best_metric == "msssim")
-                    ? pipeline::CapBestMetric::msssim
-                    : pipeline::CapBestMetric::psnr;
+                auto cap_metric = pipeline::parse_cap_best_metric(options.cap_best_metric);
                 winner = pipeline::cap_best_sweep<EhbCapTrial>(
                     *image, dith, options.palette_diversity,
                     /*jitter_count=*/8,
@@ -1567,9 +1565,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             };
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto cap_metric = (options.cap_best_metric == "msssim")
-                ? pipeline::CapBestMetric::msssim
-                : pipeline::CapBestMetric::psnr;
+            auto cap_metric = pipeline::parse_cap_best_metric(options.cap_best_metric);
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, options.palette_diversity,
                 /*jitter_count=*/8,

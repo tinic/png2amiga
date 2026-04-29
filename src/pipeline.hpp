@@ -7,6 +7,7 @@
 #include "copper.hpp"
 #include "dither.hpp"
 #include "scap.hpp"
+#include "ssimulacra2.hpp"
 #include "types.hpp"
 
 #include <algorithm>
@@ -228,10 +229,18 @@ float compute_msssim(std::span<const Color3f> a,
                      std::size_t width,
                      std::size_t height);
 
-// Ranking metric for cap_best_sweep. psnr (default) keeps fine detail
-// and matches the historical behaviour; msssim produces a cleaner
-// image at the cost of some detail. User flips via --cap-best-metric.
-enum class CapBestMetric { msssim, psnr };
+// Ranking metric for cap_best_sweep. msssim (default) gives a cleaner
+// image and tracks SSIMULACRA2 well; psnr keeps maximum fine detail;
+// ssimulacra2 is the most perceptually accurate but the slowest (a
+// vendored port of cloudinary/ssimulacra2). User flips via
+// --cap-best-metric.
+enum class CapBestMetric { msssim, psnr, ssimulacra2 };
+
+inline CapBestMetric parse_cap_best_metric(std::string_view name) {
+    if (name == "psnr")        return CapBestMetric::psnr;
+    if (name == "ssimulacra2") return CapBestMetric::ssimulacra2;
+    return CapBestMetric::msssim;  // default
+}
 
 // Multi-restart parallel sweep for any --cap-best CAP-aware encoder.
 // Sweeps:
@@ -321,6 +330,10 @@ std::optional<T> cap_best_sweep(
         float score;
         if (metric == CapBestMetric::psnr) {
             score = color_space::compute_psnr_blurred(
+                source.pixels(), rendered.pixels(),
+                source.width(), source.height());
+        } else if (metric == CapBestMetric::ssimulacra2) {
+            score = ssimulacra2::compute(
                 source.pixels(), rendered.pixels(),
                 source.width(), source.height());
         } else {

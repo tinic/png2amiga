@@ -603,10 +603,13 @@ void print_usage() {
         "                                  Spends ~20–30× the time but searches\n"
         "                                  many more candidates and picks the\n"
         "                                  one that looks best.\n"
-        "  --cap-best-metric msssim|psnr   With --cap-best, choose how candidates\n"
-        "                                  are scored: msssim (default) is a\n"
-        "                                  cleaner image that tracks SSIMULACRA2;\n"
-        "                                  psnr keeps maximum fine detail.\n"
+        "  --cap-best-metric msssim|ssimulacra2|psnr\n"
+        "                                  With --cap-best, choose how candidates\n"
+        "                                  are scored: msssim (default) is fast\n"
+        "                                  and tracks SSIMULACRA2 well;\n"
+        "                                  ssimulacra2 is the most perceptually\n"
+        "                                  accurate but slower; psnr keeps\n"
+        "                                  maximum fine detail.\n"
         "\n"
         "SCAP — Super CAP (mid-line swaps):\n"
         "  --scap                          Mid-line palette swaps inside the displayed\n"
@@ -916,11 +919,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (arg == "--cap-best-metric") {
             if (i + 1 >= argc)
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--cap-best-metric requires msssim or psnr"}};
+                    "--cap-best-metric requires msssim, ssimulacra2, or psnr"}};
             std::string v = argv[++i];
-            if (v != "msssim" && v != "psnr")
+            if (v != "msssim" && v != "psnr" && v != "ssimulacra2")
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--cap-best-metric must be msssim or psnr"}};
+                    "--cap-best-metric must be msssim, ssimulacra2, or psnr"}};
             config.cap_best_metric = std::move(v);
             continue;
         }
@@ -4533,9 +4536,7 @@ int main(int argc, char* argv[]) {
                 // seeds × 5 strengths × 4 diversities + 1 baseline.
                 // 32-colour base palette (depth=5 copper); EHB is
                 // OCS-bound so amplitude=1.0 (no AGA shimmer concern).
-                auto cap_metric = (config->cap_best_metric == "msssim")
-                    ? pipeline::CapBestMetric::msssim
-                    : pipeline::CapBestMetric::psnr;
+                auto cap_metric = pipeline::parse_cap_best_metric(config->cap_best_metric);
                 auto progress_fn = make_cli_progress_reporter();
                 winner = pipeline::cap_best_sweep<EhbCapTrial>(
                     *image, dith, config->palette_diversity,
@@ -4941,9 +4942,7 @@ int main(int argc, char* argv[]) {
             // OCS's discrete 12-bit gamut already snaps small nudges.
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto cap_metric = (config->cap_best_metric == "msssim")
-                ? pipeline::CapBestMetric::msssim
-                : pipeline::CapBestMetric::psnr;
+            auto cap_metric = pipeline::parse_cap_best_metric(config->cap_best_metric);
             auto best = pipeline::cap_best_sweep<CapTrial>(
                 *image, dith, config->palette_diversity,
                 /*jitter_count=*/8,

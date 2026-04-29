@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.27.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.27.1 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -70,6 +70,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/snes_io.cpp
     src/genesis.cpp
     src/pipeline.cpp
+    src/ssimulacra2.cpp
     src/api.cpp
 )
 
