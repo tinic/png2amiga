@@ -4,3 +4,6 @@
 [submodule "third_party/libwebp"]
 	path = third_party/libwebp
 	url = https://chromium.googlesource.com/webm/libwebp
+[submodule "third_party/ssimulacra2"]
+	path = third_party/ssimulacra2
+	url = https://github.com/cloudinary/ssimulacra2.git

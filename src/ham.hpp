@@ -158,12 +158,16 @@ void refine_scanline_triple_per_strip(
     HamMetric metric);
 
 // ---------------------------------------------------------------------------
-// HAM op-selection metric. sRGB-MSE matches our reported PSNR metric and
-// HAM hardware semantics (per-channel sRGB DAC values), and on average
-// produces +0.5..+1 dB gains over OKLab² in apples-to-apples shootouts.
-// OKLab² is perceptually-uniform: better on banded/HDR content (chuck31
-// is +3.5 OKLab-dB worse under sRGB-MSE) at the cost of headline PSNR.
-// Default is srgb_mse; --ham-metric oklab2 selects the perceptual scorer.
+// HAM op-selection metric. OKLab² is perceptually-uniform and matches
+// SSIMULACRA2 (the modern subjective-quality metric) much better than
+// sRGB-MSE — measured ~+9 SSIMULACRA2 points on dithered HAM6+CAP, and
+// ~+3.5 OKLab-dB on banded/HDR content. sRGB-MSE wins headline PSNR
+// (~+0.5-1 dB) by optimising the *reported metric* directly, but PSNR
+// is a poor predictor of subjective quality on HAM output (where dither
+// noise and discrete banding dominate the perception).
+//
+// Default is oklab2; --ham-metric srgb-mse selects the headline-PSNR
+// scorer for the rare "I need to win published-PSNR" use case.
 // ---------------------------------------------------------------------------
 enum class HamMetric { srgb_mse, oklab2 };
 
@@ -175,7 +179,7 @@ struct HamOptions {
     std::size_t beam_width = 48;    // beam search width for DP
 
     // Op-selection metric. See HamMetric for tradeoff.
-    HamMetric metric = HamMetric::srgb_mse;
+    HamMetric metric = HamMetric::oklab2;
 
     // Dithering (error diffusion applied during HAM encoding)
     dither::Method dither_method = dither::Method::none;  // none = no dithering (default)

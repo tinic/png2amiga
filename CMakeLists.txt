@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.25.1 LANGUAGES C CXX)
+project(png2amiga VERSION 1.26.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -169,22 +169,31 @@ else()
         USES_TERMINAL
     )
 
-    # Same script as a ctest case. Skips cleanly (exit 77) when recoil2png
-    # isn't installed, so CI / fresh checkouts don't fail. Tagged with the
-    # "recoil" label so it can be filtered in/out via `ctest -L recoil`
-    # or `ctest -LE recoil`.
-    add_test(
-        NAME "recoil-roundtrip"
-        COMMAND python3
-                ${CMAKE_SOURCE_DIR}/tools/recoil_roundtrip.py
-                --build ${CMAKE_BINARY_DIR}/recoil_check
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    set_tests_properties("recoil-roundtrip" PROPERTIES
-        SKIP_RETURN_CODE 77
-        LABELS "recoil"
-        TIMEOUT 600
-    )
+    # Same script also wired as an opt-in ctest case (registered ONLY
+    # when PNG2AMIGA_ENABLE_RECOIL_TEST is ON — off by default because
+    # the round-trip is ~140s, which dominates ctest wall time and
+    # delays the inner-loop edit/build/test cycle. Run manually via
+    #   cmake --build build --target recoil_check
+    # or
+    #   cmake -DPNG2AMIGA_ENABLE_RECOIL_TEST=ON -B build .
+    # to opt back in.
+    option(PNG2AMIGA_ENABLE_RECOIL_TEST
+        "Register the RECOIL round-trip suite as a ctest case (~140s)"
+        OFF)
+    if(PNG2AMIGA_ENABLE_RECOIL_TEST)
+        add_test(
+            NAME "recoil-roundtrip"
+            COMMAND python3
+                    ${CMAKE_SOURCE_DIR}/tools/recoil_roundtrip.py
+                    --build ${CMAKE_BINARY_DIR}/recoil_check
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        set_tests_properties("recoil-roundtrip" PROPERTIES
+            SKIP_RETURN_CODE 77
+            LABELS "recoil"
+            TIMEOUT 600
+        )
+    endif()
 
     # --- Raw bitplane output ---
     add_test(

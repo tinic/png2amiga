@@ -42,20 +42,26 @@ Outputs land in `output/`:
 - `<entry>.iff` — IFF where applicable
 - `results.txt` — PSNR table
 
-## How PSNR is computed
+## How quality is measured
 
 `scripts/psnr.py` reads each preview, resizes to target dims with
-nearest-neighbour (no resampling loss), and computes PSNR as
-`20·log10(255) − 10·log10(MSE)` over per-channel sRGB byte values.
+nearest-neighbour (no resampling loss), and computes two metrics:
 
-This is **not** the metric png2amiga's `--cap-best-metric psnr` option
-uses internally (that's OKLab-blurred). For cross-encoder comparison
-the neutral, widely-quoted sRGB-direct PSNR is the right pick:
+- **PSNR** (per-channel sRGB byte distance) — encoder-independent
+  reference; both `abc` and `ham_convert` quote sRGB PSNR in their own
+  write-ups. Drawback: doesn't predict subjective HAM quality well —
+  no-dither HAM can hit PSNR 32 dB while looking obviously banded.
+- **SSIMULACRA2** (Cloudinary 2022, calibrated against human ratings;
+  see `third_party/ssimulacra2/`). 30=low / 50=fair / 70=high quality.
+  Modern image-codec evaluation standard. The shootout sorts winner-
+  by-SSIMULACRA2 when the binary is available.
 
-- `abc` and `ham_convert` work in sRGB/linear and quote sRGB PSNR in
-  their own write-ups
-- OKLab-domain PSNR would unfairly favour png2amiga, which optimises
-  against it during quantisation
+Why SSIMULACRA2 became necessary: in late 2026 we found that pure
+PSNR was misleading us — sRGB-MSE-optimised HAM output won PSNR but
+lost SSIMULACRA2 by ~9 points vs perceptually-optimised output, and
+the perceptual metric matches what a viewer would call out. PSNR
+stays in the table for cross-checks and continuity; SSIMULACRA2 is
+the metric we now optimise against.
 
 ## Dependencies
 
@@ -64,5 +70,8 @@ the neutral, widely-quoted sRGB-direct PSNR is the right pick:
 - Java 17+ at `/opt/homebrew/opt/openjdk/bin/java` (fallback to `java`
   on PATH); `brew install openjdk` if missing
 - Python 3 with `Pillow` and `numpy` (`pip install Pillow numpy`)
+- `brew install highway lcms2 jpeg-turbo libpng cmake ninja` for the
+  ssimulacra2 binary (built once by setup.sh from the upstream
+  submodule at `third_party/ssimulacra2/`)
 - A built `png2amiga` at `<repo>/build/png2amiga` (run the project
   CMake build first)

@@ -149,13 +149,13 @@ struct Options {
     int ham_triple = 16;                 // triple-pixel refinement post-pass
                                          // beam width (0 = off, 16 default)
 
-    // HAM op-selection metric. "srgb-mse" (default) optimises against the
-    // reported PSNR metric and HAM hardware semantics (per-channel sRGB
-    // DAC values). "oklab2" uses perceptually-uniform OKLab² distance —
-    // better on banded/HDR content (~+3.5 OKLab-dB on chuck31) at the
-    // cost of headline PSNR. Compile-time dispatched: zero hot-loop
-    // overhead either way.
-    std::string ham_metric = "srgb-mse";
+    // HAM op-selection metric. "oklab2" (default) uses perceptually-
+    // uniform OKLab² distance — measured ~+9 SSIMULACRA2 points and
+    // ~+3.5 OKLab-dB on banded content vs sRGB-MSE. "srgb-mse" optimises
+    // headline sRGB-PSNR directly (~+0.5-1 dB nominal gain) but produces
+    // visibly worse output per SSIMULACRA2 — only useful when reporting
+    // PSNR is the literal goal. Compile-time dispatched.
+    std::string ham_metric = "oklab2";
 
     // cap-best ranking metric. "psnr" (default) keeps fine detail;
     // "msssim" produces a cleaner image at the cost of some detail.

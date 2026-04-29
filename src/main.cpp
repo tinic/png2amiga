@@ -429,9 +429,10 @@ struct Config {
     // HAM greedy encoder (skip DP beam search, ~20× faster, ~1 dB worse).
     bool ham_fast = false;
 
-    // HAM op-selection metric. "srgb-mse" (default) maximises reported
-    // PSNR; "oklab2" optimises perceptual uniformity. See api::Options.
-    std::string ham_metric = "srgb-mse";
+    // HAM op-selection metric. "oklab2" (default) optimises perceptual
+    // uniformity (better SSIMULACRA2); "srgb-mse" optimises headline
+    // PSNR. See api::Options.
+    std::string ham_metric = "oklab2";
 
     // CAP best-quality planner. Multi-candidate × all-slot search + joint
     // base-palette refinement. HAM6 + copper and HAM8 + copper only —
@@ -630,12 +631,12 @@ void print_usage() {
         "                                  (default: 16; 0 = disable). Catches fringe\n"
         "                                  artefacts the 1-pixel beam misses, ~+0.5-1 dB.\n"
         "  --ham-fast                      Greedy HAM encoder (no DP beam search).\n"
-        "  --ham-metric <srgb-mse|oklab2>  HAM op-selection metric. 'srgb-mse' (default)\n"
-        "                                  matches the reported PSNR metric and HAM hardware\n"
-        "                                  semantics. 'oklab2' uses perceptually-uniform\n"
-        "                                  OKLab² distance — better on banded/HDR content\n"
-        "                                  (~+3.5 OKLab-dB on test images) at the cost of\n"
-        "                                  ~0.5-1 dB headline PSNR.\n"
+        "  --ham-metric <oklab2|srgb-mse>  HAM op-selection metric. 'oklab2' (default)\n"
+        "                                  optimises perceptual uniformity — measured ~+9\n"
+        "                                  SSIMULACRA2 points and ~+3.5 OKLab-dB vs\n"
+        "                                  sRGB-MSE on dithered output. 'srgb-mse'\n"
+        "                                  optimises headline sRGB-PSNR (~+0.5-1 dB) but\n"
+        "                                  scores visibly worse on perceptual metrics.\n"
         "                                  ~15× faster, ~0.04 dB PSNR cost. For\n"
         "                                  realtime / batch / preview workflows.\n"
         "\n"

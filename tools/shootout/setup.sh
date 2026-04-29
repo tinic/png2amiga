@@ -88,6 +88,51 @@ else
   echo "==> abc2 already built, skipping"
 fi
 
+# --- ssimulacra2 (Cloudinary, perceptual quality metric) -------------------
+# Built once from the upstream submodule at third_party/ssimulacra2.
+# Used by run.sh as a *measurement* metric alongside sRGB-PSNR — the
+# numbers correlate to subjective quality much better than PSNR. Build
+# requires libhwy / lcms2 / libjpeg / libpng (brew/apt-installed) and
+# the upstream pulls libjxl + highway directly from its src/lib tree.
+S2_DIR="$VENDOR/ssimulacra2"
+S2_BIN="$S2_DIR/ssimulacra2"
+S2_SRC="$SCRIPT_DIR/../../third_party/ssimulacra2"
+if [ ! -x "$S2_BIN" ]; then
+  if [ ! -d "$S2_SRC" ] || [ ! -f "$S2_SRC/build_ssimulacra" ]; then
+    echo "WARNING: third_party/ssimulacra2 submodule missing. " \
+         "Run 'git submodule update --init' to fetch it." >&2
+  else
+    echo "==> Building ssimulacra2 (first-time, can take a few minutes)..."
+    mkdir -p "$S2_DIR"
+    # Build out-of-tree so the upstream source stays clean.
+    if command -v ninja >/dev/null 2>&1; then
+      cmake -S "$S2_SRC/src" -B "$S2_DIR/build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release > "$S2_DIR/cmake.log" 2>&1
+      cmake --build "$S2_DIR/build" --target ssimulacra2 -j \
+        > "$S2_DIR/build.log" 2>&1 || {
+          echo "ERROR: ssimulacra2 build failed. See $S2_DIR/build.log." >&2
+          echo "    Common fix: brew install highway lcms2 jpeg-turbo libpng" >&2
+          exit 1
+        }
+    else
+      cmake -S "$S2_SRC/src" -B "$S2_DIR/build" \
+        -DCMAKE_BUILD_TYPE=Release > "$S2_DIR/cmake.log" 2>&1
+      cmake --build "$S2_DIR/build" --target ssimulacra2 -j \
+        > "$S2_DIR/build.log" 2>&1 || {
+          echo "ERROR: ssimulacra2 build failed. See $S2_DIR/build.log." >&2
+          echo "    Common fix: brew install highway lcms2 jpeg-turbo libpng" >&2
+          exit 1
+        }
+    fi
+    cp "$S2_DIR/build/tools/ssimulacra2" "$S2_BIN" 2>/dev/null \
+      || cp "$S2_DIR/build/ssimulacra2" "$S2_BIN" 2>/dev/null \
+      || { echo "ERROR: built binary not found in $S2_DIR/build" >&2; exit 1; }
+    echo "    ssimulacra2 -> $S2_BIN"
+  fi
+else
+  echo "==> ssimulacra2 already built, skipping"
+fi
+
 # --- Sanity ----------------------------------------------------------------
 JAVA="${JAVA:-/opt/homebrew/opt/openjdk/bin/java}"
 if [ ! -x "$JAVA" ]; then
