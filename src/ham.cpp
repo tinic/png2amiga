@@ -1159,14 +1159,9 @@ std::vector<HamSwap> find_ham_swaps(
                 }
             }
 
-            // Keep candidate at full 8-bit linear precision through the
-            // worst-pixel swap loop. The OCS snap happens at chip emit
-            // (cheader/iff via palette::linear_to_ocs). Snapping here
-            // would make measure_row_error score against a 4-bit-snapped
-            // value while the next swap's row-error decision compares
-            // against the same snapped state, compounding rounding
-            // bias. Same pattern as copper.cpp's find_best_swap_ehb.
-            auto new_color = worst_pixel_target;
+            auto new_color = (chipset != amiga::Chipset::aga)
+                ? palette::quantize_to_ocs(worst_pixel_target)
+                : worst_pixel_target;
 
             auto old_color = current_pal[min_slot];
             current_pal[min_slot] = new_color;
@@ -1177,7 +1172,6 @@ std::vector<HamSwap> find_ham_swaps(
                 break;
             }
             swaps.push_back({min_slot, new_color});
-            (void)chipset;
         }
         return swaps;
     }
@@ -1238,23 +1232,13 @@ std::vector<HamSwap> find_ham_swaps(
             int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
             return static_cast<std::size_t>((r << 8) | (g << 4) | b);
         };
-        // Dedup candidates by their OCS RGB444 12-bit key (so two source
-        // pixels that fall on the same OCS grid point share a slot) but
-        // STORE the candidate at full 8-bit linear precision. The OCS
-        // snap happens at chip emit (cheader/iff). measure_row_error
-        // therefore scores candidates at the same precision the next
-        // iteration will plan against, avoiding the rounding bias that
-        // hurt EHB+SCAP+cap-best so badly (see copper.cpp::find_best_swap_ehb
-        // change). Per ham_convert 1.10.3 changelog.
         auto add_cand = [&](Color3f c) {
-            if (chipset == amiga::Chipset::aga) {
-                cands.push_back(c);
-                return;
-            }
-            auto key = ocs_key(c);
-            if (!seen[key]) {
-                seen[key] = true;
-                cands.push_back(c);
+            auto cs = (chipset != amiga::Chipset::aga)
+                ? palette::quantize_to_ocs(c) : c;
+            auto key = ocs_key(cs);
+            if (chipset == amiga::Chipset::aga || !seen[key]) {
+                if (chipset != amiga::Chipset::aga) seen[key] = true;
+                cands.push_back(cs);
             }
         };
         std::size_t topk_used = std::min(kTopK, w);
