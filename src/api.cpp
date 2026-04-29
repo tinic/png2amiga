@@ -1074,6 +1074,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.on_progress = options.on_progress;
         ham_opts.skip_initial_swap_rows = options.interlace ? 2 : 0;
 
+        // --palette: load and feed as the HAM base palette. Skips the
+        // auto-quantizer + refinement; user takes responsibility for
+        // palette quality. For OCS, palette_io snaps to 12-bit on load.
+        if (has_user_palette(options)) {
+            auto loaded = load_user_palette(options);
+            if (!loaded) return std::unexpected{loaded.error()};
+            ham_opts.external_palette = std::move(loaded->colors);
+        }
+
         // Force transparent pixels to black BEFORE HAM encoding so the
         // encoder handles color transitions correctly at transparency edges.
         if (has_transparency) {
@@ -1683,6 +1692,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         scap_dith.strength = options.dither_strength;
         scap_dith.error_clamp = options.error_clamp;
 
+        std::vector<Color3f> scap_user_pal;
+        if (has_user_palette(options)) {
+            auto loaded = load_user_palette(options);
+            if (!loaded) return std::unexpected{loaded.error()};
+            scap_user_pal = std::move(loaded->colors);
+        }
+        std::span<const Color3f> scap_user_pal_span(scap_user_pal);
+
         Result<scap::ScapResult> scap_res =
             scap_ham6
             ? scap::encode_scap_ham6_ocs(
@@ -1697,7 +1714,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.cap_spread_radius,
                 options.cap_spread_decay,
                 options.cap_best,
-                options.cap_best_metric)
+                options.cap_best_metric,
+                scap_user_pal_span)
             : scap_ehb
             ? scap::encode_scap_ehb_ocs(
                 *image,
@@ -1712,7 +1730,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.cap_best,
                 options.cap_best_metric,
                 options.cap_spread_radius,
-                options.cap_spread_decay)
+                options.cap_spread_decay,
+                scap_user_pal_span)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
@@ -1726,7 +1745,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.cap_best,
                 options.cap_best_metric,
                 options.cap_spread_radius,
-                options.cap_spread_decay);
+                options.cap_spread_decay,
+                scap_user_pal_span);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;

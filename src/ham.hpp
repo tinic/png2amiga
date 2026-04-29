@@ -173,6 +173,16 @@ struct HamOptions {
     // Base palette quantizer (empty = median-cut, "pnn" = PNN agglomerative).
     std::string quantizer;
 
+    // External base palette. When non-empty, encoders use this directly
+    // (trimmed/padded to 2^(depth-2) entries) instead of running their
+    // own quantizer. Plumbed from `--palette <file>`. For HAM6+CAP, the
+    // first scanline still uses the full base palette and subsequent
+    // lines diverge per the planner — but the *initial* base palette
+    // is fixed to this. AGA users who pass --palette get a 24-bit base;
+    // OCS users get whatever was loaded (typically already OCS-snapped
+    // by palette_io).
+    std::vector<Color3f> external_palette;
+
     // Triple-pixel refinement. After the main DP produces a scanline,
     // slide a 3-pixel window and re-optimize with a wider beam to catch
     // fringe lag that 1-pixel DP misses. beam_k = 0 disables.

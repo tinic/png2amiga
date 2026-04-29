@@ -168,7 +168,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        bool cap_best,
                                        std::string_view cap_best_metric,
                                        int cap_spread_radius,
-                                       float cap_spread_decay) {
+                                       float cap_spread_decay,
+                                       std::span<const Color3f>
+                                           external_palette) {
     // --cap-best: multi-restart with varied palette_diversity + dither
     // strength. The SCAP planner is deterministic for a given input, so
     // varying these knobs is the only way to sample different
@@ -190,7 +192,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                     jittered_in, width_arg, height_arg, reserve_color0,
                     d, debug_overlay, copper_changes_override, div,
                     /*on_progress=*/{}, /*cap_best=*/false, "psnr",
-                    cap_spread_radius, cap_spread_decay);
+                    cap_spread_radius, cap_spread_decay,
+                    external_palette);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -285,11 +288,19 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         ? std::min<std::size_t>(copper_changes_override, kMaxCombined)
         : kMaxCombined;
     std::size_t cap_share = std::min<std::size_t>(total_budget, 2u);
+    // External-palette plumbing for DPF: --palette gets forwarded as
+    // encode_copper's user_palette so the CAP base palette is locked
+    // to the user's choice (trimmed to 8 PF2 colors).
+    std::vector<Color3f> dpf_user_pal;
+    if (!external_palette.empty()) {
+        dpf_user_pal.assign(external_palette.begin(), external_palette.end());
+        if (dpf_user_pal.size() > 8) dpf_user_pal.resize(8);
+    }
     auto copper_result = copper::encode_copper(
         src, /*depth=*/3, dither_settings,
         amiga::Chipset::ocs,
         cap_share,
-        /*user_palette=*/nullptr,
+        dpf_user_pal.empty() ? nullptr : &dpf_user_pal,
         reserve_color0,
         /*locked=*/{},
         palette_diversity,
@@ -1075,7 +1086,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        bool cap_best,
                                        std::string_view cap_best_metric,
                                        int cap_spread_radius,
-                                       float cap_spread_decay) {
+                                       float cap_spread_decay,
+                                       std::span<const Color3f>
+                                           external_palette) {
     // --cap-best: 8 jitter seeds (32-base palette has shallower basins
     // than DPF's 8-base, so heavy jitter sampling buys less here).
     // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
@@ -1091,7 +1104,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     jittered_in, width_arg, height_arg, reserve_color0,
                     d, copper_changes_override, div, debug_overlay,
                     /*on_progress=*/{}, /*cap_best=*/false, "psnr",
-                    cap_spread_radius, cap_spread_decay);
+                    cap_spread_radius, cap_spread_decay,
+                    external_palette);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -1152,11 +1166,19 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         : kMaxCombinedEhb;
     std::size_t cap_share_ehb = std::min<std::size_t>(total_budget_ehb, 2u);
     std::size_t scap_share_ehb_max = total_budget_ehb - cap_share_ehb;
+    // External-palette plumbing for EHB: --palette becomes the 32-color
+    // base palette; encode_copper produces a depth-5 frame, hardware
+    // halfbrites mirror it.
+    std::vector<Color3f> ehb_user_pal;
+    if (!external_palette.empty()) {
+        ehb_user_pal.assign(external_palette.begin(), external_palette.end());
+        if (ehb_user_pal.size() > 32) ehb_user_pal.resize(32);
+    }
     auto copper_result = copper::encode_copper(
         src, /*depth=*/5, dither_settings,
         amiga::Chipset::ocs,
         cap_share_ehb,
-        /*user_palette=*/nullptr,
+        ehb_user_pal.empty() ? nullptr : &ehb_user_pal,
         reserve_color0,
         /*locked=*/{},
         palette_diversity,
@@ -1922,7 +1944,9 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         int cap_spread_radius,
                                         float cap_spread_decay,
                                         bool cap_best,
-                                        std::string_view cap_best_metric) {
+                                        std::string_view cap_best_metric,
+                                        std::span<const Color3f>
+                                            external_palette) {
     // --cap-best: 8 jitter seeds × 5 strengths × 4 diversities + 1
     // baseline = 161 trials. Same shape as EHB SCAP since HAM6's 16
     // base palette has comparable basin depth.
@@ -1939,7 +1963,8 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                     d, copper_changes_override, div,
                     /*on_progress=*/{},
                     cap_spread_radius, cap_spread_decay,
-                    /*cap_best=*/false, "psnr");
+                    /*cap_best=*/false, "psnr",
+                    external_palette);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -2041,6 +2066,10 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     ham::HamOptions ham_opts;
     ham_opts.dither_method = dither::Method::none;  // pre-dithered above
     ham_opts.palette_diversity = palette_diversity;
+    if (!external_palette.empty()) {
+        ham_opts.external_palette.assign(external_palette.begin(),
+                                          external_palette.end());
+    }
     auto ham_cap_result = ham::encode_ham_copper(
         scap_input, amiga::Mode::ham6, amiga::Chipset::ocs, ham_opts,
         /*is_hires=*/false, cap_share);

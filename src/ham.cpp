@@ -998,12 +998,28 @@ Result<HamResult> encode_ham_generic(
     // but not for HAM, where only SET operations use the palette directly.
     // Refine: encode with greedy HAM, identify which pixels actually use SET,
     // recompute palette centroids from those pixels' TARGET colors, repeat.
-    auto base_pal = choose_ham_palette(image, num_base_colors, chipset, opts.palette_diversity, opts.quantizer);
+    Palette base_pal;
+    if (!opts.external_palette.empty()) {
+        // User-supplied palette via --palette: use as-is, no refinement.
+        // Trim or pad to exactly num_base_colors entries (pad with black).
+        base_pal.name = "user";
+        base_pal.colors = opts.external_palette;
+        if (base_pal.colors.size() > num_base_colors)
+            base_pal.colors.resize(num_base_colors);
+        while (base_pal.colors.size() < num_base_colors)
+            base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
+    } else {
+        base_pal = choose_ham_palette(image, num_base_colors, chipset,
+                                      opts.palette_diversity, opts.quantizer);
+    }
 
     // Refinement only helps HAM6 (many pixels use SET due to 4-bit modify
     // precision).  For HAM8, MODIFY is precise enough that SET usage
     // drops to a small biased sample, and refinement actively hurts quality.
-    int ham_refine_iters = (data_bits <= 4) ? 2 : 0;
+    // Skip refinement entirely when the user supplied an external palette —
+    // they explicitly told us what to use; don't second-guess.
+    int ham_refine_iters = (!opts.external_palette.empty()) ? 0
+                         : (data_bits <= 4) ? 2 : 0;
     auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1);
     for (int ri = 0; ri < ham_refine_iters; ++ri) {
         std::vector<SRGBColor> ref_srgb(base_pal.size());
@@ -1564,8 +1580,18 @@ Result<HamResult> encode_ham_copper_generic(
             opts.skip_initial_swap_rows > 0);
     }
 
-    // Global base palette
-    auto base_pal = choose_ham_palette(image, num_base_colors, chipset, opts.palette_diversity, opts.quantizer);
+    // Global base palette. User-supplied via --palette takes precedence
+    // (trimmed/padded to num_base_colors); otherwise quantize from image.
+    Palette base_pal;
+    if (!opts.external_palette.empty()) {
+        base_pal.name = "user";
+        base_pal.colors = opts.external_palette;
+        if (base_pal.colors.size() > num_base_colors)
+            base_pal.colors.resize(num_base_colors);
+    } else {
+        base_pal = choose_ham_palette(image, num_base_colors, chipset,
+                                      opts.palette_diversity, opts.quantizer);
+    }
     while (base_pal.colors.size() < num_base_colors) {
         base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
     }

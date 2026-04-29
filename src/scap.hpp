@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -239,7 +240,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        std::string_view cap_best_metric =
                                            "psnr",
                                        int cap_spread_radius = -1,
-                                       float cap_spread_decay = -1.0f);
+                                       float cap_spread_decay = -1.0f,
+                                       std::span<const Color3f>
+                                           external_palette = {});
 
 // ---------------------------------------------------------------------------
 // SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
@@ -271,7 +274,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        std::string_view cap_best_metric =
                                            "psnr",
                                        int cap_spread_radius = -1,
-                                       float cap_spread_decay = -1.0f);
+                                       float cap_spread_decay = -1.0f,
+                                       std::span<const Color3f>
+                                           external_palette = {});
 
 // ---------------------------------------------------------------------------
 // SCAP for HAM6 (6 bitplanes — 2 control + 4 data, 16-colour base palette
@@ -304,7 +309,9 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         float cap_spread_decay = -1.0f,
                                         bool cap_best = false,
                                         std::string_view cap_best_metric =
-                                            "psnr");
+                                            "psnr",
+                                        std::span<const Color3f>
+                                            external_palette = {});
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).
