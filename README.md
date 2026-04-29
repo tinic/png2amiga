@@ -2,18 +2,22 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Web App](https://img.shields.io/badge/Try_it-png2amiga.app-brightgreen)](https://www.png2amiga.app)
+[![GitHub](https://img.shields.io/github/stars/tinic/png2amiga?style=social)](https://github.com/tinic/png2amiga)
 [![C++26](https://img.shields.io/badge/C%2B%2B-26-blue.svg)](https://en.cppreference.com/w/cpp/26)
 
-PNG/JPEG/WebP → Commodore Amiga, Atari ST/STE, and IBM PC (CGA / EGA /
-VGA) graphics. Writes IFF ILBM, Degas `.PI1`/`.PI2`, C headers, raw
-bitplanes, and standalone AmigaOS viewer `.cpp` source. The bundled
-`build-amiga.sh` wrapper runs the included `m68k-amiga-elf-gcc` +
-`exe2adf` toolchain to turn the `.cpp` into a runnable `.exe` and
-bootable `.adf`. DOS-mode `.c` output compiles with `ia16-elf-gcc`
-into a 16-bit real-mode viewer.
+**Open-source** PNG/JPEG/WebP → Commodore Amiga, Atari ST/STE, and
+IBM PC (CGA / EGA / VGA) image converter. Supports OCS/AGA bitplane,
+HAM6/HAM8, EHB, and **sliced-HAM (SHAM) via copper palettes** with
+perceptual OKLab color matching. Writes IFF ILBM, Degas `.PI1`/`.PI2`,
+C headers, raw bitplanes, and standalone AmigaOS viewer `.cpp` source.
+The bundled `build-amiga.sh` wrapper runs the included
+`m68k-amiga-elf-gcc` + `exe2adf` toolchain to turn the `.cpp` into a
+runnable `.exe` and bootable `.adf`. DOS-mode `.c` output compiles
+with `ia16-elf-gcc` into a 16-bit real-mode viewer.
 
 **[Try it in your browser at png2amiga.app](https://www.png2amiga.app)** —
 live preview via WebAssembly, server-side compile to Amiga executables.
+**Source on GitHub:** [github.com/tinic/png2amiga](https://github.com/tinic/png2amiga).
 
 [![png2amiga.app web interface](docs/screenshot.png)](https://www.png2amiga.app)
 

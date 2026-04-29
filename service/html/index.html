@@ -3,19 +3,40 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Convert PNG/JPEG images to Commodore Amiga graphics formats. OCS/AGA bitplane modes, HAM6/HAM8, EHB, copper palettes, 16 dithering modes, live preview. Export IFF ILBM, raw bitplanes, C headers.">
-  <meta name="keywords" content="commodore amiga, amiga, image converter, dithering, pixel art, demoscene, retro computing, ocs, aga, ham, ehb, iff ilbm, bitplane, oklab, wasm">
+  <meta name="description" content="Open-source browser-based PNG/JPEG to Commodore Amiga image converter. OCS/AGA bitplane, HAM6/HAM8, EHB, sliced-HAM (SHAM) via copper palettes, perceptual OKLab color matching, 58 dithering modes, live preview. Exports IFF ILBM, raw bitplanes, C headers, runnable .adf. Source on GitHub.">
+  <meta name="keywords" content="commodore amiga, amiga image converter, png to iff, png to ham, sham, sliced ham, copper palette, pchg, demoscene, retro computing, ocs, aga, ham, ehb, iff ilbm, bitplane, oklab, wasm, open source, github">
   <meta name="author" content="tinic">
-  <meta property="og:title" content="png2amiga - Amiga Image Converter">
-  <meta property="og:description" content="Convert PNG/JPEG images to Commodore Amiga graphics formats in your browser. OCS/AGA bitplane, HAM6/HAM8, EHB, copper palettes, perceptual OKLab color matching, live preview.">
+  <meta property="og:title" content="png2amiga - Open-Source Amiga Image Converter (HAM/SHAM/EHB)">
+  <meta property="og:description" content="Open-source browser PNG-to-Amiga converter. HAM6/HAM8, EHB, sliced-HAM via copper palettes, OKLab color matching, IFF/PNG/.adf export. Source on GitHub.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://www.png2amiga.app">
   <meta property="og:site_name" content="png2amiga">
   <link rel="canonical" href="https://www.png2amiga.app">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="png2amiga - Amiga Image Converter">
-  <meta name="twitter:description" content="Convert PNG/JPEG images to Commodore Amiga graphics formats in your browser. Perceptual OKLab color matching, live preview.">
-  <title>png2amiga - Commodore Amiga Image Converter</title>
+  <meta name="twitter:title" content="png2amiga - Open-Source Amiga Image Converter (HAM/SHAM/EHB)">
+  <meta name="twitter:description" content="Open-source browser PNG-to-Amiga converter. HAM6/HAM8, EHB, sliced-HAM via copper palettes, OKLab color matching, IFF/PNG/.adf export. Source on GitHub.">
+  <title>png2amiga — Open-Source Amiga Image Converter (HAM, SHAM, EHB)</title>
+  <!-- schema.org SoftwareApplication so search engines and AI crawlers
+       see the codeRepository link and don't treat the site as a closed
+       online tool. Surfaced on a SHAM/HAM keyword search this addresses
+       the AI-search "is png2amiga open source?" gap directly. -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "png2amiga",
+    "alternateName": ["png2amiga.app", "Amiga Image Converter"],
+    "description": "Open-source browser PNG/JPEG to Commodore Amiga image converter. Supports HAM6/HAM8, EHB, sliced-HAM (SHAM) via copper palettes, OKLab perceptual color matching, IFF ILBM and bootable .adf export.",
+    "applicationCategory": "GraphicsApplication",
+    "operatingSystem": "Web Browser",
+    "url": "https://www.png2amiga.app",
+    "codeRepository": "https://github.com/tinic/png2amiga",
+    "license": "https://github.com/tinic/png2amiga/blob/main/LICENSE",
+    "softwareVersion": "1.24.0",
+    "author": { "@type": "Person", "name": "tinic" },
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
   <!-- Umami tracker. Self-hosted on analytics.png2amiga.app. SRI not
        applied: Umami rotates the bundle on each version upgrade, so a
        pinned hash would break analytics across upgrades. To enable SRI
@@ -34,6 +55,36 @@
   <link rel="stylesheet" crossorigin href="/assets/index-C3UetO4j.css">
 </head>
 <body>
+  <!-- GitHub corner — tholman.com/github-corners. Server-rendered into
+       the static index so it's visible before the Vue app mounts and
+       crawlers see the repo link without running JS. -->
+  <a href="https://github.com/tinic/png2amiga"
+     class="github-corner" aria-label="View source on GitHub"
+     target="_blank" rel="noopener">
+    <svg width="80" height="80" viewBox="0 0 250 250"
+         style="fill:#5b9aff; color:#0b1320; position:absolute; top:0;
+                border:0; right:0; z-index:1000;"
+         aria-hidden="true">
+      <path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path>
+      <path d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2"
+            fill="currentColor" style="transform-origin:130px 106px"
+            class="octo-arm"></path>
+      <path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z"
+            fill="currentColor"></path>
+    </svg>
+  </a>
+  <style>
+    .github-corner:hover .octo-arm { animation: octocat-wave 560ms ease-in-out; }
+    @keyframes octocat-wave {
+      0%, 100% { transform: rotate(0); }
+      20%, 60% { transform: rotate(-25deg); }
+      40%, 80% { transform: rotate(10deg); }
+    }
+    @media (max-width: 500px) {
+      .github-corner:hover .octo-arm { animation: none; }
+      .github-corner .octo-arm { animation: octocat-wave 560ms ease-in-out; }
+    }
+  </style>
   <div id="app"></div>
 </body>
 </html>
