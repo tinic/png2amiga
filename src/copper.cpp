@@ -498,6 +498,47 @@ Result<CopperResult> encode_copper(const Image& image,
             all_lab[y][x] = color_space::linear_to_oklab(row[x]);
     }
 
+    // Locate the "anchor slot" — the base-palette index that the most
+    // pixels assign to. Per ham_convert 1.2.0 ("most common color is
+    // never changed to reduce horizontal blocking artefacts"), holding
+    // this slot fixed across all scanlines avoids wasting per-row
+    // copper bandwidth re-introducing a colour that's already there
+    // and reduces vertical "sliced look" on uniform regions.
+    // Skipped when reserve_color0 already locks slot 0 AND num_colors
+    // is small (≤4) — locking 50% of a tiny palette starves the
+    // planner.
+    std::size_t anchor_slot = std::numeric_limits<std::size_t>::max();
+    if (num_colors >= 8) {
+        std::vector<color_space::OKLab> base_lab(num_colors);
+        for (std::size_t k = 0; k < num_colors; ++k)
+            base_lab[k] = color_space::linear_to_oklab(base_pal[k]);
+        std::vector<std::size_t> freq(num_colors, 0);
+        for (std::size_t y = 0; y < height; ++y) {
+            auto& rl = all_lab[y];
+            for (std::size_t x = 0; x < width; ++x) {
+                float best_d = std::numeric_limits<float>::max();
+                std::size_t best_k = 0;
+                for (std::size_t k = 0; k < num_colors; ++k) {
+                    float dL = rl[x].L - base_lab[k].L;
+                    float da = rl[x].a - base_lab[k].a;
+                    float db = rl[x].b - base_lab[k].b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < best_d) { best_d = d; best_k = k; }
+                }
+                ++freq[best_k];
+            }
+        }
+        // Pick the most-frequent slot, BUT skip slot 0 if it's already
+        // reserve-color0-locked — picking it would just be redundant.
+        std::size_t best_k = 0;
+        std::size_t best_n = 0;
+        for (std::size_t k = (reserve_color0 ? std::size_t{1} : std::size_t{0});
+             k < num_colors; ++k) {
+            if (freq[k] > best_n) { best_n = freq[k]; best_k = k; }
+        }
+        if (best_n > 0) anchor_slot = best_k;
+    }
+
     constexpr float col_decay = 0.85f;
     constexpr float col_scale = 2.0f;
     constexpr int predict_dither_iterations = 2;
@@ -575,7 +616,11 @@ Result<CopperResult> encode_copper(const Image& image,
         std::vector<CopperChange> changes;
         changes.reserve(changes_per_line);
         std::vector<bool> swapped(num_colors, false);
-        if (reserve_color0) swapped[0] = true;  // don't swap COLOR00
+        if (reserve_color0 && !swapped.empty()) swapped[0] = true;
+        if (anchor_slot < num_colors && anchor_slot < swapped.size()) {
+            // Hold most-frequent slot fixed across rows.
+            swapped[anchor_slot] = true;
+        }
         for (auto& [idx, color] : locked) {
             if (idx < num_colors) {
                 swapped[idx] = true;  // don't swap locked slots
