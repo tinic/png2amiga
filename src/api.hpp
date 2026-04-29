@@ -170,6 +170,11 @@ struct Options {
     // Copper palette (per-scanline palette changes)
     bool copper = false;                // use per-scanline copper palettes
     int copper_changes = 0;             // override changes/line (0 = auto)
+    // Per-line palette planner neighbour-row smoothing. -1 means use the
+    // encode_copper default (radius=4, decay=0.85). Exposed for sweep
+    // tooling (--cap-spread-radius / --cap-spread-decay on the CLI).
+    int cap_spread_radius = -1;
+    float cap_spread_decay = -1.0f;
 
     // Transparency
     float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)

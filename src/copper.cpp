@@ -360,7 +360,9 @@ Result<CopperResult> encode_copper(const Image& image,
                                    bool is_lace,
                                    bool is_ehb,
                                    std::function<void(float, std::string_view)>
-                                       on_progress) {
+                                       on_progress,
+                                   std::size_t neighbor_radius,
+                                   float neighbor_decay) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -541,8 +543,11 @@ Result<CopperResult> encode_copper(const Image& image,
 
         // Build neighbor rows with weights for smoothing.
         // Current row weight=1.0, neighbors decay with distance.
-        constexpr std::size_t neighbor_radius = 4;
-        constexpr float decay = 0.5f;  // weight halves per row of distance
+        // Defaults (radius=1, decay=1.0) match ham_convert's "3 lines
+        // (last+current+next)" DynamicHires recipe; cap_best_sweep
+        // varies these as a trial dimension so banded/demoscene images
+        // can pick wider smoothing when it helps.
+        const float decay = neighbor_decay;
         std::vector<std::span<const Color3f>> rows;
         std::vector<std::span<const color_space::OKLab>> rows_lab;
         std::vector<float> weights;

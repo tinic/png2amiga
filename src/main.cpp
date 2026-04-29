@@ -474,6 +474,8 @@ struct Config {
     // Copper palette
     bool copper = false;               // per-scanline palette changes
     int copper_changes = 0;            // 0 = auto (based on chipset/depth)
+    int cap_spread_radius = -1;        // -1 = use encode_copper default (4)
+    float cap_spread_decay = -1.0f;    // -1 = use encode_copper default (0.85)
     bool fade_in = false;              // 16-step fade-in from black
 
     // CGA-specific options
@@ -1295,6 +1297,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 // --copper-changes kept as legacy alias for --cap-changes.
                 config.copper_changes = std::atoi(std::string(val).c_str());
             }
+            else if (arg == "--cap-spread-radius") {
+                config.cap_spread_radius = std::atoi(std::string(val).c_str());
+            }
+            else if (arg == "--cap-spread-decay") {
+                config.cap_spread_decay = std::stof(std::string(val));
+            }
             else if (arg == "--weight-l") {
                 color_space::WEIGHT_L = std::stof(std::string(val));
             }
@@ -1932,6 +1940,8 @@ api::Options make_api_options(const Config& cfg) {
     opts.cap_best_metric = cfg.cap_best_metric;
     opts.copper = cfg.copper;
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
+    opts.cap_spread_radius = cfg.cap_spread_radius;
+    opts.cap_spread_decay = cfg.cap_spread_decay;
     opts.reserve_color0 = cfg.reserve_color0;
     opts.dual_playfield = cfg.dual_playfield;
     opts.scap = cfg.scap;
@@ -4422,7 +4432,11 @@ int main(int argc, char* argv[]) {
                     report_progress
                         ? std::function<void(float, std::string_view)>(
                               make_cli_progress_reporter())
-                        : std::function<void(float, std::string_view)>{});
+                        : std::function<void(float, std::string_view)>{},
+                    config->cap_spread_radius >= 0
+                        ? static_cast<std::size_t>(config->cap_spread_radius) : std::size_t{4},
+                    config->cap_spread_decay >= 0.0f
+                        ? config->cap_spread_decay : 0.85f);
                 if (!cr) return std::unexpected{cr.error()};
 
                 std::vector<std::uint8_t> indices(w * h);
@@ -4877,7 +4891,11 @@ int main(int argc, char* argv[]) {
                 static_cast<std::size_t>(config->copper_changes), nullptr,
                 config->reserve_color0, copper_locks, diversity,
                 skip_initial_lace, config->interlace, /*is_ehb=*/false,
-                std::move(prog));
+                std::move(prog),
+                config->cap_spread_radius >= 0
+                    ? static_cast<std::size_t>(config->cap_spread_radius) : std::size_t{4},
+                config->cap_spread_decay >= 0.0f
+                    ? config->cap_spread_decay : 0.85f);
         };
 
         Result<copper::CopperResult> copper_result;

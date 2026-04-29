@@ -1180,7 +1180,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     {}, diversity,
                     skip_initial, options.interlace,
                     /*is_ehb=*/true,
-                    /*on_progress=*/{});
+                    /*on_progress=*/{},
+                    options.cap_spread_radius >= 0
+                        ? static_cast<std::size_t>(options.cap_spread_radius) : std::size_t{4},
+                    options.cap_spread_decay >= 0.0f
+                        ? options.cap_spread_decay : 0.85f);
                 if (!cr) return std::unexpected{cr.error()};
 
                 auto w = img.width();
@@ -1507,6 +1511,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Single-pass encoder, factored out so cap_best below can replay
         // it under a parallel jitter sweep without duplicating the
         // argument list.
+        auto spread_r = options.cap_spread_radius >= 0
+            ? static_cast<std::size_t>(options.cap_spread_radius) : std::size_t{4};
+        auto spread_d = options.cap_spread_decay >= 0.0f
+            ? options.cap_spread_decay : 0.85f;
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d, int diversity) {
             return copper::encode_copper(
@@ -1517,7 +1525,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 diversity,
                 skip_initial_lace, options.interlace,
                 /*is_ehb=*/false,
-                /*on_progress=*/{});
+                /*on_progress=*/{},
+                spread_r, spread_d);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -1676,7 +1685,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.scap_debug,
                 options.on_progress,
                 options.cap_best,
-                options.cap_best_metric)
+                options.cap_best_metric,
+                options.cap_spread_radius,
+                options.cap_spread_decay)
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
@@ -1688,7 +1699,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.palette_diversity,
                 options.on_progress,
                 options.cap_best,
-                options.cap_best_metric);
+                options.cap_best_metric,
+                options.cap_spread_radius,
+                options.cap_spread_decay);
         if (!scap_res) return std::unexpected{scap_res.error()};
 
         PipelineResult result;

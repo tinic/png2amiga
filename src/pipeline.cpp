@@ -3,6 +3,7 @@
 #include "api.hpp"
 #include "color_space.hpp"
 #include "ham.hpp"
+#include "palette.hpp"
 
 #include <algorithm>
 #include <array>
@@ -304,19 +305,33 @@ Result<Image> render_preview(
     const std::vector<std::vector<Color3f>>* scanline_palettes,
     std::size_t cap_changes_per_line) {
     bool has_scanline_pal = scanline_palettes && !scanline_palettes->empty();
-    if (is_ham) {
-        auto data_bits = planes.depth - 2;
-        if (has_scanline_pal) {
-            return ham::render_ham_copper(planes, *scanline_palettes, data_bits);
+    Result<Image> r = [&]() -> Result<Image> {
+        if (is_ham) {
+            auto data_bits = planes.depth - 2;
+            if (has_scanline_pal) {
+                return ham::render_ham_copper(planes, *scanline_palettes, data_bits);
+            }
+            return ham::render_ham(planes, base_palette, data_bits);
         }
-        return ham::render_ham(planes, base_palette, data_bits);
+        if (has_scanline_pal) {
+            return copper::render_copper_capped(
+                planes, *scanline_palettes, base_palette,
+                cap_changes_per_line, is_lace, chipset);
+        }
+        return bitplane::render(planes, base_palette);
+    }();
+    if (!r) return r;
+    // Snap the preview to OCS RGB444 — the chip displays at 12-bit
+    // precision; reporting metrics or pixels in 24-bit overstates
+    // quality. After the snap-defer patches in copper/scap/ham, base
+    // and per-row palettes can carry un-snapped 8-bit linear values.
+    // copper::render_copper_capped already snaps internally; this loop
+    // is a no-op there and a fix for the HAM / plain-bitplane paths.
+    // No-op for AGA (24-bit native).
+    if (chipset != amiga::Chipset::aga) {
+        for (auto& p : r->pixels()) p = palette::quantize_to_ocs(p);
     }
-    if (has_scanline_pal) {
-        return copper::render_copper_capped(
-            planes, *scanline_palettes, base_palette,
-            cap_changes_per_line, is_lace, chipset);
-    }
-    return bitplane::render(planes, base_palette);
+    return r;
 }
 
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,

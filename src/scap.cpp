@@ -164,7 +164,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
                                        bool cap_best,
-                                       std::string_view cap_best_metric) {
+                                       std::string_view cap_best_metric,
+                                       int cap_spread_radius,
+                                       float cap_spread_decay) {
     // --cap-best: multi-restart with varied palette_diversity + dither
     // strength. The SCAP planner is deterministic for a given input, so
     // varying these knobs is the only way to sample different
@@ -185,7 +187,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 return encode_scap_dpf_ocs(
                     jittered_in, width_arg, height_arg, reserve_color0,
                     d, debug_overlay, copper_changes_override, div,
-                    /*on_progress=*/{}, /*cap_best=*/false);
+                    /*on_progress=*/{}, /*cap_best=*/false, "psnr",
+                    cap_spread_radius, cap_spread_decay);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -289,7 +292,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         /*locked=*/{},
         palette_diversity,
         /*skip_initial_swap_rows=*/0,
-        /*is_lace=*/false);
+        /*is_lace=*/false,
+        /*is_ehb=*/false,
+        /*on_progress=*/{},
+        cap_spread_radius >= 0 ? static_cast<std::size_t>(cap_spread_radius) : std::size_t{4},
+        cap_spread_decay  >= 0.0f ? cap_spread_decay : 0.85f);
     if (!copper_result) return std::unexpected{copper_result.error()};
     auto& cap_palettes = copper_result->scanline_palettes;
     auto& base_palette_vec = copper_result->base_palette;
@@ -883,6 +890,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         res.max_visible_moves_per_line = vis_max;
     }
     res.line_moves = std::move(line_moves);
+    // Snap preview to OCS RGB444 — SCAP is OCS-only, and the snap-defer
+    // patches in copper/scap/ham left intermediate per-strip palettes at
+    // full 8-bit precision. The actual chip displays RGB444; preview must
+    // match. Without this, color counts > 4096 leak into the preview.
+    for (auto& p : preview.pixels()) p = palette::quantize_to_ocs(p);
     res.rendered = std::move(preview);
     return res;
 }
@@ -1041,6 +1053,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
     res.avg_visible_moves_per_line = static_cast<float>(table.slots.size());
     res.max_visible_moves_per_line = table.slots.size();
     res.line_moves = std::move(line_moves);
+    for (auto& p : preview.pixels()) p = palette::quantize_to_ocs(p);
     res.rendered = std::move(preview);
     return res;
 }
@@ -1056,7 +1069,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
                                        bool cap_best,
-                                       std::string_view cap_best_metric) {
+                                       std::string_view cap_best_metric,
+                                       int cap_spread_radius,
+                                       float cap_spread_decay) {
     // --cap-best: 8 jitter seeds (32-base palette has shallower basins
     // than DPF's 8-base, so heavy jitter sampling buys less here).
     // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
@@ -1071,7 +1086,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 return encode_scap_ehb_ocs(
                     jittered_in, width_arg, height_arg, reserve_color0,
                     d, copper_changes_override, div, debug_overlay,
-                    /*on_progress=*/{}, /*cap_best=*/false);
+                    /*on_progress=*/{}, /*cap_best=*/false, "psnr",
+                    cap_spread_radius, cap_spread_decay);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -1142,7 +1158,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         palette_diversity,
         /*skip_initial_swap_rows=*/0,
         /*is_lace=*/false,
-        /*is_ehb=*/true);
+        /*is_ehb=*/true,
+        /*on_progress=*/{},
+        cap_spread_radius >= 0 ? static_cast<std::size_t>(cap_spread_radius) : std::size_t{4},
+        cap_spread_decay  >= 0.0f ? cap_spread_decay : 0.85f);
     if (!copper_result) return std::unexpected{copper_result.error()};
     // Copies (not refs) so the joint-refinement pass below can reassign
     // them when it re-runs CAP with a refined base palette.
@@ -1799,6 +1818,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         res.max_visible_moves_per_line = vis_max;
     }
     res.line_moves = std::move(line_moves);
+    for (auto& p : preview.pixels()) p = palette::quantize_to_ocs(p);
     res.rendered = std::move(preview);
     return res;
 }

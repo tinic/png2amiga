@@ -222,7 +222,21 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // Must be thread-safe — encoder may
                                    // invoke from worker contexts.
                                    std::function<void(float, std::string_view)>
-                                       on_progress = {});
+                                       on_progress = {},
+                                   // Per-line palette planner neighbour-row
+                                   // smoothing. radius=4 + decay=0.85 won
+                                   // the 25-config A/B sweep across
+                                   // EHB+SCAP and DPF+SCAP. The earlier
+                                   // hcstyle (r=1,d=1.0) result was a
+                                   // snap-defer preview-inflation artefact
+                                   // and regresses 0.3–4 dB with honest
+                                   // preview. Old default was 0.5 decay;
+                                   // the bump to 0.85 buys ~+0.09 dB
+                                   // averaged across 8 (mode×image) cells.
+                                   // CLI exposes --cap-spread-radius /
+                                   // --cap-spread-decay for further tuning.
+                                   std::size_t neighbor_radius = 4,
+                                   float neighbor_decay = 0.85f);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.
