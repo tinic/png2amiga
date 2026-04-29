@@ -1,0 +1,14 @@
+
+PSNR vs target (320×213, sRGB MSE):
+
+  Encoder                                           PSNR (dB)
+  ------------------------------------------------  ---------
+  png2amiga EHB + SCAP + cap-best (FS)                  34.20
+  ham_convert SHAM6 (dither_fs)                         33.15
+  ham_convert HAM6_q7 (dither_fs)                       32.86
+  abc HAM6 (-floyd)                                     32.13
+  png2amiga HAM6 + CAP + cap-best (FS)                  32.12
+  png2amiga HAM6 (FS)                                   31.99
+  abc SHAM6 (-floyd)                                    29.46
+
+Winner: png2amiga EHB + SCAP + cap-best (FS) (34.20 dB)

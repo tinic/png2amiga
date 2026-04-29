@@ -245,6 +245,47 @@ per-line copper traffic gets — each band of activity is one scanline's
 worth of CAP base reload + ~19 mid-line SCAP swaps fitting inside the
 OCS hblank budget.
 
+## How does it compare?
+
+We benchmarked png2amiga against the two other modern headless
+PNG-to-Amiga HAM/SHAM converters — `arnaud-carre/abc` and Solo761's
+`ham_convert` — with **Floyd-Steinberg dither across every entry** for
+an apples-to-apples comparison. Each encoder ran in its
+highest-quality configuration. Source: `examples/chuck31.png` resized
+to 320×213 (Lanczos), PSNR computed on per-channel sRGB byte distance.
+
+| Encoder     | Mode                              | PSNR (dB) |
+|-------------|-----------------------------------|----------:|
+| **png2amiga** | **EHB + SCAP + cap-best**       | **34.20** |
+| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 33.15     |
+| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 32.86     |
+| abc         | HAM6 (`-floyd`)                   | 32.13     |
+| png2amiga   | HAM6 + CAP + cap-best             | 32.12     |
+| png2amiga   | HAM6 (no copper)                  | 31.99     |
+| abc         | SHAM6 (`-floyd`)                  | 29.46     |
+
+png2amiga's **EHB + SCAP + cap-best** wins outright by **+1.05 dB**
+over ham_convert's SHAM6 and **+1.34 dB** over ham_convert's HAM6
+max-quality mode. The lead comes from SCAP's ~19 mid-line palette
+swaps fitting inside the real OCS 14-MOVE hblank budget, plus the
+cap-best multi-restart sweep finding a base palette that's hard to
+beat. (HAM6+CAP — same line budget but no mid-line swaps — is in the
+middle of the pack on this image; on others, particularly photographic
+content with strong horizontal banding, HAM6+CAP+cap-best leads the
+HAM6 race instead.)
+
+The shootout is reproducible end-to-end:
+
+```bash
+cd tools/shootout
+./setup.sh   # downloads ham_convert.jar, clones + builds abc on macOS
+./run.sh     # encodes examples/chuck31.png (or pass your own)
+```
+
+`tools/shootout/README.md` has the full method, the rationale for the
+metric, and notes on why amigagfxmangle / DPaint.js / AGAConv were
+excluded.
+
 ## Amiga Executable Generation
 
 The project includes

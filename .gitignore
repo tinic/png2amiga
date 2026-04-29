@@ -26,3 +26,7 @@ test.cpp
 /engine/
 # vAmiga emulator snapshot — large (~8 MB) per-developer
 *.vasnap
+# Shootout harness pulls down third-party converters and writes encode
+# outputs; both are reproducible from the scripts so we don't ship them.
+/tools/shootout/vendor/
+/tools/shootout/output/
