@@ -1814,6 +1814,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 
         // Apply chain: emit per-slot MOVEs, update P/P_eff/P_eff_lab/
         // hw_state, snapshot strip palettes for the render pass.
+        bool slot0_unlocked = false;
         for (std::size_t s = 0; s < slots_to_run; ++s) {
             int reg = best.dec_reg[s];
             if (reg < 0) {
@@ -1835,13 +1836,44 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     palette::linear_to_ocs(col),
                     static_cast<int>(s)));
                 ++total_moves;
+                if (k == 0) slot0_unlocked = true;
             }
             strip_eff[s + 1] = P_eff;
             strip_eff_lab[s + 1] = P_eff_lab;
         }
-        // Skipped slots beyond slots_to_run keep the post-last-slot
-        // palette state.
-        for (std::size_t s = slots_to_run; s < num_strips - 1; ++s) {
+
+        // Mid-line slot 0 unlock + relock. With reserve_color0 on, slot 0
+        // is the Amiga border colour — must be black during the right
+        // overscan / next-line HBLANK so the chip's border draws black.
+        // But planner k_min=0 lets SCAP unlock slot 0 mid-line for image
+        // content. To keep the border guarantee we relock slot 0 to
+        // black at slot index `slots_to_run` (=18, the unused 19th slot
+        // ~pixel 296), which lands in the active raster but past most
+        // image content. The right ~24 px strip uses slot 0 = black,
+        // and the right border + next-line HBLANK see black too.
+        std::size_t restore_slot = slots_to_run;
+        if (reserve_color0 && slot0_unlocked && restore_slot < table.slots.size()) {
+            P[0] = Color3f{0.0f, 0.0f, 0.0f};
+            P_eff[0] = P[0];
+            P_eff[kBaseColors] = half_brite(P[0]);
+            P_eff_lab[0] = color_space::linear_to_oklab(P[0]);
+            P_eff_lab[kBaseColors] =
+                color_space::linear_to_oklab(P_eff[kBaseColors]);
+            hw_state[0] = P[0];
+            line_moves[y].push_back(make_move(
+                static_cast<std::uint8_t>(kRegBase + 0),
+                palette::linear_to_ocs(P[0]),
+                static_cast<int>(restore_slot)));
+            ++total_moves;
+            strip_eff[restore_slot + 1] = P_eff;
+            strip_eff_lab[restore_slot + 1] = P_eff_lab;
+        }
+        // Skipped slots beyond slots_to_run + restore keep the post-
+        // last-slot palette state.
+        std::size_t propagate_from =
+            (reserve_color0 && slot0_unlocked && restore_slot < table.slots.size())
+            ? restore_slot + 1 : slots_to_run;
+        for (std::size_t s = propagate_from; s < num_strips - 1; ++s) {
             strip_eff[s + 1] = P_eff;
             strip_eff_lab[s + 1] = P_eff_lab;
         }
