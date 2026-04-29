@@ -117,6 +117,26 @@ split_ham_value(std::uint8_t value, std::size_t data_bits) noexcept {
             static_cast<std::uint8_t>(value & data_mask)};
 }
 
+// HAM op-selection scorer. HAM ops set literal sRGB DAC values per
+// channel, so per-channel sRGB-byte distance is the objective the
+// encoder actually minimises on display. Aligns with our reported
+// PSNR metric (blurred-sRGB-MSE) too. Output scaled into OKLab²
+// magnitude (peak sRGB² = 3·255² ≈ 1.95e5, peak OKLab² ≈ 3 →
+// divide by 65536) so cumulative_error stays commensurate with
+// thresholds tuned for the prior OKLab² scorer (e.g. refine_triple's
+// skip_threshold_per_pixel).
+//
+// Switched from OKLab² → sRGB-MSE in commit 145a857 after measuring
+// +0.42..+1.39 dB internal across HAM6/HAM8 and +0.67 dB external
+// on a ham_convert head-to-head. To A/B against the old scorer,
+// `git revert 145a857` reintroduces it.
+inline float score_srgb_mse(SRGBColor a, SRGBColor b) {
+    int dr = static_cast<int>(a.r) - static_cast<int>(b.r);
+    int dg = static_cast<int>(a.g) - static_cast<int>(b.g);
+    int db = static_cast<int>(a.b) - static_cast<int>(b.b);
+    return static_cast<float>(dr * dr + dg * dg + db * db) * (1.0f / 65536.0f);
+}
+
 HamPixelResult encode_ham_pixel_impl(
     SRGBColor prev,
     Color3f target,
@@ -128,15 +148,13 @@ HamPixelResult encode_ham_pixel_impl(
     HamPixelResult best;
     best.error = std::numeric_limits<float>::max();
 
-    // Compute target OKLab once for all candidates
-    auto target_lab = color_space::linear_to_oklab(target);
+    // HAM ops set literal sRGB DAC values per channel; score in sRGB-MSE
+    // to match the reported PSNR metric (and the beam DP's scorer).
+    auto target_srgb = linear_to_srgb8(target);
 
-    // Option 1: SET palette color (control = 00) — uses precomputed palette OKLab
-    for (std::size_t i = 0; i < pre.palette_lab.size(); ++i) {
-        float dL = target_lab.L - pre.palette_lab[i].L;
-        float da = target_lab.a - pre.palette_lab[i].a;
-        float db = target_lab.b - pre.palette_lab[i].b;
-        float err = dL * dL + da * da + db * db;
+    // Option 1: SET palette color (control = 00)
+    for (std::size_t i = 0; i < base_srgb.size(); ++i) {
+        float err = score_srgb_mse(target_srgb, base_srgb[i]);
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b00, static_cast<std::uint8_t>(i), data_bits);
@@ -144,20 +162,12 @@ HamPixelResult encode_ham_pixel_impl(
         }
     }
 
-    // For modify operations, we work in sRGB space because HAM modifies
-    // individual sRGB channel values at the hardware's bit precision.
-    auto target_srgb = linear_to_srgb8(target);
-
     // Option 2: MODIFY BLUE (control = 01)
     {
         auto b_data = reduce_to_bits(target_srgb.b, data_bits);
         auto b8 = pre.expand_lut[b_data];
         SRGBColor modified{prev.r, prev.g, b8};
-        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
-        float dL = target_lab.L - lab.L;
-        float da = target_lab.a - lab.a;
-        float db = target_lab.b - lab.b;
-        float err = dL * dL + da * da + db * db;
+        float err = score_srgb_mse(target_srgb, modified);
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b01, b_data, data_bits);
@@ -170,11 +180,7 @@ HamPixelResult encode_ham_pixel_impl(
         auto r_data = reduce_to_bits(target_srgb.r, data_bits);
         auto r8 = pre.expand_lut[r_data];
         SRGBColor modified{r8, prev.g, prev.b};
-        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
-        float dL = target_lab.L - lab.L;
-        float da = target_lab.a - lab.a;
-        float db = target_lab.b - lab.b;
-        float err = dL * dL + da * da + db * db;
+        float err = score_srgb_mse(target_srgb, modified);
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b10, r_data, data_bits);
@@ -187,11 +193,7 @@ HamPixelResult encode_ham_pixel_impl(
         auto g_data = reduce_to_bits(target_srgb.g, data_bits);
         auto g8 = pre.expand_lut[g_data];
         SRGBColor modified{prev.r, g8, prev.b};
-        auto lab = color_space::linear_to_oklab(srgb8_to_linear(modified));
-        float dL = target_lab.L - lab.L;
-        float da = target_lab.a - lab.a;
-        float db = target_lab.b - lab.b;
-        float err = dL * dL + da * da + db * db;
+        float err = score_srgb_mse(target_srgb, modified);
         if (err < best.error) {
             best.error = err;
             best.value = make_ham_value(0b11, g_data, data_bits);
@@ -299,40 +301,6 @@ inline OKLab cached_srgb_to_oklab(SRGBColor c) {
     return lab;
 }
 
-// HAM op-selection scorer. Aligns the planner objective with our
-// reported metric (blurred-sRGB-MSE PSNR via compute_psnr_blurred).
-// Scores (target_srgb - output_srgb) in 8-bit RGB space, scaled into
-// OKLab² magnitude (peak sRGB² = 3·255² ≈ 1.95e5, peak OKLab² ≈ 3 →
-// divide by 65536) so cumulative_error stays commensurate.
-//
-// Switched from OKLab² → sRGB-MSE in 2026-04 after empirically
-// measuring +0.42..+1.39 dB internal across HAM6/HAM8 paths and a
-// +0.67 dB external-PSNR jump that closed and slightly overshot the
-// gap to ham_convert q7 on a reference test image. The earlier OKLab²
-// scorer was perceptually principled but objective-mismatched against
-// the metric we actually report. PNG2AMIGA_HAM_METRIC=oklab2 reverts
-// to the old scorer for A/B verification.
-enum class HamMetricMode { srgb_mse, oklab2 };
-
-inline HamMetricMode pick_ham_metric_mode() {
-    if (auto* s = std::getenv("PNG2AMIGA_HAM_METRIC")) {
-        std::string_view v{s};
-        if (v == "oklab2") return HamMetricMode::oklab2;
-    }
-    return HamMetricMode::srgb_mse;
-}
-
-inline HamMetricMode ham_metric_mode() {
-    static const HamMetricMode m = pick_ham_metric_mode();
-    return m;
-}
-
-inline float score_srgb_mse(SRGBColor a, SRGBColor b) {
-    int dr = static_cast<int>(a.r) - static_cast<int>(b.r);
-    int dg = static_cast<int>(a.g) - static_cast<int>(b.g);
-    int db = static_cast<int>(a.b) - static_cast<int>(b.b);
-    return static_cast<float>(dr * dr + dg * dg + db * db) * (1.0f / 65536.0f);
-}
 
 // Expand all reasonable HAM operations from a given previous color state.
 // MODIFY ops are restricted to a window of data values around the target's
@@ -344,9 +312,12 @@ inline float score_srgb_mse(SRGBColor a, SRGBColor b) {
 // quality loss.
 constexpr int kModifyDpRadius = 2;
 
+// `target_lab` is unused with the sRGB-MSE scorer (left in the signature
+// to avoid touching the four DP/refine call sites that precompute row_lab
+// for cache-locality reasons; the precompute is also cheap to do anyway).
 void expand_ham(
     SRGBColor prev,
-    OKLab target_lab,
+    [[maybe_unused]] OKLab target_lab,
     SRGBColor target_srgb,
     float prev_error,
     std::uint16_t parent_idx,
@@ -357,19 +328,10 @@ void expand_ham(
     auto data_bits = pre.data_bits;
     auto num_data_values = pre.num_data_values;
     auto nmax = static_cast<int>(num_data_values);
-    bool use_srgb_mse = (ham_metric_mode() == HamMetricMode::srgb_mse);
 
-    // SET palette color (control = 00) — uses precomputed palette OKLab
+    // SET palette color (control = 00)
     for (std::size_t i = 0; i < pre.palette_lab.size(); ++i) {
-        float err;
-        if (use_srgb_mse) {
-            err = score_srgb_mse(target_srgb, base_srgb[i]);
-        } else {
-            float dL = target_lab.L - pre.palette_lab[i].L;
-            float da = target_lab.a - pre.palette_lab[i].a;
-            float db = target_lab.b - pre.palette_lab[i].b;
-            err = dL * dL + da * da + db * db;
-        }
+        float err = score_srgb_mse(target_srgb, base_srgb[i]);
         candidates.push_back({
             base_srgb[i],
             prev_error + err,
@@ -382,33 +344,14 @@ void expand_ham(
     auto trv = reduce_to_bits(target_srgb.r, data_bits);
     auto tgv = reduce_to_bits(target_srgb.g, data_bits);
 
-    // Precompute per-channel LMS partials from prev. MODIFY-BLUE varies
-    // only the b channel, MODIFY-RED only r, etc. — caching the fixed two
-    // channels' LMS contribution avoids 6 of 9 mults per iteration.
-    auto& lms_t = color_space::detail::srgb_lms_lut();
-    auto lms_prev_r = lms_t[0][prev.r];
-    auto lms_prev_g = lms_t[1][prev.g];
-    auto lms_prev_b = lms_t[2][prev.b];
-
     // MODIFY BLUE (control = 01) — focused around target
     auto lo_b = std::max(0, static_cast<int>(tbv) - kModifyDpRadius);
     auto hi_b = std::min(nmax, static_cast<int>(tbv) + kModifyDpRadius + 1);
     {
-        auto rg_lms = lms_prev_r + lms_prev_g;
         for (int bv = lo_b; bv < hi_b; ++bv) {
             auto b8 = pre.expand_lut[static_cast<std::size_t>(bv)];
             SRGBColor modified{prev.r, prev.g, b8};
-            float err;
-            if (use_srgb_mse) {
-                err = score_srgb_mse(target_srgb, modified);
-            } else {
-                auto lab = color_space::lms_cbrt_to_oklab(
-                    color_space::fast_cbrt4(rg_lms + lms_t[2][b8]));
-                float dL = target_lab.L - lab.L;
-                float da = target_lab.a - lab.a;
-                float db = target_lab.b - lab.b;
-                err = dL * dL + da * da + db * db;
-            }
+            float err = score_srgb_mse(target_srgb, modified);
             candidates.push_back({
                 modified, prev_error + err,
                 make_ham_value(0b01, static_cast<std::uint8_t>(bv), data_bits),
@@ -421,21 +364,10 @@ void expand_ham(
     auto lo_r = std::max(0, static_cast<int>(trv) - kModifyDpRadius);
     auto hi_r = std::min(nmax, static_cast<int>(trv) + kModifyDpRadius + 1);
     {
-        auto gb_lms = lms_prev_g + lms_prev_b;
         for (int rv = lo_r; rv < hi_r; ++rv) {
             auto r8 = pre.expand_lut[static_cast<std::size_t>(rv)];
             SRGBColor modified{r8, prev.g, prev.b};
-            float err;
-            if (use_srgb_mse) {
-                err = score_srgb_mse(target_srgb, modified);
-            } else {
-                auto lab = color_space::lms_cbrt_to_oklab(
-                    color_space::fast_cbrt4(lms_t[0][r8] + gb_lms));
-                float dL = target_lab.L - lab.L;
-                float da = target_lab.a - lab.a;
-                float db = target_lab.b - lab.b;
-                err = dL * dL + da * da + db * db;
-            }
+            float err = score_srgb_mse(target_srgb, modified);
             candidates.push_back({
                 modified, prev_error + err,
                 make_ham_value(0b10, static_cast<std::uint8_t>(rv), data_bits),
@@ -448,21 +380,10 @@ void expand_ham(
     auto lo_g = std::max(0, static_cast<int>(tgv) - kModifyDpRadius);
     auto hi_g = std::min(nmax, static_cast<int>(tgv) + kModifyDpRadius + 1);
     {
-        auto rb_lms = lms_prev_r + lms_prev_b;
         for (int gv = lo_g; gv < hi_g; ++gv) {
             auto g8 = pre.expand_lut[static_cast<std::size_t>(gv)];
             SRGBColor modified{prev.r, g8, prev.b};
-            float err;
-            if (use_srgb_mse) {
-                err = score_srgb_mse(target_srgb, modified);
-            } else {
-                auto lab = color_space::lms_cbrt_to_oklab(
-                    color_space::fast_cbrt4(rb_lms + lms_t[1][g8]));
-                float dL = target_lab.L - lab.L;
-                float da = target_lab.a - lab.a;
-                float db = target_lab.b - lab.b;
-                err = dL * dL + da * da + db * db;
-            }
+            float err = score_srgb_mse(target_srgb, modified);
             candidates.push_back({
                 modified, prev_error + err,
                 make_ham_value(0b11, static_cast<std::uint8_t>(gv), data_bits),
@@ -692,17 +613,11 @@ void refine_triple(
     // this scanline so we start fresh (entries from previous scanlines
     // are invalidated by the mismatch check; no sweep needed).
     bump_ham_oklab_cache_gen();
-    auto cached_oklab = [](SRGBColor c) -> OKLab {
-        return cached_srgb_to_oklab(c);
-    };
-
-    bool use_srgb_mse = (ham_metric_mode() == HamMetricMode::srgb_mse);
     // Helper to compute the error of a single op against the target.
-    // Takes both target_lab and target_srgb so it can use whichever metric
-    // matches the beam DP's choice — otherwise this post-pass would re-rank
-    // by a different objective and undo the beam's wins.
+    // Score matches expand_ham's metric (sRGB-MSE) so this post-pass
+    // re-ranks consistently with the beam DP's choice.
     auto op_error = [&](SRGBColor prev, std::uint8_t ham_value,
-                        OKLab target_lab, SRGBColor target_srgb)
+                        SRGBColor target_srgb)
                         -> std::pair<float, SRGBColor> {
         auto [ctrl, data] = split_ham_value(ham_value, pre.data_bits);
         SRGBColor out = prev;
@@ -712,14 +627,7 @@ void refine_triple(
         case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
         case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
         }
-        if (use_srgb_mse) {
-            return { score_srgb_mse(target_srgb, out), out };
-        }
-        auto out_lab = cached_oklab(out);
-        float dL = target_lab.L - out_lab.L;
-        float da = target_lab.a - out_lab.a;
-        float db = target_lab.b - out_lab.b;
-        return { dL * dL + da * da + db * db, out };
+        return { score_srgb_mse(target_srgb, out), out };
     };
 
     std::vector<BeamState> window_candidates;
@@ -755,9 +663,9 @@ void refine_triple(
         SRGBColor tgts1 = row_srgb[i + 1];
         SRGBColor tgts2 = row_srgb[i + 2];
 
-        auto [e0_cur, s0_cur] = op_error(prev_state, values[i], tgt0, tgts0);
-        auto [e1_cur, s1_cur] = op_error(s0_cur, values[i + 1], tgt1, tgts1);
-        auto [e2_cur, s2_cur] = op_error(s1_cur, values[i + 2], tgt2, tgts2);
+        auto [e0_cur, s0_cur] = op_error(prev_state, values[i], tgts0);
+        auto [e1_cur, s1_cur] = op_error(s0_cur, values[i + 1], tgts1);
+        auto [e2_cur, s2_cur] = op_error(s1_cur, values[i + 2], tgts2);
         float cur_err = e0_cur + e1_cur + e2_cur;
 
         // Skip windows where all three pixels are already near-perfect.
@@ -772,9 +680,8 @@ void refine_triple(
         bool has_next = (i + 3) < width;
         float cur_next_err = 0.0f;
         if (has_next) {
-            OKLab tgt3 = row_lab[i + 3];
             SRGBColor tgts3 = row_srgb[i + 3];
-            auto [e3, _] = op_error(s2_cur, values[i + 3], tgt3, tgts3);
+            auto [e3, _] = op_error(s2_cur, values[i + 3], tgts3);
             cur_next_err = e3;
         }
         float cur_total = cur_err + cur_next_err;
@@ -807,13 +714,11 @@ void refine_triple(
         std::size_t best_idx = 0;
         float best_total = std::numeric_limits<float>::max();
         auto& last = hist[2];
-        OKLab tgt3 = has_next ? row_lab[i + 3] : OKLab{};
         SRGBColor tgts3 = has_next ? row_srgb[i + 3] : SRGBColor{};
         for (std::size_t j = 0; j < last.size(); ++j) {
             float total = last[j].cumulative_error;
             if (has_next) {
-                auto [e3, _] = op_error(last[j].color, values[i + 3],
-                                        tgt3, tgts3);
+                auto [e3, _] = op_error(last[j].color, values[i + 3], tgts3);
                 total += e3;
             }
             if (total < best_total) {
@@ -834,9 +739,9 @@ void refine_triple(
             for (std::size_t p = 0; p < 3; ++p) values[i + p] = new_ops[p];
 
             // Recompute states inside (and just after) the window.
-            auto [_e0, ns0] = op_error(prev_state, values[i],     tgt0, tgts0);
-            auto [_e1, ns1] = op_error(ns0,        values[i + 1], tgt1, tgts1);
-            auto [_e2, ns2] = op_error(ns1,        values[i + 2], tgt2, tgts2);
+            auto [_e0, ns0] = op_error(prev_state, values[i],     tgts0);
+            auto [_e1, ns1] = op_error(ns0,        values[i + 1], tgts1);
+            auto [_e2, ns2] = op_error(ns1,        values[i + 2], tgts2);
             states[i + 1] = ns0;
             states[i + 2] = ns1;
             states[i + 3] = ns2;
@@ -893,14 +798,8 @@ void refine_triple_per_strip(
         row_srgb[x] = linear_to_srgb8(target_row[x]);
     }
 
-    bump_ham_oklab_cache_gen();
-    auto cached_oklab = [](SRGBColor c) -> OKLab {
-        return cached_srgb_to_oklab(c);
-    };
-
-    bool use_srgb_mse = (ham_metric_mode() == HamMetricMode::srgb_mse);
     auto op_error = [&](SRGBColor prev, std::uint8_t ham_value,
-                        OKLab target_lab, std::size_t pixel_x)
+                        std::size_t pixel_x)
         -> std::pair<float, SRGBColor> {
         auto si = strip_at(pixel_x);
         auto& pre = pres[si];
@@ -913,14 +812,7 @@ void refine_triple_per_strip(
         case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
         case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
         }
-        if (use_srgb_mse) {
-            return { score_srgb_mse(row_srgb[pixel_x], out), out };
-        }
-        auto out_lab = cached_oklab(out);
-        float dL = target_lab.L - out_lab.L;
-        float da = target_lab.a - out_lab.a;
-        float db = target_lab.b - out_lab.b;
-        return { dL * dL + da * da + db * db, out };
+        return { score_srgb_mse(row_srgb[pixel_x], out), out };
     };
 
     std::vector<BeamState> window_candidates;
@@ -938,9 +830,9 @@ void refine_triple_per_strip(
         OKLab tgt1 = row_lab[i + 1];
         OKLab tgt2 = row_lab[i + 2];
 
-        auto [e0_cur, s0_cur] = op_error(prev_state, values[i], tgt0, i);
-        auto [e1_cur, s1_cur] = op_error(s0_cur, values[i + 1], tgt1, i + 1);
-        auto [e2_cur, s2_cur] = op_error(s1_cur, values[i + 2], tgt2, i + 2);
+        auto [e0_cur, s0_cur] = op_error(prev_state, values[i], i);
+        auto [e1_cur, s1_cur] = op_error(s0_cur, values[i + 1], i + 1);
+        auto [e2_cur, s2_cur] = op_error(s1_cur, values[i + 2], i + 2);
         float cur_err = e0_cur + e1_cur + e2_cur;
 
         if (e0_cur < skip_threshold_per_pixel &&
@@ -952,8 +844,7 @@ void refine_triple_per_strip(
         bool has_next = (i + 3) < width;
         float cur_next_err = 0.0f;
         if (has_next) {
-            OKLab tgt3 = row_lab[i + 3];
-            auto [e3, _] = op_error(s2_cur, values[i + 3], tgt3, i + 3);
+            auto [e3, _] = op_error(s2_cur, values[i + 3], i + 3);
             cur_next_err = e3;
         }
         float cur_total = cur_err + cur_next_err;
@@ -983,12 +874,11 @@ void refine_triple_per_strip(
         std::size_t best_idx = 0;
         float best_total = std::numeric_limits<float>::max();
         auto& last = hist[2];
-        OKLab tgt3 = has_next ? row_lab[i + 3] : OKLab{};
         for (std::size_t j = 0; j < last.size(); ++j) {
             float total = last[j].cumulative_error;
             if (has_next) {
                 auto [e3, _] = op_error(last[j].color, values[i + 3],
-                                        tgt3, i + 3);
+                                        i + 3);
                 total += e3;
             }
             if (total < best_total) {
@@ -1006,9 +896,9 @@ void refine_triple_per_strip(
             }
             for (std::size_t p = 0; p < 3; ++p) values[i + p] = new_ops[p];
 
-            auto [_e0, ns0] = op_error(prev_state,    values[i],     tgt0, i);
-            auto [_e1, ns1] = op_error(ns0,           values[i + 1], tgt1, i + 1);
-            auto [_e2, ns2] = op_error(ns1,           values[i + 2], tgt2, i + 2);
+            auto [_e0, ns0] = op_error(prev_state, values[i],     i);
+            auto [_e1, ns1] = op_error(ns0,        values[i + 1], i + 1);
+            auto [_e2, ns2] = op_error(ns1,        values[i + 2], i + 2);
             states[i + 1] = ns0;
             states[i + 2] = ns1;
             states[i + 3] = ns2;
