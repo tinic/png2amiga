@@ -125,6 +125,41 @@ std::string fmt_size(int bytes) {
 //   height           image height (used in chip-RAM per-line list math)
 // Pass `avg_cap` only when the mode actually has CAP — otherwise the
 // "0.0 avg CAP/line" suffix is misleading.
+// Forward declaration; dither_name is defined far below in this TU.
+const char* dither_name(dither::Method m);
+
+// Centralised header-block helpers. Every encode path prints the same
+// six-line block in the same order:
+//
+//   Input:   WxH
+//   Target:  WxH @ D bitplanes
+//   Chipset: <chipset>
+//   Mode:    <mode-specific 1-line description>
+//   Palette: <colors info>
+//   Dither:  <name> (strength: X.XX)
+//
+// All headers align text at column 10 (8-char header + space).
+inline void cli_print_input(std::size_t w, std::size_t h) {
+    cli_status("Input:    {}x{}", w, h);
+}
+inline void cli_print_target(std::size_t w, std::size_t h, int depth) {
+    cli_status("Target:   {}x{} @ {} bitplanes", w, h, depth);
+}
+inline void cli_print_chipset(amiga::Chipset cs) {
+    cli_status("Chipset:  {}",
+               cs == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
+}
+inline void cli_print_mode(std::string_view mode_desc) {
+    cli_status("Mode:     {}", mode_desc);
+}
+inline void cli_print_palette(std::string_view palette_desc) {
+    cli_status("Palette:  {}", palette_desc);
+}
+inline void cli_print_dither(dither::Method method, float strength) {
+    cli_status("Dither:   {} (strength: {:.2f})",
+               dither_name(method), strength);
+}
+
 void cli_print_encoded(int depth, int plane_bytes, int palette_size,
                        bool aga, int cap_grid_entries, int scap_op_count,
                        int height, int max_moves, int num_colors,
@@ -3583,7 +3618,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    cli_status("Input:  {}x{}", image->width(), image->height());
+    cli_print_input(image->width(), image->height());
 
     // Determine the effective source crop region BEFORE building the mask,
     // so we can sample alpha from the cropped region rather than the full
@@ -3741,7 +3776,9 @@ int main(int argc, char* argv[]) {
         actual_depth = amiga::get_mode_params(config->mode).bitplane_depth;
         config->depth = actual_depth;
     }
-    cli_status("Target: {}x{} @ {} bitplanes", target_w, target_h, actual_depth);
+    cli_print_target(static_cast<std::size_t>(target_w),
+                     static_cast<std::size_t>(target_h),
+                     static_cast<int>(actual_depth));
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
@@ -3800,7 +3837,7 @@ int main(int argc, char* argv[]) {
     preprocess::apply(*image, config->preprocess);
 
     auto chipset = effective_chipset(*config);
-    cli_status("Chipset: {}", chipset == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
+    cli_print_chipset(chipset);
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
     // PF1 (foreground) zeroed and the palette shifted into the upper color
@@ -3855,8 +3892,7 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
         auto& st = enc.state;
-        cli_status("Dither: {} (strength: {:.2f})",
-                     dither_name(config->dither_method),
+        cli_status("Dither:   {} (strength: {:.2f})",                     dither_name(config->dither_method),
                      config->dither_strength);
         cli_status("Mode:   SNES Mode 7 ({}), {}x{}, 256 colours",
                      (config->mode == amiga::Mode::snes_mode7_256
@@ -3973,8 +4009,7 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
         auto& st = enc.state;
-        cli_status("Dither: {} (strength: {:.2f})",
-                     dither_name(genesis_dither),
+        cli_status("Dither:   {} (strength: {:.2f})",                     dither_name(genesis_dither),
                      config->dither_strength);
         const char* mode_label = "";
         switch (config->mode) {
@@ -4215,10 +4250,15 @@ int main(int argc, char* argv[]) {
         // implicit default to atkinson, so config->dither_method is
         // guaranteed safe for HAM here. Just trust it.
         auto ham_dither = config->dither_method;
-        cli_status("Mode:   HAM{} (beam: {}, dither: {})",
-                     ham_params.bitplane_depth,
-                     config->ham_beam,
-                     dither_name(ham_dither));
+        auto ham_data_bits = static_cast<std::size_t>(
+            ham_params.bitplane_depth - 2);
+        std::size_t ham_base_colors = std::size_t{1} << ham_data_bits;
+        cli_print_mode(std::format("HAM{} (beam: {})",
+                                    ham_params.bitplane_depth,
+                                    config->ham_beam));
+        cli_print_palette(std::format(
+            "{} base colors, {}-bit MODIFY", ham_base_colors, ham_data_bits));
+        cli_print_dither(ham_dither, config->dither_strength);
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
@@ -4435,8 +4475,8 @@ int main(int argc, char* argv[]) {
             dith.error_clamp = config->error_clamp_explicit
                               ? config->error_clamp : ehb_cap_tune.error_clamp;
 
-            cli_status("Dither: {} (strength: {:.2f})",
-                         dither_name(dith.method), dith.strength);
+            // Dither: line is now emitted AFTER Mode/Palette below for
+            // consistent header-block ordering.
 
             // Copper encoder optimizes 32 base colors per scanline (depth=5)
             // Interlace: skip swaps on rows 0 and 1 (each field's first
@@ -4574,11 +4614,16 @@ int main(int argc, char* argv[]) {
             }
 
             auto& copper_result_obj = winner->copper_result;
-            cli_status("Mode:   EHB + CAP ({} changes/line, max {} MOVEs/line, "
-                         "dither: {})",
-                         copper_result_obj.changes_per_line,
-                         copper_result_obj.max_moves_per_line,
-                         dither_name(config->dither_method));
+            cli_print_mode(std::format(
+                "EHB + CAP ({} changes/line, max {} MOVEs/line)",
+                copper_result_obj.changes_per_line,
+                copper_result_obj.max_moves_per_line));
+            cli_print_palette(std::format(
+                "{} base + {} half-brite = {} colors",
+                copper_result_obj.base_palette.size(),
+                copper_result_obj.base_palette.size(),
+                copper_result_obj.base_palette.size() * 2));
+            cli_print_dither(dith.method, dith.strength);
 
             auto& all_indices = winner->indices;
             float total_error = winner->total_error;
@@ -4721,8 +4766,7 @@ int main(int argc, char* argv[]) {
         }
 
         // --- EHB without copper ---
-        cli_status("Mode:   EHB (Extra Half-Brite, dither: {})",
-                     dither_name(config->dither_method));
+        cli_print_mode("EHB (Extra Half-Brite)");
 
         // Force transparency to black before encoding (api::run_pipeline
         // does the same internally, but also do it on *image so the
@@ -4756,12 +4800,10 @@ int main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
         auto ehb_full_pal = palette::make_ehb_palette(st.palette);
-        cli_status("Palette: {} base + {} half-brite = {} colors",
-                     st.palette.size(), st.palette.size(),
-                     ehb_full_pal.size());
-        cli_status("Dither: {} (strength: {:.2f})",
-                     dither_name(config->dither_method),
-                     aopts.dither_strength);
+        cli_print_palette(std::format(
+            "{} base + {} half-brite = {} colors",
+            st.palette.size(), st.palette.size(), ehb_full_pal.size()));
+        cli_print_dither(config->dither_method, aopts.dither_strength);
         cli_print_encoded(
             static_cast<int>(st.planes.depth),
             static_cast<int>(st.planes.total_bytes()),
@@ -4906,8 +4948,7 @@ int main(int argc, char* argv[]) {
         dith.error_clamp = config->error_clamp_explicit
                           ? config->error_clamp : cap_tune.error_clamp;
 
-        cli_status("Dither: {} (strength: {:.2f})",
-                     dither_name(dith.method), dith.strength);
+        // Dither: line is now emitted AFTER Mode/Palette below.
 
         // Build locked slot list from --lock-index specs
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
@@ -4992,11 +5033,13 @@ int main(int argc, char* argv[]) {
         }
         // Print actual cpl after orchestration (auto mode may have stretched
         // or fallen back).
-        cli_status("Mode:   CAP ({} changes/line, max {} MOVEs/line, "
-                     "dither: {})",
-                     copper_result->changes_per_line,
-                     copper_result->max_moves_per_line,
-                     dither_name(config->dither_method));
+        cli_print_mode(std::format(
+            "CAP ({} changes/line, max {} MOVEs/line)",
+            copper_result->changes_per_line,
+            copper_result->max_moves_per_line));
+        cli_print_palette(std::format(
+            "{} colors", copper_result->base_palette.size()));
+        cli_print_dither(dith.method, dith.strength);
 
         // Apply transparency mask: transparent pixels → index 0
         if (has_transparency) {
@@ -5245,13 +5288,19 @@ int main(int argc, char* argv[]) {
         const char* scap_label = scap_ehb
             ? "OCS EHB 6bpp"
             : "OCS DPF";
-        cli_status("Mode:   SCAP ({}, {} slots, {:.1f} useful swaps/line, "
-                     "dither: {})",
-                     scap_label,
-                     st.scap_slot_count,
-                     st.copper_changes,
-                     dither_name(config->dither_method));
-        cli_status("Copper load: hblank avg {:.1f} (max {}), visible avg "
+        cli_print_mode(std::format(
+            "SCAP ({}, {} slots, {:.1f} useful swaps/line)",
+            scap_label, st.scap_slot_count, st.copper_changes));
+        if (scap_ehb) {
+            cli_print_palette(std::format(
+                "{} base + {} half-brite = {} colors",
+                st.palette.size(), st.palette.size(), st.palette.size() * 2));
+        } else {
+            cli_print_palette(std::format(
+                "{} colors (PF2 3bpl)", st.palette.size()));
+        }
+        cli_print_dither(config->dither_method, config->dither_strength);
+        cli_status("Copper:   hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
                      st.scap_avg_hblank_moves_per_line,
                      st.scap_max_hblank_moves_per_line,
@@ -5336,6 +5385,14 @@ int main(int argc, char* argv[]) {
 
     // --- Standard bitplane modes ---
 
+    // Mode line for the standard bitplane path: short hardware-flavour
+    // label so every Amiga / DOS / Atari path prints a Mode: header,
+    // matching CAP / SCAP / HAM / EHB.
+    cli_print_mode(std::format(
+        "{} ({}bpp)",
+        mode_to_options_string(config->mode),
+        amiga::get_mode_params(config->mode).bitplane_depth));
+
     // Force transparent pixels to black before quantization/encoding
     if (has_transparency) {
         for (std::size_t i = 0; i < transparency_mask.size(); ++i)
@@ -5372,7 +5429,7 @@ int main(int argc, char* argv[]) {
             // patterns regardless of any CGA register setting.
             auto pal16 = palette::cga_composite_palette();
             pal.colors.assign(pal16.begin(), pal16.end());
-            cli_status("Palette: CGA composite, 16 colors (NTSC artifact, old CGA)");
+            cli_status("Palette:  CGA composite, 16 colors (NTSC artifact, old CGA)");
         } else if (config->mode == amiga::Mode::cga_320) {
             palette::CgaPalette best = palette::CgaPalette::p1_high;
             if (config->cga_auto_palette) {
@@ -5413,7 +5470,7 @@ int main(int argc, char* argv[]) {
                 best, static_cast<std::uint8_t>(config->cga_bg));
             pal.colors.assign(pal4.begin(), pal4.end());
             const char* names[] = {"0-low", "0-high", "1-low", "1-high"};
-            cli_status("Palette: CGA {} (bg=0x{:X}), 4 colors{}",
+            cli_status("Palette:  CGA {} (bg=0x{:X}), 4 colors{}",
                          names[static_cast<int>(best)],
                          config->cga_bg & 0xF,
                          config->cga_auto_palette ? " (auto)" : "");
@@ -5424,7 +5481,7 @@ int main(int argc, char* argv[]) {
                     palette::kCgaHw[config->cga_bg & 0xF]),
                 color_space::srgb_hex_to_linear(palette::kCgaHw[15]),
             };
-            cli_status("Palette: CGA mono, 2 colors (bg=0x{:X}, fg=white)",
+            cli_status("Palette:  CGA mono, 2 colors (bg=0x{:X}, fg=white)",
                          config->cga_bg & 0xF);
         }
     } else if (user_pal_std) {
@@ -5445,12 +5502,12 @@ int main(int argc, char* argv[]) {
                 std_locked[idx] = true;
             }
         }
-        cli_status("Palette: {} colors (loaded from {})",
+        cli_status("Palette:  {} colors (loaded from {})",
                      pal.size(), config->palette_file);
     } else if (amiga::is_atari_hi(config->mode)) {
         // Monochrome: fixed white + black palette
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
-        cli_status("Palette: 2 colors (monochrome)");
+        cli_status("Palette:  2 colors (monochrome)");
     } else if (config->mode == amiga::Mode::ega_320 ||
                config->mode == amiga::Mode::ega_640) {
         // EGA 200-line CGA-compat: palette order must be kCgaHw exactly.
@@ -5462,7 +5519,7 @@ int main(int argc, char* argv[]) {
         pal.colors.reserve(16);
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
-        cli_status("Palette: 16 colors (kCgaHw, EGA CGA-compat IRGB)");
+        cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
     } else {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, reserve_zero_std);
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
@@ -5495,7 +5552,7 @@ int main(int argc, char* argv[]) {
             chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
-        cli_status("Palette: {} colors (auto, {})",
+        cli_status("Palette:  {} colors (auto, {})",
                      pal.size(),
                      amiga::is_stf(config->mode) ? "STF 9-bit" :
                      amiga::is_vga(config->mode) ? "VGA 18-bit" :
@@ -5548,8 +5605,7 @@ int main(int argc, char* argv[]) {
 
     std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
-    cli_status("Dither: {} (strength: {:.2f})",
-                 dither_name(dith.method), dith.strength);
+    cli_print_dither(dith.method, dith.strength);
 
     auto dither_result = dither::apply(*image, pal_span, dith);
 
