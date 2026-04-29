@@ -2051,20 +2051,32 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
 
-        // ---- 3. Per-strip greedy swap planner -------------------------
-        // For each strip after the first: build a 16-bucket histogram of
-        // strip pixel RGB444 keys, pick the most-frequent colour that
-        // isn't already in the strip palette, and swap it into the
-        // base slot whose strip-pixel coverage is lowest.
+        // ---- 3. Per-strip cluster-math swap planner ---------------------
+        // EHB-style scoring (no halfbrite): per strip, build per-slot
+        // cluster stats over the strip's pixels (count + OKLab mean +
+        // residual spread). Generate swap candidates from (a) every
+        // pixel in the strip OCS-quantised + deduped on RGB444, plus
+        // (b) the OKLab centroid of each non-empty cluster. For each
+        // (slot, candidate) pair, score the swap by cluster-error
+        // reduction and pick the largest reduction. Repeat per strip
+        // until the SCAP budget is exhausted.
         std::size_t scap_budget = total_budget - cap_share;
         std::size_t scap_used = 0;
         for (std::size_t s = 1; s < num_strips; ++s) {
             if (scap_used >= scap_budget) break;
             auto [x_lo, x_hi] = strip_x_range(s);
             if (x_lo >= x_hi) continue;
-            // Pixel coverage by current strip palette index.
-            std::array<std::size_t, kBaseColors> cover{};
-            std::array<std::size_t, 4096> hist{};
+
+            // Per-slot cluster: pixel assignments + cumulative LAB sum
+            // for centroid computation, plus per-pixel residual squared
+            // distance for the spread term.
+            struct Clust {
+                double L = 0, a = 0, b = 0, spread = 0;
+                std::uint32_t count = 0;
+            };
+            std::array<Clust, kBaseColors> clust{};
+            // First pass: nearest-slot assignment + per-cluster sum.
+            std::vector<std::uint8_t> assign(x_hi - x_lo, 0);
             for (std::size_t x = x_lo; x < x_hi; ++x) {
                 auto& lab = img_lab[y * width + x];
                 float best_d = std::numeric_limits<float>::max();
@@ -2076,47 +2088,96 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                     float d = dL * dL + da * da + db * db;
                     if (d < best_d) { best_d = d; best_k = k; }
                 }
-                ++cover[best_k];
-                auto rgb12 = palette::linear_to_ocs(image[x, y]);
-                if (rgb12 < 4096) ++hist[rgb12];
+                assign[x - x_lo] = static_cast<std::uint8_t>(best_k);
+                auto& c = clust[best_k];
+                c.L += static_cast<double>(lab.L);
+                c.a += static_cast<double>(lab.a);
+                c.b += static_cast<double>(lab.b);
+                c.spread += static_cast<double>(best_d);
+                ++c.count;
             }
-            // Top RGB444 candidate not already in palette.
-            std::array<bool, 4096> in_pal{};
-            for (std::size_t k = 0; k < kBaseColors; ++k)
-                in_pal[palette::linear_to_ocs(strip_pal[k]) & 0xFFFu] = true;
-            std::uint16_t best_key = 0;
-            std::size_t best_count = 0;
-            for (std::uint32_t key = 0; key < 4096; ++key) {
-                if (in_pal[key]) continue;
-                if (hist[key] > best_count) {
-                    best_count = hist[key];
-                    best_key = static_cast<std::uint16_t>(key);
+
+            // Compute centroid means for non-empty clusters.
+            std::array<color_space::OKLab, kBaseColors> centroid{};
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (clust[k].count > 0) {
+                    centroid[k] = color_space::OKLab{
+                        static_cast<float>(clust[k].L /
+                            static_cast<double>(clust[k].count)),
+                        static_cast<float>(clust[k].a /
+                            static_cast<double>(clust[k].count)),
+                        static_cast<float>(clust[k].b /
+                            static_cast<double>(clust[k].count)),
+                    };
                 }
             }
-            if (best_count == 0) continue;
-            // Slot to swap = least-covered, skipping reserved/colour 0.
-            std::size_t swap_slot = (reserve_color0 ? 1u : 0u);
-            std::size_t min_cover = std::numeric_limits<std::size_t>::max();
-            for (std::size_t k = (reserve_color0 ? 1u : 0u);
-                 k < kBaseColors; ++k) {
-                if (cover[k] < min_cover) {
-                    min_cover = cover[k];
-                    swap_slot = k;
+
+            // Build candidate set: cluster centroids + every distinct
+            // strip pixel (OCS-bucketed, dedup via 12-bit key).
+            std::vector<Color3f> cands;
+            std::vector<color_space::OKLab> cands_lab;
+            std::array<bool, 4096> seen{};
+            auto add_cand = [&](Color3f c) {
+                auto cs = palette::quantize_to_ocs(c);
+                auto key = static_cast<std::size_t>(
+                    palette::linear_to_ocs(cs) & 0xFFFu);
+                if (!seen[key]) {
+                    seen[key] = true;
+                    cands.push_back(cs);
+                    cands_lab.push_back(color_space::linear_to_oklab(cs));
+                }
+            };
+            for (std::size_t x = x_lo; x < x_hi; ++x) add_cand(image[x, y]);
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                if (clust[k].count > 0) {
+                    add_cand(color_space::oklab_to_linear(centroid[k])
+                                 .clamped());
                 }
             }
-            // Skip if the candidate is no better than what's already there.
-            if (min_cover >= best_count) continue;
-            // Apply the swap and emit the SCAP MOVE.
-            float r = static_cast<float>((best_key >> 8) & 0xF) / 15.0f;
-            float g = static_cast<float>((best_key >> 4) & 0xF) / 15.0f;
-            float b = static_cast<float>(best_key & 0xF) / 15.0f;
-            strip_pal[swap_slot] = color_space::srgb_to_linear(
-                Color3f{r, g, b});
-            strip_pal_lab[swap_slot] = color_space::linear_to_oklab(
-                strip_pal[swap_slot]);
+
+            // Score every (slot, candidate) pair: cluster error change
+            // when slot k → cand. The OTHER slots' clusters are
+            // unaffected; only cluster k's distance-from-palette term
+            // changes. spread term is per-pixel residual which doesn't
+            // change under a swap.
+            std::size_t best_slot = 0;
+            std::size_t best_cand = 0;
+            double best_reduction = 0.0;
+            std::size_t k_min = reserve_color0 ? 1u : 0u;
+            for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                if (clust[k].count == 0) continue;
+                // Old error (slot k holding strip_pal[k]):
+                float dL_old = centroid[k].L - strip_pal_lab[k].L;
+                float da_old = centroid[k].a - strip_pal_lab[k].a;
+                float db_old = centroid[k].b - strip_pal_lab[k].b;
+                double old_e = static_cast<double>(clust[k].count) *
+                    static_cast<double>(
+                        dL_old * dL_old + da_old * da_old + db_old * db_old);
+                for (std::size_t ci = 0; ci < cands.size(); ++ci) {
+                    auto& cl = cands_lab[ci];
+                    float dL = centroid[k].L - cl.L;
+                    float da = centroid[k].a - cl.a;
+                    float db = centroid[k].b - cl.b;
+                    double new_e = static_cast<double>(clust[k].count) *
+                        static_cast<double>(
+                            dL * dL + da * da + db * db);
+                    double red = old_e - new_e;
+                    if (red > best_reduction) {
+                        best_reduction = red;
+                        best_slot = k;
+                        best_cand = ci;
+                    }
+                }
+            }
+            if (best_reduction <= 0.0) continue;
+
+            // Apply swap.
+            strip_pal[best_slot] = cands[best_cand];
+            strip_pal_lab[best_slot] = cands_lab[best_cand];
+            auto rgb_ocs = palette::linear_to_ocs(cands[best_cand]);
             line_moves[y].push_back(make_move(
-                static_cast<std::uint8_t>(swap_slot),
-                best_key,
+                static_cast<std::uint8_t>(best_slot),
+                rgb_ocs,
                 static_cast<int>(s - 1)));
             ++scap_used;
             (void)kHblankCeiling;
