@@ -4876,6 +4876,8 @@ int main(int argc, char* argv[]) {
                     .interlace = config->interlace,
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
                 });
 
                 auto result = cheader::save(
@@ -4896,6 +4898,8 @@ int main(int argc, char* argv[]) {
                     .interlace = config->interlace,
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
                 });
 
                 pad_planes_to_mode(st.planes, config->mode, config->hires);
@@ -5384,6 +5388,8 @@ int main(int argc, char* argv[]) {
                     .output_path = config->output_path,
                     .symbol_override = config->symbol_name,
                     .dpf = scap_dpf,        // false for EHB SCAP
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
                 });
                 ch_opts.scap_line_moves = &st.scap_line_moves;
                 ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs"
@@ -5783,6 +5789,8 @@ int main(int argc, char* argv[]) {
                 .aga = (chipset == amiga::Chipset::aga),
                 .fade_in = config->fade_in,
                 .dpf = use_dpf_std,
+                .total_unique_colors =
+                    static_cast<std::size_t>(count_unique_colors(*preview)),
             });
 
             auto result = cheader::save(
@@ -5934,6 +5942,8 @@ int main(int argc, char* argv[]) {
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
                     .dpf = use_dpf_std,
+                    .total_unique_colors =
+                        static_cast<std::size_t>(count_unique_colors(*preview)),
                 });
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
