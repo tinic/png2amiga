@@ -118,6 +118,27 @@ HamPixelResult encode_ham_pixel(SRGBColor prev,
                                  const HamPrecomp& pre,
                                  std::span<const SRGBColor> base_srgb);
 
+// Row-level DP beam search HAM encoder with per-strip palettes. Same
+// algorithm encode_ham_copper uses internally for its per-row palette
+// case — exposed so SCAP HAM6 can drive a beam search with mid-line
+// palette swaps. The HAM rolling state crosses strip boundaries
+// unchanged; only the palette consulted at each pixel swaps.
+//
+// pres[s] / base_srgbs[s] is the active palette for pixels x where
+// strip_for_x[x] == s. Returns the per-pixel HAM value sequence and
+// total cumulative OKLab² error.
+struct ScanlineResult {
+    std::vector<std::uint8_t> values;
+    float error{};
+};
+ScanlineResult encode_scanline_dp_per_strip(
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    std::size_t beam_width);
+
 // ---------------------------------------------------------------------------
 // HAM encoding options
 // ---------------------------------------------------------------------------

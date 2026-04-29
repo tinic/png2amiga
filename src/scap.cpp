@@ -2213,30 +2213,22 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         scanline_palettes_full[y] = strip_pal;  // end-of-line state
         total_moves += line_moves[y].size();
 
-        // ---- 4. Per-pixel HAM op selection with active strip palette --
-        // Use ham::encode_ham_pixel — the production HAM op picker.
-        // Active palette mutates as we cross strip boundaries (SCAP
-        // swap applied at slot[s-1].pixel_x); HamPrecomp / base_srgb
-        // get rebuilt against the new palette state. Cost: ~2× the
-        // inline picker but matches the HAM6+CAP encoding floor.
-        std::vector<Color3f> active_pal = cap_palettes[y];
-        if (active_pal.size() < kBaseColors) active_pal.resize(kBaseColors);
-        auto rebuild_ham_state = [&]() {
-            std::span<const Color3f> pal_span(active_pal.data(), kBaseColors);
-            ham::HamPrecomp pre(pal_span, /*data_bits=*/4);
-            std::vector<ham::SRGBColor> base_srgb(kBaseColors);
-            for (std::size_t k = 0; k < kBaseColors; ++k)
-                base_srgb[k] = ham::linear_to_srgb8(active_pal[k]);
-            return std::pair{std::move(pre), std::move(base_srgb)};
-        };
-        auto [ham_pre, base_srgb] = rebuild_ham_state();
-        ham::SRGBColor prev = base_srgb.empty()
-            ? ham::SRGBColor{0, 0, 0} : base_srgb[0];
-        for (std::size_t x = 0; x < width; ++x) {
-            std::size_t s = strip_for_x(x);
-            if (s > 0 && x == static_cast<std::size_t>(
-                    table.slots[s - 1].pixel_x)) {
-                bool changed = false;
+        // ---- 4. Per-strip row-level DP beam-search HAM encoding -------
+        // Build per-strip palette state by replaying the SCAP MOVEs we
+        // just emitted for this line. strip 0 starts from the line-
+        // entry palette (cap_palettes[y]); each subsequent strip
+        // applies the MOVEs whose slot_index matches s-1.
+        std::vector<std::vector<Color3f>> strip_pals(num_strips);
+        std::vector<std::vector<ham::SRGBColor>> strip_srgbs(num_strips);
+        std::vector<ham::HamPrecomp> strip_pres;
+        strip_pres.reserve(num_strips);
+        std::vector<std::span<const ham::SRGBColor>> strip_srgb_spans;
+        strip_srgb_spans.reserve(num_strips);
+        std::vector<Color3f> running_pal = cap_palettes[y];
+        if (running_pal.size() < kBaseColors)
+            running_pal.resize(kBaseColors);
+        for (std::size_t s = 0; s < num_strips; ++s) {
+            if (s > 0) {
                 for (auto& m : line_moves[y]) {
                     if (m.kind == ScapOpKind::kMove &&
                         m.slot_index == static_cast<int>(s - 1) &&
@@ -2245,27 +2237,68 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                         float r = static_cast<float>((rgb12 >> 8) & 0xF) / 15.0f;
                         float g = static_cast<float>((rgb12 >> 4) & 0xF) / 15.0f;
                         float bv = static_cast<float>(rgb12 & 0xF) / 15.0f;
-                        active_pal[m.reg] = color_space::srgb_to_linear(
+                        running_pal[m.reg] = color_space::srgb_to_linear(
                             Color3f{r, g, bv});
-                        changed = true;
                     }
                 }
-                if (changed) {
-                    auto rebuilt = rebuild_ham_state();
-                    ham_pre = std::move(rebuilt.first);
-                    base_srgb = std::move(rebuilt.second);
-                }
             }
-            auto target = image[x, y];
-            auto pick = ham::encode_ham_pixel(
-                prev, target, ham_pre,
-                std::span<const ham::SRGBColor>{base_srgb});
-            ham_values[y * width + x] = pick.value;
-            preview[x, y] = color_space::srgb_u8_to_linear(
-                pick.result_color.r, pick.result_color.g, pick.result_color.b);
-            prev = pick.result_color;
-            total_error += static_cast<double>(pick.error);
+            strip_pals[s] = running_pal;
+            strip_srgbs[s].resize(kBaseColors);
+            for (std::size_t k = 0; k < kBaseColors; ++k)
+                strip_srgbs[s][k] = ham::linear_to_srgb8(running_pal[k]);
+            strip_pres.emplace_back(
+                std::span<const Color3f>(strip_pals[s].data(), kBaseColors),
+                /*data_bits=*/4);
+            strip_srgb_spans.emplace_back(strip_srgbs[s].data(),
+                                          kBaseColors);
         }
+
+        std::vector<std::uint16_t> strip_idx(width);
+        for (std::size_t x = 0; x < width; ++x)
+            strip_idx[x] = static_cast<std::uint16_t>(strip_for_x(x));
+
+        std::vector<Color3f> row_pixels(width);
+        for (std::size_t x = 0; x < width; ++x)
+            row_pixels[x] = image[x, y];
+
+        ham::SRGBColor start = strip_srgbs[0].empty()
+            ? ham::SRGBColor{0, 0, 0} : strip_srgbs[0][0];
+        // Match ham::encode_ham_copper's default beam_width (48).
+        constexpr std::size_t kBeamWidth = 48;
+        auto sl = ham::encode_scanline_dp_per_strip(
+            std::span<const Color3f>(row_pixels.data(), width),
+            start,
+            std::span<const ham::HamPrecomp>(strip_pres.data(),
+                                             strip_pres.size()),
+            std::span<const std::span<const ham::SRGBColor>>(
+                strip_srgb_spans.data(), strip_srgb_spans.size()),
+            std::span<const std::uint16_t>(strip_idx.data(), width),
+            kBeamWidth);
+        // Render the per-pixel preview by replaying the encoded values
+        // through the strip's palette + HAM rolling state.
+        ham::SRGBColor prev = start;
+        for (std::size_t x = 0; x < width; ++x) {
+            ham_values[y * width + x] = sl.values[x];
+            std::size_t s = strip_idx[x];
+            std::uint8_t v = sl.values[x];
+            std::uint8_t ctrl = static_cast<std::uint8_t>(v >> 4);
+            std::uint8_t data = static_cast<std::uint8_t>(v & 0xF);
+            ham::SRGBColor out;
+            if (ctrl == 0u) {
+                out = strip_srgbs[s][data];
+            } else {
+                std::uint8_t expanded =
+                    static_cast<std::uint8_t>(data * 17u);
+                out = prev;
+                if (ctrl == 0b01) out.b = expanded;
+                else if (ctrl == 0b10) out.r = expanded;
+                else if (ctrl == 0b11) out.g = expanded;
+            }
+            preview[x, y] = color_space::srgb_u8_to_linear(
+                out.r, out.g, out.b);
+            prev = out;
+        }
+        total_error += static_cast<double>(sl.error);
     }
 
     // ---- 5. Pack 6-plane bitplane data --------------------------------

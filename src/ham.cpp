@@ -442,11 +442,73 @@ void prune_beam(std::vector<BeamState>& candidates,
                 candidates.begin() + static_cast<std::ptrdiff_t>(beam_width));
 }
 
-// DP beam search for a single scanline (generic).
-struct ScanlineResult {
-    std::vector<std::uint8_t> values;
-    float error;
-};
+// DP beam search for a single scanline. ScanlineResult is declared
+// in ham.hpp now so SCAP and other consumers can use it.
+// Per-strip variant: takes parallel arrays of HamPrecomp and base_srgb
+// (one entry per strip) plus a per-pixel strip-index lookup. The DP
+// rolling state crosses strip boundaries unchanged — only the palette
+// consulted by expand_ham swaps. Used by SCAP HAM6 to drive row-level
+// DP beam search with mid-line palette swaps.
+ScanlineResult encode_scanline_dp_per_strip_impl(
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    std::size_t beam_width) {
+
+    auto width = target_row.size();
+    if (width == 0) return {{}, 0.0f};
+    if (pres.empty() || base_srgbs.empty()) return {{}, 0.0f};
+
+    std::vector<std::vector<BeamState>> beam_history(width);
+    std::vector<BeamState> candidates;
+    std::vector<BeamState> current_beam;
+    auto ops_per_state = pres[0].palette_lab.size() +
+                         static_cast<std::size_t>(3 * (2 * kModifyDpRadius + 1));
+    candidates.reserve(beam_width * ops_per_state);
+
+    std::vector<OKLab> row_lab(width);
+    std::vector<SRGBColor> row_srgb(width);
+    for (std::size_t x = 0; x < width; ++x) {
+        row_lab[x] = color_space::linear_to_oklab(target_row[x]);
+        row_srgb[x] = linear_to_srgb8(target_row[x]);
+    }
+
+    std::vector<BeamState> prev_beam;
+    prev_beam.push_back({start_color, 0.0f, 0, 0});
+    for (std::size_t x = 0; x < width; ++x) {
+        candidates.clear();
+        auto si = static_cast<std::size_t>(strip_for_x[x]);
+        if (si >= pres.size()) si = pres.size() - 1;
+        for (std::size_t s = 0; s < prev_beam.size(); ++s) {
+            auto parent_idx = static_cast<std::uint16_t>(s);
+            expand_ham(prev_beam[s].color, row_lab[x], row_srgb[x],
+                       prev_beam[s].cumulative_error, parent_idx,
+                       pres[si], base_srgbs[si], candidates);
+        }
+        prune_beam(candidates, current_beam, beam_width);
+        beam_history[x] = current_beam;
+        prev_beam.swap(current_beam);
+    }
+
+    auto& final_beam = beam_history[width - 1];
+    auto best_it = std::min_element(final_beam.begin(), final_beam.end(),
+        [](const BeamState& a, const BeamState& b) {
+            return a.cumulative_error < b.cumulative_error;
+        });
+    float total_error = best_it->cumulative_error;
+    std::vector<std::uint8_t> values(width);
+    auto state_idx = static_cast<std::size_t>(
+        std::distance(final_beam.begin(), best_it));
+    for (auto x = static_cast<std::ptrdiff_t>(width) - 1; x >= 0; --x) {
+        auto ux = static_cast<std::size_t>(x);
+        auto& state = beam_history[ux][state_idx];
+        values[ux] = state.ham_value;
+        state_idx = state.parent_idx;
+    }
+    return {std::move(values), total_error};
+}
 
 ScanlineResult encode_scanline_dp(
     std::span<const Color3f> target_row,
@@ -1702,12 +1764,24 @@ Result<HamResult> encode_ham_copper_generic(
 
 } // namespace
 
-// Public forwarder — declared in ham.hpp.
+// Public forwarders — declared in ham.hpp.
 HamPixelResult encode_ham_pixel(SRGBColor prev,
                                  Color3f target,
                                  const HamPrecomp& pre,
                                  std::span<const SRGBColor> base_srgb) {
     return encode_ham_pixel_impl(prev, target, pre, base_srgb);
+}
+
+ScanlineResult encode_scanline_dp_per_strip(
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    std::size_t beam_width) {
+    return encode_scanline_dp_per_strip_impl(
+        target_row, start_color, pres, base_srgbs,
+        strip_for_x, beam_width);
 }
 
 // ===========================================================================
