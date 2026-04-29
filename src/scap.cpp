@@ -5,6 +5,7 @@
 #include "color_space.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
+#include "ham.hpp"
 #include "palette.hpp"
 #include "pipeline.hpp"
 #include "types.hpp"
@@ -1849,18 +1850,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 // ---------------------------------------------------------------------------
 namespace {
 
+// [v0 inline HAM picker — superseded by ham::encode_ham_pixel which is
+//  the same DP beam search used by the HAM6+CAP path. Kept commented
+//  for reference; was 0.6 dB weaker than the production picker.]
+#if 0
 struct HamPickResult {
-    std::uint8_t value;     // 6-bit encoded HAM op (control<<4 | data)
-    Color3f      out_lin;   // output colour after this op (linear RGB)
-    float        error;     // OKLab² distance to target
+    std::uint8_t value;
+    Color3f      out_lin;
+    float        error;
 };
-
-// HAM6 control encoding (Amiga chip convention):
-//   00 = SET (data = palette index 0..15)
-//   01 = MODIFY blue (data = blue nibble)
-//   10 = MODIFY red
-//   11 = MODIFY green
-// Data bits = 4 → MODIFY values are nibble-replicated (n*17) to 8-bit sRGB.
 HamPickResult pick_ham6_op(
     Color3f prev_lin,
     const color_space::OKLab& target_lab,
@@ -1908,6 +1906,8 @@ HamPickResult pick_ham6_op(
     return best;
 }
 
+#endif
+
 }  // namespace
 
 Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
@@ -1950,25 +1950,27 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     std::size_t cap_share = std::min<std::size_t>(total_budget, 2u);
 
     // ---- 1. Per-line CAP base palette (16 colours, evolving across rows).
-    auto copper_result = copper::encode_copper(
-        image, /*depth=*/4, dither_settings,
-        amiga::Chipset::ocs,
-        cap_share,
-        /*user_palette=*/nullptr,
-        reserve_color0,
-        /*locked=*/{},
-        palette_diversity,
-        /*skip_initial_swap_rows=*/0,
-        /*is_lace=*/false,
-        /*is_ehb=*/false,
-        /*on_progress=*/{},
-        cap_spread_radius >= 0
-            ? static_cast<std::size_t>(cap_spread_radius)
-            : std::numeric_limits<std::size_t>::max(),
-        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f);
-    if (!copper_result) return std::unexpected{copper_result.error()};
-    auto cap_palettes = copper_result->scanline_palettes;
-    auto base_palette = copper_result->base_palette;
+    // Use ham::encode_ham_copper for the per-line CAP plan so the base
+    // palette is HAM-optimal (the encoder picks per-row palettes that
+    // minimise HAM rendering error, not generic indexed nearest-colour
+    // error). copper::encode_copper(depth=4) was off by ~0.65 dB on
+    // chuck31 because its swap planner doesn't model HAM SET/MODIFY ops.
+    // We discard the encoded HAM bitmap from the result and keep only
+    // the scanline_palettes — SCAP rebuilds the bitmap below with
+    // mid-line swaps applied.
+    ham::HamOptions ham_opts;
+    ham_opts.dither_method = dither_settings.method;
+    ham_opts.dither_strength = dither_settings.strength;
+    ham_opts.error_clamp = dither_settings.error_clamp;
+    ham_opts.palette_diversity = palette_diversity;
+    auto ham_cap_result = ham::encode_ham_copper(
+        image, amiga::Mode::ham6, amiga::Chipset::ocs, ham_opts,
+        /*is_hires=*/false, cap_share);
+    if (!ham_cap_result) return std::unexpected{ham_cap_result.error()};
+    auto& cap_palettes = ham_cap_result->scanline_palettes;
+    auto base_palette = ham_cap_result->base_palette;
+    (void)cap_spread_radius;
+    (void)cap_spread_decay;
 
     // Strip layout helpers (same shape as EHB SCAP).
     std::size_t num_strips = table.slots.size() + 1;
@@ -2186,25 +2188,29 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         total_moves += line_moves[y].size();
 
         // ---- 4. Per-pixel HAM op selection with active strip palette --
-        Color3f rolling = strip_pal.empty() ? Color3f{0, 0, 0}
-                                            : strip_pal[0];
-        // Re-walk the line, applying SCAP swaps as we cross strip
-        // boundaries. line_moves is in emission order; strip swaps are
-        // attached to slot positions which correspond to strip boundaries.
-        std::size_t move_idx = 0;
+        // Use ham::encode_ham_pixel — the production HAM op picker.
+        // Active palette mutates as we cross strip boundaries (SCAP
+        // swap applied at slot[s-1].pixel_x); HamPrecomp / base_srgb
+        // get rebuilt against the new palette state. Cost: ~2× the
+        // inline picker but matches the HAM6+CAP encoding floor.
         std::vector<Color3f> active_pal = cap_palettes[y];
         if (active_pal.size() < kBaseColors) active_pal.resize(kBaseColors);
-        std::vector<color_space::OKLab> active_pal_lab(kBaseColors);
-        for (std::size_t k = 0; k < kBaseColors; ++k)
-            active_pal_lab[k] = color_space::linear_to_oklab(active_pal[k]);
+        auto rebuild_ham_state = [&]() {
+            std::span<const Color3f> pal_span(active_pal.data(), kBaseColors);
+            ham::HamPrecomp pre(pal_span, /*data_bits=*/4);
+            std::vector<ham::SRGBColor> base_srgb(kBaseColors);
+            for (std::size_t k = 0; k < kBaseColors; ++k)
+                base_srgb[k] = ham::linear_to_srgb8(active_pal[k]);
+            return std::pair{std::move(pre), std::move(base_srgb)};
+        };
+        auto [ham_pre, base_srgb] = rebuild_ham_state();
+        ham::SRGBColor prev = base_srgb.empty()
+            ? ham::SRGBColor{0, 0, 0} : base_srgb[0];
         for (std::size_t x = 0; x < width; ++x) {
-            // At each strip boundary (pixel_x of slot[s-1]) apply any
-            // SCAP MOVEs whose slot_index matches. v0 attribution: we
-            // matched moves via slot_index = s-1 above, so process
-            // them at the strip's first pixel column.
             std::size_t s = strip_for_x(x);
             if (s > 0 && x == static_cast<std::size_t>(
                     table.slots[s - 1].pixel_x)) {
+                bool changed = false;
                 for (auto& m : line_moves[y]) {
                     if (m.kind == ScapOpKind::kMove &&
                         m.slot_index == static_cast<int>(s - 1) &&
@@ -2215,18 +2221,23 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                         float bv = static_cast<float>(rgb12 & 0xF) / 15.0f;
                         active_pal[m.reg] = color_space::srgb_to_linear(
                             Color3f{r, g, bv});
-                        active_pal_lab[m.reg] =
-                            color_space::linear_to_oklab(active_pal[m.reg]);
+                        changed = true;
                     }
                 }
+                if (changed) {
+                    auto rebuilt = rebuild_ham_state();
+                    ham_pre = std::move(rebuilt.first);
+                    base_srgb = std::move(rebuilt.second);
+                }
             }
-            (void)move_idx;
-            auto& target_lab = img_lab[y * width + x];
-            auto pick = pick_ham6_op(rolling, target_lab,
-                                     active_pal, active_pal_lab);
+            auto target = image[x, y];
+            auto pick = ham::encode_ham_pixel(
+                prev, target, ham_pre,
+                std::span<const ham::SRGBColor>{base_srgb});
             ham_values[y * width + x] = pick.value;
-            preview[x, y] = pick.out_lin;
-            rolling = pick.out_lin;
+            preview[x, y] = color_space::srgb_u8_to_linear(
+                pick.result_color.r, pick.result_color.g, pick.result_color.b);
+            prev = pick.result_color;
             total_error += static_cast<double>(pick.error);
         }
     }
@@ -2243,7 +2254,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     res.rendered = std::move(preview);
     res.total_error = static_cast<float>(total_error);
     res.avg_changes_per_line = static_cast<float>(
-        copper_result->avg_changes_per_line);
+        ham_cap_result->changes_per_line);
     auto h_div = static_cast<float>(height ? height : 1);
     res.avg_total_moves_per_line = static_cast<float>(total_moves) / h_div;
     res.max_moves_per_line = 1 + table.slots.size();

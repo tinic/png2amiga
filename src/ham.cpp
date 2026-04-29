@@ -15,16 +15,8 @@
 
 namespace png2amiga::ham {
 
-// sRGB color as 8-bit components (for HAM channel manipulation).
-// Visible to both the anonymous namespace (encoding) and public functions (decoding).
-struct SRGBColor {
-    std::uint8_t r{};
-    std::uint8_t g{};
-    std::uint8_t b{};
-
-    bool operator==(const SRGBColor&) const = default;
-};
-
+// SRGBColor / HamPixelResult / HamPrecomp / encode_ham_pixel are
+// declared in ham.hpp. Their definitions live in this TU.
 SRGBColor linear_to_srgb8(Color3f c) {
     auto srgb = color_space::linear_to_srgb(c).clamped();
     return {
@@ -36,6 +28,17 @@ SRGBColor linear_to_srgb8(Color3f c) {
 
 Color3f srgb8_to_linear(SRGBColor c) {
     return color_space::srgb_u8_to_linear(c.r, c.g, c.b);
+}
+
+// HamPrecomp definition (declared in ham.hpp).
+HamPrecomp::HamPrecomp(std::span<const Color3f> palette, std::size_t db)
+    : data_bits(db), num_data_values(std::size_t{1} << db) {
+    palette_lab.resize(palette.size());
+    for (std::size_t i = 0; i < palette.size(); ++i)
+        palette_lab[i] = color_space::linear_to_oklab(palette[i]);
+    expand_lut.resize(num_data_values);
+    for (std::size_t v = 0; v < num_data_values; ++v)
+        expand_lut[v] = expand_to_8bit(static_cast<std::uint8_t>(v), db);
 }
 
 namespace {
@@ -92,12 +95,6 @@ constexpr OKLab oklab_clamp(OKLab e, float max_mag) noexcept {
 //   - 3 * 2^data_bits MODIFY operations (R, G, B channels)
 // ---------------------------------------------------------------------------
 
-struct HamPixelResult {
-    std::uint8_t value;     // full encoded value (control + data)
-    SRGBColor result_color; // actual color produced by this operation
-    float error;            // perceptual error vs target
-};
-
 // Encode a HAM value: combine control bits and data bits.
 // HAM6 (6 planes): control in bits 5-4 (top 2), data in bits 3-0
 // Standard Amiga HAM convention: control bits live in the TOP 2 bits of
@@ -110,28 +107,6 @@ constexpr std::uint8_t make_ham_value(std::uint8_t control, std::uint8_t data,
     return static_cast<std::uint8_t>((control << data_bits) | data);
 }
 
-// ---------------------------------------------------------------------------
-// Precomputed data for HAM encoding (computed once, reused for all scanlines)
-// ---------------------------------------------------------------------------
-
-struct HamPrecomp {
-    std::vector<OKLab> palette_lab;         // OKLab for each palette entry
-    std::vector<std::uint8_t> expand_lut;   // expand_to_8bit lookup table [0..2^data_bits)
-    std::size_t data_bits;
-    std::size_t num_data_values;            // 1 << data_bits
-
-    HamPrecomp(std::span<const Color3f> palette, std::size_t db)
-        : data_bits(db), num_data_values(std::size_t{1} << db) {
-        palette_lab.resize(palette.size());
-        for (std::size_t i = 0; i < palette.size(); ++i)
-            palette_lab[i] = color_space::linear_to_oklab(palette[i]);
-
-        expand_lut.resize(num_data_values);
-        for (std::size_t v = 0; v < num_data_values; ++v)
-            expand_lut[v] = expand_to_8bit(static_cast<std::uint8_t>(v), db);
-    }
-};
-
 // Extract control and data from a HAM value (inverse of make_ham_value):
 // control = top 2 bits, data = low data_bits bits. Same convention for
 // HAM6 (data_bits=4) and HAM8 (data_bits=6).
@@ -142,7 +117,7 @@ split_ham_value(std::uint8_t value, std::size_t data_bits) noexcept {
             static_cast<std::uint8_t>(value & data_mask)};
 }
 
-HamPixelResult encode_ham_pixel(
+HamPixelResult encode_ham_pixel_impl(
     SRGBColor prev,
     Color3f target,
     const HamPrecomp& pre,
@@ -752,7 +727,7 @@ ScanlineResult encode_scanline_greedy(
     SRGBColor prev = start_color;
 
     for (std::size_t x = 0; x < width; ++x) {
-        HamPixelResult result = encode_ham_pixel(
+        HamPixelResult result = encode_ham_pixel_impl(
             prev, target_row[x], pre, base_srgb);
 
         values[x] = result.value;
@@ -1112,7 +1087,7 @@ std::vector<HamSwap> find_ham_swaps(
             SRGBColor p = ps.empty() ? SRGBColor{0, 0, 0} : ps[0];
             float err = 0.0f;
             for (std::size_t x = 0; x < r.size(); ++x) {
-                auto res = encode_ham_pixel(p, r[x], pre,
+                auto res = encode_ham_pixel_impl(p, r[x], pre,
                                             std::span<const SRGBColor>{ps});
                 err += res.error;
                 p = res.result_color;
@@ -1160,7 +1135,7 @@ std::vector<HamSwap> find_ham_swaps(
                 data_bits};
 
             for (std::size_t x = 0; x < w; ++x) {
-                auto result = encode_ham_pixel(
+                auto result = encode_ham_pixel_impl(
                     prev, row[x], swap_pre,
                     std::span<const SRGBColor>{pal_srgb});
                 auto [control, data_idx] = split_ham_value(result.value, data_bits);
@@ -1226,7 +1201,7 @@ std::vector<HamSwap> find_ham_swaps(
         std::vector<PxErr> px_errs(w);
 
         for (std::size_t x = 0; x < w; ++x) {
-            auto result = encode_ham_pixel(
+            auto result = encode_ham_pixel_impl(
                 prev, row[x], swap_pre,
                 std::span<const SRGBColor>{pal_srgb});
             auto [control, data_idx] = split_ham_value(result.value, data_bits);
@@ -1726,6 +1701,14 @@ Result<HamResult> encode_ham_copper_generic(
 }
 
 } // namespace
+
+// Public forwarder — declared in ham.hpp.
+HamPixelResult encode_ham_pixel(SRGBColor prev,
+                                 Color3f target,
+                                 const HamPrecomp& pre,
+                                 std::span<const SRGBColor> base_srgb) {
+    return encode_ham_pixel_impl(prev, target, pre, base_srgb);
+}
 
 // ===========================================================================
 // Public API: Generic HAM encoding

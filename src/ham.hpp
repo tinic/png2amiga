@@ -2,6 +2,7 @@
 
 #include "amiga.hpp"
 #include "bitplane.hpp"
+#include "color_space.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
 #include "types.hpp"
@@ -9,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -75,6 +77,46 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
     if (bits >= 8) return val;
     return static_cast<std::uint8_t>(val >> (8 - bits));
 }
+
+// ---------------------------------------------------------------------------
+// HAM single-pixel encoding primitives — exposed so external encoders
+// (e.g. scap.cpp's HAM6+SCAP planner) can score HAM ops against a
+// per-strip palette without re-implementing the picker.
+//
+// HamPrecomp: caller-owned cache. Build once per palette change.
+// encode_ham_pixel: pick the lowest-error SET / MODIFY-{R,G,B} op for
+//   `target` given previous pixel's output `prev`. Returns the encoded
+//   value (control<<data_bits | data), the actual output sRGB colour,
+//   and OKLab² error.
+// ---------------------------------------------------------------------------
+struct SRGBColor {
+    std::uint8_t r{};
+    std::uint8_t g{};
+    std::uint8_t b{};
+    bool operator==(const SRGBColor&) const = default;
+};
+
+struct HamPixelResult {
+    std::uint8_t value;       // encoded HAM op (control<<data_bits | data)
+    SRGBColor    result_color;
+    float        error;       // OKLab² distance to target
+};
+
+struct HamPrecomp {
+    std::vector<color_space::OKLab> palette_lab;
+    std::vector<std::uint8_t>       expand_lut;
+    std::size_t                     data_bits;
+    std::size_t                     num_data_values;
+
+    HamPrecomp(std::span<const Color3f> palette, std::size_t db);
+};
+
+SRGBColor linear_to_srgb8(Color3f c);
+
+HamPixelResult encode_ham_pixel(SRGBColor prev,
+                                 Color3f target,
+                                 const HamPrecomp& pre,
+                                 std::span<const SRGBColor> base_srgb);
 
 // ---------------------------------------------------------------------------
 // HAM encoding options
