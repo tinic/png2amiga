@@ -232,6 +232,15 @@ SCAP swap selection. SCAP slot positions were calibrated on real OCS
 hardware via the `--scap-probe` mode (see `src/scap.hpp` for the
 empirically-determined timing tables).
 
+![SCAP copper-list density and bus usage in vscode-amiga-debug](docs/scap.png)
+
+The vscode-amiga-debug capture above shows the copper list and bus
+usage for an SCAP frame: every visible scanline runs a near-saturated
+MOVE stream through the displayed area, illustrating just how dense
+the per-line copper traffic gets — each band of activity is one
+scanline's worth of CAP base reload + ~19 mid-line SCAP swaps fitting
+inside the OCS hblank budget.
+
 ## Amiga Executable Generation
 
 The project includes
