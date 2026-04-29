@@ -24,5 +24,5 @@ test.cpp
 /EGA350.IMG
 /Monitor_*.png
 /engine/
-# vscode-amiga-debug session snapshot — large (~8 MB) per-developer
+# vAmiga emulator snapshot — large (~8 MB) per-developer
 *.vasnap
