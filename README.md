@@ -247,15 +247,11 @@ OCS hblank budget.
 
 ## How does it compare?
 
-We benchmarked png2amiga against the two other modern headless
-PNG-to-Amiga HAM/SHAM converters — `arnaud-carre/abc` and Solo761's
-`ham_convert` — with **Floyd-Steinberg dither across every entry** for
-an apples-to-apples comparison. Each encoder ran in its
-highest-quality configuration. Source: `examples/electrichues02.jpg`
-resized to 320×213 (Lanczos). Two metrics: PSNR (sRGB byte distance,
-encoder-independent reference) and SSIMULACRA2 (Cloudinary 2022 —
-modern multi-scale perceptual quality metric, calibrated against
-human ratings; 30=low, 50=fair, 70=high quality).
+Source: `examples/electrichues02.jpg` resized to 320×213 (Lanczos),
+all encoders run with Floyd-Steinberg dither at their highest-quality
+setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
+(Cloudinary 2022 — perceptual, calibrated against human ratings;
+30=low, 50=fair, 70=high quality).
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 |
 |-------------|-----------------------------------|----------:|------------:|
@@ -267,30 +263,7 @@ human ratings; 30=low, 50=fair, 70=high quality).
 | png2amiga   | EHB + SCAP + cap-best             | 29.58     | 48.89       |
 | abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |
 
-png2amiga's **HAM6 + CAP + cap-best** wins outright on SSIMULACRA2
-(**+2.45 over ham_convert's SHAM6**, +4.89 over ham_convert HAM6 q7).
-PSNR is statistically tied with ham_convert SHAM6 (31.14 vs 31.18) —
-modern image-quality research considers SSIMULACRA2 the more reliable
-predictor of subjective quality, especially on HAM output where the
-PSNR ranking can be misleading (a HAM6 with no dither can hit PSNR
-32 dB while scoring SSIMULACRA2 18 — "very low quality" — because
-PSNR doesn't see the discrete-band stepping that's painfully obvious
-to a human viewer).
-
-png2amiga is also running real-OCS-hardware-faithful copper mode
-(≤14 MOVEs/line in the hblank budget) — ham_convert SHAM6 runs as
-software-rendered PCHG. Our copper output is the actual instruction
-stream the hardware executes. Both encoders pack changes well under
-the OCS limit (parsed from the PCHG chunks: ham_convert 7 changes/line
-max, png2amiga 10/line max, vs the 14-MOVE hardware ceiling).
-
-The HAM6-mode lead comes from the encoder's perceptually-uniform
-op-selection metric (`--ham-metric oklab2`, default since 1.26.0).
-For published-PSNR comparisons specifically, `--ham-metric srgb-mse`
-optimises that headline number directly (~+0.5-1 dB nominal gain) —
-but produces visibly worse output per SSIMULACRA2.
-
-This is one image. The harness lives at `tools/shootout/`:
+The harness lives at `tools/shootout/`:
 
 ```bash
 cd tools/shootout
