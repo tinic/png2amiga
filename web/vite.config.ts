@@ -34,17 +34,36 @@ export default defineConfig({
       '@wasm': path.resolve(__dirname, '../build-wasm')
     }
   },
-  worker: {
-    format: 'es',
-  },
   server: {
     fs: {
       allow: ['..']
-    }
+    },
+    // pthreads + SharedArrayBuffer require cross-origin isolation in
+    // the browser. Production nginx already sets these (see
+    // service/nginx.conf). Mirror them for `vite dev` so the dev
+    // workflow can exercise the WASM threads. COEP=credentialless
+    // matches prod so cross-origin scripts without an explicit
+    // Cross-Origin-Resource-Policy still load.
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    },
   },
   assetsInclude: ['**/*.wasm'],
   build: {
     outDir: '../service/html',
     emptyOutDir: true,
-  }
+    // Emscripten's pthread glue uses top-level await; bump the build
+    // target past the default es2020 to allow it. Also bumps the
+    // browser baseline to versions that ship SharedArrayBuffer +
+    // cross-origin-isolation (which is what pthreads need anyway):
+    // Chrome 89+, Firefox 89+, Safari 15+, Edge 89+.
+    target: ['chrome89', 'edge89', 'firefox89', 'safari15'],
+  },
+  worker: {
+    format: 'es',
+    // Same reason — worker chunks also load TLA-using glue.
+    rollupOptions: { output: { format: 'es' } },
+  },
 })

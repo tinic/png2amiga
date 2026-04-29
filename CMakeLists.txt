@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.23.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.24.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -84,18 +84,31 @@ if(EMSCRIPTEN)
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
     target_link_libraries(png2amiga_wasm PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode)
-    target_compile_options(png2amiga_wasm PRIVATE -O3 -msimd128 -flto)
+    # -pthread enables std::thread / std::jthread / std::mutex / std::atomic
+    # in WASM via Emscripten's pthreads-on-web-workers shim. Requires the
+    # browser to be cross-origin isolated (COOP/COEP headers, see
+    # service/nginx.conf and vite.config.js). Pool size = the number of
+    # cores reported by navigator.hardwareConcurrency, allocated lazily.
+    target_compile_options(png2amiga_wasm PRIVATE
+        -O3 -msimd128 -flto
+        -pthread)
     target_link_options(png2amiga_wasm PRIVATE
         --bind
         -O3
         -flto
         -msimd128
+        -pthread
         -sALLOW_MEMORY_GROWTH=1
         -sEXPORT_ES6=1
         -sMODULARIZE=1
         -sEXPORT_NAME=createPng2Amiga
-        -sENVIRONMENT=web,worker
+        # node included so the dither-thumbnail generator script
+        # (web/scripts/gen-dither-thumbs.mjs) can load this module
+        # under Node.js — Emscripten's pthread shim then routes to
+        # Node's worker_threads instead of browser Web Workers.
+        -sENVIRONMENT=web,worker,node
         -sNO_FILESYSTEM=1
+        -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency
     )
     set_target_properties(png2amiga_wasm PROPERTIES OUTPUT_NAME "png2amiga")
 else()

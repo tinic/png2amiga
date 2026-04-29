@@ -26,7 +26,38 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+
+function onStopEncode(): void {
+  abortWasm()
+  // Tear down EVERY in-flight encode handle. The aborted promise's
+  // catch + finally still run on the next microtask but they only
+  // touch state we're already resetting here, so the order doesn't
+  // matter. What DOES matter: clear both timers so the next options
+  // change (e.g. user toggling cap-best off) starts fresh — without
+  // this, a stale debounce timer that was queued mid-stop could re-
+  // fire runConvert with options captured BEFORE the toggle was
+  // observed, which is the most plausible "still encoding with cap-
+  // best on" symptom.
+  if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
+  if (spinnerTimer)  { clearTimeout(spinnerTimer);  spinnerTimer = null }
+  converting.value = false
+  progress.value = 0
+  progressStage.value = ''
+  errorMsg.value = ''
+  // Paint the preview canvas black so the user has a clear "aborted"
+  // signal rather than the stale half-finished output. Re-encode runs
+  // on the next option change.
+  const canvas = canvasRef.value
+  if (canvas) {
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, canvas.width || 320, canvas.height || 200)
+    }
+  }
+  resultInfo.value = 'stopped'
+}
 const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
 
 const showUploadHint = ref(true)
@@ -1124,8 +1155,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
     <!-- Main layout -->
     <div v-else class="grid">
-      <!-- Controls sidebar -->
-      <div class="col-12 md:col-4 lg:col-3">
+      <!-- Controls sidebar — give it priority over the preview when the
+           viewport narrows. The percentage classes (md:col-4 lg:col-3)
+           determine the BASE share, but `controls-col` adds a hard
+           min-width so the labels never wrap awkwardly; the preview
+           column eats any remaining space (CSS below). -->
+      <div class="col-12 md:col-4 lg:col-3 controls-col">
         <div class="flex flex-column gap-3">
 
           <!-- Upload / Image -->
@@ -1248,16 +1283,37 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
                 </div>
               </div>
-              <!-- CAP / SCAP best quality. Parallel multi-restart sweep
-                   over (dither_strength × diversity × image-jitter); picks
-                   the best-scoring trial. Active for: HAM+CAP (centroid
-                   refinement), plain CAP (lores/hires + copper), EHB+CAP,
+              <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
+              <div v-if="dpfAvailable" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual PF</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.dualPlayfield" />
+                  <span style="color: #888; font-size: 0.625rem;">PF2 only, upper color regs</span>
+                </div>
+              </div>
+
+              <!-- SCAP — mid-line palette swaps (OCS lores only, DPF or EHB) -->
+              <div v-if="scapAvailable" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP — Super CAP: mid-line palette swaps inside the displayed area, on top of CAP's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">SCAP</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.scap" />
+                  <span style="color: #888; font-size: 0.625rem;">mid-line swaps</span>
+                </div>
+              </div>
+
+              <!-- CAP / SCAP best quality. Sits LAST in the cap section so
+                   the user enables it after they've chosen mode + cap +
+                   scap + dpf — flipping cap-best earlier doesn't change
+                   the algorithmic choices, just the time budget. Parallel
+                   multi-restart sweep over (dither_strength × diversity
+                   × image-jitter); picks the best-scoring trial. Active
+                   for: HAM+CAP (centroid refinement), plain CAP, EHB+CAP,
                    SCAP DPF, SCAP EHB. -->
               <div v-if="options.copper || options.scap" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality CAP/SCAP search. Spends ~5–10× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">CAP best</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality CAP/SCAP search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">CAP best</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.capBest" />
-                  <span style="color: #888; font-size: 0.625rem;">~5–10× slower, parallel</span>
+                  <span style="color: #888; font-size: 0.625rem;">~20–30× slower, parallel</span>
                 </div>
               </div>
               <div v-if="options.capBest" class="grid align-items-center">
@@ -1270,24 +1326,6 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                     :allowEmpty="false"
                     size="small"
                   />
-                </div>
-              </div>
-
-              <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
-              <div v-if="dpfAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Dual playfield: encode the image into PF2 (upper color registers 8-15 OCS / 16-31 AGA), with PF1 (foreground) bitplanes left zeroed. Requires depth = 3 (OCS) or 4 (AGA). CAMG DBLPF flag set.">Dual playfield</label>
-                <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.dualPlayfield" />
-                  <span style="color: #888; font-size: 0.625rem;">PF2 only, upper color regs</span>
-                </div>
-              </div>
-
-              <!-- SCAP — mid-line palette swaps (OCS lores only, DPF or EHB) -->
-              <div v-if="scapAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP — Super CAP: mid-line palette swaps inside the displayed area, on top of CAP's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">SCAP</label>
-                <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.scap" />
-                  <span style="color: #888; font-size: 0.625rem;">mid-line palette swaps (19/line)</span>
                 </div>
               </div>
 
@@ -1575,7 +1613,17 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
                 <ProgressSpinner v-if="!progress" style="width: 2rem; height: 2rem" />
                 <div v-else style="width: 70%; max-width: 22rem; text-align: center;">
-                  <ProgressBar :value="progress" :show-value="true" style="height: 1.5rem" />
+                  <div class="flex align-items-center gap-2">
+                    <ProgressBar :value="progress" :show-value="true" style="height: 1.5rem; flex: 1 1 auto" />
+                    <button
+                      class="stop-btn"
+                      type="button"
+                      title="Stop encode (terminates the WASM worker)"
+                      @click.stop="onStopEncode"
+                    >
+                      <i class="pi pi-times"></i>
+                    </button>
+                  </div>
                   <div class="text-xs text-color-secondary mt-1" v-if="progressStage">{{ progressStage }}</div>
                 </div>
               </div>
@@ -1710,10 +1758,33 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   opacity: 0.25;
 }
 
+/* Layout priority: controls keep a hard floor; preview shrinks first.
+   Without this, PrimeFlex's % grid splits both columns proportionally
+   and the controls column squeezes its labels long before the preview
+   has run out of slack. */
+.controls-col {
+  min-width: 22rem;
+  flex: 0 0 auto;
+}
+/* Tighten the label column inside the controls panel: PrimeFlex's
+   .col-4 reserves 33.3333% which leaves a noticeable gap after short
+   labels (CAP, SCAP, Dither, Dual PF). Override to 25% / 75% so every
+   row stays aligned but the gap shrinks by ~22px. */
+.controls-col .grid.align-items-center > label.col-4 {
+  width: 25%;
+}
+.controls-col .grid.align-items-center > .col-8 {
+  width: 75%;
+}
 .preview-col {
   position: sticky;
   top: 1rem;
   align-self: start;
+  /* Take whatever's left after the controls column claims its
+     min-width. flex-basis: 0 + flex-grow: 1 means the preview
+     shrinks first when the viewport narrows. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 .preview-col.loupe-expanded {
   position: sticky;
@@ -1826,6 +1897,25 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 .loupe-btn.crt-btn {
   /* Sit immediately to the left of the loupe button. */
   right: 2.4rem;
+}
+
+.stop-btn {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.5rem;
+  border: none;
+  border-radius: 4px;
+  background: rgba(220, 50, 50, 0.85);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  transition: background 0.15s;
+}
+.stop-btn:hover {
+  background: rgba(200, 30, 30, 1);
 }
 
 .preview-canvas {

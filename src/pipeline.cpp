@@ -8,10 +8,8 @@
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <vector>
-#ifndef __EMSCRIPTEN__
 #include <thread>
-#endif
+#include <vector>
 
 namespace png2amiga::api {
 // The workhorse defined in src/api.cpp (post-anon-namespace, external
@@ -271,10 +269,17 @@ Image jitter_image(const Image& source, std::uint32_t seed,
 void parallel_for(std::size_t n,
                   std::function<void(std::size_t)> body) {
     if (n == 0) return;
-#ifndef __EMSCRIPTEN__
     auto n_threads = std::max<unsigned>(1,
         std::thread::hardware_concurrency());
     n_threads = std::min(n_threads, static_cast<unsigned>(n));
+    if (n_threads == 1) {
+        // Skip thread overhead on single-core hosts (or when WASM
+        // navigator.hardwareConcurrency reports 1 because the browser
+        // isn't cross-origin isolated and pthreads aren't really
+        // available — Emscripten falls back to serial in that case).
+        for (std::size_t i = 0; i < n; ++i) body(i);
+        return;
+    }
     std::atomic<std::size_t> next{0};
     auto worker = [&]() {
         while (true) {
@@ -288,9 +293,6 @@ void parallel_for(std::size_t n,
     for (unsigned t = 0; t < n_threads; ++t)
         threads.emplace_back(worker);
     threads.clear();  // join on destruction
-#else
-    for (std::size_t i = 0; i < n; ++i) body(i);
-#endif
 }
 
 Result<Image> render_preview(
