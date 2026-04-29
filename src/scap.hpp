@@ -3,6 +3,7 @@
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "dither.hpp"
+#include "ham.hpp"
 #include "types.hpp"
 
 #include <cstddef>
@@ -311,7 +312,9 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         std::string_view cap_best_metric =
                                             "psnr",
                                         std::span<const Color3f>
-                                            external_palette = {});
+                                            external_palette = {},
+                                        ham::HamMetric ham_metric =
+                                            ham::HamMetric::oklab2);
 
 // ---------------------------------------------------------------------------
 // Probe A — slot discovery sweep for OCS DPF (6-plane).

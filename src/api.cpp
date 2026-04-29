@@ -1717,7 +1717,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.cap_spread_decay,
                 options.cap_best,
                 options.cap_best_metric,
-                scap_user_pal_span)
+                scap_user_pal_span,
+                (options.ham_metric == "srgb-mse")
+                    ? ham::HamMetric::srgb_mse
+                    : ham::HamMetric::oklab2)
             : scap_ehb
             ? scap::encode_scap_ehb_ocs(
                 *image,

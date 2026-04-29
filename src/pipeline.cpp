@@ -267,9 +267,23 @@ Image jitter_image(const Image& source, std::uint32_t seed,
     return j;
 }
 
+// Nested parallel_for detection. cap_best_sweep already parallelises
+// across N trials; if an inner encoder also calls parallel_for (e.g.
+// HAM6 SCAP's per-row HAM-DP planner) we'd get hardware_concurrency²
+// threads competing for hardware_concurrency cores — severe over-
+// subscription that kills throughput. The outer call sets this flag,
+// inner calls see it set and run serially.
+thread_local bool t_in_parallel_for = false;
+
 void parallel_for(std::size_t n,
                   std::function<void(std::size_t)> body) {
     if (n == 0) return;
+    if (t_in_parallel_for) {
+        // Already inside a parallel_for on this thread — run serially
+        // to avoid nested oversubscription.
+        for (std::size_t i = 0; i < n; ++i) body(i);
+        return;
+    }
     auto n_threads = std::max<unsigned>(1,
         std::thread::hardware_concurrency());
     n_threads = std::min(n_threads, static_cast<unsigned>(n));
@@ -283,11 +297,13 @@ void parallel_for(std::size_t n,
     }
     std::atomic<std::size_t> next{0};
     auto worker = [&]() {
+        t_in_parallel_for = true;
         while (true) {
             auto i = next.fetch_add(1);
             if (i >= n) break;
             body(i);
         }
+        t_in_parallel_for = false;
     };
     std::vector<std::jthread> threads;
     threads.reserve(n_threads);

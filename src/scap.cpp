@@ -10,11 +10,14 @@
 #include "pipeline.hpp"
 #include "types.hpp"
 
-// scap.cpp's parallel sweep machinery is delegated to
-// pipeline::cap_best_sweep / pipeline::parallel_for, so this TU itself
-// doesn't need <thread> / <atomic> / <mutex> any more.
+// scap.cpp delegates parallel sweep machinery to pipeline::cap_best_sweep
+// / pipeline::parallel_for. <atomic> is needed for HAM6 SCAP's per-row
+// parallel planner (HAM-DP-aware swap evaluation is heavy, so the
+// per-row planning loop runs in parallel and accumulates totals via
+// atomics).
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <optional>
 #include <cstdint>
 #include <limits>
@@ -2106,7 +2109,8 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         bool cap_best,
                                         std::string_view cap_best_metric,
                                         std::span<const Color3f>
-                                            external_palette) {
+                                            external_palette,
+                                        ham::HamMetric ham_metric) {
     // --cap-best: 8 jitter seeds × 5 strengths × 4 diversities + 1
     // baseline = 161 trials. Same shape as EHB SCAP since HAM6's 16
     // base palette has comparable basin depth.
@@ -2124,7 +2128,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                     /*on_progress=*/{},
                     cap_spread_radius, cap_spread_decay,
                     /*cap_best=*/false, "psnr",
-                    external_palette);
+                    external_palette, ham_metric);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -2226,6 +2230,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     ham::HamOptions ham_opts;
     ham_opts.dither_method = dither::Method::none;  // pre-dithered above
     ham_opts.palette_diversity = palette_diversity;
+    ham_opts.metric = ham_metric;
     if (!external_palette.empty()) {
         ham_opts.external_palette.assign(external_palette.begin(),
                                           external_palette.end());
@@ -2278,10 +2283,17 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     std::size_t total_moves = 0;
 
     if (on_progress) on_progress(0.0f, "encoding");
-    for (std::size_t y = 0; y < height; ++y) {
-        if (on_progress && (y & 0xF) == 0) {
-            on_progress(static_cast<float>(y) / static_cast<float>(height),
-                        "encoding");
+    std::atomic<double> total_error_atomic{0.0};
+    std::atomic<std::size_t> total_moves_atomic{0};
+    std::atomic<std::size_t> rows_done{0};
+    pipeline::parallel_for(height, [&](std::size_t y) {
+        if (on_progress) {
+            auto done = rows_done.fetch_add(1) + 1;
+            if ((done & 0xF) == 0) {
+                on_progress(static_cast<float>(done) /
+                            static_cast<float>(height),
+                            "encoding");
+            }
         }
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
@@ -2320,15 +2332,110 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
 
-        // ---- 3. Per-strip cluster-math swap planner ---------------------
-        // EHB-style scoring (no halfbrite): per strip, build per-slot
-        // cluster stats over the strip's pixels (count + OKLab mean +
-        // residual spread). Generate swap candidates from (a) every
-        // pixel in the strip OCS-quantised + deduped on RGB444, plus
-        // (b) the OKLab centroid of each non-empty cluster. For each
-        // (slot, candidate) pair, score the swap by cluster-error
-        // reduction and pick the largest reduction. Repeat per strip
-        // until the SCAP budget is exhausted.
+        // ---- 3. HAM-DP-aware swap planner -------------------------------
+        // Per strip, generate candidates from cluster centroids + every
+        // distinct pixel (OCS-bucketed). Pre-screen by centroid score to
+        // a small top-K, then SCORE each survivor by running the actual
+        // encoder (ham::encode_scanline_dp_per_strip) on the full row
+        // with the candidate swap propagated forward. Accept the swap
+        // only if it strictly reduces the row's HAM-DP error.
+        //
+        // This replaces the prior centroid-based scorer (which picked
+        // swaps that minimised SET-only nearest-color error but
+        // sometimes hurt the actual HAM encode because MODIFY ops can
+        // already reach the colour better than any palette swap would).
+        //
+        // The HAM rolling state crosses strip boundaries unchanged
+        // (only the palette consulted for SET ops swaps), so encoding
+        // the full row with the modified palette gives the correct
+        // global error including chained-MODIFY effects.
+
+        // Strip layout helpers used both here and at final-encode time.
+        constexpr std::size_t kBeamWidth = 48;
+        constexpr std::size_t kTripleBeam = 16;
+        std::vector<std::uint16_t> strip_idx(width);
+        for (std::size_t x = 0; x < width; ++x)
+            strip_idx[x] = static_cast<std::uint16_t>(strip_for_x(x));
+        std::vector<Color3f> row_pixels(width);
+        for (std::size_t x = 0; x < width; ++x)
+            row_pixels[x] = scap_input[x, y];
+        auto row_span = std::span<const Color3f>(row_pixels.data(), width);
+        auto idx_span = std::span<const std::uint16_t>(strip_idx.data(),
+                                                        width);
+
+        // Build per-strip palette state by replaying the SCAP MOVEs
+        // currently in line_moves[y]. strip 0 starts from the line-
+        // entry palette (cap_palettes[y]); each subsequent strip
+        // applies the MOVEs whose slot_index matches s-1.
+        auto build_strips = [&](
+            std::vector<std::vector<Color3f>>& strip_pals,
+            std::vector<std::vector<ham::SRGBColor>>& strip_srgbs,
+            std::vector<ham::HamPrecomp>& strip_pres,
+            std::vector<std::span<const ham::SRGBColor>>& strip_srgb_spans) {
+            strip_pals.assign(num_strips, {});
+            strip_srgbs.assign(num_strips, {});
+            strip_pres.clear();
+            strip_pres.reserve(num_strips);
+            strip_srgb_spans.clear();
+            strip_srgb_spans.reserve(num_strips);
+            std::vector<Color3f> running_pal = cap_palettes[y];
+            if (running_pal.size() < kBaseColors)
+                running_pal.resize(kBaseColors);
+            for (std::size_t s = 0; s < num_strips; ++s) {
+                if (s > 0) {
+                    for (auto& m : line_moves[y]) {
+                        if (m.kind == ScapOpKind::kMove &&
+                            m.slot_index == static_cast<int>(s - 1) &&
+                            m.reg < kBaseColors) {
+                            auto rgb12 = m.rgb_ocs & 0xFFFu;
+                            float r = static_cast<float>((rgb12 >> 8) & 0xF) / 15.0f;
+                            float g = static_cast<float>((rgb12 >> 4) & 0xF) / 15.0f;
+                            float bv = static_cast<float>(rgb12 & 0xF) / 15.0f;
+                            running_pal[m.reg] = color_space::srgb_to_linear(
+                                Color3f{r, g, bv});
+                        }
+                    }
+                }
+                strip_pals[s] = running_pal;
+                strip_srgbs[s].resize(kBaseColors);
+                for (std::size_t k = 0; k < kBaseColors; ++k)
+                    strip_srgbs[s][k] = ham::linear_to_srgb8(running_pal[k]);
+                strip_pres.emplace_back(
+                    std::span<const Color3f>(strip_pals[s].data(),
+                                             kBaseColors),
+                    /*data_bits=*/4);
+                strip_srgb_spans.emplace_back(strip_srgbs[s].data(),
+                                              kBaseColors);
+            }
+        };
+
+        // DP encode without triple refinement — used for candidate
+        // scoring (refine adds ~50% cost without changing relative
+        // ordering of nearby candidates much).
+        auto encode_dp_only = [&](
+            const std::vector<std::vector<ham::SRGBColor>>& strip_srgbs,
+            std::span<const ham::HamPrecomp> pres_span,
+            std::span<const std::span<const ham::SRGBColor>> srgbs_span)
+            -> ham::ScanlineResult {
+            ham::SRGBColor start = strip_srgbs[0].empty()
+                ? ham::SRGBColor{0, 0, 0} : strip_srgbs[0][0];
+            return ham::encode_scanline_dp_per_strip(
+                row_span, start, pres_span, srgbs_span,
+                idx_span, kBeamWidth, ham_metric);
+        };
+
+        // Baseline: encode the row with no SCAP swaps yet (CAP only).
+        std::vector<std::vector<Color3f>> cur_pals;
+        std::vector<std::vector<ham::SRGBColor>> cur_srgbs;
+        std::vector<ham::HamPrecomp> cur_pres;
+        std::vector<std::span<const ham::SRGBColor>> cur_srgb_spans;
+        build_strips(cur_pals, cur_srgbs, cur_pres, cur_srgb_spans);
+        double cur_err = static_cast<double>(
+            encode_dp_only(cur_srgbs,
+                std::span<const ham::HamPrecomp>(cur_pres),
+                std::span<const std::span<const ham::SRGBColor>>(
+                    cur_srgb_spans)).error);
+
         std::size_t scap_budget = scap_share;
         std::size_t scap_used = 0;
         for (std::size_t s = 1; s < num_strips; ++s) {
@@ -2404,18 +2511,22 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 }
             }
 
-            // Score every (slot, candidate) pair: cluster error change
-            // when slot k → cand. The OTHER slots' clusters are
-            // unaffected; only cluster k's distance-from-palette term
-            // changes. spread term is per-pixel residual which doesn't
-            // change under a swap.
-            std::size_t best_slot = 0;
-            std::size_t best_cand = 0;
-            double best_reduction = 0.0;
+            // Pre-screen (slot, candidate) pairs by centroid score.
+            // The DP scorer below is ~1 ms per evaluation, so we trim
+            // the candidate set to the most promising kTopK before
+            // running the actual encoder. Centroid score is a coarse
+            // SET-only proxy — good enough for ranking but not for
+            // final selection.
             std::size_t k_min = reserve_color0 ? 1u : 0u;
+            struct CandScore {
+                std::size_t slot;
+                std::size_t cand_idx;
+                double centroid_red;
+            };
+            std::vector<CandScore> ranked;
+            ranked.reserve(kBaseColors * cands.size());
             for (std::size_t k = k_min; k < kBaseColors; ++k) {
                 if (clust[k].count == 0) continue;
-                // Old error (slot k holding strip_pal[k]):
                 float dL_old = centroid[k].L - strip_pal_lab[k].L;
                 float da_old = centroid[k].a - strip_pal_lab[k].a;
                 float db_old = centroid[k].b - strip_pal_lab[k].b;
@@ -2431,16 +2542,58 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                         static_cast<double>(
                             dL * dL + da * da + db * db);
                     double red = old_e - new_e;
-                    if (red > best_reduction) {
-                        best_reduction = red;
-                        best_slot = k;
-                        best_cand = ci;
-                    }
+                    if (red > 0.0)
+                        ranked.push_back({k, ci, red});
                 }
             }
-            if (best_reduction <= 0.0) continue;
+            if (ranked.empty()) continue;
+            constexpr std::size_t kTopK = 5;
+            if (ranked.size() > kTopK) {
+                std::partial_sort(ranked.begin(),
+                    ranked.begin() + kTopK, ranked.end(),
+                    [](const CandScore& a, const CandScore& b) {
+                        return a.centroid_red > b.centroid_red;
+                    });
+                ranked.resize(kTopK);
+            } else {
+                std::sort(ranked.begin(), ranked.end(),
+                    [](const CandScore& a, const CandScore& b) {
+                        return a.centroid_red > b.centroid_red;
+                    });
+            }
 
-            // Apply swap.
+            // DP-evaluate each survivor: tentatively push the swap as a
+            // ScapMove, rebuild strip palettes (which propagates the
+            // swap forward into all later strips), encode, score by
+            // sl.error, restore. Pick the best swap iff it strictly
+            // beats cur_err.
+            std::size_t best_slot = 0;
+            std::size_t best_cand = 0;
+            double best_err = cur_err;
+            bool found = false;
+            for (auto& cs : ranked) {
+                auto rgb_ocs = palette::linear_to_ocs(cands[cs.cand_idx]);
+                line_moves[y].push_back(make_move(
+                    static_cast<std::uint8_t>(cs.slot),
+                    rgb_ocs,
+                    static_cast<int>(s - 1)));
+                build_strips(cur_pals, cur_srgbs, cur_pres, cur_srgb_spans);
+                auto trial = encode_dp_only(cur_srgbs,
+                    std::span<const ham::HamPrecomp>(cur_pres),
+                    std::span<const std::span<const ham::SRGBColor>>(
+                        cur_srgb_spans));
+                line_moves[y].pop_back();
+                double e = static_cast<double>(trial.error);
+                if (e < best_err) {
+                    best_err = e;
+                    best_slot = cs.slot;
+                    best_cand = cs.cand_idx;
+                    found = true;
+                }
+            }
+            if (!found) continue;
+
+            // Apply best swap for real.
             strip_pal[best_slot] = cands[best_cand];
             strip_pal_lab[best_slot] = cands_lab[best_cand];
             auto rgb_ocs = palette::linear_to_ocs(cands[best_cand]);
@@ -2448,160 +2601,34 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 static_cast<std::uint8_t>(best_slot),
                 rgb_ocs,
                 static_cast<int>(s - 1)));
+            cur_err = best_err;
             ++scap_used;
             (void)kHblankCeiling;
         }
+        // Rebuild final strip state for the post-loop encode_with.
+        build_strips(cur_pals, cur_srgbs, cur_pres, cur_srgb_spans);
         scanline_palettes_full[y] = strip_pal;  // end-of-line state
         total_moves += line_moves[y].size();
 
-        // ---- 4. Per-strip row-level DP beam-search HAM encoding -------
-        // Build per-strip palette state by replaying the SCAP MOVEs we
-        // just emitted for this line. strip 0 starts from the line-
-        // entry palette (cap_palettes[y]); each subsequent strip
-        // applies the MOVEs whose slot_index matches s-1.
-        constexpr std::size_t kBeamWidth = 48;
-        constexpr std::size_t kTripleBeam = 16;
-
-        std::vector<std::uint16_t> strip_idx(width);
-        for (std::size_t x = 0; x < width; ++x)
-            strip_idx[x] = static_cast<std::uint16_t>(strip_for_x(x));
-
-        std::vector<Color3f> row_pixels(width);
-        for (std::size_t x = 0; x < width; ++x)
-            row_pixels[x] = scap_input[x, y];
-        auto row_span = std::span<const Color3f>(row_pixels.data(), width);
-        auto idx_span = std::span<const std::uint16_t>(strip_idx.data(),
-                                                        width);
-
-        // Build strip palette state from cap_palettes[y] + replaying any
-        // line_moves whose slot_index matches s-1.
-        auto build_strips = [&](bool apply_swaps,
-                                std::vector<std::vector<Color3f>>& strip_pals,
-                                std::vector<std::vector<ham::SRGBColor>>& strip_srgbs,
-                                std::vector<ham::HamPrecomp>& strip_pres,
-                                std::vector<std::span<const ham::SRGBColor>>&
-                                    strip_srgb_spans) {
-            strip_pals.assign(num_strips, {});
-            strip_srgbs.assign(num_strips, {});
-            strip_pres.clear();
-            strip_pres.reserve(num_strips);
-            strip_srgb_spans.clear();
-            strip_srgb_spans.reserve(num_strips);
-            std::vector<Color3f> running_pal = cap_palettes[y];
-            if (running_pal.size() < kBaseColors)
-                running_pal.resize(kBaseColors);
-            for (std::size_t s = 0; s < num_strips; ++s) {
-                if (apply_swaps && s > 0) {
-                    for (auto& m : line_moves[y]) {
-                        if (m.kind == ScapOpKind::kMove &&
-                            m.slot_index == static_cast<int>(s - 1) &&
-                            m.reg < kBaseColors) {
-                            auto rgb12 = m.rgb_ocs & 0xFFFu;
-                            float r = static_cast<float>((rgb12 >> 8) & 0xF) / 15.0f;
-                            float g = static_cast<float>((rgb12 >> 4) & 0xF) / 15.0f;
-                            float bv = static_cast<float>(rgb12 & 0xF) / 15.0f;
-                            running_pal[m.reg] = color_space::srgb_to_linear(
-                                Color3f{r, g, bv});
-                        }
-                    }
-                }
-                strip_pals[s] = running_pal;
-                strip_srgbs[s].resize(kBaseColors);
-                for (std::size_t k = 0; k < kBaseColors; ++k)
-                    strip_srgbs[s][k] = ham::linear_to_srgb8(running_pal[k]);
-                strip_pres.emplace_back(
-                    std::span<const Color3f>(strip_pals[s].data(),
-                                             kBaseColors),
-                    /*data_bits=*/4);
-                strip_srgb_spans.emplace_back(strip_srgbs[s].data(),
-                                              kBaseColors);
-            }
-        };
-
-        // Encode given a built strip layout. Returns the encoded value
-        // sequence + cumulative OKLab² error.
-        auto encode_with = [&](
-            const std::vector<std::vector<ham::SRGBColor>>& strip_srgbs,
-            std::span<const ham::HamPrecomp> pres_span,
-            std::span<const std::span<const ham::SRGBColor>> srgbs_span)
-            -> ham::ScanlineResult {
-            ham::SRGBColor start = strip_srgbs[0].empty()
-                ? ham::SRGBColor{0, 0, 0} : strip_srgbs[0][0];
-            // SCAP HAM6 follows the rest of the HAM pipeline: sRGB-MSE
-            // metric matches the reported PSNR. (--ham-metric oklab2 isn't
-            // currently plumbed through SCAP; default sRGB-MSE.)
-            auto sl = ham::encode_scanline_dp_per_strip(
-                row_span, start, pres_span, srgbs_span,
-                idx_span, kBeamWidth, ham::HamMetric::srgb_mse);
-            ham::refine_scanline_triple_per_strip(
-                sl.values, row_span, start, pres_span, srgbs_span,
-                idx_span, kTripleBeam, ham::HamMetric::srgb_mse);
-            return sl;
-        };
-
-        // Build with swaps + encode.
-        std::vector<std::vector<Color3f>> strip_pals;
-        std::vector<std::vector<ham::SRGBColor>> strip_srgbs;
-        std::vector<ham::HamPrecomp> strip_pres;
-        std::vector<std::span<const ham::SRGBColor>> strip_srgb_spans;
-        build_strips(/*apply_swaps=*/true, strip_pals, strip_srgbs,
-                     strip_pres, strip_srgb_spans);
+        // ---- 4. Final encode with triple refinement -------------------
+        // The HAM-DP-aware planner above only accepted swaps that
+        // strictly reduced sl.error, so no quality gate is needed —
+        // the swap set is monotonically optimal under the same metric
+        // we evaluate here. Run one more DP encode + triple-pixel
+        // refinement to produce the final ham_values for this row.
         auto pres_span = std::span<const ham::HamPrecomp>(
-            strip_pres.data(), strip_pres.size());
+            cur_pres.data(), cur_pres.size());
         auto srgbs_span = std::span<const std::span<const ham::SRGBColor>>(
-            strip_srgb_spans.data(), strip_srgb_spans.size());
-        auto sl = encode_with(strip_srgbs, pres_span, srgbs_span);
-
-        // Quality gate: if the cluster planner emitted any SCAP swaps,
-        // also encode WITHOUT them (every strip uses cap_palettes[y]
-        // unchanged) and keep whichever beats the other. The cluster
-        // planner uses nearest-color (SET-only) scoring which sometimes
-        // recommends swaps that hurt HAM-MODIFY-aware encoding (most
-        // dramatic on row-distinct synthetic images: ocs_4096.png went
-        // 91 → 62 dB before this gate).
-        bool has_scap_swaps = false;
-        for (auto& m : line_moves[y])
-            if (m.kind == ScapOpKind::kMove && m.slot_index >= 0) {
-                has_scap_swaps = true; break;
-            }
-        if (has_scap_swaps) {
-            std::vector<std::vector<Color3f>> ns_pals;
-            std::vector<std::vector<ham::SRGBColor>> ns_srgbs;
-            std::vector<ham::HamPrecomp> ns_pres;
-            std::vector<std::span<const ham::SRGBColor>> ns_srgb_spans;
-            build_strips(/*apply_swaps=*/false, ns_pals, ns_srgbs,
-                         ns_pres, ns_srgb_spans);
-            auto ns_pres_span = std::span<const ham::HamPrecomp>(
-                ns_pres.data(), ns_pres.size());
-            auto ns_srgbs_span =
-                std::span<const std::span<const ham::SRGBColor>>(
-                    ns_srgb_spans.data(), ns_srgb_spans.size());
-            auto ns_sl = encode_with(ns_srgbs, ns_pres_span, ns_srgbs_span);
-            if (ns_sl.error < sl.error) {
-                sl = std::move(ns_sl);
-                strip_pals = std::move(ns_pals);
-                strip_srgbs = std::move(ns_srgbs);
-                strip_pres = std::move(ns_pres);
-                strip_srgb_spans = std::move(ns_srgb_spans);
-                pres_span = std::span<const ham::HamPrecomp>(
-                    strip_pres.data(), strip_pres.size());
-                srgbs_span =
-                    std::span<const std::span<const ham::SRGBColor>>(
-                        strip_srgb_spans.data(),
-                        strip_srgb_spans.size());
-                // Drop SCAP swaps from line_moves; keep CAP entries
-                // (slot_index = -1) and the line-gate WAIT.
-                auto& lm = line_moves[y];
-                lm.erase(std::remove_if(lm.begin(), lm.end(),
-                    [](const ScapMove& m) {
-                        return m.kind == ScapOpKind::kMove &&
-                               m.slot_index >= 0;
-                    }), lm.end());
-                scanline_palettes_full[y] = strip_pals.back();
-            }
-        }
-        ham::SRGBColor start = strip_srgbs[0].empty()
-            ? ham::SRGBColor{0, 0, 0} : strip_srgbs[0][0];
+            cur_srgb_spans.data(), cur_srgb_spans.size());
+        ham::SRGBColor start = cur_srgbs[0].empty()
+            ? ham::SRGBColor{0, 0, 0} : cur_srgbs[0][0];
+        auto sl = ham::encode_scanline_dp_per_strip(
+            row_span, start, pres_span, srgbs_span,
+            idx_span, kBeamWidth, ham_metric);
+        ham::refine_scanline_triple_per_strip(
+            sl.values, row_span, start, pres_span, srgbs_span,
+            idx_span, kTripleBeam, ham_metric);
+        auto& strip_srgbs = cur_srgbs;
         // Render the per-pixel preview by replaying the encoded values
         // through the strip's palette + HAM rolling state.
         ham::SRGBColor prev = start;
@@ -2626,8 +2653,18 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 out.r, out.g, out.b);
             prev = out;
         }
-        total_error += static_cast<double>(sl.error);
-    }
+        // total_moves: count of MOVEs in line_moves[y].
+        total_moves_atomic.fetch_add(line_moves[y].size());
+        // total_error: accumulate via CAS since std::atomic<double>::fetch_add
+        // is C++20 but not always supported on libstdc++; CAS keeps it portable.
+        double cur_te = total_error_atomic.load();
+        double new_te;
+        do {
+            new_te = cur_te + static_cast<double>(sl.error);
+        } while (!total_error_atomic.compare_exchange_weak(cur_te, new_te));
+    });
+    total_error = total_error_atomic.load();
+    total_moves = total_moves_atomic.load();
 
     // ---- 5. Pack 6-plane bitplane data --------------------------------
     auto planes = bitplane::encode(ham_values, width, height, 6);
