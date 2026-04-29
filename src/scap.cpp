@@ -1517,16 +1517,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         // Per-strip dither-error scorer. For each pixel in the strip,
         // computes the OKLab² distance to its nearest-of-64 entry in
         // the effective palette (32 base + 32 halfbrites). This
-        // matches what the actual encoder picker does, unlike the
-        // previous frozen-cluster-centroid k-means objective which
-        // was structurally blind to "pixels would re-bind to a
-        // different slot if I changed this slot's color".
-        //
-        // Cost: pixels × 64 distance compares per call. For a typical
-        // 16-pixel strip, ~1024 ops. Called per (state, strip) for the
-        // baseline, then per (state, strip, candidate-swap) — though
-        // we use an incremental scheme for the per-candidate evals
-        // (see the eval loop below).
+        // matches what the actual encoder picker does.
         auto e_strip_dither =
             [&](std::size_t s,
                 const std::array<color_space::OKLab, kBaseColors>& Plb,
@@ -1971,7 +1962,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         res.max_visible_moves_per_line = vis_max;
     }
     res.line_moves = std::move(line_moves);
-    for (auto& p : preview.pixels()) p = palette::quantize_to_ocs(p);
+    // No post-render OCS snap. EHB halfbrite values land at NON-OCS-grid
+    // positions (halve(0x11) = 0x09, halve(0x22) = 0x12, etc.) — these
+    // are exactly the "small dark variations" the user observed losing.
+    // The previous quantize_to_ocs call collapsed every halfbrite to
+    // its nearest base-OCS level, halving distinct dark colors used
+    // (15 → 8 on chuck31 nodither). The picker has already rendered
+    // each pixel to the correct halfbrite-derived linear value, and the
+    // bitplane encoder uses indices, not pixel colors — so re-snapping
+    // the preview was pure quality loss with no encoding benefit.
     res.rendered = std::move(preview);
     return res;
 }
