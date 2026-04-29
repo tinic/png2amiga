@@ -1407,6 +1407,12 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         };
 
         std::vector<EStripStats> strips(num_strips);
+        // Per-strip pixel OKLab arrays for the per-strip dither error
+        // scorer. The cluster planner needs to evaluate candidate
+        // swaps against each pixel's actual nearest-of-64 picker
+        // outcome (the picker the encoder will use), not just against
+        // frozen cluster centroids.
+        std::vector<std::vector<color_space::OKLab>> strip_pixels_lab(num_strips);
         auto strip_x_range = [&](std::size_t s) {
             std::size_t lo = (s == 0) ? std::size_t{0}
                 : std::min(width,
@@ -1420,6 +1426,11 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         for (std::size_t s = 0; s < num_strips; ++s) {
             auto [x_lo, x_hi] = strip_x_range(s);
             if (x_lo >= x_hi) continue;
+            // Snapshot per-strip pixel OKLab (cheap; ~16 entries per
+            // strip × 18 strips per row).
+            strip_pixels_lab[s].reserve(x_hi - x_lo);
+            for (std::size_t x = x_lo; x < x_hi; ++x)
+                strip_pixels_lab[s].push_back(img_lab[y * width + x]);
             std::array<double, kBaseColors> sumLb{}, sumab{}, sumbb{};
             std::array<double, kBaseColors> sumLh{}, sumah{}, sumbh{};
             std::array<std::uint32_t, kBaseColors> cntb{}, cnth{};
@@ -1503,30 +1514,40 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             }
         }
 
-        // Strip-error helper: given P_lab_b[32] (base) and P_lab_h[32]
-        // (halve), summed cluster errors.
-        auto e_strip_err =
-            [&](const EStripStats& st,
+        // Per-strip dither-error scorer. For each pixel in the strip,
+        // computes the OKLab² distance to its nearest-of-64 entry in
+        // the effective palette (32 base + 32 halfbrites). This
+        // matches what the actual encoder picker does, unlike the
+        // previous frozen-cluster-centroid k-means objective which
+        // was structurally blind to "pixels would re-bind to a
+        // different slot if I changed this slot's color".
+        //
+        // Cost: pixels × 64 distance compares per call. For a typical
+        // 16-pixel strip, ~1024 ops. Called per (state, strip) for the
+        // baseline, then per (state, strip, candidate-swap) — though
+        // we use an incremental scheme for the per-candidate evals
+        // (see the eval loop below).
+        auto e_strip_dither =
+            [&](std::size_t s,
                 const std::array<color_space::OKLab, kBaseColors>& Plb,
                 const std::array<color_space::OKLab, kBaseColors>& Plh) {
                 double e = 0;
-                for (std::size_t k = 0; k < kBaseColors; ++k) {
-                    if (st.cb[k].count > 0) {
-                        float dL = st.cb[k].L - Plb[k].L;
-                        float da = st.cb[k].a - Plb[k].a;
-                        float db = st.cb[k].b - Plb[k].b;
-                        e += static_cast<double>(st.cb[k].count) *
-                             static_cast<double>(dL * dL + da * da + db * db);
-                        e += st.cb[k].spread;
+                auto& pixels = strip_pixels_lab[s];
+                for (auto& tgt : pixels) {
+                    float best_d = std::numeric_limits<float>::max();
+                    for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                        float dLb = tgt.L - Plb[k].L;
+                        float dab = tgt.a - Plb[k].a;
+                        float dbb = tgt.b - Plb[k].b;
+                        float db = dLb * dLb + dab * dab + dbb * dbb;
+                        if (db < best_d) best_d = db;
+                        float dLh = tgt.L - Plh[k].L;
+                        float dah = tgt.a - Plh[k].a;
+                        float dbh = tgt.b - Plh[k].b;
+                        float dh = dLh * dLh + dah * dah + dbh * dbh;
+                        if (dh < best_d) best_d = dh;
                     }
-                    if (st.ch[k].count > 0) {
-                        float dL = st.ch[k].L - Plh[k].L;
-                        float da = st.ch[k].a - Plh[k].a;
-                        float db = st.ch[k].b - Plh[k].b;
-                        e += static_cast<double>(st.ch[k].count) *
-                             static_cast<double>(dL * dL + da * da + db * db);
-                        e += st.ch[k].spread;
-                    }
+                    e += static_cast<double>(best_d);
                 }
                 return e;
             };
@@ -1580,7 +1601,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             }
             init.projected_hblank = h0;
         }
-        init.cum_err = e_strip_err(strips[0], init.P_lab_b, init.P_lab_h);
+        init.cum_err = e_strip_dither(0, init.P_lab_b, init.P_lab_h);
 
         std::vector<ENode> beam{init};
         std::vector<ENode> next;
@@ -1599,7 +1620,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             for (auto& state : beam) {
                 double filler_err = strip_empty
                     ? 0.0
-                    : e_strip_err(st, state.P_lab_b, state.P_lab_h);
+                    : e_strip_dither(s + 1, state.P_lab_b, state.P_lab_h);
                 {
                     ENode child = state;
                     child.dec_reg[s] = -1;
@@ -1609,6 +1630,11 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 if (strip_empty) continue;
                 if (state.useful_swaps >= useful_swap_cap) continue;
 
+                // Per-pixel min-of-62 (excluding base[k] and halfbrite[k]
+                // for each k) — precomputed once per state-strip-k so
+                // the candidate eval becomes O(width × candidates),
+                // not O(width × 64 × candidates).
+                auto& pixels = strip_pixels_lab[s + 1];
                 struct Move {
                     int reg;
                     std::size_t cand_idx;
@@ -1617,45 +1643,54 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 };
                 std::vector<Move> moves;
                 moves.reserve(kBaseColors * st.cands.size());
+
                 for (std::size_t k = k_min; k < kBaseColors; ++k) {
                     // Hblank-budget gate: precompute delta for register
-                    // k swap-vs-current. delta = (new_diff_with_next ?
-                    // 1 : 0) - (old_diff_with_next ? 1 : 0).
+                    // k swap-vs-current.
                     bool old_diff = false;
                     if (has_next_line) {
                         auto& a = state.P[k];
                         auto& b = cap_palettes[y + 1][k];
                         old_diff = (a.r != b.r || a.g != b.g || a.b != b.b);
                     }
+                    // Precompute pixel_min_excl_k[x]: min over all 64
+                    // slots EXCEPT base[k] and halfbrite[k+32].
+                    std::vector<float> pixel_min_excl_k(pixels.size(),
+                        std::numeric_limits<float>::max());
+                    for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
+                        if (k2 == k) continue;
+                        for (std::size_t i = 0; i < pixels.size(); ++i) {
+                            auto& tgt = pixels[i];
+                            float dLb = tgt.L - state.P_lab_b[k2].L;
+                            float dab = tgt.a - state.P_lab_b[k2].a;
+                            float dbb = tgt.b - state.P_lab_b[k2].b;
+                            float db = dLb * dLb + dab * dab + dbb * dbb;
+                            if (db < pixel_min_excl_k[i]) pixel_min_excl_k[i] = db;
+                            float dLh = tgt.L - state.P_lab_h[k2].L;
+                            float dah = tgt.a - state.P_lab_h[k2].a;
+                            float dbh = tgt.b - state.P_lab_h[k2].b;
+                            float dh = dLh * dLh + dah * dah + dbh * dbh;
+                            if (dh < pixel_min_excl_k[i]) pixel_min_excl_k[i] = dh;
+                        }
+                    }
                     for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
                         auto& c_lab_b = st.cands_lab_b[ci];
                         auto& c_lab_h = st.cands_lab_h[ci];
-                        // Strip error with state.P_lab_*  but k-th
-                        // entries replaced by candidate's lab.
                         double e = 0;
-                        for (std::size_t k2 = 0; k2 < kBaseColors; ++k2) {
-                            const auto& Pb =
-                                (k2 == k) ? c_lab_b : state.P_lab_b[k2];
-                            const auto& Ph =
-                                (k2 == k) ? c_lab_h : state.P_lab_h[k2];
-                            if (st.cb[k2].count > 0) {
-                                float dL = st.cb[k2].L - Pb.L;
-                                float da = st.cb[k2].a - Pb.a;
-                                float db = st.cb[k2].b - Pb.b;
-                                e += static_cast<double>(st.cb[k2].count) *
-                                     static_cast<double>(
-                                         dL * dL + da * da + db * db);
-                                e += st.cb[k2].spread;
-                            }
-                            if (st.ch[k2].count > 0) {
-                                float dL = st.ch[k2].L - Ph.L;
-                                float da = st.ch[k2].a - Ph.a;
-                                float db = st.ch[k2].b - Ph.b;
-                                e += static_cast<double>(st.ch[k2].count) *
-                                     static_cast<double>(
-                                         dL * dL + da * da + db * db);
-                                e += st.ch[k2].spread;
-                            }
+                        for (std::size_t i = 0; i < pixels.size(); ++i) {
+                            auto& tgt = pixels[i];
+                            float best_d = pixel_min_excl_k[i];
+                            float dLb = tgt.L - c_lab_b.L;
+                            float dab = tgt.a - c_lab_b.a;
+                            float dbb = tgt.b - c_lab_b.b;
+                            float db = dLb * dLb + dab * dab + dbb * dbb;
+                            if (db < best_d) best_d = db;
+                            float dLh = tgt.L - c_lab_h.L;
+                            float dah = tgt.a - c_lab_h.a;
+                            float dbh = tgt.b - c_lab_h.b;
+                            float dh = dLh * dLh + dah * dah + dbh * dbh;
+                            if (dh < best_d) best_d = dh;
+                            e += static_cast<double>(best_d);
                         }
                         if (e >= filler_err) continue;
                         int delta = 0;
@@ -1670,7 +1705,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                             if (state.projected_hblank +
                                 static_cast<std::size_t>(std::max(0, delta))
                                 > kHblankCeilingLocal) {
-                                continue;  // would overflow next-line hblank
+                                continue;
                             }
                         }
                         moves.push_back(
