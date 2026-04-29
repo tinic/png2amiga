@@ -697,6 +697,20 @@ function formatGenesisTileStats(result: ConvertResult): string {
   return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${vram_kb} KB VRAM)`
 }
 
+// Combine PSNR + S2 into a single comma-joined fragment so
+// formatResultInfo's branch count stays inside the eslint complexity
+// budget. Each metric is independently optional.
+function formatQualityStats(result: ConvertResult): string {
+  const out: string[] = []
+  if (result.psnr != null && Number.isFinite(result.psnr)) {
+    out.push(`PSNR: ${result.psnr.toFixed(1)} dB`)
+  }
+  if (result.s2 != null && Number.isFinite(result.s2)) {
+    out.push(`S2: ${result.s2.toFixed(1)}`)
+  }
+  return out.join(', ')
+}
+
 function formatResultInfo(result: ConvertResult) {
   // result.colors is non-optional in ConvertResult, so the chain stops there.
   const colorCount = result.totalColors ?? result.colors
@@ -706,8 +720,8 @@ function formatResultInfo(result: ConvertResult) {
   const sizeStats = formatSizeStats(result)
   pushIf(parts, sizeStats, sizeStats.slice(2))  // strip leading ", "
   pushIf(parts, result.quantError != null, `error: ${(result.quantError ?? 0).toFixed(2)}`)
-  pushIf(parts, result.psnr != null && Number.isFinite(result.psnr), `PSNR: ${(result.psnr ?? 0).toFixed(1)} dB`)
-  pushIf(parts, result.s2 != null && Number.isFinite(result.s2), `S2: ${(result.s2 ?? 0).toFixed(1)}`)
+  const quality = formatQualityStats(result)
+  pushIf(parts, quality, quality)
   const tileStats = formatGenesisTileStats(result)
   pushIf(parts, tileStats, tileStats)
   return parts.join(', ')
@@ -1318,11 +1332,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
               <div v-if="options.capBest" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for CAP best: ms-ssim (default) is fast and tracks SSIMULACRA2 well; ssimulacra2 is the most perceptually accurate but slower; psnr keeps maximum fine detail.">CAP metric</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for CAP best: ms-ssim (default) gives a cleaner image and tracks SSIMULACRA2; psnr keeps maximum fine detail.">CAP metric</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <SelectButton
                     v-model="options.capBestMetric"
-                    :options="[{label:'MS-SSIM', value:'msssim'}, {label:'SSIMULACRA2', value:'ssimulacra2'}, {label:'PSNR', value:'psnr'}]"
+                    :options="[{label:'MS-SSIM', value:'msssim'}, {label:'PSNR', value:'psnr'}]"
                     optionLabel="label" optionValue="value"
                     :allowEmpty="false"
                     size="small"
