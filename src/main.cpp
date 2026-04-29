@@ -429,6 +429,10 @@ struct Config {
     // HAM greedy encoder (skip DP beam search, ~20× faster, ~1 dB worse).
     bool ham_fast = false;
 
+    // HAM op-selection metric. "srgb-mse" (default) maximises reported
+    // PSNR; "oklab2" optimises perceptual uniformity. See api::Options.
+    std::string ham_metric = "srgb-mse";
+
     // CAP best-quality planner. Multi-candidate × all-slot search + joint
     // base-palette refinement. HAM6 + copper and HAM8 + copper only —
     // indexed copper modes ignore this flag (their planner is already
@@ -626,6 +630,12 @@ void print_usage() {
         "                                  (default: 16; 0 = disable). Catches fringe\n"
         "                                  artefacts the 1-pixel beam misses, ~+0.5-1 dB.\n"
         "  --ham-fast                      Greedy HAM encoder (no DP beam search).\n"
+        "  --ham-metric <srgb-mse|oklab2>  HAM op-selection metric. 'srgb-mse' (default)\n"
+        "                                  matches the reported PSNR metric and HAM hardware\n"
+        "                                  semantics. 'oklab2' uses perceptually-uniform\n"
+        "                                  OKLab² distance — better on banded/HDR content\n"
+        "                                  (~+3.5 OKLab-dB on test images) at the cost of\n"
+        "                                  ~0.5-1 dB headline PSNR.\n"
         "                                  ~15× faster, ~0.04 dB PSNR cost. For\n"
         "                                  realtime / batch / preview workflows.\n"
         "\n"
@@ -1277,6 +1287,17 @@ Result<Config> parse_args(int argc, char* argv[]) {
             else if (arg == "--ham-triple") {
                 config.ham_triple = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
                 if (config.ham_triple > 256) config.ham_triple = 256;
+            }
+            else if (arg == "--ham-metric") {
+                config.ham_metric = std::string(val);
+                if (config.ham_metric != "srgb-mse" &&
+                    config.ham_metric != "oklab2") {
+                    return std::unexpected{Error{
+                        ErrorCode::unsupported_mode,
+                        std::format("Invalid --ham-metric '{}': use "
+                                    "'srgb-mse' (default) or 'oklab2'",
+                                    config.ham_metric)}};
+                }
             }
             else if (arg == "--palette-diversity") {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
@@ -1934,6 +1955,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.palette_diversity = cfg.palette_diversity;
     opts.quantizer = cfg.quantizer;
     opts.ham_fast = cfg.ham_fast;
+    opts.ham_metric = cfg.ham_metric;
     opts.ham_beam = static_cast<int>(cfg.ham_beam);
     opts.ham_triple = static_cast<int>(cfg.ham_triple);
     opts.refine_iterations = cfg.refine_iterations;

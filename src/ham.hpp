@@ -131,13 +131,15 @@ struct ScanlineResult {
     std::vector<std::uint8_t> values;
     float error{};
 };
+enum class HamMetric;  // forward decl; full definition below.
 ScanlineResult encode_scanline_dp_per_strip(
     std::span<const Color3f> target_row,
     SRGBColor start_color,
     std::span<const HamPrecomp> pres,
     std::span<const std::span<const SRGBColor>> base_srgbs,
     std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_width);
+    std::size_t beam_width,
+    HamMetric metric);
 
 // Triple-pixel refinement post-pass for per-strip encoded scanlines.
 // Same algorithm as the single-palette refine_triple inside ham.cpp,
@@ -152,7 +154,18 @@ void refine_scanline_triple_per_strip(
     std::span<const HamPrecomp> pres,
     std::span<const std::span<const SRGBColor>> base_srgbs,
     std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_k);
+    std::size_t beam_k,
+    HamMetric metric);
+
+// ---------------------------------------------------------------------------
+// HAM op-selection metric. sRGB-MSE matches our reported PSNR metric and
+// HAM hardware semantics (per-channel sRGB DAC values), and on average
+// produces +0.5..+1 dB gains over OKLab² in apples-to-apples shootouts.
+// OKLab² is perceptually-uniform: better on banded/HDR content (chuck31
+// is +3.5 OKLab-dB worse under sRGB-MSE) at the cost of headline PSNR.
+// Default is srgb_mse; --ham-metric oklab2 selects the perceptual scorer.
+// ---------------------------------------------------------------------------
+enum class HamMetric { srgb_mse, oklab2 };
 
 // ---------------------------------------------------------------------------
 // HAM encoding options
@@ -160,6 +173,9 @@ void refine_scanline_triple_per_strip(
 
 struct HamOptions {
     std::size_t beam_width = 48;    // beam search width for DP
+
+    // Op-selection metric. See HamMetric for tradeoff.
+    HamMetric metric = HamMetric::srgb_mse;
 
     // Dithering (error diffusion applied during HAM encoding)
     dither::Method dither_method = dither::Method::none;  // none = no dithering (default)

@@ -2367,12 +2367,15 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             -> ham::ScanlineResult {
             ham::SRGBColor start = strip_srgbs[0].empty()
                 ? ham::SRGBColor{0, 0, 0} : strip_srgbs[0][0];
+            // SCAP HAM6 follows the rest of the HAM pipeline: sRGB-MSE
+            // metric matches the reported PSNR. (--ham-metric oklab2 isn't
+            // currently plumbed through SCAP; default sRGB-MSE.)
             auto sl = ham::encode_scanline_dp_per_strip(
                 row_span, start, pres_span, srgbs_span,
-                idx_span, kBeamWidth);
+                idx_span, kBeamWidth, ham::HamMetric::srgb_mse);
             ham::refine_scanline_triple_per_strip(
                 sl.values, row_span, start, pres_span, srgbs_span,
-                idx_span, kTripleBeam);
+                idx_span, kTripleBeam, ham::HamMetric::srgb_mse);
             return sl;
         };
 

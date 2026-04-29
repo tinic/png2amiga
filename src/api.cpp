@@ -1063,6 +1063,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.triple_beam = static_cast<std::size_t>(
             std::clamp(options.ham_triple, 0, 256));
         ham_opts.greedy = options.ham_fast;
+        ham_opts.metric = (options.ham_metric == "oklab2")
+            ? ham::HamMetric::oklab2 : ham::HamMetric::srgb_mse;
         // cap_best only applies to HAM6 and HAM8 — HAM4/5/7 are skipped
         // because their tiny base palettes (4/8/32 colors) don't benefit
         // from the refined planner enough to justify the cost.
