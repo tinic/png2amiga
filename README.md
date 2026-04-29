@@ -257,31 +257,37 @@ distance.
 
 | Encoder     | Mode                              | PSNR (dB) |
 |-------------|-----------------------------------|----------:|
-| **png2amiga** | **EHB + SCAP + cap-best**       | **31.30** |
+| **png2amiga** | **HAM6 + CAP + cap-best**       | **31.22** |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     |
-| png2amiga   | HAM6 + CAP + cap-best             | 30.97     |
+| png2amiga   | HAM6 (no copper)                  | 30.34     |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     |
-| png2amiga   | HAM6 (no copper)                  | 29.90     |
+| png2amiga   | EHB + SCAP + cap-best             | 29.58     |
 | abc         | HAM6 (`-floyd`)                   | 29.02     |
 | abc         | SHAM6 (`-floyd`)                  | 26.40     |
 
-png2amiga's **EHB + SCAP + cap-best** wins outright by **+0.12 dB**
-over ham_convert's SHAM6, and **png2amiga HAM6 + CAP + cap-best**
-beats ham_convert's HAM6 q7 max-quality mode by **+1.05 dB** despite
-running in real-OCS-hardware-faithful copper mode (≤14 MOVEs/line in
-the hblank budget). On the per-line palette modes the gap to
-ham_convert SHAM6 is **not** because we're hitting a bandwidth wall —
-both encoders pack changes well under the OCS limit (parsed from the
-PCHG chunks: ham_convert 7 changes/line max, png2amiga 10/line max,
-vs the 14-MOVE hardware ceiling) — the residual gap is algorithmic.
+png2amiga's **HAM6 + CAP + cap-best** wins outright by **+0.04 dB**
+over ham_convert's SHAM6 — running in real-OCS-hardware-faithful
+copper mode (≤14 MOVEs/line in the hblank budget) — and beats
+ham_convert's HAM6 q7 max-quality mode by **+1.30 dB**. On plain
+HAM6 (no copper) png2amiga also beats ham_convert q7 by **+0.42 dB**.
+The HAM6-mode lead comes from the planner's op-selection metric: HAM
+ops set literal sRGB DAC values per channel, so we score in sRGB-MSE
+directly (matching how PSNR is computed). HAM/SHAM encoders that
+score in OKLab or some perceptual variant pay a metric-mismatch cost
+worth ~+0.4 to +1 dB.
+
 ham_convert SHAM6 also runs as software-rendered PCHG; png2amiga's
 copper output is the actual instruction stream the hardware executes.
+On the per-line palette modes the gap analysis still holds — both
+encoders pack changes well under the OCS limit (parsed from the
+PCHG chunks: ham_convert 7 changes/line max, png2amiga 10/line max,
+vs the 14-MOVE hardware ceiling).
 
 This is one image. On smoother photographic content (tested on
-`fantasy1.png`, `lovers.jpg`, `fromthe.png`) ham_convert SHAM6 still
-edges out the png2amiga modes by 0.4–0.6 dB; on demoscene / banded
-content (tested on `chuck31.png`) png2amiga widens the lead to
-+1.05 dB. The harness lives at `tools/shootout/`:
+`fantasy1.png`, `lovers.jpg`, `fromthe.png`) png2amiga HAM6 + CAP +
+cap-best is competitive with ham_convert SHAM6; on demoscene /
+banded content (tested on `chuck31.png`) png2amiga widens the lead.
+The harness lives at `tools/shootout/`:
 
 ```bash
 cd tools/shootout
