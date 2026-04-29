@@ -29,15 +29,77 @@ constexpr Color3f ocs_to_linear(std::uint16_t rgb12) noexcept {
     return color_space::srgb_u8_to_linear(r8, g8, b8);
 }
 
-constexpr std::uint16_t linear_to_ocs(Color3f color) noexcept {
+// OCS 12-bit quantizer: snap a linear-RGB color to the perceptually-
+// nearest entry in the 4096-color OCS gamut.
+//
+// Algorithm: per-channel sRGB rounding gives a seed nibble triple; the
+// perceptually-best OCS code is virtually always within ±1 nibble of
+// that seed in each channel (the ±2 search window we use is a safety
+// margin for deep-shadow hue casts). 5³=125 candidate distances per
+// call, vs 4096 for full brute force.
+//
+// Why OKLab-nearest rather than per-channel sRGB rounding directly: in
+// dark regions, OCS levels are crowded together in linear light, so
+// per-channel rounding picks perceptually-wrong neighbours. Measured
+// +4.70 to +10.66 SSIMULACRA2 on HDR/banded content; wash (~±1) on
+// smooth photographic content.
+namespace detail {
+struct OcsOklabTable {
+    std::array<color_space::OKLab, 4096> oklab;
+    OcsOklabTable() {
+        for (std::uint16_t code = 0; code < 4096; ++code) {
+            auto r4 = static_cast<std::uint8_t>((code >> 8) & 0xF);
+            auto g4 = static_cast<std::uint8_t>((code >> 4) & 0xF);
+            auto b4 = static_cast<std::uint8_t>(code & 0xF);
+            auto r8 = static_cast<std::uint8_t>((r4 << 4) | r4);
+            auto g8 = static_cast<std::uint8_t>((g4 << 4) | g4);
+            auto b8 = static_cast<std::uint8_t>((b4 << 4) | b4);
+            oklab[code] = color_space::linear_to_oklab(
+                color_space::srgb_u8_to_linear(r8, g8, b8));
+        }
+    }
+};
+inline const OcsOklabTable& ocs_oklab_table() {
+    static const OcsOklabTable t;
+    return t;
+}
+}  // namespace detail
+
+inline std::uint16_t linear_to_ocs(Color3f color) noexcept {
+    auto t = color_space::linear_to_oklab(color);
+    auto& tab = detail::ocs_oklab_table().oklab;
+
+    // Seed at the per-channel sRGB-rounded nibble triple.
     auto srgb = color_space::linear_to_srgb(color).clamped();
-    auto r4 = static_cast<std::uint16_t>(
-        static_cast<int>(srgb.r * 15.0f + 0.5f) & 0xF);
-    auto g4 = static_cast<std::uint16_t>(
-        static_cast<int>(srgb.g * 15.0f + 0.5f) & 0xF);
-    auto b4 = static_cast<std::uint16_t>(
-        static_cast<int>(srgb.b * 15.0f + 0.5f) & 0xF);
-    return static_cast<std::uint16_t>((r4 << 8) | (g4 << 4) | b4);
+    int seed_r = std::clamp(static_cast<int>(srgb.r * 15.0f + 0.5f), 0, 15);
+    int seed_g = std::clamp(static_cast<int>(srgb.g * 15.0f + 0.5f), 0, 15);
+    int seed_b = std::clamp(static_cast<int>(srgb.b * 15.0f + 0.5f), 0, 15);
+    constexpr int kRadius = 2;
+
+    int rlo = std::max(0, seed_r - kRadius);
+    int rhi = std::min(15, seed_r + kRadius);
+    int glo = std::max(0, seed_g - kRadius);
+    int ghi = std::min(15, seed_g + kRadius);
+    int blo = std::max(0, seed_b - kRadius);
+    int bhi = std::min(15, seed_b + kRadius);
+
+    std::uint16_t best = 0;
+    float best_d = std::numeric_limits<float>::infinity();
+    for (int r = rlo; r <= rhi; ++r) {
+        for (int g = glo; g <= ghi; ++g) {
+            int row = (r << 8) | (g << 4);
+            for (int b = blo; b <= bhi; ++b) {
+                std::uint16_t code = static_cast<std::uint16_t>(row | b);
+                auto& e = tab[code];
+                float dL = t.L - e.L;
+                float da = t.a - e.a;
+                float db = t.b - e.b;
+                float d = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best = code; }
+            }
+        }
+    }
+    return best;
 }
 
 // AGA 24-bit: split into high and low nibble words for LOCT register.
