@@ -14,9 +14,9 @@ const version: string = __APP_VERSION__
           <div>
             <h1 class="m-0 title">png2amiga<span class="version">v{{ version }}</span></h1>
             <p class="m-0 mt-1 text-sm text-color-secondary">
-              Convert images to Commodore Amiga OCS/AGA formats with perceptual color matching
-              — <a href="https://github.com/tinic/png2amiga" target="_blank" class="github-link" @click="track('github-click')">GitHub <i class="pi pi-github"></i></a>
-              — Sister project: <a href="https://png2c64.app" target="_blank" class="github-link">png2c64</a>
+              Amiga OCS/AGA image converter. Full
+              <a href="https://github.com/tinic/png2amiga" target="_blank" class="github-link" @click="track('github-click')">CLI tool <i class="pi pi-github"></i></a>
+              · Sister: <a href="https://png2c64.app" target="_blank" class="github-link">png2c64</a>
             </p>
           </div>
         </div>
