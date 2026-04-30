@@ -1417,12 +1417,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- Native PAR (DOS + SNES + Genesis — modes with fixed
+              <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
                    hardware buffer): preserve source aspect by letterboxing/
                    pillarboxing the image inside the fixed frame instead of
-                   stretching. C64 multicolor's 2:1 hardware-pixel ratio is
-                   handled by the preview-canvas display, not by this toggle. -->
-              <div v-if="isFixedBufferMode(options.mode) && !isC64Mode(options.mode)" class="grid align-items-center">
+                   stretching. -->
+              <div v-if="isFixedBufferMode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.nativePar" />

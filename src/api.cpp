@@ -837,6 +837,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
+        // The encoder expects exactly screen_w × screen_h. With native_par,
+        // compute_target_dims may return a smaller letterboxed size — pad
+        // to the full hardware buffer with black (matching the SNES /
+        // Genesis convention).
+        constexpr std::size_t kCW = 160, kCH = 200;
+        if (image->width() != kCW || image->height() != kCH) {
+            Image padded(kCW, kCH);
+            std::size_t ox = (kCW > image->width())
+                ? (kCW - image->width()) / 2 : 0;
+            std::size_t oy = (kCH > image->height())
+                ? (kCH - image->height()) / 2 : 0;
+            std::size_t cw = std::min(image->width(), kCW);
+            std::size_t ch = std::min(image->height(), kCH);
+            for (std::size_t y = 0; y < ch; ++y)
+                for (std::size_t x = 0; x < cw; ++x)
+                    padded[ox + x, oy + y] = (*image)[x, y];
+            *image = std::move(padded);
+        }
         auto pal_choice = c64::parse_palette(options.c64_palette);
         auto enc = c64::encode_multicolor(*image, pal_choice);
         if (!enc) return std::unexpected{enc.error()};
