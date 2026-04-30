@@ -163,9 +163,15 @@ export function modesForChipset(chipset: Chipset): ModeOption[] {
   if (chipset === 'cga') return ALL_MODES.filter(m => m.chipset === 'cga')
   if (chipset === 'snes') return ALL_MODES.filter(m => m.chipset === 'snes')
   if (chipset === 'genesis') return ALL_MODES.filter(m => m.chipset === 'genesis')
-  return ALL_MODES.filter(m =>
-    (chipset === 'aga' || m.chipset === 'ocs') &&
-    !['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis'].includes(m.chipset))
+  return ALL_MODES.filter(m => {
+    if (['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis'].includes(m.chipset)) return false
+    // EHB is fundamentally an OCS feature (32 base + 32 hardware halve).
+    // It runs on AGA hardware but the half-brite generator is OCS-tied,
+    // so the result is OCS-quantised regardless of chipset — no useful
+    // benefit from picking AGA. Hide EHB when chipset is AGA.
+    if (chipset === 'aga' && (m.value === 'ehb' || m.value === 'ehb-lace')) return false
+    return chipset === 'aga' || m.chipset === 'ocs'
+  })
 }
 
 export const MODES: ModeOption[] = ALL_MODES
