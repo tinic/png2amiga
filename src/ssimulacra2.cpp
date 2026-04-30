@@ -41,11 +41,15 @@ inline void make_positive(XYB& v) noexcept {
     v.y += 0.01f;
 }
 
-// Separable Gaussian blur, σ=1.5, half-width=6 (kernel size 13). Mirror-
-// edge at borders. The reference uses libjxl's recursive FastGaussian
-// which mirrors at edges; finite kernel at half=6 covers >99.99% of σ=1.5
-// energy, and mirror-edge matches the reference's behaviour close enough
-// for ranking-metric use (drift ~1-4 score points; ranking preserved).
+// Separable Gaussian blur, σ=1.5, half-width=6 (kernel size 13).
+// Zero-pad boundary (out-of-bounds samples contribute 0 and are NOT
+// renormalised), matching libjxl FastGaussian's "zero-pad boundary
+// handling" — important because the EdgeDiff map's per-pixel
+// (1+|x-mu|) ratio is sensitive to whether the local mean dips at the
+// border, and the border-region edge maps carry some of the highest
+// calibrated weights in the 108-weight aggregation. Mirror-edge here
+// drifted internal vs external SSIMULACRA2 enough to flip the ranking
+// of HAM6 + --best vs baseline on FS-dithered content.
 constexpr int kBlurHalf = 6;
 constexpr int kBlurSize = 2 * kBlurHalf + 1;
 
@@ -71,33 +75,30 @@ void gaussian_blur(const std::vector<float>& in,
                    std::size_t w, std::size_t h) {
     auto& k = blur_kernel();
     std::vector<float> tmp(w * h);
-    // Horizontal.
+    int W = static_cast<int>(w);
+    int H = static_cast<int>(h);
+    // Horizontal — zero-pad: out-of-bounds samples contribute 0, no
+    // renormalisation (the reference's FastGaussian does the same).
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
             float s = 0.0f;
             for (int i = 0; i < kBlurSize; ++i) {
                 int sx = static_cast<int>(x) + i - kBlurHalf;
-                int W = static_cast<int>(w);
-                if (sx < 0) sx = -sx;
-                if (sx >= W) sx = 2 * (W - 1) - sx;
-                sx = std::clamp(sx, 0, W - 1);
+                if (sx < 0 || sx >= W) continue;
                 s += k[static_cast<std::size_t>(i)] *
                      in[y * w + static_cast<std::size_t>(sx)];
             }
             tmp[y * w + x] = s;
         }
     }
-    // Vertical.
+    // Vertical — same zero-pad policy.
     out.assign(w * h, 0.0f);
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
             float s = 0.0f;
             for (int i = 0; i < kBlurSize; ++i) {
                 int sy = static_cast<int>(y) + i - kBlurHalf;
-                int H = static_cast<int>(h);
-                if (sy < 0) sy = -sy;
-                if (sy >= H) sy = 2 * (H - 1) - sy;
-                sy = std::clamp(sy, 0, H - 1);
+                if (sy < 0 || sy >= H) continue;
                 s += k[static_cast<std::size_t>(i)] *
                      tmp[static_cast<std::size_t>(sy) * w + x];
             }

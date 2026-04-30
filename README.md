@@ -258,7 +258,7 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 | png2amiga   | HAM6 + CAP + best             | 30.91     | 69.32       |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |
-| png2amiga   | HAM6 (no copper)                  | 29.89     | 61.81       |
+| png2amiga   | HAM6 + best (no copper)           | 29.77     | 62.06       |
 | abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |
 | abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |
 
