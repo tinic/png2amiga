@@ -82,11 +82,20 @@ LABELS = {
     'p2a-ehb-best':          'png2amiga EHB + SCAP + best (FS)',
 }
 
+def read_time(stem: str) -> float | None:
+    """Returns wall-clock encode seconds from <stem>.time, or None."""
+    p = os.path.join(output_dir, f'{stem}.time')
+    try:
+        with open(p) as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
 results = []
 for stem, label in LABELS.items():
     png = os.path.join(output_dir, f'{stem}.png')
     if not os.path.exists(png):
-        results.append((label, None, None, "MISSING"))
+        results.append((label, None, None, None, "MISSING"))
         continue
     img = Image.open(png).convert('RGB')
     if img.size != (target.shape[1], target.shape[0]):
@@ -94,20 +103,23 @@ for stem, label in LABELS.items():
     arr = np.asarray(img, dtype=np.int32)
     db = psnr(target, arr)
     s2 = ssimulacra2(target_path, png)
-    results.append((label, db, s2, "OK"))
+    t  = read_time(stem)
+    results.append((label, db, s2, t, "OK"))
 
 # Sort by SSIMULACRA2 if available (better correlates with subjective
 # quality on HAM output), else PSNR. Missing entries last.
 def sort_key(r):
-    label, db, s2, status = r
+    label, db, s2, t, status = r
     if status != "OK":
         return (1, 0.0)
     return (0, -(s2 if s2 is not None else (db or -1e9)))
 results.sort(key=sort_key)
 
 print()
-header = f"  {'Encoder':<48s}  {'PSNR (dB)':>9s}  {'SSIMULACRA2':>11s}"
-sep    = f"  {'-'*48:<48s}  {'-'*9:>9s}  {'-'*11:>11s}"
+header = (f"  {'Encoder':<48s}  {'PSNR (dB)':>9s}  "
+          f"{'SSIMULACRA2':>11s}  {'Time (s)':>9s}")
+sep    = (f"  {'-'*48:<48s}  {'-'*9:>9s}  "
+          f"{'-'*11:>11s}  {'-'*9:>9s}")
 print(f"Encoder quality vs target "
       f"({target.shape[1]}×{target.shape[0]}):")
 if not HAS_S2:
@@ -115,16 +127,17 @@ if not HAS_S2:
 print()
 print(header)
 print(sep)
-for label, db, s2, status in results:
+for label, db, s2, t, status in results:
     if status != "OK":
-        print(f"  {label:<48s}  {status:>9s}  {'':<11s}")
+        print(f"  {label:<48s}  {status:>9s}  {'':<11s}  {'':<9s}")
     else:
         s2_str = f"{s2:.2f}" if s2 is not None else "—"
-        print(f"  {label:<48s}  {db:>9.2f}  {s2_str:>11s}")
+        t_str  = f"{t:.2f}"  if t  is not None else "—"
+        print(f"  {label:<48s}  {db:>9.2f}  {s2_str:>11s}  {t_str:>9s}")
 print()
 
 # Winner reported by SSIMULACRA2 if available, else PSNR.
-ok = [r for r in results if r[3] == "OK"]
+ok = [r for r in results if r[4] == "OK"]
 if ok:
     if HAS_S2 and any(r[2] is not None for r in ok):
         winner = max((r for r in ok if r[2] is not None), key=lambda r: r[2])

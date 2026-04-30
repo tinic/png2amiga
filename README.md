@@ -252,15 +252,15 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 (Cloudinary 2022 — perceptual, calibrated against human ratings;
 30=low, 50=fair, 70=high quality).
 
-| Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 |
-|-------------|-----------------------------------|----------:|------------:|
-| **png2amiga** | **EHB + SCAP + best**       | 32.30     | **75.48**   |
-| png2amiga   | HAM6 + CAP + best             | 30.91     | 69.32       |
-| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |
-| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |
-| png2amiga   | HAM6 + best (no copper)           | 29.77     | 62.06       |
-| abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |
-| abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |
+| Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
+|-------------|-----------------------------------|----------:|------------:|---------:|
+| **png2amiga** | **EHB + SCAP + best**       | 32.30     | **75.48**   |    53.25 |
+| png2amiga   | HAM6 + CAP + best                 | 30.91     | 69.32       |    14.31 |
+| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |    16.21 |
+| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |    64.77 |
+| png2amiga   | HAM6 + best (no copper)           | 29.77     | 62.06       |    28.17 |
+| abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |     0.70 |
+| abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.17 |
 
 The harness lives at `tools/shootout/`:
 

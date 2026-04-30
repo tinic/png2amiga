@@ -60,28 +60,48 @@ echo
 # Each block writes <entry>.png (decoded preview at TARGET dims) into $OUT.
 # We use a uniform Floyd-Steinberg dither across all entries.
 
+# Wall-clock timer: writes elapsed seconds (float, 2-decimal) to <out>.
+# Uses python for sub-second precision since macOS bash 3.2 lacks
+# EPOCHREALTIME and `date +%s.%N` isn't portable.
+time_to() {
+  local out="$1"; shift
+  local t0 rc t1
+  t0=$(python3 -c 'import time; print(time.time())')
+  "$@"
+  rc=$?
+  t1=$(python3 -c 'import time; print(time.time())')
+  python3 -c "import sys; print(f'{float(sys.argv[1]) - float(sys.argv[2]):.2f}')" \
+    "$t1" "$t0" > "$out"
+  return $rc
+}
+
 run_png2amiga() {
   local label="$1"; shift
   echo "==> [png2amiga] $label"
   # PNG preview is what PSNR reads. SCAP modes only emit PNG / .cpp /
   # .c / .h (no IFF for SCAP — there's no PCHG-equivalent yet for the
   # mid-line MOVE stream), so the IFF pass is a best-effort "skip on
-  # failure" to keep the harness simple.
+  # failure" to keep the harness simple. Timing covers the PNG-producing
+  # invocation only — the IFF pass is a duplicate encode and would
+  # roughly double the figure.
   "$PNG2AMIGA" --quiet --no-scale --dither floyd-steinberg "$@" \
     "$TARGET" -o "$OUT/$label.iff" 2>/dev/null || true
-  "$PNG2AMIGA" --quiet --no-scale --dither floyd-steinberg "$@" \
-    "$TARGET" -o "$OUT/$label.png"
+  time_to "$OUT/$label.time" \
+    "$PNG2AMIGA" --quiet --no-scale --dither floyd-steinberg "$@" \
+      "$TARGET" -o "$OUT/$label.png"
 }
 
 # 1) abc HAM6
 echo "==> [abc] ham6 + floyd"
-"$ABC2" "$TARGET" -ham -floyd \
-  -preview "$OUT/abc-ham6.png" -iff "$OUT/abc-ham6.iff" >/dev/null
+time_to "$OUT/abc-ham6.time" \
+  "$ABC2" "$TARGET" -ham -floyd \
+    -preview "$OUT/abc-ham6.png" -iff "$OUT/abc-ham6.iff" >/dev/null
 
 # 2) abc SHAM6
 echo "==> [abc] sham6 + floyd"
-"$ABC2" "$TARGET" -sham -floyd \
-  -preview "$OUT/abc-sham6.png" -iff "$OUT/abc-sham6.iff" >/dev/null
+time_to "$OUT/abc-sham6.time" \
+  "$ABC2" "$TARGET" -sham -floyd \
+    -preview "$OUT/abc-sham6.png" -iff "$OUT/abc-sham6.iff" >/dev/null
 
 # ham_convert is a Swing GUI app whose JVM does NOT exit after CLI work
 # completes — even with positional args, the AWT event loop keeps it
@@ -95,6 +115,8 @@ run_ham_convert() {
   local tmp="$OUT/_hc_${label}"
   rm -rf "$tmp"; mkdir -p "$tmp"
   cp "$TARGET" "$tmp/in.png"
+  local hc_t0
+  hc_t0=$(python3 -c 'import time; print(time.time())')
   ( cd "$tmp"
     nohup "$JAVA" -Xms500m -Xmx2g -jar "$HAM_CONVERT_JAR" \
       in.png "$mode" dither_fs propagation_85 color_lab_cie94 \
@@ -123,6 +145,14 @@ run_ham_convert() {
       fi
     done
   )
+  # Stop the clock once the JVM is gone. Includes the JVM-startup cost
+  # plus the 2 s grace window we added before SIGKILL — both
+  # unavoidable, neither huge relative to ham_convert's actual work
+  # (q7 / sliced both run for many seconds).
+  local hc_t1 elapsed
+  hc_t1=$(python3 -c 'import time; print(time.time())')
+  python3 -c "import sys; print(f'{float(sys.argv[1]) - float(sys.argv[2]):.2f}')" \
+    "$hc_t1" "$hc_t0" > "$OUT/$label.time"
   # ham_convert writes <basename>_output.{png,iff} for the actual preview,
   # plus in_palettes.png (and similar) for sliced modes. Pin to "_output"
   # so the palette debug image doesn't confuse PSNR ranking.
