@@ -1,9 +1,7 @@
 #pragma once
 
 #include "types.hpp"
-#include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -109,61 +107,20 @@ struct OKLab {
     float b{};
 };
 
-// Fast cube root via IEEE 754 bit hack + one Halley iteration.
-// ~6-7 significant digits — full float precision recovery.
-[[gnu::always_inline]]
-inline float fast_cbrt(float x) noexcept {
-    if (x == 0.0f) return 0.0f;
-    float sign = 1.0f;
-    if (x < 0.0f) { sign = -1.0f; x = -x; }
-
-    auto i = std::bit_cast<std::uint32_t>(x);
-    i = i / 3 + 0x2a508bfe;
-    float y = std::bit_cast<float>(i);
-
-    // Halley iteration (cubically convergent)
-    float y3 = y * y * y;
-    y *= (y3 + 2.0f * x) / (2.0f * y3 + x);
-
-    return sign * y;
-}
-
-// 4-lane SIMD cube root (lane 3 is padding). Assumes non-negative inputs
-// — the hot callers of linear_to_oklab feed LMS values from sRGB-linear
-// colors, which are always ≥ 0 after the srgb_to_linear LUT.
+// 4-lane cube root wrapper around std::cbrt (lane 3 is padding).
+// We swept all 16.7M 8-bit sRGB triples and confirmed the previous
+// IEEE-754 + 1-Halley approximation produced a different OCS code from
+// std::cbrt for ~0.028% of inputs, with worst-case drift of 4 nibbles in
+// a single channel; the second-Halley variant got us to 0.002% but still
+// not bit-exact. Full conversion overhead from std::cbrt over the
+// approximation is ~2% (the OCS search dominates), so we use the exact
+// path everywhere.
 using f32x4 [[gnu::vector_size(16)]] = float;
 using u32x4 [[gnu::vector_size(16)]] = std::uint32_t;
 
 [[gnu::always_inline]]
 inline f32x4 fast_cbrt4(f32x4 x) noexcept {
-    // Extract sign and work on |x|; the IEEE-754 bit hack initial guess is
-    // only valid for positive finite inputs. Restore sign at the end so
-    // we match the scalar version's odd-function behavior for negatives
-    // (callers like error diffusion occasionally feed negatives).
-    u32x4 sign_mask = {0x80000000u, 0x80000000u, 0x80000000u, 0x80000000u};
-    u32x4 xbits = std::bit_cast<u32x4>(x);
-    u32x4 sign = xbits & sign_mask;
-    u32x4 absbits = xbits & ~sign_mask;
-    // Initial guess: i/3 + magic. GCC/Clang lower per-lane int divide by 3
-    // to a multiply-high with magic constant even on targets without HW divide.
-    u32x4 three = {3u, 3u, 3u, 3u};
-    u32x4 off = {0x2a508bfeu, 0x2a508bfeu, 0x2a508bfeu, 0x2a508bfeu};
-    u32x4 i = absbits / three + off;
-    f32x4 absx = std::bit_cast<f32x4>(absbits);
-    f32x4 y = std::bit_cast<f32x4>(i);
-    // Halley iteration (cubically convergent). Guard against absx=0 — the
-    // initial guess is non-zero, Halley would converge toward 0 but we want
-    // cbrt(0) = 0 exactly to match the scalar version.
-    f32x4 y3 = y * y * y;
-    f32x4 two = {2.0f, 2.0f, 2.0f, 2.0f};
-    y *= (y3 + two * absx) / (two * y3 + absx);
-    // Zero-guard: where absx == 0, force result to 0.
-    f32x4 zero = {0.0f, 0.0f, 0.0f, 0.0f};
-    u32x4 nonzero_mask = (absbits != 0);
-    y = std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) & nonzero_mask);
-    (void)zero;
-    // Reapply sign.
-    return std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) | sign);
+    return f32x4{std::cbrt(x[0]), std::cbrt(x[1]), std::cbrt(x[2]), 0.0f};
 }
 
 [[gnu::always_inline]]

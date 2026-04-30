@@ -72,6 +72,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/pipeline.cpp
     src/ssimulacra2.cpp
     src/api.cpp
+    src/ocs_cand_table.cpp
 )
 
 if(EMSCRIPTEN)
