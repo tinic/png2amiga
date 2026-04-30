@@ -3811,7 +3811,7 @@ int main(int argc, char* argv[]) {
                 padded[x, target_h - 1] = (*image)[x, image->height() - 1];
             image = std::move(padded);
         } else {
-            auto scaled = scale::bicubic(*image, target_w, target_h);
+            auto scaled = scale::resample(*image, target_w, target_h);
             if (!scaled) {
                 std::println(stderr, "Scale error: {}", scaled.error().message);
                 return 1;

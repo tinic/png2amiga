@@ -390,7 +390,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                 padded[x, target_h - 1] = image[x, image.height() - 1];
             image = std::move(padded);
         } else {
-            auto scaled = scale::bicubic(image, target_w, target_h);
+            auto scaled = scale::resample(image, target_w, target_h);
             if (!scaled) return std::unexpected{scaled.error()};
             image = *std::move(scaled);
         }
