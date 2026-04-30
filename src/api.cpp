@@ -1265,9 +1265,27 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
                 for (std::size_t y = 0; y < h; ++y) {
                     auto& base32 = cr->scanline_palettes[y];
+                    while (base32.size() < 32) base32.emplace_back(0, 0, 0);
+                    // Pair-aware refinement on the row's base palette
+                    // using only that row's pixels — same idea as plain
+                    // EHB but per-line, so each scanline's 32 base
+                    // colours are jointly optimal under the half-brite
+                    // pairing for the colours actually appearing on
+                    // that row.
+                    palette::refine_ehb_base_palette(
+                        std::span<Color3f>(base32.data(), 32),
+                        std::span<const Color3f>(
+                            img.pixels().data() + y * w, w),
+                        /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                        /*max_iters=*/4);
                     Palette bp;
                     bp.colors.assign(base32.begin(), base32.end());
                     auto ehb64 = palette::make_ehb_palette(bp.colors);
+                    // Update copper-result palette so downstream
+                    // consumers (preview render, IFF CMAP) see the
+                    // refined values rather than the pre-refinement
+                    // copy.
+                    base32.assign(bp.colors.begin(), bp.colors.end());
                     pal_lab_per_row[y].resize(ehb64.colors.size());
                     for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
                         pal_lab_per_row[y][i] =
@@ -1443,8 +1461,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             color_space::srgb_to_linear(doubled_srgb);
                     }
                 }
+                // PNN (Pairwise Nearest Neighbor agglomerative
+                // clustering) on the enriched source produces a
+                // better 32-base seed than median-cut / OCS-brute-
+                // force on most images — fewer wasted slots in the
+                // dominant cluster, cleaner spread across the gamut.
                 auto quantized = quantize::quantize(
-                    enriched, 32, quantize_algo(chipset), diversity);
+                    enriched, 32, quantize::Algorithm::pnn, diversity);
                 if (!quantized) return std::unexpected{quantized.error()};
                 Palette bp = std::move(*quantized);
                 snap_to_chipset(bp, chipset, mode);
@@ -1523,8 +1546,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         } else {
             auto qcount = palette_locks::quant_count(32, options.locks, reserve_zero_ehb);
+            // PNN consistently produces better-spread 32-colour
+            // base palettes for EHB than the OCS-brute-force
+            // histogram path; the latter clusters in the densest
+            // pixel basin and underweights the half-brite-covered
+            // dark range.
             auto quantized = quantize::quantize(*image, qcount,
-                                                quantize_algo(chipset),
+                                                quantize::Algorithm::pnn,
                                                 options.palette_diversity);
             if (!quantized) return std::unexpected{quantized.error()};
             auto assembled = palette_locks::assemble_locked_palette(
