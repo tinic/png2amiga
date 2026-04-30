@@ -14,9 +14,9 @@ import Panel from 'primevue/panel'
 import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
-  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
+  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -1341,7 +1341,21 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <div v-if="!(options.mode === 'cga-text80x100' && options.cgaTextMetric !== 'mse')"
+              <!-- C64 mode only: VIC-II palette selector. The VIC-II's analogue
+                   composite output has no canonical sRGB reference; pick the
+                   one whose look you prefer. -->
+              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="VIC-II 16-colour palette. Pepto is the most-cited reference; VICE/Colodore/Deekay/Godot/C64Wiki/Levy are alternative measurements or community standards.">
+                  Palette
+                </label>
+                <div class="col-8">
+                  <Select v-model="options.c64Palette" :options="C64_PALETTES"
+                    optionLabel="label" optionValue="value" class="w-full" />
+                </div>
+              </div>
+
+              <div v-if="!(options.mode === 'cga-text80x100' && options.cgaTextMetric !== 'mse') && !isC64Mode(options.mode)"
                 class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
                 <div class="col-8">
@@ -1349,8 +1363,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS) -->
-              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !paletteData" class="grid align-items-center">
+              <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS/C64) -->
+              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="CAP — Copper-Augmented Palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">CAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
@@ -1403,10 +1417,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- Native PAR (DOS + SNES — modes with fixed hardware buffer):
-                   preserve source aspect by letterboxing/pillarboxing the
-                   image inside the fixed frame instead of stretching. -->
-              <div v-if="isFixedBufferMode(options.mode)" class="grid align-items-center">
+              <!-- Native PAR (DOS + SNES + Genesis — modes with fixed
+                   hardware buffer): preserve source aspect by letterboxing/
+                   pillarboxing the image inside the fixed frame instead of
+                   stretching. C64 multicolor's 2:1 hardware-pixel ratio is
+                   handled by the preview-canvas display, not by this toggle. -->
+              <div v-if="isFixedBufferMode(options.mode) && !isC64Mode(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.nativePar" />

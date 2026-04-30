@@ -16,8 +16,26 @@
 #include "types.hpp"
 
 #include <span>
+#include <string_view>
 
 namespace png2amiga::c64 {
+
+// Available VIC-II palettes. The C64's analogue composite output doesn't
+// have a unique sRGB ground-truth; pick the one whose look you prefer.
+// Default: pepto. Names match png2c64.
+enum class Palette : unsigned char {
+    pepto,
+    vice,
+    colodore,
+    deekay,
+    godot,
+    c64wiki,
+    levy,
+};
+
+Palette parse_palette(std::string_view s) noexcept;
+std::string_view palette_name(Palette p) noexcept;
+std::span<const Color3f, 16> palette_colors(Palette p);
 
 struct EncodeResult {
     Image rendered;                              // 160×200 logical preview
@@ -27,13 +45,10 @@ struct EncodeResult {
     std::uint8_t bg_color = 0;                   // shared background colour 0..15
 };
 
-// Encode a 160×200 logical image to c64-multicolor. The input image is
-// resampled to 160×200 by the pipeline before this is called. Uses the
-// Pepto palette by default (kC64Pepto in palette.hpp).
-Result<EncodeResult> encode_multicolor(const Image& image);
-
-// VIC-II Pepto palette as a span of linear-RGB Color3f. Defined in
-// c64.cpp (lazy-init from kC64Pepto).
-std::span<const Color3f, 16> pepto_palette();
+// Encode a 160×200 logical image to c64-multicolor with the chosen
+// VIC-II palette. The input image is resampled to 160×200 by the
+// pipeline before this is called.
+Result<EncodeResult> encode_multicolor(const Image& image,
+                                       Palette pal = Palette::pepto);
 
 }  // namespace png2amiga::c64

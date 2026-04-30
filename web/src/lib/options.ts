@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64'
 
 export interface ModeOption {
   value: string
@@ -89,6 +89,7 @@ export interface Options {
   dualPlayfield: boolean
   scap: boolean
   cgaTextMetric: string
+  c64Palette: string
   paletteData?: Uint8Array | null
   // Slider numeric fields (declared explicitly so options[s.key] is typed
   // as number rather than the index-signature wildcard).
@@ -152,23 +153,26 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h40',    label: 'H40 (320x224)',    chipset: 'genesis' },
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
+  // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
+  // constraints. Step 1 of the png2c64 merge: c64-multicolor only;
+  // hires / FLI / sprite / charset modes follow.
+  { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
+                             chipset: 'c64' },
 ]
+
+// Chipsets whose mode list is exactly `m.chipset === chipset`.
+const FIXED_CHIPSETS = new Set<Chipset>(
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
-  if (chipset === 'stf') return ALL_MODES.filter(m => m.chipset === 'stf')
-  if (chipset === 'ste') return ALL_MODES.filter(m => m.chipset === 'ste')
-  if (chipset === 'vga') return ALL_MODES.filter(m => m.chipset === 'vga')
-  if (chipset === 'ega') return ALL_MODES.filter(m => m.chipset === 'ega')
-  if (chipset === 'cga') return ALL_MODES.filter(m => m.chipset === 'cga')
-  if (chipset === 'snes') return ALL_MODES.filter(m => m.chipset === 'snes')
-  if (chipset === 'genesis') return ALL_MODES.filter(m => m.chipset === 'genesis')
+  if (FIXED_CHIPSETS.has(chipset)) return ALL_MODES.filter(m => m.chipset === chipset)
+  // Amiga (ocs / aga): mix of ocs-only modes plus aga-only when chipset is aga.
   return ALL_MODES.filter(m => {
-    if (['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis'].includes(m.chipset)) return false
+    if (FIXED_CHIPSETS.has(m.chipset)) return false
     // EHB is fundamentally an OCS feature (32 base + 32 hardware halve).
     // It runs on AGA hardware but the half-brite generator is OCS-tied,
-    // so the result is OCS-quantised regardless of chipset — no useful
-    // benefit from picking AGA. Hide EHB when chipset is AGA.
+    // so the result is OCS-quantised regardless of chipset.
     if (chipset === 'aga' && (m.value === 'ehb' || m.value === 'ehb-lace')) return false
     return chipset === 'aga' || m.chipset === 'ocs'
   })
@@ -186,6 +190,19 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'cga',  label: 'IBM PC CGA (fixed palette)' },
   { value: 'snes', label: 'SNES Mode 7' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
+  { value: 'c64',  label: 'Commodore 64 / VIC-II' },
+]
+
+// VIC-II palette options — only meaningful when chipset is 'c64'.
+export interface C64PaletteOption { value: string; label: string }
+export const C64_PALETTES: C64PaletteOption[] = [
+  { value: 'pepto',    label: 'Pepto (default)' },
+  { value: 'vice',     label: 'VICE emulator' },
+  { value: 'colodore', label: 'Colodore' },
+  { value: 'deekay',   label: 'Deekay' },
+  { value: 'godot',    label: 'Godot' },
+  { value: 'c64wiki',  label: 'C64 Wiki' },
+  { value: 'levy',     label: 'Levy' },
 ]
 
 export const DITHER_METHODS: DitherGroup[] = [
@@ -402,6 +419,7 @@ export function defaultOptions(): Options {
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
     ...CGA_TEXT_DEFAULTS,
+    c64Palette: 'pepto',
     ...sliderDefaults(),
   }
   return opts
@@ -446,6 +464,9 @@ export function isSnesMode(mode: string): boolean {
 export function isGenesisMode(mode: string): boolean {
   return mode.startsWith('genesis-')
 }
+export function isC64Mode(mode: string): boolean {
+  return mode.startsWith('c64-')
+}
 // SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
 // 2048-colour gamut comes from per-tile palette-field bits. Yliluoma
 // family (palette-aware ordered dithers) doesn't apply here — restrict
@@ -458,7 +479,8 @@ export function isSnesDirectMode(mode: string): boolean {
 // letterbox / pillarbox). DOS + SNES both fit; auto-toggled on mode
 // entry by the web UI.
 export function isFixedBufferMode(mode: string): boolean {
-  return isDosMode(mode) || isSnesMode(mode) || isGenesisMode(mode)
+  return isDosMode(mode) || isSnesMode(mode) || isGenesisMode(mode) ||
+         isC64Mode(mode)
 }
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
@@ -487,6 +509,12 @@ const MODE_PAR: Record<string, number> = {
   'genesis-h40':    0.933,
   'genesis-h32-sh': 1.167,
   'genesis-h40-sh': 0.933,
+  // C64 multicolor: 160 logical → 320 hardware (2× h-doubling) ×
+  // 200 vertical. On a PAL CRT each hardware pixel is 0.936:1
+  // (slightly tall). Per-LOGICAL-pixel display ratio = 2 × 0.936 =
+  // 1.872 (wide). PAL is the default; NTSC users would want a
+  // separate mode entry.
+  'c64-multicolor': 1.872,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
@@ -557,10 +585,15 @@ export function decomposeMode(uiMode: string): DecomposedMode {
   return { mode: uiMode, width: 0, interlace: false }
 }
 
-// Maximum bitplane depth for a given mode/chipset
+// Maximum bitplane depth for a given mode/chipset.
+// Modes whose depth is fixed by the target hardware (HAM data bits,
+// EHB always-6, Atari mode-defined, DOS hardware-defined, C64 cell
+// constraints) report 0 to mean "no user-adjustable depth slider".
+const FIXED_DEPTH_PREDICATES = [
+  isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode,
+] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
-  if (isHamMode(mode) || isEhbMode(mode) || isAtariMode(mode)) return 0
-  if (isDosMode(mode)) return 0  // DOS modes have fixed depth per hardware
+  for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
   if (isHiresMode(mode)) return chipset === 'aga' ? 8 : 4
   return chipset === 'aga' ? 8 : 5
 }

@@ -233,11 +233,12 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
     // C64 multicolor: 160×200 logical, 4×8 cells, 4-colour-per-cell.
     // Hardware pixels are 2:1 (each logical pixel doubled horizontally
-    // → 320×200 display). Display PAR on a PAL CRT is ≈ 0.94 (slightly
-    // taller-than-wide), but we report 2.0 here so preview renders at
-    // 320×200 — same convention as lores_interlace.
+    // → 320×200 display). On a PAL CRT one of those 320×200 hardware
+    // pixels has aspect 0.936:1 (slightly tall) — net per-LOGICAL-pixel
+    // display ratio = 2 × 0.936 = 1.872 (wide). The web preview canvas
+    // honours .par as the per-logical-pixel display ratio.
     case Mode::c64_multicolor:
-        return {160, 200, 2, 4, false, false, false, false, 2, 1, 2.0f};
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
     // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
     // matches SNES at 224 lines on a 4:3 CRT.
     //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)

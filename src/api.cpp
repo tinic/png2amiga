@@ -443,6 +443,19 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     bool have_w = options.width > 0;
     bool have_h = options.height > 0;
 
+    // Fixed-buffer modes have hardware-locked screen dimensions; if the
+    // caller didn't ask for native-par, ALWAYS fit to mode_w × screen_h
+    // regardless of any user-supplied width/height. (Otherwise the
+    // encoder rejects mismatched input — c64::encode_multicolor wants
+    // exactly 160×200, etc.)
+    bool is_fixed_buf =
+        amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
+        amiga::is_cga(mode)   || amiga::is_cga_text(mode) ||
+        amiga::is_snes(mode)  || amiga::is_genesis(mode) || amiga::is_c64(mode);
+    if (is_fixed_buf && !options.native_par && params.screen_height > 0) {
+        return {mode_w, params.screen_height};
+    }
+
     if (have_w && have_h) {
         return {static_cast<std::size_t>(options.width),
                 static_cast<std::size_t>(options.height)};
@@ -476,7 +489,7 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
         bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
                                amiga::is_ega(mode)   || amiga::is_cga(mode) ||
                                amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                               amiga::is_genesis(mode);
+                               amiga::is_genesis(mode) || amiga::is_c64(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
@@ -824,12 +837,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        auto enc = c64::encode_multicolor(*image);
+        auto pal_choice = c64::parse_palette(options.c64_palette);
+        auto enc = c64::encode_multicolor(*image, pal_choice);
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;
         result.rendered = std::move(enc->rendered);
-        auto pal_span = c64::pepto_palette();
+        auto pal_span = c64::palette_colors(pal_choice);
         result.palette.assign(pal_span.begin(), pal_span.end());
         result.indices.clear();
         result.planes.depth = 2;

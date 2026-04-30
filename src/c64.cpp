@@ -8,27 +8,73 @@
 
 namespace png2amiga::c64 {
 
-namespace {
-
-inline const std::array<Color3f, 16>& pepto_linear() {
-    static const std::array<Color3f, 16> pal = [] {
-        std::array<Color3f, 16> p{};
-        for (std::size_t i = 0; i < 16; ++i)
-            p[i] = color_space::srgb_hex_to_linear(palette::kC64Pepto[i]);
-        return p;
-    }();
-    return pal;
+Palette parse_palette(std::string_view s) noexcept {
+    if (s == "pepto")    return Palette::pepto;
+    if (s == "vice")     return Palette::vice;
+    if (s == "colodore") return Palette::colodore;
+    if (s == "deekay")   return Palette::deekay;
+    if (s == "godot")    return Palette::godot;
+    if (s == "c64wiki" || s == "wiki") return Palette::c64wiki;
+    if (s == "levy")     return Palette::levy;
+    return Palette::pepto;
 }
 
-inline const std::array<color_space::OKLab, 16>& pepto_oklab() {
-    static const std::array<color_space::OKLab, 16> lab = [] {
-        std::array<color_space::OKLab, 16> a{};
-        const auto& lin = pepto_linear();
-        for (std::size_t i = 0; i < 16; ++i)
-            a[i] = color_space::linear_to_oklab(lin[i]);
-        return a;
+std::string_view palette_name(Palette p) noexcept {
+    switch (p) {
+    case Palette::pepto:    return "pepto";
+    case Palette::vice:     return "vice";
+    case Palette::colodore: return "colodore";
+    case Palette::deekay:   return "deekay";
+    case Palette::godot:    return "godot";
+    case Palette::c64wiki:  return "c64wiki";
+    case Palette::levy:     return "levy";
+    }
+    return "pepto";
+}
+
+namespace {
+
+const std::array<std::uint32_t, 16>& palette_hex(Palette p) {
+    switch (p) {
+    case Palette::pepto:    return palette::kC64Pepto;
+    case Palette::vice:     return palette::kC64Vice;
+    case Palette::colodore: return palette::kC64Colodore;
+    case Palette::deekay:   return palette::kC64Deekay;
+    case Palette::godot:    return palette::kC64Godot;
+    case Palette::c64wiki:  return palette::kC64Wiki;
+    case Palette::levy:     return palette::kC64Levy;
+    }
+    return palette::kC64Pepto;
+}
+
+const std::array<Color3f, 16>& palette_linear(Palette p) {
+    static const auto cache = [] {
+        std::array<std::array<Color3f, 16>, 7> all{};
+        Palette ps[] = {Palette::pepto, Palette::vice, Palette::colodore,
+                        Palette::deekay, Palette::godot, Palette::c64wiki,
+                        Palette::levy};
+        for (auto pp : ps) {
+            const auto& hex = palette_hex(pp);
+            for (std::size_t i = 0; i < 16; ++i)
+                all[static_cast<std::size_t>(pp)][i] =
+                    color_space::srgb_hex_to_linear(hex[i]);
+        }
+        return all;
     }();
-    return lab;
+    return cache[static_cast<std::size_t>(p)];
+}
+
+const std::array<color_space::OKLab, 16>& palette_oklab(Palette p) {
+    static const auto cache = [] {
+        std::array<std::array<color_space::OKLab, 16>, 7> all{};
+        for (std::size_t i = 0; i < 7; ++i) {
+            const auto& lin = palette_linear(static_cast<Palette>(i));
+            for (std::size_t j = 0; j < 16; ++j)
+                all[i][j] = color_space::linear_to_oklab(lin[j]);
+        }
+        return all;
+    }();
+    return cache[static_cast<std::size_t>(p)];
 }
 
 constexpr std::size_t kCellW = 4;   // multicolor logical pixels per cell
@@ -64,11 +110,11 @@ inline float cell_error_for_quad(
 
 }  // namespace
 
-std::span<const Color3f, 16> pepto_palette() {
-    return std::span<const Color3f, 16>(pepto_linear());
+std::span<const Color3f, 16> palette_colors(Palette p) {
+    return std::span<const Color3f, 16>(palette_linear(p));
 }
 
-Result<EncodeResult> encode_multicolor(const Image& image) {
+Result<EncodeResult> encode_multicolor(const Image& image, Palette pal) {
     constexpr std::size_t W = kCols * kCellW;  // 160
     constexpr std::size_t H = kRows * kCellH;  // 200
 
@@ -80,8 +126,8 @@ Result<EncodeResult> encode_multicolor(const Image& image) {
         }};
     }
 
-    const auto& pal_lin  = pepto_linear();
-    const auto& pal_lab  = pepto_oklab();
+    const auto& pal_lin  = palette_linear(pal);
+    const auto& pal_lab  = palette_oklab(pal);
 
     // Pre-bake source pixels in OKLab so the inner loop is plain
     // float math.

@@ -523,6 +523,7 @@ struct Config {
 
     // CGA-specific options
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
+    std::string c64_palette = "pepto"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
     int cga_bg = 0;                    // background color index (0..15 in master palette)
     bool cga_auto_palette = true;      // try all palettes, pick lowest-error
 
@@ -688,6 +689,8 @@ void print_usage() {
         "                                  p1-low, p1-high (default: auto-pick best)\n"
         "  --cga-bg <0..15>                CGA background color (master palette index,\n"
         "                                  default: 0/black)\n"
+        "  --c64-palette <p>               VIC-II palette: pepto (default), vice,\n"
+        "                                  colodore, deekay, godot, c64wiki, levy\n"
         "\n"
         "Dithering:\n"
         "  --dither <method>\n"
@@ -1141,6 +1144,19 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--mask-invert") {
             config.mask_invert = true;
+            continue;
+        }
+
+        if (arg == "--c64-palette" && i + 1 < argc) {
+            auto v = std::string_view(argv[++i]);
+            if (v != "pepto" && v != "vice" && v != "colodore" &&
+                v != "deekay" && v != "godot" && v != "c64wiki" &&
+                v != "wiki" && v != "levy") {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("Unknown C64 palette: {} (expected pepto/"
+                                "vice/colodore/deekay/godot/c64wiki/levy)", v)}};
+            }
+            config.c64_palette = std::string(v == "wiki" ? "c64wiki" : v);
             continue;
         }
 
@@ -2024,6 +2040,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.crop_auto = cfg.crop_auto;
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
+    opts.c64_palette = cfg.c64_palette;
     opts.locks = cfg.locks;
     opts.pins = cfg.pins;
     opts.palette_file = cfg.palette_file;
