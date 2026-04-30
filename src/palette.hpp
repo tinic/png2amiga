@@ -571,9 +571,13 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
     // OKLab table for both base candidates and their hardware halves
     // is built once per call (4096 × 2 entries). 32 slots × 4096
     // candidates × ~10 ops ≈ 1M ops per refine iteration — trivial.
-    std::array<color_space::OKLab, 4096> ocs_lab{};
-    std::array<color_space::OKLab, 4096> ocs_halve_lab{};
+    // Heap-allocate (each is 4096 × sizeof(OKLab) ≈ 48 KB) so we
+    // don't blow the 64 KB WASM default stack.
+    std::vector<color_space::OKLab> ocs_lab;
+    std::vector<color_space::OKLab> ocs_halve_lab;
     if (snap_to_ocs) {
+        ocs_lab.resize(4096);
+        ocs_halve_lab.resize(4096);
         for (std::uint16_t code = 0; code < 4096; ++code) {
             Color3f c = ocs_to_linear(code);
             ocs_lab[code] = oklab_of(c);
