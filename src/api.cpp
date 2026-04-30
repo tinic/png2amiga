@@ -1389,6 +1389,82 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                   has_transparency); !v)
             return std::unexpected{v.error()};
 
+        // Plain EHB --best: multi-restart sweep over (dither_strength ×
+        // diversity × pre-image jitter), ranked by best_metric. Only
+        // engaged on the simple case (no user palette, no locks/pins,
+        // no transparency, no pre-existing pin swaps to replay) — the
+        // joint state otherwise gets unwieldy. Same shape and trial
+        // count as plain CAP / SCAP EHB.
+        bool ehb_can_sweep = options.best
+                          && !has_user_palette(options)
+                          && options.locks.empty()
+                          && options.pins.empty()
+                          && !has_transparency;
+        if (ehb_can_sweep) {
+            struct EhbPlainTrial {
+                Palette base_pal;
+                Palette ehb_pal;
+                bitplane::BitplaneData planes;
+                std::vector<std::uint8_t> indices;
+                Image rendered;
+                float total_error;
+            };
+            dither::Settings base_dith;
+            base_dith.method = parse_dither(options.dither);
+            base_dith.strength = options.dither_strength;
+            base_dith.error_clamp = options.error_clamp;
+            auto encode_once = [&](const Image& img,
+                                   const dither::Settings& d,
+                                   int diversity) -> Result<EhbPlainTrial> {
+                auto quantized = quantize::quantize(
+                    img, 32, quantize_algo(chipset), diversity);
+                if (!quantized) return std::unexpected{quantized.error()};
+                Palette bp = std::move(*quantized);
+                snap_to_chipset(bp, chipset, mode);
+                auto ehbp = palette::make_ehb_palette(bp.colors);
+                auto dr = dither::apply(img, ehbp.colors, d);
+                auto pl = bitplane::encode(dr.indices,
+                                            img.width(), img.height(), 6);
+                if (!pl) return std::unexpected{pl.error()};
+                std::vector<Color3f> full_pal(ehbp.colors.begin(),
+                                              ehbp.colors.end());
+                auto pv = pipeline::render_preview(
+                    *pl, full_pal, /*is_ham=*/false,
+                    options.interlace, chipset);
+                if (!pv) return std::unexpected{pv.error()};
+                return EhbPlainTrial{
+                    std::move(bp), std::move(ehbp), *std::move(pl),
+                    std::move(dr.indices), *std::move(pv), dr.total_error,
+                };
+            };
+            auto bm = pipeline::parse_best_metric(options.best_metric);
+            auto winner = pipeline::best_sweep<EhbPlainTrial>(
+                *image, base_dith, options.palette_diversity,
+                /*jitter_count=*/8,
+                encode_once,
+                [](const EhbPlainTrial& t) -> const Image& { return t.rendered; },
+                options.on_progress, /*jitter_amplitude=*/1.0f, bm);
+            if (!winner) {
+                return std::unexpected{Error{
+                    ErrorCode::unsupported_mode,
+                    "EHB --best sweep produced no result"}};
+            }
+            std::vector<Color3f> full_palette(winner->ehb_pal.colors.begin(),
+                                              winner->ehb_pal.colors.end());
+            PipelineResult result;
+            result.rendered = std::move(winner->rendered);
+            result.planes = std::move(winner->planes);
+            result.palette = std::move(full_palette);
+            result.indices = std::move(winner->indices);
+            result.mode = mode;
+            result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
+            result.interlace = options.interlace;
+            result.has_transparency = has_transparency;
+            result.transparency_mask = tmask;
+            result.finalize_psnr(*image, winner->total_error);
+            return result;
+        }
+
         // Generate base colors via median-cut, or load from file.
         // With custom palette: use as-is (32 colors expected).
         // Without: reserve index 0 for transparency when needed.
