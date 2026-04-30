@@ -30,13 +30,13 @@ const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, c
 
 function onStopEncode(): void {
   abortWasm()
-  // Bump the generation so any in-flight runConvert that's still
-  // suspended on its await sees myGen != convertGen and refuses to
-  // mutate UI state when its catch/finally fire on the next microtask.
-  // Without this, the aborted encode's catch could overwrite errorMsg
-  // ('aborted'), spinner state, or the canvas paint with stale data
-  // after the user had already moved on.
+  // Bump committedGen ABOVE every in-flight runConvert's myGen so
+  // their catch/finally on the next microtask see myGen <= committedGen
+  // and refuse to overwrite errorMsg / canvas / resultInfo with stale
+  // data after the user already moved on. Bump convertGen too to keep
+  // start-time identifiers monotonic.
   convertGen++
+  committedGen = convertGen
   // Tear down EVERY in-flight encode handle. What DOES matter: clear
   // both timers so the next options change (e.g. user toggling cap-best
   // off) starts fresh — without this, a stale debounce timer that was
@@ -820,14 +820,19 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   return true
 }
 
-// Generation counter: every runConvert increments it; abortWasm /
-// onStopEncode also bumps it. Each in-flight runConvert closes over its
-// own gen and refuses to mutate UI state if a newer encode (or a stop)
-// has happened in the meantime. Without this, a slow cap-best encode
-// followed by a fast no-cap-best encode can have the SLOW one resolve
-// last and overwrite the UI with stale options' result — visible as
-// "settings out of sync with UI" / "encode ignored cap-best".
+// Generation counters. `convertGen` increments per runConvert start;
+// `committedGen` tracks the highest gen that has *already painted*. We
+// drop a finishing convert only if a NEWER convert has already painted
+// (i.e. its result is on screen) — not merely if a newer one has
+// started. Without this distinction, two concurrent runConverts (e.g.
+// the default-example load racing with a click on a second example)
+// would both check `myGen !== convertGen` against the latest START gen
+// and the FIRST-finishing one would always drop, leaving the canvas
+// black until the second finished too. Stop bumps both counters so any
+// in-flight encode finishing after a stop sees myGen <= committedGen
+// and bails.
 let convertGen = 0
+let committedGen = 0
 
 function handleConvertSuccess(result: ConvertResult,
                                myGen: number,
@@ -837,15 +842,11 @@ function handleConvertSuccess(result: ConvertResult,
     track('error', { type: 'convert', message: result.error, mode: options.mode })
     return
   }
-  // paintAndCacheResult awaits internally; commit only if our generation
-  // is still latest after the paint completes (caller already paints
-  // synchronously before awaiting CRT — gating here protects the
-  // resultInfo/lastResult-refs writes from a stale encode winning the
-  // race against a newer one).
   void (async () => {
     let ok = false
     try { ok = await paintAndCacheResult(result) } catch { /* nop */ }
-    if (!ok || myGen !== convertGen) return
+    if (!ok || myGen <= committedGen) return
+    committedGen = myGen
     updateLastResultRefs(result)
     resultInfo.value = formatResultInfo(result)
     trackConvertSuccess(result, performance.now() - convertStart)
@@ -863,19 +864,25 @@ async function runConvert(srcBytes: Uint8Array): Promise<void> {
   progress.value = 0
   progressStage.value = ''
   const onProgress = (p: number, stage: string) => {
+    // Progress ticks: only the latest START gen drives the bar (cheap
+    // way to avoid two encodes' progress flickering into each other).
     if (myGen !== convertGen) return
     progress.value = Math.round(p * 100)
     progressStage.value = stage || ''
   }
   try {
     const result = await convertRGBA(srcBytes, buildWasmOptions(), onProgress)
-    if (myGen !== convertGen) return
+    // Don't drop here based on convertGen: a slower encode that
+    // happens to finish first should still get a chance to paint.
+    // The committedGen check inside handleConvertSuccess will reject
+    // results where a newer one has already painted.
+    if (myGen <= committedGen) return
     clearTimeout(spinnerTimer)
     progress.value = 0
     progressStage.value = ''
     handleConvertSuccess(result, myGen, convertStart)
   } catch (error) {
-    if (myGen !== convertGen) return
+    if (myGen <= committedGen) return
     clearTimeout(spinnerTimer)
     const message = errorMessage(error)
     errorMsg.value = message
