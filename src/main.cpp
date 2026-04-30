@@ -2721,11 +2721,14 @@ void show_terminal_preview(const Image& preview, amiga::Mode mode,
 // next CLI status line ("Encoded: ...") starts cleanly.
 std::function<void(float, std::string_view)> make_cli_progress_reporter() {
     if (!isatty(fileno(stderr))) return {};
-    auto state = std::make_shared<std::pair<std::mutex,
-        std::chrono::steady_clock::time_point>>();
-    state->second = std::chrono::steady_clock::time_point{};
+    struct State {
+        std::mutex mu;
+        std::chrono::steady_clock::time_point last_emit{};
+        std::string last_stage;
+    };
+    auto state = std::make_shared<State>();
     return [state](float p, std::string_view stage) {
-        std::lock_guard lk(state->first);
+        std::lock_guard lk(state->mu);
         auto now = std::chrono::steady_clock::now();
         // "done" is the terminal stage — end-cap the line with a
         // newline so the next "Mode:" / "Encoded:" prints cleanly.
@@ -2733,15 +2736,27 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
         // own pass completes; that's NOT terminal (a pass-2 or
         // refinement pass may follow), so don't newline there.
         bool final_tick = (stage == "done");
+        // Stage change: end the previous bar with a newline before
+        // starting the new one — without this, an inner stage that
+        // doesn't end with "done" (e.g. "extra-ehb-opt" before the
+        // dither pass) leaves its bar attached to whatever status
+        // line prints next, which clobbers it on the same row.
+        bool stage_changed = !state->last_stage.empty() &&
+                              state->last_stage != stage;
+        if (stage_changed) {
+            std::fputc('\n', stderr);
+            state->last_emit = std::chrono::steady_clock::time_point{};
+        }
         // 16 ms throttle ≈ 60 Hz — gives the user actual visible
         // motion on fast parallel passes (previous 50 ms swallowed
         // most updates from a 25-50 ms HAM6 beam search and made the
         // bar look frozen). Final tick always emits.
-        if (!final_tick &&
-            now - state->second < std::chrono::milliseconds(16)) {
+        if (!final_tick && !stage_changed &&
+            now - state->last_emit < std::chrono::milliseconds(16)) {
             return;
         }
-        state->second = now;
+        state->last_emit = now;
+        state->last_stage.assign(stage);
         float pct = std::clamp(p, 0.0f, 1.0f) * 100.0f;
         std::fprintf(stderr, "\rEncoding... %5.1f%% [%.*s]\033[K",
                      static_cast<double>(pct),
