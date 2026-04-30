@@ -90,6 +90,7 @@ export interface Options {
   scap: boolean
   cgaTextMetric: string
   c64Palette: string
+  c64Metric: string
   paletteData?: Uint8Array | null
   // Slider numeric fields (declared explicitly so options[s.key] is typed
   // as number rather than the index-signature wildcard).
@@ -164,6 +165,8 @@ const ALL_MODES: ModeOption[] = [
                              chipset: 'c64' },
   { value: 'c64-afli',       label: 'AFLI (hires + per-row screen)',
                              chipset: 'c64' },
+  { value: 'c64-petscii',    label: 'PETSCII (40x25 text-mode glyphs)',
+                             chipset: 'c64' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
@@ -210,6 +213,15 @@ export const C64_PALETTES: C64PaletteOption[] = [
   { value: 'godot',    label: 'Godot' },
   { value: 'c64wiki',  label: 'C64 Wiki' },
   { value: 'levy',     label: 'Levy' },
+]
+
+// C64 per-cell error metric. All three operate in sRGB (display
+// space). Default = blur (Pappas-Neuhoff perceptual).
+export interface C64MetricOption { value: string; label: string }
+export const C64_METRICS: C64MetricOption[] = [
+  { value: 'blur', label: 'Blur (Pappas-Neuhoff, default)' },
+  { value: 'mse',  label: 'Per-pixel MSE' },
+  { value: 'ssim', label: 'SSIM' },
 ]
 
 export const DITHER_METHODS: DitherGroup[] = [
@@ -427,6 +439,7 @@ export function defaultOptions(): Options {
     scap: false,
     ...CGA_TEXT_DEFAULTS,
     c64Palette: 'colodore',
+    c64Metric:  'blur',
     ...sliderDefaults(),
   }
   return opts
@@ -516,10 +529,11 @@ const MODE_PAR: Record<string, number> = {
   'genesis-h40':    0.933,
   'genesis-h32-sh': 1.167,
   'genesis-h40-sh': 0.933,
-  // C64 hires / AFLI: encoder emits 320×200 native (1:1). Display
-  // ratio = PAL VIC-II hardware pixel = 0.936:1.
+  // C64 hires / AFLI / PETSCII: encoder emits 320×200 native (1:1).
+  // Display ratio = PAL VIC-II hardware pixel = 0.936:1.
   'c64-hires':       0.936,
   'c64-afli':        0.936,
+  'c64-petscii':     0.936,
   // C64 multicolor / FLI: encoder emits 160×200 logical (each
   // logical pixel = 2 hardware pixels). Per-LOGICAL-pixel display
   // ratio = 2 × 0.936 = 1.872 (wide).
@@ -566,6 +580,7 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   // Both pairs land at the same physical canvas size.
   'c64-hires':       { sx: 2, sy: 2 },
   'c64-afli':        { sx: 2, sy: 2 },
+  'c64-petscii':     { sx: 2, sy: 2 },
   'c64-multicolor':  { sx: 4, sy: 2 },
   'c64-fli':         { sx: 4, sy: 2 },
 }

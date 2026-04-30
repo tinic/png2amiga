@@ -524,6 +524,7 @@ struct Config {
     // CGA-specific options
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
     std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
+    std::string c64_metric  = "blur";     // blur (PN-sRGB), mse (sRGB), ssim
     int cga_bg = 0;                    // background color index (0..15 in master palette)
     bool cga_auto_palette = true;      // try all palettes, pick lowest-error
 
@@ -692,6 +693,9 @@ void print_usage() {
         "  --c64-palette <p>               VIC-II palette: pepto, vice,\n"
         "                                  colodore (default), deekay, godot,\n"
         "                                  c64wiki, levy\n"
+        "  --c64-metric <m>                C64 per-cell error metric:\n"
+        "                                  blur (default, Pappas-Neuhoff sRGB),\n"
+        "                                  mse (per-pixel sRGB²), ssim\n"
         "\n"
         "Dithering:\n"
         "  --dither <method>\n"
@@ -1148,6 +1152,16 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--c64-metric" && i + 1 < argc) {
+            auto v = std::string_view(argv[++i]);
+            if (v != "blur" && v != "mse" && v != "ssim") {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("Unknown C64 metric: {} (expected blur/mse/ssim)", v)}};
+            }
+            config.c64_metric = std::string(v);
+            continue;
+        }
+
         if (arg == "--c64-palette" && i + 1 < argc) {
             auto v = std::string_view(argv[++i]);
             if (v != "pepto" && v != "vice" && v != "colodore" &&
@@ -1315,6 +1329,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::c64_fli;
                 else if (v == "c64-afli" || v == "afli")
                     config.mode = amiga::Mode::c64_afli;
+                else if (v == "c64-petscii" || v == "petscii")
+                    config.mode = amiga::Mode::c64_petscii;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -2049,6 +2065,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
     opts.c64_palette = cfg.c64_palette;
+    opts.c64_metric = cfg.c64_metric;
     opts.locks = cfg.locks;
     opts.pins = cfg.pins;
     opts.palette_file = cfg.palette_file;
@@ -3947,6 +3964,7 @@ int main(int argc, char* argv[]) {
             case amiga::Mode::c64_hires:      return "c64-hires";
             case amiga::Mode::c64_fli:        return "c64-fli";
             case amiga::Mode::c64_afli:      return "c64-afli";
+            case amiga::Mode::c64_petscii:    return "c64-petscii";
             default:                          return "c64-multicolor";
             }
         }();
@@ -3966,6 +3984,8 @@ int main(int argc, char* argv[]) {
             cli_status("Mode:   C64 FLI (160×200, multicolor + per-row screen)"); break;
         case amiga::Mode::c64_afli:
             cli_status("Mode:   C64 AFLI (320×200, hires + per-row screen)"); break;
+        case amiga::Mode::c64_petscii:
+            cli_status("Mode:   C64 PETSCII (40×25 text, PN-sRGB blur metric)"); break;
         default:
             cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell)"); break;
         }

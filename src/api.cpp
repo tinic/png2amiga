@@ -98,6 +98,7 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "c64-multicolor")    return amiga::Mode::c64_multicolor;
     if (s == "c64-fli")           return amiga::Mode::c64_fli;
     if (s == "c64-afli")          return amiga::Mode::c64_afli;
+    if (s == "c64-petscii")       return amiga::Mode::c64_petscii;
     return amiga::Mode::lores;
 }
 
@@ -882,6 +883,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         }
         auto pal_choice = c64::parse_palette(options.c64_palette);
+        auto metric     = c64::parse_metric(options.c64_metric);
         dither::Settings dith;
         dith.method      = parse_dither(options.dither);
         dith.strength    = options.dither_strength;
@@ -890,13 +892,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         Result<c64::EncodeResult> enc = [&] {
             switch (mode) {
             case amiga::Mode::c64_hires:
-                return c64::encode_hires(*image, pal_choice, dith);
+                return c64::encode_hires(*image, pal_choice, dith, metric);
             case amiga::Mode::c64_fli:
-                return c64::encode_fli(*image, pal_choice, dith);
+                return c64::encode_fli(*image, pal_choice, dith, metric);
             case amiga::Mode::c64_afli:
-                return c64::encode_afli(*image, pal_choice, dith);
+                return c64::encode_afli(*image, pal_choice, dith, metric);
+            case amiga::Mode::c64_petscii:
+                return c64::encode_petscii(*image, pal_choice, dith, metric);
             default:
-                return c64::encode_multicolor(*image, pal_choice, dith);
+                return c64::encode_multicolor(*image, pal_choice, dith, metric);
             }
         }();
         if (!enc) return std::unexpected{enc.error()};

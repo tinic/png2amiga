@@ -39,6 +39,18 @@ Palette parse_palette(std::string_view s) noexcept;
 std::string_view palette_name(Palette p) noexcept;
 std::span<const Color3f, 16> palette_colors(Palette p);
 
+// Per-cell error metric. All three operate in sRGB (gamma-encoded)
+// space; no OKLab — the encoder lives entirely in display-space.
+//   blur — Pappas-Neuhoff 3×3 binomial blur of source vs rendered
+//          cell. Models eye-on-CRT averaging.
+//   mse  — per-pixel sRGB squared error. Faithful but doesn't model
+//          blur perception of chunky pixels.
+//   ssim — Structural Similarity (means / variances / covariances).
+//          Rewards local structure preservation.
+enum class Metric : unsigned char { blur, mse, ssim };
+Metric parse_metric(std::string_view s) noexcept;
+std::string_view metric_name(Metric m) noexcept;
+
 struct EncodeResult {
     Image rendered;                              // 160×200 logical preview
     std::vector<std::uint8_t> bitmap;            // 8000 bytes (40 cols × 25 rows × 8)
@@ -48,21 +60,17 @@ struct EncodeResult {
 };
 
 // Encode a 160×200 logical image to c64-multicolor with the chosen
-// VIC-II palette and dither settings. Two-pass:
-//   1. Brute-force per-cell quad selection (16 bg × C(15,3) ≈ 7280
-//      quads per cell; nearest-OKLab² scoring against undithered
-//      source).
-//   2. Per-pixel dither via dither::diffuse_raw_buffer with a
-//      per-cell palette callback that returns the 4 OKLab colours
-//      chosen for the cell at (x, y). Supports every method that
-//      diffuse_raw_buffer routes — FS-family, Atkinson, Sierra-Lite,
-//      Stucki, Jarvis, Ostromoukhov, Riemersma, Gilbert,
-//      structure-fs / contrast-fs / Zhou-Fang, all ordered methods,
-//      and the Yliluoma / Knoll / opt-checker family.
+// VIC-II palette, dither settings, and per-cell error metric. The
+// outer brute-force pass picks 4 colours per cell (nearest-distance
+// scoring under the chosen metric). The dither pass then runs over
+// the per-cell 4-colour palette through diffuse_raw_buffer with the
+// full dither suite (FS-family, ostromoukhov, gilbert, riemersma,
+// structure-fs, ordered, knoll, opt-checker, yliluoma).
 Result<EncodeResult> encode_multicolor(
     const Image& image,
     Palette pal = Palette::colodore,
-    const dither::Settings& settings = {});
+    const dither::Settings& settings = {},
+    Metric metric = Metric::blur);
 
 // Encode a 320×200 image to c64-hires. 8×8 cells, 2 colours per cell
 // (no shared bg). Per-cell brute force is C(16, 2) = 120 pairs.
@@ -74,7 +82,8 @@ Result<EncodeResult> encode_multicolor(
 Result<EncodeResult> encode_hires(
     const Image& image,
     Palette pal = Palette::colodore,
-    const dither::Settings& settings = {});
+    const dither::Settings& settings = {},
+    Metric metric = Metric::blur);
 
 // Encode a 160×200 image to c64-FLI (Flexible Line Interpretation):
 // multicolor with per-row (c1, c2) screen colours within each 4×8
@@ -96,7 +105,8 @@ Result<EncodeResult> encode_hires(
 Result<EncodeResult> encode_fli(
     const Image& image,
     Palette pal = Palette::colodore,
-    const dither::Settings& settings = {});
+    const dither::Settings& settings = {},
+    Metric metric = Metric::blur);
 
 // Encode a 320×200 image to c64-AFLI: hires with per-row (c0, c1)
 // pair within each 8×8 cell. The per-row pair lives in the same
@@ -111,6 +121,28 @@ Result<EncodeResult> encode_fli(
 Result<EncodeResult> encode_afli(
     const Image& image,
     Palette pal = Palette::colodore,
-    const dither::Settings& settings = {});
+    const dither::Settings& settings = {},
+    Metric metric = Metric::blur);
+
+// Encode a 320×200 image to c64-PETSCII: text-mode glyph match.
+// 40×25 cells, each 8×8. Per cell: pick (char, fg) ∈ 256 ROM glyphs
+// × 16 VIC-II colours; bg is global (one of 16 colours, brute-
+// forced over the whole image). Pappas-Neuhoff sRGB blur metric
+// scores per-cell fits — the eye averages fg/bg through display
+// blur, so PN-sRGB is the right perceptual model.
+//
+// EncodeResult layout:
+//   bitmap     empty (text mode has no bitmap)
+//   screen_ram 1000 bytes (per-cell PETSCII char code 0..255)
+//   color_ram  1000 bytes (per-cell fg colour 0..15)
+//   bg_color   global background (0..15)
+//
+// `dither::Settings` is currently ignored — PETSCII picks per cell
+// without ED.
+Result<EncodeResult> encode_petscii(
+    const Image& image,
+    Palette pal = Palette::colodore,
+    const dither::Settings& settings = {},
+    Metric metric = Metric::blur);
 
 }  // namespace png2amiga::c64

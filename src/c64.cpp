@@ -1,12 +1,29 @@
 #include "c64.hpp"
 
 #include "palette.hpp"
+#include "petscii_rom.hpp"
 
 #include <array>
 #include <format>
 #include <limits>
 
 namespace png2amiga::c64 {
+
+Metric parse_metric(std::string_view s) noexcept {
+    if (s == "blur") return Metric::blur;
+    if (s == "mse")  return Metric::mse;
+    if (s == "ssim") return Metric::ssim;
+    return Metric::blur;
+}
+
+std::string_view metric_name(Metric m) noexcept {
+    switch (m) {
+    case Metric::blur: return "blur";
+    case Metric::mse:  return "mse";
+    case Metric::ssim: return "ssim";
+    }
+    return "blur";
+}
 
 Palette parse_palette(std::string_view s) noexcept {
     if (s == "pepto")    return Palette::pepto;
@@ -115,7 +132,11 @@ std::span<const Color3f, 16> palette_colors(Palette p) {
 }
 
 Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
-                                        const dither::Settings& settings) {
+                                        const dither::Settings& settings,
+                                        Metric metric) {
+    (void)metric;  // TODO: per-metric brute-force scoring; current
+                   // path uses sRGB MSE-equivalent (OKLab² nearest)
+                   // for the per-cell quad pick regardless of metric.
     constexpr std::size_t W = kCols * kCellW;  // 160
     constexpr std::size_t H = kRows * kCellH;  // 200
 
@@ -291,7 +312,9 @@ inline float cell_error_for_pair(
 }  // namespace
 
 Result<EncodeResult> encode_hires(const Image& image, Palette pal,
-                                   const dither::Settings& settings) {
+                                   const dither::Settings& settings,
+                                   Metric metric) {
+    (void)metric;  // TODO: per-metric brute-force scoring.
     constexpr std::size_t W = kHiCols * kHiCellW;  // 320
     constexpr std::size_t H = kHiRows * kHiCellH;  // 200
 
@@ -404,7 +427,9 @@ Result<EncodeResult> encode_hires(const Image& image, Palette pal,
 // ---------------------------------------------------------------------------
 
 Result<EncodeResult> encode_fli(const Image& image, Palette pal,
-                                 const dither::Settings& settings) {
+                                 const dither::Settings& settings,
+                                 Metric metric) {
+    (void)metric;  // TODO: per-metric brute-force scoring.
     constexpr std::size_t W = kCols * kCellW;  // 160
     constexpr std::size_t H = kRows * kCellH;  // 200
 
@@ -557,7 +582,9 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
 // ---------------------------------------------------------------------------
 
 Result<EncodeResult> encode_afli(const Image& image, Palette pal,
-                                  const dither::Settings& settings) {
+                                  const dither::Settings& settings,
+                                  Metric metric) {
+    (void)metric;  // TODO: per-metric brute-force scoring.
     constexpr std::size_t W = kHiCols * kHiCellW;  // 320
     constexpr std::size_t H = kHiRows * kHiCellH;  // 200
 
@@ -661,6 +688,356 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
                     res.rendered[x, y] = pal_lin[pair[q]];
                 }
                 res.bitmap[cell_idx * kHiCellH + py] = row_byte;
+            }
+        }
+    }
+
+    return res;
+}
+
+// ---------------------------------------------------------------------------
+// c64-PETSCII: 320×200 text mode (40×25 cells × 8×8 PETSCII glyphs).
+// Per cell: (char, fg) ∈ 256 × 16; global bg (one of 16) brute-forced
+// over the full image. Pappas-Neuhoff sRGB blur metric — same shape as
+// cga-text80x100 but with the C64 character ROM and VIC-II palette.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr std::size_t kPetW    = 320;
+constexpr std::size_t kPetH    = 200;
+constexpr std::size_t kPetCellW = 8;
+constexpr std::size_t kPetCellH = 8;
+constexpr std::size_t kPetCols = 40;
+constexpr std::size_t kPetRows = 25;
+constexpr std::size_t kPetCellN = kPetCellW * kPetCellH;  // 64
+
+// Pappas-Neuhoff blur kernel — 3×3 binomial separable [1,2,1]/4 ⊗
+// [1,2,1]/4 (≈ Gaussian σ ≈ 0.85). Replicate-padded at cell edges.
+// Same kernel cga_text uses — picked because the per-cell blur
+// matches what the eye averages on a CRT, in sRGB (gamma-encoded)
+// space which matches the display.
+constexpr std::array<std::array<float, 3>, 3> kBlurKernel = {{
+    {1.0f/16, 2.0f/16, 1.0f/16},
+    {2.0f/16, 4.0f/16, 2.0f/16},
+    {1.0f/16, 2.0f/16, 1.0f/16},
+}};
+
+struct Tap { std::uint8_t q; float w; };
+
+// 9 taps per pixel, replicate-padded so pixels at cell edges fold
+// edge taps onto boundary pixels (taps may share q values; harmless).
+std::array<std::array<Tap, 9>, kPetCellN> build_petscii_taps() {
+    std::array<std::array<Tap, 9>, kPetCellN> taps{};
+    for (std::size_t py = 0; py < kPetCellH; ++py) {
+        for (std::size_t px = 0; px < kPetCellW; ++px) {
+            std::size_t p_out = py * kPetCellW + px;
+            std::size_t k = 0;
+            for (int dy = -1; dy <= 1; ++dy) {
+                int ny = std::clamp(static_cast<int>(py) + dy, 0,
+                                    static_cast<int>(kPetCellH) - 1);
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int nx = std::clamp(static_cast<int>(px) + dx, 0,
+                                        static_cast<int>(kPetCellW) - 1);
+                    taps[p_out][k++] = {
+                        static_cast<std::uint8_t>(
+                            static_cast<std::size_t>(ny) * kPetCellW +
+                            static_cast<std::size_t>(nx)),
+                        kBlurKernel[static_cast<std::size_t>(dy + 1)]
+                                   [static_cast<std::size_t>(dx + 1)]};
+                }
+            }
+        }
+    }
+    return taps;
+}
+
+// Per-glyph blur stats: a[p] = sum of taps that touch fg pixels; ma[p]
+// = (1 - a[p]) is the bg fraction. Then per-pair (fg, bg) blur cost is
+// closed-form (see cga_text comments).
+struct GlyphPre {
+    std::uint64_t fg_mask;            // raw fg bits, 64 pixels
+    std::array<float, kPetCellN> a;   // fg weight at each pixel post-blur
+    float K3;                         // Σ a·(1-a)
+    float K4;                         // Σ a²
+    float K5;                         // Σ (1-a)²
+};
+
+std::array<GlyphPre, 256> build_glyph_precompute(
+    const std::array<std::array<Tap, 9>, kPetCellN>& taps) {
+    std::array<GlyphPre, 256> out{};
+    for (std::size_t g = 0; g < 256; ++g) {
+        // Decode the 8-byte glyph into a 64-bit fg mask.
+        std::uint64_t fg_mask = 0;
+        for (std::size_t row = 0; row < 8; ++row) {
+            std::uint8_t b = petscii::character_rom[g * 8 + row];
+            for (std::size_t col = 0; col < 8; ++col) {
+                std::size_t p = row * 8 + col;
+                if ((b >> (7 - col)) & 1) fg_mask |= (1ULL << p);
+            }
+        }
+        auto& gp = out[g];
+        gp.fg_mask = fg_mask;
+        gp.K3 = 0; gp.K4 = 0; gp.K5 = 0;
+        for (std::size_t p = 0; p < kPetCellN; ++p) {
+            float a = 0;
+            for (auto& t : taps[p]) {
+                if ((fg_mask >> t.q) & 1ULL) a += t.w;
+            }
+            gp.a[p] = a;
+            float ma = 1.0f - a;
+            gp.K3 += a * ma;
+            gp.K4 += a * a;
+            gp.K5 += ma * ma;
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
+                                     const dither::Settings& /*settings*/,
+                                     Metric metric) {
+    if (image.width() != kPetW || image.height() != kPetH) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("c64::encode_petscii: expected {}x{} input, got {}x{}",
+                        kPetW, kPetH, image.width(), image.height()),
+        }};
+    }
+
+    const auto& pal_lin = palette_linear(pal);
+
+    // sRGB-as-OKLab "metric vector" per palette entry. Blur math is
+    // space-agnostic — palette and per-pixel cell vectors both live
+    // in this space. sRGB beats OKLab on PN-blur (cga_text result).
+    auto to_sblur = [](const Color3f& lin) -> color_space::OKLab {
+        auto s = color_space::linear_to_srgb(lin).clamped();
+        return color_space::OKLab{s.r, s.g, s.b};
+    };
+    std::array<color_space::OKLab, 16> pal_s{};
+    for (std::size_t i = 0; i < 16; ++i) pal_s[i] = to_sblur(pal_lin[i]);
+
+    // Pre-bake palette dot products and norms for the closed-form
+    // per-pair error formula.
+    std::array<std::array<float, 16>, 16> pal_dot{};
+    std::array<float, 16> pal_norm{};
+    for (std::size_t i = 0; i < 16; ++i) {
+        pal_norm[i] = pal_s[i].L * pal_s[i].L
+                    + pal_s[i].a * pal_s[i].a
+                    + pal_s[i].b * pal_s[i].b;
+        for (std::size_t j = 0; j < 16; ++j) {
+            pal_dot[i][j] = pal_s[i].L * pal_s[j].L
+                          + pal_s[i].a * pal_s[j].a
+                          + pal_s[i].b * pal_s[j].b;
+        }
+    }
+
+    static const auto taps  = build_petscii_taps();
+    static const auto glyph = build_glyph_precompute(taps);
+
+    EncodeResult res;
+    res.rendered = Image(kPetW, kPetH);
+    res.bitmap.clear();                              // text mode: no bitmap
+    res.screen_ram.assign(kPetCols * kPetRows, 0);   // 1000 bytes (char codes)
+    res.color_ram.assign(kPetCols * kPetRows, 0);    // 1000 bytes (per-cell fg)
+    res.bg_color = 0;
+
+    // Outer brute-force loop: try each of 16 backgrounds globally.
+    // For each bg, score every cell's best (glyph, fg) and accumulate
+    // total error. Pick the bg that minimises the total.
+    std::array<std::uint8_t, kPetCols * kPetRows> best_chars{};
+    std::array<std::uint8_t, kPetCols * kPetRows> best_fgs{};
+    float best_total = std::numeric_limits<float>::infinity();
+    std::uint8_t best_bg = 0;
+
+    // Per-cell raw sRGB-as-3vec view (used by mse + ssim) and post-
+    // blur view (used by blur metric's closed-form pair expansion).
+    // K0 = Σ ‖blurred[p]‖² is the bg/fg-agnostic constant for blur.
+    std::vector<std::array<color_space::OKLab, kPetCellN>>
+        cell_raw(kPetRows * kPetCols);
+    std::vector<std::array<color_space::OKLab, kPetCellN>>
+        cell_blur(kPetRows * kPetCols);
+    std::vector<float> cell_K0(kPetRows * kPetCols, 0.0f);
+    for (std::size_t cy = 0; cy < kPetRows; ++cy) {
+        for (std::size_t cx = 0; cx < kPetCols; ++cx) {
+            std::array<color_space::OKLab, kPetCellN> raw{};
+            for (std::size_t py = 0; py < kPetCellH; ++py) {
+                for (std::size_t px = 0; px < kPetCellW; ++px) {
+                    auto x = cx * kPetCellW + px;
+                    auto y = cy * kPetCellH + py;
+                    raw[py * kPetCellW + px] = to_sblur(image[x, y]);
+                }
+            }
+            // Blur each pixel via 9-tap kernel. Replicate-padded at
+            // cell edges (matches cga_text's convention).
+            float K0 = 0;
+            std::array<color_space::OKLab, kPetCellN> blurred{};
+            for (std::size_t p = 0; p < kPetCellN; ++p) {
+                color_space::OKLab b{0, 0, 0};
+                for (auto& t : taps[p]) {
+                    auto& v = raw[t.q];
+                    b.L += t.w * v.L;
+                    b.a += t.w * v.a;
+                    b.b += t.w * v.b;
+                }
+                blurred[p] = b;
+                K0 += b.L * b.L + b.a * b.a + b.b * b.b;
+            }
+            cell_raw[cy * kPetCols + cx]  = raw;
+            cell_blur[cy * kPetCols + cx] = blurred;
+            cell_K0[cy * kPetCols + cx]   = K0;
+        }
+    }
+
+    auto score_pair_blur = [&](float K0,
+                                const std::array<color_space::OKLab, kPetCellN>& blurred,
+                                const GlyphPre& gp,
+                                std::uint8_t fg, std::uint8_t bg) {
+        color_space::OKLab K1{0, 0, 0};
+        color_space::OKLab K2{0, 0, 0};
+        for (std::size_t p = 0; p < kPetCellN; ++p) {
+            float a = gp.a[p];
+            float ma = 1.0f - a;
+            K1.L += blurred[p].L * a;
+            K1.a += blurred[p].a * a;
+            K1.b += blurred[p].b * a;
+            K2.L += blurred[p].L * ma;
+            K2.a += blurred[p].a * ma;
+            K2.b += blurred[p].b * ma;
+        }
+        const auto& pf = pal_s[fg];
+        const auto& pb = pal_s[bg];
+        float dot_K1 = K1.L * pf.L + K1.a * pf.a + K1.b * pf.b;
+        float dot_K2 = K2.L * pb.L + K2.a * pb.a + K2.b * pb.b;
+        return K0
+            - 2.0f * dot_K1 - 2.0f * dot_K2
+            + 2.0f * gp.K3 * pal_dot[fg][bg]
+            + gp.K4 * pal_norm[fg]
+            + gp.K5 * pal_norm[bg];
+    };
+
+    auto score_pair_mse = [&](const std::array<color_space::OKLab, kPetCellN>& raw,
+                              const GlyphPre& gp,
+                              std::uint8_t fg, std::uint8_t bg) {
+        const auto& pf = pal_s[fg];
+        const auto& pb = pal_s[bg];
+        float err = 0.0f;
+        for (std::size_t p = 0; p < kPetCellN; ++p) {
+            const auto& c = ((gp.fg_mask >> p) & 1ULL) ? pf : pb;
+            float dL = raw[p].L - c.L;
+            float da = raw[p].a - c.a;
+            float db = raw[p].b - c.b;
+            err += dL * dL + da * da + db * db;
+        }
+        return err;
+    };
+
+    // Single-window SSIM over the 8×8 cell. Computes scalar mean +
+    // var + covariance per cell × candidate; returns 1 - SSIM as
+    // error so the brute force "minimises" naturally. Channels
+    // averaged (luminance proxy) for speed.
+    auto score_pair_ssim = [&](const std::array<color_space::OKLab, kPetCellN>& raw,
+                                const GlyphPre& gp,
+                                std::uint8_t fg, std::uint8_t bg) {
+        const auto& pf = pal_s[fg];
+        const auto& pb = pal_s[bg];
+        // Per-pixel rendered scalar (luminance proxy = avg of L+a+b
+        // since contents are sRGB R+G+B treated as a 3-vec).
+        std::array<float, kPetCellN> sx{}, sy{};
+        for (std::size_t p = 0; p < kPetCellN; ++p) {
+            const auto& c = ((gp.fg_mask >> p) & 1ULL) ? pf : pb;
+            sx[p] = (raw[p].L + raw[p].a + raw[p].b) * (1.0f / 3.0f);
+            sy[p] = (c.L + c.a + c.b) * (1.0f / 3.0f);
+        }
+        float mx = 0, my = 0;
+        for (std::size_t p = 0; p < kPetCellN; ++p) { mx += sx[p]; my += sy[p]; }
+        mx /= kPetCellN; my /= kPetCellN;
+        float vx = 0, vy = 0, cxy = 0;
+        for (std::size_t p = 0; p < kPetCellN; ++p) {
+            float dx = sx[p] - mx, dy = sy[p] - my;
+            vx += dx * dx; vy += dy * dy; cxy += dx * dy;
+        }
+        vx /= kPetCellN; vy /= kPetCellN; cxy /= kPetCellN;
+        constexpr float c1 = 0.01f * 0.01f;
+        constexpr float c2 = 0.03f * 0.03f;
+        float num = (2.0f * mx * my + c1) * (2.0f * cxy + c2);
+        float den = (mx * mx + my * my + c1) * (vx + vy + c2);
+        float ssim = (den > 0) ? num / den : 1.0f;
+        return 1.0f - ssim;
+    };
+
+    for (std::uint8_t bg = 0; bg < 16; ++bg) {
+        float total = 0.0f;
+        std::array<std::uint8_t, kPetCols * kPetRows> chars{};
+        std::array<std::uint8_t, kPetCols * kPetRows> fgs{};
+        for (std::size_t cy = 0; cy < kPetRows; ++cy) {
+            for (std::size_t cx = 0; cx < kPetCols; ++cx) {
+                std::size_t cell_idx = cy * kPetCols + cx;
+                const auto& raw     = cell_raw[cell_idx];
+                const auto& blurred = cell_blur[cell_idx];
+                float K0 = cell_K0[cell_idx];
+
+                float best_err = std::numeric_limits<float>::infinity();
+                std::uint8_t best_ch = 0;
+                std::uint8_t best_fg = bg;
+
+                for (std::size_t g = 0; g < 256; ++g) {
+                    const auto& gp = glyph[g];
+                    for (std::uint8_t fg = 0; fg < 16; ++fg) {
+                        if (fg == bg) continue;
+                        float err = 0.0f;
+                        switch (metric) {
+                        case Metric::blur:
+                            err = score_pair_blur(K0, blurred, gp, fg, bg); break;
+                        case Metric::mse:
+                            err = score_pair_mse(raw, gp, fg, bg); break;
+                        case Metric::ssim:
+                            err = score_pair_ssim(raw, gp, fg, bg); break;
+                        }
+                        if (err < best_err) {
+                            best_err = err;
+                            best_ch = static_cast<std::uint8_t>(g);
+                            best_fg = fg;
+                        }
+                    }
+                }
+                total += best_err;
+                chars[cell_idx] = best_ch;
+                fgs[cell_idx]   = best_fg;
+            }
+        }
+        if (total < best_total) {
+            best_total = total;
+            best_bg    = bg;
+            best_chars = chars;
+            best_fgs   = fgs;
+        }
+    }
+
+    res.bg_color = best_bg;
+    for (std::size_t i = 0; i < kPetCols * kPetRows; ++i) {
+        res.screen_ram[i] = best_chars[i];
+        res.color_ram[i]  = best_fgs[i];
+    }
+
+    // Render the preview by painting each cell with its chosen
+    // (char, fg) over the global bg.
+    for (std::size_t cy = 0; cy < kPetRows; ++cy) {
+        for (std::size_t cx = 0; cx < kPetCols; ++cx) {
+            std::size_t cell_idx = cy * kPetCols + cx;
+            std::uint8_t ch = best_chars[cell_idx];
+            std::uint8_t fg = best_fgs[cell_idx];
+            for (std::size_t py = 0; py < kPetCellH; ++py) {
+                std::uint8_t row_bits =
+                    petscii::character_rom[ch * 8 + py];
+                for (std::size_t px = 0; px < kPetCellW; ++px) {
+                    bool fg_pixel = (row_bits >> (7 - px)) & 1;
+                    auto col = fg_pixel ? pal_lin[fg] : pal_lin[best_bg];
+                    res.rendered[cx * kPetCellW + px,
+                                 cy * kPetCellH + py] = col;
+                }
             }
         }
     }

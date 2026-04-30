@@ -14,7 +14,7 @@ import Panel from 'primevue/panel'
 import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
-  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, EXAMPLES,
+  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
   isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
@@ -1358,6 +1358,19 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </label>
                 <div class="col-8">
                   <Select v-model="options.c64Palette" :options="C64_PALETTES"
+                    optionLabel="label" optionValue="value" class="w-full" />
+                </div>
+              </div>
+
+              <!-- C64 mode only: per-cell error metric. Mirrors png2c64 — all
+                   three operate in sRGB (display space). -->
+              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Per-cell error metric for C64 brute-force scoring. Blur = Pappas-Neuhoff perceptual blur (default). MSE = per-pixel sRGB squared error. SSIM = structural similarity. Try them — they pick noticeably different outputs.">
+                  Metric
+                </label>
+                <div class="col-8">
+                  <Select v-model="options.c64Metric" :options="C64_METRICS"
                     optionLabel="label" optionValue="value" class="w-full" />
                 </div>
               </div>

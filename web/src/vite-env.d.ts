@@ -135,8 +135,9 @@ declare module '@wasm/png2amiga.js' {
     // CGA text
     cgaTextMetric?: string
 
-    // C64 / VIC-II palette
+    // C64 / VIC-II palette + metric
     c64Palette?: string
+    c64Metric?: string
 
     // C header export
     symbolName?: string

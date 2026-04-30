@@ -103,6 +103,10 @@ enum class Mode : unsigned char {
     c64_multicolor,     // 160×200, 4 colours per 4×8 cell (1 shared bg + 3)
     c64_fli,            // 160×200, multicolor + per-row screen pair
     c64_afli,           // 320×200, hires + per-row screen pair
+    c64_petscii,        // 320×200, PETSCII text mode glyph match
+                        //   (40×25 cells × 256 ROM glyphs × per-cell fg
+                        //    + global bg). Pappas-Neuhoff sRGB blur
+                        //    metric — same shape as cga-text80x100.
 
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
@@ -263,6 +267,9 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // C64 AFLI: same buffer as hires + per-row screen pair.
     case Mode::c64_afli:
         return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    // C64 PETSCII: 320×200 text mode (40×25 cells × 8×8 glyphs).
+    case Mode::c64_petscii:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
     // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
     // matches SNES at 224 lines on a 4:3 CRT.
     //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)
@@ -343,8 +350,17 @@ constexpr bool is_cga(Mode mode) noexcept {
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
 constexpr bool is_c64(Mode mode) noexcept {
-    return mode == Mode::c64_hires || mode == Mode::c64_multicolor ||
-           mode == Mode::c64_fli   || mode == Mode::c64_afli;
+    return mode == Mode::c64_hires      || mode == Mode::c64_multicolor ||
+           mode == Mode::c64_fli        || mode == Mode::c64_afli       ||
+           mode == Mode::c64_petscii;
+}
+
+// PETSCII text mode — glyph-match metric (Pappas-Neuhoff sRGB blur);
+// no error-diffusion dither in the conventional sense, so the dither
+// gallery's ED methods don't apply here. UI gates on this in the
+// same way it gates cga-text80x100.
+constexpr bool is_c64_text(Mode mode) noexcept {
+    return mode == Mode::c64_petscii;
 }
 
 // Check if a mode is a "wide-pixel" multicolor variant (logical pixel
