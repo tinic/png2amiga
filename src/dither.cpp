@@ -3139,7 +3139,6 @@ float diffuse_raw_buffer(const Image& image,
         : std::vector<float>{};
 
     constexpr std::size_t RIEM_QSIZE = 16;
-    std::array<color_space::OKLab, RIEM_QSIZE> riem_queue{};
     std::array<float, RIEM_QSIZE> riem_weights{};
     std::size_t riem_head = 0;
     if (needs_riem) {
@@ -3154,8 +3153,18 @@ float diffuse_raw_buffer(const Image& image,
         for (float& wt : riem_weights) wt /= total;
     }
 
-    std::vector<color_space::OKLab> err_buf;
-    if (is_diff) err_buf.assign(w * h, color_space::OKLab{0, 0, 0});
+    // Error diffusion in sRGB (gamma-encoded) space. Picker still
+    // chooses perceptually (OKLab), but residual conservation runs
+    // in sRGB because the gamma curve happens to allocate
+    // quantization steps roughly where the eye is sensitive — so
+    // per-pixel error is more uniformly distributed in perceptual
+    // terms than either linear-sRGB or OKLab residuals would be.
+    // This is what ham_convert / abc / ham_convert.jar do; it's the
+    // structural difference behind their stronger-looking ED on
+    // low-bit-depth output (EHB / OCS16).
+    std::vector<Color3f> err_buf_s;
+    if (is_diff) err_buf_s.assign(w * h, Color3f{0, 0, 0});
+    std::array<Color3f, RIEM_QSIZE> riem_queue_s{};
 
     float total_error = 0.0f;
     auto ec = settings.error_clamp;
@@ -3165,27 +3174,33 @@ float diffuse_raw_buffer(const Image& image,
 
         for (std::size_t step = 0; step < w; ++step) {
             std::size_t x = reverse ? (w - 1 - step) : step;
-            auto src_lab = color_space::linear_to_oklab(image[x, y]);
-            color_space::OKLab target = src_lab;
+            Color3f src_lin = image[x, y];
+            auto src_lab = color_space::linear_to_oklab(src_lin);
+            Color3f src_s = color_space::linear_to_srgb(src_lin).clamped();
 
+            Color3f target_s = src_s;
             if (needs_riem) {
-                color_space::OKLab carry{};
+                Color3f carry{0, 0, 0};
                 for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
                     std::size_t age =
                         (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                    carry.L += riem_queue[age].L * riem_weights[k];
-                    carry.a += riem_queue[age].a * riem_weights[k];
-                    carry.b += riem_queue[age].b * riem_weights[k];
+                    carry.r += riem_queue_s[age].r * riem_weights[k];
+                    carry.g += riem_queue_s[age].g * riem_weights[k];
+                    carry.b += riem_queue_s[age].b * riem_weights[k];
                 }
-                target.L += std::clamp(carry.L, -ec, ec);
-                target.a += std::clamp(carry.a, -ec, ec);
-                target.b += std::clamp(carry.b, -ec, ec);
+                target_s.r += std::clamp(carry.r, -ec, ec);
+                target_s.g += std::clamp(carry.g, -ec, ec);
+                target_s.b += std::clamp(carry.b, -ec, ec);
             } else if (is_diff) {
-                auto& e = err_buf[y * w + x];
-                target.L += std::clamp(e.L, -ec, ec);
-                target.a += std::clamp(e.a, -ec, ec);
-                target.b += std::clamp(e.b, -ec, ec);
+                auto& e = err_buf_s[y * w + x];
+                target_s.r += std::clamp(e.r, -ec, ec);
+                target_s.g += std::clamp(e.g, -ec, ec);
+                target_s.b += std::clamp(e.b, -ec, ec);
             }
+            // Round-trip target back to OKLab via linear so the
+            // picker keeps using a perceptual nearest-search.
+            Color3f target_lin = color_space::srgb_to_linear(target_s);
+            color_space::OKLab target = color_space::linear_to_oklab(target_lin);
             if (!bias_map.empty()) target.L += bias_map[y * w + x];
             if (is_ord) {
                 float thr = ordered_threshold(settings.method, x, y);
@@ -3202,16 +3217,18 @@ float diffuse_raw_buffer(const Image& image,
             total_error += dL * dL + da * da + db * db;
 
             if (is_diff) {
-                color_space::OKLab qe{
-                    (target.L - picked.chosen_lab.L) * settings.strength,
-                    (target.a - picked.chosen_lab.a) * settings.strength,
-                    (target.b - picked.chosen_lab.b) * settings.strength,
+                Color3f chosen_lin = color_space::oklab_to_linear(picked.chosen_lab);
+                Color3f chosen_s = color_space::linear_to_srgb(chosen_lin).clamped();
+                Color3f qe_s{
+                    (target_s.r - chosen_s.r) * settings.strength,
+                    (target_s.g - chosen_s.g) * settings.strength,
+                    (target_s.b - chosen_s.b) * settings.strength,
                 };
                 float ostro_scale = is_ostro
                     ? (0.6f + 0.8f * picked.ostro_threshold)
                     : 1.0f;
                 if (needs_riem) {
-                    riem_queue[riem_head] = qe;
+                    riem_queue_s[riem_head] = qe_s;
                     riem_head = (riem_head + 1) % RIEM_QSIZE;
                 } else {
                     for (auto& [kdx, kdy, kw] : kernel) {
@@ -3221,12 +3238,12 @@ float diffuse_raw_buffer(const Image& image,
                         if (nx < 0 || ny < 0) continue;
                         if (static_cast<std::size_t>(nx) >= w) continue;
                         if (static_cast<std::size_t>(ny) >= h) continue;
-                        auto& en = err_buf[
+                        auto& en = err_buf_s[
                             static_cast<std::size_t>(ny) * w +
                             static_cast<std::size_t>(nx)];
-                        en.L += qe.L * kw * ostro_scale;
-                        en.a += qe.a * kw * ostro_scale;
-                        en.b += qe.b * kw * ostro_scale;
+                        en.r += qe_s.r * kw * ostro_scale;
+                        en.g += qe_s.g * kw * ostro_scale;
+                        en.b += qe_s.b * kw * ostro_scale;
                     }
                 }
             }
