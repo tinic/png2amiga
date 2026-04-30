@@ -1651,6 +1651,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 image->pixels(),
                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
         }
+        // 1-opt local search is --best-only; plain EHB stays at
+        // PNN + pair-refine for the fast (~0.1s) baseline path.
 
         // Build full 64-color EHB palette (32 base + 32 half-bright)
         auto ehb_pal = palette::make_ehb_palette(base_pal.colors);

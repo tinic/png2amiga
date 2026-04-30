@@ -171,6 +171,9 @@ run_ham_convert hc-ham6  ham6_q7
 # 3a) ham_convert HAM6 fast profile (q1) + Floyd-Steinberg
 run_ham_convert hc-ham6-fast ham6_q1
 
+# 3b) ham_convert EHB (64-color OCS, hardware half-brite) + dither_fs
+run_ham_convert hc-ehb ehb
+
 # 4) ham_convert SHAM6 (ham6_sliced) + dither_fs
 run_ham_convert hc-sham6 ham6_sliced
 
@@ -188,6 +191,12 @@ run_png2amiga "p2a-ham6-best"        --mode ham6 --cap --best
 
 # 9) png2amiga EHB + SCAP + best
 run_png2amiga "p2a-ehb-best"         --mode ehb --scap --best
+
+# 10) png2amiga plain EHB (no copper) + best — head-to-head with hc-ehb
+run_png2amiga "p2a-ehb-plain-best"   --mode ehb --best
+
+# 11) png2amiga plain EHB (no copper, no best) — fast baseline
+run_png2amiga "p2a-ehb-plain"        --mode ehb
 
 # --- Step 3: PSNR table ----------------------------------------------------
 echo
