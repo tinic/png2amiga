@@ -2743,7 +2743,10 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
         // line prints next, which clobbers it on the same row.
         bool stage_changed = !state->last_stage.empty() &&
                               state->last_stage != stage;
-        if (stage_changed) {
+        // Newline on stage change EXCEPT when the new stage is "done"
+        // — the final tick already end-caps with its own newline, so
+        // adding another would leave a blank line in between.
+        if (stage_changed && !final_tick) {
             std::fputc('\n', stderr);
             state->last_emit = std::chrono::steady_clock::time_point{};
         }

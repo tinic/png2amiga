@@ -1580,6 +1580,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         winner->total_error = dr.total_error;
                     }
                 }
+                if (options.on_progress)
+                    options.on_progress(1.0f, "done");
             }
             std::vector<Color3f> full_palette(winner->ehb_pal.colors.begin(),
                                               winner->ehb_pal.colors.end());
