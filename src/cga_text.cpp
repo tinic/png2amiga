@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -21,23 +22,13 @@ namespace png2amiga::cga_text {
 
 namespace {
 
-// Precompute OKLab for each of the 16 CGA master colors so cell-matching
-// distance calculations don't recompute per iteration.
+// Per-cell metric vectors for each of the 16 CGA master colors. The
+// .lab field name is historical — its contents depend on the metric
+// space chosen by encode() (currently sRGB; see comment there).
 struct CgaPaletteLab {
     std::array<color_space::OKLab, 16> lab;
     std::array<Color3f, 16> rgb;
-    CgaPaletteLab() {
-        for (std::size_t i = 0; i < 16; ++i) {
-            rgb[i] = color_space::srgb_hex_to_linear(palette::kCgaHw[i]);
-            lab[i] = color_space::linear_to_oklab(rgb[i]);
-        }
-    }
 };
-
-inline const CgaPaletteLab& palette_lab() {
-    static const CgaPaletteLab p;
-    return p;
-}
 
 }  // namespace
 
@@ -87,18 +78,39 @@ encode(const Image& image, amiga::Mode mode,
         chars.assign(restrict_chars.begin(), restrict_chars.end());
     }
 
-    // Precompute OKLab for every source cell's pixels (for reuse across
-    // glyph/fg/bg trials). If the caller supplied a custom 16-color palette
-    // (EGA text modes picking from the 64-entry gamut), build an ad-hoc
-    // lookup table; otherwise use the cached fixed-CGA-master palette.
-    CgaPaletteLab custom;
+    // The Pappas-Neuhoff blur metric runs in sRGB (gamma-encoded)
+    // space, not OKLab. Rationale: PN was designed for the
+    // gamma-encoded signal a CRT actually emits, and the eye's
+    // post-blur perception of a CGA-text cell averaging fg/bg via
+    // checker patterns matches sRGB-domain blur much better than
+    // OKLab on chroma-rich content. A/B on electrichues02 showed
+    // sRGB +2.14 SSIMULACRA2 with markedly better foreground-vs-
+    // background separation in dark midtones (reds and market
+    // detail register; OKLab was dominated by blue noise).
+    //
+    // The metric structure (pair dot products, squared norms,
+    // closed-form expansion) is space-agnostic — we just keep palette
+    // and per-cell vectors in the same space. The struct field is
+    // still named .lab for historical reasons; treat it as "metric
+    // 3-vector".
+    auto to_metric_space = [](const Color3f& c_lin) -> color_space::OKLab {
+        auto s = color_space::linear_to_srgb(c_lin).clamped();
+        return color_space::OKLab{s.r, s.g, s.b};
+    };
+
+    CgaPaletteLab pal_local;
     if (!palette16.empty()) {
         for (std::size_t i = 0; i < 16; ++i) {
-            custom.rgb[i] = palette16[i];
-            custom.lab[i] = color_space::linear_to_oklab(palette16[i]);
+            pal_local.rgb[i] = palette16[i];
+            pal_local.lab[i] = to_metric_space(palette16[i]);
+        }
+    } else {
+        for (std::size_t i = 0; i < 16; ++i) {
+            pal_local.rgb[i] = color_space::srgb_hex_to_linear(palette::kCgaHw[i]);
+            pal_local.lab[i] = to_metric_space(pal_local.rgb[i]);
         }
     }
-    const CgaPaletteLab& pal = palette16.empty() ? palette_lab() : custom;
+    const CgaPaletteLab& pal = pal_local;
 
     // Try all possible scanline offsets into the glyph (0..glyph_h - cell_h).
     // The CRTC can be programmed to start the character row at any scanline,
@@ -359,8 +371,7 @@ encode(const Image& image, amiga::Mode mode,
             for (std::size_t px = 0; px < 8; ++px) {
                 auto img_x = col * 8 + px;
                 auto img_y = row * cell_h + py;
-                out[py * 8 + px] =
-                    color_space::linear_to_oklab(image[img_x, img_y]);
+                out[py * 8 + px] = to_metric_space(image[img_x, img_y]);
             }
         }
     };
