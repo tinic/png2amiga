@@ -141,8 +141,8 @@ run_ham_convert hc-ham6  ham6_q7
 # 4) ham_convert SHAM6 (ham6_sliced) + dither_fs
 run_ham_convert hc-sham6 ham6_sliced
 
-# 5) png2amiga HAM6 (no CAP)
-run_png2amiga "p2a-ham6"          --mode ham6
+# 5) png2amiga HAM6 + best (no CAP, multi-restart sweep)
+run_png2amiga "p2a-ham6-noncap-best" --mode ham6 --best
 
 # 6) png2amiga HAM6 + CAP + best
 run_png2amiga "p2a-ham6-best" --mode ham6 --cap --best
