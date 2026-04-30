@@ -716,8 +716,13 @@ function formatQualityStats(result: ConvertResult): string {
 function formatResultInfo(result: ConvertResult) {
   // result.colors is non-optional in ConvertResult, so the chain stops there.
   const colorCount = result.totalColors ?? result.colors
+  // For DPF the encoded frame is N planes (PF2 + zeroed PF1) but only
+  // PF2 = N/2 planes are visible. Report the visible-PF count to match
+  // the CLI / .cpp viewer's Palette line.
+  const visibleBpl = options.dualPlayfield && result.depth
+    ? Math.floor(result.depth / 2) : result.depth
   const parts = [`${result.width}x${result.height}, ${statusChipset.value}`,
-                 `${result.depth || '?'}bpl, ${colorCount} colors`]
+                 `${visibleBpl || '?'}bpl, ${colorCount} colors`]
   pushIf(parts, result.copperChanges, `${(result.copperChanges ?? 0).toFixed(1)} avg CAP/line`)
   const sizeStats = formatSizeStats(result)
   pushIf(parts, sizeStats, sizeStats.slice(2))  // strip leading ", "
