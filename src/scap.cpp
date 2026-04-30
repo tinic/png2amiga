@@ -434,7 +434,28 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             total_error_atomic.store(0.0);
             rows_done.store(0);
         }
-    pipeline::parallel_for(height, [&](std::size_t y) {
+    // hw_state tracks the actual hardware state of the 8 PF2 colour
+    // registers across lines. With --cap-changes < 8 we can't fully
+    // refresh the palette every line, so the PREVIOUS line's SCAP
+    // swaps + partial CAP MOVEs decide what colours are sitting in
+    // those registers when the next line's HBLANK starts. Strip 0
+    // of every line MUST be encoded against this real state, not
+    // against cap_palettes[y]'s CAP target — otherwise pixels are
+    // encoded with a palette the chip isn't actually displaying
+    // (= the artefacts users saw with --cap-changes 1..7).
+    //
+    // Tracking hw_state across lines forces a sequential row loop
+    // (kills parallel_for). DPF SCAP's per-row work is cheap
+    // enough that single-thread is fine; the dominant cost in the
+    // pipeline is cap_best_sweep's outer parallelism.
+    std::array<Color3f, kBaseColors> hw_state_init{};
+    for (std::size_t k = 0; k < kBaseColors; ++k)
+        hw_state_init[k] = base_palette[k];
+    auto hw_state = hw_state_init;
+    for (std::size_t y = 0; y < height; ++y) {
+        // Pass-2 reset: each pass starts hw_state at the frame-init
+        // palette so the per-pass HBLANK plans are deterministic.
+        if (y == 0) hw_state = hw_state_init;
         // Per-row working state: must be local for thread safety.
         // P / P_lab / strip_palettes / strip_pal_lab were captured-by-
         // ref outside the loop; declared inside now so each parallel
@@ -479,10 +500,6 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         //   approximation (assume prev line landed near its CAP
         //   target, ignore SCAP residue) is good enough that rows
         //   stay independent for parallel_for.
-        std::array<Color3f, kBaseColors> prev_target{};
-        for (std::size_t k = 0; k < kBaseColors; ++k) {
-            prev_target[k] = (y > 0) ? cap_palettes[y - 1][k] : base_palette[k];
-        }
         std::array<bool, kBaseColors> emitted{};
         if (copper_changes_override == 0) {
             // Full reset path (default; 9 hblank MOVEs).
@@ -499,11 +516,12 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         } else {
             std::size_t hblank_budget = std::min<std::size_t>(
                 copper_changes_override, kMaxCombined);
-            // Score per-slot diff in OKLab² between prev_target and
-            // target. Top-K wins emit-budget.
+            // Score per-slot diff in OKLab² between actual hw_state
+            // (the colour the chip is sitting on at end of line y-1)
+            // and target = cap_palettes[y]. Top-K wins emit-budget.
             std::array<std::pair<int, float>, kBaseColors> diffs{};
             for (std::size_t k = 0; k < kBaseColors; ++k) {
-                auto a = color_space::linear_to_oklab(prev_target[k]);
+                auto a = color_space::linear_to_oklab(hw_state[k]);
                 auto b = color_space::linear_to_oklab(target[k]);
                 float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
                 diffs[k] = {static_cast<int>(k),
@@ -529,10 +547,14 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             }
         }
 
-        // After per-line CAP MOVEs, build strip-0 palette: emitted
-        // slots = target; unemitted = prev_target (carry over).
+        // Build strip-0 palette from REAL post-HBLANK hw state:
+        //   emitted slots ← target (this line's CAP MOVE landed)
+        //   skipped slots ← hw_state (carried from prev line)
+        // This is what the chip actually displays in the leftmost
+        // strip — encoding pixels against any other palette would
+        // show the artefacts users hit with --cap-changes 1..7.
         for (std::size_t k = 0; k < kBaseColors; ++k)
-            P[k] = emitted[k] ? target[k] : prev_target[k];
+            P[k] = emitted[k] ? target[k] : hw_state[k];
         recompute_lab_local();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
@@ -841,6 +863,10 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
+        // Carry P forward as next-line hw_state — captures every
+        // emitted CAP MOVE + every applied SCAP swap.
+        hw_state = P;
+
         // Snapshot pass-1 strip state for this row; pass-2 dither runs
         // over the whole image once, after the per-row loop.
         strip_palettes_per_row[y] = strip_palettes;
@@ -853,7 +879,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                   static_cast<float>(height));
             }
         }
-    });
+    }
     total_moves = total_moves_atomic.load();
 
     // ---- Pass 2: whole-image dither against per-row, per-strip
