@@ -2743,10 +2743,13 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
         // line prints next, which clobbers it on the same row.
         bool stage_changed = !state->last_stage.empty() &&
                               state->last_stage != stage;
-        // Newline on stage change EXCEPT when the new stage is "done"
-        // — the final tick already end-caps with its own newline, so
-        // adding another would leave a blank line in between.
-        if (stage_changed && !final_tick) {
+        // Newline on stage change EXCEPT when:
+        //   - the new stage is "done" (final_tick already adds \n)
+        //   - the previous stage was "done" (its final_tick already
+        //     end-capped with \n; another would make a blank line
+        //     between the two Encoding... bars)
+        bool prev_was_done = state->last_stage == "done";
+        if (stage_changed && !final_tick && !prev_was_done) {
             std::fputc('\n', stderr);
             state->last_emit = std::chrono::steady_clock::time_point{};
         }
@@ -4841,15 +4844,19 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         auto& st = enc.state;
-        auto ehb_full_pal = palette::make_ehb_palette(st.palette);
-        cli_print_palette(std::format(
-            "{} base + {} half-brite = {} colors",
-            st.palette.size(), st.palette.size(), ehb_full_pal.size()));
+        // st.palette holds the full 64-entry EHB palette here (the
+        // EHB pipeline emits {32 base} ++ {32 half-brite} into
+        // result.palette). The SCAP-EHB path (cli_print_palette
+        // around line 5347) stores only the 32 base; that
+        // inconsistency is the reason this branch can't reuse the
+        // same `palette.size() / size()*2` formula. EHB is always
+        // 32 + 32 = 64 by definition; print the invariant.
+        cli_print_palette("32 base + 32 half-brite = 64 colors");
         cli_print_dither(config->dither_method, aopts.dither_strength);
         cli_print_encoded(
             static_cast<int>(st.planes.depth),
             static_cast<int>(st.planes.total_bytes()),
-            static_cast<int>(ehb_full_pal.size()),
+            static_cast<int>(st.palette.size()),
             /*aga=*/false,
             /*cap=*/0, /*scap=*/0,
             static_cast<int>(st.planes.height), /*max_moves=*/0,
@@ -4863,7 +4870,7 @@ int main(int argc, char* argv[]) {
 
         // Alias so the existing output-dispatch code below — which
         // expects a `full_palette` Color3f vector — compiles unchanged.
-        auto& full_palette = ehb_full_pal.colors;
+        auto& full_palette = st.palette;
 
         // Output
         if (!config->output_path.empty()) {
