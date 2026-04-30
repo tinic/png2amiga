@@ -834,16 +834,25 @@ DitherResult apply_error_diffusion(
     result.indices.resize(w * h);
     result.total_error = 0.0f;
 
-    // Precompute image in OKLab
-    std::vector<OKLab> image_lab(w * h);
+    // Precompute image in sRGB and OKLab. Picker still chooses
+    // perceptually (OKLab); residual conservation runs in sRGB
+    // (gamma-encoded) — see diffuse_raw_buffer for the rationale.
+    std::vector<Color3f> image_s(w * h);
+    std::vector<OKLab>  image_lab(w * h);
+    std::vector<Color3f> palette_s(palette_lab.size());
+    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+        palette_s[i] = color_space::linear_to_srgb(
+            color_space::oklab_to_linear(palette_lab[i])).clamped();
+    }
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
-            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+            auto lin = image[x, y];
+            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+            image_lab[y * w + x] = color_space::linear_to_oklab(lin);
         }
     }
 
-    // Error buffer (OKLab)
-    std::vector<OKLab> error_buf(w * h);
+    std::vector<Color3f> err_buf_s(w * h, Color3f{0, 0, 0});
 
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = serpentine && (y % 2 == 1);
@@ -852,20 +861,29 @@ DitherResult apply_error_diffusion(
             std::size_t x = reverse ? (w - 1 - step) : step;
             auto buf_idx = y * w + x;
 
-            // Add accumulated error to the original pixel
-            auto clamped_error = oklab_clamp(error_buf[buf_idx], ec);
-            auto adjusted = oklab_add(image_lab[buf_idx], clamped_error);
+            // Add accumulated sRGB error
+            auto& e = err_buf_s[buf_idx];
+            Color3f target_s{
+                image_s[buf_idx].r + std::clamp(e.r, -ec, ec),
+                image_s[buf_idx].g + std::clamp(e.g, -ec, ec),
+                image_s[buf_idx].b + std::clamp(e.b, -ec, ec),
+            };
+            // Round-trip back to OKLab so the picker stays perceptual.
+            auto target_lin = color_space::srgb_to_linear(target_s);
+            auto adjusted   = color_space::linear_to_oklab(target_lin);
 
-            // Find nearest palette color
             auto [idx, chosen_lab, dist_sq] =
                 find_nearest_oklab(adjusted, palette_lab);
             result.indices[buf_idx] = static_cast<std::uint8_t>(idx);
             result.total_error += dist_sq;
 
-            // Compute quantization error and distribute
-            auto quant_error =
-                oklab_scale(oklab_sub(adjusted, chosen_lab), strength);
-
+            // sRGB quantisation error, scaled by strength.
+            const auto& chosen_s = palette_s[idx];
+            Color3f qe_s{
+                (target_s.r - chosen_s.r) * strength,
+                (target_s.g - chosen_s.g) * strength,
+                (target_s.b - chosen_s.b) * strength,
+            };
             for (auto& [kdx, kdy, weight] : kernel) {
                 int actual_dx = reverse ? -kdx : kdx;
                 auto nx = static_cast<int>(x) + actual_dx;
@@ -875,10 +893,10 @@ DitherResult apply_error_diffusion(
                     ny >= 0 && static_cast<std::size_t>(ny) < h) {
                     auto nidx = static_cast<std::size_t>(ny) * w +
                                 static_cast<std::size_t>(nx);
-                    error_buf[nidx] = oklab_clamp(
-                        oklab_add(error_buf[nidx],
-                                  oklab_scale(quant_error, weight)),
-                        ec);
+                    auto& en = err_buf_s[nidx];
+                    en.r = std::clamp(en.r + qe_s.r * weight, -ec, ec);
+                    en.g = std::clamp(en.g + qe_s.g * weight, -ec, ec);
+                    en.b = std::clamp(en.b + qe_s.b * weight, -ec, ec);
                 }
             }
         }
@@ -989,10 +1007,19 @@ DitherResult apply_gilbert(
 
     auto curve = gilbert_curve(static_cast<int>(w), static_cast<int>(h));
 
-    std::vector<OKLab> image_lab(w * h);
+    std::vector<OKLab>  image_lab(w * h);
+    std::vector<Color3f> image_s(w * h);
+    std::vector<Color3f> palette_s(palette_lab.size());
+    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+        palette_s[i] = color_space::linear_to_srgb(
+            color_space::oklab_to_linear(palette_lab[i])).clamped();
+    }
     for (std::size_t y = 0; y < h; ++y)
-        for (std::size_t x = 0; x < w; ++x)
-            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+        for (std::size_t x = 0; x < w; ++x) {
+            auto lin = image[x, y];
+            image_lab[y * w + x] = color_space::linear_to_oklab(lin);
+            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+        }
 
     // Flatness map: 1.0 in smooth regions, 0.0 at edges. Error diffusion
     // on a space-filling curve tends to produce curve-following patterns
@@ -1044,8 +1071,9 @@ DitherResult apply_gilbert(
         noise_amp = 0.15f * (total_nn / static_cast<float>(palette_lab.size()));
     }
 
-    // Error accumulator per pixel index
-    std::vector<OKLab> error_buf(w * h);
+    // Error accumulator per pixel index — sRGB residual (see
+    // diffuse_raw_buffer rationale).
+    std::vector<Color3f> err_buf_s(w * h, Color3f{0, 0, 0});
 
     // Diffusion weights along the curve: most of the error goes to the
     // immediate next cell (spatially adjacent on the curve), with a small
@@ -1066,8 +1094,14 @@ DitherResult apply_gilbert(
         auto [x, y] = curve[i];
         auto idx = static_cast<std::size_t>(y) * w + static_cast<std::size_t>(x);
 
-        auto clamped = oklab_clamp(error_buf[idx], ec);
-        auto target = oklab_add(image_lab[idx], clamped);
+        auto& e = err_buf_s[idx];
+        Color3f target_s{
+            image_s[idx].r + std::clamp(e.r, -ec, ec),
+            image_s[idx].g + std::clamp(e.g, -ec, ec),
+            image_s[idx].b + std::clamp(e.b, -ec, ec),
+        };
+        auto target = color_space::linear_to_oklab(
+            color_space::srgb_to_linear(target_s));
 
         // Blue-noise perturbation in flat regions only. The noise is
         // applied to the NEAREST-COLOR LOOKUP target but NOT to the
@@ -1087,29 +1121,34 @@ DitherResult apply_gilbert(
         // Find nearest palette entry (using perturbed lookup)
         float best_d = std::numeric_limits<float>::max();
         std::size_t best_k = 0;
-        OKLab best_lab{};
         for (std::size_t k = 0; k < palette_lab.size(); ++k) {
             float dL = lookup.L - palette_lab[k].L;
             float da = lookup.a - palette_lab[k].a;
             float db = lookup.b - palette_lab[k].b;
             float d = dL * dL + da * da + db * db;
-            if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
+            if (d < best_d) { best_d = d; best_k = k; }
         }
         result.indices[idx] = static_cast<std::uint8_t>(best_k);
         result.total_error += best_d;
 
-        // Error propagation uses the UNPERTURBED target, so blue noise
-        // doesn't compound through the diffusion chain.
-        auto err = oklab_sub(target, best_lab);
-        auto scaled = oklab_scale(err, strength);
+        // Error propagation in sRGB, using the UNPERTURBED target so
+        // blue noise doesn't compound through the diffusion chain.
+        const auto& chosen_s = palette_s[best_k];
+        Color3f qe_s{
+            (target_s.r - chosen_s.r) * strength,
+            (target_s.g - chosen_s.g) * strength,
+            (target_s.b - chosen_s.b) * strength,
+        };
 
         // Distribute to next 4 cells along the curve
         for (std::size_t k = 0; k < weights.size() && i + 1 + k < curve.size(); ++k) {
             auto [nx, ny] = curve[i + 1 + k];
             auto nidx = static_cast<std::size_t>(ny) * w +
                         static_cast<std::size_t>(nx);
-            auto w_e = oklab_scale(scaled, weights[k]);
-            error_buf[nidx] = oklab_clamp(oklab_add(error_buf[nidx], w_e), ec);
+            auto& en = err_buf_s[nidx];
+            en.r = std::clamp(en.r + qe_s.r * weights[k], -ec, ec);
+            en.g = std::clamp(en.g + qe_s.g * weights[k], -ec, ec);
+            en.b = std::clamp(en.b + qe_s.b * weights[k], -ec, ec);
         }
     }
 
@@ -1146,17 +1185,26 @@ DitherResult apply_riemersma(
 
     auto curve = gilbert_curve(static_cast<int>(w), static_cast<int>(h));
 
-    std::vector<OKLab> image_lab(w * h);
+    std::vector<OKLab>  image_lab(w * h);
+    std::vector<Color3f> image_s(w * h);
+    std::vector<Color3f> palette_s(palette_lab.size());
+    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+        palette_s[i] = color_space::linear_to_srgb(
+            color_space::oklab_to_linear(palette_lab[i])).clamped();
+    }
     for (std::size_t y = 0; y < h; ++y)
-        for (std::size_t x = 0; x < w; ++x)
-            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+        for (std::size_t x = 0; x < w; ++x) {
+            auto lin = image[x, y];
+            image_lab[y * w + x] = color_space::linear_to_oklab(lin);
+            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+        }
 
     // Riemersma's canonical queue: 16 entries with exponential decay.
     // ratio = (1/16)^(1/15) so weight_i = ratio^(QSIZE-1-i) gives oldest
     // entry weight = 1/16, newest entry weight = 1.0. Sum is normalised
     // implicitly by error propagation — accumulated error converges.
     constexpr std::size_t QSIZE = 16;
-    std::array<OKLab, QSIZE> queue{};  // ring buffer of last QSIZE errors
+    std::array<Color3f, QSIZE> queue{};  // sRGB residual queue
     std::array<float, QSIZE> weights{};
     {
         const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
@@ -1179,13 +1227,20 @@ DitherResult apply_riemersma(
         auto idx = static_cast<std::size_t>(y) * w + static_cast<std::size_t>(x);
 
         // Sum the queue with exponential weights — newest at qhead-1.
-        OKLab carry{};
+        Color3f carry{0, 0, 0};
         for (std::size_t k = 0; k < QSIZE; ++k) {
             std::size_t age = (qhead + QSIZE - 1 - k) % QSIZE;
-            carry = oklab_add(carry, oklab_scale(queue[age], weights[k]));
+            carry.r += queue[age].r * weights[k];
+            carry.g += queue[age].g * weights[k];
+            carry.b += queue[age].b * weights[k];
         }
-        carry = oklab_clamp(carry, ec);
-        auto target = oklab_add(image_lab[idx], carry);
+        Color3f target_s{
+            image_s[idx].r + std::clamp(carry.r, -ec, ec),
+            image_s[idx].g + std::clamp(carry.g, -ec, ec),
+            image_s[idx].b + std::clamp(carry.b, -ec, ec),
+        };
+        auto target = color_space::linear_to_oklab(
+            color_space::srgb_to_linear(target_s));
 
         // Find nearest palette entry.
         float best_d = std::numeric_limits<float>::max();
@@ -1201,9 +1256,13 @@ DitherResult apply_riemersma(
 
         result.indices[idx] = static_cast<std::uint8_t>(best_k);
 
-        // Push new error onto queue, dropping oldest.
-        auto err = oklab_sub(target, best_lab);
-        queue[qhead] = oklab_scale(err, strength);
+        // Push new sRGB error onto queue, dropping oldest.
+        const auto& chosen_s = palette_s[best_k];
+        queue[qhead] = Color3f{
+            (target_s.r - chosen_s.r) * strength,
+            (target_s.g - chosen_s.g) * strength,
+            (target_s.b - chosen_s.b) * strength,
+        };
         qhead = (qhead + 1) % QSIZE;
 
         float dL = image_lab[idx].L - best_lab.L;
@@ -1834,11 +1893,20 @@ DitherResult apply_structure_fs(
     result.indices.resize(w * h);
     result.total_error = 0.0f;
 
-    // Source as OKLab.
-    std::vector<OKLab> image_lab(w * h);
+    // Source as OKLab + sRGB; palette pre-converted to sRGB.
+    std::vector<OKLab>  image_lab(w * h);
+    std::vector<Color3f> image_s(w * h);
+    std::vector<Color3f> palette_s(palette_lab.size());
+    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+        palette_s[i] = color_space::linear_to_srgb(
+            color_space::oklab_to_linear(palette_lab[i])).clamped();
+    }
     for (std::size_t y = 0; y < h; ++y)
-        for (std::size_t x = 0; x < w; ++x)
-            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+        for (std::size_t x = 0; x < w; ++x) {
+            auto lin = image[x, y];
+            image_lab[y * w + x] = color_space::linear_to_oklab(lin);
+            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+        }
 
     // Per-pixel structure signal. For Laplacian mode this is the 4-conn
     // discrete Laplacian of the OKLab L channel; for contrast mode it's
@@ -1921,8 +1989,8 @@ DitherResult apply_structure_fs(
         }
     }
 
-    // Floyd-Steinberg-style error buffer.
-    std::vector<OKLab> error_buf(w * h);
+    // sRGB error buffer (see diffuse_raw_buffer rationale).
+    std::vector<Color3f> err_buf_s(w * h, Color3f{0, 0, 0});
     constexpr std::array<DiffusionEntry, 4> kernel = {{
         {1, 0, 7.0f / 16.0f},
         {-1, 1, 3.0f / 16.0f},
@@ -1935,14 +2003,22 @@ DitherResult apply_structure_fs(
     // higher makes structure dominate.
     constexpr float K_SCALE = 0.4f;
 
+    float ec = error_clamp_val;
+
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = serpentine && (y % 2 == 1);
         for (std::size_t step = 0; step < w; ++step) {
             std::size_t x = reverse ? (w - 1 - step) : step;
             auto idx = y * w + x;
 
-            auto err = oklab_clamp(error_buf[idx], error_clamp_val);
-            auto target = oklab_add(image_lab[idx], err);
+            auto& e = err_buf_s[idx];
+            Color3f target_s{
+                image_s[idx].r + std::clamp(e.r, -ec, ec),
+                image_s[idx].g + std::clamp(e.g, -ec, ec),
+                image_s[idx].b + std::clamp(e.b, -ec, ec),
+            };
+            auto target = color_space::linear_to_oklab(
+                color_space::srgb_to_linear(target_s));
 
             // Structure bias: shape depends on mode. Laplacian/contrast
             // scale by local stddev so flat regions stay neutral. ZF uses
@@ -1978,9 +2054,13 @@ DitherResult apply_structure_fs(
 
             result.indices[idx] = static_cast<std::uint8_t>(best_k);
 
-            // Diffuse the *unbiased* error (don't compound the structure bias).
-            auto e = oklab_sub(image_lab[idx], best_lab);
-            auto scaled = oklab_scale(e, strength);
+            // Propagate sRGB residual against the *unbiased* source.
+            const auto& chosen_s = palette_s[best_k];
+            Color3f qe_s{
+                (image_s[idx].r - chosen_s.r) * strength,
+                (image_s[idx].g - chosen_s.g) * strength,
+                (image_s[idx].b - chosen_s.b) * strength,
+            };
             for (auto& kr : kernel) {
                 int dx = kr.dx;
                 if (reverse) dx = -dx;
@@ -1990,8 +2070,10 @@ DitherResult apply_structure_fs(
                 if (ny < 0 || ny >= static_cast<std::ptrdiff_t>(h)) continue;
                 auto nidx = static_cast<std::size_t>(ny) * w +
                             static_cast<std::size_t>(nx);
-                error_buf[nidx] = oklab_add(error_buf[nidx],
-                                            oklab_scale(scaled, kr.weight));
+                auto& en = err_buf_s[nidx];
+                en.r = std::clamp(en.r + qe_s.r * kr.weight, -ec, ec);
+                en.g = std::clamp(en.g + qe_s.g * kr.weight, -ec, ec);
+                en.b = std::clamp(en.b + qe_s.b * kr.weight, -ec, ec);
             }
 
             float dL = image_lab[idx].L - best_lab.L;
@@ -2019,12 +2101,21 @@ DitherResult apply_ostromoukhov(
     result.indices.resize(w * h);
     result.total_error = 0.0f;
 
-    std::vector<OKLab> image_lab(w * h);
+    std::vector<OKLab>  image_lab(w * h);
+    std::vector<Color3f> image_s(w * h);
+    std::vector<Color3f> palette_s(palette_lab.size());
+    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+        palette_s[i] = color_space::linear_to_srgb(
+            color_space::oklab_to_linear(palette_lab[i])).clamped();
+    }
     for (std::size_t y = 0; y < h; ++y)
-        for (std::size_t x = 0; x < w; ++x)
-            image_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+        for (std::size_t x = 0; x < w; ++x) {
+            auto lin = image[x, y];
+            image_lab[y * w + x] = color_space::linear_to_oklab(lin);
+            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+        }
 
-    std::vector<OKLab> error_buf(w * h);
+    std::vector<Color3f> err_buf_s(w * h, Color3f{0, 0, 0});
 
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = serpentine && (y % 2 == 1);
@@ -2032,14 +2123,19 @@ DitherResult apply_ostromoukhov(
             std::size_t x = reverse ? (w - 1 - step) : step;
             auto buf_idx = y * w + x;
 
-            auto clamped_error = oklab_clamp(error_buf[buf_idx], ec);
-            auto adjusted = oklab_add(image_lab[buf_idx], clamped_error);
+            auto& e = err_buf_s[buf_idx];
+            Color3f target_s{
+                image_s[buf_idx].r + std::clamp(e.r, -ec, ec),
+                image_s[buf_idx].g + std::clamp(e.g, -ec, ec),
+                image_s[buf_idx].b + std::clamp(e.b, -ec, ec),
+            };
+            auto adjusted = color_space::linear_to_oklab(
+                color_space::srgb_to_linear(target_s));
 
             // Find nearest AND second-nearest to compute threshold level
             float best_d = std::numeric_limits<float>::max();
             float second_d = std::numeric_limits<float>::max();
             std::size_t best_k = 0;
-            OKLab best_lab{};
             for (std::size_t k = 0; k < palette_lab.size(); ++k) {
                 float dL = adjusted.L - palette_lab[k].L;
                 float da = adjusted.a - palette_lab[k].a;
@@ -2049,7 +2145,6 @@ DitherResult apply_ostromoukhov(
                     second_d = best_d;
                     best_d = d;
                     best_k = k;
-                    best_lab = palette_lab[k];
                 } else if (d < second_d) {
                     second_d = d;
                 }
@@ -2076,8 +2171,12 @@ DitherResult apply_ostromoukhov(
             float w2 = (5.0f / 16.0f) * scale;
             float w3 = (1.0f / 16.0f) * scale;
 
-            auto quant_error =
-                oklab_scale(oklab_sub(adjusted, best_lab), strength);
+            const auto& chosen_s = palette_s[best_k];
+            Color3f qe_s{
+                (target_s.r - chosen_s.r) * strength,
+                (target_s.g - chosen_s.g) * strength,
+                (target_s.b - chosen_s.b) * strength,
+            };
 
             struct { int dx, dy; float wt; } entries[] = {
                 {1, 0, w0}, {-1, 1, w1}, {0, 1, w2}, {1, 1, w3}};
@@ -2089,10 +2188,10 @@ DitherResult apply_ostromoukhov(
                     ny >= 0 && static_cast<std::size_t>(ny) < h) {
                     auto nidx = static_cast<std::size_t>(ny) * w +
                                 static_cast<std::size_t>(nx);
-                    error_buf[nidx] = oklab_clamp(
-                        oklab_add(error_buf[nidx],
-                                  oklab_scale(quant_error, wt)),
-                        ec);
+                    auto& en = err_buf_s[nidx];
+                    en.r = std::clamp(en.r + qe_s.r * wt, -ec, ec);
+                    en.g = std::clamp(en.g + qe_s.g * wt, -ec, ec);
+                    en.b = std::clamp(en.b + qe_s.b * wt, -ec, ec);
                 }
             }
         }
