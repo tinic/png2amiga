@@ -1416,11 +1416,45 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto encode_once = [&](const Image& img,
                                    const dither::Settings& d,
                                    int diversity) -> Result<EhbPlainTrial> {
+                // Pair-aware EHB seeding: quantise the *union* of the
+                // source pixels and their sRGB-doubled darks. A picked
+                // colour either matches a bright pixel directly OR is
+                // 2x a dark pixel (whose half-brite copy will then
+                // land exactly on that dark pixel). Plain median-cut
+                // / OCS-brute on the source alone tends to cluster in
+                // the midtone where pixel density is highest, leaving
+                // the half-brite half unused on dark detail.
+                Image enriched(img.width(), img.height() * 2);
+                for (std::size_t y = 0; y < img.height(); ++y) {
+                    for (std::size_t x = 0; x < img.width(); ++x) {
+                        enriched[x, y] = img[x, y];
+                    }
+                }
+                for (std::size_t y = 0; y < img.height(); ++y) {
+                    for (std::size_t x = 0; x < img.width(); ++x) {
+                        auto p = img[x, y];
+                        auto s = color_space::linear_to_srgb(p).clamped();
+                        Color3f doubled_srgb{
+                            std::clamp(s.r * 2.0f, 0.0f, 1.0f),
+                            std::clamp(s.g * 2.0f, 0.0f, 1.0f),
+                            std::clamp(s.b * 2.0f, 0.0f, 1.0f),
+                        };
+                        enriched[x, img.height() + y] =
+                            color_space::srgb_to_linear(doubled_srgb);
+                    }
+                }
                 auto quantized = quantize::quantize(
-                    img, 32, quantize_algo(chipset), diversity);
+                    enriched, 32, quantize_algo(chipset), diversity);
                 if (!quantized) return std::unexpected{quantized.error()};
                 Palette bp = std::move(*quantized);
                 snap_to_chipset(bp, chipset, mode);
+                // Pair-aware refinement: jointly optimise the 32 base
+                // colours under the hardware-tied half-brite pairing.
+                while (bp.colors.size() < 32) bp.colors.emplace_back(0, 0, 0);
+                palette::refine_ehb_base_palette(
+                    std::span<Color3f>(bp.colors.data(), 32),
+                    img.pixels(),
+                    /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
                 auto ehbp = palette::make_ehb_palette(bp.colors);
                 auto dr = dither::apply(img, ehbp.colors, d);
                 auto pl = bitplane::encode(dr.indices,
@@ -1497,6 +1531,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 *quantized, options.locks, 32, reserve_zero_ehb, chipset, mode);
             base_pal = std::move(assembled.palette);
             base_locked = std::move(assembled.locked);
+        }
+
+        // Pair-aware refinement: jointly optimise the 32 base colours
+        // under the hardware-tied half-brite pairing. Skipped when the
+        // user supplied an external palette or any base slots are
+        // locked — the refinement isn't lock-aware yet.
+        bool any_locked = false;
+        for (auto v : base_locked) any_locked = any_locked || v;
+        if (!user_pal_ehb && !any_locked && !has_transparency
+                && base_pal.colors.size() >= 32) {
+            palette::refine_ehb_base_palette(
+                std::span<Color3f>(base_pal.colors.data(), 32),
+                image->pixels(),
+                /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
         }
 
         // Build full 64-color EHB palette (32 base + 32 half-bright)

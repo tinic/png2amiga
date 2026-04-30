@@ -510,4 +510,111 @@ inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
     return pal;
 }
 
+// Pair-aware k-means refinement for EHB.
+//
+// Median-cut alone picks 32 base colors that span the source's dominant
+// clusters; deriving the half-brite copies as base/2 then leaves the
+// dark half of the gamut covered "for free" but unoptimised. The
+// hardware-tied pairing (hb = base/2 in sRGB DAC space) means that
+// where you put a base color also dictates where its half-brite copy
+// lands, so the optimum 32-base set is the one that minimises total
+// squared error over BOTH halves jointly.
+//
+// Per iteration:
+//   1. Assign each pixel to its OKLab-nearest of the 64 effective colors.
+//   2. For each slot k, separate the base assignments B_k from the
+//      half-brite assignments H_k.
+//   3. Solve in sRGB DAC space (where halving is linear). Minimising
+//      L(b) = sum_{p in B_k}(b - p)^2 + sum_{q in H_k}(b/2 - q)^2
+//      yields b = (4*sum(B_k_srgb) + 2*sum(H_k_srgb))
+//                 / (4*|B_k| + |H_k|)   (in sRGB).
+//   4. Snap to OCS 12-bit nibbles (4 bits/channel), rebuild the EHB
+//      palette, repeat.
+//
+// Empty slots are left unchanged. Iterations cap at `max_iters` or stop
+// when slot drift falls below a small tolerance.
+inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
+                                    std::span<const Color3f> image_pixels,
+                                    bool snap_to_ocs = true,
+                                    int max_iters = 8) {
+    if (base_colors.size() < 32 || image_pixels.empty()) return;
+    constexpr std::size_t kBaseN = 32;
+
+    // Pre-bake pixel sRGB views (the centroid math lives in sRGB).
+    std::vector<Color3f> pix_srgb(image_pixels.size());
+    for (std::size_t i = 0; i < image_pixels.size(); ++i) {
+        auto s = color_space::linear_to_srgb(image_pixels[i]).clamped();
+        pix_srgb[i] = s;
+    }
+
+    auto snap_one = [&](Color3f c) -> Color3f {
+        return snap_to_ocs ? quantize_to_ocs(c) : c;
+    };
+
+    auto build_full = [&](std::span<const Color3f> base) {
+        std::array<Color3f, 64> full{};
+        for (std::size_t i = 0; i < kBaseN; ++i) full[i] = base[i];
+        for (std::size_t i = 0; i < kBaseN; ++i) full[kBaseN + i] = half_brite(base[i]);
+        return full;
+    };
+
+    auto oklab_of = [&](const Color3f& c) {
+        return color_space::linear_to_oklab(c);
+    };
+
+    for (int it = 0; it < max_iters; ++it) {
+        auto full_pal = build_full(base_colors);
+        std::array<color_space::OKLab, 64> full_oklab{};
+        for (std::size_t i = 0; i < 64; ++i) full_oklab[i] = oklab_of(full_pal[i]);
+
+        std::array<Color3f, kBaseN> sum_b{}, sum_h{};
+        std::array<std::uint32_t, kBaseN> cnt_b{}, cnt_h{};
+
+        for (std::size_t i = 0; i < image_pixels.size(); ++i) {
+            auto t = oklab_of(image_pixels[i]);
+            std::size_t best = 0;
+            float best_d = std::numeric_limits<float>::infinity();
+            for (std::size_t k = 0; k < 64; ++k) {
+                auto& e = full_oklab[k];
+                float dL = t.L - e.L, da = t.a - e.a, db = t.b - e.b;
+                float d  = dL * dL + da * da + db * db;
+                if (d < best_d) { best_d = d; best = k; }
+            }
+            auto& s = pix_srgb[i];
+            if (best < kBaseN) {
+                sum_b[best].r += s.r; sum_b[best].g += s.g; sum_b[best].b += s.b;
+                cnt_b[best] += 1;
+            } else {
+                auto k = best - kBaseN;
+                sum_h[k].r += s.r; sum_h[k].g += s.g; sum_h[k].b += s.b;
+                cnt_h[k] += 1;
+            }
+        }
+
+        float drift = 0.0f;
+        for (std::size_t k = 0; k < kBaseN; ++k) {
+            std::uint32_t denom = 4u * cnt_b[k] + cnt_h[k];
+            if (denom == 0) continue;
+            float fd = static_cast<float>(denom);
+            Color3f new_srgb{
+                (4.0f * sum_b[k].r + 2.0f * sum_h[k].r) / fd,
+                (4.0f * sum_b[k].g + 2.0f * sum_h[k].g) / fd,
+                (4.0f * sum_b[k].b + 2.0f * sum_h[k].b) / fd,
+            };
+            // Clamp into legal sRGB then bring back to linear.
+            new_srgb.r = std::clamp(new_srgb.r, 0.0f, 1.0f);
+            new_srgb.g = std::clamp(new_srgb.g, 0.0f, 1.0f);
+            new_srgb.b = std::clamp(new_srgb.b, 0.0f, 1.0f);
+            Color3f new_lin = color_space::srgb_to_linear(new_srgb);
+            new_lin = snap_one(new_lin);
+            float dr = base_colors[k].r - new_lin.r;
+            float dg = base_colors[k].g - new_lin.g;
+            float db = base_colors[k].b - new_lin.b;
+            drift += dr * dr + dg * dg + db * db;
+            base_colors[k] = new_lin;
+        }
+        if (drift < 1e-6f) break;
+    }
+}
+
 } // namespace png2amiga::palette
