@@ -112,7 +112,7 @@ def compile_viewer(source_code, output_format="exe"):
             "-fomit-frame-pointer", "-fno-exceptions",
             "-nostdinc",                   # block #include of host system files
             "-isystem", SYS_INCLUDE,       # Amiga SDK headers (proto/, exec/, etc.)
-            "-isystem", os.path.join(GCC_DIR, "lib", "gcc", "m68k-amiga-elf", "14.2.0", "include"),  # gcc builtins (stddef.h etc.)
+            "-isystem", os.path.join(GCC_DIR, "lib", "gcc", "m68k-amiga-elf", "15.1.0", "include"),  # gcc builtins (stddef.h etc.)
             "-I", TEMPLATE,
             "-Wa,--register-prefix-optional",
             "-Wl,--emit-relocs,-Ttext=0",

@@ -343,7 +343,7 @@ Result<void> save(std::string_view path,
 // palette, copper list, and a main() that takes over the system,
 // sets up the display, and waits for left mouse button.
 //
-// Compatible with vscode-amiga-debug toolchain (m68k-amiga-elf-gcc 14).
+// Compatible with vscode-amiga-debug toolchain (m68k-amiga-elf-gcc 15).
 // ===========================================================================
 
 Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
