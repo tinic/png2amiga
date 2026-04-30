@@ -168,17 +168,26 @@ run_ham_convert() {
 # 3) ham_convert HAM6 max-quality (q7) + Floyd-Steinberg
 run_ham_convert hc-ham6  ham6_q7
 
+# 3a) ham_convert HAM6 fast profile (q1) + Floyd-Steinberg
+run_ham_convert hc-ham6-fast ham6_q1
+
 # 4) ham_convert SHAM6 (ham6_sliced) + dither_fs
 run_ham_convert hc-sham6 ham6_sliced
 
-# 5) png2amiga HAM6 + best (no CAP, multi-restart sweep)
+# 5) png2amiga HAM6 (no CAP, no --best — baseline for time/quality)
+run_png2amiga "p2a-ham6"             --mode ham6
+
+# 6) png2amiga HAM6 + best (no CAP, multi-restart sweep)
 run_png2amiga "p2a-ham6-noncap-best" --mode ham6 --best
 
-# 6) png2amiga HAM6 + CAP + best
-run_png2amiga "p2a-ham6-best" --mode ham6 --cap --best
+# 7) png2amiga HAM6 + CAP (no --best — single-pass per-line palette)
+run_png2amiga "p2a-ham6-cap"         --mode ham6 --cap
 
-# 7) png2amiga EHB + SCAP + best
-run_png2amiga "p2a-ehb-best" --mode ehb --scap --best
+# 8) png2amiga HAM6 + CAP + best
+run_png2amiga "p2a-ham6-best"        --mode ham6 --cap --best
+
+# 9) png2amiga EHB + SCAP + best
+run_png2amiga "p2a-ehb-best"         --mode ehb --scap --best
 
 # --- Step 3: PSNR table ----------------------------------------------------
 echo
