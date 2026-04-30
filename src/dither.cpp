@@ -2293,23 +2293,45 @@ DitherResult apply_dbs(
     // 1. Warm-start: run FS to get a sensible initial halftone.
     //    DBS is greedy and converges to a local minimum, so the
     //    starting point matters. FS gets us within a few dB of optimum
-    //    everywhere already.
+    //    everywhere already. (FS does its own perceptual nearest in
+    //    OKLab; the blur-space probe below only swaps the DBS cost
+    //    metric.)
     DitherResult res = apply_error_diffusion(
         image, palette_lab, settings.strength, settings.error_clamp,
         settings.serpentine, floyd_steinberg_kernel);
     auto& indices = res.indices;
 
-    // 2. Compute HVS-blurred source AND HVS-blurred halftone, both in
-    //    OKLab. We'll maintain the halftone-blurred buffer
-    //    incrementally as toggles fire.
+    // The DBS HVS-blur cost metric runs in sRGB. Same lesson as
+    // CGA-text Pappas-Neuhoff: a pure blur metric models "what the
+    // eye sees the CRT emit", which is sRGB. A/B vs OKLab on
+    // electrichues02 / chuck31 / lovers @ lores5 + vga-13h showed
+    // sRGB winning everywhere on banded content (chuck31 vga-13h:
+    // +24 SSIMULACRA2; lovers lores5: visually clearly better
+    // despite a SSIMULACRA2 false-negative driven by the score's
+    // high-frequency-dither weighting). The OKLab struct is a
+    // generic 3-vector here; field names .L/.a/.b are decorative
+    // when the contents are sRGB.
+    auto to_blur_space = [](const Color3f& lin) -> OKLab {
+        auto s = color_space::linear_to_srgb(lin).clamped();
+        return OKLab{s.r, s.g, s.b};
+    };
+    std::vector<OKLab> palette_blur(palette_lab.size());
+    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
+        auto lin = color_space::oklab_to_linear(palette_lab[i]);
+        palette_blur[i] = to_blur_space(lin);
+    }
+
+    // 2. Compute HVS-blurred source AND HVS-blurred halftone in the
+    //    chosen blur space. We'll maintain the halftone-blurred
+    //    buffer incrementally as toggles fire.
     std::vector<OKLab> source_lab(w * h);
     for (std::size_t y = 0; y < h; ++y)
         for (std::size_t x = 0; x < w; ++x)
-            source_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+            source_lab[y * w + x] = to_blur_space(image[x, y]);
 
     std::vector<OKLab> halftone_lab(w * h);
     for (std::size_t i = 0; i < w * h; ++i)
-        halftone_lab[i] = palette_lab[indices[i]];
+        halftone_lab[i] = palette_blur[indices[i]];
 
     // Two-stage separable blur: horizontal, then vertical.
     std::vector<OKLab> source_h(w * h), source_blur(w * h);
@@ -2378,14 +2400,14 @@ DitherResult apply_dbs(
                 std::size_t best_idx = cur_idx;
                 float best_delta = 0.0f;
                 // Try each palette alternative.
-                for (std::size_t pi = 0; pi < palette_lab.size(); ++pi) {
+                for (std::size_t pi = 0; pi < palette_blur.size(); ++pi) {
                     if (pi == cur_idx) continue;
                     // Compute the cost change from setting indices[pix] = pi.
                     // The halftone_lab[pix] flip propagates through both
                     // separable passes — we recompute the 5×5 window's
                     // contribution under the hypothetical flip.
-                    OKLab old_pal = palette_lab[cur_idx];
-                    OKLab new_pal = palette_lab[pi];
+                    OKLab old_pal = palette_blur[cur_idx];
+                    OKLab new_pal = palette_blur[pi];
                     OKLab delta_h{
                         new_pal.L - old_pal.L,
                         new_pal.a - old_pal.a,
@@ -2431,8 +2453,8 @@ DitherResult apply_dbs(
                 if (best_idx != cur_idx) {
                     // Commit: update indices, halftone_lab, AND the
                     // 5×5 window of half_blur.
-                    OKLab old_pal = palette_lab[cur_idx];
-                    OKLab new_pal = palette_lab[best_idx];
+                    OKLab old_pal = palette_blur[cur_idx];
+                    OKLab new_pal = palette_blur[best_idx];
                     OKLab delta_h{
                         new_pal.L - old_pal.L,
                         new_pal.a - old_pal.a,
@@ -2462,17 +2484,22 @@ DitherResult apply_dbs(
         if (!changed) break;
     }
 
-    // Recompute total error against the actual chosen colours (not the
-    // HVS-blurred cost — that's the optimisation target, but the
-    // reported error stays in units the rest of the pipeline expects).
+    // Recompute total error against the actual chosen colours in
+    // OKLab — the optimisation target was blur-space, but the
+    // reported error stays in OKLab units the rest of the pipeline
+    // expects. (When dbs_use_srgb is set, source_lab holds sRGB
+    // 3-vectors, so we re-derive OKLab from the original image
+    // here.)
     float total_err = 0.0f;
-    for (std::size_t i = 0; i < w * h; ++i) {
-        auto& src = source_lab[i];
-        auto& chosen = palette_lab[indices[i]];
-        float dL = src.L - chosen.L;
-        float da = src.a - chosen.a;
-        float db = src.b - chosen.b;
-        total_err += dL * dL + da * da + db * db;
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            auto src_ok = color_space::linear_to_oklab(image[x, y]);
+            auto& chosen = palette_lab[indices[y * w + x]];
+            float dL = src_ok.L - chosen.L;
+            float da = src_ok.a - chosen.a;
+            float db = src_ok.b - chosen.b;
+            total_err += dL * dL + da * da + db * db;
+        }
     }
     res.total_error = total_err;
     return res;
@@ -2501,16 +2528,42 @@ void apply_dbs_post_pass(
     auto h = image.height();
     if (indices.size() != w * h) return;
 
-    // Build source-Lab buffer + halftone-Lab buffer (the rendered colour
-    // for the current per-pixel palette index).
+    // Blur metric runs in sRGB (see apply_dbs comment). The palette
+    // callback returns OKLab; cache an sRGB-as-3vec view per
+    // (palette span identity) so we don't re-convert every pixel.
+    auto to_blur_space = [](const Color3f& lin) -> OKLab {
+        auto s = color_space::linear_to_srgb(lin).clamped();
+        return OKLab{s.r, s.g, s.b};
+    };
+    auto oklab_to_blur = [](const OKLab& o) -> OKLab {
+        auto lin = color_space::oklab_to_linear(o);
+        auto s = color_space::linear_to_srgb(lin).clamped();
+        return OKLab{s.r, s.g, s.b};
+    };
+    const OKLab* last_pal_data = nullptr;
+    std::size_t  last_pal_size = 0;
+    std::vector<OKLab> pal_blur_cache;
+    auto get_pal_blur = [&](std::span<const OKLab> pal) -> std::span<const OKLab> {
+        if (pal.data() != last_pal_data || pal.size() != last_pal_size) {
+            pal_blur_cache.assign(pal.size(), OKLab{});
+            for (std::size_t i = 0; i < pal.size(); ++i)
+                pal_blur_cache[i] = oklab_to_blur(pal[i]);
+            last_pal_data = pal.data();
+            last_pal_size = pal.size();
+        }
+        return std::span<const OKLab>(pal_blur_cache);
+    };
+
+    // Build source + halftone buffers in blur space.
     std::vector<OKLab> source_lab(w * h);
     std::vector<OKLab> halftone_lab(w * h);
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
             std::size_t idx = y * w + x;
-            source_lab[idx] = color_space::linear_to_oklab(image[x, y]);
+            source_lab[idx] = to_blur_space(image[x, y]);
             auto pal = palette_for_pixel(x, y);
-            halftone_lab[idx] = pal[indices[idx]];
+            auto pal_b = get_pal_blur(pal);
+            halftone_lab[idx] = pal_b[indices[idx]];
         }
     }
 
@@ -2555,6 +2608,7 @@ void apply_dbs_post_pass(
                 std::size_t pix = y * w + x;
                 std::uint8_t cur_idx = indices[pix];
                 auto pal = palette_for_pixel(x, y);
+                auto pal_b = get_pal_blur(pal);
 
                 // Current cost over the 5×5 window.
                 float current_cost = 0.0f;
@@ -2572,10 +2626,10 @@ void apply_dbs_post_pass(
 
                 std::size_t best_idx = cur_idx;
                 float best_delta = 0.0f;
-                for (std::size_t pi = 0; pi < pal.size(); ++pi) {
+                for (std::size_t pi = 0; pi < pal_b.size(); ++pi) {
                     if (pi == cur_idx) continue;
-                    OKLab old_pal = pal[cur_idx];
-                    OKLab new_pal = pal[pi];
+                    OKLab old_pal = pal_b[cur_idx];
+                    OKLab new_pal = pal_b[pi];
                     OKLab delta_h{
                         new_pal.L - old_pal.L,
                         new_pal.a - old_pal.a,
@@ -2608,8 +2662,8 @@ void apply_dbs_post_pass(
                 }
 
                 if (best_idx != cur_idx) {
-                    OKLab old_pal = pal[cur_idx];
-                    OKLab new_pal = pal[best_idx];
+                    OKLab old_pal = pal_b[cur_idx];
+                    OKLab new_pal = pal_b[best_idx];
                     OKLab delta_h{
                         new_pal.L - old_pal.L,
                         new_pal.a - old_pal.a,
