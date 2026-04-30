@@ -1648,20 +1648,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::span<Color3f>(base_pal.colors.data(), 32),
                 image->pixels(),
                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
-            // 1-opt local search ("Extra OCS palette optimization").
-            // ~1.5-2s on a 320x180 image; user accepts the cost on
-            // the plain-EHB path because the quality lift (+5 over
-            // PNN+refine alone) crosses ham_convert.
-            palette::extra_ehb_optimization(
-                std::span<Color3f>(base_pal.colors.data(), 32),
-                image->pixels(),
-                /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
-                /*max_passes=*/2,
-                [](std::size_t n,
-                   std::function<void(std::size_t)> f) {
-                    pipeline::parallel_for(n, std::move(f));
-                },
-                options.on_progress);
         }
 
         // Build full 64-color EHB palette (32 base + 32 half-bright)
@@ -1685,7 +1671,42 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
                 if (tmask[i]) dither_result.indices[i] = 0;
         } else {
-            dither_result = dither::apply(*image, ehb_pal.colors, dith);
+            // diffuse_raw_buffer + pick_palette_index_with_ostro path —
+            // same dither used by EHB+CAP / SCAP+EHB. Bisect against
+            // dither::apply on a fixed 64-colour EHB palette showed it
+            // produces +28 SSIMULACRA2 for free (encode_copper with 0
+            // changes/line measured 63.76 vs plain EHB's apply path
+            // 35.79 on the same palette). The diffuse_raw_buffer path
+            // pairs with pick_palette_index_with_ostro's
+            // second-nearest tracking which the legacy `apply` route
+            // doesn't expose.
+            std::vector<color_space::OKLab> pal_lab(ehb_pal.colors.size());
+            for (std::size_t i = 0; i < ehb_pal.colors.size(); ++i)
+                pal_lab[i] = color_space::linear_to_oklab(ehb_pal.colors[i]);
+            auto w = image->width();
+            std::vector<std::uint8_t> indices(w * image->height(), 0);
+            float total_err = dither::diffuse_raw_buffer(
+                *image, dith,
+                [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+                    std::size_t k = 0;
+                    color_space::OKLab chosen{};
+                    float thr = dither::pick_palette_index_with_ostro(
+                        dith.method, target, pal_lab, x, y,
+                        dith.strength, /*k_min=*/0, k, chosen);
+                    indices[y * w + x] = static_cast<std::uint8_t>(k);
+                    return {chosen, thr};
+                });
+            if (dith.method == dither::Method::dbs) {
+                dither::apply_dbs_post_pass(
+                    *image, indices,
+                    [&](std::size_t /*x*/, std::size_t /*y*/)
+                        -> std::span<const color_space::OKLab> {
+                        return pal_lab;
+                    });
+            }
+            dither_result.indices = std::move(indices);
+            dither_result.total_error = total_err;
         }
 
         // Apply EHB pin-index swaps. Pins act on the BASE 32 only; half-brite
