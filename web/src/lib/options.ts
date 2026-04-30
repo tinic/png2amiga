@@ -194,11 +194,12 @@ export const CHIPSETS: ChipsetOption[] = [
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
+// Default is Colodore (measurement-based; matches png2c64).
 export interface C64PaletteOption { value: string; label: string }
 export const C64_PALETTES: C64PaletteOption[] = [
-  { value: 'pepto',    label: 'Pepto (default)' },
+  { value: 'colodore', label: 'Colodore (default)' },
+  { value: 'pepto',    label: 'Pepto' },
   { value: 'vice',     label: 'VICE emulator' },
-  { value: 'colodore', label: 'Colodore' },
   { value: 'deekay',   label: 'Deekay' },
   { value: 'godot',    label: 'Godot' },
   { value: 'c64wiki',  label: 'C64 Wiki' },
@@ -419,7 +420,7 @@ export function defaultOptions(): Options {
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
     ...CGA_TEXT_DEFAULTS,
-    c64Palette: 'pepto',
+    c64Palette: 'colodore',
     ...sliderDefaults(),
   }
   return opts

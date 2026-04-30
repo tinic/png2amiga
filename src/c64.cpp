@@ -16,7 +16,7 @@ Palette parse_palette(std::string_view s) noexcept {
     if (s == "godot")    return Palette::godot;
     if (s == "c64wiki" || s == "wiki") return Palette::c64wiki;
     if (s == "levy")     return Palette::levy;
-    return Palette::pepto;
+    return Palette::colodore;
 }
 
 std::string_view palette_name(Palette p) noexcept {

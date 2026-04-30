@@ -523,7 +523,7 @@ struct Config {
 
     // CGA-specific options
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
-    std::string c64_palette = "pepto"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
+    std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
     int cga_bg = 0;                    // background color index (0..15 in master palette)
     bool cga_auto_palette = true;      // try all palettes, pick lowest-error
 
@@ -689,8 +689,9 @@ void print_usage() {
         "                                  p1-low, p1-high (default: auto-pick best)\n"
         "  --cga-bg <0..15>                CGA background color (master palette index,\n"
         "                                  default: 0/black)\n"
-        "  --c64-palette <p>               VIC-II palette: pepto (default), vice,\n"
-        "                                  colodore, deekay, godot, c64wiki, levy\n"
+        "  --c64-palette <p>               VIC-II palette: pepto, vice,\n"
+        "                                  colodore (default), deekay, godot,\n"
+        "                                  c64wiki, levy\n"
         "\n"
         "Dithering:\n"
         "  --dither <method>\n"

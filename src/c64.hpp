@@ -23,7 +23,8 @@ namespace png2amiga::c64 {
 
 // Available VIC-II palettes. The C64's analogue composite output doesn't
 // have a unique sRGB ground-truth; pick the one whose look you prefer.
-// Default: pepto. Names match png2c64.
+// Default: colodore (measurement-based, matches png2c64). Names match
+// png2c64.
 enum class Palette : unsigned char {
     pepto,
     vice,
@@ -60,7 +61,7 @@ struct EncodeResult {
 //      and the Yliluoma / Knoll / opt-checker family.
 Result<EncodeResult> encode_multicolor(
     const Image& image,
-    Palette pal = Palette::pepto,
+    Palette pal = Palette::colodore,
     const dither::Settings& settings = {});
 
 }  // namespace png2amiga::c64

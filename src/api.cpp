@@ -840,20 +840,29 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // The encoder expects exactly screen_w × screen_h. With native_par,
         // compute_target_dims may return a smaller letterboxed size — pad
         // to the full hardware buffer with black (matching the SNES /
-        // Genesis convention).
+        // Genesis convention). Pad the transparency mask in lock-step:
+        // the inserted border pixels are NOT in the source so they get
+        // marked transparent (true).
         constexpr std::size_t kCW = 160, kCH = 200;
         if (image->width() != kCW || image->height() != kCH) {
+            std::size_t old_w = image->width(), old_h = image->height();
+            std::size_t ox = (kCW > old_w) ? (kCW - old_w) / 2 : 0;
+            std::size_t oy = (kCH > old_h) ? (kCH - old_h) / 2 : 0;
+            std::size_t cw = std::min(old_w, kCW);
+            std::size_t ch = std::min(old_h, kCH);
             Image padded(kCW, kCH);
-            std::size_t ox = (kCW > image->width())
-                ? (kCW - image->width()) / 2 : 0;
-            std::size_t oy = (kCH > image->height())
-                ? (kCH - image->height()) / 2 : 0;
-            std::size_t cw = std::min(image->width(), kCW);
-            std::size_t ch = std::min(image->height(), kCH);
             for (std::size_t y = 0; y < ch; ++y)
                 for (std::size_t x = 0; x < cw; ++x)
                     padded[ox + x, oy + y] = (*image)[x, y];
             *image = std::move(padded);
+            if (has_transparency && tmask.size() == old_w * old_h) {
+                std::vector<bool> new_mask(kCW * kCH, true);
+                for (std::size_t y = 0; y < ch; ++y)
+                    for (std::size_t x = 0; x < cw; ++x)
+                        new_mask[(oy + y) * kCW + (ox + x)] =
+                            tmask[y * old_w + x];
+                tmask = std::move(new_mask);
+            }
         }
         auto pal_choice = c64::parse_palette(options.c64_palette);
         dither::Settings dith;

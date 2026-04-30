@@ -251,11 +251,13 @@ struct Options {
     // pre-dither stage when blur is selected.
     std::string cga_text_metric = "blur";
 
-    // C64 / VIC-II palette selector. One of: pepto (default), vice,
-    // colodore, deekay, godot, c64wiki, levy. Only affects c64-* modes;
+    // C64 / VIC-II palette selector. One of: pepto, vice, colodore
+    // (default), deekay, godot, c64wiki, levy. Only affects c64-* modes;
     // ignored everywhere else. The VIC-II palette has no unique sRGB
     // ground-truth — different tools/scenes prefer different RGB tables.
-    std::string c64_palette = "pepto";
+    // Colodore is the default (matches png2c64) — it's measurement-based
+    // so colours track real CRT output more closely than other tables.
+    std::string c64_palette = "colodore";
 
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
