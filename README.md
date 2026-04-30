@@ -17,7 +17,6 @@ with `ia16-elf-gcc` into a 16-bit real-mode viewer.
 
 **[Try it in your browser at png2amiga.app](https://www.png2amiga.app)** —
 live preview via WebAssembly, server-side compile to Amiga executables.
-**Source on GitHub:** [github.com/tinic/png2amiga](https://github.com/tinic/png2amiga).
 
 [![png2amiga.app web interface](docs/screenshot.png)](https://www.png2amiga.app)
 
