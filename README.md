@@ -254,19 +254,19 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
-| **png2amiga** | **EHB + SCAP + best**       | 32.90     | **76.00**   |    62.11 |
-| png2amiga   | HAM6 + CAP + best                 | 30.91     | 69.32       |    15.24 |
-| png2amiga   | HAM6 + CAP                        | 30.31     | 65.71       |     0.34 |
-| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |    16.21 |
-| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |    66.73 |
-| png2amiga   | HAM6 + best (no copper)           | 29.77     | 62.06       |    31.22 |
-| png2amiga   | HAM6 (no copper)                  | 29.89     | 61.81       |     0.31 |
-| ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.67     | 57.91       |     4.05 |
-| ham_convert | EHB (`dither_fs`)                 | 30.18     | 57.78       |     4.05 |
-| abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |     0.73 |
-| png2amiga   | EHB + best (no copper)            | 28.53     | 48.45       |     8.21 |
-| abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.23 |
-| png2amiga   | EHB (no copper)                   | 28.88     | 40.30       |     0.10 |
+| **png2amiga** | **HAM6 + CAP + best**       | 30.94     | **69.15**   |    13.72 |
+| png2amiga   | HAM6 + CAP                        | 30.32     | 65.41       |     0.34 |
+| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |    18.18 |
+| png2amiga   | HAM6 + best (no copper)           | 29.75     | 62.44       |    27.47 |
+| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |    70.63 |
+| png2amiga   | HAM6 (no copper)                  | 29.95     | 62.22       |     0.29 |
+| png2amiga   | EHB + SCAP + best                 | 30.01     | 58.18       |    52.70 |
+| ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.67     | 57.91       |     4.07 |
+| ham_convert | EHB (`dither_fs`)                 | 30.18     | 57.78       |     4.06 |
+| abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |     0.67 |
+| png2amiga   | EHB + best (no copper)            | 28.53     | 48.45       |     6.86 |
+| abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.21 |
+| png2amiga   | EHB (no copper)                   | 28.83     | 40.54       |     0.10 |
 
 The harness lives at `tools/shootout/`:
 

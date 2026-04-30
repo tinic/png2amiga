@@ -2143,15 +2143,19 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         res.max_visible_moves_per_line = vis_max;
     }
     res.line_moves = std::move(line_moves);
-    // No post-render OCS snap. EHB halfbrite values land at NON-OCS-grid
-    // positions (halve(0x11) = 0x09, halve(0x22) = 0x12, etc.) — these
-    // are exactly the "small dark variations" the user observed losing.
-    // The previous quantize_to_ocs call collapsed every halfbrite to
-    // its nearest base-OCS level, halving distinct dark colors used
-    // (15 → 8 on chuck31 nodither). The picker has already rendered
-    // each pixel to the correct halfbrite-derived linear value, and the
-    // bitplane encoder uses indices, not pixel colors — so re-snapping
-    // the preview was pure quality loss with no encoding benefit.
+    // Snap rendered pixels to OCS 12-bit. The previous "no-snap"
+    // version was based on a misread of the hardware: halve(0x11)
+    // is NOT 0x09 (sRGB / 2), it's 0x00 (nibble 1 >> 1 = nibble 0,
+    // 8-bit 0x00). The Amiga DAC takes 4-bit nibbles per channel
+    // and halve is `nibble >> 1`, not `value * 0.5`. Producing
+    // half-brite values like 0x09 (which 38% of EHB+SCAP+best
+    // output pixels were sitting at) gives an inflated SSIMULACRA2
+    // reading against pixels real hardware cannot display. The
+    // collapse from "15 distinct darks" to ~8 wasn't the snap
+    // throwing quality away — it was the snap reflecting what
+    // hardware actually shows. Restoring the snap aligns the
+    // preview/score with what the chip emits.
+    for (auto& p : preview.pixels()) p = palette::quantize_to_ocs(p);
     res.rendered = std::move(preview);
     return res;
 }
