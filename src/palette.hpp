@@ -550,17 +550,6 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
     if (base_colors.size() < 32 || image_pixels.empty()) return;
     constexpr std::size_t kBaseN = 32;
 
-    // Pre-bake pixel sRGB views (the centroid math lives in sRGB).
-    std::vector<Color3f> pix_srgb(image_pixels.size());
-    for (std::size_t i = 0; i < image_pixels.size(); ++i) {
-        auto s = color_space::linear_to_srgb(image_pixels[i]).clamped();
-        pix_srgb[i] = s;
-    }
-
-    auto snap_one = [&](Color3f c) -> Color3f {
-        return snap_to_ocs ? quantize_to_ocs(c) : c;
-    };
-
     auto build_full = [&](std::span<const Color3f> base) {
         std::array<Color3f, 64> full{};
         for (std::size_t i = 0; i < kBaseN; ++i) full[i] = base[i];
@@ -572,13 +561,38 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
         return color_space::linear_to_oklab(c);
     };
 
+    // OCS candidate set: when snap_to_ocs is true, the joint MSE
+    // minimum has to be one of 4096 displayable colours. Brute-force
+    // over all of them per slot, evaluating joint OKLab MSE with the
+    // hardware-correct half_brite (per-nibble truncating shift). For
+    // AGA (24-bit) we fall back to the closed-form sRGB centroid
+    // (4·B+2·H)/(4|B|+|H|) since the candidate space is too large.
+    //
+    // OKLab table for both base candidates and their hardware halves
+    // is built once per call (4096 × 2 entries). 32 slots × 4096
+    // candidates × ~10 ops ≈ 1M ops per refine iteration — trivial.
+    std::array<color_space::OKLab, 4096> ocs_lab{};
+    std::array<color_space::OKLab, 4096> ocs_halve_lab{};
+    if (snap_to_ocs) {
+        for (std::uint16_t code = 0; code < 4096; ++code) {
+            Color3f c = ocs_to_linear(code);
+            ocs_lab[code] = oklab_of(c);
+            ocs_halve_lab[code] = oklab_of(half_brite(c));
+        }
+    }
+
     for (int it = 0; it < max_iters; ++it) {
         auto full_pal = build_full(base_colors);
         std::array<color_space::OKLab, 64> full_oklab{};
         for (std::size_t i = 0; i < 64; ++i) full_oklab[i] = oklab_of(full_pal[i]);
 
-        std::array<Color3f, kBaseN> sum_b{}, sum_h{};
-        std::array<std::uint32_t, kBaseN> cnt_b{}, cnt_h{};
+        // Per-slot OKLab sums and counts for the base bucket B_k
+        // (pixels whose nearest is base[k]) and the half-brite bucket
+        // H_k (pixels whose nearest is halve(base[k])).
+        std::array<color_space::OKLab, kBaseN> sum_B_lab{}, sum_H_lab{};
+        std::array<std::uint32_t, kBaseN> cnt_B{}, cnt_H{};
+        // sRGB sums kept for the AGA fallback path.
+        std::array<Color3f, kBaseN> sum_B_s{}, sum_H_s{};
 
         for (std::size_t i = 0; i < image_pixels.size(); ++i) {
             auto t = oklab_of(image_pixels[i]);
@@ -590,33 +604,74 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
                 float d  = dL * dL + da * da + db * db;
                 if (d < best_d) { best_d = d; best = k; }
             }
-            auto& s = pix_srgb[i];
+            auto s = color_space::linear_to_srgb(image_pixels[i]).clamped();
             if (best < kBaseN) {
-                sum_b[best].r += s.r; sum_b[best].g += s.g; sum_b[best].b += s.b;
-                cnt_b[best] += 1;
+                sum_B_lab[best].L += t.L;
+                sum_B_lab[best].a += t.a;
+                sum_B_lab[best].b += t.b;
+                sum_B_s[best].r += s.r;
+                sum_B_s[best].g += s.g;
+                sum_B_s[best].b += s.b;
+                cnt_B[best] += 1;
             } else {
                 auto k = best - kBaseN;
-                sum_h[k].r += s.r; sum_h[k].g += s.g; sum_h[k].b += s.b;
-                cnt_h[k] += 1;
+                sum_H_lab[k].L += t.L;
+                sum_H_lab[k].a += t.a;
+                sum_H_lab[k].b += t.b;
+                sum_H_s[k].r += s.r;
+                sum_H_s[k].g += s.g;
+                sum_H_s[k].b += s.b;
+                cnt_H[k] += 1;
             }
         }
 
         float drift = 0.0f;
         for (std::size_t k = 0; k < kBaseN; ++k) {
-            std::uint32_t denom = 4u * cnt_b[k] + cnt_h[k];
-            if (denom == 0) continue;
-            float fd = static_cast<float>(denom);
-            Color3f new_srgb{
-                (4.0f * sum_b[k].r + 2.0f * sum_h[k].r) / fd,
-                (4.0f * sum_b[k].g + 2.0f * sum_h[k].g) / fd,
-                (4.0f * sum_b[k].b + 2.0f * sum_h[k].b) / fd,
-            };
-            // Clamp into legal sRGB then bring back to linear.
-            new_srgb.r = std::clamp(new_srgb.r, 0.0f, 1.0f);
-            new_srgb.g = std::clamp(new_srgb.g, 0.0f, 1.0f);
-            new_srgb.b = std::clamp(new_srgb.b, 0.0f, 1.0f);
-            Color3f new_lin = color_space::srgb_to_linear(new_srgb);
-            new_lin = snap_one(new_lin);
+            if (cnt_B[k] + cnt_H[k] == 0) continue;
+            Color3f new_lin{};
+            if (snap_to_ocs) {
+                // Joint OKLab MSE expanded:
+                //   Σ_{i∈B} ||c - p_i||² + Σ_{i∈H} ||h - p_i||²
+                // = |B|·||c||² - 2 c·Σ_B + Σ||p_B||²
+                //   + |H|·||h||² - 2 h·Σ_H + Σ||p_H||²
+                // Drop the constant Σ||p_i||² terms; argmin over the
+                // remaining terms. Picks the OCS code whose (base,
+                // halve(base)) pair best fits the joint cluster.
+                float fcB = static_cast<float>(cnt_B[k]);
+                float fcH = static_cast<float>(cnt_H[k]);
+                std::uint16_t best_code = 0;
+                float best_cost = std::numeric_limits<float>::infinity();
+                for (std::uint16_t code = 0; code < 4096; ++code) {
+                    auto& cl = ocs_lab[code];
+                    auto& hl = ocs_halve_lab[code];
+                    float cost_B = fcB * (cl.L*cl.L + cl.a*cl.a + cl.b*cl.b)
+                                 - 2.0f * (cl.L*sum_B_lab[k].L
+                                         + cl.a*sum_B_lab[k].a
+                                         + cl.b*sum_B_lab[k].b);
+                    float cost_H = fcH * (hl.L*hl.L + hl.a*hl.a + hl.b*hl.b)
+                                 - 2.0f * (hl.L*sum_H_lab[k].L
+                                         + hl.a*sum_H_lab[k].a
+                                         + hl.b*sum_H_lab[k].b);
+                    float cost = cost_B + cost_H;
+                    if (cost < best_cost) { best_cost = cost; best_code = code; }
+                }
+                new_lin = ocs_to_linear(best_code);
+            } else {
+                // AGA path: closed-form sRGB centroid (assumes halve =
+                // b/2; valid for AGA's 8-bit DAC where halve =
+                // byte >> 1 ≈ byte/2 with rounding).
+                std::uint32_t denom = 4u * cnt_B[k] + cnt_H[k];
+                float fd = static_cast<float>(denom);
+                Color3f new_srgb{
+                    (4.0f * sum_B_s[k].r + 2.0f * sum_H_s[k].r) / fd,
+                    (4.0f * sum_B_s[k].g + 2.0f * sum_H_s[k].g) / fd,
+                    (4.0f * sum_B_s[k].b + 2.0f * sum_H_s[k].b) / fd,
+                };
+                new_srgb.r = std::clamp(new_srgb.r, 0.0f, 1.0f);
+                new_srgb.g = std::clamp(new_srgb.g, 0.0f, 1.0f);
+                new_srgb.b = std::clamp(new_srgb.b, 0.0f, 1.0f);
+                new_lin = color_space::srgb_to_linear(new_srgb);
+            }
             float dr = base_colors[k].r - new_lin.r;
             float dg = base_colors[k].g - new_lin.g;
             float db = base_colors[k].b - new_lin.b;
