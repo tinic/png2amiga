@@ -150,12 +150,30 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
     std::vector<float> best_dist(entries.size(),
                                  std::numeric_limits<float>::max());
 
+    // Track which OCS codes are already in the palette so the greedy
+    // can skip duplicates (slot 0 + slot 1 both landing on 0x000 was
+    // a real symptom on low-chroma sources).
+    std::array<bool, 4096> picked{};
+
+    auto is_gray_code = [](std::uint16_t c) {
+        int r = (c >> 8) & 0xF, g = (c >> 4) & 0xF, b = c & 0xF;
+        return r == g && g == b;
+    };
+
     for (std::size_t k = 0; k < max_colors; ++k) {
-        // Try all 4096 OCS colors, pick the one that reduces total error most
+        // Try all unpicked 4096 OCS colors. Tie-break: when two
+        // candidates yield equal total error, prefer the gray-axis
+        // code (R=G=B). Without this, ties on near-gray content are
+        // resolved by the 0..4095 traversal order, which surfaces
+        // chromatic codes like 0x001 = (0,0,17) ahead of grays — the
+        // pixels aren't tinted but the palette becomes a striped
+        // mess of one-nibble-off grays.
         float best_total = std::numeric_limits<float>::max();
         std::uint16_t best_ocs = 0;
+        bool best_is_gray = false;
 
         for (std::uint16_t candidate = 0; candidate < 4096; ++candidate) {
+            if (picked[candidate]) continue;
             auto cand_lab = lut.oklab[candidate];
             float total = 0.0f;
 
@@ -165,13 +183,36 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
                 total += effective * static_cast<float>(entries[i].weight);
             }
 
-            if (total < best_total) {
+            bool cand_gray = is_gray_code(candidate);
+            constexpr float kTieEps = 1e-6f;
+            bool strictly_better = total < best_total - kTieEps;
+            bool tied_and_gray = !strictly_better &&
+                                 total < best_total + kTieEps &&
+                                 cand_gray && !best_is_gray;
+            if (strictly_better || tied_and_gray) {
                 best_total = total;
                 best_ocs = candidate;
+                best_is_gray = cand_gray;
             }
         }
 
+        // Stop adding fresh codes once the palette already covers
+        // the histogram exactly. Otherwise the greedy keeps picking
+        // arbitrary unpicked OCS codes (in 0..4095 order) for no
+        // benefit, surfacing chromatic phantoms like (0,0,17) on
+        // gray-only sources. Pad remaining slots with duplicates of
+        // the last-picked colour — the encoder's dither sees only
+        // the unique entries either way.
+        constexpr float kSaturatedEps = 1e-9f;
+        if (best_total < kSaturatedEps && k > 0) {
+            for (std::size_t kk = k; kk < max_colors; ++kk) {
+                palette_ocs[kk] = palette_ocs[k - 1];
+            }
+            break;
+        }
+
         palette_ocs[k] = best_ocs;
+        picked[best_ocs] = true;
 
         // Update per-entry best distances with the newly added color
         auto new_lab = lut.oklab[best_ocs];
