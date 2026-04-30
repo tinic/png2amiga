@@ -76,4 +76,41 @@ Result<EncodeResult> encode_hires(
     Palette pal = Palette::colodore,
     const dither::Settings& settings = {});
 
+// Encode a 160×200 image to c64-FLI (Flexible Line Interpretation):
+// multicolor with per-row (c1, c2) screen colours within each 4×8
+// cell + per-cell color_ram (c3) + global background. The per-row
+// swap is achieved at runtime by a raster-IRQ that reloads the
+// screen-RAM pointer 8× per cell.
+//
+// EncodeResult layout (raw_frame is what api.cpp packs):
+//   bitmap      8000 bytes (40 × 25 × 8 — same as multicolor)
+//   screen_ram  8000 bytes (8 screen RAMs × 1000 bytes each, one
+//               per cell-row)
+//   color_ram   1000 bytes (c3 per cell)
+//   bg_color    global background colour (currently fixed at 0)
+//
+// Per-cell brute force: 16 (color_ram) × 8 (rows) × C(15, 2) = 16 ×
+// 8 × 105 ≈ 13 K row evaluations per cell. ~13 M for a 1000-cell
+// image. Bg is fixed to 0 for the proof-of-fit; a global sweep is
+// future work.
+Result<EncodeResult> encode_fli(
+    const Image& image,
+    Palette pal = Palette::colodore,
+    const dither::Settings& settings = {});
+
+// Encode a 320×200 image to c64-AFLI: hires with per-row (c0, c1)
+// pair within each 8×8 cell. The per-row pair lives in the same
+// 8 × 1000-byte screen-RAM array FLI uses, but with the hires
+// layout (1 bit per pixel, no shared bg / color_ram). Per-cell
+// brute force: 8 rows × C(16, 2) = 8 × 120 = 960 row evaluations.
+//
+// EncodeResult layout:
+//   bitmap      8000 bytes
+//   screen_ram  8000 bytes (8 screen RAMs)
+//   color_ram   empty
+Result<EncodeResult> encode_afli(
+    const Image& image,
+    Palette pal = Palette::colodore,
+    const dither::Settings& settings = {});
+
 }  // namespace png2amiga::c64

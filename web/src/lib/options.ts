@@ -154,10 +154,15 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
   // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
-  // constraints. FLI / sprite / charset modes follow on the merge branch.
+  // constraints. Sprite / charset / petscii modes follow on the
+  // merge branch.
   { value: 'c64-hires',      label: 'Hires (320x200, 2/cell)',
                              chipset: 'c64' },
   { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
+                             chipset: 'c64' },
+  { value: 'c64-fli',        label: 'FLI (multicolor + per-row screen)',
+                             chipset: 'c64' },
+  { value: 'c64-afli',       label: 'AFLI (hires + per-row screen)',
                              chipset: 'c64' },
 ]
 
@@ -511,15 +516,15 @@ const MODE_PAR: Record<string, number> = {
   'genesis-h40':    0.933,
   'genesis-h32-sh': 1.167,
   'genesis-h40-sh': 0.933,
-  // C64 hires: 320×200, 1:1 hardware pixels. PAL CRT VIC-II pixel
-  // aspect = 0.936 (slightly tall).
-  'c64-hires': 0.936,
-  // C64 multicolor: 160 logical → 320 hardware (2× h-doubling) ×
-  // 200 vertical. On a PAL CRT each hardware pixel is 0.936:1
-  // (slightly tall). Per-LOGICAL-pixel display ratio = 2 × 0.936 =
-  // 1.872 (wide). PAL is the default; NTSC users would want a
-  // separate mode entry.
-  'c64-multicolor': 1.872,
+  // C64 hires / AFLI: encoder emits 320×200 native (1:1). Display
+  // ratio = PAL VIC-II hardware pixel = 0.936:1.
+  'c64-hires':       0.936,
+  'c64-afli':        0.936,
+  // C64 multicolor / FLI: encoder emits 160×200 logical (each
+  // logical pixel = 2 hardware pixels). Per-LOGICAL-pixel display
+  // ratio = 2 × 0.936 = 1.872 (wide).
+  'c64-multicolor':  1.872,
+  'c64-fli':         1.872,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
@@ -553,12 +558,16 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'ega-640':         { sx: 1, sy: 2 },
   'cga-640':         { sx: 1, sy: 2 },
   'cga-text80x100':  { sx: 1, sy: 2 },
-  // C64 hires: 320×200 native. 2× backing scale for visibility.
+  // C64 modes: backing-canvas scale before PAR-aware CSS stretch.
+  //   hires / AFLI: encoder is 320×200 native; 2×2 → 640×400 backing.
+  //   multicolor / FLI: encoder is 160×200 logical; 4×2 → 640×400
+  //     backing (the 4× horizontal includes the 2:1 hardware-pixel
+  //     doubling baked into multicolor display).
+  // Both pairs land at the same physical canvas size.
   'c64-hires':       { sx: 2, sy: 2 },
-  // C64 multicolor: 160×200 logical buffer. 4× backing scale so the
-  // rendered preview is large enough to actually see (the 1.872 PAR
-  // CSS-stretch is applied separately at display time).
+  'c64-afli':        { sx: 2, sy: 2 },
   'c64-multicolor':  { sx: 4, sy: 2 },
+  'c64-fli':         { sx: 4, sy: 2 },
 }
 
 // Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for

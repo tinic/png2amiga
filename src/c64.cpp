@@ -398,4 +398,274 @@ Result<EncodeResult> encode_hires(const Image& image, Palette pal,
     return res;
 }
 
+// ---------------------------------------------------------------------------
+// c64-FLI: 160×200 multicolor + per-row (c1, c2) screen colours
+//          within each 4×8 cell + per-cell color_ram (c3) + global bg.
+// ---------------------------------------------------------------------------
+
+Result<EncodeResult> encode_fli(const Image& image, Palette pal,
+                                 const dither::Settings& settings) {
+    constexpr std::size_t W = kCols * kCellW;  // 160
+    constexpr std::size_t H = kRows * kCellH;  // 200
+
+    if (image.width() != W || image.height() != H) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("c64::encode_fli: expected {}x{} input, got {}x{}",
+                        W, H, image.width(), image.height()),
+        }};
+    }
+
+    const auto& pal_lin = palette_linear(pal);
+    const auto& pal_lab = palette_oklab(pal);
+
+    std::vector<color_space::OKLab> src_lab(W * H);
+    for (std::size_t y = 0; y < H; ++y)
+        for (std::size_t x = 0; x < W; ++x)
+            src_lab[y * W + x] = color_space::linear_to_oklab(image[x, y]);
+
+    constexpr std::uint8_t bg = 0;  // global bg fixed at black for now
+
+    EncodeResult res;
+    res.rendered = Image(W, H);        // 160×200 logical
+    res.bitmap.assign(kRows * kCols * kCellH, 0);   // 8000 bytes
+    res.screen_ram.assign(kCellH * kRows * kCols, 0);  // 8000 bytes (8 RAMs)
+    res.color_ram.assign(kRows * kCols, 0);         // 1000 bytes
+    res.bg_color = bg;
+
+    // Pass 1: per-cell, per-row brute force.
+    //   For each candidate color_ram value cr ∈ {0..15} \ {bg}:
+    //     For each of 8 rows: try every (c1, c2) pair from
+    //       {0..15} \ {bg, cr}, score row error against the row's
+    //       4 pixels under the 4-colour set {bg, c1, c2, cr}.
+    //     Sum row errors → cell error for this cr.
+    //   Pick the cr that minimises total cell error, plus its
+    //   row-best (c1, c2) pairs.
+    //
+    // Per-cell quad layout for pass 2: cell_quads[cell][row] = {bg, c1, c2, cr}.
+    std::vector<std::array<std::array<std::uint8_t, 4>, kCellH>>
+        cell_quads(kRows * kCols);
+    std::vector<std::uint8_t> cell_cr(kRows * kCols, 0);
+
+    for (std::size_t cy = 0; cy < kRows; ++cy) {
+        for (std::size_t cx = 0; cx < kCols; ++cx) {
+            std::size_t cell_idx = cy * kCols + cx;
+
+            float best_total = std::numeric_limits<float>::infinity();
+            std::uint8_t best_cr = 0;
+            std::array<std::array<std::uint8_t, 4>, kCellH> best_rows{};
+
+            for (std::uint8_t cr = 0; cr < 16; ++cr) {
+                if (cr == bg) continue;
+                float total = 0.0f;
+                std::array<std::array<std::uint8_t, 4>, kCellH> row_quads{};
+                for (std::size_t py = 0; py < kCellH; ++py) {
+                    // Gather row pixels.
+                    std::array<color_space::OKLab, kCellW> row_lab{};
+                    for (std::size_t px = 0; px < kCellW; ++px) {
+                        row_lab[px] = src_lab[(cy * kCellH + py) * W +
+                                              (cx * kCellW + px)];
+                    }
+                    float best_row = std::numeric_limits<float>::infinity();
+                    std::array<std::uint8_t, 4> best_row_quad{bg, 0, 0, cr};
+                    for (std::uint8_t c1 = 0; c1 < 16; ++c1) {
+                        if (c1 == bg || c1 == cr) continue;
+                        for (std::uint8_t c2 = static_cast<std::uint8_t>(c1 + 1);
+                             c2 < 16; ++c2) {
+                            if (c2 == bg || c2 == cr) continue;
+                            std::array<std::uint8_t, 4> q{bg, c1, c2, cr};
+                            float e = cell_error_for_quad(
+                                std::span<const color_space::OKLab>(row_lab),
+                                q, pal_lab, nullptr);
+                            if (e < best_row) {
+                                best_row = e;
+                                best_row_quad = q;
+                            }
+                        }
+                    }
+                    total += best_row;
+                    row_quads[py] = best_row_quad;
+                }
+                if (total < best_total) {
+                    best_total = total;
+                    best_cr = cr;
+                    best_rows = row_quads;
+                }
+            }
+
+            cell_cr[cell_idx] = best_cr;
+            cell_quads[cell_idx] = best_rows;
+        }
+    }
+
+    // Pass 2: per-pixel dither using the cell's row-specific 4-colour set.
+    std::vector<std::uint8_t> indices(W * H, 0);
+    auto pick = [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+        std::size_t cy = y / kCellH;
+        std::size_t cx = x / kCellW;
+        std::size_t py = y % kCellH;
+        const auto& quad = cell_quads[cy * kCols + cx][py];
+        std::array<color_space::OKLab, 4> cp{
+            pal_lab[quad[0]], pal_lab[quad[1]],
+            pal_lab[quad[2]], pal_lab[quad[3]],
+        };
+        std::size_t chosen_index = 0;
+        color_space::OKLab chosen{};
+        float thr = dither::pick_palette_index_with_ostro(
+            settings.method, target,
+            std::span<const color_space::OKLab>(cp),
+            x, y, settings.strength, /*k_min=*/0,
+            chosen_index, chosen);
+        indices[y * W + x] = static_cast<std::uint8_t>(chosen_index);
+        return {chosen, thr};
+    };
+    (void)dither::diffuse_raw_buffer(image, settings, pick);
+
+    // Pack bitmap (40×25×8) + 8 screen RAMs + color RAM, render preview.
+    for (std::size_t cy = 0; cy < kRows; ++cy) {
+        for (std::size_t cx = 0; cx < kCols; ++cx) {
+            std::size_t cell_idx = cy * kCols + cx;
+            res.color_ram[cell_idx] = static_cast<std::uint8_t>(
+                cell_cr[cell_idx] & 0xF);
+            for (std::size_t py = 0; py < kCellH; ++py) {
+                const auto& quad = cell_quads[cell_idx][py];
+                // Screen RAM[py][cell_idx] = upper nibble c1, lower c2.
+                res.screen_ram[py * kRows * kCols + cell_idx] =
+                    static_cast<std::uint8_t>(
+                        ((quad[1] & 0xF) << 4) | (quad[2] & 0xF));
+                std::uint8_t row_byte = 0;
+                for (std::size_t px = 0; px < kCellW; ++px) {
+                    auto x = cx * kCellW + px;
+                    auto y = cy * kCellH + py;
+                    auto q = static_cast<std::uint8_t>(
+                        indices[y * W + x] & 0x3);
+                    row_byte = static_cast<std::uint8_t>(
+                        (row_byte << 2) | q);
+                    res.rendered[x, y] = pal_lin[quad[q]];
+                }
+                res.bitmap[cell_idx * kCellH + py] = row_byte;
+            }
+        }
+    }
+
+    return res;
+}
+
+// ---------------------------------------------------------------------------
+// c64-AFLI: 320×200 hires + per-row (c0, c1) pair within each 8×8 cell.
+// ---------------------------------------------------------------------------
+
+Result<EncodeResult> encode_afli(const Image& image, Palette pal,
+                                  const dither::Settings& settings) {
+    constexpr std::size_t W = kHiCols * kHiCellW;  // 320
+    constexpr std::size_t H = kHiRows * kHiCellH;  // 200
+
+    if (image.width() != W || image.height() != H) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("c64::encode_afli: expected {}x{} input, got {}x{}",
+                        W, H, image.width(), image.height()),
+        }};
+    }
+
+    const auto& pal_lin = palette_linear(pal);
+    const auto& pal_lab = palette_oklab(pal);
+
+    std::vector<color_space::OKLab> src_lab(W * H);
+    for (std::size_t y = 0; y < H; ++y)
+        for (std::size_t x = 0; x < W; ++x)
+            src_lab[y * W + x] = color_space::linear_to_oklab(image[x, y]);
+
+    EncodeResult res;
+    res.rendered = Image(W, H);
+    res.bitmap.assign(kHiRows * kHiCols * kHiCellH, 0);
+    res.screen_ram.assign(kHiCellH * kHiRows * kHiCols, 0);  // 8 × 1000
+    // color_ram unused for AFLI.
+    res.bg_color = 0;
+
+    // Pass 1: per-cell-row brute force C(16, 2) = 120 pairs.
+    std::vector<std::array<std::array<std::uint8_t, 2>, kHiCellH>>
+        cell_pairs(kHiRows * kHiCols);
+    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+            std::size_t cell_idx = cy * kHiCols + cx;
+            std::array<std::array<std::uint8_t, 2>, kHiCellH> row_pairs{};
+            for (std::size_t py = 0; py < kHiCellH; ++py) {
+                std::array<color_space::OKLab, kHiCellW> row_lab{};
+                for (std::size_t px = 0; px < kHiCellW; ++px) {
+                    row_lab[px] = src_lab[(cy * kHiCellH + py) * W +
+                                          (cx * kHiCellW + px)];
+                }
+                float best = std::numeric_limits<float>::infinity();
+                std::array<std::uint8_t, 2> best_pair{0, 0};
+                for (std::uint8_t i = 0; i < 16; ++i) {
+                    for (std::uint8_t j = static_cast<std::uint8_t>(i + 1);
+                         j < 16; ++j) {
+                        std::array<std::uint8_t, 2> p{i, j};
+                        float e = cell_error_for_pair(
+                            std::span<const color_space::OKLab>(row_lab),
+                            p, pal_lab, nullptr);
+                        if (e < best) {
+                            best = e;
+                            best_pair = p;
+                        }
+                    }
+                }
+                row_pairs[py] = best_pair;
+            }
+            cell_pairs[cell_idx] = row_pairs;
+        }
+    }
+
+    // Pass 2: per-pixel dither against per-row 2-colour palette.
+    std::vector<std::uint8_t> indices(W * H, 0);
+    auto pick = [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+        std::size_t cy = y / kHiCellH;
+        std::size_t cx = x / kHiCellW;
+        std::size_t py = y % kHiCellH;
+        const auto& pair = cell_pairs[cy * kHiCols + cx][py];
+        std::array<color_space::OKLab, 2> cp{
+            pal_lab[pair[0]], pal_lab[pair[1]],
+        };
+        std::size_t chosen_index = 0;
+        color_space::OKLab chosen{};
+        float thr = dither::pick_palette_index_with_ostro(
+            settings.method, target,
+            std::span<const color_space::OKLab>(cp),
+            x, y, settings.strength, /*k_min=*/0,
+            chosen_index, chosen);
+        indices[y * W + x] = static_cast<std::uint8_t>(chosen_index);
+        return {chosen, thr};
+    };
+    (void)dither::diffuse_raw_buffer(image, settings, pick);
+
+    // Pack bitmap + screen RAMs, render preview.
+    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+            std::size_t cell_idx = cy * kHiCols + cx;
+            for (std::size_t py = 0; py < kHiCellH; ++py) {
+                const auto& pair = cell_pairs[cell_idx][py];
+                res.screen_ram[py * kHiRows * kHiCols + cell_idx] =
+                    static_cast<std::uint8_t>(
+                        ((pair[1] & 0xF) << 4) | (pair[0] & 0xF));
+                std::uint8_t row_byte = 0;
+                for (std::size_t px = 0; px < kHiCellW; ++px) {
+                    auto x = cx * kHiCellW + px;
+                    auto y = cy * kHiCellH + py;
+                    auto q = static_cast<std::uint8_t>(
+                        indices[y * W + x] & 0x1);
+                    row_byte = static_cast<std::uint8_t>(
+                        (row_byte << 1) | q);
+                    res.rendered[x, y] = pal_lin[pair[q]];
+                }
+                res.bitmap[cell_idx * kHiCellH + py] = row_byte;
+            }
+        }
+    }
+
+    return res;
+}
+
 }  // namespace png2amiga::c64

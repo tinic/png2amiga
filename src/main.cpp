@@ -1311,6 +1311,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "c64-hires" || v == "c64-hi" ||
                          v == "vic2-hires")
                     config.mode = amiga::Mode::c64_hires;
+                else if (v == "c64-fli" || v == "fli")
+                    config.mode = amiga::Mode::c64_fli;
+                else if (v == "c64-afli" || v == "afli")
+                    config.mode = amiga::Mode::c64_afli;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -2676,7 +2680,8 @@ void save_raw_vga(std::string_view path,
 // and the batch / video preview loops.
 Image scale_for_display(const Image& preview, amiga::Mode mode,
                         bool hires, bool interlace) {
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) ||
+        amiga::is_cga(mode) || amiga::is_c64(mode)) {
         auto params = amiga::get_mode_params(mode);
         std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
@@ -2697,7 +2702,8 @@ std::vector<bool> scale_mask_for_display(const std::vector<bool>& mask,
                                          std::size_t src_w, std::size_t src_h,
                                          amiga::Mode mode,
                                          bool hires, bool interlace) {
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) ||
+        amiga::is_cga(mode) || amiga::is_c64(mode)) {
         auto params = amiga::get_mode_params(mode);
         std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(src_w, src_h,
@@ -3936,8 +3942,14 @@ int main(int argc, char* argv[]) {
         }
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
-        aopts.mode = (config->mode == amiga::Mode::c64_hires)
-                     ? "c64-hires" : "c64-multicolor";
+        aopts.mode = [&] -> const char* {
+            switch (config->mode) {
+            case amiga::Mode::c64_hires:      return "c64-hires";
+            case amiga::Mode::c64_fli:        return "c64-fli";
+            case amiga::Mode::c64_afli:      return "c64-afli";
+            default:                          return "c64-multicolor";
+            }
+        }();
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
@@ -3947,10 +3959,16 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
         auto& st = enc.state;
-        if (config->mode == amiga::Mode::c64_hires)
-            cli_status("Mode:   C64 hires (320×200, 2 colours/cell)");
-        else
-            cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell)");
+        switch (config->mode) {
+        case amiga::Mode::c64_hires:
+            cli_status("Mode:   C64 hires (320×200, 2 colours/cell)"); break;
+        case amiga::Mode::c64_fli:
+            cli_status("Mode:   C64 FLI (160×200, multicolor + per-row screen)"); break;
+        case amiga::Mode::c64_afli:
+            cli_status("Mode:   C64 AFLI (320×200, hires + per-row screen)"); break;
+        default:
+            cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell)"); break;
+        }
         cli_status("Encoded: {} bytes, PSNR: {:.2f} dB, S2: {:.2f}",
                      st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
         if (ends_with(config->output_path, ".bin") ||

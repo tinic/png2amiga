@@ -96,6 +96,8 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "genesis-h40-sh")    return amiga::Mode::genesis_h40_sh;
     if (s == "c64-hires")         return amiga::Mode::c64_hires;
     if (s == "c64-multicolor")    return amiga::Mode::c64_multicolor;
+    if (s == "c64-fli")           return amiga::Mode::c64_fli;
+    if (s == "c64-afli")          return amiga::Mode::c64_afli;
     return amiga::Mode::lores;
 }
 
@@ -871,9 +873,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength    = options.dither_strength;
         dith.error_clamp = options.error_clamp;
         dith.serpentine  = true;
-        Result<c64::EncodeResult> enc = (mode == amiga::Mode::c64_hires)
-            ? c64::encode_hires(*image, pal_choice, dith)
-            : c64::encode_multicolor(*image, pal_choice, dith);
+        Result<c64::EncodeResult> enc = [&] {
+            switch (mode) {
+            case amiga::Mode::c64_hires:
+                return c64::encode_hires(*image, pal_choice, dith);
+            case amiga::Mode::c64_fli:
+                return c64::encode_fli(*image, pal_choice, dith);
+            case amiga::Mode::c64_afli:
+                return c64::encode_afli(*image, pal_choice, dith);
+            default:
+                return c64::encode_multicolor(*image, pal_choice, dith);
+            }
+        }();
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;
@@ -881,7 +892,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto pal_span = c64::palette_colors(pal_choice);
         result.palette.assign(pal_span.begin(), pal_span.end());
         result.indices.clear();
-        result.planes.depth = (mode == amiga::Mode::c64_hires) ? 1 : 2;
+        result.planes.depth = amiga::is_c64_multicolor(mode) ? 2 : 1;
         result.mode = mode;
         result.hires = false;
         result.interlace = false;

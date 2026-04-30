@@ -90,8 +90,19 @@ enum class Mode : unsigned char {
     //   c64_multicolor: 160×200 logical (2:1 hardware doubling), 4×8
     //                   cells, 4 colours per cell (1 shared bg + 3
     //                   per-cell). 2 bits per pixel.
+    //   c64_fli:        160×200 multicolor + per-row (c1, c2) screen
+    //                   colours within each 4×8 cell. 8000-byte
+    //                   bitmap + 8 screen RAMs (1000 bytes each;
+    //                   one per cell-row) + 1000-byte color RAM. The
+    //                   per-row swap is achieved by a raster-IRQ that
+    //                   reloads the screen-RAM pointer 8× per cell.
+    //   c64_afli:       320×200 hires + per-row colour pair within
+    //                   each 8×8 cell. Same raster trick as FLI but
+    //                   on the 1bpp bitmap.
     c64_hires,          // 320×200, 2 colours per 8×8 cell
     c64_multicolor,     // 160×200, 4 colours per 4×8 cell (1 shared bg + 3)
+    c64_fli,            // 160×200, multicolor + per-row screen pair
+    c64_afli,           // 320×200, hires + per-row screen pair
 
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
@@ -239,14 +250,19 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // pixels are 1:1 (no doubling). PAL hardware-pixel ratio 0.936:1.
     case Mode::c64_hires:
         return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
-    // C64 multicolor: 160×200 logical, 4×8 cells, 4-colour-per-cell.
-    // Hardware pixels are 2:1 (each logical pixel doubled horizontally
-    // → 320×200 display). On a PAL CRT one of those 320×200 hardware
-    // pixels has aspect 0.936:1 (slightly tall) — net per-LOGICAL-pixel
-    // display ratio = 2 × 0.936 = 1.872 (wide). The web preview canvas
-    // honours .par as the per-logical-pixel display ratio.
+    // C64 multicolor: 160×200 logical buffer. Each logical pixel
+    // displays as 2 hardware pixels horizontally; PAL CRT hardware-
+    // pixel aspect = 0.936:1 → per-LOGICAL-pixel display ratio
+    // = 2 × 0.936 = 1.872 (wide).
     case Mode::c64_multicolor:
         return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
+    // C64 FLI: same buffer layout as multicolor + per-row screen
+    // palette pair (raster-IRQ trick).
+    case Mode::c64_fli:
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
+    // C64 AFLI: same buffer as hires + per-row screen pair.
+    case Mode::c64_afli:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
     // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
     // matches SNES at 224 lines on a 4:3 CRT.
     //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)
@@ -327,7 +343,15 @@ constexpr bool is_cga(Mode mode) noexcept {
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
 constexpr bool is_c64(Mode mode) noexcept {
-    return mode == Mode::c64_hires || mode == Mode::c64_multicolor;
+    return mode == Mode::c64_hires || mode == Mode::c64_multicolor ||
+           mode == Mode::c64_fli   || mode == Mode::c64_afli;
+}
+
+// Check if a mode is a "wide-pixel" multicolor variant (logical pixel
+// is 2× hardware-doubled — multicolor + FLI). Used by the rendered
+// buffer to know whether to pair pixels horizontally.
+constexpr bool is_c64_multicolor(Mode mode) noexcept {
+    return mode == Mode::c64_multicolor || mode == Mode::c64_fli;
 }
 
 // Check if the mode uses NTSC composite artifacting to produce its colors.
