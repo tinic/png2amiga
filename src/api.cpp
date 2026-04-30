@@ -1241,10 +1241,43 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto encode_once = [&](const Image& img,
                                    const dither::Settings& d,
                                    int diversity) -> Result<EhbCapTrial> {
+                // Pre-build the global base palette ourselves with
+                // PNN + pair-aware refinement (and 1-opt on --best),
+                // then hand it to encode_copper as the line-0 seed.
+                // CAP still evolves from there per-line via its own
+                // copper-budget-aware planner — but the seed is the
+                // EHB-aware best palette we can build offline.
+                Palette seed_pal;
+                {
+                    auto q = quantize::quantize(img, 32,
+                                                quantize::Algorithm::pnn,
+                                                diversity);
+                    if (!q) return std::unexpected{q.error()};
+                    seed_pal = std::move(*q);
+                    snap_to_chipset(seed_pal, chipset, mode);
+                    while (seed_pal.colors.size() < 32)
+                        seed_pal.colors.emplace_back(0, 0, 0);
+                    palette::refine_ehb_base_palette(
+                        std::span<Color3f>(seed_pal.colors.data(), 32),
+                        img.pixels(),
+                        /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                    if (options.best) {
+                        palette::extra_ehb_optimization(
+                            std::span<Color3f>(seed_pal.colors.data(), 32),
+                            img.pixels(),
+                            /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                            /*max_passes=*/2,
+                            [](std::size_t n,
+                               std::function<void(std::size_t)> f) {
+                                pipeline::parallel_for(n, std::move(f));
+                            },
+                            options.on_progress);
+                    }
+                }
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
                     static_cast<std::size_t>(options.copper_changes),
-                    nullptr, options.reserve_color0,
+                    &seed_pal.colors, options.reserve_color0,
                     {}, diversity,
                     skip_initial, options.interlace,
                     /*is_ehb=*/true,
@@ -1522,7 +1555,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     [](std::size_t n,
                        std::function<void(std::size_t)> f) {
                         pipeline::parallel_for(n, std::move(f));
-                    });
+                    },
+                    options.on_progress);
                 winner->base_pal.colors = std::move(base32);
                 winner->ehb_pal = palette::make_ehb_palette(
                     winner->base_pal.colors);
@@ -1614,24 +1648,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::span<Color3f>(base_pal.colors.data(), 32),
                 image->pixels(),
                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
-            // 1-opt local search on top of the refined palette: per
-            // pass, find the slot whose removal hurts least and the
-            // source-image colour that, dropped into that slot, lowers
-            // total nearest-OKLab error the most. Mirrors ham_convert's
-            // "Extra OCS palette optimization". Only fires on the
-            // simple non-best path — --best already runs many
-            // jittered restarts.
-            if (!options.best) {
-                palette::extra_ehb_optimization(
-                    std::span<Color3f>(base_pal.colors.data(), 32),
-                    image->pixels(),
-                    /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
-                    /*max_passes=*/2,
-                    /*parallel_for_fn=*/[](std::size_t n,
-                                           std::function<void(std::size_t)> f) {
-                        pipeline::parallel_for(n, std::move(f));
-                    });
-            }
+            // 1-opt local search ("Extra OCS palette optimization").
+            // ~1.5-2s on a 320x180 image; user accepts the cost on
+            // the plain-EHB path because the quality lift (+5 over
+            // PNN+refine alone) crosses ham_convert.
+            palette::extra_ehb_optimization(
+                std::span<Color3f>(base_pal.colors.data(), 32),
+                image->pixels(),
+                /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                /*max_passes=*/2,
+                [](std::size_t n,
+                   std::function<void(std::size_t)> f) {
+                    pipeline::parallel_for(n, std::move(f));
+                },
+                options.on_progress);
         }
 
         // Build full 64-color EHB palette (32 base + 32 half-bright)

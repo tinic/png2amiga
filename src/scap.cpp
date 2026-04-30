@@ -8,6 +8,7 @@
 #include "ham.hpp"
 #include "palette.hpp"
 #include "pipeline.hpp"
+#include "quantize.hpp"
 #include "types.hpp"
 
 // scap.cpp delegates parallel sweep machinery to pipeline::best_sweep
@@ -1321,6 +1322,38 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     if (!external_palette.empty()) {
         ehb_user_pal.assign(external_palette.begin(), external_palette.end());
         if (ehb_user_pal.size() > 32) ehb_user_pal.resize(32);
+    } else {
+        // No external palette: build the global EHB base ourselves
+        // with PNN + pair-aware refinement (and 1-opt on --best),
+        // then hand it to encode_copper. Same shape as the EHB+CAP
+        // path in api.cpp — gives the SCAP planner a better seed
+        // than encode_copper's internal histogram quantizer.
+        auto q = quantize::quantize(src, 32,
+                                    quantize::Algorithm::pnn,
+                                    palette_diversity);
+        if (q) {
+            Palette seed_pal = std::move(*q);
+            for (auto& c : seed_pal.colors) c = palette::quantize_to_ocs(c);
+            while (seed_pal.colors.size() < 32)
+                seed_pal.colors.emplace_back(0, 0, 0);
+            palette::refine_ehb_base_palette(
+                std::span<Color3f>(seed_pal.colors.data(), 32),
+                src.pixels(),
+                /*snap_to_ocs=*/true);
+            if (enable_best) {
+                palette::extra_ehb_optimization(
+                    std::span<Color3f>(seed_pal.colors.data(), 32),
+                    src.pixels(),
+                    /*snap_to_ocs=*/true,
+                    /*max_passes=*/2,
+                    [](std::size_t n,
+                       std::function<void(std::size_t)> f) {
+                        pipeline::parallel_for(n, std::move(f));
+                    },
+                    on_progress);
+            }
+            ehb_user_pal = std::move(seed_pal.colors);
+        }
     }
     auto copper_result = copper::encode_copper(
         src, /*depth=*/5, dither_settings,

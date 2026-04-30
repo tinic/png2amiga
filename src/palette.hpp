@@ -640,7 +640,9 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
                                    int max_passes,
                                    void(*parallel_for_fn)(std::size_t,
                                        std::function<void(std::size_t)>) =
-                                           nullptr) {
+                                           nullptr,
+                                   std::function<void(float,
+                                       std::string_view)> on_progress = {}) {
     if (base_colors.size() < 32 || image_pixels.empty()) return;
     constexpr std::size_t kBaseN = 32;
     auto N = image_pixels.size();
@@ -721,6 +723,19 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
 
     int slot_start = 0;
     std::size_t last_insert = static_cast<std::size_t>(-1);
+    // Progress estimate: bound by max_passes * 32 outer iterations,
+    // but the main loop may converge a slot in fewer iterations than
+    // 32. Emit on every iteration; the slot_start advance gives the
+    // user a roughly monotonic 0..1 readout.
+    auto emit_progress = [&](int extra_subiter) {
+        if (!on_progress) return;
+        float frac = (static_cast<float>(slot_start) +
+                      0.001f * static_cast<float>(extra_subiter)) /
+                     static_cast<float>(kBaseN);
+        on_progress(std::clamp(frac, 0.0f, 1.0f), "extra-ehb-opt");
+    };
+    int subiter = 0;
+    if (on_progress) emit_progress(0);
     for (int pass = 0; pass < max_passes;) {
         // 1. Removal candidate: replace each slot k in [slot_start, 32)
         //    with its neighbour and pick the slot whose removal yields
@@ -778,13 +793,16 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
                     base_colors[static_cast<std::size_t>(slot_start)]);
             }
             ++slot_start;
+            subiter = 0;
             last_insert = static_cast<std::size_t>(-1);
             ++pass;
+            emit_progress(0);
             if (slot_start >= static_cast<int>(kBaseN)) break;
         } else {
             base_colors[static_cast<std::size_t>(remove_slot)] =
                 snap_one(candidates[best_insert]);
             last_insert = best_insert;
+            emit_progress(++subiter);
         }
     }
 }
