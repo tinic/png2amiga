@@ -13,6 +13,7 @@
 
 #include "amiga.hpp"
 #include "color_space.hpp"
+#include "dither.hpp"
 #include "types.hpp"
 
 #include <span>
@@ -46,9 +47,20 @@ struct EncodeResult {
 };
 
 // Encode a 160×200 logical image to c64-multicolor with the chosen
-// VIC-II palette. The input image is resampled to 160×200 by the
-// pipeline before this is called.
-Result<EncodeResult> encode_multicolor(const Image& image,
-                                       Palette pal = Palette::pepto);
+// VIC-II palette and dither settings. Two-pass:
+//   1. Brute-force per-cell quad selection (16 bg × C(15,3) ≈ 7280
+//      quads per cell; nearest-OKLab² scoring against undithered
+//      source).
+//   2. Per-pixel dither via dither::diffuse_raw_buffer with a
+//      per-cell palette callback that returns the 4 OKLab colours
+//      chosen for the cell at (x, y). Supports every method that
+//      diffuse_raw_buffer routes — FS-family, Atkinson, Sierra-Lite,
+//      Stucki, Jarvis, Ostromoukhov, Riemersma, Gilbert,
+//      structure-fs / contrast-fs / Zhou-Fang, all ordered methods,
+//      and the Yliluoma / Knoll / opt-checker family.
+Result<EncodeResult> encode_multicolor(
+    const Image& image,
+    Palette pal = Palette::pepto,
+    const dither::Settings& settings = {});
 
 }  // namespace png2amiga::c64

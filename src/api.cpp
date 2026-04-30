@@ -856,7 +856,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             *image = std::move(padded);
         }
         auto pal_choice = c64::parse_palette(options.c64_palette);
-        auto enc = c64::encode_multicolor(*image, pal_choice);
+        dither::Settings dith;
+        dith.method      = parse_dither(options.dither);
+        dith.strength    = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine  = true;
+        auto enc = c64::encode_multicolor(*image, pal_choice, dith);
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;

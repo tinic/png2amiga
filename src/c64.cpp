@@ -114,7 +114,8 @@ std::span<const Color3f, 16> palette_colors(Palette p) {
     return std::span<const Color3f, 16>(palette_linear(p));
 }
 
-Result<EncodeResult> encode_multicolor(const Image& image, Palette pal) {
+Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
+                                        const dither::Settings& settings) {
     constexpr std::size_t W = kCols * kCellW;  // 160
     constexpr std::size_t H = kRows * kCellH;  // 200
 
@@ -158,24 +159,22 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal) {
                        // the bg "slot" for their own dark-cluster colour.
                        // (Real per-image bg sweep is a TODO refinement.)
 
+    // Pass 1: per-cell brute-force quad pick on the *undithered* source.
+    // Stores the chosen (bg, c1, c2, c3) for each cell; dither runs on
+    // top of these palettes in pass 2.
+    std::vector<std::array<std::uint8_t, 4>> cell_quad(kRows * kCols);
     std::array<color_space::OKLab, kCellW * kCellH> cell_lab{};
     std::array<std::uint8_t, kCellW * kCellH> pix_idx{};
-
     for (std::size_t cy = 0; cy < kRows; ++cy) {
         for (std::size_t cx = 0; cx < kCols; ++cx) {
-            // Gather cell pixels.
             for (std::size_t py = 0; py < kCellH; ++py) {
                 for (std::size_t px = 0; px < kCellW; ++px) {
-                    auto x = cx * kCellW + px;
-                    auto y = cy * kCellH + py;
-                    cell_lab[py * kCellW + px] = src_lab[y * W + x];
+                    cell_lab[py * kCellW + px] =
+                        src_lab[(cy * kCellH + py) * W + (cx * kCellW + px)];
                 }
             }
-
             float best_err = std::numeric_limits<float>::infinity();
             std::array<std::uint8_t, 4> best_quad{0, 0, 0, 0};
-            std::array<std::uint8_t, kCellW * kCellH> best_pixels{};
-
             for (std::uint8_t bg = 0; bg < 16; ++bg) {
                 for (std::uint8_t i = 0; i < 16; ++i) {
                     if (i == bg) continue;
@@ -189,29 +188,63 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal) {
                             float err = cell_error_for_quad(
                                 cell_lab, quad, pal_lab, &pix_idx);
                             if (err < best_err) {
-                                best_err   = err;
-                                best_quad  = quad;
-                                best_pixels = pix_idx;
+                                best_err  = err;
+                                best_quad = quad;
                             }
                         }
                     }
                 }
             }
+            cell_quad[cy * kCols + cx] = best_quad;
+        }
+    }
 
-            // Commit: rendered pixels + bitmap + screen/color RAM.
+    // Pass 2: per-pixel index pick with dither. The pick callback
+    // looks up the cell's 4-colour palette and routes through
+    // pick_palette_index_with_ostro — same code path the Yliluoma /
+    // ED / Ostromoukhov families use elsewhere. diffuse_raw_buffer
+    // owns the err_buf, ordered-bias, Riemersma queue, and structure
+    // map, so every method it supports works here.
+    std::vector<std::uint8_t> indices(W * H, 0);
+    auto pick = [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+        std::size_t cy = y / kCellH;
+        std::size_t cx = x / kCellW;
+        const auto& quad = cell_quad[cy * kCols + cx];
+        std::array<color_space::OKLab, 4> cp{
+            pal_lab[quad[0]], pal_lab[quad[1]],
+            pal_lab[quad[2]], pal_lab[quad[3]],
+        };
+        std::size_t chosen_index = 0;
+        color_space::OKLab chosen{};
+        float thr = dither::pick_palette_index_with_ostro(
+            settings.method, target,
+            std::span<const color_space::OKLab>(cp),
+            x, y, settings.strength, /*k_min=*/0,
+            chosen_index, chosen);
+        indices[y * W + x] = static_cast<std::uint8_t>(chosen_index);
+        return {chosen, thr};
+    };
+    (void)dither::diffuse_raw_buffer(image, settings, pick);
+
+    // Render + pack bitmap / screen / color RAM from the dithered
+    // per-pixel indices.
+    for (std::size_t cy = 0; cy < kRows; ++cy) {
+        for (std::size_t cx = 0; cx < kCols; ++cx) {
             std::size_t cell_idx = cy * kCols + cx;
+            const auto& quad = cell_quad[cell_idx];
             res.screen_ram[cell_idx] = static_cast<std::uint8_t>(
-                ((best_quad[1] & 0xF) << 4) | (best_quad[2] & 0xF));
-            res.color_ram[cell_idx]  = static_cast<std::uint8_t>(best_quad[3] & 0xF);
+                ((quad[1] & 0xF) << 4) | (quad[2] & 0xF));
+            res.color_ram[cell_idx] = static_cast<std::uint8_t>(quad[3] & 0xF);
             for (std::size_t py = 0; py < kCellH; ++py) {
                 std::uint8_t row_byte = 0;
                 for (std::size_t px = 0; px < kCellW; ++px) {
-                    auto q = best_pixels[py * kCellW + px];
-                    row_byte = static_cast<std::uint8_t>(
-                        (row_byte << 2) | (q & 0x3));
                     auto x = cx * kCellW + px;
                     auto y = cy * kCellH + py;
-                    res.rendered[x, y] = pal_lin[best_quad[q]];
+                    auto q = static_cast<std::uint8_t>(indices[y * W + x] & 0x3);
+                    row_byte = static_cast<std::uint8_t>(
+                        (row_byte << 2) | q);
+                    res.rendered[x, y] = pal_lin[quad[q]];
                 }
                 res.bitmap[cell_idx * kCellH + py] = row_byte;
             }
