@@ -268,11 +268,6 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 | abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |     0.67 |
 | abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.21 |
 
-EHB rows reflect the hardware-correct halve formula: the OCS DAC halves
-the 4-bit nibble (`n >> 1`, truncating), not the 8-bit sRGB byte. Aligning
-the dither's belief with what the hardware emits unlocks ~10–15
-SSIMULACRA2 points across all EHB modes.
-
 The harness lives at `tools/shootout/`:
 
 ```bash
