@@ -9,6 +9,9 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#ifndef __EMSCRIPTEN__
+#include <print>
+#endif
 #include <thread>
 #include <vector>
 
@@ -349,6 +352,29 @@ Result<Image> render_preview(
     // No-op for AGA (24-bit native).
     if (chipset != amiga::Chipset::aga) {
         for (auto& p : r->pixels()) p = palette::quantize_to_ocs(p);
+        // Defence in depth: every emitted pixel must be a 12-bit OCS
+        // colour (nibble-replicated 8-bit sRGB byte). The snap above
+        // guarantees this, but past regressions in render_copper_capped
+        // and EHB+SCAP shipped non-displayable previews that scored
+        // fictional 24-bit precision. If a future code path bypasses
+        // the snap, this audit makes it loud.
+        std::size_t bad = 0;
+        for (const auto& p : r->pixels()) {
+            auto srgb = color_space::linear_to_srgb(p).clamped();
+            auto check = [](float v) {
+                int b = std::clamp(
+                    static_cast<int>(std::lround(v * 255.0f)), 0, 255);
+                return ((b >> 4) & 0xF) == (b & 0xF);
+            };
+            if (!check(srgb.r) || !check(srgb.g) || !check(srgb.b)) ++bad;
+        }
+#ifndef __EMSCRIPTEN__
+        if (bad > 0) {
+            std::println(stderr,
+                "warning: render_preview emitted {} non-OCS pixels "
+                "(snap regression?)", bad);
+        }
+#endif
     }
     return r;
 }
