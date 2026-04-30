@@ -254,19 +254,24 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
-| **png2amiga** | **HAM6 + CAP + best**       | 30.94     | **69.15**   |    13.72 |
+| **png2amiga** | **EHB + SCAP + best**       | 30.64     | **71.72**   |    52.70 |
+| png2amiga   | HAM6 + CAP + best                 | 30.94     | 69.15       |    13.72 |
 | png2amiga   | HAM6 + CAP                        | 30.32     | 65.41       |     0.34 |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |    18.18 |
+| png2amiga   | EHB + best (no copper)            | 29.55     | 64.25       |     6.86 |
 | png2amiga   | HAM6 + best (no copper)           | 29.75     | 62.44       |    27.47 |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |    70.63 |
 | png2amiga   | HAM6 (no copper)                  | 29.95     | 62.22       |     0.29 |
-| png2amiga   | EHB + SCAP + best                 | 30.01     | 58.18       |    52.70 |
 | ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.67     | 57.91       |     4.07 |
 | ham_convert | EHB (`dither_fs`)                 | 30.18     | 57.78       |     4.06 |
+| png2amiga   | EHB (no copper)                   | 29.11     | 51.79       |     0.10 |
 | abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |     0.67 |
-| png2amiga   | EHB + best (no copper)            | 28.53     | 48.45       |     6.86 |
 | abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.21 |
-| png2amiga   | EHB (no copper)                   | 28.83     | 40.54       |     0.10 |
+
+EHB rows reflect the hardware-correct halve formula: the OCS DAC halves
+the 4-bit nibble (`n >> 1`, truncating), not the 8-bit sRGB byte. Aligning
+the dither's belief with what the hardware emits unlocks ~10–15
+SSIMULACRA2 points across all EHB modes.
 
 The harness lives at `tools/shootout/`:
 

@@ -480,13 +480,22 @@ inline std::size_t find_nearest(Color3f color,
 // We compute this in sRGB space (as the hardware operates on DAC values).
 // ---------------------------------------------------------------------------
 
-// Half-brite a base linear-RGB colour: sRGB-halve then back to linear,
-// matching the Amiga DAC. Single source of truth replacing
-// scap::half_brite + copper::halve_brite.
+// Half-brite a base linear-RGB colour, matching the OCS hardware DAC:
+// the 4-bit per-channel nibble is shifted right by one (truncating),
+// then re-replicated to 8-bit. EHB is fundamentally an OCS feature, so
+// we snap the input to OCS before halving — even AGA-EHB outputs OCS-
+// quantised colours through the EHB path. The previous implementation
+// used sRGB × 0.5 which is wrong for OCS: e.g. halve(0x33) is 0x11
+// (nibble 3 >> 1 = 1, nibble-replicated), not 0x19 (sRGB / 2).
+// Single source of truth replacing scap::half_brite + copper::halve_brite.
 inline Color3f half_brite(const Color3f& c) {
-    auto srgb = color_space::linear_to_srgb(c).clamped();
-    Color3f half_srgb{srgb.r * 0.5f, srgb.g * 0.5f, srgb.b * 0.5f};
-    return color_space::srgb_to_linear(half_srgb);
+    auto code = linear_to_ocs(c);
+    auto r4 = static_cast<std::uint16_t>((code >> 8) & 0xF);
+    auto g4 = static_cast<std::uint16_t>((code >> 4) & 0xF);
+    auto b4 = static_cast<std::uint16_t>(code & 0xF);
+    std::uint16_t halved =
+        static_cast<std::uint16_t>(((r4 >> 1) << 8) | ((g4 >> 1) << 4) | (b4 >> 1));
+    return ocs_to_linear(halved);
 }
 
 inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
