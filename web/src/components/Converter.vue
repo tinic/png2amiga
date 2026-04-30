@@ -1175,6 +1175,18 @@ function dismissHint() {
 async function loadExample(example: typeof EXAMPLES[number]) {
   dismissHint()
   track('example', { name: example.name })
+
+  // Fetch the new image FIRST, before touching reactive state. This
+  // matters because the convertGen race fix (commit 2bafc49) makes
+  // doConvert read imageBytes.value at debounce FIRE time, not
+  // schedule time. If we set options + then awaited the fetch + then
+  // set imageBytes, the debounce could fire mid-fetch and runConvert
+  // with the OLD bytes + the NEW options. Doing the fetch first means
+  // the bytes/options assignments below happen back-to-back and a
+  // single debounce tick covers both.
+  const resp = await fetch(`/examples/${example.file}`)
+  const buf = await resp.arrayBuffer()
+
   // Reset to defaults, then apply example-specific settings.
   // nextTick between the two so watchers actually observe the
   // intermediate "all defaults" state — without it Vue batches both
@@ -1186,8 +1198,6 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   Object.assign(options, defaultOptions())
   await nextTick()
   if (example.opts) Object.assign(options, example.opts)
-  const resp = await fetch(`/examples/${example.file}`)
-  const buf = await resp.arrayBuffer()
   imageBytes.value = new Uint8Array(buf)
   imageName.value = example.file
   const type = example.file.endsWith('.jpg') || example.file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
