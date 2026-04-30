@@ -742,16 +742,23 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number; cs
   const dh = result.height * sy
   canvas.width = dw
   canvas.height = dh
-  // Native-PAR preview (DOS modes only): keep the canvas backing at
-  // integer-NN upscaled resolution for sharp pixels, but CSS-stretch
-  // the displayed HEIGHT so each pixel renders with the hardware PAR.
+  // Native-PAR preview: keep the canvas backing at integer-NN upscaled
+  // resolution for sharp pixels, but CSS-stretch the displayed HEIGHT
+  // so each pixel renders with the hardware PAR.
   //   Target CSS aspect = buffer_w * par / buffer_h (the real CRT frame)
   // With width pinned to dw, height becomes dw * buffer_h / (buffer_w * par).
   // PAR < 1 (tall pixels → EGA 640×200 etc.) stretches height UP;
-  // PAR > 1 (wide pixels → CGA composite) compresses height DOWN.
+  // PAR > 1 (wide pixels → CGA composite, C64 multicolor) compresses height DOWN.
+  //
+  // The PAR correction is independent of native_par's resize choice:
+  // native_par toggles letterbox-vs-stretch resize, but the *display
+  // aspect* of the encoded buffer always reflects what the hardware
+  // would emit on a CRT. Fixed-buffer modes always apply modePar at
+  // display time so e.g. C64 multicolor's 160×200 buffer renders 4:3-ish
+  // regardless of letterbox-vs-stretch.
   const cssW = dw
   let cssH = dh
-  if (isFixedBufferMode(options.mode) && options.nativePar) {
+  if (isFixedBufferMode(options.mode)) {
     const par = modePar(options.mode)
     cssH = Math.round(dw * result.height / (result.width * par))
   }
