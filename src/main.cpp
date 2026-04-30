@@ -1288,6 +1288,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "genesis-h40-sh" || v == "md-h40-sh" ||
                          v == "genesis-sh" || v == "megadrive-sh")
                     config.mode = amiga::Mode::genesis_h40_sh;
+                else if (v == "c64-multicolor" || v == "c64-mc" ||
+                         v == "c64" || v == "vic2-multicolor")
+                    config.mode = amiga::Mode::c64_multicolor;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -3623,7 +3626,8 @@ int main(int argc, char* argv[]) {
                                    amiga::is_cga(config->mode) ||
                                    amiga::is_ega(config->mode) ||
                                    amiga::is_snes(config->mode) ||
-                                   amiga::is_genesis(config->mode);
+                                   amiga::is_genesis(config->mode) ||
+                                   amiga::is_c64(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
@@ -3898,6 +3902,59 @@ int main(int argc, char* argv[]) {
     // Routes through api::encode_state's SNES branch — same path the
     // WASM/web frontend uses — and writes raw bytes, palette, header,
     // or PNG preview based on the output extension.
+    if (amiga::is_c64(config->mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "C64: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.mode = "c64-multicolor";
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+        aopts.on_progress = make_cli_progress_reporter();
+        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "C64 encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell, Pepto palette)");
+        cli_status("Encoded: {} bytes (8000 bitmap + 1000 screen + 1000 color), PSNR: {:.2f} dB, S2: {:.2f}",
+                     st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
+        if (ends_with(config->output_path, ".bin") ||
+            ends_with(config->output_path, ".raw")) {
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
+                     static_cast<std::streamsize>(st.raw_frame.size()));
+            cli_status("Raw:    {} ({} bytes)", config->output_path,
+                       st.raw_frame.size());
+        } else {
+            auto r = save_preview(config->output_path, st.rendered,
+                                  has_transparency, transparency_mask,
+                                  config->mode, /*hires=*/false,
+                                  /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:    {}", config->output_path);
+        }
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{
+                config->input_path, config->palette_file,
+            };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
     if (amiga::is_snes(config->mode)) {
         if (has_transparency) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)

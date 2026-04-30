@@ -14,6 +14,7 @@
 #include "iff.hpp"
 #include "console_color.hpp"
 #include "genesis.hpp"
+#include "c64.hpp"
 #include "snes_io.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
@@ -93,6 +94,7 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "genesis-h40")       return amiga::Mode::genesis_h40;
     if (s == "genesis-h32-sh")    return amiga::Mode::genesis_h32_sh;
     if (s == "genesis-h40-sh")    return amiga::Mode::genesis_h40_sh;
+    if (s == "c64-multicolor")    return amiga::Mode::c64_multicolor;
     return amiga::Mode::lores;
 }
 
@@ -806,6 +808,46 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
         result.finalize_psnr(*image, dith_result.total_error);
+        result.raw_frame = std::move(raw);
+        return result;
+    }
+
+    // --- C64 / VIC-II ---
+    // Brute-force per-cell quantization (4 colours per 4×8 cell,
+    // 1 shared bg + 3 fg). Image arrives at 160×200 from the
+    // pipeline's resize stage; we render back to 160×200 and let
+    // preview_scale do the 2:1 hardware doubling. No dither pass
+    // for the proof-of-fit; future work will route through
+    // diffuse_raw_buffer with per-cell palette callback.
+    if (amiga::is_c64(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto enc = c64::encode_multicolor(*image);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        auto pal_span = c64::pepto_palette();
+        result.palette.assign(pal_span.begin(), pal_span.end());
+        result.indices.clear();
+        result.planes.depth = 2;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, 0.0f);
+        // Pack bitmap + screen + color RAM into raw_frame for downstream
+        // writers (.prg layout to follow). Order: bitmap (8000) +
+        // screen (1000) + color (1000) = 10000 bytes.
+        std::vector<std::uint8_t> raw;
+        raw.reserve(enc->bitmap.size() + enc->screen_ram.size() +
+                    enc->color_ram.size());
+        raw.insert(raw.end(), enc->bitmap.begin(), enc->bitmap.end());
+        raw.insert(raw.end(), enc->screen_ram.begin(), enc->screen_ram.end());
+        raw.insert(raw.end(), enc->color_ram.begin(), enc->color_ram.end());
         result.raw_frame = std::move(raw);
         return result;
     }

@@ -151,6 +151,22 @@ constexpr Color3f quantize_to_stf(Color3f color) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Commodore 64 / VIC-II 16-color hardware palette. The VIC-II's analogue
+// composite output doesn't have a unique sRGB ground-truth — different
+// research efforts produced slightly different RGB tables. We use Pepto's
+// 2001 derivation as the default (widely accepted reference; see
+// pepto.de/projects/colorvic/). Indexed 0..15 in standard VIC-II order:
+// black, white, red, cyan, purple, green, blue, yellow, orange, brown,
+// light red, dark grey, medium grey, light green, light blue, light grey.
+// ---------------------------------------------------------------------------
+inline constexpr std::array<std::uint32_t, 16> kC64Pepto = {
+    0x000000, 0xFFFFFF, 0x68372B, 0x70A4B2,
+    0x6F3D86, 0x588D43, 0x352879, 0xB8C76F,
+    0x6F4F25, 0x433900, 0x9A6759, 0x444444,
+    0x6C6C6C, 0x9AD284, 0x6C5EB5, 0x959595,
+};
+
+// ---------------------------------------------------------------------------
 // CGA 16-color master palette (IRGB, fixed at hardware). Canonical "IBM
 // Color/Graphics Monitor Adaptor" values (sRGB). Values sourced from the
 // IBM Technical Reference & widely-reproduced CGA color tables.

@@ -82,6 +82,13 @@ enum class Mode : unsigned char {
                         // doesn't have, so the hardware really does cap
                         // at 256 here.
 
+    // Commodore 64 / VIC-II — fixed 16-color palette (Pepto by default),
+    // 8×8 cell-based with per-cell colour constraints. multicolor uses
+    // 4×8 cells with 1 shared bg + 3 per-cell foregrounds (2 bits per
+    // pixel, 4-colour cell), 160×200 logical resolution displayed
+    // at 2:1 (160 logical → 320 hardware pixels).
+    c64_multicolor,     // 160×200, 4 colours per 4×8 cell (1 shared bg + 3)
+
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
                         //  Tile-based: 8×8 4bpp tiles + tilemap; each tile
@@ -113,6 +120,7 @@ enum class Chipset : unsigned char {
     ocs,    // Original Chip Set (A1000, A500, A2000) — 12-bit color, 6 bitplanes
     ecs,    // Enhanced Chip Set (A500+, A600, A3000) — same palette as OCS
     aga,    // Advanced Graphics Architecture (A1200, A4000) — 24-bit color, 8 bitplanes
+    c64,    // Commodore 64 / VIC-II — fixed 16-color palette
 };
 
 // ---------------------------------------------------------------------------
@@ -223,6 +231,13 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         // palette-field byte, so the 2048-colour gamut documented for
         // Modes 3/4 Direct Color isn't reachable here.
         return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
+    // C64 multicolor: 160×200 logical, 4×8 cells, 4-colour-per-cell.
+    // Hardware pixels are 2:1 (each logical pixel doubled horizontally
+    // → 320×200 display). Display PAR on a PAL CRT is ≈ 0.94 (slightly
+    // taller-than-wide), but we report 2.0 here so preview renders at
+    // 320×200 — same convention as lores_interlace.
+    case Mode::c64_multicolor:
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 2.0f};
     // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
     // matches SNES at 224 lines on a 4:3 CRT.
     //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)
@@ -301,6 +316,11 @@ constexpr bool is_cga(Mode mode) noexcept {
            mode == Mode::cga_text80x100;
 }
 
+// Check if a mode is a Commodore 64 / VIC-II mode.
+constexpr bool is_c64(Mode mode) noexcept {
+    return mode == Mode::c64_multicolor;
+}
+
 // Check if the mode uses NTSC composite artifacting to produce its colors.
 // Affects encoding (pixel pairs → color) and should disable ordered/error
 // dithering in ways that break the artifact pattern.
@@ -351,6 +371,8 @@ constexpr std::size_t max_depth(Chipset chipset) noexcept {
         return 6;
     case Chipset::aga:
         return 8;
+    case Chipset::c64:
+        return 2;  // VIC-II multicolor: 2 bpp per cell
     }
     std::unreachable();
 }
@@ -381,6 +403,8 @@ constexpr std::size_t color_bits(Chipset chipset) noexcept {
         return 4;   // 12-bit color (4 bits per channel)
     case Chipset::aga:
         return 8;   // 24-bit color (8 bits per channel)
+    case Chipset::c64:
+        return 8;   // VIC-II is fixed-palette; precision is 8-bit sRGB
     }
     std::unreachable();
 }
