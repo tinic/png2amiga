@@ -88,18 +88,34 @@ struct ScapSlotTable {
 constexpr int kOCS = 0;
 inline const ScapSlotTable kScap6bplOcs{
     /*total_planes=*/6,
-    /*line_gate_hpos=*/0x3C,        // DMA dictates actual MOVE landing
-                                    // positions; hpos tweaks don't help.
-                                    // Slot pixel_x values below are the
-                                    // empirically-observed start of each
-                                    // post-MOVE strip.
+    /*line_gate_hpos=*/0x38,        // Was 0x3C; pulled 8 HPOS (= 16 lores
+                                    // px) earlier to fit the new preload
+                                    // MOVE (slot 0 at pixel_x = 0) before
+                                    // the existing slot at pixel 8. Each
+                                    // MOVE takes ~4 CCK under DPF DMA
+                                    // contention, so 8 HPOS of headroom
+                                    // is enough for the extra preload.
+                                    // ADJUST via --scap-debug if hw
+                                    // landings differ.
     /*end_of_line_hpos=*/0xDD,
     /*slots=*/{
         // pixel_x — first pixel of the strip this slot's MOVE applies to.
-        // Shifted by −8 from the naive {16,32,…,320} grid because under
-        // 6-plane DPF DMA contention the first real MOVE in the chain
-        // lands at lores x = 8, and subsequent MOVEs follow at 16-px
-        // spacing.
+        //
+        // Slot 0 ("preload") at pixel_x = 0: lands during HBLANK tail /
+        // start of active raster, so its swap takes effect for the
+        // first 8 active-area pixels. Without it the chain's first real
+        // MOVE is at x=8 and pixels 0..7 stay on CAP's entry palette,
+        // producing a visible discontinuity at the x=8 boundary on
+        // continuous-tone content. The planner uses this slot like any
+        // other; if the beam doesn't want a swap the filler MOVE writes
+        // COLOR31 (unread on OCS DPF 3+3) and costs nothing.
+        // ADJUST THE LANDING POSITION via --scap-debug if the actual
+        // hw timing puts it past x=0.
+        {  0+kOCS},
+        // Existing slots — shifted by −8 from the naive {16,32,…,320}
+        // grid because under 6-plane DPF DMA contention the first real
+        // MOVE in this segment of the chain lands at lores x = 8, and
+        // subsequent MOVEs follow at 16-px spacing.
         { 8+kOCS}, { 24-1+kOCS}, { 40+kOCS}, { 56-1+kOCS}, { 72-1+kOCS}, { 88+kOCS}, {104+kOCS}, {120+kOCS},
         {136-1+kOCS}, {152+kOCS}, {168+kOCS}, {184+kOCS}, {200+kOCS}, {216-1+kOCS}, {232+kOCS}, {248-1+kOCS},
         {264-1+kOCS}, {280+kOCS}, {296-1+kOCS},
