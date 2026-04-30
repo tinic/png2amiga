@@ -121,14 +121,35 @@ Defaults defaults_for(const Context& ctx) {
     }
 
     // ---- Standard modes (no copper, no SCAP) ----------------------------
-    if (ctx.mode == amiga::Mode::ehb) return Defaults{0.9f, 0.35f};
-    if (ctx.mode == amiga::Mode::lores) {
+    //
+    // Strengths re-tuned 2026-04-30 against SSIMULACRA2 (mean over
+    // lovers / electrichues02 / chuck31 at the mode-natural
+    // raster). The previous values were PSNR-tuned and produced an
+    // FS runaway at hires depth=4 (S2 cliffed from ~14 to -21
+    // between strength 0.7 and 1.0). The new defaults sit at or
+    // below the cliff for every bucket. lace variants share their
+    // non-lace siblings — the encoded bitplane buffer is identical
+    // (lace is purely a CAMG flag), so the same tuning applies.
+    if (ctx.mode == amiga::Mode::ehb) return Defaults{0.8f, 0.35f};
+    if (ctx.mode == amiga::Mode::lores ||
+        ctx.mode == amiga::Mode::lores_interlace) {
         switch (ctx.depth) {
-            case 1: return Defaults{1.0f, 0.35f};
-            case 2: return Defaults{0.8f, 0.10f};
-            case 3: return Defaults{0.9f, 0.35f};
-            case 4: return Defaults{0.9f, 0.20f};
-            case 5: return Defaults{0.9f, 0.35f};
+            case 1: return Defaults{0.85f, 0.35f};
+            case 2: return Defaults{0.70f, 0.10f};
+            case 3: return Defaults{0.70f, 0.35f};
+            case 4: return Defaults{0.85f, 0.20f};
+            case 5: return Defaults{0.50f, 0.35f};
+            case 6: return Defaults{0.50f, 0.35f};
+            default: break;
+        }
+    }
+    if (ctx.mode == amiga::Mode::hires ||
+        ctx.mode == amiga::Mode::hires_interlace) {
+        switch (ctx.depth) {
+            case 1: return Defaults{0.85f, 0.35f};
+            case 2: return Defaults{0.80f, 0.35f};
+            case 3: return Defaults{0.80f, 0.35f};
+            case 4: return Defaults{0.70f, 0.35f};
             default: break;
         }
     }

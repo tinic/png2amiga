@@ -5608,13 +5608,27 @@ int main(int argc, char* argv[]) {
         preprocess::match_palette_range(*image, pal);
     }
 
-    // Apply dithering
+    // Apply dithering. Pull mode-aware defaults from dither_tuning so
+    // hires / lores-lace / ehb / etc. get the per-mode strength tuned
+    // against SSIMULACRA2 rather than the unsafe-at-low-color
+    // strength=1.0 fallback (which used to runaway-FS at hires d=4).
     auto pal_size = std::min(pal.size(), max_colors);
 
     dither::Settings dith;
     dith.method = config->dither_method;
-    dith.strength = config->dither_strength;
-    dith.error_clamp = config->error_clamp;
+    auto plain_tune = dither_tuning::defaults_for(dither_tuning::Context{
+        .mode    = config->mode,
+        .depth   = static_cast<int>(config->depth),
+        .dpf     = config->dual_playfield,
+        .scap    = false,
+        .copper  = false,
+        .chipset = chipset,
+        .method  = config->dither_method,
+    });
+    dith.strength = config->dither_strength_explicit
+        ? config->dither_strength : plain_tune.strength;
+    dith.error_clamp = config->error_clamp_explicit
+        ? config->error_clamp : plain_tune.error_clamp;
 
     // Dither-aware palette refinement: iteratively run the ditherer,
     // recompute each slot's centroid from the pixels actually assigned
