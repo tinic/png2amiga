@@ -148,7 +148,7 @@ run_png2amiga "p2a-ham6"          --mode ham6
 run_png2amiga "p2a-ham6-best" --mode ham6 --cap --best
 
 # 7) png2amiga EHB + SCAP + best
-run_png2amiga "p2a-ehb-sbest" --mode ehb --scap --best
+run_png2amiga "p2a-ehb-best" --mode ehb --scap --best
 
 # --- Step 3: PSNR table ----------------------------------------------------
 echo

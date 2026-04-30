@@ -1093,21 +1093,74 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
 
         Result<ham::HamResult> ham_result;
+        std::optional<Image> swept_preview;
         if (options.copper) {
             ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts,
                                                   compound_hires,
                                                   static_cast<std::size_t>(options.copper_changes));
+        } else if (options.best && ham_eligible_for_best) {
+            // Plain HAM6/HAM8 + --best: same multi-restart shape as CAP /
+            // SCAP. Each trial encodes a jittered source under different
+            // (dither_strength × diversity) and is ranked by best_metric
+            // against the unjittered original. 8 jitter seeds matches
+            // plain CAP's setting; HAM8 uses amplitude 0.4 (its 64-colour
+            // base + 8-bit modify channels are more sensitive to large
+            // pre-image perturbations — AGA shimmer).
+            struct HamTrial {
+                ham::HamResult result;
+                Image rendered;
+            };
+            dither::Settings dith;
+            dith.method = parse_dither(options.dither);
+            dith.strength = options.dither_strength;
+            dith.error_clamp = options.error_clamp;
+            auto encode_once = [&](const Image& img,
+                                   const dither::Settings& d,
+                                   int div) -> Result<HamTrial> {
+                auto trial_opts = ham_opts;
+                trial_opts.dither_strength = d.strength;
+                trial_opts.error_clamp = d.error_clamp;
+                trial_opts.palette_diversity = div;
+                trial_opts.best = false;  // best replaced by the sweep
+                auto r = ham::encode_ham(img, mode, chipset, trial_opts);
+                if (!r) return std::unexpected{r.error()};
+                auto p = pipeline::render_preview(
+                    r->planes, r->base_palette, /*is_ham=*/true,
+                    options.interlace, chipset, nullptr);
+                if (!p) return std::unexpected{p.error()};
+                return HamTrial{*std::move(r), *std::move(p)};
+            };
+            auto best_metric = pipeline::parse_best_metric(options.best_metric);
+            float amp = (ham_params.bitplane_depth == 8) ? 0.4f : 1.0f;
+            auto winner = pipeline::best_sweep<HamTrial>(
+                *image, dith, options.palette_diversity,
+                /*jitter_count=*/8,
+                encode_once,
+                [](const HamTrial& t) -> const Image& { return t.rendered; },
+                options.on_progress, amp, best_metric);
+            if (!winner) {
+                return std::unexpected{Error{
+                    ErrorCode::unsupported_mode,
+                    "HAM --best sweep produced no result"}};
+            }
+            ham_result = std::move(winner->result);
+            swept_preview = std::move(winner->rendered);
         } else {
             ham_result = ham::encode_ham(*image, mode, chipset, ham_opts);
         }
         if (!ham_result) return std::unexpected{ham_result.error()};
 
         // Render preview using HAM decoder (not simple palette lookup)
-        auto preview = pipeline::render_preview(
-            ham_result->planes, ham_result->base_palette,
-            /*is_ham=*/true, options.interlace, chipset,
-            (options.copper && !ham_result->scanline_palettes.empty())
-                ? &ham_result->scanline_palettes : nullptr);
+        Result<Image> preview;
+        if (swept_preview) {
+            preview = std::move(*swept_preview);
+        } else {
+            preview = pipeline::render_preview(
+                ham_result->planes, ham_result->base_palette,
+                /*is_ham=*/true, options.interlace, chipset,
+                (options.copper && !ham_result->scanline_palettes.empty())
+                    ? &ham_result->scanline_palettes : nullptr);
+        }
         if (!preview) return std::unexpected{preview.error()};
 
         PipelineResult result;

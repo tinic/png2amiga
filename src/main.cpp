@@ -477,7 +477,7 @@ struct Config {
     // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
     // Off by default — opt-in for offline / final exports.
     bool best = false;
-    std::string best_metric = "msssim";  // "msssim" (default) | "psnr"
+    std::string best_metric = "ssimulacra2";  // "ssimulacra2" (default) | "msssim" | "psnr"
 
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
@@ -640,13 +640,13 @@ void print_usage() {
         "                                  Spends ~20–30× the time but searches\n"
         "                                  many more candidates and picks the\n"
         "                                  one that looks best.\n"
-        "  --best-metric msssim|ssimulacra2|psnr\n"
+        "  --best-metric ssimulacra2|msssim|psnr\n"
         "                                  With --best, choose how candidates\n"
-        "                                  are scored: msssim (default) is fast\n"
-        "                                  and tracks SSIMULACRA2 well;\n"
-        "                                  ssimulacra2 is the most perceptually\n"
-        "                                  accurate but slower; psnr keeps\n"
-        "                                  maximum fine detail.\n"
+        "                                  are scored. ssimulacra2 (default)\n"
+        "                                  is the most perceptually accurate;\n"
+        "                                  msssim is faster and tracks\n"
+        "                                  SSIMULACRA2 reasonably well; psnr\n"
+        "                                  keeps maximum fine detail.\n"
         "\n"
         "SCAP — Super CAP (mid-line swaps):\n"
         "  --scap                          Mid-line palette swaps inside the displayed\n"
