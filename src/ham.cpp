@@ -1586,7 +1586,7 @@ std::vector<HamSwap> find_ham_swaps(
         return swaps;
     }
 
-    // Best-quality path (--ham-cap-best): per iteration, build a multi-
+    // Best-quality path (--best): per iteration, build a multi-
     // candidate × multi-slot search and pick the (slot, color) pair that
     // drops row error the most. Don't bail on a single failed candidate —
     // only stop when NO candidate-slot pair improves the row. ~5-10×
@@ -1670,7 +1670,7 @@ std::vector<HamSwap> find_ham_swaps(
         }
 
         // Candidate slots: every SET slot (k>=1), sorted least-used first.
-        // The best-quality planner is already opt-in (--ham-cap-best), so
+        // The best-quality planner is already opt-in (--best), so
         // we don't compromise on search width here — searching every slot
         // catches popular-slot swaps that re-route many SET pixels through
         // cheaper MODIFY chains.
@@ -1688,10 +1688,10 @@ std::vector<HamSwap> find_ham_swaps(
         // Parallelise the candidate × slot search. Each trial is
         // independent given a thread-local palette copy with the swap
         // applied; measure_row_error reads but doesn't write shared
-        // state. Sequential trials are the dominant cost in --cap-best
+        // state. Sequential trials are the dominant cost in --best
         // mode (16 cands × 15 slots × 7 swaps × ~213 rows × 5 passes
         // = ~1.8M row encodes), so parallelising here lifts the whole
-        // HAM6+CAP+cap-best path from single-thread to N-core.
+        // HAM6+CAP+best path from single-thread to N-core.
         struct TrialResult {
             float    err = std::numeric_limits<float>::max();
             Color3f  color{};
@@ -1825,7 +1825,7 @@ Result<HamResult> encode_ham_copper_generic(
         float total_error;
     };
 
-    // Single shared global progress counter so cap_best's many run_passes
+    // Single shared global progress counter so best's many run_passes
     // calls together cover 0..100% in one monotone sweep instead of N
     // visually-distinct sub-bars. Each row processed contributes one
     // weighted "work unit":
@@ -1833,14 +1833,14 @@ Result<HamResult> encode_ham_copper_generic(
     //   - pass 2 (parallel DP beam search)  ≈ 95%
     // so weighting per-row bumps gives a near-linear bar in wall time.
     //
-    // cap_best does the initial encode plus kCapBestRefineIters extra
+    // best does the initial encode plus kCapBestRefineIters extra
     // refinement passes (no early-stop — predictable progress + every
     // iteration is a chance to find a lower-error palette centroid).
     // User explicitly OK'd more compute for better quality.
     constexpr float kPass1Weight = 0.05f;
     constexpr float kPass2Weight = 0.95f;
     constexpr int kCapBestRefineIters = 4;
-    float run_passes_count = opts.cap_best
+    float run_passes_count = opts.best
         ? static_cast<float>(1 + kCapBestRefineIters) : 1.0f;
     float total_units = run_passes_count *
         (kPass1Weight * static_cast<float>(h) +
@@ -1857,10 +1857,10 @@ Result<HamResult> encode_ham_copper_generic(
         opts.on_progress(p, stage);
     };
 
-    // Beam width is per-call so refinement passes (cap_best loop below)
+    // Beam width is per-call so refinement passes (best loop below)
     // can ask for a wider DP beam than the initial encode. Wider beam
     // = higher PSNR per row at proportional CPU cost — exactly the
-    // tradeoff cap_best trades on.
+    // tradeoff best trades on.
     auto run_passes = [&](std::vector<Color3f> initial_base,
                           std::string_view stage,
                           std::size_t beam_width) -> PassResult {
@@ -1915,7 +1915,7 @@ Result<HamResult> encode_ham_copper_generic(
                 neighbour_weights.data(), nb_count);
             auto swaps = find_ham_swaps(row, pal_for_row, num_base_colors,
                                         data_bits, row_k, chipset,
-                                        opts.cap_best,
+                                        opts.best,
                                         rows_view, weights_view);
             std::vector<copper::CopperChange> line_changes;
             for (auto& [slot, color] : swaps) {
@@ -2030,7 +2030,7 @@ Result<HamResult> encode_ham_copper_generic(
     // inside each).
     auto best = run_passes(base_pal.colors, "encoding", opts.beam_width);
 
-    // Joint base-palette + CAP refinement (--cap-best only). The
+    // Joint base-palette + CAP refinement (--best only). The
     // initial choose_ham_palette base is fixed without knowing what
     // CAP will do per row; refinement re-picks each slot as the OKLab
     // centroid of the per-row palettes the previous pass settled into,
@@ -2070,7 +2070,7 @@ Result<HamResult> encode_ham_copper_generic(
         }
         return refined;
     };
-    if (opts.cap_best && changes_per_line > 0 && h > 0) {
+    if (opts.best && changes_per_line > 0 && h > 0) {
         // Pure centroid refinement is a fixed-point iteration — it
         // converges in 1–2 passes and pure looping doesn't gain past
         // that. To keep finding real improvements we alternate centroid
@@ -2081,7 +2081,7 @@ Result<HamResult> encode_ham_copper_generic(
         //
         // Quadruple the beam for refinement passes (default 16 → 64).
         // Wider DP beam typically buys +0.3..1 dB on top of the centroid
-        // refine, moving cap_best clearly into "visibly better"
+        // refine, moving best clearly into "visibly better"
         // territory.
         auto refine_beam = std::max(opts.beam_width, std::size_t{64});
         auto jitter = [&](std::vector<Color3f>& pal, std::uint32_t seed) {

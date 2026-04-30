@@ -476,8 +476,8 @@ struct Config {
     // indexed copper modes ignore this flag (their planner is already
     // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
     // Off by default — opt-in for offline / final exports.
-    bool cap_best = false;
-    std::string cap_best_metric = "msssim";  // "msssim" (default) | "psnr"
+    bool best = false;
+    std::string best_metric = "msssim";  // "msssim" (default) | "psnr"
 
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
@@ -636,12 +636,12 @@ void print_usage() {
         "                                  worst-case K that fits the 14-MOVE\n"
         "                                  budget; auto mode also tries K+1..K+3).\n"
         "                                  (Legacy alias: --copper-changes)\n"
-        "  --cap-best, --scap-best         Best-quality CAP/SCAP search.\n"
+        "  --best                          Best-quality search.\n"
         "                                  Spends ~20–30× the time but searches\n"
         "                                  many more candidates and picks the\n"
         "                                  one that looks best.\n"
-        "  --cap-best-metric msssim|ssimulacra2|psnr\n"
-        "                                  With --cap-best, choose how candidates\n"
+        "  --best-metric msssim|ssimulacra2|psnr\n"
+        "                                  With --best, choose how candidates\n"
         "                                  are scored: msssim (default) is fast\n"
         "                                  and tracks SSIMULACRA2 well;\n"
         "                                  ssimulacra2 is the most perceptually\n"
@@ -953,15 +953,15 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg == "--cap-best-metric") {
+        if (arg == "--best-metric") {
             if (i + 1 >= argc)
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--cap-best-metric requires msssim, ssimulacra2, or psnr"}};
+                    "--best-metric requires msssim, ssimulacra2, or psnr"}};
             std::string v = argv[++i];
             if (v != "msssim" && v != "psnr" && v != "ssimulacra2")
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--cap-best-metric must be msssim, ssimulacra2, or psnr"}};
-            config.cap_best_metric = std::move(v);
+                    "--best-metric must be msssim, ssimulacra2, or psnr"}};
+            config.best_metric = std::move(v);
             continue;
         }
 
@@ -1015,13 +1015,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg == "--cap-best" || arg == "--scap-best" ||
-            arg == "--ham-cap-best") {
-            // --scap-best is an alias for --cap-best (same parallel
-            // jitter sweep; the encoder route is selected by --cap /
-            // --scap, not by which best-flag the user typed).
-            // --ham-cap-best is the legacy alias.
-            config.cap_best = true;
+        if (arg == "--best") {
+            // Best-quality multi-restart sweep. The encoder route is
+            // selected by --cap / --scap; --best toggles the parallel
+            // jitter pass on top of whichever encoder runs.
+            config.best = true;
             continue;
         }
 
@@ -1847,7 +1845,7 @@ std::string_view mode_to_options_string(amiga::Mode m) {
 // dither::Method → api::Options.dither string. api::parse_dither is the
 // inverse. Falls back to "floyd-steinberg" for unmapped methods.
 // Mirror of api::parse_dither — must stay in sync. Any method exposed
-// to --dither MUST round-trip through this so cap_best / SCAP / SNES /
+// to --dither MUST round-trip through this so best / SCAP / SNES /
 // Genesis paths that route through api::encode_state see the user's
 // actual choice (silent fallback to floyd-steinberg here was a real
 // bug that hid opt-checker / yliluoma / structure-fs / knoll / etc.).
@@ -2000,8 +1998,8 @@ api::Options make_api_options(const Config& cfg) {
     opts.ham_beam = static_cast<int>(cfg.ham_beam);
     opts.ham_triple = static_cast<int>(cfg.ham_triple);
     opts.refine_iterations = cfg.refine_iterations;
-    opts.cap_best = cfg.cap_best;
-    opts.cap_best_metric = cfg.cap_best_metric;
+    opts.best = cfg.best;
+    opts.best_metric = cfg.best_metric;
     opts.copper = cfg.copper;
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
     opts.cap_spread_radius = cfg.cap_spread_radius;
@@ -4507,7 +4505,7 @@ int main(int argc, char* argv[]) {
             auto w = image->width();
             auto h = image->height();
 
-            // Single-pass EHB+CAP encode. Body factored so cap_best
+            // Single-pass EHB+CAP encode. Body factored so best
             // below can replay it under a parallel jitter sweep without
             // duplicating the (copper → re-dither → render) flow.
             struct EhbCapTrial {
@@ -4600,14 +4598,14 @@ int main(int argc, char* argv[]) {
             };
 
             std::optional<EhbCapTrial> winner;
-            if (config->cap_best) {
+            if (config->best) {
                 // Same sweep shape as plain CAP and SCAP EHB: 8 jitter
                 // seeds × 5 strengths × 4 diversities + 1 baseline.
                 // 32-colour base palette (depth=5 copper); EHB is
                 // OCS-bound so amplitude=1.0 (no AGA shimmer concern).
-                auto cap_metric = pipeline::parse_cap_best_metric(config->cap_best_metric);
+                auto cap_metric = pipeline::parse_best_metric(config->best_metric);
                 auto progress_fn = make_cli_progress_reporter();
-                winner = pipeline::cap_best_sweep<EhbCapTrial>(
+                winner = pipeline::best_sweep<EhbCapTrial>(
                     *image, dith, config->palette_diversity,
                     /*jitter_count=*/8,
                     [&](const Image& jittered_in,
@@ -4990,7 +4988,7 @@ int main(int argc, char* argv[]) {
 
         std::size_t skip_initial_lace = config->interlace ? 2 : 0;
 
-        // Single-pass encoder factored so cap-best below can replay it
+        // Single-pass encoder factored so best below can replay it
         // under a parallel jitter sweep without duplicating the args.
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d, int diversity,
@@ -5010,11 +5008,11 @@ int main(int argc, char* argv[]) {
         };
 
         Result<copper::CopperResult> copper_result;
-        if (config->cap_best) {
+        if (config->best) {
             // Plain CAP: 8 jitter seeds (16-colour palette has shallower
             // basins than DPF's 8-colour PF2; 8 seeds × 5×4 = 161 trials,
             // ~30–60 s on 8 cores). Same parallel-sweep machinery as
-            // SCAP DPF/EHB via pipeline::cap_best_sweep.
+            // SCAP DPF/EHB via pipeline::best_sweep.
             struct CapTrial {
                 copper::CopperResult result;
                 Image rendered;
@@ -5025,8 +5023,8 @@ int main(int argc, char* argv[]) {
             // OCS's discrete 12-bit gamut already snaps small nudges.
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto cap_metric = pipeline::parse_cap_best_metric(config->cap_best_metric);
-            auto best = pipeline::cap_best_sweep<CapTrial>(
+            auto cap_metric = pipeline::parse_best_metric(config->best_metric);
+            auto best = pipeline::best_sweep<CapTrial>(
                 *image, dith, config->palette_diversity,
                 /*jitter_count=*/8,
                 [&](const Image& jittered_in,

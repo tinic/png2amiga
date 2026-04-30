@@ -270,7 +270,7 @@ Image jitter_image(const Image& source, std::uint32_t seed,
     return j;
 }
 
-// Nested parallel_for detection. cap_best_sweep already parallelises
+// Nested parallel_for detection. best_sweep already parallelises
 // across N trials; if an inner encoder also calls parallel_for (e.g.
 // HAM6 SCAP's per-row HAM-DP planner) we'd get hardware_concurrency²
 // threads competing for hardware_concurrency cores — severe over-

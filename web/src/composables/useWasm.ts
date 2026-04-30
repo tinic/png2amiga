@@ -105,7 +105,7 @@ function ensureWorker(): void {
 // promise with an "aborted" error, and let the next convert call
 // re-spawn a fresh worker. Cheap (~few hundred ms WASM re-instantiate)
 // but reliable — works regardless of where in the encode we are
-// (parallel_for, beam search, cap_best_sweep), because the whole
+// (parallel_for, beam search, best_sweep), because the whole
 // WASM runtime + its pthread workers go down with the host worker.
 //
 // IMPORTANT: do NOT flip sharedLoading to true here. The loading
@@ -158,7 +158,7 @@ export function useWasm(): UseWasmReturn {
 
   // The optional `onProgress` arg (last position on each wrapper) lets
   // callers receive progress ticks from the encoder during long operations
-  // (HAM6 + --ham-cap-best, large beam widths, etc.). The worker injects a
+  // (HAM6 + --best, large beam widths, etc.). The worker injects a
   // JS callback into the WASM options at args[1]; ticks come back as
   // {type:'progress'} messages and are routed by id.
   function postWorker(msg: WorkerOutboundMessage): void {

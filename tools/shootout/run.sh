@@ -144,11 +144,11 @@ run_ham_convert hc-sham6 ham6_sliced
 # 5) png2amiga HAM6 (no CAP)
 run_png2amiga "p2a-ham6"          --mode ham6
 
-# 6) png2amiga HAM6 + CAP + cap-best
-run_png2amiga "p2a-ham6-cap-best" --mode ham6 --cap --cap-best
+# 6) png2amiga HAM6 + CAP + best
+run_png2amiga "p2a-ham6-best" --mode ham6 --cap --best
 
-# 7) png2amiga EHB + SCAP + cap-best
-run_png2amiga "p2a-ehb-scap-best" --mode ehb --scap --cap-best
+# 7) png2amiga EHB + SCAP + best
+run_png2amiga "p2a-ehb-sbest" --mode ehb --scap --best
 
 # --- Step 3: PSNR table ----------------------------------------------------
 echo

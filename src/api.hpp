@@ -157,12 +157,12 @@ struct Options {
     // PSNR is the literal goal. Compile-time dispatched.
     std::string ham_metric = "oklab2";
 
-    // cap-best ranking metric. "msssim" (default) produces a cleaner
+    // best ranking metric. "msssim" (default) produces a cleaner
     // image and tracks SSIMULACRA2 better; "psnr" keeps maximum
     // fine detail at the cost of perceptual quality.
-    // User flips via --cap-best-metric.
-    std::string cap_best_metric = "msssim";
-    bool cap_best = false;               // multi-candidate CAP planner +
+    // User flips via --best-metric.
+    std::string best_metric = "msssim";
+    bool best = false;               // multi-candidate CAP planner +
                                          // joint base-palette refinement.
                                          // HAM6 + copper and HAM8 + copper
                                          // only — indexed copper modes

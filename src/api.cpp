@@ -1065,14 +1065,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.greedy = options.ham_fast;
         ham_opts.metric = (options.ham_metric == "oklab2")
             ? ham::HamMetric::oklab2 : ham::HamMetric::srgb_mse;
-        // cap_best only applies to HAM6 and HAM8 — HAM4/5/7 are skipped
+        // best only applies to HAM6 and HAM8 — HAM4/5/7 are skipped
         // because their tiny base palettes (4/8/32 colors) don't benefit
         // from the refined planner enough to justify the cost.
         auto ham_params = amiga::get_mode_params(mode);
-        bool ham_eligible_for_cap_best =
+        bool ham_eligible_for_best =
             (ham_params.bitplane_depth == 6 ||
              ham_params.bitplane_depth == 8);
-        ham_opts.cap_best = options.cap_best && ham_eligible_for_cap_best;
+        ham_opts.best = options.best && ham_eligible_for_best;
         ham_opts.on_progress = options.on_progress;
         ham_opts.skip_initial_swap_rows = options.interlace ? 2 : 0;
 
@@ -1177,7 +1177,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // Single-pass EHB+CAP encode: depth-5 copper (32 base colors)
             // → per-row 64-entry EHB palette (base + hardware halfbrites)
             // → re-dither against per-row palette → 6-plane bitmap +
-            // preview. Factored so cap_best below replays it under a
+            // preview. Factored so best below replays it under a
             // parallel jitter sweep without duplicating the body.
             struct EhbCapTrial {
                 copper::CopperResult copper_result;
@@ -1274,14 +1274,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             };
 
             std::optional<EhbCapTrial> winner;
-            if (options.cap_best) {
+            if (options.best) {
                 // Same sweep shape as plain CAP and SCAP EHB: 8 jitter
                 // seeds × 5 strengths × 4 diversities + 1 baseline.
                 // 32-colour base palette → shallower median-cut basins,
                 // amplitude 1.0 (AGA-only weakening doesn't apply here
                 // since EHB is OCS-bound).
-                auto cap_metric = pipeline::parse_cap_best_metric(options.cap_best_metric);
-                winner = pipeline::cap_best_sweep<EhbCapTrial>(
+                auto cap_metric = pipeline::parse_best_metric(options.best_metric);
+                winner = pipeline::best_sweep<EhbCapTrial>(
                     *image, dith, options.palette_diversity,
                     /*jitter_count=*/8,
                     [&](const Image& jittered_in,
@@ -1524,7 +1524,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         std::size_t skip_initial_lace = options.interlace ? 2 : 0;
 
-        // Single-pass encoder, factored out so cap_best below can replay
+        // Single-pass encoder, factored out so best below can replay
         // it under a parallel jitter sweep without duplicating the
         // argument list.
         // Forward sentinel when CLI flag absent → encode_copper picks
@@ -1549,7 +1549,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         };
 
         Result<copper::CopperResult> copper_result;
-        if (options.cap_best) {
+        if (options.best) {
             // Plain CAP: 8 jitter seeds. Same shape as SCAP EHB —
             // 16-colour (or wider) palette so the median-cut basin is
             // less acute than DPF's 8-colour PF2; 8 seeds × 5×4 = 161
@@ -1557,7 +1557,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             //
             // copper::encode_copper returns the rendered preview via
             // copper::render_copper_capped on (planes, scanline_palettes).
-            // We pre-render here per trial so cap_best_sweep can rank by
+            // We pre-render here per trial so best_sweep can rank by
             // PSNR.
             struct CapTrial {
                 copper::CopperResult result;
@@ -1565,8 +1565,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             };
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto cap_metric = pipeline::parse_cap_best_metric(options.cap_best_metric);
-            auto best = pipeline::cap_best_sweep<CapTrial>(
+            auto cap_metric = pipeline::parse_best_metric(options.best_metric);
+            auto best = pipeline::best_sweep<CapTrial>(
                 *image, dith, options.palette_diversity,
                 /*jitter_count=*/8,
                 [&](const Image& jittered_in,
@@ -1711,8 +1711,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.on_progress,
                 options.cap_spread_radius,
                 options.cap_spread_decay,
-                options.cap_best,
-                options.cap_best_metric,
+                options.best,
+                options.best_metric,
                 scap_user_pal_span,
                 (options.ham_metric == "srgb-mse")
                     ? ham::HamMetric::srgb_mse
@@ -1728,8 +1728,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.palette_diversity,
                 options.scap_debug,
                 options.on_progress,
-                options.cap_best,
-                options.cap_best_metric,
+                options.best,
+                options.best_metric,
                 options.cap_spread_radius,
                 options.cap_spread_decay,
                 scap_user_pal_span)
@@ -1743,8 +1743,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
                 options.on_progress,
-                options.cap_best,
-                options.cap_best_metric,
+                options.best,
+                options.best_metric,
                 options.cap_spread_radius,
                 options.cap_spread_decay,
                 scap_user_pal_span);

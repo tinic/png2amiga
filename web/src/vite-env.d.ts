@@ -94,10 +94,8 @@ declare module '@wasm/png2amiga.js' {
     hamFast?: boolean
     quantizer?: string
     refineIterations?: number
-    capBest?: boolean
-    scapBest?: boolean        // alias for capBest
-    hamCapBest?: boolean      // legacy alias for capBest
-    capBestMetric?: string    // 'psnr' (default) | 'msssim'
+    best?: boolean
+    bestMetric?: string    // 'msssim' (default) | 'psnr'
 
     // Color adjustments (OKLab-space)
     gamma?: number

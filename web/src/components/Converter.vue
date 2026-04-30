@@ -38,7 +38,7 @@ function onStopEncode(): void {
   convertGen++
   committedGen = convertGen
   // Tear down EVERY in-flight encode handle. What DOES matter: clear
-  // both timers so the next options change (e.g. user toggling cap-best
+  // both timers so the next options change (e.g. user toggling --best
   // off) starts fresh — without this, a stale debounce timer that was
   // queued mid-stop could re-fire runConvert.
   if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
@@ -1375,26 +1375,26 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- CAP / SCAP best quality. Sits LAST in the cap section so
+              <!-- Best quality. Sits LAST in the cap section so
                    the user enables it after they've chosen mode + cap +
-                   scap + dpf — flipping cap-best earlier doesn't change
+                   scap + dpf — flipping --best earlier doesn't change
                    the algorithmic choices, just the time budget. Parallel
                    multi-restart sweep over (dither_strength × diversity
                    × image-jitter); picks the best-scoring trial. Active
                    for: HAM+CAP (centroid refinement), plain CAP, EHB+CAP,
                    SCAP DPF, SCAP EHB. -->
               <div v-if="options.copper || options.scap" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality CAP/SCAP search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">CAP best</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">Best</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.capBest" />
+                  <ToggleSwitch v-model="options.best" />
                   <span style="color: #888; font-size: 0.625rem;">~20–30× slower, parallel</span>
                 </div>
               </div>
-              <div v-if="options.capBest" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for CAP best: ms-ssim (default) gives a cleaner image and tracks SSIMULACRA2; psnr keeps maximum fine detail.">CAP metric</label>
+              <div v-if="options.best" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for --best: ms-ssim (default) gives a cleaner image and tracks SSIMULACRA2; psnr keeps maximum fine detail.">Best metric</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <SelectButton
-                    v-model="options.capBestMetric"
+                    v-model="options.bestMetric"
                     :options="[{label:'MS-SSIM', value:'msssim'}, {label:'PSNR', value:'psnr'}]"
                     optionLabel="label" optionValue="value"
                     :allowEmpty="false"

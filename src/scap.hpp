@@ -253,8 +253,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int palette_diversity = 0,
                                        std::function<void(float, std::string_view)>
                                            on_progress = {},
-                                       bool cap_best = false,
-                                       std::string_view cap_best_metric =
+                                       bool enable_best = false,
+                                       std::string_view best_metric =
                                            "msssim",
                                        int cap_spread_radius = -1,
                                        float cap_spread_decay = -1.0f,
@@ -287,8 +287,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        bool debug_overlay = false,
                                        std::function<void(float, std::string_view)>
                                            on_progress = {},
-                                       bool cap_best = false,
-                                       std::string_view cap_best_metric =
+                                       bool enable_best = false,
+                                       std::string_view best_metric =
                                            "msssim",
                                        int cap_spread_radius = -1,
                                        float cap_spread_decay = -1.0f,
@@ -311,7 +311,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 // Output: 6-plane bitplane data, 16-entry base palette, per-line SCAP
 // MOVE tables, and a rendered preview Image.
 //
-// v0: single greedy pass, no joint refinement, no cap-best wiring.
+// v0: single greedy pass, no joint refinement, no best wiring.
 // ---------------------------------------------------------------------------
 Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         int width,
@@ -324,8 +324,8 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                             on_progress = {},
                                         int cap_spread_radius = -1,
                                         float cap_spread_decay = -1.0f,
-                                        bool cap_best = false,
-                                        std::string_view cap_best_metric =
+                                        bool enable_best = false,
+                                        std::string_view best_metric =
                                             "msssim",
                                         std::span<const Color3f>
                                             external_palette = {},

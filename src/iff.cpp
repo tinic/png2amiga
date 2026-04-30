@@ -173,7 +173,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     // exactly — otherwise every subsequent row gets a constant
     // (CMAP − scan_pals[0]) offset applied. Without this, the per-row
     // mutations inside find_ham_swaps / copper::encode (and especially
-    // --cap-best's joint base-palette refinement, where base_palette
+    // --best's joint base-palette refinement, where base_palette
     // is the OKLab centroid of all rows, not row 0 specifically)
     // produce wrong colours via every IFF reader.
     auto pchg_pal0 = (options.scanline_palettes &&

@@ -10,8 +10,8 @@ README. Reproducible end-to-end.
 | `abc` (arnaud-carre) | ✓ `-floyd` | ✓ `-floyd` |
 | `ham_convert` (Solo761, max-quality `q7`) | ✓ `dither_fs` | ✓ `dither_fs` (`ham6_sliced`) |
 | `png2amiga` plain HAM6 | ✓ `--dither floyd-steinberg` | — |
-| `png2amiga` HAM6 + CAP + cap-best | ✓ FS | — |
-| `png2amiga` EHB + SCAP + cap-best | — | (SCAP fills the SHAM-equivalent role) |
+| `png2amiga` HAM6 + CAP + best | ✓ FS | — |
+| `png2amiga` EHB + SCAP + best | — | (SCAP fills the SHAM-equivalent role) |
 
 All entries use Floyd-Steinberg as the error-diffusion kernel for
 apples-to-apples comparison. Each encoder's other tuning knobs are set

@@ -491,10 +491,10 @@ Result<CopperResult> encode_copper(const Image& image,
     //            iteration 1 as column weights — swaps now target where
     //            the ditherer actually struggled.
     //
-    // Joint base-palette refinement (the --cap-best HAM strategy) was
+    // Joint base-palette refinement (the --best HAM strategy) was
     // tried here and gave ≤+0.10 dB on indexed copper modes — the
     // existing pd_iter feedback already finds a near-local-optimum so
-    // OKLab-centroid re-seeding doesn't dislodge it. Removed; --cap-best
+    // OKLab-centroid re-seeding doesn't dislodge it. Removed; --best
     // is HAM-only.
 
     std::vector<std::uint8_t> all_indices(width * height);

@@ -78,8 +78,8 @@ LABELS = {
     'hc-ham6':            'ham_convert HAM6_q7 (dither_fs)',
     'hc-sham6':           'ham_convert SHAM6 (dither_fs)',
     'p2a-ham6':           'png2amiga HAM6 (FS)',
-    'p2a-ham6-cap-best':  'png2amiga HAM6 + CAP + cap-best (FS)',
-    'p2a-ehb-scap-best':  'png2amiga EHB + SCAP + cap-best (FS)',
+    'p2a-ham6-best':  'png2amiga HAM6 + CAP + best (FS)',
+    'p2a-ehb-sbest':  'png2amiga EHB + SCAP + best (FS)',
 }
 
 results = []

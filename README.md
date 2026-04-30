@@ -116,7 +116,7 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 ./build/png2amiga --mode ehb --scap input.png data.h
 
 # HAM6 + CAP at maximum quality (~4-5× slower, +0.5 to +2 dB PSNR)
-./build/png2amiga --mode ham6 --cap --cap-best input.png output.iff
+./build/png2amiga --mode ham6 --cap --best input.png output.iff
 
 # Generate a bootable Amiga floppy that displays the image
 ./build/png2amiga --mode ham6 input.png viewer.cpp
@@ -197,7 +197,7 @@ on AGA.
 if you want to experiment with configurations that may exceed real
 hardware limits but still display correctly on emulators.
 
-`--cap-best` enables a slower (~4–5×) HAM CAP planner that combines
+`--best` enables a slower (~4–5×) HAM CAP planner that combines
 multi-candidate slot search with joint base-palette refinement. HAM6
 and HAM8 + CAP only. Adds roughly +0.5 to +1.5 dB PSNR on natural
 images; smooth synthetic gradients can land near lossless. The
@@ -254,8 +254,8 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 |
 |-------------|-----------------------------------|----------:|------------:|
-| **png2amiga** | **EHB + SCAP + cap-best**       | 32.95     | **75.15**   |
-| png2amiga   | HAM6 + CAP + cap-best             | 30.91     | 69.32       |
+| **png2amiga** | **EHB + SCAP + best**       | 32.95     | **75.15**   |
+| png2amiga   | HAM6 + CAP + best             | 30.91     | 69.32       |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |
 | png2amiga   | HAM6 (no copper)                  | 29.89     | 61.81       |

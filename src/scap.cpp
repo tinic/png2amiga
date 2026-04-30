@@ -10,7 +10,7 @@
 #include "pipeline.hpp"
 #include "types.hpp"
 
-// scap.cpp delegates parallel sweep machinery to pipeline::cap_best_sweep
+// scap.cpp delegates parallel sweep machinery to pipeline::best_sweep
 // / pipeline::parallel_for. <atomic> is needed for HAM6 SCAP's per-row
 // parallel planner (HAM-DP-aware swap evaluation is heavy, so the
 // per-row planning loop runs in parallel and accumulates totals via
@@ -168,31 +168,31 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int palette_diversity,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
-                                       bool cap_best,
-                                       std::string_view cap_best_metric,
+                                       bool enable_best,
+                                       std::string_view best_metric,
                                        int cap_spread_radius,
                                        float cap_spread_decay,
                                        std::span<const Color3f>
                                            external_palette) {
-    // --cap-best: multi-restart with varied palette_diversity + dither
+    // --best: multi-restart with varied palette_diversity + dither
     // strength. The SCAP planner is deterministic for a given input, so
     // varying these knobs is the only way to sample different
     // optimisation landscapes. Each restart is a full encode (~100 ms);
     // user OK'd unbounded compute. Keep the lowest-error result.
-    if (cap_best) {
+    if (enable_best) {
         // DPF: 24 jitter seeds — the 8-colour PF2 palette is highly
         // sensitive to which colours win the median-cut, so heavy jitter
         // sampling buys more here than for wider palettes (EHB stays at
         // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
-        auto metric = pipeline::parse_cap_best_metric(cap_best_metric);
-        auto best = pipeline::cap_best_sweep<ScapResult>(
+        auto metric = pipeline::parse_best_metric(best_metric);
+        auto best = pipeline::best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/24,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
                 return encode_scap_dpf_ocs(
                     jittered_in, width_arg, height_arg, reserve_color0,
                     d, debug_overlay, copper_changes_override, div,
-                    /*on_progress=*/{}, /*cap_best=*/false, "psnr",
+                    /*on_progress=*/{}, /*best=*/false, "psnr",
                     cap_spread_radius, cap_spread_decay,
                     external_palette);
             },
@@ -1233,25 +1233,25 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        bool debug_overlay,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
-                                       bool cap_best,
-                                       std::string_view cap_best_metric,
+                                       bool enable_best,
+                                       std::string_view best_metric,
                                        int cap_spread_radius,
                                        float cap_spread_decay,
                                        std::span<const Color3f>
                                            external_palette) {
-    // --cap-best: 8 jitter seeds (32-base palette has shallower basins
+    // --best: 8 jitter seeds (32-base palette has shallower basins
     // than DPF's 8-base, so heavy jitter sampling buys less here).
     // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
-    if (cap_best) {
-        auto metric = pipeline::parse_cap_best_metric(cap_best_metric);
-        auto best = pipeline::cap_best_sweep<ScapResult>(
+    if (enable_best) {
+        auto metric = pipeline::parse_best_metric(best_metric);
+        auto best = pipeline::best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
                 return encode_scap_ehb_ocs(
                     jittered_in, width_arg, height_arg, reserve_color0,
                     d, copper_changes_override, div, debug_overlay,
-                    /*on_progress=*/{}, /*cap_best=*/false, "psnr",
+                    /*on_progress=*/{}, /*best=*/false, "psnr",
                     cap_spread_radius, cap_spread_decay,
                     external_palette);
             },
@@ -2138,7 +2138,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 //     swap the K least-used base slots with the strip's most-frequent
 //     RGB444-bucketed colours.
 //   * No multi-pass joint refinement (EHB SCAP runs 6 passes).
-//   * No cap-best wiring.
+//   * No best wiring.
 //   * Inline HAM op selector — keeps scap.cpp self-contained without
 //     needing to expose ham.cpp's anonymous-namespace helpers.
 // ---------------------------------------------------------------------------
@@ -2215,17 +2215,17 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                             on_progress,
                                         int cap_spread_radius,
                                         float cap_spread_decay,
-                                        bool cap_best,
-                                        std::string_view cap_best_metric,
+                                        bool enable_best,
+                                        std::string_view best_metric,
                                         std::span<const Color3f>
                                             external_palette,
                                         ham::HamMetric ham_metric) {
-    // --cap-best: 8 jitter seeds × 5 strengths × 4 diversities + 1
+    // --best: 8 jitter seeds × 5 strengths × 4 diversities + 1
     // baseline = 161 trials. Same shape as EHB SCAP since HAM6's 16
     // base palette has comparable basin depth.
-    if (cap_best) {
-        auto metric = pipeline::parse_cap_best_metric(cap_best_metric);
-        auto best = pipeline::cap_best_sweep<ScapResult>(
+    if (enable_best) {
+        auto metric = pipeline::parse_best_metric(best_metric);
+        auto best = pipeline::best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
@@ -2234,7 +2234,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                     d, copper_changes_override, div,
                     /*on_progress=*/{},
                     cap_spread_radius, cap_spread_decay,
-                    /*cap_best=*/false, "psnr",
+                    /*best=*/false, "psnr",
                     external_palette, ham_metric);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },

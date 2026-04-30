@@ -227,7 +227,7 @@ struct HamOptions {
     // tries the top-N least-used slots, picking the (slot, color) pair
     // that drops row error the most. Off by default — the cheaper single-
     // candidate greedy is good enough for typical interactive use.
-    bool cap_best = false;
+    bool best = false;
 
     // Optional progress reporter. Called periodically with (progress 0..1,
     // stage label). Encoder makes no guarantees about call frequency or

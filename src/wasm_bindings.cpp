@@ -130,17 +130,13 @@ Options parse_js_options(val js_opts) {
         opts.scap = js_opts["scap"].as<bool>();
     if (js_opts.hasOwnProperty("scapDebug"))
         opts.scap_debug = js_opts["scapDebug"].as<bool>();
-    if (js_opts.hasOwnProperty("capBest"))
-        opts.cap_best = js_opts["capBest"].as<bool>();
-    else if (js_opts.hasOwnProperty("scapBest"))    // alias
-        opts.cap_best = js_opts["scapBest"].as<bool>();
-    else if (js_opts.hasOwnProperty("hamCapBest"))  // legacy alias
-        opts.cap_best = js_opts["hamCapBest"].as<bool>();
-    if (js_opts.hasOwnProperty("capBestMetric"))
-        opts.cap_best_metric = js_opts["capBestMetric"].as<std::string>();
+    if (js_opts.hasOwnProperty("best"))
+        opts.best = js_opts["best"].as<bool>();
+    if (js_opts.hasOwnProperty("bestMetric"))
+        opts.best_metric = js_opts["bestMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("onProgress")) {
         // The encoder may call this from worker threads (parallel_for
-        // bodies, HAM beam search, cap_best_sweep trials). emscripten
+        // bodies, HAM beam search, best_sweep trials). emscripten
         // ::val handles are bound to the thread that captured them, so
         // pthread-worker calls would crash on the captured cb. Main-
         // runtime-thread calls invoke the cb directly; worker calls

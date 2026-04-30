@@ -70,8 +70,8 @@ export interface Options {
   width: number
   height: number
   hamBeam: number
-  capBest: boolean
-  capBestMetric: string
+  best: boolean
+  bestMetric: string
   alphaThreshold: number
   alphaDither: string
   alphaDitherStrength: number
@@ -362,10 +362,10 @@ export function defaultOptions(): Options {
     // base-palette refinement). HAM6 + copper and HAM8 + copper only —
     // indexed copper modes ignore this flag (their planner is already
     // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
-    capBest: false,
+    best: false,
     // Ranking metric for cap-best. 'msssim' (default) is a cleaner
     // image and tracks SSIMULACRA2; 'psnr' keeps maximum fine detail.
-    capBestMetric: 'msssim',
+    bestMetric: 'msssim',
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',

@@ -197,7 +197,7 @@ Result<Image> render_preview(
 
 // Build a deterministically jittered copy of `source` (per-pixel
 // hash-based perturbation, ±0.5*amplitude/255 per channel). Used by
-// cap_best_sweep to give an encoder a different median-cut basin per
+// best_sweep to give an encoder a different median-cut basin per
 // trial. amplitude=1.0 = ±1/255 nudge (default; right for OCS where
 // the discrete 12-bit gamut means small input nudges produce
 // meaningful palette divergence). amplitude=0.4 = ±0.4/255 (right for
@@ -209,7 +209,7 @@ Image jitter_image(const Image& source, std::uint32_t seed,
 
 // Run body(i) for i in [0, n) — parallel-dispatched across
 // hardware_concurrency() jthreads on native, sequential under WASM.
-// Used by cap_best_sweep but generic; any caller with N independent
+// Used by best_sweep but generic; any caller with N independent
 // units of work can use it.
 void parallel_for(std::size_t n,
                   std::function<void(std::size_t)> body);
@@ -221,7 +221,7 @@ void parallel_for(std::size_t n,
 // 0.3001, 0.2363, 0.1333}; per-scale SSIM uses an 11×11 Gaussian
 // window (σ=1.5).
 //
-// Used by cap_best_sweep as a more perceptual ranking metric than
+// Used by best_sweep as a more perceptual ranking metric than
 // PSNR. Captures local structure changes (banding, contour breakup,
 // per-line swap shimmer) that pixel-MSE PSNR averages away — the
 // horizontal-banding failure mode --cap especially produces in tight
@@ -234,20 +234,20 @@ float compute_msssim(std::span<const Color3f> a,
                      std::size_t width,
                      std::size_t height);
 
-// Ranking metric for cap_best_sweep. msssim (default) gives a cleaner
+// Ranking metric for best_sweep. msssim (default) gives a cleaner
 // image and tracks SSIMULACRA2 well; psnr keeps maximum fine detail;
 // ssimulacra2 is the most perceptually accurate but the slowest (a
 // vendored port of cloudinary/ssimulacra2). User flips via
-// --cap-best-metric.
-enum class CapBestMetric { msssim, psnr, ssimulacra2 };
+// --best-metric.
+enum class BestMetric { msssim, psnr, ssimulacra2 };
 
-inline CapBestMetric parse_cap_best_metric(std::string_view name) {
-    if (name == "psnr")        return CapBestMetric::psnr;
-    if (name == "ssimulacra2") return CapBestMetric::ssimulacra2;
-    return CapBestMetric::msssim;  // default
+inline BestMetric parse_best_metric(std::string_view name) {
+    if (name == "psnr")        return BestMetric::psnr;
+    if (name == "ssimulacra2") return BestMetric::ssimulacra2;
+    return BestMetric::msssim;  // default
 }
 
-// Multi-restart parallel sweep for any --cap-best CAP-aware encoder.
+// Multi-restart parallel sweep for any --best CAP-aware encoder.
 // Sweeps:
 //   - dither_strength: 5 multipliers (0.7, 0.85, 1.0, 1.15, 1.3)
 //   - palette_diversity: 4 values when caller's base is 0; otherwise
@@ -271,10 +271,10 @@ inline CapBestMetric parse_cap_best_metric(std::string_view name) {
 // if every trial failed). Caller picks jitter_count: SCAP DPF uses
 // 24 (8-colour PF2 palette is highly basin-sensitive), SCAP EHB and
 // plain CAP use 8 (32-colour and 16-colour palettes have shallower
-// basins). User explicitly OK'd unbounded compute on cap_best, so the
+// basins). User explicitly OK'd unbounded compute on best, so the
 // large trial count (5×4×N + 1) is a feature.
 template <typename T, typename EncodeFn, typename RenderedFn>
-std::optional<T> cap_best_sweep(
+std::optional<T> best_sweep(
     const Image& source,
     const dither::Settings& base_settings,
     int base_diversity,
@@ -283,7 +283,7 @@ std::optional<T> cap_best_sweep(
     RenderedFn rendered_fn,
     const std::function<void(float, std::string_view)>& on_progress,
     float jitter_amplitude = 1.0f,
-    CapBestMetric metric = CapBestMetric::psnr) {
+    BestMetric metric = BestMetric::psnr) {
     struct Trial {
         dither::Settings settings;
         int diversity;
@@ -328,16 +328,16 @@ std::optional<T> cap_best_sweep(
         if (on_progress) {
             on_progress(static_cast<float>(n_done) /
                         static_cast<float>(total),
-                        "cap-best");
+                        "best");
         }
         if (!retry) return;
         const Image& rendered = rendered_fn(*retry);
         float score;
-        if (metric == CapBestMetric::psnr) {
+        if (metric == BestMetric::psnr) {
             score = color_space::compute_psnr_blurred(
                 source.pixels(), rendered.pixels(),
                 source.width(), source.height());
-        } else if (metric == CapBestMetric::ssimulacra2) {
+        } else if (metric == BestMetric::ssimulacra2) {
             score = ssimulacra2::compute(
                 source.pixels(), rendered.pixels(),
                 source.width(), source.height());
