@@ -459,27 +459,80 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             target[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
                                       : cap_palettes[y][k];
 
-        // 1. Per-line CAP MOVEs: unconditionally re-emit all 8 PF2
-        //    base colours every line. DPF only has 8 PF2 indices so a
-        //    full reset costs ≤9 hblank MOVEs (k=0 dual-writes
-        //    COLOR00+COLOR08, k=1..7 single MOVE each), well below the
-        //    14-MOVE OCS hblank capacity. This makes SCAP's mid-line
-        //    swaps a non-issue across lines: whatever registers SCAP
-        //    polluted on line y-1 get fully overwritten before line y's
-        //    visible region starts. No hw_state tracking needed.
+        // 1. Per-line CAP MOVEs in HBLANK.
+        //
+        //   Default (copper_changes_override == 0): unconditionally
+        //   re-emit all 8 PF2 base colours (≤9 hblank MOVEs; k=0
+        //   dual-writes COLOR00+COLOR08, k=1..7 single MOVE each),
+        //   well below the 14-MOVE OCS hblank capacity. Whatever
+        //   registers SCAP polluted on line y-1 get fully overwritten
+        //   before line y's visible region starts.
+        //
+        //   --cap-changes N > 0: cap HBLANK to N MOVEs total. Diff
+        //   target vs the previous line's target in OKLab; emit MOVEs
+        //   for the top-N most-changed slots (k=0 costs 2 of the
+        //   budget, others cost 1). Slots not emitted carry the
+        //   previous line's value into strip 0 of this line — the
+        //   SCAP visible-area swaps still get to evolve them.
+        //   SCAP's k_min=1 means slot 0 isn't touched mid-line, so
+        //   carrying its prev value is safe; for slots 1..7 the
+        //   approximation (assume prev line landed near its CAP
+        //   target, ignore SCAP residue) is good enough that rows
+        //   stay independent for parallel_for.
+        std::array<Color3f, kBaseColors> prev_target{};
         for (std::size_t k = 0; k < kBaseColors; ++k) {
-            auto regs = pf2_writes(k);
-            for (int reg : regs) {
-                if (reg < 0) continue;
-                line_moves[y].push_back(make_move(
-                    static_cast<std::uint8_t>(reg),
-                    palette::linear_to_ocs(target[k]), -1));
+            prev_target[k] = (y > 0) ? cap_palettes[y - 1][k] : base_palette[k];
+        }
+        std::array<bool, kBaseColors> emitted{};
+        if (copper_changes_override == 0) {
+            // Full reset path (default; 9 hblank MOVEs).
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                auto regs = pf2_writes(k);
+                for (int reg : regs) {
+                    if (reg < 0) continue;
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(reg),
+                        palette::linear_to_ocs(target[k]), -1));
+                }
+                emitted[k] = true;
+            }
+        } else {
+            std::size_t hblank_budget = std::min<std::size_t>(
+                copper_changes_override, kMaxCombined);
+            // Score per-slot diff in OKLab² between prev_target and
+            // target. Top-K wins emit-budget.
+            std::array<std::pair<int, float>, kBaseColors> diffs{};
+            for (std::size_t k = 0; k < kBaseColors; ++k) {
+                auto a = color_space::linear_to_oklab(prev_target[k]);
+                auto b = color_space::linear_to_oklab(target[k]);
+                float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                diffs[k] = {static_cast<int>(k),
+                            dL * dL + da * da + db * db};
+            }
+            std::sort(diffs.begin(), diffs.end(),
+                [](auto& a, auto& b) { return a.second > b.second; });
+            std::size_t move_cost = 0;
+            for (auto& d : diffs) {
+                if (d.second <= 0.0f) break;  // no further differences
+                auto k = static_cast<std::size_t>(d.first);
+                std::size_t cost = (k == 0) ? 2 : 1;  // dual-write for k=0
+                if (move_cost + cost > hblank_budget) continue;
+                auto regs = pf2_writes(k);
+                for (int reg : regs) {
+                    if (reg < 0) continue;
+                    line_moves[y].push_back(make_move(
+                        static_cast<std::uint8_t>(reg),
+                        palette::linear_to_ocs(target[k]), -1));
+                }
+                emitted[k] = true;
+                move_cost += cost;
             }
         }
 
-        // After per-line CAP MOVEs, hardware state == target. Plug it
-        // into the strip-0 palette for the SCAP swap planner.
-        for (std::size_t k = 0; k < kBaseColors; ++k) P[k] = target[k];
+        // After per-line CAP MOVEs, build strip-0 palette: emitted
+        // slots = target; unemitted = prev_target (carry over).
+        for (std::size_t k = 0; k < kBaseColors; ++k)
+            P[k] = emitted[k] ? target[k] : prev_target[k];
         recompute_lab_local();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
