@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <utility>
 #include <string_view>
 #include <vector>
@@ -614,6 +615,177 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
             base_colors[k] = new_lin;
         }
         if (drift < 1e-6f) break;
+    }
+}
+
+// "Extra OCS palette optimization" — 1-opt coordinate-descent local
+// search on the 32-colour EHB base palette, ranked by full-image
+// nearest-neighbour squared OKLab error. Same shape as ham_convert's
+// EHB optimiser (decompiled from app/HAM_convert.java around lines
+// 6857-7095): per pass, find the slot whose removal hurts least, then
+// find the source-image colour that, dropped into that slot, lowers
+// total error the most. Repeat until the chosen insertion candidate
+// matches the previous pass's pick (slot converged) — then move on to
+// the next slot. Half-brite copies are auto-rederived after every
+// candidate change so the 64-effective gamut stays consistent.
+//
+// Cost: O(passes * 32 * (W*H*64) + passes * |candidates| * (W*H*64)).
+// The candidate inner loop is the hot path and is parallelised; the
+// removal loop is comparatively cheap. `palette_diversity_seed` is
+// only used for tie-break determinism between equal-cost candidates;
+// the search itself is deterministic.
+inline void extra_ehb_optimization(std::span<Color3f> base_colors,
+                                   std::span<const Color3f> image_pixels,
+                                   bool snap_to_ocs,
+                                   int max_passes,
+                                   void(*parallel_for_fn)(std::size_t,
+                                       std::function<void(std::size_t)>) =
+                                           nullptr) {
+    if (base_colors.size() < 32 || image_pixels.empty()) return;
+    constexpr std::size_t kBaseN = 32;
+    auto N = image_pixels.size();
+
+    // Pre-compute pixel OKLab; reused across every candidate evaluation.
+    std::vector<color_space::OKLab> pix_lab(N);
+    for (std::size_t i = 0; i < N; ++i)
+        pix_lab[i] = color_space::linear_to_oklab(image_pixels[i]);
+
+    auto eval_total_error = [&](const std::array<Color3f, 64>& full) {
+        std::array<color_space::OKLab, 64> full_lab{};
+        for (std::size_t k = 0; k < 64; ++k)
+            full_lab[k] = color_space::linear_to_oklab(full[k]);
+        double total = 0.0;
+        for (std::size_t i = 0; i < N; ++i) {
+            auto t = pix_lab[i];
+            float best_d = std::numeric_limits<float>::infinity();
+            for (std::size_t k = 0; k < 64; ++k) {
+                auto& e = full_lab[k];
+                float dL = t.L - e.L, da = t.a - e.a, db = t.b - e.b;
+                float d  = dL * dL + da * da + db * db;
+                if (d < best_d) best_d = d;
+            }
+            total += static_cast<double>(best_d);
+        }
+        return total;
+    };
+
+    auto build_full = [&](std::span<const Color3f, kBaseN> base) {
+        std::array<Color3f, 64> full{};
+        for (std::size_t i = 0; i < kBaseN; ++i) full[i] = base[i];
+        for (std::size_t i = 0; i < kBaseN; ++i)
+            full[kBaseN + i] = half_brite(base[i]);
+        return full;
+    };
+
+    auto snap_one = [&](Color3f c) {
+        return snap_to_ocs ? quantize_to_ocs(c) : c;
+    };
+
+    // Build candidate set: distinct snapped (chipset-precision) source
+    // colours, ranked by histogram count and capped at `max_candidates`.
+    // The cap matters: 320x180 photos can yield ~1000-1500 unique OCS
+    // codes and the inner loop is the dominant cost. The decompiled
+    // ham_convert path also caps at 4096 (the OCS gamut size).
+    std::vector<Color3f> candidates;
+    constexpr std::size_t kMaxCandidates = 512;
+    {
+        std::vector<std::uint32_t> keys(image_pixels.size());
+        for (std::size_t i = 0; i < image_pixels.size(); ++i) {
+            auto s = snap_one(image_pixels[i]);
+            auto srgb = color_space::linear_to_srgb(s).clamped();
+            keys[i] =
+                (static_cast<std::uint32_t>(srgb.r * 255.0f + 0.5f) << 16) |
+                (static_cast<std::uint32_t>(srgb.g * 255.0f + 0.5f) <<  8) |
+                 static_cast<std::uint32_t>(srgb.b * 255.0f + 0.5f);
+        }
+        std::sort(keys.begin(), keys.end());
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> hist;  // {key, count}
+        for (std::size_t i = 0; i < keys.size(); ) {
+            std::size_t j = i + 1;
+            while (j < keys.size() && keys[j] == keys[i]) ++j;
+            hist.emplace_back(keys[i], static_cast<std::uint32_t>(j - i));
+            i = j;
+        }
+        std::sort(hist.begin(), hist.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
+        if (hist.size() > kMaxCandidates) hist.resize(kMaxCandidates);
+        candidates.reserve(hist.size());
+        for (auto& [key, _] : hist) {
+            std::uint8_t r = (key >> 16) & 0xFF;
+            std::uint8_t g = (key >>  8) & 0xFF;
+            std::uint8_t b =  key        & 0xFF;
+            candidates.push_back(color_space::srgb_u8_to_linear(r, g, b));
+        }
+    }
+    if (candidates.empty()) return;
+
+    int slot_start = 0;
+    std::size_t last_insert = static_cast<std::size_t>(-1);
+    for (int pass = 0; pass < max_passes;) {
+        // 1. Removal candidate: replace each slot k in [slot_start, 32)
+        //    with its neighbour and pick the slot whose removal yields
+        //    the lowest total error.
+        int remove_slot = slot_start;
+        double remove_err = std::numeric_limits<double>::infinity();
+        std::array<Color3f, kBaseN> work{};
+        for (std::size_t i = 0; i < kBaseN; ++i) work[i] = base_colors[i];
+        for (int k = slot_start; k < static_cast<int>(kBaseN); ++k) {
+            auto orig = work[static_cast<std::size_t>(k)];
+            int neigh = (k > slot_start) ? k - 1 : k + 1;
+            if (neigh >= static_cast<int>(kBaseN)) neigh = k;
+            work[static_cast<std::size_t>(k)] =
+                work[static_cast<std::size_t>(neigh)];
+            auto full = build_full(std::span<const Color3f, kBaseN>(work));
+            auto err = eval_total_error(full);
+            work[static_cast<std::size_t>(k)] = orig;
+            if (err < remove_err) {
+                remove_err = err;
+                remove_slot = k;
+            }
+        }
+
+        // 2. Insertion candidate: try every distinct source colour in
+        //    the removed slot, pick the one with lowest error.
+        std::vector<double> errs(candidates.size(),
+                                  std::numeric_limits<double>::infinity());
+        auto eval_one = [&](std::size_t ci) {
+            std::array<Color3f, kBaseN> tw{};
+            for (std::size_t i = 0; i < kBaseN; ++i) tw[i] = base_colors[i];
+            tw[static_cast<std::size_t>(remove_slot)] =
+                snap_one(candidates[ci]);
+            auto full = build_full(std::span<const Color3f, kBaseN>(tw));
+            errs[ci] = eval_total_error(full);
+        };
+        if (parallel_for_fn) {
+            parallel_for_fn(candidates.size(), eval_one);
+        } else {
+            for (std::size_t ci = 0; ci < candidates.size(); ++ci) eval_one(ci);
+        }
+        std::size_t best_insert = 0;
+        for (std::size_t ci = 1; ci < candidates.size(); ++ci) {
+            if (errs[ci] < errs[best_insert])
+                best_insert = ci;
+        }
+
+        if (best_insert == last_insert) {
+            // Slot converged — write its final value, swap to slot_start
+            // so the remaining slots make progress, advance slot_start.
+            base_colors[static_cast<std::size_t>(remove_slot)] =
+                snap_one(candidates[best_insert]);
+            if (remove_slot != slot_start) {
+                std::swap(
+                    base_colors[static_cast<std::size_t>(remove_slot)],
+                    base_colors[static_cast<std::size_t>(slot_start)]);
+            }
+            ++slot_start;
+            last_insert = static_cast<std::size_t>(-1);
+            ++pass;
+            if (slot_start >= static_cast<int>(kBaseN)) break;
+        } else {
+            base_colors[static_cast<std::size_t>(remove_slot)] =
+                snap_one(candidates[best_insert]);
+            last_insert = best_insert;
+        }
     }
 }
 

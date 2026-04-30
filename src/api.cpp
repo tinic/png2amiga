@@ -1506,6 +1506,47 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     ErrorCode::unsupported_mode,
                     "EHB --best sweep produced no result"}};
             }
+            // Post-sweep 1-opt local search on the winning palette —
+            // takes the multi-restart's best basin and tightens it
+            // further. Non-best gets the same step earlier in the
+            // pipeline; here we run it once on the sweep winner.
+            {
+                std::vector<Color3f> base32(
+                    winner->base_pal.colors.begin(),
+                    winner->base_pal.colors.begin() + 32);
+                palette::extra_ehb_optimization(
+                    std::span<Color3f>(base32.data(), 32),
+                    image->pixels(),
+                    /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                    /*max_passes=*/2,
+                    [](std::size_t n,
+                       std::function<void(std::size_t)> f) {
+                        pipeline::parallel_for(n, std::move(f));
+                    });
+                winner->base_pal.colors = std::move(base32);
+                winner->ehb_pal = palette::make_ehb_palette(
+                    winner->base_pal.colors);
+                // Re-dither + re-bitplane + re-render with the refined
+                // palette so the result indices/preview reflect it.
+                dither::Settings post_dith = base_dith;
+                auto dr = dither::apply(*image, winner->ehb_pal.colors,
+                                         post_dith);
+                auto pl = bitplane::encode(
+                    dr.indices, image->width(), image->height(), 6);
+                if (pl) {
+                    auto pv = pipeline::render_preview(
+                        *pl, std::vector<Color3f>(
+                            winner->ehb_pal.colors.begin(),
+                            winner->ehb_pal.colors.end()),
+                        /*is_ham=*/false, options.interlace, chipset);
+                    if (pv) {
+                        winner->planes = *std::move(pl);
+                        winner->indices = std::move(dr.indices);
+                        winner->rendered = *std::move(pv);
+                        winner->total_error = dr.total_error;
+                    }
+                }
+            }
             std::vector<Color3f> full_palette(winner->ehb_pal.colors.begin(),
                                               winner->ehb_pal.colors.end());
             PipelineResult result;
@@ -1573,6 +1614,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::span<Color3f>(base_pal.colors.data(), 32),
                 image->pixels(),
                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+            // 1-opt local search on top of the refined palette: per
+            // pass, find the slot whose removal hurts least and the
+            // source-image colour that, dropped into that slot, lowers
+            // total nearest-OKLab error the most. Mirrors ham_convert's
+            // "Extra OCS palette optimization". Only fires on the
+            // simple non-best path — --best already runs many
+            // jittered restarts.
+            if (!options.best) {
+                palette::extra_ehb_optimization(
+                    std::span<Color3f>(base_pal.colors.data(), 32),
+                    image->pixels(),
+                    /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                    /*max_passes=*/2,
+                    /*parallel_for_fn=*/[](std::size_t n,
+                                           std::function<void(std::size_t)> f) {
+                        pipeline::parallel_for(n, std::move(f));
+                    });
+            }
         }
 
         // Build full 64-color EHB palette (32 base + 32 half-bright)
