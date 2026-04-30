@@ -94,6 +94,7 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "genesis-h40")       return amiga::Mode::genesis_h40;
     if (s == "genesis-h32-sh")    return amiga::Mode::genesis_h32_sh;
     if (s == "genesis-h40-sh")    return amiga::Mode::genesis_h40_sh;
+    if (s == "c64-hires")         return amiga::Mode::c64_hires;
     if (s == "c64-multicolor")    return amiga::Mode::c64_multicolor;
     return amiga::Mode::lores;
 }
@@ -837,13 +838,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        // The encoder expects exactly screen_w × screen_h. With native_par,
-        // compute_target_dims may return a smaller letterboxed size — pad
-        // to the full hardware buffer with black (matching the SNES /
-        // Genesis convention). Pad the transparency mask in lock-step:
-        // the inserted border pixels are NOT in the source so they get
-        // marked transparent (true).
-        constexpr std::size_t kCW = 160, kCH = 200;
+        // Pad to the mode's screen buffer. native_par may have produced
+        // a smaller letterboxed image — pad with black (matching SNES /
+        // Genesis), and pad tmask in lock-step (border = transparent
+        // since it's outside the source region).
+        auto cparams = amiga::get_mode_params(mode);
+        std::size_t kCW = cparams.screen_width;
+        std::size_t kCH = cparams.screen_height;
         if (image->width() != kCW || image->height() != kCH) {
             std::size_t old_w = image->width(), old_h = image->height();
             std::size_t ox = (kCW > old_w) ? (kCW - old_w) / 2 : 0;
@@ -870,7 +871,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength    = options.dither_strength;
         dith.error_clamp = options.error_clamp;
         dith.serpentine  = true;
-        auto enc = c64::encode_multicolor(*image, pal_choice, dith);
+        Result<c64::EncodeResult> enc = (mode == amiga::Mode::c64_hires)
+            ? c64::encode_hires(*image, pal_choice, dith)
+            : c64::encode_multicolor(*image, pal_choice, dith);
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;
@@ -878,7 +881,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto pal_span = c64::palette_colors(pal_choice);
         result.palette.assign(pal_span.begin(), pal_span.end());
         result.indices.clear();
-        result.planes.depth = 2;
+        result.planes.depth = (mode == amiga::Mode::c64_hires) ? 1 : 2;
         result.mode = mode;
         result.hires = false;
         result.interlace = false;

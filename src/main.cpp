@@ -1308,6 +1308,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "c64-multicolor" || v == "c64-mc" ||
                          v == "c64" || v == "vic2-multicolor")
                     config.mode = amiga::Mode::c64_multicolor;
+                else if (v == "c64-hires" || v == "c64-hi" ||
+                         v == "vic2-hires")
+                    config.mode = amiga::Mode::c64_hires;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -3933,7 +3936,8 @@ int main(int argc, char* argv[]) {
         }
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
-        aopts.mode = "c64-multicolor";
+        aopts.mode = (config->mode == amiga::Mode::c64_hires)
+                     ? "c64-hires" : "c64-multicolor";
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
@@ -3943,8 +3947,11 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
         auto& st = enc.state;
-        cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell, Pepto palette)");
-        cli_status("Encoded: {} bytes (8000 bitmap + 1000 screen + 1000 color), PSNR: {:.2f} dB, S2: {:.2f}",
+        if (config->mode == amiga::Mode::c64_hires)
+            cli_status("Mode:   C64 hires (320×200, 2 colours/cell)");
+        else
+            cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell)");
+        cli_status("Encoded: {} bytes, PSNR: {:.2f} dB, S2: {:.2f}",
                      st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
         if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {

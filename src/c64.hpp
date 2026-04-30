@@ -64,4 +64,16 @@ Result<EncodeResult> encode_multicolor(
     Palette pal = Palette::colodore,
     const dither::Settings& settings = {});
 
+// Encode a 320×200 image to c64-hires. 8×8 cells, 2 colours per cell
+// (no shared bg). Per-cell brute force is C(16, 2) = 120 pairs.
+// Same dither pipeline as multicolor — diffuse_raw_buffer + per-cell
+// 2-colour palette callback. EncodeResult layout:
+//   bitmap     8000 bytes (40 cols × 25 rows × 8)
+//   screen_ram 1000 bytes (upper nibble = c1 / fg, lower = c0 / bg)
+//   color_ram  empty (hires uses only screen RAM)
+Result<EncodeResult> encode_hires(
+    const Image& image,
+    Palette pal = Palette::colodore,
+    const dither::Settings& settings = {});
+
 }  // namespace png2amiga::c64

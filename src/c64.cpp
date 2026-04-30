@@ -254,4 +254,148 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
     return res;
 }
 
+// ---------------------------------------------------------------------------
+// c64-hires: 320×200, 8×8 cells, 2 colours per cell (no shared bg).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr std::size_t kHiCellW = 8;
+constexpr std::size_t kHiCellH = 8;
+constexpr std::size_t kHiCols  = 40;   // 320 / 8
+constexpr std::size_t kHiRows  = 25;   // 200 / 8
+
+// Per-pixel error against a 2-colour pair, returning the chosen index
+// 0/1 plus the squared OKLab error.
+inline float cell_error_for_pair(
+    std::span<const color_space::OKLab> pix_lab,
+    std::array<std::uint8_t, 2> pair,
+    const std::array<color_space::OKLab, 16>& pal_lab,
+    std::array<std::uint8_t, kHiCellW * kHiCellH>* pixel_idx_out) {
+
+    float total = 0.0f;
+    auto& a = pal_lab[pair[0]];
+    auto& b = pal_lab[pair[1]];
+    for (std::size_t p = 0; p < pix_lab.size(); ++p) {
+        const auto& t = pix_lab[p];
+        float dLa = t.L - a.L, daa = t.a - a.a, dba = t.b - a.b;
+        float dLb = t.L - b.L, dab = t.a - b.a, dbb = t.b - b.b;
+        float ea = dLa * dLa + daa * daa + dba * dba;
+        float eb = dLb * dLb + dab * dab + dbb * dbb;
+        if (ea <= eb) { total += ea; if (pixel_idx_out) (*pixel_idx_out)[p] = 0; }
+        else          { total += eb; if (pixel_idx_out) (*pixel_idx_out)[p] = 1; }
+    }
+    return total;
+}
+
+}  // namespace
+
+Result<EncodeResult> encode_hires(const Image& image, Palette pal,
+                                   const dither::Settings& settings) {
+    constexpr std::size_t W = kHiCols * kHiCellW;  // 320
+    constexpr std::size_t H = kHiRows * kHiCellH;  // 200
+
+    if (image.width() != W || image.height() != H) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("c64::encode_hires: expected {}x{} input, got {}x{}",
+                        W, H, image.width(), image.height()),
+        }};
+    }
+
+    const auto& pal_lin = palette_linear(pal);
+    const auto& pal_lab = palette_oklab(pal);
+
+    std::vector<color_space::OKLab> src_lab(W * H);
+    for (std::size_t y = 0; y < H; ++y)
+        for (std::size_t x = 0; x < W; ++x)
+            src_lab[y * W + x] = color_space::linear_to_oklab(image[x, y]);
+
+    EncodeResult res;
+    res.rendered = Image(W, H);
+    res.bitmap.assign(kHiRows * kHiCols * kHiCellH, 0);  // 8000 bytes
+    res.screen_ram.assign(kHiRows * kHiCols, 0);          // 1000 bytes
+    // color_ram unused for hires — left empty.
+    res.bg_color = 0;
+
+    // Pass 1: per-cell pair pick. C(16, 2) = 120 pairs.
+    std::vector<std::array<std::uint8_t, 2>> cell_pair(kHiRows * kHiCols);
+    std::array<color_space::OKLab, kHiCellW * kHiCellH> cell_lab{};
+    std::array<std::uint8_t, kHiCellW * kHiCellH> pix_idx{};
+    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+            for (std::size_t py = 0; py < kHiCellH; ++py) {
+                for (std::size_t px = 0; px < kHiCellW; ++px) {
+                    cell_lab[py * kHiCellW + px] =
+                        src_lab[(cy * kHiCellH + py) * W + (cx * kHiCellW + px)];
+                }
+            }
+            float best_err = std::numeric_limits<float>::infinity();
+            std::array<std::uint8_t, 2> best_pair{0, 0};
+            for (std::uint8_t i = 0; i < 16; ++i) {
+                for (std::uint8_t j = static_cast<std::uint8_t>(i + 1);
+                     j < 16; ++j) {
+                    std::array<std::uint8_t, 2> pair{i, j};
+                    float err = cell_error_for_pair(
+                        cell_lab, pair, pal_lab, &pix_idx);
+                    if (err < best_err) {
+                        best_err  = err;
+                        best_pair = pair;
+                    }
+                }
+            }
+            cell_pair[cy * kHiCols + cx] = best_pair;
+        }
+    }
+
+    // Pass 2: per-pixel dither via diffuse_raw_buffer with per-cell
+    // 2-colour palette callback. Index 0/1 written to the bitmap MSB-
+    // first within each row byte.
+    std::vector<std::uint8_t> indices(W * H, 0);
+    auto pick = [&](const color_space::OKLab& target,
+                    std::size_t x, std::size_t y) -> dither::PickResult {
+        std::size_t cy = y / kHiCellH;
+        std::size_t cx = x / kHiCellW;
+        const auto& pair = cell_pair[cy * kHiCols + cx];
+        std::array<color_space::OKLab, 2> cp{
+            pal_lab[pair[0]], pal_lab[pair[1]],
+        };
+        std::size_t chosen_index = 0;
+        color_space::OKLab chosen{};
+        float thr = dither::pick_palette_index_with_ostro(
+            settings.method, target,
+            std::span<const color_space::OKLab>(cp),
+            x, y, settings.strength, /*k_min=*/0,
+            chosen_index, chosen);
+        indices[y * W + x] = static_cast<std::uint8_t>(chosen_index);
+        return {chosen, thr};
+    };
+    (void)dither::diffuse_raw_buffer(image, settings, pick);
+
+    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+            std::size_t cell_idx = cy * kHiCols + cx;
+            const auto& pair = cell_pair[cell_idx];
+            // Screen RAM: upper nibble = c1 (foreground / index 1),
+            // lower = c0 (background / index 0).
+            res.screen_ram[cell_idx] = static_cast<std::uint8_t>(
+                ((pair[1] & 0xF) << 4) | (pair[0] & 0xF));
+            for (std::size_t py = 0; py < kHiCellH; ++py) {
+                std::uint8_t row_byte = 0;
+                for (std::size_t px = 0; px < kHiCellW; ++px) {
+                    auto x = cx * kHiCellW + px;
+                    auto y = cy * kHiCellH + py;
+                    auto q = static_cast<std::uint8_t>(indices[y * W + x] & 0x1);
+                    row_byte = static_cast<std::uint8_t>(
+                        (row_byte << 1) | q);
+                    res.rendered[x, y] = pal_lin[pair[q]];
+                }
+                res.bitmap[cell_idx * kHiCellH + py] = row_byte;
+            }
+        }
+    }
+
+    return res;
+}
+
 }  // namespace png2amiga::c64

@@ -82,11 +82,15 @@ enum class Mode : unsigned char {
                         // doesn't have, so the hardware really does cap
                         // at 256 here.
 
-    // Commodore 64 / VIC-II — fixed 16-color palette (Pepto by default),
-    // 8×8 cell-based with per-cell colour constraints. multicolor uses
-    // 4×8 cells with 1 shared bg + 3 per-cell foregrounds (2 bits per
-    // pixel, 4-colour cell), 160×200 logical resolution displayed
-    // at 2:1 (160 logical → 320 hardware pixels).
+    // Commodore 64 / VIC-II — fixed 16-color palette, cell-based with
+    // per-cell colour constraints.
+    //   c64_hires:      320×200, 8×8 cells, 2 colours per cell.
+    //                   1 bit per pixel; per-cell colour pair stored in
+    //                   1000-byte screen RAM (upper / lower nibble).
+    //   c64_multicolor: 160×200 logical (2:1 hardware doubling), 4×8
+    //                   cells, 4 colours per cell (1 shared bg + 3
+    //                   per-cell). 2 bits per pixel.
+    c64_hires,          // 320×200, 2 colours per 8×8 cell
     c64_multicolor,     // 160×200, 4 colours per 4×8 cell (1 shared bg + 3)
 
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
@@ -231,6 +235,10 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         // palette-field byte, so the 2048-colour gamut documented for
         // Modes 3/4 Direct Color isn't reachable here.
         return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
+    // C64 hires: 320×200, 8×8 cells, 2 colours per cell. Hardware
+    // pixels are 1:1 (no doubling). PAL hardware-pixel ratio 0.936:1.
+    case Mode::c64_hires:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
     // C64 multicolor: 160×200 logical, 4×8 cells, 4-colour-per-cell.
     // Hardware pixels are 2:1 (each logical pixel doubled horizontally
     // → 320×200 display). On a PAL CRT one of those 320×200 hardware
@@ -319,7 +327,7 @@ constexpr bool is_cga(Mode mode) noexcept {
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
 constexpr bool is_c64(Mode mode) noexcept {
-    return mode == Mode::c64_multicolor;
+    return mode == Mode::c64_hires || mode == Mode::c64_multicolor;
 }
 
 // Check if the mode uses NTSC composite artifacting to produce its colors.

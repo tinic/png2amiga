@@ -154,8 +154,9 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
   // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
-  // constraints. Step 1 of the png2c64 merge: c64-multicolor only;
-  // hires / FLI / sprite / charset modes follow.
+  // constraints. FLI / sprite / charset modes follow on the merge branch.
+  { value: 'c64-hires',      label: 'Hires (320x200, 2/cell)',
+                             chipset: 'c64' },
   { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
                              chipset: 'c64' },
 ]
@@ -510,6 +511,9 @@ const MODE_PAR: Record<string, number> = {
   'genesis-h40':    0.933,
   'genesis-h32-sh': 1.167,
   'genesis-h40-sh': 0.933,
+  // C64 hires: 320×200, 1:1 hardware pixels. PAL CRT VIC-II pixel
+  // aspect = 0.936 (slightly tall).
+  'c64-hires': 0.936,
   // C64 multicolor: 160 logical → 320 hardware (2× h-doubling) ×
   // 200 vertical. On a PAL CRT each hardware pixel is 0.936:1
   // (slightly tall). Per-LOGICAL-pixel display ratio = 2 × 0.936 =
@@ -549,6 +553,8 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'ega-640':         { sx: 1, sy: 2 },
   'cga-640':         { sx: 1, sy: 2 },
   'cga-text80x100':  { sx: 1, sy: 2 },
+  // C64 hires: 320×200 native. 2× backing scale for visibility.
+  'c64-hires':       { sx: 2, sy: 2 },
   // C64 multicolor: 160×200 logical buffer. 4× backing scale so the
   // rendered preview is large enough to actually see (the 1.872 PAR
   // CSS-stretch is applied separately at display time).
