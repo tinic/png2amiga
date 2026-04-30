@@ -548,6 +548,10 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'ega-640':         { sx: 1, sy: 2 },
   'cga-640':         { sx: 1, sy: 2 },
   'cga-text80x100':  { sx: 1, sy: 2 },
+  // C64 multicolor: 160×200 logical buffer. 4× backing scale so the
+  // rendered preview is large enough to actually see (the 1.872 PAR
+  // CSS-stretch is applied separately at display time).
+  'c64-multicolor':  { sx: 4, sy: 2 },
 }
 
 // Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for
