@@ -510,8 +510,17 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
 Options decompose_mode_options(const Options& opts) {
     auto o = opts;
     auto& s = o.mode;
-    bool has_hires = s.find("hires") != std::string::npos;
-    bool has_lace = s.size() > 4 && s.find("-lace") != std::string::npos;
+    // The "hires" / "lace" suffixes are Amiga compound-mode markers
+    // (ham6-hires, lores-lace, etc.). Other chipsets use mode strings
+    // that may *contain* the substring (c64-hires, vga-13h… though
+    // none of those collide today besides c64). Anchor by chipset
+    // prefix so non-Amiga modes don't get accidentally rewritten.
+    bool is_amiga_compound = s.starts_with("ham") || s.starts_with("lores") ||
+                              s.starts_with("hires") || s.starts_with("ehb");
+    bool has_hires = is_amiga_compound &&
+                     s.find("hires") != std::string::npos;
+    bool has_lace = is_amiga_compound &&
+                    s.size() > 4 && s.find("-lace") != std::string::npos;
     // Only override if user didn't already set these
     if (has_hires && o.width == 0) o.width = 640;
     if (has_lace) o.interlace = true;
@@ -526,7 +535,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     const Options& orig_options) {
     auto options = decompose_mode_options(orig_options);
     auto mode = parse_mode(options.mode);
-    bool compound_hires = orig_options.mode.find("hires") != std::string::npos;
+    bool compound_hires =
+        (orig_options.mode.starts_with("ham") ||
+         orig_options.mode.starts_with("lores") ||
+         orig_options.mode.starts_with("hires") ||
+         orig_options.mode.starts_with("ehb")) &&
+        orig_options.mode.find("hires") != std::string::npos;
 
     // Reject dither methods that don't apply to the chosen mode rather
     // than silently fall through to a degraded encode. HAM has no
