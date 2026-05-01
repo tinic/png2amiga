@@ -525,6 +525,7 @@ struct Config {
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
     std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
     std::string c64_metric  = "blur";     // blur (PN-sRGB), mse (sRGB), ssim
+    bool c64_petscii_graphics_only = false;
     int cga_bg = 0;                    // background color index (0..15 in master palette)
     bool cga_auto_palette = true;      // try all palettes, pick lowest-error
 
@@ -696,6 +697,9 @@ void print_usage() {
         "  --c64-metric <m>                C64 per-cell error metric:\n"
         "                                  blur (default, Pappas-Neuhoff sRGB),\n"
         "                                  mse (per-pixel sRGB²), ssim\n"
+        "  --c64-petscii-graphics          PETSCII only: restrict candidate glyphs\n"
+        "                                  to semi-graphics + blocks (~130 chars,\n"
+        "                                  no letters/digits/punctuation)\n"
         "\n"
         "Dithering:\n"
         "  --dither <method>\n"
@@ -1152,6 +1156,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--c64-petscii-graphics") {
+            config.c64_petscii_graphics_only = true;
+            continue;
+        }
         if (arg == "--c64-metric" && i + 1 < argc) {
             auto v = std::string_view(argv[++i]);
             if (v != "blur" && v != "mse" && v != "ssim") {
@@ -2066,6 +2074,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.cga_text_metric = cfg.cga_text_metric;
     opts.c64_palette = cfg.c64_palette;
     opts.c64_metric = cfg.c64_metric;
+    opts.c64_petscii_graphics_only = cfg.c64_petscii_graphics_only;
     opts.locks = cfg.locks;
     opts.pins = cfg.pins;
     opts.palette_file = cfg.palette_file;

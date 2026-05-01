@@ -128,6 +128,9 @@ Options parse_js_options(val js_opts) {
         opts.c64_palette = js_opts["c64Palette"].as<std::string>();
     if (js_opts.hasOwnProperty("c64Metric"))
         opts.c64_metric = js_opts["c64Metric"].as<std::string>();
+    if (js_opts.hasOwnProperty("c64PetsciiGraphicsOnly"))
+        opts.c64_petscii_graphics_only =
+            js_opts["c64PetsciiGraphicsOnly"].as<bool>();
     if (js_opts.hasOwnProperty("dualPlayfield"))
         opts.dual_playfield = js_opts["dualPlayfield"].as<bool>();
     if (js_opts.hasOwnProperty("scap"))

@@ -143,6 +143,7 @@ Result<EncodeResult> encode_petscii(
     const Image& image,
     Palette pal = Palette::colodore,
     const dither::Settings& settings = {},
-    Metric metric = Metric::blur);
+    Metric metric = Metric::blur,
+    bool graphics_only = false);
 
 }  // namespace png2amiga::c64

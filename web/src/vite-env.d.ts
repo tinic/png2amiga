@@ -138,6 +138,7 @@ declare module '@wasm/png2amiga.js' {
     // C64 / VIC-II palette + metric
     c64Palette?: string
     c64Metric?: string
+    c64PetsciiGraphicsOnly?: boolean
 
     // C header export
     symbolName?: string

@@ -91,6 +91,7 @@ export interface Options {
   cgaTextMetric: string
   c64Palette: string
   c64Metric: string
+  c64PetsciiGraphicsOnly: boolean
   paletteData?: Uint8Array | null
   // Slider numeric fields (declared explicitly so options[s.key] is typed
   // as number rather than the index-signature wildcard).
@@ -155,11 +156,11 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
   // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
-  // constraints. Sprite / charset / petscii modes follow on the
-  // merge branch.
-  { value: 'c64-hires',      label: 'Hires (320x200, 2/cell)',
-                             chipset: 'c64' },
+  // constraints. Multicolor first / default; sprite / charset modes
+  // follow on the merge branch.
   { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
+                             chipset: 'c64' },
+  { value: 'c64-hires',      label: 'Hires (320x200, 2/cell)',
                              chipset: 'c64' },
   { value: 'c64-fli',        label: 'FLI (multicolor + per-row screen)',
                              chipset: 'c64' },
@@ -440,6 +441,7 @@ export function defaultOptions(): Options {
     ...CGA_TEXT_DEFAULTS,
     c64Palette: 'colodore',
     c64Metric:  'blur',
+    c64PetsciiGraphicsOnly: false,
     ...sliderDefaults(),
   }
   return opts

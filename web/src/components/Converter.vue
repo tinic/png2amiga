@@ -1375,6 +1375,19 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
+              <!-- PETSCII only: restrict candidate glyphs to graphics
+                   subset (no letters / digits / punctuation). -->
+              <div v-if="options.mode === 'c64-petscii'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Restrict the candidate glyph set to PETSCII semi-graphics + blocks (~130 chars). Skips letters, digits, and punctuation that would look out-of-place in smooth halftone areas.">
+                  Graphics only
+                </label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.c64PetsciiGraphicsOnly" />
+                  <span style="color: #888; font-size: 0.625rem;">no letters/digits/punctuation</span>
+                </div>
+              </div>
+
               <div v-if="!(options.mode === 'cga-text80x100' && options.cgaTextMetric !== 'mse')"
                 class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>

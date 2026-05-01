@@ -271,6 +271,13 @@ struct Options {
     //          when individual pixels miss.
     std::string c64_metric = "blur";
 
+    // PETSCII only: when true, restrict the candidate glyph set to
+    // PETSCII semi-graphics, blocks, and the reverse-video graphics
+    // (~130 chars) — skips letters / digits / punctuation. Useful
+    // for halftone-style art where letter shapes in smooth regions
+    // would look wrong.
+    bool c64_petscii_graphics_only = false;
+
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
     std::vector<PinSpec>  pins;

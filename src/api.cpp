@@ -898,7 +898,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             case amiga::Mode::c64_afli:
                 return c64::encode_afli(*image, pal_choice, dith, metric);
             case amiga::Mode::c64_petscii:
-                return c64::encode_petscii(*image, pal_choice, dith, metric);
+                return c64::encode_petscii(*image, pal_choice, dith, metric,
+                                            options.c64_petscii_graphics_only);
             default:
                 return c64::encode_multicolor(*image, pal_choice, dith, metric);
             }

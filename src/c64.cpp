@@ -99,15 +99,53 @@ constexpr std::size_t kCellH = 8;
 constexpr std::size_t kCols  = 40;  // 160 / 4
 constexpr std::size_t kRows  = 25;  // 200 / 8
 
-// For each pixel in the cell, find the nearest of the 4 candidate
-// colours (in OKLab) and return the chosen index 0..3 plus the
-// squared OKLab error. Per-pixel work: 4 distance computes.
+// 3×3 binomial blur kernel — same as cga_text / petscii. sRGB
+// (gamma-encoded) space matches what the CRT emits.
+constexpr std::array<std::array<float, 3>, 3> kCellBlur = {{
+    {1.0f/16, 2.0f/16, 1.0f/16},
+    {2.0f/16, 4.0f/16, 2.0f/16},
+    {1.0f/16, 2.0f/16, 1.0f/16},
+}};
+
+// 9-tap replicate-padded blur table for an arbitrary cell W × H.
+template <std::size_t W, std::size_t H>
+struct CellTaps {
+    struct T { std::uint8_t q; float w; };
+    std::array<std::array<T, 9>, W * H> taps;
+
+    constexpr CellTaps() : taps{} {
+        for (std::size_t py = 0; py < H; ++py) {
+            for (std::size_t px = 0; px < W; ++px) {
+                std::size_t out = py * W + px;
+                std::size_t k = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    int ny = std::clamp(static_cast<int>(py) + dy,
+                                        0, static_cast<int>(H) - 1);
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int nx = std::clamp(static_cast<int>(px) + dx,
+                                            0, static_cast<int>(W) - 1);
+                        taps[out][k++] = {
+                            static_cast<std::uint8_t>(
+                                static_cast<std::size_t>(ny) * W +
+                                static_cast<std::size_t>(nx)),
+                            kCellBlur[static_cast<std::size_t>(dy + 1)]
+                                     [static_cast<std::size_t>(dx + 1)]};
+                    }
+                }
+            }
+        }
+    }
+};
+
+// Legacy OKLab² nearest-pick helper for hires / FLI / AFLI. These
+// modes still score in OKLab pending per-metric integration; the
+// Metric parameter is plumbed but ignored. The hot path is the
+// inner-loop sum-of-squared-distance — cheap.
 inline float cell_error_for_quad(
     std::span<const color_space::OKLab> pix_lab,
     const std::array<std::uint8_t, 4>& cand,
     const std::array<color_space::OKLab, 16>& pal_lab,
     std::array<std::uint8_t, kCellW * kCellH>* pixel_idx_out) {
-
     float total = 0.0f;
     for (std::size_t p = 0; p < pix_lab.size(); ++p) {
         const auto& t = pix_lab[p];
@@ -116,13 +154,105 @@ inline float cell_error_for_quad(
         for (std::uint8_t q = 0; q < 4; ++q) {
             const auto& c = pal_lab[cand[q]];
             float dL = t.L - c.L, da = t.a - c.a, db = t.b - c.b;
-            float d  = dL * dL + da * da + db * db;
+            float d = dL * dL + da * da + db * db;
             if (d < best_d) { best_d = d; best_q = q; }
         }
         total += best_d;
         if (pixel_idx_out) (*pixel_idx_out)[p] = best_q;
     }
     return total;
+}
+
+// Per-cell metric scorer. Phase 1 picks each pixel's nearest of N
+// candidates in sRGB MSE (cheapest correct assignment). Phase 2
+// computes the chosen metric on the resulting (raw, rendered) pair.
+//   blur — MSE between pre-blurred source and post-blurred rendered.
+//   mse  — per-pixel sRGB squared error.
+//   ssim — single-window SSIM on luminance proxy ((r+g+b)/3).
+template <std::size_t N, std::size_t Px>
+inline float score_cell(
+    const std::array<Color3f, Px>& raw,
+    const std::array<Color3f, Px>& blurred_src,
+    const std::array<typename CellTaps<4, 8>::T, 9>* /*taps*/,  // see overloads
+    const std::array<Color3f, N>& cand,
+    Metric metric,
+    std::array<std::uint8_t, Px>* idx_out,
+    auto&& tap_lookup) {
+
+    // Phase 1: per-pixel nearest-of-N in sRGB MSE.
+    std::array<std::uint8_t, Px> idx{};
+    std::array<Color3f, Px> rendered{};
+    for (std::size_t p = 0; p < Px; ++p) {
+        float best = std::numeric_limits<float>::infinity();
+        std::uint8_t best_q = 0;
+        for (std::uint8_t q = 0; q < N; ++q) {
+            float dr = raw[p].r - cand[q].r;
+            float dg = raw[p].g - cand[q].g;
+            float db = raw[p].b - cand[q].b;
+            float d = dr * dr + dg * dg + db * db;
+            if (d < best) { best = d; best_q = q; }
+        }
+        idx[p] = best_q;
+        rendered[p] = cand[best_q];
+    }
+    if (idx_out) *idx_out = idx;
+
+    // Phase 2: score.
+    float err = 0.0f;
+    switch (metric) {
+    case Metric::mse:
+        for (std::size_t p = 0; p < Px; ++p) {
+            float dr = raw[p].r - rendered[p].r;
+            float dg = raw[p].g - rendered[p].g;
+            float db = raw[p].b - rendered[p].b;
+            err += dr * dr + dg * dg + db * db;
+        }
+        return err;
+    case Metric::blur: {
+        // Blur the rendered cell using the same 9-tap kernel; MSE
+        // against pre-blurred source. tap_lookup yields the 9 taps
+        // for pixel p — caller-provided so this works for any
+        // cell size.
+        for (std::size_t p = 0; p < Px; ++p) {
+            Color3f b{0, 0, 0};
+            auto taps = tap_lookup(p);
+            for (auto& t : taps) {
+                b.r += t.w * rendered[t.q].r;
+                b.g += t.w * rendered[t.q].g;
+                b.b += t.w * rendered[t.q].b;
+            }
+            float dr = blurred_src[p].r - b.r;
+            float dg = blurred_src[p].g - b.g;
+            float db = blurred_src[p].b - b.b;
+            err += dr * dr + dg * dg + db * db;
+        }
+        return err;
+    }
+    case Metric::ssim: {
+        // Luminance proxy = (r + g + b) / 3. SSIM over the cell.
+        float mx = 0, my = 0;
+        std::array<float, Px> sx{}, sy{};
+        for (std::size_t p = 0; p < Px; ++p) {
+            sx[p] = (raw[p].r      + raw[p].g      + raw[p].b)      * (1.0f/3);
+            sy[p] = (rendered[p].r + rendered[p].g + rendered[p].b) * (1.0f/3);
+            mx += sx[p]; my += sy[p];
+        }
+        mx /= Px; my /= Px;
+        float vx = 0, vy = 0, cxy = 0;
+        for (std::size_t p = 0; p < Px; ++p) {
+            float dx = sx[p] - mx, dy = sy[p] - my;
+            vx += dx * dx; vy += dy * dy; cxy += dx * dy;
+        }
+        vx /= Px; vy /= Px; cxy /= Px;
+        constexpr float c1 = 0.01f * 0.01f;
+        constexpr float c2 = 0.03f * 0.03f;
+        float num = (2.0f * mx * my + c1) * (2.0f * cxy + c2);
+        float den = (mx * mx + my * my + c1) * (vx + vy + c2);
+        float ssim = (den > 0) ? num / den : 1.0f;
+        return 1.0f - ssim;
+    }
+    }
+    return err;
 }
 
 }  // namespace
@@ -148,26 +278,32 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
         }};
     }
 
-    const auto& pal_lin  = palette_linear(pal);
-    const auto& pal_lab  = palette_oklab(pal);
+    const auto& pal_lin = palette_linear(pal);
+    const auto& pal_lab = palette_oklab(pal);
 
-    // Pre-bake source pixels in OKLab so the inner loop is plain
-    // float math.
-    std::vector<color_space::OKLab> src_lab(W * H);
+    // Source pixels in sRGB (display space). Cell modes brute-force
+    // their per-cell palette here — sRGB matches what the CRT emits,
+    // so all three metrics (blur / mse / ssim) operate in this space.
+    std::vector<Color3f> src_s(W * H);
     for (std::size_t y = 0; y < H; ++y)
-        for (std::size_t x = 0; x < W; ++x)
-            src_lab[y * W + x] = color_space::linear_to_oklab(image[x, y]);
+        for (std::size_t x = 0; x < W; ++x) {
+            auto srgb = color_space::linear_to_srgb(image[x, y]).clamped();
+            src_s[y * W + x] = {srgb.r, srgb.g, srgb.b};
+        }
+    std::array<Color3f, 16> pal_s{};
+    for (std::size_t i = 0; i < 16; ++i) {
+        auto srgb = color_space::linear_to_srgb(pal_lin[i]).clamped();
+        pal_s[i] = {srgb.r, srgb.g, srgb.b};
+    }
 
-    // Per-cell trial: enumerate all 16 background candidates × C(15,3) =
-    // 6825 quads. For each cell-pixel buffer we run the assign/error
-    // pass; pick the (bg, i, j, k) that minimises total cell error,
-    // then commit pixel indices and cell colours.
-    //
-    // Single pass — bg varies per cell here. The png2c64 baseline
-    // brute-forces a *shared* bg across the whole image (16 outer
-    // passes); that's a quality refinement we can layer later. Per-
-    // cell bg matches what some C64 multicolor tools (e.g. spectre)
-    // produce as a first cut and is fine for a proof-of-fit.
+    static constexpr CellTaps<kCellW, kCellH> taps_mc{};
+    auto tap_lookup = [](std::size_t p) -> std::span<const CellTaps<kCellW, kCellH>::T, 9> {
+        return std::span<const CellTaps<kCellW, kCellH>::T, 9>(taps_mc.taps[p]);
+    };
+
+    // Per-cell trial: enumerate all 16 backgrounds × C(15,3) = 6825
+    // quads. The brute force scores each quad under the chosen
+    // metric; per-cell bg.
 
     EncodeResult res;
     res.rendered = Image(W, H);
@@ -180,19 +316,29 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
                        // the bg "slot" for their own dark-cluster colour.
                        // (Real per-image bg sweep is a TODO refinement.)
 
-    // Pass 1: per-cell brute-force quad pick on the *undithered* source.
-    // Stores the chosen (bg, c1, c2, c3) for each cell; dither runs on
-    // top of these palettes in pass 2.
+    // Pass 1: per-cell brute-force quad pick. Score under chosen
+    // metric (blur / mse / ssim, all sRGB).
     std::vector<std::array<std::uint8_t, 4>> cell_quad(kRows * kCols);
-    std::array<color_space::OKLab, kCellW * kCellH> cell_lab{};
-    std::array<std::uint8_t, kCellW * kCellH> pix_idx{};
+    constexpr std::size_t kCellPx = kCellW * kCellH;  // 32
+    std::array<Color3f, kCellPx> raw{};
+    std::array<Color3f, kCellPx> blurred_src{};
     for (std::size_t cy = 0; cy < kRows; ++cy) {
         for (std::size_t cx = 0; cx < kCols; ++cx) {
             for (std::size_t py = 0; py < kCellH; ++py) {
                 for (std::size_t px = 0; px < kCellW; ++px) {
-                    cell_lab[py * kCellW + px] =
-                        src_lab[(cy * kCellH + py) * W + (cx * kCellW + px)];
+                    raw[py * kCellW + px] =
+                        src_s[(cy * kCellH + py) * W + (cx * kCellW + px)];
                 }
+            }
+            // Pre-blur the source cell once (used by metric=blur).
+            for (std::size_t p = 0; p < kCellPx; ++p) {
+                Color3f b{0, 0, 0};
+                for (auto& t : taps_mc.taps[p]) {
+                    b.r += t.w * raw[t.q].r;
+                    b.g += t.w * raw[t.q].g;
+                    b.b += t.w * raw[t.q].b;
+                }
+                blurred_src[p] = b;
             }
             float best_err = std::numeric_limits<float>::infinity();
             std::array<std::uint8_t, 4> best_quad{0, 0, 0, 0};
@@ -205,12 +351,15 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
                         for (std::uint8_t k = static_cast<std::uint8_t>(j + 1);
                              k < 16; ++k) {
                             if (k == bg) continue;
-                            std::array<std::uint8_t, 4> quad{bg, i, j, k};
-                            float err = cell_error_for_quad(
-                                cell_lab, quad, pal_lab, &pix_idx);
+                            std::array<Color3f, 4> cand{
+                                pal_s[bg], pal_s[i], pal_s[j], pal_s[k],
+                            };
+                            float err = score_cell<4, kCellPx>(
+                                raw, blurred_src, nullptr, cand,
+                                metric, nullptr, tap_lookup);
                             if (err < best_err) {
                                 best_err  = err;
-                                best_quad = quad;
+                                best_quad = {bg, i, j, k};
                             }
                         }
                     }
@@ -798,7 +947,8 @@ std::array<GlyphPre, 256> build_glyph_precompute(
 
 Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
                                      const dither::Settings& /*settings*/,
-                                     Metric metric) {
+                                     Metric metric,
+                                     bool graphics_only) {
     if (image.width() != kPetW || image.height() != kPetH) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
@@ -984,6 +1134,8 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
                 std::uint8_t best_fg = bg;
 
                 for (std::size_t g = 0; g < 256; ++g) {
+                    if (graphics_only && !petscii::is_graphic_char(
+                            static_cast<std::uint8_t>(g))) continue;
                     const auto& gp = glyph[g];
                     for (std::uint8_t fg = 0; fg < 16; ++fg) {
                         if (fg == bg) continue;
