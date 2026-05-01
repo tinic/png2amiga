@@ -49,6 +49,10 @@
 #ifndef _WIN32
 #include <termios.h>
 #include <unistd.h>
+// POSIX guarantees this signature; some libcs (e.g. MSYS/Cygwin GCC under
+// strict -std=c++26) hide ::fileno behind feature-test macros, so declare it
+// explicitly. Harmless on macOS/Linux where it's already declared identically.
+extern "C" int fileno(FILE*);
 #else
 #include <io.h>
 #define isatty _isatty
