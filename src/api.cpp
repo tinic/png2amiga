@@ -1916,12 +1916,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 }
             }
         } else {
+            auto reserves_in_pal_ehb = palette_locks::validate_reserves(
+                options.reserves, options.locks, 32, lock_zero_ehb);
+            if (!reserves_in_pal_ehb)
+                return std::unexpected{reserves_in_pal_ehb.error()};
+            std::size_t reserves_ehb = *reserves_in_pal_ehb;
             auto qcount = palette_locks::quant_count(32, options.locks, lock_zero_ehb);
-            // PNN consistently produces better-spread 32-colour
-            // base palettes for EHB than the OCS-brute-force
-            // histogram path; the latter clusters in the densest
-            // pixel basin and underweights the half-brite-covered
-            // dark range.
+            if (qcount > reserves_ehb) qcount -= reserves_ehb;
+            else                       qcount = 1;
             auto quantized = quantize::quantize(*image, qcount,
                                                 quantize::Algorithm::pnn,
                                                 options.palette_diversity);
@@ -1930,6 +1932,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 *quantized, options.locks, 32, lock_zero_ehb, chipset, mode);
             base_pal = std::move(assembled.palette);
             base_locked = std::move(assembled.locked);
+            for (auto& r : options.reserves) {
+                auto i = static_cast<std::size_t>(r.index);
+                if (r.index >= 0 && i < 32) {
+                    base_pal.colors[i] = palette_locks::to_color(
+                        LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
+                    base_locked[i] = true;
+                }
+            }
         }
 
         // Pair-aware refinement: jointly optimise the 32 base colours
@@ -1960,12 +1970,34 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
 
+        // Build candidate set for dithering: reserved base slots and their
+        // half-brite copies are excluded so image pixels can't land on them.
+        // (Locked slots remain candidates — image pixels CAN choose them.)
+        std::vector<bool> ehb_blocked(64, false);
+        for (auto& r : options.reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < 32) {
+                ehb_blocked[i] = true;
+                ehb_blocked[i + 32] = true;
+            }
+        }
+
         dither::DitherResult dither_result;
         if (has_transparency) {
-            std::span<const Color3f> dither_span{ehb_pal.colors.data() + 1,
-                                                  ehb_pal.colors.size() - 1};
-            dither_result = dither::apply(*image, dither_span, dith);
-            for (auto& idx : dither_result.indices) ++idx;
+            // Build candidate palette skipping slot 0 (transparent) AND
+            // any reserved base/half-brite slots.
+            std::vector<Color3f> cand;
+            std::vector<std::uint8_t> cand_to_full;
+            cand.reserve(63);
+            cand_to_full.reserve(63);
+            for (std::size_t i = 1; i < 64; ++i) {
+                if (ehb_blocked[i]) continue;
+                cand.push_back(ehb_pal.colors[i]);
+                cand_to_full.push_back(static_cast<std::uint8_t>(i));
+            }
+            dither_result = dither::apply(*image, cand, dith);
+            for (auto& idx : dither_result.indices)
+                idx = cand_to_full[idx];
             for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
                 if (tmask[i]) dither_result.indices[i] = 0;
         } else {
@@ -1978,9 +2010,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // pairs with pick_palette_index_with_ostro's
             // second-nearest tracking which the legacy `apply` route
             // doesn't expose.
-            std::vector<color_space::OKLab> pal_lab(ehb_pal.colors.size());
-            for (std::size_t i = 0; i < ehb_pal.colors.size(); ++i)
-                pal_lab[i] = color_space::linear_to_oklab(ehb_pal.colors[i]);
+            std::vector<color_space::OKLab> pal_lab;
+            std::vector<std::uint8_t> cand_to_full;
+            pal_lab.reserve(64);
+            cand_to_full.reserve(64);
+            for (std::size_t i = 0; i < ehb_pal.colors.size(); ++i) {
+                if (ehb_blocked[i]) continue;
+                pal_lab.push_back(color_space::linear_to_oklab(ehb_pal.colors[i]));
+                cand_to_full.push_back(static_cast<std::uint8_t>(i));
+            }
             auto w = image->width();
             std::vector<std::uint8_t> indices(w * image->height(), 0);
             float total_err = dither::diffuse_raw_buffer(
@@ -1992,16 +2030,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     float thr = dither::pick_palette_index_with_ostro(
                         dith.method, target, pal_lab, x, y,
                         dith.strength, /*k_min=*/0, k, chosen);
-                    indices[y * w + x] = static_cast<std::uint8_t>(k);
+                    indices[y * w + x] = cand_to_full[k];
                     return {chosen, thr};
                 });
             if (dith.method == dither::Method::dbs) {
+                // DBS post-pass also needs the filtered candidate set so
+                // it doesn't swap pixels back onto reserved slots.
+                std::vector<std::uint8_t> cand_indices(indices.size());
+                std::vector<std::uint8_t> full_to_cand(64, 255);
+                for (std::size_t k = 0; k < cand_to_full.size(); ++k)
+                    full_to_cand[cand_to_full[k]] = static_cast<std::uint8_t>(k);
+                for (std::size_t i = 0; i < indices.size(); ++i)
+                    cand_indices[i] = full_to_cand[indices[i]];
                 dither::apply_dbs_post_pass(
-                    *image, indices,
+                    *image, cand_indices,
                     [&](std::size_t /*x*/, std::size_t /*y*/)
                         -> std::span<const color_space::OKLab> {
                         return pal_lab;
                     });
+                for (std::size_t i = 0; i < indices.size(); ++i)
+                    indices[i] = cand_to_full[cand_indices[i]];
             }
             dither_result.indices = std::move(indices);
             dither_result.total_error = total_err;

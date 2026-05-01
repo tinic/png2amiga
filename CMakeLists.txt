@@ -579,6 +579,49 @@ else()
                              PROPERTIES DEPENDS "smoke-degas-${ext}")
     endforeach()
 
+    # --reserve-range smoke tests. Each mode encodes once with a
+    # mode-appropriate reserve range, then a python helper checks the
+    # produced .h has the magenta default colour exactly N times in
+    # the palette (where N = reserved-slot count).
+    set(reserve_specs
+        "lores|24-31|--mode lores --depth 5"
+        "hires|12-15|--mode hires --depth 4"
+        "vga-13h|248-255|--mode vga-13h"
+        "ehb|24-31|--mode ehb"
+    )
+    foreach(spec ${reserve_specs})
+        string(REPLACE "|" ";" parts ${spec})
+        list(GET parts 0 mname)
+        list(GET parts 1 range)
+        list(GET parts 2 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        # Compute expected reserve count from the range (single hyphen).
+        string(REPLACE "-" ";" rparts ${range})
+        list(GET rparts 0 r_lo)
+        list(GET rparts 1 r_hi)
+        math(EXPR r_count "${r_hi} - ${r_lo} + 1")
+        add_test(
+            NAME "reserve-${mname}"
+            COMMAND png2amiga ${mode_args}
+                    --reserve-range ${range} ff00cc
+                    --symbol reserve_test
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/reserve-${mname}.h
+        )
+        add_test(
+            NAME "reserve-${mname}-count"
+            COMMAND python3 -c
+                "import re,sys; \
+                content = open('${CMAKE_BINARY_DIR}/reserve-${mname}.h').read(); \
+                m = re.search(r'_palette\\[\\] = \\{([^}]+)\\}', content); \
+                vals = re.findall(r'0x[0-9A-Fa-f]+', m.group(1)); \
+                reserved = sum(1 for v in vals[${r_lo}:${r_hi}+1] if int(v,16) in (0x0F0C, 0x00FF00CC, 0xCC, 0x002A)); \
+                sys.exit(0 if reserved == ${r_count} else (print(f'expected ${r_count} reserves at slots ${r_lo}..${r_hi}, found '+str(reserved)) or 1))"
+        )
+        set_tests_properties("reserve-${mname}-count"
+                             PROPERTIES DEPENDS "reserve-${mname}")
+    endforeach()
+
     # Sega Genesis: .bin (tiles + tilemap + CRAM) and .h (SGDK header).
     set(genesis_outputs
         "h32.bin|--mode genesis-h32"
