@@ -424,6 +424,7 @@ struct Config {
     bool json = false;                 // emit JSON status object instead of human text
     std::string depfile;               // Make-format depfile path (empty = disabled)
     bool list_modes = false;           // emit mode catalog (human or JSON) and exit 0
+    bool list_dithers = false;         // emit dither-method catalog and exit 0
 
     // Batch mode: N input PNGs encoded as a single horizontally-tiled
     // atlas so they share one palette and (if --cap) one copper plan,
@@ -614,10 +615,8 @@ void print_usage() {
         "  --no-scale                      Use source dimensions verbatim\n"
         "\n"
         "Dithering:\n"
-        "  --dither <method>               Dither method (default: ostromoukhov)\n"
-        "                                  See --list-modes for the full catalog;\n"
-        "                                  common: ostromoukhov, atkinson,\n"
-        "                                  floyd-steinberg, opt-checker, bayer4x4\n"
+        "  --dither <method>               Dither method (default: ostromoukhov;\n"
+        "                                  --list-dithers for the full catalog)\n"
         "  --dither-strength <float>       Dither amount 0.0-2.0 (default: 1.0)\n"
         "  --error-clamp <float>           Max error per channel (default: 0.35)\n"
         "  --refine <0-32>                 Palette refinement iterations (default: 4)\n"
@@ -703,6 +702,7 @@ void print_usage() {
         "  --json                          JSON status output (implies --quiet)\n"
         "  --depfile <path>                Write a Make-format depfile\n"
         "  --list-modes                    Print supported modes and exit\n"
+        "  --list-dithers                  Print supported dither methods and exit\n"
         "\n"
         "Exit codes (sysexits.h):\n"
         "  0 ok    1 internal    64 usage    66 no input    73 cannot create\n");
@@ -893,6 +893,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--list-dithers") {
+            config.list_dithers = true;
+            continue;
+        }
         if (arg == "--list-modes") {
             config.list_modes = true;
             continue;
@@ -1468,7 +1472,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
     }
 
     if (config.input_path.empty() && config.scap_probe.empty() &&
-        !config.list_modes) {
+        !config.list_modes && !config.list_dithers) {
         print_usage();
         std::exit(exit_code::usage);
     }
@@ -3315,6 +3319,28 @@ int main(int argc, char* argv[]) {
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
             cli_status("            c64-charset-hires, c64-charset-multicolor");
         }
+        return exit_code::ok;
+    }
+
+    if (config->list_dithers) {
+        cli_status("png2amiga {} — dither methods:", png2amiga::version);
+        cli_status("  ED:        ostromoukhov (default), sierra-lite, atkinson, jarvis,");
+        cli_status("             floyd-steinberg, stucki, gilbert, riemersma");
+        cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker, tri-tone,");
+        cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
+        cli_status("  DBS:       dbs (perceptual optimum, slow)");
+        cli_status("  Structure: structure-fs, contrast-fs, zhoufang");
+        cli_status("  Bayer:     bayer2x2, bayer4x4, bayer8x8, bayer4x2, bayer2x4,");
+        cli_status("             bayer3x3, bayer5x5, bayer6x6, bayer7x7,");
+        cli_status("             aseprite-old, libcaca3, libcaca6, cranley-bayer, fractal16");
+        cli_status("  Halftone:  checker, clustered-dot, halftone8x8, diagonal8x8,");
+        cli_status("             spiral5x5, pegasus, h2x4, v4x2");
+        cli_status("  Lines:     line2, line4, line8, line-checker,");
+        cli_status("             vline2, vline4, vline8, vline-checker, crosshatch");
+        cli_status("  Pattern:   hex8x8, hex5x5, radial, quasicrystal, truchet");
+        cli_status("  Noise:     blue-noise, void-cluster, cluster-noise,");
+        cli_status("             ign, ign-tri, r2, r2-tri, white-noise, value-noise");
+        cli_status("  none");
         return exit_code::ok;
     }
 
