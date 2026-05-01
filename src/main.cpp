@@ -542,7 +542,7 @@ struct Config {
     // fixed buffer. Without the flag, modes with fixed dimensions stretch
     // source to fill the buffer (may look squished on CRT).
     bool native_par = false;
-    bool reserve_color0 = true;        // reserve index 0 for black (border)
+    bool lock_color0 = true;        // reserve index 0 for black (border)
 
     // Dual playfield: encode image into PF2, leave PF1 zeroed, palette
     // shifted into upper color registers (8-15 OCS / 16-31 AGA).
@@ -577,8 +577,9 @@ struct Config {
     float preview_video_fps = 12.5f;   // default playback rate (8mm-ish)
 
     // Palette index manipulation
-    std::vector<api::LockSpec> locks;  // --lock-index <id> <rgbhex>
-    std::vector<api::PinSpec>  pins;   // --pin-index-at <id> <x> <y>
+    std::vector<api::LockSpec> locks;     // --lock-index <id> <rgbhex>
+    std::vector<api::PinSpec>  pins;      // --pin-index-at <id> <x> <y>
+    std::vector<api::ReserveSpec> reserves;  // --reserve-range <range> <rgbhex>
 };
 
 void print_version() {
@@ -625,7 +626,7 @@ void print_usage() {
         "  --palette <file>                Load palette (.gpl, IFF, hex text)\n"
         "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
-        "  --no-reserve-color0             Allow palette index 0 to be image colour\n"
+        "  --no-lock-color0             Allow palette index 0 to be image colour\n"
         "\n"
         "Image processing:\n"
         "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
@@ -677,6 +678,9 @@ void print_usage() {
         "\n"
         "Palette index pinning (lores/hires/EHB/Atari):\n"
         "  --lock-index <id> <rgbhex>      Lock palette slot to a specific colour\n"
+        "                                  (quantizer may still pick this slot)\n"
+        "  --reserve-range <range> <rgb>   Hard-reserve slots from the quantizer.\n"
+        "                                  Range: 0,1,5-10 / -5 / 5- (open ends)\n"
         "  --pin-index-at <id> <x> <y>     Swap pixel (x,y)'s slot with <id>\n"
         "\n"
         "Output:\n"
@@ -847,8 +851,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
 
 
-        if (arg == "--no-reserve-color0") {
-            config.reserve_color0 = false;
+        if (arg == "--no-lock-color0") {
+            config.lock_color0 = false;
             continue;
         }
 
@@ -1125,6 +1129,90 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     "--lock-index color must be a hex value (e.g. ff00cc)"}};
             }
             config.locks.push_back({idx, r, g, b});
+            continue;
+        }
+
+        // --reserve-range <ranges> <rgbhex>: hard-reserve palette slots.
+        // Range form: "0,1,5-10" / "-5" (= 0..5) / "5-" (= 5..palette-end,
+        // resolved per mode in the pipeline). Quantizer cannot place
+        // image colours into reserved slots; the slots are filled with
+        // the user-supplied default colour.
+        if (arg == "--reserve-range" && i + 2 < argc) {
+            auto ranges = std::string_view(argv[++i]);
+            auto hex = std::string(argv[++i]);
+            if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
+            if (hex.size() > 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X'))
+                hex.erase(0, 2);
+            if (hex.size() == 3) {
+                std::string e;
+                for (char c : hex) { e.push_back(c); e.push_back(c); }
+                hex = e;
+            }
+            if (hex.size() != 6) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--reserve-range color must be a 3- or 6-digit hex value "
+                    "(e.g. f0c or ff00cc)"}};
+            }
+            auto parse_byte = [](std::string_view s) -> int {
+                int v = 0;
+                for (char c : s) {
+                    v <<= 4;
+                    if (c >= '0' && c <= '9') v |= (c - '0');
+                    else if (c >= 'a' && c <= 'f') v |= (c - 'a' + 10);
+                    else if (c >= 'A' && c <= 'F') v |= (c - 'A' + 10);
+                    else return -1;
+                }
+                return v;
+            };
+            int r = parse_byte(std::string_view(hex).substr(0, 2));
+            int g = parse_byte(std::string_view(hex).substr(2, 2));
+            int b = parse_byte(std::string_view(hex).substr(4, 2));
+            if (r < 0 || g < 0 || b < 0) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--reserve-range color must be a hex value (e.g. ff00cc)"}};
+            }
+            // Token forms:
+            //   "5"     → single index 5
+            //   "5-10"  → 5..10 inclusive
+            //   "-5"    → 0..5
+            //   "5-"    → 5..255 (pipeline drops indices ≥ palette size)
+            auto parse_int = [](std::string_view s) -> int {
+                int v = 0; bool any = false;
+                for (char c : s) {
+                    if (c < '0' || c > '9') return -1;
+                    v = v * 10 + (c - '0'); any = true;
+                }
+                return any ? v : -1;
+            };
+            std::size_t pos = 0;
+            while (pos < ranges.size()) {
+                auto next = ranges.find(',', pos);
+                auto tok = (next == std::string_view::npos)
+                    ? ranges.substr(pos)
+                    : ranges.substr(pos, next - pos);
+                pos = (next == std::string_view::npos) ? ranges.size() : next + 1;
+                if (tok.empty()) continue;
+                int lo = 0, hi = 0;
+                auto dash = tok.find('-');
+                if (dash == std::string_view::npos) {
+                    lo = hi = parse_int(tok);
+                } else if (dash == 0) {
+                    lo = 0; hi = parse_int(tok.substr(1));
+                } else if (dash == tok.size() - 1) {
+                    lo = parse_int(tok.substr(0, dash)); hi = 255;
+                } else {
+                    lo = parse_int(tok.substr(0, dash));
+                    hi = parse_int(tok.substr(dash + 1));
+                }
+                if (lo < 0 || hi < 0 || hi < lo || lo > 255 || hi > 255) {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                        std::format("--reserve-range: bad range '{}' "
+                                    "(use 0..255, e.g. 0,1,5-10)", tok)}};
+                }
+                for (int k = lo; k <= hi; ++k) {
+                    config.reserves.push_back({k, r, g, b});
+                }
+            }
             continue;
         }
 
@@ -1936,7 +2024,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
     opts.cap_spread_radius = cfg.cap_spread_radius;
     opts.cap_spread_decay = cfg.cap_spread_decay;
-    opts.reserve_color0 = cfg.reserve_color0;
+    opts.lock_color0 = cfg.lock_color0;
     opts.dual_playfield = cfg.dual_playfield;
     opts.scap = cfg.scap;
     opts.scap_debug = cfg.scap_debug;
@@ -1960,6 +2048,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.tile_reserve = cfg.tile_reserve;
     opts.locks = cfg.locks;
     opts.pins = cfg.pins;
+    opts.reserves = cfg.reserves;
     opts.palette_file = cfg.palette_file;
     if (cfg.width)  opts.width  = static_cast<int>(*cfg.width);
     if (cfg.height) opts.height = static_cast<int>(*cfg.height);
@@ -3514,6 +3603,23 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // --reserve-range gating for paths that bypass api::run_pipeline
+    // (DPF, CGA fixed-palette, batch). Modes routed through api::encode_state
+    // are gated inside api.cpp; this block catches the rest so the user
+    // gets a clear error instead of a silent no-op.
+    if (!config->reserves.empty()) {
+        auto reject = [](std::string_view why) {
+            std::println(stderr, "Error: --reserve-range: {}", why);
+            return 1;
+        };
+        if (config->dual_playfield)
+            return reject("not supported with --dpf (two split palettes; "
+                          "specify which playfield is needed)");
+        if (amiga::is_cga(config->mode) || amiga::is_cga_text(config->mode))
+            return reject("not supported in CGA modes (palette is "
+                          "hardware-fixed)");
+    }
+
     // Batch mode runs an entirely different path: build atlas, encode
     // once, slice per frame, write N outputs. Skip the normal single-
     // input pipeline below.
@@ -4643,6 +4749,29 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
+            // --reserve-range support for EHB+CAP: validate against the
+            // 32-base palette (half-brite copies are derived). Build the
+            // locked + dither_excluded vectors that flow into encode_copper
+            // and the per-row dither below.
+            auto reserves_in_ehb_cap = palette_locks::validate_reserves(
+                config->reserves, config->locks, /*max_colors=*/32,
+                config->lock_color0);
+            if (!reserves_in_ehb_cap) {
+                std::println(stderr, "{}", reserves_in_ehb_cap.error().message);
+                return 1;
+            }
+            std::vector<std::pair<std::size_t, Color3f>> ehb_cap_locked;
+            std::vector<std::size_t> ehb_cap_excluded;
+            for (auto& r : config->reserves) {
+                auto i = static_cast<std::size_t>(r.index);
+                if (r.index >= 0 && i < 32) {
+                    ehb_cap_locked.emplace_back(i, palette_locks::to_color(
+                        api::LockSpec{r.index, r.r, r.g, r.b},
+                        chipset, config->mode));
+                    ehb_cap_excluded.push_back(i);
+                }
+            }
+
             dither::Settings dith;
             dith.method = config->dither_method;
             auto ehb_cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
@@ -4685,7 +4814,7 @@ int main(int argc, char* argv[]) {
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
                     static_cast<std::size_t>(config->copper_changes),
-                    nullptr, true, {}, diversity,
+                    nullptr, true, ehb_cap_locked, diversity,
                     skip_initial, config->interlace, /*is_ehb=*/true,
                     report_progress
                         ? std::function<void(float, std::string_view)>(
@@ -4696,20 +4825,46 @@ int main(int argc, char* argv[]) {
                         ? static_cast<std::size_t>(config->cap_spread_radius)
                         : std::numeric_limits<std::size_t>::max(),
                     config->cap_spread_decay >= 0.0f
-                        ? config->cap_spread_decay : -1.0f);
+                        ? config->cap_spread_decay : -1.0f,
+                    ehb_cap_excluded);
                 if (!cr) return std::unexpected{cr.error()};
 
+                // For reserved base slots, also exclude their half-brite
+                // copies (idx + 32) from the per-row 64-color dither
+                // candidate set. cand_to_full[y] maps filtered index back
+                // to the actual 0..63 EHB slot.
+                std::vector<bool> ehb_blocked(64, false);
+                for (auto i : ehb_cap_excluded) {
+                    if (i < 32) {
+                        ehb_blocked[i] = true;
+                        ehb_blocked[i + 32] = true;
+                    }
+                }
                 std::vector<std::uint8_t> indices(w * h);
                 std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
+                std::vector<std::vector<std::uint8_t>> cand_to_full_per_row;
+                if (!ehb_cap_excluded.empty()) cand_to_full_per_row.resize(h);
                 for (std::size_t y = 0; y < h; ++y) {
                     auto& base32 = cr->scanline_palettes[y];
                     Palette bp;
                     bp.colors.assign(base32.begin(), base32.end());
                     auto ehb64 = palette::make_ehb_palette(bp.colors);
-                    pal_lab_per_row[y].resize(ehb64.colors.size());
-                    for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                        pal_lab_per_row[y][i] =
-                            color_space::linear_to_oklab(ehb64.colors[i]);
+                    if (ehb_cap_excluded.empty()) {
+                        pal_lab_per_row[y].resize(ehb64.colors.size());
+                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
+                            pal_lab_per_row[y][i] =
+                                color_space::linear_to_oklab(ehb64.colors[i]);
+                    } else {
+                        pal_lab_per_row[y].reserve(64);
+                        cand_to_full_per_row[y].reserve(64);
+                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i) {
+                            if (ehb_blocked[i]) continue;
+                            pal_lab_per_row[y].push_back(
+                                color_space::linear_to_oklab(ehb64.colors[i]));
+                            cand_to_full_per_row[y].push_back(
+                                static_cast<std::uint8_t>(i));
+                        }
+                    }
                 }
 
                 float total_err = dither::diffuse_raw_buffer(
@@ -4722,17 +4877,44 @@ int main(int argc, char* argv[]) {
                         float thr = dither::pick_palette_index_with_ostro(
                             d.method, target, pal_lab, x, y,
                             d.strength, /*k_min=*/0, k, chosen);
-                        indices[y * w + x] = static_cast<std::uint8_t>(k);
+                        indices[y * w + x] = ehb_cap_excluded.empty()
+                            ? static_cast<std::uint8_t>(k)
+                            : cand_to_full_per_row[y][k];
                         return {chosen, thr};
                     });
 
                 if (d.method == dither::Method::dbs) {
-                    dither::apply_dbs_post_pass(
-                        img, indices,
-                        [&](std::size_t /*x*/, std::size_t y)
-                            -> std::span<const color_space::OKLab> {
-                            return pal_lab_per_row[y];
-                        });
+                    if (ehb_cap_excluded.empty()) {
+                        dither::apply_dbs_post_pass(
+                            img, indices,
+                            [&](std::size_t /*x*/, std::size_t y)
+                                -> std::span<const color_space::OKLab> {
+                                return pal_lab_per_row[y];
+                            });
+                    } else {
+                        std::vector<std::vector<std::uint8_t>>
+                            full_to_cand_per_row(h);
+                        for (std::size_t y = 0; y < h; ++y) {
+                            full_to_cand_per_row[y].assign(64, 255);
+                            auto& cand = cand_to_full_per_row[y];
+                            for (std::size_t k = 0; k < cand.size(); ++k)
+                                full_to_cand_per_row[y][cand[k]] =
+                                    static_cast<std::uint8_t>(k);
+                        }
+                        std::vector<std::uint8_t> cand_indices(indices.size());
+                        for (std::size_t i = 0; i < indices.size(); ++i)
+                            cand_indices[i] =
+                                full_to_cand_per_row[i / w][indices[i]];
+                        dither::apply_dbs_post_pass(
+                            img, cand_indices,
+                            [&](std::size_t /*x*/, std::size_t y)
+                                -> std::span<const color_space::OKLab> {
+                                return pal_lab_per_row[y];
+                            });
+                        for (std::size_t i = 0; i < cand_indices.size(); ++i)
+                            indices[i] =
+                                cand_to_full_per_row[i / w][cand_indices[i]];
+                    }
                 }
 
                 if (has_transparency) {
@@ -5146,12 +5328,33 @@ int main(int argc, char* argv[]) {
 
         // Dither: line is now emitted AFTER Mode/Palette below.
 
-        // Build locked slot list from --lock-index specs
+        // Build locked slot list from --lock-index specs.
+        // --reserve-range entries also feed `locked` (so the copper never
+        // re-programs them) AND `cap_excluded` (so the dither pass treats
+        // them as forbidden across all scanlines).
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
         for (auto& lock : config->locks) {
             auto idx = static_cast<std::size_t>(lock.index);
             copper_locks.emplace_back(idx,
                 palette_locks::to_color(lock, chipset, config->mode));
+        }
+        auto cap_max_colors = std::size_t{1} << config->depth;
+        auto reserves_in_cap = palette_locks::validate_reserves(
+            config->reserves, config->locks, cap_max_colors,
+            config->lock_color0);
+        if (!reserves_in_cap) {
+            std::println(stderr, "{}", reserves_in_cap.error().message);
+            return 1;
+        }
+        std::vector<std::size_t> cap_excluded;
+        for (auto& r : config->reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < cap_max_colors) {
+                copper_locks.emplace_back(i, palette_locks::to_color(
+                    api::LockSpec{r.index, r.r, r.g, r.b},
+                    chipset, config->mode));
+                cap_excluded.push_back(i);
+            }
         }
 
         std::size_t skip_initial_lace = config->interlace ? 2 : 0;
@@ -5165,14 +5368,15 @@ int main(int argc, char* argv[]) {
             return copper::encode_copper(
                 img, config->depth, d, chipset,
                 static_cast<std::size_t>(config->copper_changes), nullptr,
-                config->reserve_color0, copper_locks, diversity,
+                config->lock_color0, copper_locks, diversity,
                 skip_initial_lace, config->interlace, /*is_ehb=*/false,
                 std::move(prog),
                 config->cap_spread_radius >= 0
                     ? static_cast<std::size_t>(config->cap_spread_radius)
                     : std::numeric_limits<std::size_t>::max(),
                 config->cap_spread_decay >= 0.0f
-                    ? config->cap_spread_decay : -1.0f);
+                    ? config->cap_spread_decay : -1.0f,
+                cap_excluded);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -5615,7 +5819,7 @@ int main(int argc, char* argv[]) {
     auto max_colors = std::size_t{1} << config->depth;
     auto is_atari_std = amiga::is_atari(config->mode);
     bool user_pal_std = !config->palette_file.empty();
-    auto reserve_zero_std = !user_pal_std && config->reserve_color0 &&
+    auto lock_zero_std = !user_pal_std && config->lock_color0 &&
                              (has_transparency || !is_atari_std);
 
     // Validate locks/pins
@@ -5625,9 +5829,21 @@ int main(int argc, char* argv[]) {
     }
     if (auto v = palette_locks::validate_pins(config->pins, config->locks, max_colors,
                                               image->width(), image->height(),
-                                              reserve_zero_std); !v) {
+                                              lock_zero_std); !v) {
         std::println(stderr, "{}", v.error().message);
         return 1;
+    }
+    auto reserves_in_pal_std = palette_locks::validate_reserves(
+        config->reserves, config->locks, max_colors, lock_zero_std);
+    if (!reserves_in_pal_std) {
+        std::println(stderr, "{}", reserves_in_pal_std.error().message);
+        return 1;
+    }
+    std::size_t reserve_count_std = *reserves_in_pal_std;
+    std::vector<bool> reserved_mask_std(max_colors, false);
+    for (auto& r : config->reserves) {
+        auto i = static_cast<std::size_t>(r.index);
+        if (r.index >= 0 && i < max_colors) reserved_mask_std[i] = true;
     }
 
     Palette pal;
@@ -5725,7 +5941,7 @@ int main(int argc, char* argv[]) {
         // EGA 200-line CGA-compat: palette order must be kCgaHw exactly.
         // The ATC register layout we emit (CGA-compat IRGB with b4 = I)
         // assumes palette slot i corresponds to kCgaHw[i]. Going through
-        // assemble_locked_palette with reserve_color0 prepends a second
+        // assemble_locked_palette with lock_color0 prepends a second
         // black at slot 0 and shifts the whole palette up by 1, dropping
         // white off the end — found via ATCPROBE/CGA16 test image.
         pal.colors.reserve(16);
@@ -5733,7 +5949,9 @@ int main(int argc, char* argv[]) {
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
         cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
     } else {
-        auto qcount = palette_locks::quant_count(max_colors, config->locks, reserve_zero_std);
+        auto qcount = palette_locks::quant_count(max_colors, config->locks, lock_zero_std);
+        if (qcount > reserve_count_std) qcount -= reserve_count_std;
+        else                            qcount = 1;
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.
@@ -5760,10 +5978,20 @@ int main(int argc, char* argv[]) {
             amiga::is_ega(config->mode))
             snap_palette(*quantized, chipset, config->mode);
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, config->locks, max_colors, reserve_zero_std,
+            *quantized, config->locks, max_colors, lock_zero_std,
             chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
+        // Overlay --reserve-range: snap user RGB to chipset, drop into
+        // its slot, mark locked so refine treats as fixed.
+        for (auto& r : config->reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) {
+                pal.colors[i] = palette_locks::to_color(
+                    api::LockSpec{r.index, r.r, r.g, r.b}, chipset, config->mode);
+                std_locked[i] = true;
+            }
+        }
         cli_status("Palette:  {} colors (auto, {})",
                      pal.size(),
                      amiga::is_stf(config->mode) ? "STF 9-bit" :
@@ -5815,7 +6043,7 @@ int main(int argc, char* argv[]) {
                        amiga::is_ega(config->mode) ||
                        amiga::is_atari_hi(config->mode);
     if (config->refine_iterations > 0 && config->palette_file.empty() &&
-        !skip_refine) {
+        !skip_refine && reserve_count_std == 0) {
         auto refined = quantize::refine_with_dither(
             *image,
             Palette{"refined", {pal.colors.begin(),
@@ -5833,15 +6061,30 @@ int main(int argc, char* argv[]) {
 
     cli_print_dither(dith.method, dith.strength);
 
-    auto dither_result = dither::apply(*image, pal_span, dith);
-
-    // Apply transparency mask: transparent pixels → index 0
-    if (has_transparency) {
-        for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
-            if (transparency_mask[i]) {
-                dither_result.indices[i] = 0;
+    dither::DitherResult dither_result;
+    // Build candidate palette: skip reserved slots (and slot 0 if
+    // transparency, the legacy "color 0 = transparent" rule).
+    if (reserve_count_std > 0 || has_transparency) {
+        std::vector<Color3f> cand_pal;
+        std::vector<std::uint8_t> cand_to_full;
+        cand_pal.reserve(pal_size);
+        cand_to_full.reserve(pal_size);
+        for (std::size_t i = 0; i < pal_size; ++i) {
+            if (has_transparency && i == 0) continue;
+            if (reserved_mask_std[i]) continue;
+            cand_pal.push_back(pal.colors[i]);
+            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+        }
+        std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
+        dither_result = dither::apply(*image, dither_span, dith);
+        for (auto& idx : dither_result.indices) idx = cand_to_full[idx];
+        if (has_transparency) {
+            for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
+                if (transparency_mask[i]) dither_result.indices[i] = 0;
             }
         }
+    } else {
+        dither_result = dither::apply(*image, pal_span, dith);
     }
 
     // Apply pin-index swaps (post-quantization, post-dither).

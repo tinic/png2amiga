@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.52.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.53.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -577,6 +577,98 @@ else()
         )
         set_tests_properties("smoke-degas-${ext}-exists"
                              PROPERTIES DEPENDS "smoke-degas-${ext}")
+    endforeach()
+
+    # --reserve-range smoke tests. Each mode encodes once with a
+    # mode-appropriate reserve range, then a python helper checks the
+    # produced .h has the magenta default colour exactly N times in
+    # the palette (where N = reserved-slot count).
+    set(reserve_specs
+        "lores|24-31|--mode lores --depth 5"
+        "hires|12-15|--mode hires --depth 4"
+        "vga-13h|248-255|--mode vga-13h"
+        "ehb|24-31|--mode ehb"
+        "cap-lores|28-31|--mode lores --copper --depth 5"
+        "cap-ehb|28-31|--mode ehb --copper"
+        "scap-ehb|28-31|--mode ehb --scap"
+        "stf-low|12-15|--mode stf-low"
+        "ste-low|12-15|--mode ste-low"
+        "stf-med|2-3|--mode stf-med"
+        "ste-med|2-3|--mode ste-med"
+        "ega-hi|12-15|--mode ega-hi"
+    )
+    foreach(spec ${reserve_specs})
+        string(REPLACE "|" ";" parts ${spec})
+        list(GET parts 0 mname)
+        list(GET parts 1 range)
+        list(GET parts 2 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        # Compute expected reserve count from the range (single hyphen).
+        string(REPLACE "-" ";" rparts ${range})
+        list(GET rparts 0 r_lo)
+        list(GET rparts 1 r_hi)
+        math(EXPR r_count "${r_hi} - ${r_lo} + 1")
+        add_test(
+            NAME "reserve-${mname}"
+            COMMAND png2amiga ${mode_args}
+                    --reserve-range ${range} ff00cc
+                    --symbol reserve_test
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/reserve-${mname}.h
+        )
+        # Validate by checking that all r_count slots in the reserve range
+        # hold the SAME value (mode-agnostic — different modes quantize the
+        # default colour differently, but reserved slots must all overlay
+        # to the identical post-quantization value).
+        add_test(
+            NAME "reserve-${mname}-count"
+            COMMAND python3 -c
+                "import re,sys; \
+                content = open('${CMAKE_BINARY_DIR}/reserve-${mname}.h').read(); \
+                m = re.search(r'_palette\\[\\] = \\{([^}]+)\\}', content); \
+                vals = re.findall(r'0x[0-9A-Fa-f]+', m.group(1)); \
+                slice_ = vals[${r_lo}:${r_hi}+1]; \
+                ok = len(slice_) == ${r_count} and len(set(slice_)) == 1; \
+                sys.exit(0 if ok else (print(f'expected ${r_count} identical reserves at slots ${r_lo}..${r_hi}, got '+str(slice_)) or 1))"
+        )
+        set_tests_properties("reserve-${mname}-count"
+                             PROPERTIES DEPENDS "reserve-${mname}")
+    endforeach()
+
+    # Fixed-palette EGA modes (ega-320, ega-640) keep their IRGB ordering,
+    # so the "all reserved slots identical" check above doesn't apply.
+    # Verify exclusion instead: render to PNG and confirm the image never
+    # uses the four high IRGB colours (slots 12-15: FF5555, FF55FF,
+    # FFFF55, FFFFFF).
+    set(reserve_ega_excl
+        "ega-320|--mode ega-320"
+        "ega-640|--mode ega-640"
+    )
+    foreach(spec ${reserve_ega_excl})
+        string(REPLACE "|" ";" parts ${spec})
+        list(GET parts 0 mname)
+        list(GET parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "reserve-${mname}"
+            COMMAND png2amiga ${mode_args}
+                    --reserve-range 12-15 ff00cc
+                    --symbol reserve_test
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/reserve-${mname}.png
+        )
+        add_test(
+            NAME "reserve-${mname}-excl"
+            COMMAND python3 -c
+                "from PIL import Image; \
+                img = Image.open('${CMAKE_BINARY_DIR}/reserve-${mname}.png').convert('RGB'); \
+                colors = set(img.getdata()); \
+                forbidden = {(0xFF,0x55,0x55), (0xFF,0x55,0xFF), (0xFF,0xFF,0x55), (0xFF,0xFF,0xFF)}; \
+                used = colors & forbidden; \
+                __import__('sys').exit(0 if not used else (print(f'reserved IRGB slots 12-15 leaked into image: {sorted(used)}') or 1))"
+        )
+        set_tests_properties("reserve-${mname}-excl"
+                             PROPERTIES DEPENDS "reserve-${mname}")
     endforeach()
 
     # Sega Genesis: .bin (tiles + tilemap + CRAM) and .h (SGDK header).

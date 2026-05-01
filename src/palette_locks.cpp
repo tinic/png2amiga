@@ -60,15 +60,55 @@ Result<void> validate_locks(const std::vector<LockSpec>& locks,
     return {};
 }
 
+Result<std::size_t> validate_reserves(
+    const std::vector<ReserveSpec>& reserves,
+    const std::vector<LockSpec>& locks,
+    std::size_t max_colors,
+    bool lock_zero_black) {
+    if (reserves.empty()) return std::size_t{0};
+    std::unordered_set<int> locked;
+    for (auto& l : locks) locked.insert(l.index);
+    if (lock_zero_black && !has_lock_at_zero(locks)) locked.insert(0);
+    std::unordered_set<int> seen;
+    std::size_t in_palette = 0;
+    for (auto& r : reserves) {
+        if (r.index < 0) {
+            return std::unexpected{Error{ErrorCode::invalid_depth,
+                std::format("--reserve-range index {} negative", r.index)}};
+        }
+        // Open-end ranges (e.g. "5-") were expanded up to 255 at parse
+        // time; silently drop entries past the actual palette.
+        if (static_cast<std::size_t>(r.index) >= max_colors) continue;
+        if (!seen.insert(r.index).second) {
+            return std::unexpected{Error{ErrorCode::invalid_depth,
+                std::format("--reserve-range: index {} listed twice", r.index)}};
+        }
+        if (locked.contains(r.index)) {
+            return std::unexpected{Error{ErrorCode::invalid_depth,
+                std::format("--reserve-range: index {} is already locked "
+                            "(via --lock-index or implicit black-zero)",
+                            r.index)}};
+        }
+        ++in_palette;
+    }
+    if (in_palette >= max_colors) {
+        return std::unexpected{Error{ErrorCode::invalid_depth,
+            std::format("--reserve-range covers all {} palette slots — "
+                        "leave at least one for image content",
+                        max_colors)}};
+    }
+    return in_palette;
+}
+
 Result<void> validate_pins(const std::vector<PinSpec>& pins,
                            const std::vector<LockSpec>& locks,
                            std::size_t max_colors,
                            std::size_t image_w,
                            std::size_t image_h,
-                           bool reserve_zero_black) {
+                           bool lock_zero_black) {
     std::unordered_set<int> locked_indices;
     for (auto& l : locks) locked_indices.insert(l.index);
-    if (reserve_zero_black && !has_lock_at_zero(locks))
+    if (lock_zero_black && !has_lock_at_zero(locks))
         locked_indices.insert(0);
 
     std::unordered_set<int> pin_targets;
@@ -109,9 +149,9 @@ Result<void> validate_pins(const std::vector<PinSpec>& pins,
 
 std::size_t quant_count(std::size_t max_colors,
                         const std::vector<LockSpec>& locks,
-                        bool reserve_zero_black) {
+                        bool lock_zero_black) {
     auto used = locks.size();
-    if (reserve_zero_black && !has_lock_at_zero(locks)) {
+    if (lock_zero_black && !has_lock_at_zero(locks)) {
         ++used;
     }
     if (used >= max_colors) return 1;
@@ -122,7 +162,7 @@ AssembledPalette assemble_locked_palette(
     const Palette& quantized,
     const std::vector<LockSpec>& locks,
     std::size_t max_colors,
-    bool reserve_zero_black,
+    bool lock_zero_black,
     amiga::Chipset chipset,
     amiga::Mode mode) {
 
@@ -140,7 +180,7 @@ AssembledPalette assemble_locked_palette(
     }
 
     // Reserve index 0 = black if requested AND not user-locked
-    if (reserve_zero_black && !out.locked[0]) {
+    if (lock_zero_black && !out.locked[0]) {
         out.palette.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
         out.locked[0] = true;
     }

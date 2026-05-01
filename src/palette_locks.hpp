@@ -10,8 +10,9 @@
 
 namespace png2amiga::palette_locks {
 
-using LockSpec = api::LockSpec;
-using PinSpec  = api::PinSpec;
+using LockSpec    = api::LockSpec;
+using PinSpec     = api::PinSpec;
+using ReserveSpec = api::ReserveSpec;
 
 // ---------------------------------------------------------------------------
 // Convert a LockSpec (sRGB 0-255) into a linear Color3f, snapped to the
@@ -31,6 +32,19 @@ Result<void> validate_locks(const std::vector<LockSpec>& locks,
                             std::size_t max_colors);
 
 // ---------------------------------------------------------------------------
+// Validate reserves: in-range, no duplicates, no overlap with locks
+// or with the implicit black-zero. Returns max_in_palette = the
+// number of reserve entries that fall within max_colors (entries
+// from open-end ranges may have been parsed beyond max_colors and
+// are silently clipped here).
+// ---------------------------------------------------------------------------
+Result<std::size_t> validate_reserves(
+    const std::vector<ReserveSpec>& reserves,
+    const std::vector<LockSpec>& locks,
+    std::size_t max_colors,
+    bool lock_zero_black);
+
+// ---------------------------------------------------------------------------
 // Validate pins against the palette size and image bounds. Errors:
 //  - target index out of range
 //  - target equals an existing locked slot
@@ -42,7 +56,7 @@ Result<void> validate_pins(const std::vector<PinSpec>& pins,
                            std::size_t max_colors,
                            std::size_t image_w,
                            std::size_t image_h,
-                           bool reserve_zero_black);
+                           bool lock_zero_black);
 
 // ---------------------------------------------------------------------------
 // True if a lock at index 0 exists (which overrides the implicit black-0).
@@ -55,13 +69,13 @@ bool has_lock_at_zero(const std::vector<LockSpec>& locks);
 // ---------------------------------------------------------------------------
 std::size_t quant_count(std::size_t max_colors,
                         const std::vector<LockSpec>& locks,
-                        bool reserve_zero_black);
+                        bool lock_zero_black);
 
 // ---------------------------------------------------------------------------
 // Build the final palette by combining quantized colors with locked colors
 // and (when applicable) the implicit black at index 0.
 //
-// `quantized` length must equal quant_count(max_colors, locks, reserve_zero).
+// `quantized` length must equal quant_count(max_colors, locks, lock_zero).
 // Locked slots are placed at their requested indices; remaining slots take
 // the quantized colors in order.
 //
@@ -76,7 +90,7 @@ AssembledPalette assemble_locked_palette(
     const Palette& quantized,
     const std::vector<LockSpec>& locks,
     std::size_t max_colors,
-    bool reserve_zero_black,
+    bool lock_zero_black,
     amiga::Chipset chipset,
     amiga::Mode mode);
 

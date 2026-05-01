@@ -84,7 +84,7 @@ export interface Options {
   symbolName: string
   maskInvert: boolean
   nativePar: boolean
-  reserveColor0: boolean
+  lockColor0: boolean
   paletteDiversity: number
   dualPlayfield: boolean
   scap: boolean
@@ -498,7 +498,7 @@ export function defaultOptions(): Options {
     // (letterbox/pillarbox) instead of stretching to fill.
     nativePar: false,
     // Advanced
-    reserveColor0: true,
+    lockColor0: true,
     paletteDiversity: 0,
     // Dual playfield: encode image into PF2 (upper color regs 8-15 OCS /
     // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3

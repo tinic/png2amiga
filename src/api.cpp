@@ -645,6 +645,39 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
     }
 
+    // --reserve-range gating. Modes where reserves can't yet be honoured
+    // (HAM dynamic palette, copper per-line palettes, dual-playfield split,
+    // multi-palette tile modes, fixed hardware palettes) reject early with
+    // a clear message rather than silently dropping the spec.
+    if (!options.reserves.empty()) {
+        auto reject = [&](std::string_view why) -> Result<PipelineResult> {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                std::string("--reserve-range: ") + std::string(why),
+            }};
+        };
+        if (amiga::is_ham(mode))
+            return reject("not supported in HAM modes (palette is dynamic — "
+                          "the modify ops produce arbitrary colours, no "
+                          "fixed slot to reserve)");
+        if (options.dual_playfield)
+            return reject("not supported with --dpf (two split palettes; "
+                          "specify which playfield is needed)");
+        if (amiga::is_genesis(mode))
+            return reject("not supported in Genesis modes (4 separate "
+                          "16-colour palette lines; reserve target ambiguous)");
+        if (amiga::is_snes(mode))
+            return reject("not supported in SNES Mode 7 yet "
+                          "(encoder is opaque to the reserve overlay)");
+        if (amiga::is_c64(mode))
+            return reject("not supported in C64 modes (VIC-II palette is "
+                          "fixed in hardware; --lock-color0 covers the "
+                          "common 'pin background' use-case)");
+        if (amiga::is_cga(mode) || amiga::is_cga_text(mode))
+            return reject("not supported in CGA modes (palette is "
+                          "hardware-fixed)");
+    }
+
     // We need source dimensions to compute the target size.
     // Peek at the source image dimensions first.
     int peek_w{}, peek_h{};
@@ -1571,7 +1604,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
                     static_cast<std::size_t>(options.copper_changes),
-                    &seed_pal.colors, options.reserve_color0,
+                    &seed_pal.colors, options.lock_color0,
                     {}, diversity,
                     skip_initial, options.interlace,
                     /*is_ehb=*/true,
@@ -1897,7 +1930,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // With custom palette: use as-is (32 colors expected).
         // Without: reserve index 0 for transparency when needed.
         bool user_pal_ehb = has_user_palette(options);
-        bool reserve_zero_ehb = !user_pal_ehb && has_transparency;
+        bool lock_zero_ehb = !user_pal_ehb && has_transparency;
         Palette base_pal;
         std::vector<bool> base_locked(32, false);
         if (user_pal_ehb) {
@@ -1916,20 +1949,30 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 }
             }
         } else {
-            auto qcount = palette_locks::quant_count(32, options.locks, reserve_zero_ehb);
-            // PNN consistently produces better-spread 32-colour
-            // base palettes for EHB than the OCS-brute-force
-            // histogram path; the latter clusters in the densest
-            // pixel basin and underweights the half-brite-covered
-            // dark range.
+            auto reserves_in_pal_ehb = palette_locks::validate_reserves(
+                options.reserves, options.locks, 32, lock_zero_ehb);
+            if (!reserves_in_pal_ehb)
+                return std::unexpected{reserves_in_pal_ehb.error()};
+            std::size_t reserves_ehb = *reserves_in_pal_ehb;
+            auto qcount = palette_locks::quant_count(32, options.locks, lock_zero_ehb);
+            if (qcount > reserves_ehb) qcount -= reserves_ehb;
+            else                       qcount = 1;
             auto quantized = quantize::quantize(*image, qcount,
                                                 quantize::Algorithm::pnn,
                                                 options.palette_diversity);
             if (!quantized) return std::unexpected{quantized.error()};
             auto assembled = palette_locks::assemble_locked_palette(
-                *quantized, options.locks, 32, reserve_zero_ehb, chipset, mode);
+                *quantized, options.locks, 32, lock_zero_ehb, chipset, mode);
             base_pal = std::move(assembled.palette);
             base_locked = std::move(assembled.locked);
+            for (auto& r : options.reserves) {
+                auto i = static_cast<std::size_t>(r.index);
+                if (r.index >= 0 && i < 32) {
+                    base_pal.colors[i] = palette_locks::to_color(
+                        LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
+                    base_locked[i] = true;
+                }
+            }
         }
 
         // Pair-aware refinement: jointly optimise the 32 base colours
@@ -1960,12 +2003,34 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
 
+        // Build candidate set for dithering: reserved base slots and their
+        // half-brite copies are excluded so image pixels can't land on them.
+        // (Locked slots remain candidates — image pixels CAN choose them.)
+        std::vector<bool> ehb_blocked(64, false);
+        for (auto& r : options.reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < 32) {
+                ehb_blocked[i] = true;
+                ehb_blocked[i + 32] = true;
+            }
+        }
+
         dither::DitherResult dither_result;
         if (has_transparency) {
-            std::span<const Color3f> dither_span{ehb_pal.colors.data() + 1,
-                                                  ehb_pal.colors.size() - 1};
-            dither_result = dither::apply(*image, dither_span, dith);
-            for (auto& idx : dither_result.indices) ++idx;
+            // Build candidate palette skipping slot 0 (transparent) AND
+            // any reserved base/half-brite slots.
+            std::vector<Color3f> cand;
+            std::vector<std::uint8_t> cand_to_full;
+            cand.reserve(63);
+            cand_to_full.reserve(63);
+            for (std::size_t i = 1; i < 64; ++i) {
+                if (ehb_blocked[i]) continue;
+                cand.push_back(ehb_pal.colors[i]);
+                cand_to_full.push_back(static_cast<std::uint8_t>(i));
+            }
+            dither_result = dither::apply(*image, cand, dith);
+            for (auto& idx : dither_result.indices)
+                idx = cand_to_full[idx];
             for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
                 if (tmask[i]) dither_result.indices[i] = 0;
         } else {
@@ -1978,9 +2043,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // pairs with pick_palette_index_with_ostro's
             // second-nearest tracking which the legacy `apply` route
             // doesn't expose.
-            std::vector<color_space::OKLab> pal_lab(ehb_pal.colors.size());
-            for (std::size_t i = 0; i < ehb_pal.colors.size(); ++i)
-                pal_lab[i] = color_space::linear_to_oklab(ehb_pal.colors[i]);
+            std::vector<color_space::OKLab> pal_lab;
+            std::vector<std::uint8_t> cand_to_full;
+            pal_lab.reserve(64);
+            cand_to_full.reserve(64);
+            for (std::size_t i = 0; i < ehb_pal.colors.size(); ++i) {
+                if (ehb_blocked[i]) continue;
+                pal_lab.push_back(color_space::linear_to_oklab(ehb_pal.colors[i]));
+                cand_to_full.push_back(static_cast<std::uint8_t>(i));
+            }
             auto w = image->width();
             std::vector<std::uint8_t> indices(w * image->height(), 0);
             float total_err = dither::diffuse_raw_buffer(
@@ -1992,16 +2063,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     float thr = dither::pick_palette_index_with_ostro(
                         dith.method, target, pal_lab, x, y,
                         dith.strength, /*k_min=*/0, k, chosen);
-                    indices[y * w + x] = static_cast<std::uint8_t>(k);
+                    indices[y * w + x] = cand_to_full[k];
                     return {chosen, thr};
                 });
             if (dith.method == dither::Method::dbs) {
+                // DBS post-pass also needs the filtered candidate set so
+                // it doesn't swap pixels back onto reserved slots.
+                std::vector<std::uint8_t> cand_indices(indices.size());
+                std::vector<std::uint8_t> full_to_cand(64, 255);
+                for (std::size_t k = 0; k < cand_to_full.size(); ++k)
+                    full_to_cand[cand_to_full[k]] = static_cast<std::uint8_t>(k);
+                for (std::size_t i = 0; i < indices.size(); ++i)
+                    cand_indices[i] = full_to_cand[indices[i]];
                 dither::apply_dbs_post_pass(
-                    *image, indices,
+                    *image, cand_indices,
                     [&](std::size_t /*x*/, std::size_t /*y*/)
                         -> std::span<const color_space::OKLab> {
                         return pal_lab;
                     });
+                for (std::size_t i = 0; i < indices.size(); ++i)
+                    indices[i] = cand_to_full[cand_indices[i]];
             }
             dither_result.indices = std::move(indices);
             dither_result.total_error = total_err;
@@ -2127,12 +2208,30 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 copper_user_pal = std::move(tmp.colors);
             }
         }
-        // Build locked slot list for copper from --lock-index specs
+        // Build locked slot list for copper from --lock-index specs.
+        // --reserve-range entries also feed `locked` so the copper
+        // never re-programs them — but their indices ALSO flow into
+        // `cap_excluded` so the dither pass treats them as untouchable.
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
         for (auto& lock : options.locks) {
             auto idx = static_cast<std::size_t>(lock.index);
             copper_locks.emplace_back(idx,
                 palette_locks::to_color(lock, chipset, mode));
+        }
+        // Validate reserves against the CAP base palette size (1<<depth).
+        auto cap_max_colors = std::size_t{1} << depth;
+        auto reserves_in_cap = palette_locks::validate_reserves(
+            options.reserves, options.locks, cap_max_colors,
+            options.lock_color0);
+        if (!reserves_in_cap) return std::unexpected{reserves_in_cap.error()};
+        std::vector<std::size_t> cap_excluded;
+        for (auto& r : options.reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < cap_max_colors) {
+                copper_locks.emplace_back(i, palette_locks::to_color(
+                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                cap_excluded.push_back(i);
+            }
         }
 
         std::size_t skip_initial_lace = options.interlace ? 2 : 0;
@@ -2153,12 +2252,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 img, depth, d, chipset,
                 static_cast<std::size_t>(options.copper_changes),
                 copper_user_pal.empty() ? nullptr : &copper_user_pal,
-                options.reserve_color0, copper_locks,
+                options.lock_color0, copper_locks,
                 diversity,
                 skip_initial_lace, options.interlace,
                 /*is_ehb=*/false,
                 /*on_progress=*/{},
-                spread_r, spread_d);
+                spread_r, spread_d,
+                cap_excluded);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -2317,7 +2417,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
-                options.reserve_color0,
+                options.lock_color0,
                 scap_dith,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
@@ -2331,26 +2431,43 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     ? ham::HamMetric::srgb_mse
                     : ham::HamMetric::oklab2)
             : scap_ehb
-            ? scap::encode_scap_ehb_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                options.reserve_color0,
-                scap_dith,
-                static_cast<std::size_t>(options.copper_changes),
-                options.palette_diversity,
-                options.scap_debug,
-                options.on_progress,
-                options.best,
-                options.best_metric,
-                options.cap_spread_radius,
-                options.cap_spread_decay,
-                scap_user_pal_span)
+            ? [&] {
+                // SCAP-EHB reserves: build (idx, color) pairs for the
+                // 32-base palette. encode_scap_ehb_ocs forwards them to
+                // encode_copper as locked + dither-excluded, AND blocks
+                // the mid-line SCAP swap planner from targeting them.
+                std::vector<std::pair<std::size_t, Color3f>> scap_ehb_reserves;
+                for (auto& r : options.reserves) {
+                    auto i = static_cast<std::size_t>(r.index);
+                    if (r.index >= 0 && i < 32) {
+                        scap_ehb_reserves.emplace_back(i,
+                            palette_locks::to_color(
+                                LockSpec{r.index, r.r, r.g, r.b},
+                                chipset, mode));
+                    }
+                }
+                return scap::encode_scap_ehb_ocs(
+                    *image,
+                    static_cast<int>(image->width()),
+                    static_cast<int>(image->height()),
+                    options.lock_color0,
+                    scap_dith,
+                    static_cast<std::size_t>(options.copper_changes),
+                    options.palette_diversity,
+                    options.scap_debug,
+                    options.on_progress,
+                    options.best,
+                    options.best_metric,
+                    options.cap_spread_radius,
+                    options.cap_spread_decay,
+                    scap_user_pal_span,
+                    scap_ehb_reserves);
+            }()
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
-                options.reserve_color0,
+                options.lock_color0,
                 scap_dith,
                 options.scap_debug,
                 static_cast<std::size_t>(options.copper_changes),
@@ -2410,7 +2527,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // With custom palette: use as-is, no forced black at index 0.
     // Without: reserve index 0 for black (Amiga border/background),
     // unless the user explicitly disabled it.
-    auto reserve_zero = !user_pal && options.reserve_color0 &&
+    auto lock_zero = !user_pal && options.lock_color0 &&
                         (has_transparency || !is_atari);
 
     // Validate locks/pins (no-op for HAM/copper paths above which return earlier).
@@ -2420,8 +2537,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (auto v = palette_locks::validate_pins(options.pins, options.locks,
                                               max_colors,
                                               image->width(), image->height(),
-                                              reserve_zero); !v)
+                                              lock_zero); !v)
         return std::unexpected{v.error()};
+    auto reserves_in_pal = palette_locks::validate_reserves(
+        options.reserves, options.locks, max_colors, lock_zero);
+    if (!reserves_in_pal) return std::unexpected{reserves_in_pal.error()};
+    std::size_t reserve_count = *reserves_in_pal;
+    // Build a reserved_mask the dither path uses to exclude these slots
+    // from the candidate set (locks DON'T appear here — they remain
+    // valid dither targets per their lock-not-reserve semantics).
+    std::vector<bool> reserved_mask(max_colors, false);
+    for (auto& r : options.reserves) {
+        auto i = static_cast<std::size_t>(r.index);
+        if (r.index >= 0 && i < max_colors) reserved_mask[i] = true;
+    }
 
     Palette pal;
     std::vector<bool> locked_mask(max_colors, false);
@@ -2491,13 +2620,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     } else if (mode == amiga::Mode::ega_320 || mode == amiga::Mode::ega_640) {
         // Same fix as main.cpp: palette order must be kCgaHw exactly so
         // bitplane index i = kCga IRGB index i; assemble_locked_palette
-        // with reserve_color0 otherwise shifts the palette up by 1.
+        // with lock_color0 otherwise shifts the palette up by 1.
         pal.colors.reserve(16);
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
     } else {
         auto qcount = palette_locks::quant_count(max_colors, options.locks,
-                                                 reserve_zero);
+                                                 lock_zero);
+        // Reserves take additional slots out of the quantizer's budget.
+        // Floor at 1 — validate_reserves already rejected the all-reserved case.
+        if (qcount > reserve_count) qcount -= reserve_count;
+        else                        qcount = 1;
         Result<Palette> quantized;
         if (amiga::is_ega(mode)) {
             // All EGA modes on a 5154 ECD support 16 of the 64-color
@@ -2522,9 +2655,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (amiga::is_stf(mode) || amiga::is_vga(mode))
             snap_to_chipset(*quantized, chipset, mode);
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, options.locks, max_colors, reserve_zero, chipset, mode);
+            *quantized, options.locks, max_colors, lock_zero, chipset, mode);
         pal = std::move(assembled.palette);
         locked_mask = std::move(assembled.locked);
+        // Overlay reserved slots: snap each user-supplied colour to the
+        // chipset/mode precision and drop it into the slot. Mark in
+        // locked_mask so refine treats them as fixed; reserved_mask is
+        // separate (refine doesn't see it — refine only operates on
+        // unlocked slots and reserved slots are already locked).
+        for (auto& r : options.reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) {
+                pal.colors[i] = palette_locks::to_color(
+                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
+                locked_mask[i] = true;
+            }
+        }
     }
 
     if (options.match_range)
@@ -2552,7 +2698,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     //     the same gamut entry (reduces 16 slots → ~11 effective colors)
     //     and drops PSNR by 3+ dB.
     if (options.refine_iterations > 0 && !has_user_palette(options) &&
-        dith.method != dither::Method::none &&
+        dith.method != dither::Method::none && reserve_count == 0 &&
         !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
         !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
@@ -2570,15 +2716,28 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
     dither::DitherResult dither_result;
-    if (has_transparency) {
-        // Dither against colors [1..N] only (skip reserved index 0)
-        std::span<const Color3f> dither_span{pal.colors.data() + 1, pal_size - 1};
+    // Build the dither candidate set:
+    //   - skip reserved slots (hard-reserve: image content may not land there).
+    //   - skip slot 0 too when has_transparency (legacy "transparent = 0" rule).
+    if (reserve_count > 0 || has_transparency) {
+        std::vector<Color3f> cand_pal;
+        std::vector<std::uint8_t> cand_to_full;
+        cand_pal.reserve(pal_size);
+        cand_to_full.reserve(pal_size);
+        for (std::size_t i = 0; i < pal_size; ++i) {
+            if (has_transparency && i == 0) continue;
+            if (reserved_mask[i]) continue;
+            cand_pal.push_back(pal.colors[i]);
+            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+        }
+        std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
         dither_result = dither::apply(*image, dither_span, dith);
-        // Offset all indices by 1 (index 0 is reserved for transparency)
-        for (auto& idx : dither_result.indices) ++idx;
-        // Force transparent pixels to index 0
-        for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
-            if (tmask[i]) dither_result.indices[i] = 0;
+        for (auto& idx : dither_result.indices) idx = cand_to_full[idx];
+        if (has_transparency) {
+            for (std::size_t i = 0;
+                 i < tmask.size() && i < dither_result.indices.size(); ++i)
+                if (tmask[i]) dither_result.indices[i] = 0;
+        }
     } else {
         dither_result = dither::apply(*image, pal_span, dith);
     }
