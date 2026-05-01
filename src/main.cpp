@@ -626,7 +626,7 @@ void print_usage() {
         "  --palette <file>                Load palette (.gpl, IFF, hex text)\n"
         "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
-        "  --no-lock-color0             Allow palette index 0 to be image colour\n"
+        "  --no-lock-color0                Allow palette index 0 to be image colour\n"
         "\n"
         "Image processing:\n"
         "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
