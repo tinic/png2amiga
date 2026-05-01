@@ -3584,6 +3584,27 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Depth defaults for standard Amiga modes when --depth wasn't given:
+        //   AGA lores / lores-lace / hires / hires-lace → 8 (full 256-colour
+        //                                                    gamut).
+        //   OCS hires / hires-lace → 4 (hardware cap; the global default of
+        //                              5 would fail the depth-vs-max gate
+        //                              below).
+        //   OCS lores / lores-lace → 5 (the existing global default).
+        if (!config->depth_explicit &&
+            (config->mode == amiga::Mode::lores ||
+             config->mode == amiga::Mode::lores_interlace ||
+             config->mode == amiga::Mode::hires ||
+             config->mode == amiga::Mode::hires_interlace)) {
+            if (cs == amiga::Chipset::aga) {
+                config->depth = 8;
+            } else if (config->mode == amiga::Mode::hires ||
+                       config->mode == amiga::Mode::hires_interlace) {
+                config->depth = 4;
+            }
+            // OCS lores keeps the global default 5.
+        }
+
         // Check depth against mode+chipset limits
         // (HAM/EHB have fixed depths so --depth is ignored for them,
         //  but for standard modes the user's depth must be valid)
