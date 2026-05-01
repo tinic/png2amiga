@@ -2027,12 +2027,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <span v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</span>
             </div>
           </div>
-          <!-- Charset diagnostic: the actual generated glyphs, painted with
-               the colours of each glyph's first-occurrence cell. Visible
-               only for c64-charset modes. -->
+          <!-- Charset diagnostic: actual generated glyphs, coloured by
+               each glyph's first-occurrence cell. Only for c64-charset. -->
           <div v-if="isC64CharsetMode(options.mode)"
-               class="surface-card border-round-lg p-2 flex flex-column gap-1">
-            <span class="text-xs text-color-secondary">Generated charset (colours from first occurrence)</span>
+               class="surface-card border-round-lg p-2">
             <canvas ref="charsetCanvasRef" class="charset-canvas" />
           </div>
         </div>
