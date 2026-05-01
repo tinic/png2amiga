@@ -5317,7 +5317,14 @@ int main(int argc, char* argv[]) {
     }
 
     // --- Copper palette mode ---
-    if (config->copper) {
+    // Mirror api::run_pipeline's gates: SCAP layers on top of CAP and
+    // owns the per-line stream itself, EHB has its own copper branch
+    // (line 4745), HAM has its own copper branch (line 4523). Skip the
+    // plain CAP path for those so `--cap --scap` doesn't fall into
+    // depth-5 CAP and produce a 32-colour result with EHB-mode confusion.
+    if (config->copper && !config->scap &&
+        !amiga::is_ham(config->mode) &&
+        config->mode != amiga::Mode::ehb) {
         if (!config->pins.empty()) {
             std::println(stderr, "Error: --pin-index-at "
                                  "is not supported with --copper");
