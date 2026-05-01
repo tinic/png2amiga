@@ -1571,7 +1571,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
                     static_cast<std::size_t>(options.copper_changes),
-                    &seed_pal.colors, options.reserve_color0,
+                    &seed_pal.colors, options.lock_color0,
                     {}, diversity,
                     skip_initial, options.interlace,
                     /*is_ehb=*/true,
@@ -1897,7 +1897,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // With custom palette: use as-is (32 colors expected).
         // Without: reserve index 0 for transparency when needed.
         bool user_pal_ehb = has_user_palette(options);
-        bool reserve_zero_ehb = !user_pal_ehb && has_transparency;
+        bool lock_zero_ehb = !user_pal_ehb && has_transparency;
         Palette base_pal;
         std::vector<bool> base_locked(32, false);
         if (user_pal_ehb) {
@@ -1916,7 +1916,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 }
             }
         } else {
-            auto qcount = palette_locks::quant_count(32, options.locks, reserve_zero_ehb);
+            auto qcount = palette_locks::quant_count(32, options.locks, lock_zero_ehb);
             // PNN consistently produces better-spread 32-colour
             // base palettes for EHB than the OCS-brute-force
             // histogram path; the latter clusters in the densest
@@ -1927,7 +1927,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                 options.palette_diversity);
             if (!quantized) return std::unexpected{quantized.error()};
             auto assembled = palette_locks::assemble_locked_palette(
-                *quantized, options.locks, 32, reserve_zero_ehb, chipset, mode);
+                *quantized, options.locks, 32, lock_zero_ehb, chipset, mode);
             base_pal = std::move(assembled.palette);
             base_locked = std::move(assembled.locked);
         }
@@ -2153,7 +2153,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 img, depth, d, chipset,
                 static_cast<std::size_t>(options.copper_changes),
                 copper_user_pal.empty() ? nullptr : &copper_user_pal,
-                options.reserve_color0, copper_locks,
+                options.lock_color0, copper_locks,
                 diversity,
                 skip_initial_lace, options.interlace,
                 /*is_ehb=*/false,
@@ -2317,7 +2317,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
-                options.reserve_color0,
+                options.lock_color0,
                 scap_dith,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
@@ -2335,7 +2335,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
-                options.reserve_color0,
+                options.lock_color0,
                 scap_dith,
                 static_cast<std::size_t>(options.copper_changes),
                 options.palette_diversity,
@@ -2350,7 +2350,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 *image,
                 static_cast<int>(image->width()),
                 static_cast<int>(image->height()),
-                options.reserve_color0,
+                options.lock_color0,
                 scap_dith,
                 options.scap_debug,
                 static_cast<std::size_t>(options.copper_changes),
@@ -2410,7 +2410,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // With custom palette: use as-is, no forced black at index 0.
     // Without: reserve index 0 for black (Amiga border/background),
     // unless the user explicitly disabled it.
-    auto reserve_zero = !user_pal && options.reserve_color0 &&
+    auto lock_zero = !user_pal && options.lock_color0 &&
                         (has_transparency || !is_atari);
 
     // Validate locks/pins (no-op for HAM/copper paths above which return earlier).
@@ -2420,7 +2420,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (auto v = palette_locks::validate_pins(options.pins, options.locks,
                                               max_colors,
                                               image->width(), image->height(),
-                                              reserve_zero); !v)
+                                              lock_zero); !v)
         return std::unexpected{v.error()};
 
     Palette pal;
@@ -2491,13 +2491,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     } else if (mode == amiga::Mode::ega_320 || mode == amiga::Mode::ega_640) {
         // Same fix as main.cpp: palette order must be kCgaHw exactly so
         // bitplane index i = kCga IRGB index i; assemble_locked_palette
-        // with reserve_color0 otherwise shifts the palette up by 1.
+        // with lock_color0 otherwise shifts the palette up by 1.
         pal.colors.reserve(16);
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
     } else {
         auto qcount = palette_locks::quant_count(max_colors, options.locks,
-                                                 reserve_zero);
+                                                 lock_zero);
         Result<Palette> quantized;
         if (amiga::is_ega(mode)) {
             // All EGA modes on a 5154 ECD support 16 of the 64-color
@@ -2522,7 +2522,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (amiga::is_stf(mode) || amiga::is_vga(mode))
             snap_to_chipset(*quantized, chipset, mode);
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, options.locks, max_colors, reserve_zero, chipset, mode);
+            *quantized, options.locks, max_colors, lock_zero, chipset, mode);
         pal = std::move(assembled.palette);
         locked_mask = std::move(assembled.locked);
     }

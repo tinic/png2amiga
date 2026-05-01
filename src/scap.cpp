@@ -162,7 +162,7 @@ ScapMove make_move(std::uint8_t reg, std::uint16_t rgb_ocs, int slot_index = -1)
 Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        int width_arg,
                                        int height_arg,
-                                       bool reserve_color0,
+                                       bool lock_color0,
                                        const dither::Settings& dither_settings,
                                        bool debug_overlay,
                                        std::size_t copper_changes_override,
@@ -191,7 +191,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
                 return encode_scap_dpf_ocs(
-                    jittered_in, width_arg, height_arg, reserve_color0,
+                    jittered_in, width_arg, height_arg, lock_color0,
                     d, debug_overlay, copper_changes_override, div,
                     /*on_progress=*/{}, /*best=*/false, "psnr",
                     cap_spread_radius, cap_spread_decay,
@@ -303,7 +303,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         amiga::Chipset::ocs,
         cap_share,
         dpf_user_pal.empty() ? nullptr : &dpf_user_pal,
-        reserve_color0,
+        lock_color0,
         /*locked=*/{},
         palette_diversity,
         /*skip_initial_swap_rows=*/0,
@@ -344,7 +344,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // the parallel worker (each row owns a private copy so the per-
     // row planner is thread-safe).
 
-    // Force k_min=1 for DPF SCAP regardless of --reserve-color0. PF2
+    // Force k_min=1 for DPF SCAP regardless of --lock-color0. PF2
     // index 0 maps to COLOR00 on OCS and COLOR08 on AGA (per BPLCON3
     // PF2OF=011) — keeping the two in sync mid-line would require
     // emitting two MOVEs per swap, which would shift subsequent slot
@@ -1227,7 +1227,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
 Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        int width_arg,
                                        int height_arg,
-                                       bool reserve_color0,
+                                       bool lock_color0,
                                        const dither::Settings& dither_settings,
                                        std::size_t copper_changes_override,
                                        int palette_diversity,
@@ -1250,7 +1250,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
                 return encode_scap_ehb_ocs(
-                    jittered_in, width_arg, height_arg, reserve_color0,
+                    jittered_in, width_arg, height_arg, lock_color0,
                     d, copper_changes_override, div, debug_overlay,
                     /*on_progress=*/{}, /*best=*/false, "psnr",
                     cap_spread_radius, cap_spread_decay,
@@ -1360,7 +1360,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         amiga::Chipset::ocs,
         cap_share_ehb,
         ehb_user_pal.empty() ? nullptr : &ehb_user_pal,
-        reserve_color0,
+        lock_color0,
         /*locked=*/{},
         palette_diversity,
         /*skip_initial_swap_rows=*/0,
@@ -1415,7 +1415,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     };
 
     // The dither picker should be free to pick any of the 64 effective
-    // entries — `reserve_color0` only constrains palette GENERATION
+    // entries — `lock_color0` only constrains palette GENERATION
     // (forces base[0] = black for the Amiga border). Excluding it from
     // the picker forces dark pixels to a non-black slot, producing
     // visible colored noise in shadows. copper.cpp uses k_min=0 here
@@ -2244,7 +2244,7 @@ HamPickResult pick_ham6_op(
 Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         int width_arg,
                                         int height_arg,
-                                        bool reserve_color0,
+                                        bool lock_color0,
                                         const dither::Settings& dither_settings,
                                         std::size_t copper_changes_override,
                                         int palette_diversity,
@@ -2267,7 +2267,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
                 return encode_scap_ham6_ocs(
-                    jittered_in, width_arg, height_arg, reserve_color0,
+                    jittered_in, width_arg, height_arg, lock_color0,
                     d, copper_changes_override, div,
                     /*on_progress=*/{},
                     cap_spread_radius, cap_spread_decay,
@@ -2661,7 +2661,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             // running the actual encoder. Centroid score is a coarse
             // SET-only proxy — good enough for ranking but not for
             // final selection.
-            std::size_t k_min = reserve_color0 ? 1u : 0u;
+            std::size_t k_min = lock_color0 ? 1u : 0u;
             struct CandScore {
                 std::size_t slot;
                 std::size_t cand_idx;

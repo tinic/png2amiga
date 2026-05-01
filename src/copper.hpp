@@ -191,7 +191,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                    amiga::Chipset chipset = amiga::Chipset::ocs,
                                    std::size_t override_changes = 0,  // 0 = auto
                                    const std::vector<Color3f>* user_palette = nullptr,
-                                   bool reserve_color0 = true,
+                                   bool lock_color0 = true,
                                    // Locked palette slots: fixed colors that copper
                                    // must never swap (e.g., for blitter objects).
                                    const std::vector<std::pair<std::size_t, Color3f>>& locked = {},

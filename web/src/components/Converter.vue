@@ -2226,8 +2226,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <!-- Reserve color 0 -->
               <div class="pt-3 mt-3 border-top-1 surface-border">
                 <div class="flex align-items-center gap-2">
-                  <input type="checkbox" v-model="options.reserveColor0" id="reserveColor0" />
-                  <label for="reserveColor0" class="text-xs text-color-secondary" title="Reserve palette index 0 for black (Amiga border/background color). Disable to use all palette slots for image colors.">Reserve color 0 for black</label>
+                  <input type="checkbox" v-model="options.lockColor0" id="lockColor0" />
+                  <label for="lockColor0" class="text-xs text-color-secondary" title="Reserve palette index 0 for black (Amiga border/background color). Disable to use all palette slots for image colors.">Reserve color 0 for black</label>
                 </div>
               </div>
 

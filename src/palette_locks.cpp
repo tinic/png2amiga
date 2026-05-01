@@ -65,10 +65,10 @@ Result<void> validate_pins(const std::vector<PinSpec>& pins,
                            std::size_t max_colors,
                            std::size_t image_w,
                            std::size_t image_h,
-                           bool reserve_zero_black) {
+                           bool lock_zero_black) {
     std::unordered_set<int> locked_indices;
     for (auto& l : locks) locked_indices.insert(l.index);
-    if (reserve_zero_black && !has_lock_at_zero(locks))
+    if (lock_zero_black && !has_lock_at_zero(locks))
         locked_indices.insert(0);
 
     std::unordered_set<int> pin_targets;
@@ -109,9 +109,9 @@ Result<void> validate_pins(const std::vector<PinSpec>& pins,
 
 std::size_t quant_count(std::size_t max_colors,
                         const std::vector<LockSpec>& locks,
-                        bool reserve_zero_black) {
+                        bool lock_zero_black) {
     auto used = locks.size();
-    if (reserve_zero_black && !has_lock_at_zero(locks)) {
+    if (lock_zero_black && !has_lock_at_zero(locks)) {
         ++used;
     }
     if (used >= max_colors) return 1;
@@ -122,7 +122,7 @@ AssembledPalette assemble_locked_palette(
     const Palette& quantized,
     const std::vector<LockSpec>& locks,
     std::size_t max_colors,
-    bool reserve_zero_black,
+    bool lock_zero_black,
     amiga::Chipset chipset,
     amiga::Mode mode) {
 
@@ -140,7 +140,7 @@ AssembledPalette assemble_locked_palette(
     }
 
     // Reserve index 0 = black if requested AND not user-locked
-    if (reserve_zero_black && !out.locked[0]) {
+    if (lock_zero_black && !out.locked[0]) {
         out.palette.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
         out.locked[0] = true;
     }

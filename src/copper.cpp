@@ -373,7 +373,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                    amiga::Chipset chipset,
                                    std::size_t override_changes,
                                    const std::vector<Color3f>* user_palette,
-                                   bool reserve_color0,
+                                   bool lock_color0,
                                    const std::vector<std::pair<std::size_t, Color3f>>& locked,
                                    int palette_diversity,
                                    std::size_t skip_initial_swap_rows,
@@ -401,7 +401,7 @@ Result<CopperResult> encode_copper(const Image& image,
     }
 
     auto num_colors = std::size_t{1} << depth;
-    auto max_swappable = reserve_color0
+    auto max_swappable = lock_color0
         ? (num_colors > 1 ? num_colors - 1 : std::size_t{0})
         : num_colors;
 
@@ -426,7 +426,7 @@ Result<CopperResult> encode_copper(const Image& image,
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
-                                         stretch_k, user_palette, reserve_color0,
+                                         stretch_k, user_palette, lock_color0,
                                          locked, palette_diversity,
                                          skip_initial_swap_rows, is_lace, is_ehb,
                                          on_progress);
@@ -452,7 +452,7 @@ Result<CopperResult> encode_copper(const Image& image,
         auto algo = (chipset == amiga::Chipset::aga)
             ? quantize::Algorithm::median_cut
             : quantize::Algorithm::ocs_bruteforce;
-        auto reserve = reserve_color0
+        auto reserve = lock_color0
             ? ((num_colors > 1) ? num_colors - 1 : std::size_t{1})
             : num_colors;
         auto base_result = quantize::quantize(image, reserve, algo);
@@ -469,7 +469,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                         chipset != amiga::Chipset::aga);
             base_pal = std::move(tmp.colors);
         }
-        if (reserve_color0)
+        if (lock_color0)
             base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});
         while (base_pal.size() < num_colors)
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
@@ -538,7 +538,7 @@ Result<CopperResult> encode_copper(const Image& image,
     // this slot fixed across all scanlines avoids wasting per-row
     // copper bandwidth re-introducing a colour that's already there
     // and reduces vertical "sliced look" on uniform regions.
-    // Skipped when reserve_color0 already locks slot 0 AND num_colors
+    // Skipped when lock_color0 already locks slot 0 AND num_colors
     // is small (≤4) — locking 50% of a tiny palette starves the
     // planner.
     std::size_t anchor_slot = std::numeric_limits<std::size_t>::max();
@@ -566,7 +566,7 @@ Result<CopperResult> encode_copper(const Image& image,
         // reserve-color0-locked — picking it would just be redundant.
         std::size_t best_k = 0;
         std::size_t best_n = 0;
-        for (std::size_t k = (reserve_color0 ? std::size_t{1} : std::size_t{0});
+        for (std::size_t k = (lock_color0 ? std::size_t{1} : std::size_t{0});
              k < num_colors; ++k) {
             if (freq[k] > best_n) { best_n = freq[k]; best_k = k; }
         }
@@ -671,7 +671,7 @@ Result<CopperResult> encode_copper(const Image& image,
         std::vector<CopperChange> changes;
         changes.reserve(changes_per_line);
         std::vector<bool> swapped(num_colors, false);
-        if (reserve_color0 && !swapped.empty()) swapped[0] = true;
+        if (lock_color0 && !swapped.empty()) swapped[0] = true;
         if (anchor_slot < num_colors && anchor_slot < swapped.size()) {
             // Hold most-frequent slot fixed across rows.
             swapped[anchor_slot] = true;

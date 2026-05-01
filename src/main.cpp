@@ -542,7 +542,7 @@ struct Config {
     // fixed buffer. Without the flag, modes with fixed dimensions stretch
     // source to fill the buffer (may look squished on CRT).
     bool native_par = false;
-    bool reserve_color0 = true;        // reserve index 0 for black (border)
+    bool lock_color0 = true;        // reserve index 0 for black (border)
 
     // Dual playfield: encode image into PF2, leave PF1 zeroed, palette
     // shifted into upper color registers (8-15 OCS / 16-31 AGA).
@@ -577,8 +577,9 @@ struct Config {
     float preview_video_fps = 12.5f;   // default playback rate (8mm-ish)
 
     // Palette index manipulation
-    std::vector<api::LockSpec> locks;  // --lock-index <id> <rgbhex>
-    std::vector<api::PinSpec>  pins;   // --pin-index-at <id> <x> <y>
+    std::vector<api::LockSpec> locks;     // --lock-index <id> <rgbhex>
+    std::vector<api::PinSpec>  pins;      // --pin-index-at <id> <x> <y>
+    std::vector<api::ReserveSpec> reserves;  // --reserve-range <range> <rgbhex>
 };
 
 void print_version() {
@@ -625,7 +626,7 @@ void print_usage() {
         "  --palette <file>                Load palette (.gpl, IFF, hex text)\n"
         "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
-        "  --no-reserve-color0             Allow palette index 0 to be image colour\n"
+        "  --no-lock-color0             Allow palette index 0 to be image colour\n"
         "\n"
         "Image processing:\n"
         "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
@@ -847,8 +848,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
 
 
-        if (arg == "--no-reserve-color0") {
-            config.reserve_color0 = false;
+        if (arg == "--no-lock-color0") {
+            config.lock_color0 = false;
             continue;
         }
 
@@ -1125,6 +1126,90 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     "--lock-index color must be a hex value (e.g. ff00cc)"}};
             }
             config.locks.push_back({idx, r, g, b});
+            continue;
+        }
+
+        // --reserve-range <ranges> <rgbhex>: hard-reserve palette slots.
+        // Range form: "0,1,5-10" / "-5" (= 0..5) / "5-" (= 5..palette-end,
+        // resolved per mode in the pipeline). Quantizer cannot place
+        // image colours into reserved slots; the slots are filled with
+        // the user-supplied default colour.
+        if (arg == "--reserve-range" && i + 2 < argc) {
+            auto ranges = std::string_view(argv[++i]);
+            auto hex = std::string(argv[++i]);
+            if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
+            if (hex.size() > 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X'))
+                hex.erase(0, 2);
+            if (hex.size() == 3) {
+                std::string e;
+                for (char c : hex) { e.push_back(c); e.push_back(c); }
+                hex = e;
+            }
+            if (hex.size() != 6) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--reserve-range color must be a 3- or 6-digit hex value "
+                    "(e.g. f0c or ff00cc)"}};
+            }
+            auto parse_byte = [](std::string_view s) -> int {
+                int v = 0;
+                for (char c : s) {
+                    v <<= 4;
+                    if (c >= '0' && c <= '9') v |= (c - '0');
+                    else if (c >= 'a' && c <= 'f') v |= (c - 'a' + 10);
+                    else if (c >= 'A' && c <= 'F') v |= (c - 'A' + 10);
+                    else return -1;
+                }
+                return v;
+            };
+            int r = parse_byte(std::string_view(hex).substr(0, 2));
+            int g = parse_byte(std::string_view(hex).substr(2, 2));
+            int b = parse_byte(std::string_view(hex).substr(4, 2));
+            if (r < 0 || g < 0 || b < 0) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--reserve-range color must be a hex value (e.g. ff00cc)"}};
+            }
+            // Token forms:
+            //   "5"     → single index 5
+            //   "5-10"  → 5..10 inclusive
+            //   "-5"    → 0..5
+            //   "5-"    → 5..255 (pipeline drops indices ≥ palette size)
+            auto parse_int = [](std::string_view s) -> int {
+                int v = 0; bool any = false;
+                for (char c : s) {
+                    if (c < '0' || c > '9') return -1;
+                    v = v * 10 + (c - '0'); any = true;
+                }
+                return any ? v : -1;
+            };
+            std::size_t pos = 0;
+            while (pos < ranges.size()) {
+                auto next = ranges.find(',', pos);
+                auto tok = (next == std::string_view::npos)
+                    ? ranges.substr(pos)
+                    : ranges.substr(pos, next - pos);
+                pos = (next == std::string_view::npos) ? ranges.size() : next + 1;
+                if (tok.empty()) continue;
+                int lo = 0, hi = 0;
+                auto dash = tok.find('-');
+                if (dash == std::string_view::npos) {
+                    lo = hi = parse_int(tok);
+                } else if (dash == 0) {
+                    lo = 0; hi = parse_int(tok.substr(1));
+                } else if (dash == tok.size() - 1) {
+                    lo = parse_int(tok.substr(0, dash)); hi = 255;
+                } else {
+                    lo = parse_int(tok.substr(0, dash));
+                    hi = parse_int(tok.substr(dash + 1));
+                }
+                if (lo < 0 || hi < 0 || hi < lo || lo > 255 || hi > 255) {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                        std::format("--reserve-range: bad range '{}' "
+                                    "(use 0..255, e.g. 0,1,5-10)", tok)}};
+                }
+                for (int k = lo; k <= hi; ++k) {
+                    config.reserves.push_back({k, r, g, b});
+                }
+            }
             continue;
         }
 
@@ -1936,7 +2021,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
     opts.cap_spread_radius = cfg.cap_spread_radius;
     opts.cap_spread_decay = cfg.cap_spread_decay;
-    opts.reserve_color0 = cfg.reserve_color0;
+    opts.lock_color0 = cfg.lock_color0;
     opts.dual_playfield = cfg.dual_playfield;
     opts.scap = cfg.scap;
     opts.scap_debug = cfg.scap_debug;
@@ -5165,7 +5250,7 @@ int main(int argc, char* argv[]) {
             return copper::encode_copper(
                 img, config->depth, d, chipset,
                 static_cast<std::size_t>(config->copper_changes), nullptr,
-                config->reserve_color0, copper_locks, diversity,
+                config->lock_color0, copper_locks, diversity,
                 skip_initial_lace, config->interlace, /*is_ehb=*/false,
                 std::move(prog),
                 config->cap_spread_radius >= 0
@@ -5615,7 +5700,7 @@ int main(int argc, char* argv[]) {
     auto max_colors = std::size_t{1} << config->depth;
     auto is_atari_std = amiga::is_atari(config->mode);
     bool user_pal_std = !config->palette_file.empty();
-    auto reserve_zero_std = !user_pal_std && config->reserve_color0 &&
+    auto lock_zero_std = !user_pal_std && config->lock_color0 &&
                              (has_transparency || !is_atari_std);
 
     // Validate locks/pins
@@ -5625,7 +5710,7 @@ int main(int argc, char* argv[]) {
     }
     if (auto v = palette_locks::validate_pins(config->pins, config->locks, max_colors,
                                               image->width(), image->height(),
-                                              reserve_zero_std); !v) {
+                                              lock_zero_std); !v) {
         std::println(stderr, "{}", v.error().message);
         return 1;
     }
@@ -5725,7 +5810,7 @@ int main(int argc, char* argv[]) {
         // EGA 200-line CGA-compat: palette order must be kCgaHw exactly.
         // The ATC register layout we emit (CGA-compat IRGB with b4 = I)
         // assumes palette slot i corresponds to kCgaHw[i]. Going through
-        // assemble_locked_palette with reserve_color0 prepends a second
+        // assemble_locked_palette with lock_color0 prepends a second
         // black at slot 0 and shifts the whole palette up by 1, dropping
         // white off the end — found via ATCPROBE/CGA16 test image.
         pal.colors.reserve(16);
@@ -5733,7 +5818,7 @@ int main(int argc, char* argv[]) {
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
         cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
     } else {
-        auto qcount = palette_locks::quant_count(max_colors, config->locks, reserve_zero_std);
+        auto qcount = palette_locks::quant_count(max_colors, config->locks, lock_zero_std);
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.
@@ -5760,7 +5845,7 @@ int main(int argc, char* argv[]) {
             amiga::is_ega(config->mode))
             snap_palette(*quantized, chipset, config->mode);
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, config->locks, max_colors, reserve_zero_std,
+            *quantized, config->locks, max_colors, lock_zero_std,
             chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);

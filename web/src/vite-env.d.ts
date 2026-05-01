@@ -144,7 +144,7 @@ declare module '@wasm/png2amiga.js' {
     dualPlayfield?: boolean
     scap?: boolean
     scapDebug?: boolean
-    reserveColor0?: boolean
+    lockColor0?: boolean
     paletteDiversity?: number
     paletteData?: Uint8Array
     paletteFile?: string

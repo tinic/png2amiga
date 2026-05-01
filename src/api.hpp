@@ -82,6 +82,17 @@ struct LockSpec {
     int r, g, b;     // sRGB 0-255
 };
 
+// Reserve a palette slot from the quantizer entirely. Differs from
+// LockSpec: locks pin a slot to a colour but the quantizer may still
+// route image pixels there if they happen to match. Reserves remove
+// the slot from the candidate set — the encoded image never references
+// it. Useful for sprite-colour slots, runtime palette regions, EHB
+// upper-bank carve-outs, etc.
+struct ReserveSpec {
+    int index;       // palette slot, 0..max_colors-1
+    int r, g, b;     // sRGB 0-255 default colour for the slot
+};
+
 // Pin a palette slot to whatever color the source pixel at (x, y) ends up
 // at after quantization+dithering. Implemented as a post-dither index swap:
 // the index pixel(x,y) holds is swapped (palette + index map) with `index`.
@@ -204,7 +215,7 @@ struct Options {
     bool crop_auto = false;             // auto-crop to mode aspect ratio (center)
 
     // Advanced
-    bool reserve_color0 = true;         // reserve index 0 for black (border/background)
+    bool lock_color0 = true;         // reserve index 0 for black (border/background)
 
     // Amiga dual playfield. When true, encode the image as PF2 of a
     // dual-playfield display: bitplane depth is forced to 3 (OCS, 8 colors)
@@ -289,6 +300,7 @@ struct Options {
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
     std::vector<PinSpec>  pins;
+    std::vector<ReserveSpec> reserves;
 };
 
 struct ConvertResult {
