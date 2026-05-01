@@ -26,7 +26,7 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
 
 function onStopEncode(): void {
   abortWasm()
@@ -1510,6 +1510,27 @@ async function downloadHir() {
   converting.value = false
 }
 
+// Plain .h export — for non-Amiga modes the C++ side dispatches per
+// platform: c64-charset → c64::charset_header, Genesis → SGDK header,
+// SNES → minimal Mode 7 .h. Amiga modes still use cheader::generate.
+async function downloadHeader() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const stem = options.symbolName ||
+      (imageName.value || 'image').replace(/\.[^.]+$/, '').replaceAll(/\W/g, '_')
+    const opts = buildWasmOptions()
+    opts.symbolName = stem
+    const result = await convertHeader(imageBytes.value, opts, stem)
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.h', 'text/plain')
+    exportCount++
+    track('export', { format: 'h', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
 async function downloadMaskPNG() {
   if (!imageBytes.value) return
   converting.value = true
@@ -2101,15 +2122,42 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 title="Download a DJGPP-compilable .cpp viewer (sets video mode, loads palette, blits image, waits for key, restores text mode). Build: i586-pc-msdosdjgpp-g++ -O2 -o out.exe out.cpp" />
             </div>
             <!-- C64 export buttons: PNG preview + .prg displayer + format-specific raw. -->
-            <div v-if="isC64Mode(options.mode)" class="flex gap-2">
+            <div v-if="isC64Mode(options.mode) && !isC64CharsetMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button label="prg" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting || options.mode.startsWith('c64-charset')" @click="downloadPRG"
-                title="Download a runnable C64 .prg with embedded 6502 displayer (Koala for multicolor, Art Studio for hires, FLI/AFLI/PETSCII as appropriate). Charset modes not yet supported." />
+              <Button label="prg" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPRG"
+                title="Download a runnable C64 .prg with embedded 6502 displayer (Koala for multicolor, Art Studio for hires, FLI/AFLI/PETSCII as appropriate)." />
               <Button v-if="options.mode === 'c64-multicolor'" label="koa" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadKoa"
                 title="Download Koala Paint .koa (raw bitmap+screen+d800+bg, no displayer; loads at $6000)." />
               <Button v-else-if="options.mode === 'c64-hires'" label="hir" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHir"
                 title="Download Art Studio .hir (raw bitmap+screen, no displayer; loads at $2000)." />
+            </div>
+            <!-- C64 charset export: PNG + .h header + .raw bytes. -->
+            <div v-if="isC64CharsetMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a self-contained C header: charset[] + screen[] + color[] + palette[] + COLS / ROWS / GLYPHS / BG_COLOR (and MC1 / MC2 for multicolor)." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: charset_data (unique_glyphs × 8) + screen_ram (cols × rows) + color_ram (cols × rows)." />
+            </div>
+            <!-- Genesis export: PNG + SGDK .h + raw .bin. -->
+            <div v-if="isGenesisMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download an SGDK-compatible C header: tiles[] + tilemap[] + palette[] + TileSet/TileMap/Palette wrappers ready for VDP_loadTileSet / VDP_setMap / VDP_setPalette." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: tile data (unique × 32) + tilemap (u16 BE per cell) + palette (4 lines × 16 BGR333 words BE)." />
+            </div>
+            <!-- SNES Mode 7 export: PNG + minimal .h + raw .bin. -->
+            <div v-if="isSnesMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a Mode 7 C header: tiles[] + tilemap[] + palette[] (256-mode) or tiles + tilemap (Direct, BBGGGRRR pixel bytes self-decode)." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: 16 KB tilemap (128×128, u8 tile index) + tile data (unique × 64) + 256×3-byte sRGB palette (256 mode only)." />
             </div>
             <!-- Amiga export buttons -->
             <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
