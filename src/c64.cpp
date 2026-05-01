@@ -1369,32 +1369,73 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
         }
     }
 
-    // Pass 2: per-pixel dither via diffuse_raw_buffer using the
-    // cell's 2-colour palette. Produces a dithered index per pixel
-    // (different from the brute-force nearest-pick — error diffusion
-    // pushes residuals across pixels). The resulting per-pixel
-    // pattern is what the dedup/merge phase keys on, so dither
-    // shapes the glyph budget directly.
+    // Pass 2: per-cell mirrored-3×3 ED.
+    //
+    // Charset modes dedup glyph patterns to fit a 256-tile budget. If
+    // we ran a single global ED across the image, two visually
+    // identical cells in different positions would dither *differently*
+    // (FS depends on scan order + accumulated upstream error) and burn
+    // two glyph slots instead of one. Per-cell ED would also be wrong:
+    // each cell would start with a cold err_buf and snap into a
+    // different pattern than its neighbour with the same content.
+    //
+    // Fix: build a 3W×3H buffer for each cell where the centre block
+    // is the source cell and the 8 surrounding blocks are mirror
+    // reflections (h-flip on left/right, v-flip on top/bottom, both
+    // on corners). Run ED across the full 3W×3H, take the centre
+    // W×H. Identical source cells produce identical mirrored buffers
+    // → identical post-ED patterns → clean dedup. The mirror also
+    // primes err_buf with realistic upstream content so the centre
+    // pattern is the steady-state response, not a transient.
+    constexpr std::size_t k3W = 3 * kHiCellW;
+    constexpr std::size_t k3H = 3 * kHiCellH;
     std::vector<std::uint8_t> indices(W * H, 0);
-    auto pick = [&](const color_space::OKLab& target,
-                    std::size_t x, std::size_t y) -> dither::PickResult {
-        std::size_t cy = y / kHiCellH;
-        std::size_t cx = x / kHiCellW;
-        const auto& pair = cell_pair[cy * kHiCols + cx];
-        std::array<color_space::OKLab, 2> cp{
-            pal_lab[pair[0]], pal_lab[pair[1]],
-        };
-        std::size_t chosen_index = 0;
-        color_space::OKLab chosen{};
-        float thr = dither::pick_palette_index_with_ostro(
-            settings.method, target,
-            std::span<const color_space::OKLab>(cp),
-            x, y, settings.strength, /*k_min=*/0,
-            chosen_index, chosen);
-        indices[y * W + x] = static_cast<std::uint8_t>(chosen_index);
-        return {chosen, thr};
-    };
-    (void)dither::diffuse_raw_buffer(image, settings, pick);
+    Image block(k3W, k3H);
+    std::vector<std::uint8_t> block_idx(k3W * k3H, 0);
+    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+            // Mirror-fill the 3W×3H block.
+            for (std::size_t by = 0; by < 3; ++by) {
+                for (std::size_t bx = 0; bx < 3; ++bx) {
+                    for (std::size_t ly = 0; ly < kHiCellH; ++ly) {
+                        std::size_t sy = (by == 1) ? ly : (kHiCellH - 1 - ly);
+                        for (std::size_t lx = 0; lx < kHiCellW; ++lx) {
+                            std::size_t sx = (bx == 1) ? lx : (kHiCellW - 1 - lx);
+                            block[bx * kHiCellW + lx, by * kHiCellH + ly] =
+                                image[cx * kHiCellW + sx, cy * kHiCellH + sy];
+                        }
+                    }
+                }
+            }
+            const auto& pair = cell_pair[cy * kHiCols + cx];
+            std::array<color_space::OKLab, 2> cp{
+                pal_lab[pair[0]], pal_lab[pair[1]],
+            };
+            std::fill(block_idx.begin(), block_idx.end(), 0);
+            auto pick = [&](const color_space::OKLab& target,
+                            std::size_t bx, std::size_t by) -> dither::PickResult {
+                std::size_t chosen_index = 0;
+                color_space::OKLab chosen{};
+                float thr = dither::pick_palette_index_with_ostro(
+                    settings.method, target,
+                    std::span<const color_space::OKLab>(cp),
+                    bx, by, settings.strength, /*k_min=*/0,
+                    chosen_index, chosen);
+                block_idx[by * k3W + bx] = static_cast<std::uint8_t>(chosen_index);
+                return {chosen, thr};
+            };
+            (void)dither::diffuse_raw_buffer(block, settings, pick);
+            // Copy centre W×H back to the global indices buffer.
+            for (std::size_t ly = 0; ly < kHiCellH; ++ly) {
+                for (std::size_t lx = 0; lx < kHiCellW; ++lx) {
+                    auto block_off = (kHiCellH + ly) * k3W + (kHiCellW + lx);
+                    auto global_off = (cy * kHiCellH + ly) * W
+                                    + (cx * kHiCellW + lx);
+                    indices[global_off] = block_idx[block_off];
+                }
+            }
+        }
+    }
 
     // Pack the dithered per-pixel indices into per-cell 64-bit
     // patterns + final cells[].
@@ -1659,28 +1700,58 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
         }
     }
 
-    // Pass 2: per-pixel dither using each cell's 4-colour palette
-    // {bg, mc1, mc2, fg} via diffuse_raw_buffer.
+    // Pass 2: per-cell mirrored-3×3 ED. Same pattern as
+    // encode_charset_hires — each cell's ED runs on a 3W×3H buffer
+    // with mirror-reflected neighbours, producing a self-consistent
+    // dither that's identical for identical source cells (so dedup
+    // collapses cleanly to ≤256 glyphs).
+    constexpr std::size_t k3W = 3 * kCellW;
+    constexpr std::size_t k3H = 3 * kCellH;
     std::vector<std::uint8_t> indices(W * H, 0);
-    auto pick = [&](const color_space::OKLab& target,
-                    std::size_t x, std::size_t y) -> dither::PickResult {
-        std::size_t cy = y / kCellH;
-        std::size_t cx = x / kCellW;
-        std::uint8_t fg = best_fg[cy * kCols + cx];
-        std::array<color_space::OKLab, 4> cp{
-            pal_lab[bg], pal_lab[best_mc1], pal_lab[best_mc2], pal_lab[fg],
-        };
-        std::size_t chosen_index = 0;
-        color_space::OKLab chosen{};
-        float thr = dither::pick_palette_index_with_ostro(
-            settings.method, target,
-            std::span<const color_space::OKLab>(cp),
-            x, y, settings.strength, /*k_min=*/0,
-            chosen_index, chosen);
-        indices[y * W + x] = static_cast<std::uint8_t>(chosen_index);
-        return {chosen, thr};
-    };
-    (void)dither::diffuse_raw_buffer(image, settings, pick);
+    Image block(k3W, k3H);
+    std::vector<std::uint8_t> block_idx(k3W * k3H, 0);
+    for (std::size_t cy = 0; cy < kRows; ++cy) {
+        for (std::size_t cx = 0; cx < kCols; ++cx) {
+            for (std::size_t by = 0; by < 3; ++by) {
+                for (std::size_t bx = 0; bx < 3; ++bx) {
+                    for (std::size_t ly = 0; ly < kCellH; ++ly) {
+                        std::size_t sy = (by == 1) ? ly : (kCellH - 1 - ly);
+                        for (std::size_t lx = 0; lx < kCellW; ++lx) {
+                            std::size_t sx = (bx == 1) ? lx : (kCellW - 1 - lx);
+                            block[bx * kCellW + lx, by * kCellH + ly] =
+                                image[cx * kCellW + sx, cy * kCellH + sy];
+                        }
+                    }
+                }
+            }
+            std::uint8_t fg = best_fg[cy * kCols + cx];
+            std::array<color_space::OKLab, 4> cp{
+                pal_lab[bg], pal_lab[best_mc1], pal_lab[best_mc2], pal_lab[fg],
+            };
+            std::fill(block_idx.begin(), block_idx.end(), 0);
+            auto pick = [&](const color_space::OKLab& target,
+                            std::size_t bx, std::size_t by) -> dither::PickResult {
+                std::size_t chosen_index = 0;
+                color_space::OKLab chosen{};
+                float thr = dither::pick_palette_index_with_ostro(
+                    settings.method, target,
+                    std::span<const color_space::OKLab>(cp),
+                    bx, by, settings.strength, /*k_min=*/0,
+                    chosen_index, chosen);
+                block_idx[by * k3W + bx] = static_cast<std::uint8_t>(chosen_index);
+                return {chosen, thr};
+            };
+            (void)dither::diffuse_raw_buffer(block, settings, pick);
+            for (std::size_t ly = 0; ly < kCellH; ++ly) {
+                for (std::size_t lx = 0; lx < kCellW; ++lx) {
+                    auto block_off = (kCellH + ly) * k3W + (kCellW + lx);
+                    auto global_off = (cy * kCellH + ly) * W
+                                    + (cx * kCellW + lx);
+                    indices[global_off] = block_idx[block_off];
+                }
+            }
+        }
+    }
 
     // Pack per-cell 64-bit patterns from dithered indices.
     std::vector<std::uint64_t> patterns(kCells, 0);
