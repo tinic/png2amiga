@@ -1052,36 +1052,84 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         }
 
-        // 4. Per-pixel re-quantise via the central ED driver. Picker
-        //    selects the palette index in [1..15] against this tile's
-        //    assigned palette (base or shadowed for S/H modes).
+        // 4. Per-pixel re-quantise via per-tile mirrored 3×3 ED.
+        //
+        // Build a 3W×3H buffer per 8×8 tile where the centre block is
+        // the source tile and the 8 surrounding blocks are mirror
+        // reflections (h-flip on left/right, v-flip on top/bottom,
+        // both on corners). Run ED on the full 24×24, take the centre
+        // 8×8. Identical source tiles produce identical mirrored
+        // buffers → identical post-ED patterns → cleaner dedup. Same
+        // approach as c64 charset (commit 7236237).
         Image rendered(w, h);
         std::vector<std::uint8_t>& pixel_index = gres.pixel_index;
         const std::vector<std::uint8_t>& tile_pal = gres.tile_palette;
         const std::vector<std::uint8_t>& tile_shadow = gres.tile_shadow;
-        float te = dither::diffuse_raw_buffer(
-            *image, dith,
-            [&](const color_space::OKLab& target,
-                std::size_t x, std::size_t y) -> dither::PickResult {
-                std::size_t tx = x / genesis::kTileSide;
-                std::size_t ty = y / genesis::kTileSide;
+        constexpr std::size_t kTS = genesis::kTileSide;       // 8
+        constexpr std::size_t k3T = 3 * kTS;                  // 24
+        Image block(k3T, k3T);
+        std::vector<std::uint8_t> block_idx(k3T * k3T, 0);
+        std::vector<color_space::OKLab> block_chosen(k3T * k3T);
+        auto tiles_y = (h + kTS - 1) / kTS;
+        float te = 0.0f;
+        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+                // Mirror-fill the 3W×3H block.
+                for (std::size_t by = 0; by < 3; ++by) {
+                    for (std::size_t bx = 0; bx < 3; ++bx) {
+                        for (std::size_t ly = 0; ly < kTS; ++ly) {
+                            std::size_t sy_local =
+                                (by == 1) ? ly : (kTS - 1 - ly);
+                            for (std::size_t lx = 0; lx < kTS; ++lx) {
+                                std::size_t sx_local =
+                                    (bx == 1) ? lx : (kTS - 1 - lx);
+                                std::size_t sx = std::min(
+                                    tx * kTS + sx_local, w - 1);
+                                std::size_t sy = std::min(
+                                    ty * kTS + sy_local, h - 1);
+                                block[bx * kTS + lx, by * kTS + ly] =
+                                    (*image)[sx, sy];
+                            }
+                        }
+                    }
+                }
                 std::size_t cell = ty * tiles_x + tx;
                 std::uint8_t pal = tile_pal[cell];
                 bool shadowed = sh_mode && tile_shadow[cell] != 0;
                 auto& pl = shadowed ? shadow_lab[pal] : palette_lab[pal];
                 std::span<const color_space::OKLab> pl_span(pl.data(),
                                                              pl.size());
-                std::size_t k = 1;
-                color_space::OKLab chosen{};
-                float thr = dither::pick_palette_index_with_ostro(
-                    dith.method, target, pl_span, x, y,
-                    dith.strength, /*k_min=*/1, k, chosen);
-                pixel_index[y * w + x] = static_cast<std::uint8_t>(k);
-                rendered[x, y] = shadowed
-                    ? shadow_lines[pal][k]
-                    : gres.palette_lines[pal][k];
-                return {chosen, thr};
-            });
+                std::fill(block_idx.begin(), block_idx.end(), 0);
+                te += dither::diffuse_raw_buffer(
+                    block, dith,
+                    [&](const color_space::OKLab& target,
+                        std::size_t bx, std::size_t by) -> dither::PickResult {
+                        std::size_t k = 1;
+                        color_space::OKLab chosen{};
+                        float thr = dither::pick_palette_index_with_ostro(
+                            dith.method, target, pl_span, bx, by,
+                            dith.strength, /*k_min=*/1, k, chosen);
+                        std::size_t bi = by * k3T + bx;
+                        block_idx[bi] = static_cast<std::uint8_t>(k);
+                        block_chosen[bi] = chosen;
+                        return {chosen, thr};
+                    });
+                // Copy centre 8×8 back to the global buffers.
+                for (std::size_t ly = 0; ly < kTS; ++ly) {
+                    for (std::size_t lx = 0; lx < kTS; ++lx) {
+                        auto bi = (kTS + ly) * k3T + (kTS + lx);
+                        auto x = tx * kTS + lx;
+                        auto y = ty * kTS + ly;
+                        if (x >= w || y >= h) continue;
+                        std::uint8_t k = block_idx[bi];
+                        pixel_index[y * w + x] = k;
+                        rendered[x, y] = shadowed
+                            ? shadow_lines[pal][k]
+                            : gres.palette_lines[pal][k];
+                    }
+                }
+            }
+        }
 
         gres.preview = rendered;
         gres.total_error = te;
@@ -1092,7 +1140,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         //    art with repeated regions (skies, gradients, decorations).
         auto dedup = genesis::dedup_tiles(
             gres.pixel_index, gres.tile_palette, w, h);
-        auto tiles_y = (h + genesis::kTileSide - 1) / genesis::kTileSide;
         auto total_cells = tiles_x * tiles_y;
 
         // Build the three byte streams: tile bytes, tilemap cells (u16),
