@@ -255,10 +255,11 @@ const showDepthSlider = computed(() => {
   // HAM (N-2 data bits), EHB (always 6), Atari (mode defines depth),
   // DOS (EGA/VGA/CGA/text — 1/2/4/8), SNES Mode 7 (8bpp chunky),
   // Sega Genesis (4bpp tiles), and c64 charset (1bpp/2bpp fixed by
-  // mode — c64-charset-multicolor and -hires).
+  // mode). Tile-freeform modes left isFixedBufferMode in the recent
+  // refactor but their depth is still hardware-fixed.
   return !isHamMode(options.mode) && !isEhbMode(options.mode) &&
          !isAtariMode(options.mode) && !isFixedBufferMode(options.mode) &&
-         !isC64CharsetMode(options.mode)
+         !isTileFreeformMode(options.mode)
 })
 
 // Raw export tooltip with format layout (HTML for fixed-width font).
