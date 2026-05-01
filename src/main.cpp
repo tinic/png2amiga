@@ -1743,13 +1743,17 @@ std::string inline_image_escape(const Image& image) {
         // dither), so the sixel maps each pixel to an exact match. If
         // there are >256 unique colors (HAM modes), fall back to
         // constixel's built-in 256-color quantizer.
+        // Sixel emits in 6-pixel-tall bands; pad height up to the next
+        // multiple of 6 by replicating the last row so the trailing
+        // band has defined content (avoids a terminal-bg-color stripe).
         const auto w = scaled.width();
-        const auto h = scaled.height();
+        const auto orig_h = scaled.height();
+        const auto h = ((orig_h + 5) / 6) * 6;
         std::vector<std::uint8_t> rgba(w * h * 4);
         std::unordered_set<std::uint32_t> unique_colors;
         unique_colors.reserve(512);
         bool overflow = false;
-        for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t y = 0; y < orig_h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
                 auto srgb = color_space::linear_to_srgb(scaled[x, y]).clamped();
                 auto base = (y * w + x) * 4;
@@ -1765,6 +1769,12 @@ std::string inline_image_escape(const Image& image) {
                         (std::uint32_t(r) << 16) | (std::uint32_t(g) << 8) | std::uint32_t(b));
                     if (unique_colors.size() > 256) overflow = true;
                 }
+            }
+        }
+        if (h > orig_h && orig_h > 0) {
+            const auto* src = &rgba[(orig_h - 1) * w * 4];
+            for (std::size_t y = orig_h; y < h; ++y) {
+                std::memcpy(&rgba[y * w * 4], src, w * 4);
             }
         }
         std::string out;
