@@ -142,6 +142,26 @@ inline const ScapSlotTable kScap6bplEhb{
     }
 };
 
+// kScap6bplHam6 — OCS HAM6, 6 bitplanes, lores 320 px display.
+//
+// Same 6-plane DMA shape as EHB (6 plane fetches per 16 lores px), so
+// the kScap6bplEhb slot positions transfer directly. HAM6 differs in
+// what the registers MEAN (16-entry base palette + per-pixel SET /
+// MODIFY ops) — but mid-line MOVEs land on the bus at the same hpos
+// because BPL DMA defines the timing, not the mode. Cloned from EHB
+// so HAM6+SCAP can be tuned independently if probe data later shows
+// they diverge.
+inline const ScapSlotTable kScap6bplHam6{
+    /*total_planes=*/6,
+    /*line_gate_hpos=*/0x3C,
+    /*end_of_line_hpos=*/0xDD,
+    /*slots=*/{
+        {  8-1}, { 24-1}, { 40-1}, { 56-1}, { 72-1}, { 88-1}, {104-1}, {120-1},
+        {136-1}, {152-1}, {168-1}, {184-1}, {200-1}, {216-1}, {232-1}, {248-1},
+        {264-1}, {280-1}, {296-1},
+    }
+};
+
 // Deferred — populated when we run an AGA probe.
 inline const ScapSlotTable kScap8bplAga{
     /*total_planes=*/8,

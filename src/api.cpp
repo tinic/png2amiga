@@ -3164,9 +3164,14 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     // (data only — no init code; that lives in the .cpp viewer).
     if (result->scap && !result->scap_line_moves.empty()) {
         ch_opts.scap_line_moves = &result->scap_line_moves;
-        bool scap_ehb = result->mode == amiga::Mode::ehb;
-        auto& table = scap_ehb ? scap::kScap6bplEhb : scap::kScap6bplOcs;
-        ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs" : "scap_dpf_ocs";
+        bool scap_ehb  = result->mode == amiga::Mode::ehb;
+        bool scap_ham6 = result->mode == amiga::Mode::ham6;
+        auto& table = scap_ehb  ? scap::kScap6bplEhb
+                    : scap_ham6 ? scap::kScap6bplHam6
+                                : scap::kScap6bplOcs;
+        ch_opts.scap_label = scap_ehb  ? "scap_ehb_ocs"
+                           : scap_ham6 ? "scap_ham6_ocs"
+                                       : "scap_dpf_ocs";
         ch_opts.scap_anchor_hpos = table.line_gate_hpos;
         ch_opts.scap_total_planes = table.total_planes;
     }
@@ -3307,12 +3312,14 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     }
     if (result->scap && !result->scap_line_moves.empty()) {
         ch_opts.scap_line_moves = &result->scap_line_moves;
-        // Pick the table that matches the mode the SCAP planner ran
-        // against (the slot positions happen to coincide between DPF
-        // and EHB OCS variants, but the label and intent differ).
-        bool scap_ehb = result->mode == amiga::Mode::ehb;
-        auto& table = scap_ehb ? scap::kScap6bplEhb : scap::kScap6bplOcs;
-        ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs" : "scap_dpf_ocs";
+        bool scap_ehb  = result->mode == amiga::Mode::ehb;
+        bool scap_ham6 = result->mode == amiga::Mode::ham6;
+        auto& table = scap_ehb  ? scap::kScap6bplEhb
+                    : scap_ham6 ? scap::kScap6bplHam6
+                                : scap::kScap6bplOcs;
+        ch_opts.scap_label = scap_ehb  ? "scap_ehb_ocs"
+                           : scap_ham6 ? "scap_ham6_ocs"
+                                       : "scap_dpf_ocs";
         ch_opts.scap_anchor_hpos = table.line_gate_hpos;
         ch_opts.scap_total_planes = table.total_planes;
         ch_opts.fade_in = false;  // SCAP carries its own per-line palette

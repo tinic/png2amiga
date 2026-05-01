@@ -451,6 +451,28 @@ else()
     )
     set_tests_properties("pin-index-ham-rejected" PROPERTIES WILL_FAIL TRUE)
 
+    # HAM6 + SCAP: encoder produces both bitplane data and a per-line
+    # copper move table; the .h emitter must wire scap_line_moves so
+    # the SCAP copper list lands in the header (without it the .h
+    # silently degrades to plain HAM6 against the base 16-colour
+    # palette and the SCAP gain disappears).
+    add_test(
+        NAME "smoke-ham6-scap-h"
+        COMMAND png2amiga --mode ham6 --scap --symbol h6scap
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/ham6-scap.h
+    )
+    add_test(
+        NAME "smoke-ham6-scap-h-content"
+        COMMAND python3 -c
+            "content = open('${CMAKE_BINARY_DIR}/ham6-scap.h').read(); \
+            assert 'scap_ham6_ocs' in content, 'scap_ham6_ocs label missing'; \
+            assert 'h6scap_scap_copper_list' in content, \
+                'scap copper list missing'"
+    )
+    set_tests_properties("smoke-ham6-scap-h-content"
+                         PROPERTIES DEPENDS "smoke-ham6-scap-h")
+
     # Copper supports locks (fixed palette slots for blitter objects)
     add_test(
         NAME "lock-index-copper-accepted"

@@ -4661,9 +4661,14 @@ int main(int argc, char* argv[]) {
         auto ham_data_bits = static_cast<std::size_t>(
             ham_params.bitplane_depth - 2);
         std::size_t ham_base_colors = std::size_t{1} << ham_data_bits;
-        cli_print_mode(std::format("HAM{} (beam: {})",
-                                    ham_params.bitplane_depth,
-                                    config->ham_beam));
+        if (config->scap && config->mode == amiga::Mode::ham6) {
+            cli_print_mode(std::format("HAM6 + SCAP (beam: {})",
+                                        config->ham_beam));
+        } else {
+            cli_print_mode(std::format("HAM{} (beam: {})",
+                                        ham_params.bitplane_depth,
+                                        config->ham_beam));
+        }
         cli_print_palette(std::format(
             "{} base colors, {}-bit MODIFY", ham_base_colors, ham_data_bits));
         cli_print_dither(ham_dither, config->dither_strength);
@@ -4756,35 +4761,10 @@ int main(int argc, char* argv[]) {
                     return 1;
                 }
                 cli_status("IFF:    {}", config->output_path);
-            } else if (ends_with(config->output_path, ".h")) {
-                auto ch_opts = pipeline::make_ch_opts({
-                    .output_path = config->output_path,
-                    .symbol_override = config->symbol_name,
-                    .hires = config->hires,
-                    .interlace = config->interlace,
-                    .aga = (chipset == amiga::Chipset::aga),
-                    .fade_in = config->fade_in,
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
-                });
-                if (!st.scanline_changes.empty()) {
-                    ch_opts.copper_changes = &st.scanline_changes;
-                    ch_opts.copper_changes_per_line = st.changes_per_line;
-                    if (!st.scanline_palettes.empty())
-                        ch_opts.copper_scanline_palettes = &st.scanline_palettes;
-                }
-
-                auto result = cheader::save(
-                    config->output_path, st.planes,
-                    st.palette, config->mode, ch_opts);
-                if (!result) {
-                    std::println(stderr, "C header write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("Header: {}", config->output_path);
-            } else if (ends_with(config->output_path, ".cpp") ||
+            } else if (ends_with(config->output_path, ".h") ||
+                       ends_with(config->output_path, ".cpp") ||
                        ends_with(config->output_path, ".c")) {
+                bool is_h = ends_with(config->output_path, ".h");
                 auto ch_opts = pipeline::make_ch_opts({
                     .output_path = config->output_path,
                     .symbol_override = config->symbol_name,
@@ -4801,17 +4781,38 @@ int main(int argc, char* argv[]) {
                     if (!st.scanline_palettes.empty())
                         ch_opts.copper_scanline_palettes = &st.scanline_palettes;
                 }
-
-                pad_planes_to_mode(st.planes, config->mode, config->hires);
-                auto result = cheader::save_viewer(
-                    config->output_path, st.planes,
-                    st.palette, config->mode, ch_opts);
+                // HAM6+SCAP: emit the SCAP mid-line MOVE table the same
+                // way EHB+SCAP and DPF+SCAP do. HAM6 shares the EHB slot
+                // table (6-plane DMA, 19 mid-line slots — see scap.cpp
+                // 2176). Without this the .h / .cpp drops the per-line
+                // copper list and the rendered output decodes as plain
+                // HAM6 against the base 16-colour palette.
+                if (config->scap && !st.scap_line_moves.empty()) {
+                    ch_opts.scap_line_moves = &st.scap_line_moves;
+                    bool scap_ham6 = config->mode == amiga::Mode::ham6;
+                    auto& table = scap_ham6 ? scap::kScap6bplHam6
+                                            : scap::kScap6bplOcs;
+                    ch_opts.scap_label = scap_ham6 ? "scap_ham6_ocs"
+                                                   : "scap_dpf_ocs";
+                    ch_opts.scap_anchor_hpos = table.line_gate_hpos;
+                    ch_opts.scap_total_planes = table.total_planes;
+                    ch_opts.fade_in = false;
+                }
+                if (!is_h) pad_planes_to_mode(st.planes, config->mode,
+                                              config->hires);
+                auto result = is_h
+                    ? cheader::save(config->output_path, st.planes,
+                                    st.palette, config->mode, ch_opts)
+                    : cheader::save_viewer(config->output_path, st.planes,
+                                           st.palette, config->mode, ch_opts);
                 if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
+                    std::println(stderr, "{} write error: {}",
+                                 is_h ? "C header" : "Viewer",
                                  result.error().message);
                     return 1;
                 }
-                cli_status("Viewer: {}", config->output_path);
+                cli_status("{}: {}", is_h ? "Header" : "Viewer",
+                           config->output_path);
             } else if (ends_with(config->output_path, ".raw")) {
                 save_raw(config->output_path, st.planes,
                          st.palette, chipset,
@@ -5775,11 +5776,14 @@ int main(int argc, char* argv[]) {
     if (config->scap) {
         bool scap_ehb = config->mode == amiga::Mode::ehb;
         bool scap_dpf = use_dpf_std && config->mode == amiga::Mode::lores;
+        // HAM6+SCAP is handled by the HAM branch above, so the gate here
+        // only needs to cover the EHB/DPF combos. Keep the error wording
+        // explicit about all three legal forms.
         if ((!scap_dpf && !scap_ehb) || chipset != amiga::Chipset::ocs ||
             config->interlace) {
             std::println(stderr,
                 "Error: --scap requires OCS (no interlace) with either "
-                "--dpf lores depth=3 or --mode ehb.");
+                "--dpf lores depth=3, --mode ehb, or --mode ham6.");
             return 1;
         }
         if (has_transparency) {

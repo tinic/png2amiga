@@ -2350,11 +2350,11 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             metric);
         if (best.has_value()) return std::move(*best);
     }
-    auto& table = kScap6bplEhb;  // HAM6 shares 6-plane DMA with EHB
+    auto& table = kScap6bplHam6;
     if (table.slots.empty()) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
-            "SCAP HAM6 planner: kScap6bplEhb slot table is empty",
+            "SCAP HAM6 planner: kScap6bplHam6 slot table is empty",
         }};
     }
     auto width = (width_arg > 0) ? static_cast<std::size_t>(width_arg)
