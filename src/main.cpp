@@ -28,6 +28,8 @@
 #include "types.hpp"
 #include "version.hpp"
 
+#include <constixel.hpp>
+
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -1663,10 +1665,13 @@ unsigned g_preview_scale = 1;
 //   - Kitty: APC _G a=T,f=100, ... <ST>. Kitty's native protocol.
 //     Ghostty implements Kitty graphics (alongside its own UI), no
 //     OSC 1337 fallback. Kitty likewise does NOT speak OSC 1337.
+//   - sixel: DEC sixel (\033Pq ... \033\\). Windows Terminal >= 1.22
+//     speaks sixel and sets WT_SESSION; older WT versions just won't
+//     render it. Detected by env var, no DA1 probe yet.
 //   - none:  Anywhere else (Terminal.app, ssh w/o env passthrough,
 //     non-image terminals). Skip the inline emit; preview becomes
 //     a no-op.
-enum class InlineImageProtocol { none, iterm, kitty };
+enum class InlineImageProtocol { none, iterm, kitty, sixel };
 
 InlineImageProtocol detect_inline_image_protocol() {
     auto eq = [](const char* a, const char* b) {
@@ -1692,6 +1697,11 @@ InlineImageProtocol detect_inline_image_protocol() {
 
     // iTerm.app — OSC 1337 only.
     if (eq(term_program, "iTerm.app"))   return InlineImageProtocol::iterm;
+
+    // Windows Terminal — sixel since 1.22. WT_SESSION is set on every
+    // pane; we don't probe DA1 because the env var is sufficient and
+    // the probe needs raw-mode stdin handling on Windows.
+    if (set("WT_SESSION"))               return InlineImageProtocol::sixel;
 
     return InlineImageProtocol::none;
 }
@@ -1725,6 +1735,35 @@ std::string inline_image_escape(const Image& image) {
     Image scaled = (g_preview_scale > 1)
         ? scale_preview(image, g_preview_scale, g_preview_scale)
         : image;
+
+    if (proto == InlineImageProtocol::sixel) {
+        // Convert linear-RGB Image to sRGB RGBA bytes, then encode via
+        // constixel::dynamic_image<format_8bit_dyn>. We use the built-in
+        // 256-color palette quantizer here — plumbing the encoded
+        // palette through for pixel-perfect preview is a future tweak.
+        const auto w = scaled.width();
+        const auto h = scaled.height();
+        std::vector<std::uint8_t> rgba(w * h * 4);
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto srgb = color_space::linear_to_srgb(scaled[x, y]).clamped();
+                auto base = (y * w + x) * 4;
+                rgba[base + 0] = static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
+                rgba[base + 1] = static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
+                rgba[base + 2] = static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
+                rgba[base + 3] = 255;
+            }
+        }
+        constixel::dynamic_image<constixel::format_8bit_dyn> dimg(w, h);
+        dimg.blit_RGBA(0, 0, static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+                       rgba.data(), static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+                       static_cast<std::int32_t>(w * 4));
+        std::string out;
+        out.reserve(w * h);
+        dimg.sixel([&](char c) { out.push_back(c); });
+        return out;
+    }
+
     auto png = png_io::encode(scaled);
     if (!png) return {};
     auto encoded = base64_encode(*png);
