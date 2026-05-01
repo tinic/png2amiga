@@ -2705,6 +2705,51 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         r.c64Mc2     = p.c64_mc2;
         r.c64BgColor = p.c64_bg_color;
     }
+    // Genesis tile diagnostic: u16 vectors get serialised as little-endian
+    // 2-byte sequences so JS can DataView them with .getUint16(off, true).
+    if (amiga::is_genesis(p.mode) && !p.genesis_tile_bytes.empty()) {
+        r.genesisTileBytes = p.genesis_tile_bytes;
+        auto u16_to_bytes = [](const std::vector<std::uint16_t>& src) {
+            std::vector<std::uint8_t> out(src.size() * 2);
+            for (std::size_t i = 0; i < src.size(); ++i) {
+                out[i * 2]     = static_cast<std::uint8_t>(src[i] & 0xFF);
+                out[i * 2 + 1] = static_cast<std::uint8_t>((src[i] >> 8) & 0xFF);
+            }
+            return out;
+        };
+        r.genesisTilemapBytes  = u16_to_bytes(p.genesis_tilemap_cells);
+        r.genesisPaletteBytes  = u16_to_bytes(p.genesis_palette_words);
+    }
+    // SNES Mode 7 tile diagnostic: split packed_bytes into tilemap (first
+    // 16 KB) + tile data (rest). Palette is 256 RGB triples for 256 mode,
+    // empty for Direct (BBGGGRRR pixels self-decode).
+    if (amiga::is_snes(p.mode) && !p.raw_frame.empty()) {
+        constexpr std::size_t kTilemapBytes = 128 * 128;
+        if (p.raw_frame.size() >= kTilemapBytes) {
+            r.snesTilemapBytes.assign(
+                p.raw_frame.begin(),
+                p.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(kTilemapBytes));
+            r.snesTileBytes.assign(
+                p.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(kTilemapBytes),
+                p.raw_frame.end());
+        }
+        if (!p.palette.empty()) {
+            r.snesPaletteBytes.reserve(p.palette.size() * 3);
+            for (auto& c : p.palette) {
+                auto srgb = color_space::linear_to_srgb(c);
+                auto chan = [](float v) {
+                    return static_cast<std::uint8_t>(
+                        std::clamp(static_cast<int>(std::lround(v * 255.0f)),
+                                    0, 255));
+                };
+                r.snesPaletteBytes.push_back(chan(srgb.r));
+                r.snesPaletteBytes.push_back(chan(srgb.g));
+                r.snesPaletteBytes.push_back(chan(srgb.b));
+            }
+        }
+    }
     return r;
 }
 

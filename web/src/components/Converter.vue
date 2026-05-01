@@ -93,6 +93,10 @@ const options = reactive(defaultOptions())
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvasRef')
 const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL CRT-preview overlay canvas
 const charsetCanvasRef = useTemplateRef<HTMLCanvasElement>('charsetCanvasRef')
+const genesisPaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisPaletteCanvasRef')
+const genesisTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisTilesCanvasRef')
+const snesPaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('snesPaletteCanvasRef')
+const snesTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('snesTilesCanvasRef')
 const crtEnabled = ref(false)
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
@@ -1022,6 +1026,271 @@ function paintCharsetCanvas(result: ConvertResult): void {
   ctx.putImageData(imgData, 0, 0)
 }
 
+// ---------------------------------------------------------------------------
+// Genesis tile diagnostic.
+// ---------------------------------------------------------------------------
+
+// Decode 3-bit channel value to 8-bit sRGB via bit replication
+// (c << 5 | c << 2 | c >> 1).
+function expand3to8(c: number): number {
+  return ((c & 0x7) << 5) | ((c & 0x7) << 2) | ((c & 0x7) >> 1)
+}
+
+// Decode a Genesis BGR333 word (LE u16) to an [R, G, B] sRGB triple.
+function decodeGenesisColor(word: number): [number, number, number] {
+  const r3 = (word >> 1) & 0x7
+  const g3 = (word >> 5) & 0x7
+  const b3 = (word >> 9) & 0x7
+  return [expand3to8(r3), expand3to8(g3), expand3to8(b3)]
+}
+
+function fillGenesisPalette(
+    palette: Uint8Array): readonly [number, number, number][][] {
+  // 4 lines × 16 entries × [R, G, B].
+  const out: [number, number, number][][] = []
+  for (let line = 0; line < 4; line++) {
+    const lineOut: [number, number, number][] = []
+    for (let i = 0; i < 16; i++) {
+      const off = (line * 16 + i) * 2
+      const lo = palette[off] ?? 0
+      const hi = palette[off + 1] ?? 0
+      lineOut.push(decodeGenesisColor((hi << 8) | lo))
+    }
+    out.push(lineOut)
+  }
+  return out
+}
+
+function paintGenesisPaletteSwatch(palette: readonly (readonly [number, number, number])[][]): void {
+  const canvas = genesisPaletteCanvasRef.value
+  if (!canvas) return
+  // 16 swatches × 16 px wide × 4 lines × 16 px tall.
+  const swatch = 16
+  canvas.width = 16 * swatch
+  canvas.height = 4 * swatch
+  canvas.style.imageRendering = 'pixelated'
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  for (let line = 0; line < 4; line++) {
+    const lp = palette[line] ?? []
+    for (let i = 0; i < 16; i++) {
+      const [r, g, b] = lp[i] ?? [0, 0, 0]
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
+      ctx.fillRect(i * swatch, line * swatch, swatch, swatch)
+    }
+  }
+}
+
+interface GenesisFirstLineMap { firstLine: Int8Array }
+
+function genesisFirstLines(
+    tilemap: Uint8Array, uniqueTiles: number): GenesisFirstLineMap {
+  const firstLine = new Int8Array(uniqueTiles).fill(-1)
+  const cellCount = tilemap.length / 2
+  for (let c = 0; c < cellCount; c++) {
+    const lo = tilemap[c * 2] ?? 0
+    const hi = tilemap[c * 2 + 1] ?? 0
+    const word = (hi << 8) | lo
+    const idx = word & 0x07FF
+    const line = (word >> 13) & 0x3
+    if (idx < uniqueTiles && firstLine[idx] === -1) {
+      firstLine[idx] = line
+    }
+  }
+  return { firstLine }
+}
+
+interface GenesisTileCtx {
+  px: Uint8ClampedArray
+  pixelW: number
+  scale: number
+  cols: number
+  tileBytes: Uint8Array
+  palette: readonly (readonly [number, number, number])[][]
+}
+
+function paintTilePixel(args: {
+  px: Uint8ClampedArray; pixelW: number; scale: number;
+  x: number; y: number; rgb: readonly [number, number, number];
+}): void {
+  const [pr, pg, pb] = args.rgb
+  for (let dy = 0; dy < args.scale; dy++) {
+    for (let dx = 0; dx < args.scale; dx++) {
+      const o = ((args.y + dy) * args.pixelW + (args.x + dx)) * 4
+      args.px[o] = pr; args.px[o + 1] = pg
+      args.px[o + 2] = pb; args.px[o + 3] = 255
+    }
+  }
+}
+
+function paintGenesisTile(ctx: GenesisTileCtx, g: number, line: number): void {
+  const gx0 = (g % ctx.cols) * 8 * ctx.scale
+  const gy0 = Math.floor(g / ctx.cols) * 8 * ctx.scale
+  const linePal = ctx.palette[line] ?? []
+  for (let r = 0; r < 8; r++) {
+    for (let p = 0; p < 8; p++) {
+      const byte = ctx.tileBytes[g * 32 + r * 4 + (p >> 1)] ?? 0
+      const idx = (p & 1) ? (byte & 0xF) : ((byte >> 4) & 0xF)
+      paintTilePixel({
+        px: ctx.px, pixelW: ctx.pixelW, scale: ctx.scale,
+        x: gx0 + p * ctx.scale, y: gy0 + r * ctx.scale,
+        rgb: linePal[idx] ?? [0, 0, 0],
+      })
+    }
+  }
+}
+
+interface GenesisTileInputs {
+  tileBytes: Uint8Array
+  tilemap: Uint8Array
+  palBytes: Uint8Array
+  unique: number
+}
+
+function genesisTileInputs(result: ConvertResult): GenesisTileInputs | null {
+  const tileBytes = result.genesisTileBytes
+  const tilemap = result.genesisTilemapBytes
+  const palBytes = result.genesisPaletteBytes
+  const unique = result.genesisUniqueTiles ?? 0
+  if (!tileBytes || !tilemap || !palBytes || unique === 0) return null
+  return { tileBytes, tilemap, palBytes, unique }
+}
+
+function paintGenesisTilesCanvas(result: ConvertResult): void {
+  const canvas = genesisTilesCanvasRef.value
+  if (!canvas || !isGenesisMode(options.mode)) return
+  const inputs = genesisTileInputs(result)
+  if (!inputs) return
+  const palette = fillGenesisPalette(inputs.palBytes)
+  paintGenesisPaletteSwatch(palette)
+  const { firstLine } = genesisFirstLines(inputs.tilemap, inputs.unique)
+  const scale = 1
+  const cols = 16
+  const rows = Math.ceil(inputs.unique / cols)
+  canvas.width = cols * 8 * scale
+  canvas.height = rows * 8 * scale
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
+  canvas.style.imageRendering = 'pixelated'
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+  ctx2d.fillStyle = 'black'
+  ctx2d.fillRect(0, 0, canvas.width, canvas.height)
+  const imgData = ctx2d.createImageData(canvas.width, canvas.height)
+  const ctx: GenesisTileCtx = {
+    px: imgData.data, pixelW: canvas.width, scale, cols,
+    tileBytes: inputs.tileBytes, palette,
+  }
+  for (let g = 0; g < inputs.unique; g++) {
+    const line = firstLine[g] ?? -1
+    if (line === -1) continue
+    paintGenesisTile(ctx, g, line)
+  }
+  ctx2d.putImageData(imgData, 0, 0)
+}
+
+// ---------------------------------------------------------------------------
+// SNES Mode 7 tile diagnostic.
+// ---------------------------------------------------------------------------
+
+function paintSnesPaletteSwatch(palette: Uint8Array): void {
+  const canvas = snesPaletteCanvasRef.value
+  if (!canvas) return
+  // 16×16 grid of 256 swatches. 8 px each = 128×128 backing.
+  const swatch = 8
+  canvas.width = 16 * swatch
+  canvas.height = 16 * swatch
+  canvas.style.imageRendering = 'pixelated'
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  for (let i = 0; i < 256; i++) {
+    const off = i * 3
+    const r = palette[off] ?? 0
+    const g = palette[off + 1] ?? 0
+    const b = palette[off + 2] ?? 0
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
+    const x = (i % 16) * swatch
+    const y = Math.floor(i / 16) * swatch
+    ctx.fillRect(x, y, swatch, swatch)
+  }
+}
+
+interface SnesTileCtx {
+  px: Uint8ClampedArray
+  pixelW: number
+  scale: number
+  cols: number
+  tileBytes: Uint8Array
+  palette: Uint8Array | undefined  // 256×3 RGB; undefined = Direct
+}
+
+function snesPixelRgb(byte: number, palette: Uint8Array | undefined): [number, number, number] {
+  if (palette && palette.length >= 768) {
+    const off = byte * 3
+    return [palette[off] ?? 0, palette[off + 1] ?? 0, palette[off + 2] ?? 0]
+  }
+  // Direct: BBGGGRRR → expand to 8-bit per channel.
+  const r3 = byte & 0x7
+  const g3 = (byte >> 3) & 0x7
+  const b2 = (byte >> 6) & 0x3
+  // 3-bit → 8-bit replication for r/g; 2-bit → 8-bit for b.
+  const b8 = ((b2 & 0x3) << 6) | ((b2 & 0x3) << 4) | ((b2 & 0x3) << 2) | (b2 & 0x3)
+  return [expand3to8(r3), expand3to8(g3), b8]
+}
+
+function paintSnesTile(ctx: SnesTileCtx, g: number): void {
+  const gx0 = (g % ctx.cols) * 8 * ctx.scale
+  const gy0 = Math.floor(g / ctx.cols) * 8 * ctx.scale
+  for (let r = 0; r < 8; r++) {
+    for (let p = 0; p < 8; p++) {
+      const byte = ctx.tileBytes[g * 64 + r * 8 + p] ?? 0
+      paintTilePixel({
+        px: ctx.px, pixelW: ctx.pixelW, scale: ctx.scale,
+        x: gx0 + p * ctx.scale, y: gy0 + r * ctx.scale,
+        rgb: snesPixelRgb(byte, ctx.palette),
+      })
+    }
+  }
+}
+
+function paintSnesPaletteOrClear(palette: Uint8Array | undefined): void {
+  if (palette) {
+    paintSnesPaletteSwatch(palette)
+    return
+  }
+  const c = snesPaletteCanvasRef.value
+  if (c) { c.width = 0; c.height = 0 }
+}
+
+function paintSnesTilesCanvas(result: ConvertResult): void {
+  const canvas = snesTilesCanvasRef.value
+  if (!canvas || !isSnesMode(options.mode)) return
+  const tileBytes = result.snesTileBytes
+  if (!tileBytes) return
+  const palette = result.snesPaletteBytes
+  paintSnesPaletteOrClear(palette)
+  const unique = Math.floor(tileBytes.length / 64)
+  const scale = 1
+  const cols = 16
+  const rows = Math.ceil(unique / cols)
+  canvas.width = cols * 8 * scale
+  canvas.height = rows * 8 * scale
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
+  canvas.style.imageRendering = 'pixelated'
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+  ctx2d.fillStyle = 'black'
+  ctx2d.fillRect(0, 0, canvas.width, canvas.height)
+  const imgData = ctx2d.createImageData(canvas.width, canvas.height)
+  const ctx: SnesTileCtx = {
+    px: imgData.data, pixelW: canvas.width, scale, cols,
+    tileBytes, palette,
+  }
+  for (let g = 0; g < unique; g++) paintSnesTile(ctx, g)
+  ctx2d.putImageData(imgData, 0, 0)
+}
+
 async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   const painted = paintPreviewCanvas(result)
   if (!painted || !result.rgba) return false
@@ -1035,6 +1304,8 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
     if (r) renderCrt()
   }
   paintCharsetCanvas(result)
+  paintGenesisTilesCanvas(result)
+  paintSnesTilesCanvas(result)
   return true
 }
 
@@ -2044,6 +2315,16 @@ async function loadExample(example: typeof EXAMPLES[number]) {
           <div v-if="isC64CharsetMode(options.mode)"
                class="surface-card border-round-lg p-2">
             <canvas ref="charsetCanvasRef" class="charset-canvas" />
+          </div>
+          <div v-if="isGenesisMode(options.mode)"
+               class="surface-card border-round-lg p-2 flex flex-column gap-1">
+            <canvas ref="genesisPaletteCanvasRef" class="charset-canvas" />
+            <canvas ref="genesisTilesCanvasRef" class="charset-canvas" />
+          </div>
+          <div v-if="isSnesMode(options.mode)"
+               class="surface-card border-round-lg p-2 flex flex-column gap-1">
+            <canvas ref="snesPaletteCanvasRef" class="charset-canvas" />
+            <canvas ref="snesTilesCanvasRef" class="charset-canvas" />
           </div>
         </div>
       </div>

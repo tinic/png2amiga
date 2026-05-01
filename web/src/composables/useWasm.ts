@@ -20,15 +20,16 @@ interface DitherDefaultsPendingEntry {
 type WorkerOutboundMessage =
   | { id: number; fn: string; args: unknown[]; wantProgress: boolean }
 
-// Shape of the worker's reply envelope. `rgba` / `data` /
-// `c64CharsetData` cross the thread boundary as ArrayBuffer; wrapped
-// back to Uint8Array on this side.
-interface ReplyEnvelope extends Omit<ConvertResult,
-  'rgba' | 'data' | 'c64CharsetData'> {
-  rgba?: ArrayBuffer
-  data?: ArrayBuffer
-  c64CharsetData?: ArrayBuffer
-}
+// Shape of the worker's reply envelope. Buffer-typed fields cross
+// the thread boundary as ArrayBuffer; wrapped back to Uint8Array
+// on this side.
+type BufferKey =
+  | 'rgba' | 'data' | 'c64CharsetData'
+  | 'genesisTileBytes' | 'genesisTilemapBytes' | 'genesisPaletteBytes'
+  | 'snesTileBytes' | 'snesTilemapBytes' | 'snesPaletteBytes'
+type ReplyEnvelope =
+  Omit<ConvertResult, BufferKey>
+  & Partial<Record<BufferKey, ArrayBuffer>>
 
 type WorkerInboundMessage =
   | { type: 'ready' }
@@ -48,16 +49,28 @@ const pending = new Map<number, PendingEntry | DitherDefaultsPendingEntry>()
 const sharedLoading = ref(true)
 const sharedError = ref('')
 
+function spreadIf(key: BufferKey, b: ArrayBuffer | undefined): Partial<ConvertResult> {
+  return b ? { [key]: new Uint8Array(b) } : {}
+}
+
 function unwrapConvertEnvelope(raw: ReplyEnvelope): ConvertResult {
-  // Conditional spreads (rather than `rgba: ... ?? undefined`) so we don't
-  // explicitly set optional keys to undefined under exactOptionalPropertyTypes.
-  const { rgba, data, c64CharsetData, ...rest } = raw
+  const {
+    rgba, data, c64CharsetData,
+    genesisTileBytes, genesisTilemapBytes, genesisPaletteBytes,
+    snesTileBytes, snesTilemapBytes, snesPaletteBytes,
+    ...rest
+  } = raw
   return {
     ...rest,
-    ...(rgba ? { rgba: new Uint8Array(rgba) } : {}),
-    ...(data ? { data: new Uint8Array(data) } : {}),
-    ...(c64CharsetData
-        ? { c64CharsetData: new Uint8Array(c64CharsetData) } : {}),
+    ...spreadIf('rgba', rgba),
+    ...spreadIf('data', data),
+    ...spreadIf('c64CharsetData', c64CharsetData),
+    ...spreadIf('genesisTileBytes', genesisTileBytes),
+    ...spreadIf('genesisTilemapBytes', genesisTilemapBytes),
+    ...spreadIf('genesisPaletteBytes', genesisPaletteBytes),
+    ...spreadIf('snesTileBytes', snesTileBytes),
+    ...spreadIf('snesTilemapBytes', snesTilemapBytes),
+    ...spreadIf('snesPaletteBytes', snesPaletteBytes),
   }
 }
 

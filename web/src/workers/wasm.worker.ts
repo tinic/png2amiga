@@ -39,6 +39,12 @@ interface ReplyEnvelope {
   c64Mc1?: number
   c64Mc2?: number
   c64BgColor?: number
+  genesisTileBytes?: ArrayBuffer
+  genesisTilemapBytes?: ArrayBuffer
+  genesisPaletteBytes?: ArrayBuffer
+  snesTileBytes?: ArrayBuffer
+  snesTilemapBytes?: ArrayBuffer
+  snesPaletteBytes?: ArrayBuffer
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -147,12 +153,25 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
   }
   const transfers: ArrayBuffer[] = []
 
-  if (result.c64CharsetData) {
-    const arr = new Uint8Array(result.c64CharsetData)
+  const forwardArrayBuffer = (
+      src: Uint8Array | ArrayBuffer | undefined,
+      dst: 'c64CharsetData' | 'genesisTileBytes' | 'genesisTilemapBytes'
+        | 'genesisPaletteBytes' | 'snesTileBytes' | 'snesTilemapBytes'
+        | 'snesPaletteBytes'
+  ): void => {
+    if (!src) return
+    const arr = new Uint8Array(src as ArrayBuffer)
     const buf = arr.buffer.slice(arr.byteOffset, arr.byteOffset + arr.byteLength)
-    reply.c64CharsetData = buf
+    reply[dst] = buf
     transfers.push(buf)
   }
+  forwardArrayBuffer(result.c64CharsetData, 'c64CharsetData')
+  forwardArrayBuffer(result.genesisTileBytes, 'genesisTileBytes')
+  forwardArrayBuffer(result.genesisTilemapBytes, 'genesisTilemapBytes')
+  forwardArrayBuffer(result.genesisPaletteBytes, 'genesisPaletteBytes')
+  forwardArrayBuffer(result.snesTileBytes, 'snesTileBytes')
+  forwardArrayBuffer(result.snesTilemapBytes, 'snesTilemapBytes')
+  forwardArrayBuffer(result.snesPaletteBytes, 'snesPaletteBytes')
 
   if (result.rgba) {
     const arr = new Uint8Array(result.rgba)

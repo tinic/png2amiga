@@ -245,6 +245,23 @@ val js_convert_rgba(val input_array, val js_opts) {
         obj.set("c64Mc2",     result.c64Mc2);
         obj.set("c64BgColor", result.c64BgColor);
     }
+    if (!result.genesisTileBytes.empty()) {
+        obj.set("genesisTileBytes",
+                make_uint8_array(result.genesisTileBytes));
+        obj.set("genesisTilemapBytes",
+                make_uint8_array(result.genesisTilemapBytes));
+        obj.set("genesisPaletteBytes",
+                make_uint8_array(result.genesisPaletteBytes));
+    }
+    if (!result.snesTileBytes.empty()) {
+        obj.set("snesTileBytes",
+                make_uint8_array(result.snesTileBytes));
+        obj.set("snesTilemapBytes",
+                make_uint8_array(result.snesTilemapBytes));
+        if (!result.snesPaletteBytes.empty())
+            obj.set("snesPaletteBytes",
+                    make_uint8_array(result.snesPaletteBytes));
+    }
     obj.set("error", result.error);
 
     if (!result.data.empty())

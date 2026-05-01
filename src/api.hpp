@@ -336,6 +336,19 @@ struct ConvertResult {
     int c64Mc2{};                        // multicolor: shared mc2 (0..15)
     int c64BgColor{};                    // shared bg (0..15)
 
+    // Genesis tile diagnostic — same idea as c64CharsetData but with
+    // 4bpp 8×8 tiles and a 4-line palette structure. Empty for
+    // non-Genesis runs.
+    std::vector<std::uint8_t> genesisTileBytes;       // unique × 32
+    std::vector<std::uint8_t> genesisTilemapBytes;    // cells × 2 (u16 LE)
+    std::vector<std::uint8_t> genesisPaletteBytes;    // 4 × 16 × 2 (BGR333 LE)
+
+    // SNES Mode 7 tile diagnostic. snesPaletteBytes is empty for the
+    // Direct Color variant (BBGGGRRR pixel bytes expand inline).
+    std::vector<std::uint8_t> snesTileBytes;          // unique × 64
+    std::vector<std::uint8_t> snesTilemapBytes;       // 128×128 (16384)
+    std::vector<std::uint8_t> snesPaletteBytes;       // 256 × 3 RGB (256-mode only)
+
     std::string error;                  // error message (empty on success)
 };
 

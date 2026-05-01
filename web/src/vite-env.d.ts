@@ -62,6 +62,17 @@ declare module '@wasm/png2amiga.js' {
     c64Mc1?: number
     c64Mc2?: number
     c64BgColor?: number
+    // Genesis tile diagnostic — 4bpp 8×8 unique tiles + u16 tilemap +
+    // 4-line BGR333 palette. tilemap / palette are 2-byte LE per entry.
+    genesisTileBytes?: Uint8Array
+    genesisTilemapBytes?: Uint8Array
+    genesisPaletteBytes?: Uint8Array
+    // SNES Mode 7 tile diagnostic — 8bpp 8×8 unique tiles + 128×128
+    // 1-byte-per-cell tilemap. snesPaletteBytes is 256×3 RGB for the
+    // 256-mode variant, missing for Direct.
+    snesTileBytes?: Uint8Array
+    snesTilemapBytes?: Uint8Array
+    snesPaletteBytes?: Uint8Array
     error?: string
   }
 
