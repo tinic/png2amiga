@@ -678,6 +678,9 @@ void print_usage() {
         "\n"
         "Palette index pinning (lores/hires/EHB/Atari):\n"
         "  --lock-index <id> <rgbhex>      Lock palette slot to a specific colour\n"
+        "                                  (quantizer may still pick this slot)\n"
+        "  --reserve-range <range> <rgb>   Hard-reserve slots from the quantizer.\n"
+        "                                  Range: 0,1,5-10 / -5 / 5- (open ends)\n"
         "  --pin-index-at <id> <x> <y>     Swap pixel (x,y)'s slot with <id>\n"
         "\n"
         "Output:\n"
@@ -2045,6 +2048,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.tile_reserve = cfg.tile_reserve;
     opts.locks = cfg.locks;
     opts.pins = cfg.pins;
+    opts.reserves = cfg.reserves;
     opts.palette_file = cfg.palette_file;
     if (cfg.width)  opts.width  = static_cast<int>(*cfg.width);
     if (cfg.height) opts.height = static_cast<int>(*cfg.height);
@@ -5714,6 +5718,18 @@ int main(int argc, char* argv[]) {
         std::println(stderr, "{}", v.error().message);
         return 1;
     }
+    auto reserves_in_pal_std = palette_locks::validate_reserves(
+        config->reserves, config->locks, max_colors, lock_zero_std);
+    if (!reserves_in_pal_std) {
+        std::println(stderr, "{}", reserves_in_pal_std.error().message);
+        return 1;
+    }
+    std::size_t reserve_count_std = *reserves_in_pal_std;
+    std::vector<bool> reserved_mask_std(max_colors, false);
+    for (auto& r : config->reserves) {
+        auto i = static_cast<std::size_t>(r.index);
+        if (r.index >= 0 && i < max_colors) reserved_mask_std[i] = true;
+    }
 
     Palette pal;
     std::vector<bool> std_locked(max_colors, false);
@@ -5819,6 +5835,8 @@ int main(int argc, char* argv[]) {
         cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
     } else {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, lock_zero_std);
+        if (qcount > reserve_count_std) qcount -= reserve_count_std;
+        else                            qcount = 1;
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.
@@ -5849,6 +5867,16 @@ int main(int argc, char* argv[]) {
             chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
+        // Overlay --reserve-range: snap user RGB to chipset, drop into
+        // its slot, mark locked so refine treats as fixed.
+        for (auto& r : config->reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) {
+                pal.colors[i] = palette_locks::to_color(
+                    api::LockSpec{r.index, r.r, r.g, r.b}, chipset, config->mode);
+                std_locked[i] = true;
+            }
+        }
         cli_status("Palette:  {} colors (auto, {})",
                      pal.size(),
                      amiga::is_stf(config->mode) ? "STF 9-bit" :
@@ -5900,7 +5928,7 @@ int main(int argc, char* argv[]) {
                        amiga::is_ega(config->mode) ||
                        amiga::is_atari_hi(config->mode);
     if (config->refine_iterations > 0 && config->palette_file.empty() &&
-        !skip_refine) {
+        !skip_refine && reserve_count_std == 0) {
         auto refined = quantize::refine_with_dither(
             *image,
             Palette{"refined", {pal.colors.begin(),
@@ -5918,15 +5946,30 @@ int main(int argc, char* argv[]) {
 
     cli_print_dither(dith.method, dith.strength);
 
-    auto dither_result = dither::apply(*image, pal_span, dith);
-
-    // Apply transparency mask: transparent pixels → index 0
-    if (has_transparency) {
-        for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
-            if (transparency_mask[i]) {
-                dither_result.indices[i] = 0;
+    dither::DitherResult dither_result;
+    // Build candidate palette: skip reserved slots (and slot 0 if
+    // transparency, the legacy "color 0 = transparent" rule).
+    if (reserve_count_std > 0 || has_transparency) {
+        std::vector<Color3f> cand_pal;
+        std::vector<std::uint8_t> cand_to_full;
+        cand_pal.reserve(pal_size);
+        cand_to_full.reserve(pal_size);
+        for (std::size_t i = 0; i < pal_size; ++i) {
+            if (has_transparency && i == 0) continue;
+            if (reserved_mask_std[i]) continue;
+            cand_pal.push_back(pal.colors[i]);
+            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+        }
+        std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
+        dither_result = dither::apply(*image, dither_span, dith);
+        for (auto& idx : dither_result.indices) idx = cand_to_full[idx];
+        if (has_transparency) {
+            for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
+                if (transparency_mask[i]) dither_result.indices[i] = 0;
             }
         }
+    } else {
+        dither_result = dither::apply(*image, pal_span, dith);
     }
 
     // Apply pin-index swaps (post-quantization, post-dither).

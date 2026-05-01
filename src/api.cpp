@@ -2422,6 +2422,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                               image->width(), image->height(),
                                               lock_zero); !v)
         return std::unexpected{v.error()};
+    auto reserves_in_pal = palette_locks::validate_reserves(
+        options.reserves, options.locks, max_colors, lock_zero);
+    if (!reserves_in_pal) return std::unexpected{reserves_in_pal.error()};
+    std::size_t reserve_count = *reserves_in_pal;
+    // Build a reserved_mask the dither path uses to exclude these slots
+    // from the candidate set (locks DON'T appear here — they remain
+    // valid dither targets per their lock-not-reserve semantics).
+    std::vector<bool> reserved_mask(max_colors, false);
+    for (auto& r : options.reserves) {
+        auto i = static_cast<std::size_t>(r.index);
+        if (r.index >= 0 && i < max_colors) reserved_mask[i] = true;
+    }
 
     Palette pal;
     std::vector<bool> locked_mask(max_colors, false);
@@ -2498,6 +2510,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     } else {
         auto qcount = palette_locks::quant_count(max_colors, options.locks,
                                                  lock_zero);
+        // Reserves take additional slots out of the quantizer's budget.
+        // Floor at 1 — validate_reserves already rejected the all-reserved case.
+        if (qcount > reserve_count) qcount -= reserve_count;
+        else                        qcount = 1;
         Result<Palette> quantized;
         if (amiga::is_ega(mode)) {
             // All EGA modes on a 5154 ECD support 16 of the 64-color
@@ -2525,6 +2541,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             *quantized, options.locks, max_colors, lock_zero, chipset, mode);
         pal = std::move(assembled.palette);
         locked_mask = std::move(assembled.locked);
+        // Overlay reserved slots: snap each user-supplied colour to the
+        // chipset/mode precision and drop it into the slot. Mark in
+        // locked_mask so refine treats them as fixed; reserved_mask is
+        // separate (refine doesn't see it — refine only operates on
+        // unlocked slots and reserved slots are already locked).
+        for (auto& r : options.reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) {
+                pal.colors[i] = palette_locks::to_color(
+                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
+                locked_mask[i] = true;
+            }
+        }
     }
 
     if (options.match_range)
@@ -2552,7 +2581,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     //     the same gamut entry (reduces 16 slots → ~11 effective colors)
     //     and drops PSNR by 3+ dB.
     if (options.refine_iterations > 0 && !has_user_palette(options) &&
-        dith.method != dither::Method::none &&
+        dith.method != dither::Method::none && reserve_count == 0 &&
         !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
         !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
@@ -2570,15 +2599,28 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
 
     dither::DitherResult dither_result;
-    if (has_transparency) {
-        // Dither against colors [1..N] only (skip reserved index 0)
-        std::span<const Color3f> dither_span{pal.colors.data() + 1, pal_size - 1};
+    // Build the dither candidate set:
+    //   - skip reserved slots (hard-reserve: image content may not land there).
+    //   - skip slot 0 too when has_transparency (legacy "transparent = 0" rule).
+    if (reserve_count > 0 || has_transparency) {
+        std::vector<Color3f> cand_pal;
+        std::vector<std::uint8_t> cand_to_full;
+        cand_pal.reserve(pal_size);
+        cand_to_full.reserve(pal_size);
+        for (std::size_t i = 0; i < pal_size; ++i) {
+            if (has_transparency && i == 0) continue;
+            if (reserved_mask[i]) continue;
+            cand_pal.push_back(pal.colors[i]);
+            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+        }
+        std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
         dither_result = dither::apply(*image, dither_span, dith);
-        // Offset all indices by 1 (index 0 is reserved for transparency)
-        for (auto& idx : dither_result.indices) ++idx;
-        // Force transparent pixels to index 0
-        for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
-            if (tmask[i]) dither_result.indices[i] = 0;
+        for (auto& idx : dither_result.indices) idx = cand_to_full[idx];
+        if (has_transparency) {
+            for (std::size_t i = 0;
+                 i < tmask.size() && i < dither_result.indices.size(); ++i)
+                if (tmask[i]) dither_result.indices[i] = 0;
+        }
     } else {
         dither_result = dither::apply(*image, pal_span, dith);
     }

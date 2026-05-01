@@ -10,8 +10,9 @@
 
 namespace png2amiga::palette_locks {
 
-using LockSpec = api::LockSpec;
-using PinSpec  = api::PinSpec;
+using LockSpec    = api::LockSpec;
+using PinSpec     = api::PinSpec;
+using ReserveSpec = api::ReserveSpec;
 
 // ---------------------------------------------------------------------------
 // Convert a LockSpec (sRGB 0-255) into a linear Color3f, snapped to the
@@ -29,6 +30,19 @@ Color3f to_color(const LockSpec& lock,
 // ---------------------------------------------------------------------------
 Result<void> validate_locks(const std::vector<LockSpec>& locks,
                             std::size_t max_colors);
+
+// ---------------------------------------------------------------------------
+// Validate reserves: in-range, no duplicates, no overlap with locks
+// or with the implicit black-zero. Returns max_in_palette = the
+// number of reserve entries that fall within max_colors (entries
+// from open-end ranges may have been parsed beyond max_colors and
+// are silently clipped here).
+// ---------------------------------------------------------------------------
+Result<std::size_t> validate_reserves(
+    const std::vector<ReserveSpec>& reserves,
+    const std::vector<LockSpec>& locks,
+    std::size_t max_colors,
+    bool lock_zero_black);
 
 // ---------------------------------------------------------------------------
 // Validate pins against the palette size and image bounds. Errors:
