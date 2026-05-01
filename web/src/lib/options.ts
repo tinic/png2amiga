@@ -634,6 +634,13 @@ const MODE_PAR: Record<string, number> = {
   // ratio = 2 × 0.936 = 1.872 (wide).
   'c64-multicolor':  1.872,
   'c64-fli':         1.872,
+  // Atari ST/STE — colour modes target a 4:3 CRT.
+  //   low  320×200 → 4:3 ⇒ PAR ≈ 0.833 (slightly tall, like ega-320)
+  //   med  640×200 → 4:3 ⇒ PAR ≈ 0.417 (2.4× tall, like ega-640)
+  //   hi   640×400 monochrome monitor ⇒ PAR 1.0 (square)
+  'stf-low':  0.833,  'ste-low':  0.833,
+  'stf-med':  0.417,  'ste-med':  0.417,
+  'stf-hi':   1,      'ste-hi':   1,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
