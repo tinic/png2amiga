@@ -169,6 +169,9 @@ const ALL_MODES: ModeOption[] = [
                              chipset: 'c64' },
   { value: 'c64-petscii',    label: 'PETSCII (40x25 text-mode glyphs)',
                              chipset: 'c64' },
+  { value: 'c64-charset-hires',
+                             label: 'Charset Hires (custom 256-glyph charset)',
+                             chipset: 'c64' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
@@ -217,13 +220,12 @@ export const C64_PALETTES: C64PaletteOption[] = [
   { value: 'levy',     label: 'Levy' },
 ]
 
-// C64 per-cell error metric. All three operate in sRGB (display
-// space). Default = blur (Pappas-Neuhoff perceptual).
+// C64 per-cell error metric. Both run in OKLab; mirrors png2c64.
+// Default = mse (matches png2c64).
 export interface C64MetricOption { value: string; label: string }
 export const C64_METRICS: C64MetricOption[] = [
-  { value: 'blur', label: 'Blur (Pappas-Neuhoff, default)' },
-  { value: 'mse',  label: 'Per-pixel MSE' },
-  { value: 'ssim', label: 'SSIM' },
+  { value: 'mse',  label: 'Per-pixel MSE (default)' },
+  { value: 'blur', label: 'Blur (Pappas-Neuhoff 3x3)' },
 ]
 
 export const DITHER_METHODS: DitherGroup[] = [
@@ -535,9 +537,10 @@ const MODE_PAR: Record<string, number> = {
   'genesis-h40-sh': 0.933,
   // C64 hires / AFLI / PETSCII: encoder emits 320×200 native (1:1).
   // Display ratio = PAL VIC-II hardware pixel = 0.936:1.
-  'c64-hires':       0.936,
-  'c64-afli':        0.936,
-  'c64-petscii':     0.936,
+  'c64-hires':           0.936,
+  'c64-afli':            0.936,
+  'c64-petscii':         0.936,
+  'c64-charset-hires':   0.936,
   // C64 multicolor / FLI: encoder emits 160×200 logical (each
   // logical pixel = 2 hardware pixels). Per-LOGICAL-pixel display
   // ratio = 2 × 0.936 = 1.872 (wide).
@@ -582,9 +585,10 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   //     backing (the 4× horizontal includes the 2:1 hardware-pixel
   //     doubling baked into multicolor display).
   // Both pairs land at the same physical canvas size.
-  'c64-hires':       { sx: 2, sy: 2 },
-  'c64-afli':        { sx: 2, sy: 2 },
-  'c64-petscii':     { sx: 2, sy: 2 },
+  'c64-hires':           { sx: 2, sy: 2 },
+  'c64-afli':            { sx: 2, sy: 2 },
+  'c64-petscii':         { sx: 2, sy: 2 },
+  'c64-charset-hires':   { sx: 2, sy: 2 },
   'c64-multicolor':  { sx: 4, sy: 2 },
   'c64-fli':         { sx: 4, sy: 2 },
 }

@@ -107,6 +107,15 @@ enum class Mode : unsigned char {
                         //   (40×25 cells × 256 ROM glyphs × per-cell fg
                         //    + global bg). Pappas-Neuhoff sRGB blur
                         //    metric — same shape as cga-text80x100.
+    c64_charset_hires,      // 320×200, hires 8×8 cells; per-cell pattern
+                            //   deduplicated to ≤256 unique glyphs +
+                            //   merged via Hamming-distance pair sort.
+                            //   Output is a custom 2 KB charset + 1000-byte
+                            //   screen RAM + 1000-byte color RAM.
+    c64_charset_multicolor, // 160×200 logical, multicolor 4×8 cells; same
+                            //   dedup + merge as charset-hires but 4
+                            //   colours per cell (1 shared bg + 2 shared
+                            //   mc colours + 1 per-cell fg).
 
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
@@ -270,6 +279,12 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // C64 PETSCII: 320×200 text mode (40×25 cells × 8×8 glyphs).
     case Mode::c64_petscii:
         return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    // C64 charset-hires: 320×200 (40×25 8×8 cells), 1bpp.
+    case Mode::c64_charset_hires:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    // C64 charset-multicolor: 160×200 logical, 2:1 hardware doubling.
+    case Mode::c64_charset_multicolor:
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
     // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
     // matches SNES at 224 lines on a 4:3 CRT.
     //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)
@@ -350,9 +365,10 @@ constexpr bool is_cga(Mode mode) noexcept {
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
 constexpr bool is_c64(Mode mode) noexcept {
-    return mode == Mode::c64_hires      || mode == Mode::c64_multicolor ||
-           mode == Mode::c64_fli        || mode == Mode::c64_afli       ||
-           mode == Mode::c64_petscii;
+    return mode == Mode::c64_hires      || mode == Mode::c64_multicolor      ||
+           mode == Mode::c64_fli        || mode == Mode::c64_afli            ||
+           mode == Mode::c64_petscii    || mode == Mode::c64_charset_hires   ||
+           mode == Mode::c64_charset_multicolor;
 }
 
 // PETSCII text mode — glyph-match metric (Pappas-Neuhoff sRGB blur);
@@ -364,10 +380,18 @@ constexpr bool is_c64_text(Mode mode) noexcept {
 }
 
 // Check if a mode is a "wide-pixel" multicolor variant (logical pixel
-// is 2× hardware-doubled — multicolor + FLI). Used by the rendered
-// buffer to know whether to pair pixels horizontally.
+// is 2× hardware-doubled — multicolor + FLI + charset-multicolor).
 constexpr bool is_c64_multicolor(Mode mode) noexcept {
-    return mode == Mode::c64_multicolor || mode == Mode::c64_fli;
+    return mode == Mode::c64_multicolor || mode == Mode::c64_fli ||
+           mode == Mode::c64_charset_multicolor;
+}
+
+// Charset modes — encoder produces a custom charset + screen + color
+// RAM (no per-pixel bitmap), so output / dither paths differ from
+// the bitmap modes.
+constexpr bool is_c64_charset(Mode mode) noexcept {
+    return mode == Mode::c64_charset_hires ||
+           mode == Mode::c64_charset_multicolor;
 }
 
 // Check if the mode uses NTSC composite artifacting to produce its colors.

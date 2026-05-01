@@ -4,25 +4,25 @@
 #include "petscii_rom.hpp"
 
 #include <array>
+#include <bit>
 #include <format>
 #include <limits>
+#include <unordered_map>
 
 namespace png2amiga::c64 {
 
 Metric parse_metric(std::string_view s) noexcept {
     if (s == "blur") return Metric::blur;
     if (s == "mse")  return Metric::mse;
-    if (s == "ssim") return Metric::ssim;
-    return Metric::blur;
+    return Metric::mse;
 }
 
 std::string_view metric_name(Metric m) noexcept {
     switch (m) {
     case Metric::blur: return "blur";
     case Metric::mse:  return "mse";
-    case Metric::ssim: return "ssim";
     }
-    return "blur";
+    return "mse";
 }
 
 Palette parse_palette(std::string_view s) noexcept {
@@ -164,11 +164,10 @@ inline float cell_error_for_quad(
 }
 
 // Per-cell metric scorer. Phase 1 picks each pixel's nearest of N
-// candidates in sRGB MSE (cheapest correct assignment). Phase 2
-// computes the chosen metric on the resulting (raw, rendered) pair.
+// candidates (squared distance in whatever space the caller fed us
+// — c64 modes feed OKLab via Color3f). Phase 2 computes:
+//   mse  — per-pixel squared error sum.
 //   blur — MSE between pre-blurred source and post-blurred rendered.
-//   mse  — per-pixel sRGB squared error.
-//   ssim — single-window SSIM on luminance proxy ((r+g+b)/3).
 template <std::size_t N, std::size_t Px>
 inline float score_cell(
     const std::array<Color3f, Px>& raw,
@@ -227,29 +226,6 @@ inline float score_cell(
             err += dr * dr + dg * dg + db * db;
         }
         return err;
-    }
-    case Metric::ssim: {
-        // Luminance proxy = (r + g + b) / 3. SSIM over the cell.
-        float mx = 0, my = 0;
-        std::array<float, Px> sx{}, sy{};
-        for (std::size_t p = 0; p < Px; ++p) {
-            sx[p] = (raw[p].r      + raw[p].g      + raw[p].b)      * (1.0f/3);
-            sy[p] = (rendered[p].r + rendered[p].g + rendered[p].b) * (1.0f/3);
-            mx += sx[p]; my += sy[p];
-        }
-        mx /= Px; my /= Px;
-        float vx = 0, vy = 0, cxy = 0;
-        for (std::size_t p = 0; p < Px; ++p) {
-            float dx = sx[p] - mx, dy = sy[p] - my;
-            vx += dx * dx; vy += dy * dy; cxy += dx * dy;
-        }
-        vx /= Px; vy /= Px; cxy /= Px;
-        constexpr float c1 = 0.01f * 0.01f;
-        constexpr float c2 = 0.03f * 0.03f;
-        float num = (2.0f * mx * my + c1) * (2.0f * cxy + c2);
-        float den = (mx * mx + my * my + c1) * (vx + vy + c2);
-        float ssim = (den > 0) ? num / den : 1.0f;
-        return 1.0f - ssim;
     }
     }
     return err;
@@ -986,6 +962,217 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
 }
 
 // ---------------------------------------------------------------------------
+// c64-charset-hires: 320×200, 8×8 cells, 2 colours per cell. Per-cell
+// quantisation matches encode_hires; the resulting 8-byte glyph
+// patterns are then deduplicated and merged-by-Hamming-distance to
+// fit the 256-slot charset budget.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+inline std::uint64_t hi_pattern_64(
+    const std::array<std::uint8_t, kHiCellW * kHiCellH>& pix_idx) {
+    // Pack the 64 0/1 indices into a single uint64 (row 0 lowest 8
+    // bits). Used as the dedup key.
+    std::uint64_t key = 0;
+    for (std::size_t i = 0; i < kHiCellW * kHiCellH; ++i) {
+        if (pix_idx[i]) key |= (std::uint64_t{1} << i);
+    }
+    return key;
+}
+
+inline std::array<std::uint8_t, 8> hi_pattern_bytes(std::uint64_t key) {
+    // row r ↔ bits r*8 .. r*8+7 (column 0 = MSB of byte).
+    std::array<std::uint8_t, 8> out{};
+    for (std::size_t r = 0; r < 8; ++r) {
+        std::uint8_t b = 0;
+        for (std::size_t c = 0; c < 8; ++c) {
+            if ((key >> (r * 8 + c)) & 1) b |= static_cast<std::uint8_t>(0x80 >> c);
+        }
+        out[r] = b;
+    }
+    return out;
+}
+
+inline int popcount_xor(std::uint64_t a, std::uint64_t b) {
+    return std::popcount(a ^ b);
+}
+
+}  // namespace
+
+Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
+                                           const dither::Settings& settings,
+                                           Metric metric) {
+    constexpr std::size_t W = kHiCols * kHiCellW;  // 320
+    constexpr std::size_t H = kHiRows * kHiCellH;  // 200
+
+    if (image.width() != W || image.height() != H) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            std::format("c64::encode_charset_hires: expected {}x{} input, got {}x{}",
+                        W, H, image.width(), image.height()),
+        }};
+    }
+
+    const auto& pal_lin = palette_linear(pal);
+    const auto& pal_lab = palette_oklab(pal);
+    std::vector<color_space::OKLab> src_lab(W * H);
+    for (std::size_t y = 0; y < H; ++y)
+        for (std::size_t x = 0; x < W; ++x)
+            src_lab[y * W + x] = color_space::linear_to_oklab(image[x, y]);
+
+    constexpr std::size_t kHiCellPx = kHiCellW * kHiCellH;  // 64
+    constexpr std::size_t kCells    = kHiRows * kHiCols;    // 1000
+
+    // Pass 1: per-cell brute-force pair pick + per-pixel chosen
+    // 0/1 index. Mirrors encode_hires's mse path (current ranking
+    // metric). blur is plumbed but charset-hires uses MSE since
+    // the dedup / merge phases below use Hamming distance — they
+    // assume a per-pixel bit pattern, not a blurred reconstruction.
+    (void)metric;
+
+    struct CellPick {
+        std::array<std::uint8_t, 2> pair;  // (c0, c1) palette indices
+        std::uint64_t pattern;             // 64-bit fg/bg mask
+    };
+    std::vector<CellPick> cells(kCells);
+    std::array<color_space::OKLab, kHiCellPx> cell_lab{};
+    std::array<std::uint8_t, kHiCellPx> pix_idx{};
+    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+            for (std::size_t py = 0; py < kHiCellH; ++py) {
+                for (std::size_t px = 0; px < kHiCellW; ++px) {
+                    cell_lab[py * kHiCellW + px] =
+                        src_lab[(cy * kHiCellH + py) * W + (cx * kHiCellW + px)];
+                }
+            }
+            float best_err = std::numeric_limits<float>::infinity();
+            std::array<std::uint8_t, 2> best_pair{0, 0};
+            std::array<std::uint8_t, kHiCellPx> best_pixels{};
+            for (std::uint8_t i = 0; i < 16; ++i) {
+                for (std::uint8_t j = static_cast<std::uint8_t>(i + 1);
+                     j < 16; ++j) {
+                    std::array<std::uint8_t, 2> pair{i, j};
+                    float err = cell_error_for_pair(
+                        cell_lab, pair, pal_lab, &pix_idx);
+                    if (err < best_err) {
+                        best_err = err;
+                        best_pair = pair;
+                        best_pixels = pix_idx;
+                    }
+                }
+            }
+            CellPick cp{best_pair, hi_pattern_64(best_pixels)};
+            cells[cy * kHiCols + cx] = cp;
+        }
+    }
+
+    // Pass 2: dedup by 64-bit pattern. cell_to_glyph[i] = index into
+    // the unique-glyph list.
+    std::vector<std::uint64_t> glyphs;
+    std::vector<std::vector<std::size_t>> glyph_cells;  // cells per glyph
+    std::unordered_map<std::uint64_t, std::size_t> pat_to_glyph;
+    glyphs.reserve(kCells);
+    glyph_cells.reserve(kCells);
+    std::vector<std::size_t> cell_to_glyph(kCells, 0);
+    for (std::size_t i = 0; i < kCells; ++i) {
+        auto p = cells[i].pattern;
+        auto it = pat_to_glyph.find(p);
+        if (it == pat_to_glyph.end()) {
+            std::size_t idx = glyphs.size();
+            pat_to_glyph[p] = idx;
+            glyphs.push_back(p);
+            glyph_cells.emplace_back();
+            it = pat_to_glyph.find(p);
+        }
+        glyph_cells[it->second].push_back(i);
+        cell_to_glyph[i] = it->second;
+    }
+
+    // Pass 3: merge by Hamming distance until ≤256 unique glyphs.
+    // Reserve glyph 0 for the all-zero (empty) pattern if the image
+    // produces one — it's a natural snap target. Otherwise the first
+    // 256 surviving glyphs land at indices 0..255.
+    while (glyphs.size() > 256) {
+        // Find closest pair (smallest popcount of XOR). Brute O(N²)
+        // is fine here — N ≤ ~5000 cells in practice.
+        std::size_t best_a = 0, best_b = 1;
+        int best_dist = std::numeric_limits<int>::max();
+        for (std::size_t a = 0; a < glyphs.size(); ++a) {
+            for (std::size_t b = a + 1; b < glyphs.size(); ++b) {
+                int d = popcount_xor(glyphs[a], glyphs[b]);
+                if (d < best_dist) {
+                    best_dist = d;
+                    best_a = a; best_b = b;
+                }
+            }
+        }
+        // Merge b → a (keep larger cell-count slot).
+        std::size_t keep = best_a, drop = best_b;
+        if (glyph_cells[keep].size() < glyph_cells[drop].size())
+            std::swap(keep, drop);
+        for (auto ci : glyph_cells[drop]) cell_to_glyph[ci] = keep;
+        glyph_cells[keep].insert(glyph_cells[keep].end(),
+                                  glyph_cells[drop].begin(),
+                                  glyph_cells[drop].end());
+        // Erase drop. Re-index everything > drop down by 1.
+        glyphs.erase(glyphs.begin() + static_cast<std::ptrdiff_t>(drop));
+        glyph_cells.erase(glyph_cells.begin() + static_cast<std::ptrdiff_t>(drop));
+        for (auto& g : cell_to_glyph) {
+            if (g > drop) --g;
+        }
+    }
+
+    // Build charset_data: 256 × 8 bytes (zero-fill unused entries).
+    std::array<std::uint8_t, 2048> charset_data{};
+    for (std::size_t g = 0; g < glyphs.size() && g < 256; ++g) {
+        auto bytes = hi_pattern_bytes(glyphs[g]);
+        for (std::size_t r = 0; r < 8; ++r)
+            charset_data[g * 8 + r] = bytes[r];
+    }
+
+    EncodeResult res;
+    res.rendered = Image(W, H);
+    // Stash charset in `bitmap` for now (first 2048 bytes); a proper
+    // charset_data field can come with the .h writer.
+    res.bitmap.assign(2048, 0);
+    for (std::size_t i = 0; i < 2048; ++i) res.bitmap[i] = charset_data[i];
+    res.screen_ram.assign(kCells, 0);   // char codes per cell
+    res.color_ram.assign(kCells, 0);    // upper=c1, lower=c0
+    res.bg_color = 0;
+
+    // Render + pack screen / colour. screen_ram[cell] = glyph index.
+    for (std::size_t i = 0; i < kCells; ++i) {
+        auto cy = i / kHiCols;
+        auto cx = i % kHiCols;
+        std::uint8_t glyph_idx = static_cast<std::uint8_t>(
+            std::min(cell_to_glyph[i], std::size_t{255}));
+        res.screen_ram[i] = glyph_idx;
+        const auto& pair = cells[i].pair;
+        res.color_ram[i] = static_cast<std::uint8_t>(
+            ((pair[1] & 0xF) << 4) | (pair[0] & 0xF));
+        // Render: each pixel is c0 (bg) or c1 (fg) per the post-merge
+        // glyph pattern.
+        std::uint64_t merged_pattern = glyphs[cell_to_glyph[i]];
+        for (std::size_t py = 0; py < kHiCellH; ++py) {
+            for (std::size_t px = 0; px < kHiCellW; ++px) {
+                auto x = cx * kHiCellW + px;
+                auto y = cy * kHiCellH + py;
+                std::size_t bit = py * kHiCellW + px;
+                auto q = static_cast<std::uint8_t>(
+                    (merged_pattern >> bit) & 1ULL);
+                res.rendered[x, y] = pal_lin[pair[q]];
+            }
+        }
+    }
+
+    (void)settings;  // dither isn't applied to charset modes (would
+                     // break the per-cell glyph dedup invariant).
+
+    return res;
+}
+
+// ---------------------------------------------------------------------------
 // c64-PETSCII: 320×200 text mode (40×25 cells × 8×8 PETSCII glyphs).
 // Per cell: (char, fg) ∈ 256 × 16; global bg (one of 16) brute-forced
 // over the full image. Pappas-Neuhoff sRGB blur metric — same shape as
@@ -1226,40 +1413,6 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
         return err;
     };
 
-    // Single-window SSIM over the 8×8 cell. Computes scalar mean +
-    // var + covariance per cell × candidate; returns 1 - SSIM as
-    // error so the brute force "minimises" naturally. Channels
-    // averaged (luminance proxy) for speed.
-    auto score_pair_ssim = [&](const std::array<color_space::OKLab, kPetCellN>& raw,
-                                const GlyphPre& gp,
-                                std::uint8_t fg, std::uint8_t bg) {
-        const auto& pf = pal_s[fg];
-        const auto& pb = pal_s[bg];
-        // Per-pixel rendered scalar (luminance proxy = avg of L+a+b
-        // since contents are sRGB R+G+B treated as a 3-vec).
-        std::array<float, kPetCellN> sx{}, sy{};
-        for (std::size_t p = 0; p < kPetCellN; ++p) {
-            const auto& c = ((gp.fg_mask >> p) & 1ULL) ? pf : pb;
-            sx[p] = (raw[p].L + raw[p].a + raw[p].b) * (1.0f / 3.0f);
-            sy[p] = (c.L + c.a + c.b) * (1.0f / 3.0f);
-        }
-        float mx = 0, my = 0;
-        for (std::size_t p = 0; p < kPetCellN; ++p) { mx += sx[p]; my += sy[p]; }
-        mx /= kPetCellN; my /= kPetCellN;
-        float vx = 0, vy = 0, cxy = 0;
-        for (std::size_t p = 0; p < kPetCellN; ++p) {
-            float dx = sx[p] - mx, dy = sy[p] - my;
-            vx += dx * dx; vy += dy * dy; cxy += dx * dy;
-        }
-        vx /= kPetCellN; vy /= kPetCellN; cxy /= kPetCellN;
-        constexpr float c1 = 0.01f * 0.01f;
-        constexpr float c2 = 0.03f * 0.03f;
-        float num = (2.0f * mx * my + c1) * (2.0f * cxy + c2);
-        float den = (mx * mx + my * my + c1) * (vx + vy + c2);
-        float ssim = (den > 0) ? num / den : 1.0f;
-        return 1.0f - ssim;
-    };
-
     for (std::uint8_t bg = 0; bg < 16; ++bg) {
         float total = 0.0f;
         std::array<std::uint8_t, kPetCols * kPetRows> chars{};
@@ -1287,8 +1440,6 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
                             err = score_pair_blur(K0, blurred, gp, fg, bg); break;
                         case Metric::mse:
                             err = score_pair_mse(raw, gp, fg, bg); break;
-                        case Metric::ssim:
-                            err = score_pair_ssim(raw, gp, fg, bg); break;
                         }
                         if (err < best_err) {
                             best_err = err;

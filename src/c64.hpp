@@ -39,15 +39,12 @@ Palette parse_palette(std::string_view s) noexcept;
 std::string_view palette_name(Palette p) noexcept;
 std::span<const Color3f, 16> palette_colors(Palette p);
 
-// Per-cell error metric. All three operate in sRGB (gamma-encoded)
-// space; no OKLab — the encoder lives entirely in display-space.
+// Per-cell error metric for c64 cell-mode brute force. Both run in
+// OKLab (perceptually-uniform; matches png2c64).
+//   mse  — per-pixel nearest-distance squared sum. Default.
 //   blur — Pappas-Neuhoff 3×3 binomial blur of source vs rendered
 //          cell. Models eye-on-CRT averaging.
-//   mse  — per-pixel sRGB squared error. Faithful but doesn't model
-//          blur perception of chunky pixels.
-//   ssim — Structural Similarity (means / variances / covariances).
-//          Rewards local structure preservation.
-enum class Metric : unsigned char { blur, mse, ssim };
+enum class Metric : unsigned char { mse, blur };
 Metric parse_metric(std::string_view s) noexcept;
 std::string_view metric_name(Metric m) noexcept;
 
@@ -145,5 +142,28 @@ Result<EncodeResult> encode_petscii(
     const dither::Settings& settings = {},
     Metric metric = Metric::blur,
     bool graphics_only = false);
+
+// Encode a 320×200 image to c64 charset-hires. Per-cell brute force
+// is the same as encode_hires (C(16, 2) = 120 colour pairs per
+// 8×8 cell). The 8-byte glyph pattern is then deduplicated across
+// cells; if more than 256 unique patterns remain, the closest
+// Hamming-distance pairs are merged until the budget fits.
+//
+// EncodeResult layout:
+//   bitmap     — empty (charset modes have no flat bitmap)
+//   screen_ram — 1000 bytes: char index 0..255 per cell.
+//   color_ram  — 1000 bytes: per-cell colour pair encoded as
+//                upper nibble = c1 / fg, lower = c0 / bg.
+//   bg_color   — 0 (slot reserved for the empty pattern; not used
+//                as a global VIC-II background register here).
+//
+// The 256-glyph charset itself is currently surfaced via the
+// EncodeResult.bitmap field's first 2048 bytes (tile data); we'll
+// add a dedicated charset_data field when wiring the .h writer.
+Result<EncodeResult> encode_charset_hires(
+    const Image& image,
+    Palette pal = Palette::colodore,
+    const dither::Settings& settings = {},
+    Metric metric = Metric::mse);
 
 }  // namespace png2amiga::c64

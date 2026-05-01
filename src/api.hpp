@@ -259,15 +259,11 @@ struct Options {
     // so colours track real CRT output more closely than other tables.
     std::string c64_palette = "colodore";
 
-    // Per-cell error metric for C64 modes. Mirrors png2c64's metric
-    // option — useful for tweaking and A/B comparison.
-    //   "mse" (default): per-pixel OKLab² nearest distance. Matches
-    //          png2c64's default exactly so quality is directly
-    //          comparable.
-    //   "blur": Pappas-Neuhoff perceptual blur in sRGB (gamma-encoded
-    //          space matches what the CRT emits and the eye averages
-    //          through display blur).
-    //   "ssim": Structural Similarity Index in sRGB.
+    // Per-cell error metric for C64 modes (cell brute force). Both
+    // run in OKLab. Mirrors png2c64.
+    //   "mse" (default): per-pixel nearest-distance squared sum.
+    //   "blur": Pappas-Neuhoff 3×3 binomial blur of source vs
+    //          rendered cell — models eye-on-CRT averaging.
     std::string c64_metric = "mse";
 
     // PETSCII only: when true, restrict the candidate glyph set to

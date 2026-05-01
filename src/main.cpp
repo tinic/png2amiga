@@ -694,9 +694,9 @@ void print_usage() {
         "  --c64-palette <p>               VIC-II palette: pepto, vice,\n"
         "                                  colodore (default), deekay, godot,\n"
         "                                  c64wiki, levy\n"
-        "  --c64-metric <m>                C64 per-cell error metric:\n"
-        "                                  blur (default, Pappas-Neuhoff sRGB),\n"
-        "                                  mse (per-pixel sRGB²), ssim\n"
+        "  --c64-metric <m>                C64 per-cell error metric (OKLab):\n"
+        "                                  mse (default, per-pixel nearest²),\n"
+        "                                  blur (Pappas-Neuhoff 3x3 binomial)\n"
         "  --c64-petscii-graphics          PETSCII only: restrict candidate glyphs\n"
         "                                  to semi-graphics + blocks (~130 chars,\n"
         "                                  no letters/digits/punctuation)\n"
@@ -1162,9 +1162,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--c64-metric" && i + 1 < argc) {
             auto v = std::string_view(argv[++i]);
-            if (v != "blur" && v != "mse" && v != "ssim") {
+            if (v != "blur" && v != "mse") {
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    std::format("Unknown C64 metric: {} (expected blur/mse/ssim)", v)}};
+                    std::format("Unknown C64 metric: {} (expected blur/mse)", v)}};
             }
             config.c64_metric = std::string(v);
             continue;
@@ -1339,6 +1339,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::c64_afli;
                 else if (v == "c64-petscii" || v == "petscii")
                     config.mode = amiga::Mode::c64_petscii;
+                else if (v == "c64-charset-hires" || v == "c64-charset-hi" ||
+                         v == "charset-hires")
+                    config.mode = amiga::Mode::c64_charset_hires;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -3970,11 +3973,12 @@ int main(int argc, char* argv[]) {
         neutralize_preprocess(aopts);
         aopts.mode = [&] -> const char* {
             switch (config->mode) {
-            case amiga::Mode::c64_hires:      return "c64-hires";
-            case amiga::Mode::c64_fli:        return "c64-fli";
-            case amiga::Mode::c64_afli:      return "c64-afli";
-            case amiga::Mode::c64_petscii:    return "c64-petscii";
-            default:                          return "c64-multicolor";
+            case amiga::Mode::c64_hires:           return "c64-hires";
+            case amiga::Mode::c64_fli:             return "c64-fli";
+            case amiga::Mode::c64_afli:            return "c64-afli";
+            case amiga::Mode::c64_petscii:         return "c64-petscii";
+            case amiga::Mode::c64_charset_hires:   return "c64-charset-hires";
+            default:                               return "c64-multicolor";
             }
         }();
         aopts.width = static_cast<int>(image->width());
@@ -3995,6 +3999,8 @@ int main(int argc, char* argv[]) {
             cli_status("Mode:   C64 AFLI (320×200, hires + per-row screen)"); break;
         case amiga::Mode::c64_petscii:
             cli_status("Mode:   C64 PETSCII (40×25 text, PN-sRGB blur metric)"); break;
+        case amiga::Mode::c64_charset_hires:
+            cli_status("Mode:   C64 charset-hires (40×25 8×8 cells, ≤256 dedup glyphs)"); break;
         default:
             cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell)"); break;
         }
