@@ -166,4 +166,28 @@ Result<EncodeResult> encode_charset_hires(
     const dither::Settings& settings = {},
     Metric metric = Metric::mse);
 
+// Encode a 160×200 logical image to c64 charset-multicolor. 4×8
+// cells with shared bg + mc1 + mc2 (global) + per-cell fg. The
+// 4×8 glyph pattern (2 bits per pixel = 16 bytes per cell, but
+// only 8 unique 4-pixel rows × 4 colours per row → 8 bytes when
+// tightly-packed). bg is currently fixed at 0 and (mc1, mc2) are
+// brute-forced over C(15, 2) = 105 pairs globally; per-cell fg
+// picks the best of 16 each cell. Dedup + Hamming-merge to ≤256
+// glyphs.
+//
+// EncodeResult layout:
+//   bitmap     — 2048-byte charset (256 × 8).
+//   screen_ram — 1000 bytes: char index per cell.
+//   color_ram  — 1000 bytes: per-cell fg in the low nibble (mc1
+//                / mc2 / bg are global registers, not per-cell).
+//   bg_color   — global background colour.
+//
+// (mc1 / mc2 are returned via fields not yet wired into the
+// header writer; followup.)
+Result<EncodeResult> encode_charset_multicolor(
+    const Image& image,
+    Palette pal = Palette::colodore,
+    const dither::Settings& settings = {},
+    Metric metric = Metric::mse);
+
 }  // namespace png2amiga::c64

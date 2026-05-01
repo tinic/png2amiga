@@ -511,6 +511,17 @@ function maybeResetModeForChipset(): void {
   options.depth = defaultDepth(options.mode)
 }
 
+// Per-chipset default dither method. Auto-set on chipset entry;
+// user can still pick another from the dither gallery.
+const CHIPSET_DEFAULT_DITHER: Record<string, string> = {
+  c64: 'opt-checker',
+}
+
+function applyChipsetDefaults(chipset: string, oldChipset: string): void {
+  const d = CHIPSET_DEFAULT_DITHER[chipset]
+  if (d && chipset !== oldChipset) options.dither = d
+}
+
 // When chipset changes, reset mode if current mode isn't available
 watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
@@ -523,6 +534,7 @@ watch(() => options.chipset, (chipset, oldChipset) => {
   // above don't fire here, so reset directly.
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
+  applyChipsetDefaults(chipset, oldChipset)
 })
 
 // When size override is toggled, populate from last result or reset to 0

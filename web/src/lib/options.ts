@@ -172,6 +172,9 @@ const ALL_MODES: ModeOption[] = [
   { value: 'c64-charset-hires',
                              label: 'Charset Hires (custom 256-glyph charset)',
                              chipset: 'c64' },
+  { value: 'c64-charset-multicolor',
+                             label: 'Charset Multicolor (shared mc + per-cell fg)',
+                             chipset: 'c64' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
@@ -541,6 +544,7 @@ const MODE_PAR: Record<string, number> = {
   'c64-afli':            0.936,
   'c64-petscii':         0.936,
   'c64-charset-hires':   0.936,
+  'c64-charset-multicolor': 1.872,
   // C64 multicolor / FLI: encoder emits 160×200 logical (each
   // logical pixel = 2 hardware pixels). Per-LOGICAL-pixel display
   // ratio = 2 × 0.936 = 1.872 (wide).
@@ -588,7 +592,8 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'c64-hires':           { sx: 2, sy: 2 },
   'c64-afli':            { sx: 2, sy: 2 },
   'c64-petscii':         { sx: 2, sy: 2 },
-  'c64-charset-hires':   { sx: 2, sy: 2 },
+  'c64-charset-hires':       { sx: 2, sy: 2 },
+  'c64-charset-multicolor':  { sx: 4, sy: 2 },
   'c64-multicolor':  { sx: 4, sy: 2 },
   'c64-fli':         { sx: 4, sy: 2 },
 }

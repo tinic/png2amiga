@@ -100,6 +100,8 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "c64-afli")          return amiga::Mode::c64_afli;
     if (s == "c64-petscii")       return amiga::Mode::c64_petscii;
     if (s == "c64-charset-hires") return amiga::Mode::c64_charset_hires;
+    if (s == "c64-charset-multicolor")
+        return amiga::Mode::c64_charset_multicolor;
     return amiga::Mode::lores;
 }
 
@@ -915,6 +917,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                             options.c64_petscii_graphics_only);
             case amiga::Mode::c64_charset_hires:
                 return c64::encode_charset_hires(*image, pal_choice, dith, metric);
+            case amiga::Mode::c64_charset_multicolor:
+                return c64::encode_charset_multicolor(*image, pal_choice, dith, metric);
             default:
                 return c64::encode_multicolor(*image, pal_choice, dith, metric);
             }

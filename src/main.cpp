@@ -1342,6 +1342,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "c64-charset-hires" || v == "c64-charset-hi" ||
                          v == "charset-hires")
                     config.mode = amiga::Mode::c64_charset_hires;
+                else if (v == "c64-charset-multicolor" ||
+                         v == "c64-charset-mc" || v == "charset-multicolor")
+                    config.mode = amiga::Mode::c64_charset_multicolor;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -3978,6 +3981,8 @@ int main(int argc, char* argv[]) {
             case amiga::Mode::c64_afli:            return "c64-afli";
             case amiga::Mode::c64_petscii:         return "c64-petscii";
             case amiga::Mode::c64_charset_hires:   return "c64-charset-hires";
+            case amiga::Mode::c64_charset_multicolor:
+                                                   return "c64-charset-multicolor";
             default:                               return "c64-multicolor";
             }
         }();
@@ -4001,6 +4006,8 @@ int main(int argc, char* argv[]) {
             cli_status("Mode:   C64 PETSCII (40×25 text, PN-sRGB blur metric)"); break;
         case amiga::Mode::c64_charset_hires:
             cli_status("Mode:   C64 charset-hires (40×25 8×8 cells, ≤256 dedup glyphs)"); break;
+        case amiga::Mode::c64_charset_multicolor:
+            cli_status("Mode:   C64 charset-multicolor (40×25 4×8 cells, shared mc + per-cell fg)"); break;
         default:
             cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell)"); break;
         }
