@@ -198,15 +198,18 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {320, 0, 8, 64,  true,  false, false, false, 1, 1, 1.0f};
     case Mode::ehb:
         return {320, 0, 6, 64,  false, true,  false, false, 1, 1, 1.0f};
-    // Atari ST/STE — fixed 200 lines, square pixels (low) or tall pixels (med)
+    // Atari ST/STE — fixed 200 lines, displayed on a 4:3 CRT.
+    //   low  320×200 → PAR (4/3)/(320/200) ≈ 0.833 (slightly tall, like ega-320)
+    //   med  640×200 → PAR (4/3)/(640/200) ≈ 0.417 (2.4× tall, like ega-640)
+    //   hi   640×400 monochrome monitor ⇒ 1.0
     case Mode::stf_low:
-        return {320, 200, 4, 16, false, false, false, false, 2, 2, 1.0f};
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 0.833f};
     case Mode::stf_med:
-        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.5f};
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.417f};
     case Mode::ste_low:
-        return {320, 200, 4, 16, false, false, false, false, 2, 2, 1.0f};
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 0.833f};
     case Mode::ste_med:
-        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.5f};
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.417f};
     case Mode::stf_hi:
     case Mode::ste_hi:
         return {640, 400, 1,  2, false, false, true,  false, 1, 1, 1.0f};
