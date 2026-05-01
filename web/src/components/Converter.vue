@@ -993,6 +993,11 @@ function paintCharsetCanvas(result: ConvertResult): void {
   const gridRows = Math.ceil(lo.unique / lo.cols)
   canvas.width = lo.pixelW
   canvas.height = gridRows * 8 * lo.scale
+  // 2× CSS scaling — keep the backing buffer compact (one pixel per
+  // logical-display-pixel inside lo.scale), then nearest-neighbour
+  // up the displayed size so the diagnostic is comfortably readable.
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
   canvas.style.imageRendering = 'pixelated'
   const ctx = canvas.getContext('2d')
   if (!ctx) return
