@@ -93,9 +93,7 @@ const options = reactive(defaultOptions())
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvasRef')
 const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL CRT-preview overlay canvas
 const charsetCanvasRef = useTemplateRef<HTMLCanvasElement>('charsetCanvasRef')
-const genesisPaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisPaletteCanvasRef')
 const genesisTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisTilesCanvasRef')
-const snesPaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('snesPaletteCanvasRef')
 const snesTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('snesTilesCanvasRef')
 const crtEnabled = ref(false)
 const converting = ref(false)
@@ -1061,26 +1059,6 @@ function fillGenesisPalette(
   return out
 }
 
-function paintGenesisPaletteSwatch(palette: readonly (readonly [number, number, number])[][]): void {
-  const canvas = genesisPaletteCanvasRef.value
-  if (!canvas) return
-  // 16 swatches × 16 px wide × 4 lines × 16 px tall.
-  const swatch = 16
-  canvas.width = 16 * swatch
-  canvas.height = 4 * swatch
-  canvas.style.imageRendering = 'pixelated'
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  for (let line = 0; line < 4; line++) {
-    const lp = palette[line] ?? []
-    for (let i = 0; i < 16; i++) {
-      const [r, g, b] = lp[i] ?? [0, 0, 0]
-      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
-      ctx.fillRect(i * swatch, line * swatch, swatch, swatch)
-    }
-  }
-}
-
 interface GenesisFirstLineMap { firstLine: Int8Array }
 
 function genesisFirstLines(
@@ -1162,7 +1140,6 @@ function paintGenesisTilesCanvas(result: ConvertResult): void {
   const inputs = genesisTileInputs(result)
   if (!inputs) return
   const palette = fillGenesisPalette(inputs.palBytes)
-  paintGenesisPaletteSwatch(palette)
   const { firstLine } = genesisFirstLines(inputs.tilemap, inputs.unique)
   const scale = 1
   const cols = 16
@@ -1192,28 +1169,6 @@ function paintGenesisTilesCanvas(result: ConvertResult): void {
 // ---------------------------------------------------------------------------
 // SNES Mode 7 tile diagnostic.
 // ---------------------------------------------------------------------------
-
-function paintSnesPaletteSwatch(palette: Uint8Array): void {
-  const canvas = snesPaletteCanvasRef.value
-  if (!canvas) return
-  // 16×16 grid of 256 swatches. 8 px each = 128×128 backing.
-  const swatch = 8
-  canvas.width = 16 * swatch
-  canvas.height = 16 * swatch
-  canvas.style.imageRendering = 'pixelated'
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  for (let i = 0; i < 256; i++) {
-    const off = i * 3
-    const r = palette[off] ?? 0
-    const g = palette[off + 1] ?? 0
-    const b = palette[off + 2] ?? 0
-    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
-    const x = (i % 16) * swatch
-    const y = Math.floor(i / 16) * swatch
-    ctx.fillRect(x, y, swatch, swatch)
-  }
-}
 
 interface SnesTileCtx {
   px: Uint8ClampedArray
@@ -1253,22 +1208,12 @@ function paintSnesTile(ctx: SnesTileCtx, g: number): void {
   }
 }
 
-function paintSnesPaletteOrClear(palette: Uint8Array | undefined): void {
-  if (palette) {
-    paintSnesPaletteSwatch(palette)
-    return
-  }
-  const c = snesPaletteCanvasRef.value
-  if (c) { c.width = 0; c.height = 0 }
-}
-
 function paintSnesTilesCanvas(result: ConvertResult): void {
   const canvas = snesTilesCanvasRef.value
   if (!canvas || !isSnesMode(options.mode)) return
   const tileBytes = result.snesTileBytes
   if (!tileBytes) return
   const palette = result.snesPaletteBytes
-  paintSnesPaletteOrClear(palette)
   const unique = Math.floor(tileBytes.length / 64)
   const scale = 1
   const cols = 16
@@ -2317,13 +2262,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             <canvas ref="charsetCanvasRef" class="charset-canvas" />
           </div>
           <div v-if="isGenesisMode(options.mode)"
-               class="surface-card border-round-lg p-2 flex flex-column gap-1">
-            <canvas ref="genesisPaletteCanvasRef" class="charset-canvas" />
+               class="surface-card border-round-lg p-2">
             <canvas ref="genesisTilesCanvasRef" class="charset-canvas" />
           </div>
           <div v-if="isSnesMode(options.mode)"
-               class="surface-card border-round-lg p-2 flex flex-column gap-1">
-            <canvas ref="snesPaletteCanvasRef" class="charset-canvas" />
+               class="surface-card border-round-lg p-2">
             <canvas ref="snesTilesCanvasRef" class="charset-canvas" />
           </div>
         </div>
