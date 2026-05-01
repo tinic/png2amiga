@@ -88,6 +88,7 @@ echo "Launching fs-uae ($MODEL: ${CHIP}K chip, ${SLOW}K slow, ${FAST}K fast${NTS
     --floppy_drive_speed=0 \
     --align-x=0 --align-y=0 \
     --theme=none \
+    --accuracy=1 \
     $NTSC \
     2>/dev/null &
 
