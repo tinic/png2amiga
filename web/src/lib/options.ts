@@ -593,7 +593,7 @@ export function isFixedBufferMode(mode: string): boolean {
   // fixed-buffer when Resize is enabled; the UI uses isEffectiveFixedBuffer
   // (Vue side) to keep Native PAR available at default size.
   if (isTileFreeformMode(mode)) return false
-  return isDosMode(mode) || isC64Mode(mode)
+  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode)
 }
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
