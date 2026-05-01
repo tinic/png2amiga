@@ -15,6 +15,7 @@
 #include "console_color.hpp"
 #include "genesis.hpp"
 #include "c64.hpp"
+#include "c64_prg.hpp"
 #include "snes_io.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
@@ -938,8 +939,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.transparency_mask = tmask;
         result.finalize_psnr(*image, 0.0f);
         // Pack bitmap + screen + color RAM into raw_frame for downstream
-        // writers (.prg layout to follow). Order: bitmap (8000) +
-        // screen (1000) + color (1000) = 10000 bytes.
+        // writers. Order: bitmap + screen + color. Sizes vary by mode
+        // (see c64_prg.cpp for the per-mode split).
         std::vector<std::uint8_t> raw;
         raw.reserve(enc->bitmap.size() + enc->screen_ram.size() +
                     enc->color_ram.size());
@@ -947,6 +948,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         raw.insert(raw.end(), enc->screen_ram.begin(), enc->screen_ram.end());
         raw.insert(raw.end(), enc->color_ram.begin(), enc->color_ram.end());
         result.raw_frame = std::move(raw);
+        result.c64_bg_color = enc->bg_color;
         return result;
     }
 
@@ -2973,6 +2975,72 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     return make_result(std::move(raw), *result);
 }
 
+// ---------------------------------------------------------------------------
+// c64 PRG / Koala / Art-Studio raw exports.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+ConvertResult c64_export(const std::uint8_t* input_data, std::size_t input_size,
+                         const Options& options,
+                         const std::function<Result<c64::prg::PrgData>(
+                             amiga::Mode, const c64::EncodeResult&)>& gen,
+                         const char* label) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    if (!amiga::is_c64(result->mode))
+        return make_error(std::string(label)
+                          + " export only supported for c64 modes");
+    auto enc = c64::prg::unpack_pipeline_raw(
+        result->mode, result->raw_frame, result->c64_bg_color);
+    if (!enc) return make_error(enc.error().message);
+    auto prg = gen(result->mode, *enc);
+    if (!prg) return make_error(prg.error().message);
+    return make_result(std::move(prg->bytes), *result);
+}
+
+}  // namespace
+
+ConvertResult convert_prg(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    return c64_export(input_data, input_size, options,
+                      [](amiga::Mode m, const c64::EncodeResult& r) {
+                          return c64::prg::from_mode(m, r);
+                      },
+                      "PRG");
+}
+
+ConvertResult convert_koa(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    return c64_export(input_data, input_size, options,
+                      [](amiga::Mode m, const c64::EncodeResult& r) {
+                          if (m != amiga::Mode::c64_multicolor)
+                              return Result<c64::prg::PrgData>{
+                                  std::unexpected{Error{
+                                      ErrorCode::unsupported_mode,
+                                      ".koa requires c64-multicolor mode"}}};
+                          return c64::prg::koala_raw(r);
+                      },
+                      "Koala raw");
+}
+
+ConvertResult convert_hir(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    return c64_export(input_data, input_size, options,
+                      [](amiga::Mode m, const c64::EncodeResult& r) {
+                          if (m != amiga::Mode::c64_hires)
+                              return Result<c64::prg::PrgData>{
+                                  std::unexpected{Error{
+                                      ErrorCode::unsupported_mode,
+                                      ".hir requires c64-hires mode"}}};
+                          return c64::prg::hires_raw(r);
+                      },
+                      "Art Studio raw");
+}
+
 ConvertResult convert_palette(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
@@ -3177,6 +3245,7 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.psnr = p.psnr;
     s.ssimulacra2_score = p.ssimulacra2_score;
     s.raw_frame = std::move(p.raw_frame);
+    s.c64_bg_color = p.c64_bg_color;
     s.genesis_unique_tiles = p.genesis_unique_tiles;
     s.tile_data_bytes      = p.tile_data_bytes;
     s.genesis_total_cells = p.genesis_total_cells;

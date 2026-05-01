@@ -350,8 +350,6 @@ export const ALPHA_DITHER_METHODS: NamedItem[] = [
 export const SLIDERS: Slider[] = [
   { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 5, step: 0.05, default: 1,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
-  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
-    tip: 'Dithering intensity. 0 = no dithering effect, 1 = standard, >1 = exaggerated.' },
   { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1, step: 0.05, default: 0,
     tip: 'Additive lightness shift in perceptual OKLab space.' },
   { key: 'contrast',       label: 'Contrast',    min: 0,   max: 3, step: 0.05, default: 1,
@@ -366,6 +364,12 @@ export const SLIDERS: Slider[] = [
     tip: 'Clip the darkest fraction of the image. Deepens blacks.' },
   { key: 'whitePoint',     label: 'White Pt',    min: 0,   max: 0.5, step: 0.01, default: 0,
     tip: 'Clip the brightest fraction of the image. Cleans up highlights.' },
+  // Dither strength moved to the bottom — the per-mode tuning table
+  // (dither_tuning::defaults_for) auto-applies the empirical optimum
+  // whenever mode/method changes, so most users should never touch it.
+  // Kept always-visible so it can still be tweaked when needed.
+  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
+    tip: 'Dithering intensity. Auto-tuned per mode/method; manual override only.' },
 ]
 
 export const DIFFUSION_SLIDERS: Slider[] = [

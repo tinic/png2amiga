@@ -308,6 +308,54 @@ val js_convert_raw(val input_array, val js_opts) {
     return obj;
 }
 
+// JS API: convertPRG(Uint8Array, options) -> { data: Uint8Array(.prg), width, height, error }
+// c64 modes only — Koala/hires/FLI/AFLI/PETSCII displayer .prg.
+val js_convert_prg(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_prg(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("error", result.error);
+    if (!result.data.empty())
+        obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
+// JS API: convertKoa(Uint8Array, options) -> { data: Uint8Array(.koa), error }
+val js_convert_koa(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_koa(input.data(), input.size(), opts);
+    val obj = val::object();
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
+// JS API: convertHir(Uint8Array, options) -> { data: Uint8Array(.hir), error }
+val js_convert_hir(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_hir(input.data(), input.size(), opts);
+    val obj = val::object();
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
 // JS API: convertDegas(Uint8Array, options) -> { data: Uint8Array, width, height, error }
 val js_convert_degas(val input_array, val js_opts) {
     auto length = input_array["length"].as<std::size_t>();
@@ -415,6 +463,9 @@ EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convertViewer", &js_convert_viewer);
     function("convertDegas", &js_convert_degas);
     function("convertRaw", &js_convert_raw);
+    function("convertPRG", &js_convert_prg);
+    function("convertKoa", &js_convert_koa);
+    function("convertHir", &js_convert_hir);
     function("convertMask", &js_convert_mask);
     function("convertMaskRaw", &js_convert_mask_raw);
     function("ditherDefaults", &js_dither_defaults);

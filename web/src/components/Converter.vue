@@ -26,7 +26,7 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
 
 function onStopEncode(): void {
   abortWasm()
@@ -136,6 +136,10 @@ function renderCrt() {
     crtCanvasRef.value.style.width  = `${lastDst.w}px`
     crtCanvasRef.value.style.height = `${lastDst.h}px`
   }
+  // C64 modes simulate composite output to a PAL TV (chroma blur,
+  // delay-line averaging, chromatic aberration). Amiga modes assume an
+  // 1084S RGB monitor — leave PAL mode off.
+  crtRenderer.setPalMode(isC64Mode(options.mode))
   crtRenderer.render(lastRgba, lastSrc.w, lastSrc.h, dw, dh)
 }
 const resultInfo = ref('')
@@ -1032,6 +1036,48 @@ async function downloadRaw() {
   converting.value = false
 }
 
+async function downloadPRG() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertPRG(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.prg', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'prg', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+async function downloadKoa() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertKoa(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.koa', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'koa', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+async function downloadHir() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertHir(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.hir', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'hir', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
 async function downloadMaskPNG() {
   if (!imageBytes.value) return
   converting.value = true
@@ -1620,8 +1666,19 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
                 title="Download a DJGPP-compilable .cpp viewer (sets video mode, loads palette, blits image, waits for key, restores text mode). Build: i586-pc-msdosdjgpp-g++ -O2 -o out.exe out.cpp" />
             </div>
+            <!-- C64 export buttons: PNG preview + .prg displayer + format-specific raw. -->
+            <div v-if="isC64Mode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="prg" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting || options.mode.startsWith('c64-charset')" @click="downloadPRG"
+                title="Download a runnable C64 .prg with embedded 6502 displayer (Koala for multicolor, Art Studio for hires, FLI/AFLI/PETSCII as appropriate). Charset modes not yet supported." />
+              <Button v-if="options.mode === 'c64-multicolor'" label="koa" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadKoa"
+                title="Download Koala Paint .koa (raw bitmap+screen+d800+bg, no displayer; loads at $6000)." />
+              <Button v-else-if="options.mode === 'c64-hires'" label="hir" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHir"
+                title="Download Art Studio .hir (raw bitmap+screen, no displayer; loads at $2000)." />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -1631,7 +1688,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"

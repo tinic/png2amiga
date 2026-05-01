@@ -1,5 +1,6 @@
 #include "amiga.hpp"
 #include "api.hpp"
+#include "c64_prg.hpp"
 #include "snes_io.hpp"
 #include "bitplane.hpp"
 #include "cheader.hpp"
@@ -4020,6 +4021,38 @@ int main(int argc, char* argv[]) {
                      static_cast<std::streamsize>(st.raw_frame.size()));
             cli_status("Raw:    {} ({} bytes)", config->output_path,
                        st.raw_frame.size());
+        } else if (ends_with(config->output_path, ".prg") ||
+                   ends_with(config->output_path, ".koa") ||
+                   ends_with(config->output_path, ".hir")) {
+            // C64 runnable .prg (Koala/hires/FLI/AFLI/PETSCII displayer)
+            // or .koa / .hir raw image-only formats.
+            auto enc_result = c64::prg::unpack_pipeline_raw(
+                config->mode, st.raw_frame, st.c64_bg_color);
+            if (!enc_result) {
+                std::println(stderr, "C64 PRG unpack: {}",
+                             enc_result.error().message);
+                return exit_code::internal;
+            }
+            Result<c64::prg::PrgData> prg = [&] {
+                if (ends_with(config->output_path, ".koa"))
+                    return c64::prg::koala_raw(*enc_result);
+                if (ends_with(config->output_path, ".hir"))
+                    return c64::prg::hires_raw(*enc_result);
+                return c64::prg::from_mode(config->mode, *enc_result);
+            }();
+            if (!prg) {
+                std::println(stderr, "C64 PRG encode: {}",
+                             prg.error().message);
+                return exit_code::internal;
+            }
+            auto wr = c64::prg::write(config->output_path, *prg);
+            if (!wr) {
+                std::println(stderr, "C64 PRG write: {}",
+                             wr.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PRG:    {} ({} bytes)", config->output_path,
+                       prg->bytes.size());
         } else {
             auto r = save_preview(config->output_path, st.rendered,
                                   has_transparency, transparency_mask,

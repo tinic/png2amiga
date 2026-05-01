@@ -348,6 +348,23 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options);
 
+// c64 only: convert and return a runnable C64 .prg with embedded
+// 6502 displayer (Koala for c64-multicolor, Art-Studio for c64-hires,
+// FLI/AFLI/PETSCII as appropriate). Charset modes are not yet
+// supported pending mc1/mc2 surfacing in the c64 EncodeResult.
+ConvertResult convert_prg(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
+
+// c64 only: raw image-only formats — Koala Paint .koa
+// (multicolor) or Art Studio .hir (hires). No displayer prepended.
+ConvertResult convert_koa(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
+ConvertResult convert_hir(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
+
 // Convert raw image data and return OCS 12-bit palette bytes
 // (2 bytes per color, big-endian 0x0RGB).
 ConvertResult convert_palette(const std::uint8_t* input_data,
@@ -434,6 +451,10 @@ struct EncodeState {
     // palette-index array; for SNES Direct it's the 8bpp packed
     // bbgggrrr-format Direct Color pixel byte array.
     std::vector<std::uint8_t> raw_frame;
+
+    // c64 modes: shared VIC-II background colour. Needed for PRG /
+    // .koa / .hir export. 0 for non-c64 runs.
+    std::uint8_t c64_bg_color = 0;
 
     // Tile-dedup stats — Genesis (4bpp 8×8 = 32 B/tile) and SNES Mode 7
     // (8bpp 8×8 = 64 B/tile). 0 = not a tiled run.
