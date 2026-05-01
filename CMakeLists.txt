@@ -592,6 +592,7 @@ else()
         "ste-low|12-15|--mode ste-low"
         "stf-med|2-3|--mode stf-med"
         "ste-med|2-3|--mode ste-med"
+        "ega-hi|12-15|--mode ega-hi"
     )
     foreach(spec ${reserve_specs})
         string(REPLACE "|" ";" parts ${spec})
@@ -628,6 +629,42 @@ else()
                 sys.exit(0 if ok else (print(f'expected ${r_count} identical reserves at slots ${r_lo}..${r_hi}, got '+str(slice_)) or 1))"
         )
         set_tests_properties("reserve-${mname}-count"
+                             PROPERTIES DEPENDS "reserve-${mname}")
+    endforeach()
+
+    # Fixed-palette EGA modes (ega-320, ega-640) keep their IRGB ordering,
+    # so the "all reserved slots identical" check above doesn't apply.
+    # Verify exclusion instead: render to PNG and confirm the image never
+    # uses the four high IRGB colours (slots 12-15: FF5555, FF55FF,
+    # FFFF55, FFFFFF).
+    set(reserve_ega_excl
+        "ega-320|--mode ega-320"
+        "ega-640|--mode ega-640"
+    )
+    foreach(spec ${reserve_ega_excl})
+        string(REPLACE "|" ";" parts ${spec})
+        list(GET parts 0 mname)
+        list(GET parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "reserve-${mname}"
+            COMMAND png2amiga ${mode_args}
+                    --reserve-range 12-15 ff00cc
+                    --symbol reserve_test
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/reserve-${mname}.png
+        )
+        add_test(
+            NAME "reserve-${mname}-excl"
+            COMMAND python3 -c
+                "from PIL import Image; \
+                img = Image.open('${CMAKE_BINARY_DIR}/reserve-${mname}.png').convert('RGB'); \
+                colors = set(img.getdata()); \
+                forbidden = {(0xFF,0x55,0x55), (0xFF,0x55,0xFF), (0xFF,0xFF,0x55), (0xFF,0xFF,0xFF)}; \
+                used = colors & forbidden; \
+                __import__('sys').exit(0 if not used else (print(f'reserved IRGB slots 12-15 leaked into image: {sorted(used)}') or 1))"
+        )
+        set_tests_properties("reserve-${mname}-excl"
                              PROPERTIES DEPENDS "reserve-${mname}")
     endforeach()
 
