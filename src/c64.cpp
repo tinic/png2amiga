@@ -107,6 +107,120 @@ constexpr std::array<std::array<float, 3>, 3> kCellBlur = {{
     {1.0f/16, 2.0f/16, 1.0f/16},
 }};
 
+// Floyd-Steinberg dither against the full 16-colour palette over the
+// whole image (no cell constraints). Returned per-pixel index map drives
+// "global-FS palette coherence": each cell picks its own slot palette
+// from the top-N most-used colours in its region of this output. Without
+// it, flat cells snap to a single colour and dump diffusion error onto
+// the next cell that happens to have a more diverse palette — visible
+// as 4×8 / 8×8 cell-boundary blocking under error diffusion. (Ported
+// from png2c64 commits 949d539 / b46e2a1.)
+inline std::vector<std::uint8_t> global_fs_indices(
+    const Image& image,
+    const std::array<color_space::OKLab, 16>& pal_lab) {
+    auto W = image.width();
+    auto H = image.height();
+    std::vector<color_space::OKLab> img_lab(W * H);
+    for (std::size_t y = 0; y < H; ++y)
+        for (std::size_t x = 0; x < W; ++x)
+            img_lab[y * W + x] = color_space::linear_to_oklab(image[x, y]);
+
+    constexpr std::array<std::array<float, 3>, 4> fs_kernel = {{
+        { 1.0f, 0.0f, 7.0f / 16.0f},
+        {-1.0f, 1.0f, 3.0f / 16.0f},
+        { 0.0f, 1.0f, 5.0f / 16.0f},
+        { 1.0f, 1.0f, 1.0f / 16.0f},
+    }};
+    constexpr float kEc = 0.12f;
+    auto clamp = [](color_space::OKLab e, float m) {
+        return color_space::OKLab{
+            std::clamp(e.L, -m, m),
+            std::clamp(e.a, -m, m),
+            std::clamp(e.b, -m, m),
+        };
+    };
+
+    std::vector<color_space::OKLab> err_buf(W * H);
+    std::vector<std::uint8_t> out(W * H);
+    for (std::size_t y = 0; y < H; ++y) {
+        bool reverse = (y & 1) != 0;
+        for (std::size_t step = 0; step < W; ++step) {
+            auto x = reverse ? (W - 1 - step) : step;
+            auto idx = y * W + x;
+            auto ce = clamp(err_buf[idx], kEc);
+            color_space::OKLab adj{
+                img_lab[idx].L + ce.L,
+                img_lab[idx].a + ce.a,
+                img_lab[idx].b + ce.b,
+            };
+            float bd = std::numeric_limits<float>::max();
+            std::uint8_t bi = 0;
+            for (std::size_t c = 0; c < 16; ++c) {
+                auto& cl = pal_lab[c];
+                float dL = adj.L - cl.L;
+                float da = adj.a - cl.a;
+                float db = adj.b - cl.b;
+                float d = dL * dL + da * da + db * db;
+                if (d < bd) { bd = d; bi = static_cast<std::uint8_t>(c); }
+            }
+            out[idx] = bi;
+            const auto& cl = pal_lab[bi];
+            color_space::OKLab qe{
+                adj.L - cl.L, adj.a - cl.a, adj.b - cl.b,
+            };
+            for (auto& k : fs_kernel) {
+                float sx = reverse ? -k[0] : k[0];
+                int nx = static_cast<int>(x) + static_cast<int>(sx);
+                int ny = static_cast<int>(y) + static_cast<int>(k[1]);
+                if (nx < 0 || static_cast<std::size_t>(nx) >= W ||
+                    ny < 0 || static_cast<std::size_t>(ny) >= H)
+                    continue;
+                auto nidx = static_cast<std::size_t>(ny) * W
+                          + static_cast<std::size_t>(nx);
+                err_buf[nidx] = clamp({
+                    err_buf[nidx].L + qe.L * k[2],
+                    err_buf[nidx].a + qe.a * k[2],
+                    err_buf[nidx].b + qe.b * k[2],
+                }, kEc);
+            }
+        }
+    }
+    return out;
+}
+
+// 3×3 binomial blur on a flat row-major Color3f buffer, with image-edge
+// (not cell-edge) replicate padding. Used by the blur metric so the
+// per-cell scoring reads from a globally-coherent blurred target —
+// removes the 4×N / 8×N seams produced by per-cell replicate-pad blur
+// in flat gradient regions.
+inline std::vector<Color3f> global_blur_3x3(
+    std::span<const Color3f> src,
+    std::size_t W, std::size_t H) {
+    std::vector<Color3f> out(W * H);
+    for (std::size_t y = 0; y < H; ++y) {
+        for (std::size_t x = 0; x < W; ++x) {
+            Color3f acc{0, 0, 0};
+            for (int dy = -1; dy <= 1; ++dy) {
+                int ny = std::clamp(static_cast<int>(y) + dy,
+                                    0, static_cast<int>(H) - 1);
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int nx = std::clamp(static_cast<int>(x) + dx,
+                                        0, static_cast<int>(W) - 1);
+                    float w = kCellBlur[static_cast<std::size_t>(dy + 1)]
+                                       [static_cast<std::size_t>(dx + 1)];
+                    const auto& s = src[static_cast<std::size_t>(ny) * W
+                                       + static_cast<std::size_t>(nx)];
+                    acc.r += w * s.r;
+                    acc.g += w * s.g;
+                    acc.b += w * s.b;
+                }
+            }
+            out[y * W + x] = acc;
+        }
+    }
+    return out;
+}
+
 // 9-tap replicate-padded blur table for an arbitrary cell W × H.
 template <std::size_t W, std::size_t H>
 struct CellTaps {
@@ -297,73 +411,114 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
                        // the bg "slot" for their own dark-cluster colour.
                        // (Real per-image bg sweep is a TODO refinement.)
 
-    // Pass 1: per-cell brute-force quad pick. Two paths:
-    //   metric=mse  → OKLab² nearest sum (matches png2c64).
-    //   metric=blur → sRGB blur of (raw, rendered) cells, MSE on
-    //                 blurred. Empirically beats OKLab-blur on
-    //                 chunky display content (cga-text result).
-    //   metric=ssim → sRGB SSIM single-window.
+    // Pass 1: per-cell quad pick. Two paths:
+    //
+    //   - Any dither method (!= none): use "global-FS palette
+    //     coherence". Run a full-image FS dither against all 16
+    //     palette colours, then take the top-4 most-used colours in
+    //     each cell as that cell's quad. Stops flat cells from snapping
+    //     to one colour — they get coherent gradients across cell
+    //     boundaries instead of dumping accumulated diffusion error
+    //     onto the next cell. Removes 4×8 / 8×8 cell-boundary blocking.
+    //     Ported from png2c64 (949d539 / b46e2a1); we apply it across
+    //     ordered + ED + palette-aware since all of them dither
+    //     against the cell palette and benefit from a coherent
+    //     neighbourhood.
+    //   - method == none: per-cell brute force MSE/blur — picks the
+    //     optimal static palette since there's no dither budget to
+    //     spread error.
     std::vector<std::array<std::uint8_t, 4>> cell_quad(kRows * kCols);
     constexpr std::size_t kCellPx = kCellW * kCellH;  // 32
-    std::array<color_space::OKLab, kCellPx> cell_lab{};
-    std::array<Color3f, kCellPx> raw{};
-    std::array<Color3f, kCellPx> blurred_src{};
-    std::array<std::uint8_t, kCellPx> _idx_scratch{};
 
-    for (std::size_t cy = 0; cy < kRows; ++cy) {
-        for (std::size_t cx = 0; cx < kCols; ++cx) {
-            for (std::size_t py = 0; py < kCellH; ++py) {
-                for (std::size_t px = 0; px < kCellW; ++px) {
-                    auto src_idx = (cy * kCellH + py) * W + (cx * kCellW + px);
-                    cell_lab[py * kCellW + px] = src_lab[src_idx];
-                    raw[py * kCellW + px]      = src_s[src_idx];
-                }
-            }
-            // Pre-blur the source cell once (used by metric=blur).
-            if (metric == Metric::blur) {
-                for (std::size_t p = 0; p < kCellPx; ++p) {
-                    Color3f b{0, 0, 0};
-                    for (auto& t : taps_mc.taps[p]) {
-                        b.r += t.w * raw[t.q].r;
-                        b.g += t.w * raw[t.q].g;
-                        b.b += t.w * raw[t.q].b;
+    if (settings.method != dither::Method::none) {
+        auto fs = global_fs_indices(image, pal_lab);
+        for (std::size_t cy = 0; cy < kRows; ++cy) {
+            for (std::size_t cx = 0; cx < kCols; ++cx) {
+                std::array<std::uint16_t, 16> hist{};
+                for (std::size_t py = 0; py < kCellH; ++py)
+                    for (std::size_t px = 0; px < kCellW; ++px)
+                        ++hist[fs[(cy * kCellH + py) * W
+                                + (cx * kCellW + px)]];
+                std::array<std::uint8_t, 4> top{0, 0, 0, 0};
+                for (std::size_t s = 0; s < 4; ++s) {
+                    std::uint16_t best_cnt = 0;
+                    std::uint8_t best_c = 0;
+                    for (std::size_t c = 0; c < 16; ++c) {
+                        if (hist[c] > best_cnt) {
+                            best_cnt = hist[c];
+                            best_c = static_cast<std::uint8_t>(c);
+                        }
                     }
-                    blurred_src[p] = b;
+                    if (best_cnt == 0) break;
+                    top[s] = best_c;
+                    hist[best_c] = 0;
                 }
+                cell_quad[cy * kCols + cx] = top;
             }
-            float best_err = std::numeric_limits<float>::infinity();
-            std::array<std::uint8_t, 4> best_quad{0, 0, 0, 0};
-            for (std::uint8_t bg = 0; bg < 16; ++bg) {
-                for (std::uint8_t i = 0; i < 16; ++i) {
-                    if (i == bg) continue;
-                    for (std::uint8_t j = static_cast<std::uint8_t>(i + 1);
-                         j < 16; ++j) {
-                        if (j == bg) continue;
-                        for (std::uint8_t k = static_cast<std::uint8_t>(j + 1);
-                             k < 16; ++k) {
-                            if (k == bg) continue;
-                            float err;
-                            if (metric == Metric::mse) {
-                                std::array<std::uint8_t, 4> q{bg, i, j, k};
-                                err = cell_error_for_quad(
-                                    cell_lab, q, pal_lab, &_idx_scratch);
-                            } else {
-                                std::array<Color3f, 4> cand{
-                                    pal_s[bg], pal_s[i], pal_s[j], pal_s[k],
-                                };
-                                err = score_cell<4, kCellPx>(
-                                    raw, blurred_src, nullptr, cand,
-                                    metric, nullptr, tap_lookup);
-                            }
-                            if (err < best_err) {
-                                best_err  = err;
-                                best_quad = {bg, i, j, k};
+        }
+    } else {
+        std::array<color_space::OKLab, kCellPx> cell_lab{};
+        std::array<Color3f, kCellPx> raw{};
+        std::array<Color3f, kCellPx> blurred_src{};
+        std::array<std::uint8_t, kCellPx> _idx_scratch{};
+
+        // Global source blur for metric=blur — replaces the per-cell
+        // replicate-pad blur (which produced 4×N seams in gradients)
+        // with an image-level 3×3 binomial blur.
+        std::vector<Color3f> global_blurred;
+        if (metric == Metric::blur) {
+            global_blurred = global_blur_3x3(
+                std::span<const Color3f>(src_s), W, H);
+        }
+
+        for (std::size_t cy = 0; cy < kRows; ++cy) {
+            for (std::size_t cx = 0; cx < kCols; ++cx) {
+                for (std::size_t py = 0; py < kCellH; ++py) {
+                    for (std::size_t px = 0; px < kCellW; ++px) {
+                        auto src_idx = (cy * kCellH + py) * W
+                                     + (cx * kCellW + px);
+                        cell_lab[py * kCellW + px] = src_lab[src_idx];
+                        raw[py * kCellW + px]      = src_s[src_idx];
+                        if (metric == Metric::blur) {
+                            blurred_src[py * kCellW + px] =
+                                global_blurred[src_idx];
+                        }
+                    }
+                }
+                float best_err = std::numeric_limits<float>::infinity();
+                std::array<std::uint8_t, 4> best_quad{0, 0, 0, 0};
+                for (std::uint8_t bg = 0; bg < 16; ++bg) {
+                    for (std::uint8_t i = 0; i < 16; ++i) {
+                        if (i == bg) continue;
+                        for (std::uint8_t j = static_cast<std::uint8_t>(i + 1);
+                             j < 16; ++j) {
+                            if (j == bg) continue;
+                            for (std::uint8_t k = static_cast<std::uint8_t>(j + 1);
+                                 k < 16; ++k) {
+                                if (k == bg) continue;
+                                float err;
+                                if (metric == Metric::mse) {
+                                    std::array<std::uint8_t, 4> q{bg, i, j, k};
+                                    err = cell_error_for_quad(
+                                        cell_lab, q, pal_lab, &_idx_scratch);
+                                } else {
+                                    std::array<Color3f, 4> cand{
+                                        pal_s[bg], pal_s[i], pal_s[j], pal_s[k],
+                                    };
+                                    err = score_cell<4, kCellPx>(
+                                        raw, blurred_src, nullptr, cand,
+                                        metric, nullptr, tap_lookup);
+                                }
+                                if (err < best_err) {
+                                    best_err  = err;
+                                    best_quad = {bg, i, j, k};
+                                }
                             }
                         }
                     }
                 }
+                cell_quad[cy * kCols + cx] = best_quad;
             }
-            cell_quad[cy * kCols + cx] = best_quad;
         }
     }
 
@@ -497,76 +652,105 @@ Result<EncodeResult> encode_hires(const Image& image, Palette pal,
         return std::span<const CellTaps<kHiCellW, kHiCellH>::T, 9>(taps_hi.taps[p]);
     };
 
-    // Pass 1: per-cell pair pick. C(16, 2) = 120 pairs. Metric
-    // dispatch:
-    //   mse  → cell_error_for_pair (OKLab² nearest sum, fast).
-    //   blur → score_cell<2, 64> with pre-blurred source vs blurred
-    //          rendered; OKLab is treated as a generic 3-vec.
-    //   ssim → score_cell<2, 64> single-window stats.
+    // Pass 1: per-cell pair pick. Two paths:
+    //
+    //   - Any dither method (!= none): global-FS palette coherence —
+    //     top-2 most-used colours in each cell's region of a full-
+    //     palette FS dither output. Same fix as encode_multicolor.
+    //   - method == none: per-cell brute force C(16,2) = 120 pairs
+    //     with mse/blur scoring (no dither = static MSE-optimal pair).
     constexpr std::size_t kHiCellPx = kHiCellW * kHiCellH;  // 64
     std::vector<std::array<std::uint8_t, 2>> cell_pair(kHiRows * kHiCols);
-    std::array<color_space::OKLab, kHiCellPx> cell_lab{};
-    std::array<Color3f, kHiCellPx>             raw{};
-    std::array<Color3f, kHiCellPx>             blurred_src{};
-    std::array<std::uint8_t, kHiCellPx>        pix_idx{};
-    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
-        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
-            for (std::size_t py = 0; py < kHiCellH; ++py) {
-                for (std::size_t px = 0; px < kHiCellW; ++px) {
-                    auto idx = (cy * kHiCellH + py) * W + (cx * kHiCellW + px);
-                    cell_lab[py * kHiCellW + px] = src_lab[idx];
-                    raw[py * kHiCellW + px] = {
-                        src_lab[idx].L, src_lab[idx].a, src_lab[idx].b
-                    };
-                }
-            }
-            if (metric == Metric::blur) {
-                for (std::size_t p = 0; p < kHiCellPx; ++p) {
-                    Color3f b{0, 0, 0};
-                    for (auto& t : taps_hi.taps[p]) {
-                        b.r += t.w * raw[t.q].r;
-                        b.g += t.w * raw[t.q].g;
-                        b.b += t.w * raw[t.q].b;
-                    }
-                    blurred_src[p] = b;
-                }
-            }
-            float best_err = std::numeric_limits<float>::infinity();
-            std::array<std::uint8_t, 2> best_pair{0, 0};
-            for (std::uint8_t i = 0; i < 16; ++i) {
-                for (std::uint8_t j = static_cast<std::uint8_t>(i + 1);
-                     j < 16; ++j) {
-                    float err;
-                    if (metric == Metric::mse) {
-                        std::array<std::uint8_t, 4> q{i, j, 0, 0};
-                        // Reuse cell_error_for_quad with last 2 unused;
-                        // simpler: inline the 2-color error.
-                        const auto& a = pal_lab[i];
-                        const auto& b = pal_lab[j];
-                        float total = 0.0f;
-                        for (std::size_t p = 0; p < kHiCellPx; ++p) {
-                            const auto& t = cell_lab[p];
-                            float dLa = t.L - a.L, daa = t.a - a.a, dba = t.b - a.b;
-                            float dLb = t.L - b.L, dab = t.a - b.a, dbb = t.b - b.b;
-                            float ea = dLa*dLa + daa*daa + dba*dba;
-                            float eb = dLb*dLb + dab*dab + dbb*dbb;
-                            total += std::min(ea, eb);
+
+    if (settings.method != dither::Method::none) {
+        auto fs = global_fs_indices(image, pal_lab);
+        for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+            for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+                std::array<std::uint16_t, 16> hist{};
+                for (std::size_t py = 0; py < kHiCellH; ++py)
+                    for (std::size_t px = 0; px < kHiCellW; ++px)
+                        ++hist[fs[(cy * kHiCellH + py) * W
+                                + (cx * kHiCellW + px)]];
+                std::array<std::uint8_t, 2> top{0, 0};
+                for (std::size_t s = 0; s < 2; ++s) {
+                    std::uint16_t best_cnt = 0;
+                    std::uint8_t best_c = top[0];
+                    for (std::size_t c = 0; c < 16; ++c) {
+                        if (hist[c] > best_cnt) {
+                            best_cnt = hist[c];
+                            best_c = static_cast<std::uint8_t>(c);
                         }
-                        err = total;
-                        (void)q;
-                    } else {
-                        std::array<Color3f, 2> cand{pal_s[i], pal_s[j]};
-                        err = score_cell<2, kHiCellPx>(
-                            raw, blurred_src, nullptr, cand,
-                            metric, &pix_idx, tap_lookup);
                     }
-                    if (err < best_err) {
-                        best_err  = err;
-                        best_pair = {i, j};
+                    top[s] = best_c;
+                    hist[best_c] = 0;
+                }
+                cell_pair[cy * kHiCols + cx] = top;
+            }
+        }
+    } else {
+        std::array<color_space::OKLab, kHiCellPx> cell_lab{};
+        std::array<Color3f, kHiCellPx>             raw{};
+        std::array<Color3f, kHiCellPx>             blurred_src{};
+        std::array<std::uint8_t, kHiCellPx>        pix_idx{};
+
+        std::vector<Color3f> src_s_buf;
+        std::vector<Color3f> global_blurred;
+        if (metric == Metric::blur) {
+            src_s_buf.resize(W * H);
+            for (std::size_t i = 0; i < W * H; ++i)
+                src_s_buf[i] = {src_lab[i].L, src_lab[i].a, src_lab[i].b};
+            global_blurred = global_blur_3x3(
+                std::span<const Color3f>(src_s_buf), W, H);
+        }
+
+        for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+            for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+                for (std::size_t py = 0; py < kHiCellH; ++py) {
+                    for (std::size_t px = 0; px < kHiCellW; ++px) {
+                        auto idx = (cy * kHiCellH + py) * W
+                                 + (cx * kHiCellW + px);
+                        cell_lab[py * kHiCellW + px] = src_lab[idx];
+                        raw[py * kHiCellW + px] = {
+                            src_lab[idx].L, src_lab[idx].a, src_lab[idx].b};
+                        if (metric == Metric::blur) {
+                            blurred_src[py * kHiCellW + px] =
+                                global_blurred[idx];
+                        }
                     }
                 }
+                float best_err = std::numeric_limits<float>::infinity();
+                std::array<std::uint8_t, 2> best_pair{0, 0};
+                for (std::uint8_t i = 0; i < 16; ++i) {
+                    for (std::uint8_t j = static_cast<std::uint8_t>(i + 1);
+                         j < 16; ++j) {
+                        float err;
+                        if (metric == Metric::mse) {
+                            const auto& a = pal_lab[i];
+                            const auto& b = pal_lab[j];
+                            float total = 0.0f;
+                            for (std::size_t p = 0; p < kHiCellPx; ++p) {
+                                const auto& t = cell_lab[p];
+                                float dLa = t.L - a.L, daa = t.a - a.a, dba = t.b - a.b;
+                                float dLb = t.L - b.L, dab = t.a - b.a, dbb = t.b - b.b;
+                                float ea = dLa*dLa + daa*daa + dba*dba;
+                                float eb = dLb*dLb + dab*dab + dbb*dbb;
+                                total += std::min(ea, eb);
+                            }
+                            err = total;
+                        } else {
+                            std::array<Color3f, 2> cand{pal_s[i], pal_s[j]};
+                            err = score_cell<2, kHiCellPx>(
+                                raw, blurred_src, nullptr, cand,
+                                metric, &pix_idx, tap_lookup);
+                        }
+                        if (err < best_err) {
+                            best_err  = err;
+                            best_pair = {i, j};
+                        }
+                    }
+                }
+                cell_pair[cy * kHiCols + cx] = best_pair;
             }
-            cell_pair[cy * kHiCols + cx] = best_pair;
         }
     }
 
@@ -684,6 +868,61 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
         cell_quads(kRows * kCols);
     std::vector<std::uint8_t> cell_cr(kRows * kCols, 0);
 
+    // Global-FS palette coherence path (any dither method != none).
+    // For each cell: cr = most-used non-bg colour in the cell's region
+    // of a full-palette FS dither output. Each row's (c1, c2) screen
+    // pair = top-2 of that row's pixels excluding bg and cr. Same
+    // fix as encode_multicolor — stops the per-row 4-colour palette
+    // from snapping into 1 dominant colour and creating cell-boundary
+    // blocking under error diffusion. Ported from png2c64 b46e2a1.
+    if (settings.method != dither::Method::none) {
+        auto fs = global_fs_indices(image, pal_lab);
+        for (std::size_t cy = 0; cy < kRows; ++cy) {
+            for (std::size_t cx = 0; cx < kCols; ++cx) {
+                std::size_t cell_idx = cy * kCols + cx;
+                // Cell histogram → cr = top non-bg colour.
+                std::array<std::uint16_t, 16> cell_hist{};
+                for (std::size_t py = 0; py < kCellH; ++py)
+                    for (std::size_t px = 0; px < kCellW; ++px)
+                        ++cell_hist[fs[(cy * kCellH + py) * W
+                                     + (cx * kCellW + px)]];
+                cell_hist[bg] = 0;
+                std::uint8_t cr = bg;
+                std::uint16_t best_cnt = 0;
+                for (std::size_t c = 0; c < 16; ++c) {
+                    if (cell_hist[c] > best_cnt) {
+                        best_cnt = cell_hist[c];
+                        cr = static_cast<std::uint8_t>(c);
+                    }
+                }
+                cell_cr[cell_idx] = cr;
+                std::array<std::array<std::uint8_t, 4>, kCellH> rows{};
+                for (std::size_t py = 0; py < kCellH; ++py) {
+                    std::array<std::uint16_t, 16> row_hist{};
+                    for (std::size_t px = 0; px < kCellW; ++px)
+                        ++row_hist[fs[(cy * kCellH + py) * W
+                                    + (cx * kCellW + px)]];
+                    row_hist[bg] = 0;
+                    row_hist[cr] = 0;
+                    std::uint8_t t0 = cr, t1 = cr;
+                    std::uint16_t c0 = 0, c1 = 0;
+                    for (std::size_t c = 0; c < 16; ++c) {
+                        if (row_hist[c] > c0) {
+                            c1 = c0; t1 = t0;
+                            c0 = row_hist[c];
+                            t0 = static_cast<std::uint8_t>(c);
+                        } else if (row_hist[c] > c1) {
+                            c1 = row_hist[c];
+                            t1 = static_cast<std::uint8_t>(c);
+                        }
+                    }
+                    rows[py] = {bg, t0, t1, cr};
+                }
+                cell_quads[cell_idx] = rows;
+            }
+        }
+    } else {
+
     for (std::size_t cy = 0; cy < kRows; ++cy) {
         for (std::size_t cx = 0; cx < kCols; ++cx) {
             std::size_t cell_idx = cy * kCols + cx;
@@ -758,6 +997,7 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
             cell_quads[cell_idx] = best_rows;
         }
     }
+    }  // end else (method == none brute-force path)
 
     // Pass 2: per-pixel dither using the cell's row-specific 4-colour set.
     std::vector<std::uint8_t> indices(W * H, 0);
@@ -855,9 +1095,42 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
     // color_ram unused for AFLI.
     res.bg_color = 0;
 
-    // Pass 1: per-cell-row brute force C(16, 2) = 120 pairs.
+    // Pass 1: per-cell-row pair pick.
+    //   - method != none: global-FS palette coherence — top-2 most-
+    //     used colours in each row's 8 pixels of a full-palette FS
+    //     output. Same fix as encode_multicolor / encode_hires.
+    //   - method == none: per-row brute force C(16,2) = 120 pairs.
     std::vector<std::array<std::array<std::uint8_t, 2>, kHiCellH>>
         cell_pairs(kHiRows * kHiCols);
+
+    if (settings.method != dither::Method::none) {
+        auto fs = global_fs_indices(image, pal_lab);
+        for (std::size_t cy = 0; cy < kHiRows; ++cy) {
+            for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+                std::array<std::array<std::uint8_t, 2>, kHiCellH> rows{};
+                for (std::size_t py = 0; py < kHiCellH; ++py) {
+                    std::array<std::uint16_t, 16> hist{};
+                    for (std::size_t px = 0; px < kHiCellW; ++px)
+                        ++hist[fs[(cy * kHiCellH + py) * W
+                                + (cx * kHiCellW + px)]];
+                    std::uint8_t t0 = 0, t1 = 0;
+                    std::uint16_t c0 = 0, c1 = 0;
+                    for (std::size_t c = 0; c < 16; ++c) {
+                        if (hist[c] > c0) {
+                            c1 = c0; t1 = t0;
+                            c0 = hist[c];
+                            t0 = static_cast<std::uint8_t>(c);
+                        } else if (hist[c] > c1) {
+                            c1 = hist[c];
+                            t1 = static_cast<std::uint8_t>(c);
+                        }
+                    }
+                    rows[py] = {t0, t1};
+                }
+                cell_pairs[cy * kHiCols + cx] = rows;
+            }
+        }
+    } else {
     for (std::size_t cy = 0; cy < kHiRows; ++cy) {
         for (std::size_t cx = 0; cx < kHiCols; ++cx) {
             std::size_t cell_idx = cy * kHiCols + cx;
@@ -910,6 +1183,7 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
             cell_pairs[cell_idx] = row_pairs;
         }
     }
+    }  // end else (method == none brute-force path)
 
     // Pass 2: per-pixel dither against per-row 2-colour palette.
     std::vector<std::uint8_t> indices(W * H, 0);
