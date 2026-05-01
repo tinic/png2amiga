@@ -293,7 +293,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        int cap_spread_radius = -1,
                                        float cap_spread_decay = -1.0f,
                                        std::span<const Color3f>
-                                           external_palette = {});
+                                           external_palette = {},
+                                       // --reserve-range: base-palette slots
+                                       // (0..31) that must keep their fixed
+                                       // colour on every scanline (passed to
+                                       // encode_copper as locked + dither
+                                       // excluded). The mid-line SCAP
+                                       // planner additionally avoids them.
+                                       const std::vector<std::pair<std::size_t, Color3f>>&
+                                           reserved_slots = {});
 
 // ---------------------------------------------------------------------------
 // SCAP for HAM6 (6 bitplanes — 2 control + 4 data, 16-colour base palette

@@ -1239,7 +1239,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        int cap_spread_radius,
                                        float cap_spread_decay,
                                        std::span<const Color3f>
-                                           external_palette) {
+                                           external_palette,
+                                       const std::vector<std::pair<std::size_t, Color3f>>&
+                                           reserved_slots) {
     // --best: 8 jitter seeds (32-base palette has shallower basins
     // than DPF's 8-base, so heavy jitter sampling buys less here).
     // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
@@ -1254,7 +1256,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     d, copper_changes_override, div, debug_overlay,
                     /*on_progress=*/{}, /*best=*/false, "psnr",
                     cap_spread_radius, cap_spread_decay,
-                    external_palette);
+                    external_palette, reserved_slots);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -1288,6 +1290,14 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     constexpr std::size_t kBaseColors = 32;
     constexpr std::size_t kEffective  = 64;
     constexpr int kRegBase = 0;
+
+    // Reserved-slot mask: SCAP planner must skip these registers in its
+    // mid-line swap candidate generation (encode_copper already keeps
+    // them locked across CAP scanlines and excludes them from the dither
+    // candidate set).
+    std::array<bool, kBaseColors> reserved_mask_ehb{};
+    for (auto& [idx, _] : reserved_slots)
+        if (idx < kBaseColors) reserved_mask_ehb[idx] = true;
 
     // ---- 1. CAP first: per-line palette evolution.
     // SCAP is a layer ON TOP OF CAP, not a replacement. The CAP encoder
@@ -1355,13 +1365,19 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             ehb_user_pal = std::move(seed_pal.colors);
         }
     }
+    // Forward reserved slots: encode_copper treats them as locked
+    // (palette enforced each line, never swapped) AND adds them to
+    // dither_excluded so the per-row picker can't choose them.
+    std::vector<std::size_t> ehb_dither_excluded;
+    ehb_dither_excluded.reserve(reserved_slots.size());
+    for (auto& [idx, _] : reserved_slots) ehb_dither_excluded.push_back(idx);
     auto copper_result = copper::encode_copper(
         src, /*depth=*/5, dither_settings,
         amiga::Chipset::ocs,
         cap_share_ehb,
         ehb_user_pal.empty() ? nullptr : &ehb_user_pal,
         lock_color0,
-        /*locked=*/{},
+        reserved_slots,
         palette_diversity,
         /*skip_initial_swap_rows=*/0,
         /*is_lace=*/false,
@@ -1370,7 +1386,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         cap_spread_radius >= 0
             ? static_cast<std::size_t>(cap_spread_radius)
             : std::numeric_limits<std::size_t>::max(),
-        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f);
+        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f,
+        ehb_dither_excluded);
     if (!copper_result) return std::unexpected{copper_result.error()};
     // Copies (not refs) so the joint-refinement pass below can reassign
     // them when it re-runs CAP with a refined base palette.
@@ -1817,6 +1834,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                 moves.reserve(kBaseColors * st.cands.size());
 
                 for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    if (reserved_mask_ehb[k]) continue;
                     // Hblank-budget gate: precompute delta for register
                     // k swap-vs-current.
                     bool old_diff = false;
@@ -2046,6 +2064,19 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         }
     }
 
+    // Reserved slots: build a candidate-mask over the 64 effective slots
+    // that excludes reserved bases AND their half-brite copies, plus a
+    // cand_to_full mapping for translating filtered indices back.
+    std::array<bool, kEffective> eff_blocked{};
+    for (auto& [idx, _] : reserved_slots) {
+        if (idx < kBaseColors) {
+            eff_blocked[idx] = true;
+            eff_blocked[kBaseColors + idx] = true;
+        }
+    }
+    bool has_excluded = std::any_of(eff_blocked.begin(), eff_blocked.end(),
+                                    [](bool b) { return b; });
+
     // Stage-2 render across all 64 effective entries per pixel against
     // the per-row, per-strip palette. Driver owns ED scaffolding
     // (kernel, serpentine, structure bias, Riemersma, ostromoukhov,
@@ -2053,23 +2084,62 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // palette, then yliluoma family or nearest pair pick.
     total_error = 0.0;
     {
+        // When --reserve-range is active, filter each per-strip palette
+        // to remove reserved/half-brite slots. The picker then operates
+        // on a smaller candidate set; cand_to_full[y][s][k] maps back.
+        std::vector<std::vector<std::vector<color_space::OKLab>>>
+            eff_lab_filtered;
+        std::vector<std::vector<std::vector<std::uint8_t>>> cand_to_full;
+        if (has_excluded) {
+            eff_lab_filtered.resize(height);
+            cand_to_full.resize(height);
+            for (std::size_t y = 0; y < height; ++y) {
+                eff_lab_filtered[y].resize(strip_eff_lab_per_row[y].size());
+                cand_to_full[y].resize(strip_eff_lab_per_row[y].size());
+                for (std::size_t s = 0; s < strip_eff_lab_per_row[y].size(); ++s) {
+                    auto& src_lab = strip_eff_lab_per_row[y][s];
+                    auto& dst_lab = eff_lab_filtered[y][s];
+                    auto& dst_map = cand_to_full[y][s];
+                    dst_lab.reserve(kEffective);
+                    dst_map.reserve(kEffective);
+                    for (std::size_t i = 0; i < kEffective; ++i) {
+                        if (eff_blocked[i]) continue;
+                        dst_lab.push_back(src_lab[i]);
+                        dst_map.push_back(static_cast<std::uint8_t>(i));
+                    }
+                }
+            }
+        }
+
         float te = dither::diffuse_raw_buffer(
             src, dither_settings,
             [&](const color_space::OKLab& target,
                 std::size_t x, std::size_t y) -> dither::PickResult {
                 auto s = static_cast<std::size_t>(x_strip[x]);
                 auto& eff_pal = strip_eff_per_row[y][s];
-                auto& eff_lab = strip_eff_lab_per_row[y][s];
-                std::span<const color_space::OKLab> eff_span(
-                    eff_lab.data(), kEffective);
-
                 std::size_t k = 0;
                 color_space::OKLab chosen{};
-                float thr = dither::pick_palette_index_with_ostro(
-                    dither_settings.method, target, eff_span, x, y,
-                    dither_settings.strength, k_min, k, chosen);
-                indices[y * width + x] = static_cast<std::uint8_t>(k);
-                preview[x, y] = eff_pal[k];
+                float thr;
+                std::uint8_t full_idx;
+                if (has_excluded) {
+                    auto& eff_lab = eff_lab_filtered[y][s];
+                    std::span<const color_space::OKLab> eff_span(
+                        eff_lab.data(), eff_lab.size());
+                    thr = dither::pick_palette_index_with_ostro(
+                        dither_settings.method, target, eff_span, x, y,
+                        dither_settings.strength, k_min, k, chosen);
+                    full_idx = cand_to_full[y][s][k];
+                } else {
+                    auto& eff_lab = strip_eff_lab_per_row[y][s];
+                    std::span<const color_space::OKLab> eff_span(
+                        eff_lab.data(), kEffective);
+                    thr = dither::pick_palette_index_with_ostro(
+                        dither_settings.method, target, eff_span, x, y,
+                        dither_settings.strength, k_min, k, chosen);
+                    full_idx = static_cast<std::uint8_t>(k);
+                }
+                indices[y * width + x] = full_idx;
+                preview[x, y] = eff_pal[full_idx];
                 return {chosen, thr};
             });
         total_error = static_cast<double>(te);

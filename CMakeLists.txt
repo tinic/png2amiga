@@ -590,6 +590,7 @@ else()
         "ehb|24-31|--mode ehb"
         "cap-lores|28-31|--mode lores --copper --depth 5"
         "cap-ehb|28-31|--mode ehb --copper"
+        "scap-ehb|28-31|--mode ehb --scap"
         "stf-low|12-15|--mode stf-low"
         "ste-low|12-15|--mode ste-low"
         "stf-med|2-3|--mode stf-med"

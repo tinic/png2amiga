@@ -2431,21 +2431,38 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     ? ham::HamMetric::srgb_mse
                     : ham::HamMetric::oklab2)
             : scap_ehb
-            ? scap::encode_scap_ehb_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                options.lock_color0,
-                scap_dith,
-                static_cast<std::size_t>(options.copper_changes),
-                options.palette_diversity,
-                options.scap_debug,
-                options.on_progress,
-                options.best,
-                options.best_metric,
-                options.cap_spread_radius,
-                options.cap_spread_decay,
-                scap_user_pal_span)
+            ? [&] {
+                // SCAP-EHB reserves: build (idx, color) pairs for the
+                // 32-base palette. encode_scap_ehb_ocs forwards them to
+                // encode_copper as locked + dither-excluded, AND blocks
+                // the mid-line SCAP swap planner from targeting them.
+                std::vector<std::pair<std::size_t, Color3f>> scap_ehb_reserves;
+                for (auto& r : options.reserves) {
+                    auto i = static_cast<std::size_t>(r.index);
+                    if (r.index >= 0 && i < 32) {
+                        scap_ehb_reserves.emplace_back(i,
+                            palette_locks::to_color(
+                                LockSpec{r.index, r.r, r.g, r.b},
+                                chipset, mode));
+                    }
+                }
+                return scap::encode_scap_ehb_ocs(
+                    *image,
+                    static_cast<int>(image->width()),
+                    static_cast<int>(image->height()),
+                    options.lock_color0,
+                    scap_dith,
+                    static_cast<std::size_t>(options.copper_changes),
+                    options.palette_diversity,
+                    options.scap_debug,
+                    options.on_progress,
+                    options.best,
+                    options.best_metric,
+                    options.cap_spread_radius,
+                    options.cap_spread_decay,
+                    scap_user_pal_span,
+                    scap_ehb_reserves);
+            }()
             : scap::encode_scap_dpf_ocs(
                 *image,
                 static_cast<int>(image->width()),
