@@ -898,7 +898,7 @@ function buildCharsetLayout(
   if (!charsetSourceValid(cs, unique, cells)) return null
   const mc = mode === 'c64-charset-multicolor'
   const { cellW, xspan } = charsetLayoutSizes(mc)
-  const scale = 2
+  const scale = 1
   const cols = 16
   return {
     cs,
@@ -993,6 +993,11 @@ function paintCharsetCanvas(result: ConvertResult): void {
   const gridRows = Math.ceil(lo.unique / lo.cols)
   canvas.width = lo.pixelW
   canvas.height = gridRows * 8 * lo.scale
+  // Pin CSS size to backing — without this the parent container's
+  // flex layout stretches the canvas. We want 1:1 (each backing pixel
+  // = one display pixel).
+  canvas.style.width = `${canvas.width}px`
+  canvas.style.height = `${canvas.height}px`
   canvas.style.imageRendering = 'pixelated'
   const ctx = canvas.getContext('2d')
   if (!ctx) return
