@@ -3603,6 +3603,23 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // --reserve-range gating for paths that bypass api::run_pipeline
+    // (DPF, CGA fixed-palette, batch). Modes routed through api::encode_state
+    // are gated inside api.cpp; this block catches the rest so the user
+    // gets a clear error instead of a silent no-op.
+    if (!config->reserves.empty()) {
+        auto reject = [](std::string_view why) {
+            std::println(stderr, "Error: --reserve-range: {}", why);
+            return 1;
+        };
+        if (config->dual_playfield)
+            return reject("not supported with --dpf (two split palettes; "
+                          "specify which playfield is needed)");
+        if (amiga::is_cga(config->mode) || amiga::is_cga_text(config->mode))
+            return reject("not supported in CGA modes (palette is "
+                          "hardware-fixed)");
+    }
+
     // Batch mode runs an entirely different path: build atlas, encode
     // once, slice per frame, write N outputs. Skip the normal single-
     // input pipeline below.
@@ -4732,6 +4749,29 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
+            // --reserve-range support for EHB+CAP: validate against the
+            // 32-base palette (half-brite copies are derived). Build the
+            // locked + dither_excluded vectors that flow into encode_copper
+            // and the per-row dither below.
+            auto reserves_in_ehb_cap = palette_locks::validate_reserves(
+                config->reserves, config->locks, /*max_colors=*/32,
+                config->lock_color0);
+            if (!reserves_in_ehb_cap) {
+                std::println(stderr, "{}", reserves_in_ehb_cap.error().message);
+                return 1;
+            }
+            std::vector<std::pair<std::size_t, Color3f>> ehb_cap_locked;
+            std::vector<std::size_t> ehb_cap_excluded;
+            for (auto& r : config->reserves) {
+                auto i = static_cast<std::size_t>(r.index);
+                if (r.index >= 0 && i < 32) {
+                    ehb_cap_locked.emplace_back(i, palette_locks::to_color(
+                        api::LockSpec{r.index, r.r, r.g, r.b},
+                        chipset, config->mode));
+                    ehb_cap_excluded.push_back(i);
+                }
+            }
+
             dither::Settings dith;
             dith.method = config->dither_method;
             auto ehb_cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
@@ -4774,7 +4814,7 @@ int main(int argc, char* argv[]) {
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
                     static_cast<std::size_t>(config->copper_changes),
-                    nullptr, true, {}, diversity,
+                    nullptr, true, ehb_cap_locked, diversity,
                     skip_initial, config->interlace, /*is_ehb=*/true,
                     report_progress
                         ? std::function<void(float, std::string_view)>(
@@ -4785,20 +4825,46 @@ int main(int argc, char* argv[]) {
                         ? static_cast<std::size_t>(config->cap_spread_radius)
                         : std::numeric_limits<std::size_t>::max(),
                     config->cap_spread_decay >= 0.0f
-                        ? config->cap_spread_decay : -1.0f);
+                        ? config->cap_spread_decay : -1.0f,
+                    ehb_cap_excluded);
                 if (!cr) return std::unexpected{cr.error()};
 
+                // For reserved base slots, also exclude their half-brite
+                // copies (idx + 32) from the per-row 64-color dither
+                // candidate set. cand_to_full[y] maps filtered index back
+                // to the actual 0..63 EHB slot.
+                std::vector<bool> ehb_blocked(64, false);
+                for (auto i : ehb_cap_excluded) {
+                    if (i < 32) {
+                        ehb_blocked[i] = true;
+                        ehb_blocked[i + 32] = true;
+                    }
+                }
                 std::vector<std::uint8_t> indices(w * h);
                 std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
+                std::vector<std::vector<std::uint8_t>> cand_to_full_per_row;
+                if (!ehb_cap_excluded.empty()) cand_to_full_per_row.resize(h);
                 for (std::size_t y = 0; y < h; ++y) {
                     auto& base32 = cr->scanline_palettes[y];
                     Palette bp;
                     bp.colors.assign(base32.begin(), base32.end());
                     auto ehb64 = palette::make_ehb_palette(bp.colors);
-                    pal_lab_per_row[y].resize(ehb64.colors.size());
-                    for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                        pal_lab_per_row[y][i] =
-                            color_space::linear_to_oklab(ehb64.colors[i]);
+                    if (ehb_cap_excluded.empty()) {
+                        pal_lab_per_row[y].resize(ehb64.colors.size());
+                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
+                            pal_lab_per_row[y][i] =
+                                color_space::linear_to_oklab(ehb64.colors[i]);
+                    } else {
+                        pal_lab_per_row[y].reserve(64);
+                        cand_to_full_per_row[y].reserve(64);
+                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i) {
+                            if (ehb_blocked[i]) continue;
+                            pal_lab_per_row[y].push_back(
+                                color_space::linear_to_oklab(ehb64.colors[i]));
+                            cand_to_full_per_row[y].push_back(
+                                static_cast<std::uint8_t>(i));
+                        }
+                    }
                 }
 
                 float total_err = dither::diffuse_raw_buffer(
@@ -4811,17 +4877,44 @@ int main(int argc, char* argv[]) {
                         float thr = dither::pick_palette_index_with_ostro(
                             d.method, target, pal_lab, x, y,
                             d.strength, /*k_min=*/0, k, chosen);
-                        indices[y * w + x] = static_cast<std::uint8_t>(k);
+                        indices[y * w + x] = ehb_cap_excluded.empty()
+                            ? static_cast<std::uint8_t>(k)
+                            : cand_to_full_per_row[y][k];
                         return {chosen, thr};
                     });
 
                 if (d.method == dither::Method::dbs) {
-                    dither::apply_dbs_post_pass(
-                        img, indices,
-                        [&](std::size_t /*x*/, std::size_t y)
-                            -> std::span<const color_space::OKLab> {
-                            return pal_lab_per_row[y];
-                        });
+                    if (ehb_cap_excluded.empty()) {
+                        dither::apply_dbs_post_pass(
+                            img, indices,
+                            [&](std::size_t /*x*/, std::size_t y)
+                                -> std::span<const color_space::OKLab> {
+                                return pal_lab_per_row[y];
+                            });
+                    } else {
+                        std::vector<std::vector<std::uint8_t>>
+                            full_to_cand_per_row(h);
+                        for (std::size_t y = 0; y < h; ++y) {
+                            full_to_cand_per_row[y].assign(64, 255);
+                            auto& cand = cand_to_full_per_row[y];
+                            for (std::size_t k = 0; k < cand.size(); ++k)
+                                full_to_cand_per_row[y][cand[k]] =
+                                    static_cast<std::uint8_t>(k);
+                        }
+                        std::vector<std::uint8_t> cand_indices(indices.size());
+                        for (std::size_t i = 0; i < indices.size(); ++i)
+                            cand_indices[i] =
+                                full_to_cand_per_row[i / w][indices[i]];
+                        dither::apply_dbs_post_pass(
+                            img, cand_indices,
+                            [&](std::size_t /*x*/, std::size_t y)
+                                -> std::span<const color_space::OKLab> {
+                                return pal_lab_per_row[y];
+                            });
+                        for (std::size_t i = 0; i < cand_indices.size(); ++i)
+                            indices[i] =
+                                cand_to_full_per_row[i / w][cand_indices[i]];
+                    }
                 }
 
                 if (has_transparency) {
@@ -5235,12 +5328,33 @@ int main(int argc, char* argv[]) {
 
         // Dither: line is now emitted AFTER Mode/Palette below.
 
-        // Build locked slot list from --lock-index specs
+        // Build locked slot list from --lock-index specs.
+        // --reserve-range entries also feed `locked` (so the copper never
+        // re-programs them) AND `cap_excluded` (so the dither pass treats
+        // them as forbidden across all scanlines).
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
         for (auto& lock : config->locks) {
             auto idx = static_cast<std::size_t>(lock.index);
             copper_locks.emplace_back(idx,
                 palette_locks::to_color(lock, chipset, config->mode));
+        }
+        auto cap_max_colors = std::size_t{1} << config->depth;
+        auto reserves_in_cap = palette_locks::validate_reserves(
+            config->reserves, config->locks, cap_max_colors,
+            config->lock_color0);
+        if (!reserves_in_cap) {
+            std::println(stderr, "{}", reserves_in_cap.error().message);
+            return 1;
+        }
+        std::vector<std::size_t> cap_excluded;
+        for (auto& r : config->reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < cap_max_colors) {
+                copper_locks.emplace_back(i, palette_locks::to_color(
+                    api::LockSpec{r.index, r.r, r.g, r.b},
+                    chipset, config->mode));
+                cap_excluded.push_back(i);
+            }
         }
 
         std::size_t skip_initial_lace = config->interlace ? 2 : 0;
@@ -5261,7 +5375,8 @@ int main(int argc, char* argv[]) {
                     ? static_cast<std::size_t>(config->cap_spread_radius)
                     : std::numeric_limits<std::size_t>::max(),
                 config->cap_spread_decay >= 0.0f
-                    ? config->cap_spread_decay : -1.0f);
+                    ? config->cap_spread_decay : -1.0f,
+                cap_excluded);
         };
 
         Result<copper::CopperResult> copper_result;

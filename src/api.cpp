@@ -645,6 +645,39 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
     }
 
+    // --reserve-range gating. Modes where reserves can't yet be honoured
+    // (HAM dynamic palette, copper per-line palettes, dual-playfield split,
+    // multi-palette tile modes, fixed hardware palettes) reject early with
+    // a clear message rather than silently dropping the spec.
+    if (!options.reserves.empty()) {
+        auto reject = [&](std::string_view why) -> Result<PipelineResult> {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                std::string("--reserve-range: ") + std::string(why),
+            }};
+        };
+        if (amiga::is_ham(mode))
+            return reject("not supported in HAM modes (palette is dynamic — "
+                          "the modify ops produce arbitrary colours, no "
+                          "fixed slot to reserve)");
+        if (options.dual_playfield)
+            return reject("not supported with --dpf (two split palettes; "
+                          "specify which playfield is needed)");
+        if (amiga::is_genesis(mode))
+            return reject("not supported in Genesis modes (4 separate "
+                          "16-colour palette lines; reserve target ambiguous)");
+        if (amiga::is_snes(mode))
+            return reject("not supported in SNES Mode 7 yet "
+                          "(encoder is opaque to the reserve overlay)");
+        if (amiga::is_c64(mode))
+            return reject("not supported in C64 modes (VIC-II palette is "
+                          "fixed in hardware; --lock-color0 covers the "
+                          "common 'pin background' use-case)");
+        if (amiga::is_cga(mode) || amiga::is_cga_text(mode))
+            return reject("not supported in CGA modes (palette is "
+                          "hardware-fixed)");
+    }
+
     // We need source dimensions to compute the target size.
     // Peek at the source image dimensions first.
     int peek_w{}, peek_h{};
@@ -2175,12 +2208,30 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 copper_user_pal = std::move(tmp.colors);
             }
         }
-        // Build locked slot list for copper from --lock-index specs
+        // Build locked slot list for copper from --lock-index specs.
+        // --reserve-range entries also feed `locked` so the copper
+        // never re-programs them — but their indices ALSO flow into
+        // `cap_excluded` so the dither pass treats them as untouchable.
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
         for (auto& lock : options.locks) {
             auto idx = static_cast<std::size_t>(lock.index);
             copper_locks.emplace_back(idx,
                 palette_locks::to_color(lock, chipset, mode));
+        }
+        // Validate reserves against the CAP base palette size (1<<depth).
+        auto cap_max_colors = std::size_t{1} << depth;
+        auto reserves_in_cap = palette_locks::validate_reserves(
+            options.reserves, options.locks, cap_max_colors,
+            options.lock_color0);
+        if (!reserves_in_cap) return std::unexpected{reserves_in_cap.error()};
+        std::vector<std::size_t> cap_excluded;
+        for (auto& r : options.reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < cap_max_colors) {
+                copper_locks.emplace_back(i, palette_locks::to_color(
+                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                cap_excluded.push_back(i);
+            }
         }
 
         std::size_t skip_initial_lace = options.interlace ? 2 : 0;
@@ -2206,7 +2257,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 skip_initial_lace, options.interlace,
                 /*is_ehb=*/false,
                 /*on_progress=*/{},
-                spread_r, spread_d);
+                spread_r, spread_d,
+                cap_excluded);
         };
 
         Result<copper::CopperResult> copper_result;

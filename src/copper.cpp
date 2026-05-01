@@ -382,7 +382,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::function<void(float, std::string_view)>
                                        on_progress,
                                    std::size_t neighbor_radius,
-                                   float neighbor_decay) {
+                                   float neighbor_decay,
+                                   const std::vector<std::size_t>& dither_excluded) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -429,7 +430,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                          stretch_k, user_palette, lock_color0,
                                          locked, palette_diversity,
                                          skip_initial_swap_rows, is_lace, is_ehb,
-                                         on_progress);
+                                         on_progress, neighbor_radius,
+                                         neighbor_decay, dither_excluded);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= move_budget) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
@@ -982,13 +984,34 @@ Result<CopperResult> encode_copper(const Image& image,
     // selects the per-row palette and yliluoma family / nearest-pair.
     // ===================================================================
 
-    // Pre-convert each row's CAP palette to OKLab once.
+    // Pre-convert each row's CAP palette to OKLab once. When --reserve-range
+    // is active, drop excluded slots from the candidate set (cand_to_full[y]
+    // maps the filtered index back to the actual palette slot).
+    std::vector<bool> excluded_mask;
+    if (!dither_excluded.empty()) {
+        excluded_mask.assign(num_colors, false);
+        for (auto i : dither_excluded)
+            if (i < num_colors) excluded_mask[i] = true;
+    }
     std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(height);
+    std::vector<std::vector<std::uint8_t>> cand_to_full_per_row;
+    if (!excluded_mask.empty()) cand_to_full_per_row.resize(height);
     for (std::size_t y = 0; y < height; ++y) {
         auto& pal = scanline_palettes[y];
-        pal_lab_per_row[y].resize(num_colors);
-        for (std::size_t i = 0; i < num_colors; ++i)
-            pal_lab_per_row[y][i] = color_space::linear_to_oklab(pal[i]);
+        if (excluded_mask.empty()) {
+            pal_lab_per_row[y].resize(num_colors);
+            for (std::size_t i = 0; i < num_colors; ++i)
+                pal_lab_per_row[y][i] = color_space::linear_to_oklab(pal[i]);
+        } else {
+            pal_lab_per_row[y].reserve(num_colors);
+            cand_to_full_per_row[y].reserve(num_colors);
+            for (std::size_t i = 0; i < num_colors; ++i) {
+                if (excluded_mask[i]) continue;
+                pal_lab_per_row[y].push_back(
+                    color_space::linear_to_oklab(pal[i]));
+                cand_to_full_per_row[y].push_back(static_cast<std::uint8_t>(i));
+            }
+        }
     }
 
     total_error = dither::diffuse_raw_buffer(
@@ -1001,7 +1024,10 @@ Result<CopperResult> encode_copper(const Image& image,
             float thr = dither::pick_palette_index_with_ostro(
                 dither_settings.method, target, pal_lab, x, y,
                 dither_settings.strength, /*k_min=*/0, k, chosen);
-            all_indices[y * width + x] = static_cast<std::uint8_t>(k);
+            std::uint8_t full_idx = excluded_mask.empty()
+                ? static_cast<std::uint8_t>(k)
+                : cand_to_full_per_row[y][k];
+            all_indices[y * width + x] = full_idx;
             return {chosen, thr};
         });
 
@@ -1010,12 +1036,38 @@ Result<CopperResult> encode_copper(const Image& image,
     // and toggles indices to lower the HVS-blurred OKLab cost,
     // respecting that each row has a different palette.
     if (dither_settings.method == dither::Method::dbs) {
-        dither::apply_dbs_post_pass(
-            image, all_indices,
-            [&](std::size_t /*x*/, std::size_t y)
-                -> std::span<const color_space::OKLab> {
-                return pal_lab_per_row[y];
-            });
+        if (excluded_mask.empty()) {
+            dither::apply_dbs_post_pass(
+                image, all_indices,
+                [&](std::size_t /*x*/, std::size_t y)
+                    -> std::span<const color_space::OKLab> {
+                    return pal_lab_per_row[y];
+                });
+        } else {
+            // Translate full indices → candidate-space, run DBS, translate back.
+            std::vector<std::vector<std::uint8_t>> full_to_cand_per_row(height);
+            for (std::size_t y = 0; y < height; ++y) {
+                full_to_cand_per_row[y].assign(num_colors, 255);
+                auto& cand = cand_to_full_per_row[y];
+                for (std::size_t k = 0; k < cand.size(); ++k)
+                    full_to_cand_per_row[y][cand[k]] = static_cast<std::uint8_t>(k);
+            }
+            std::vector<std::uint8_t> cand_indices(all_indices.size());
+            for (std::size_t i = 0; i < all_indices.size(); ++i) {
+                auto y = i / width;
+                cand_indices[i] = full_to_cand_per_row[y][all_indices[i]];
+            }
+            dither::apply_dbs_post_pass(
+                image, cand_indices,
+                [&](std::size_t /*x*/, std::size_t y)
+                    -> std::span<const color_space::OKLab> {
+                    return pal_lab_per_row[y];
+                });
+            for (std::size_t i = 0; i < cand_indices.size(); ++i) {
+                auto y = i / width;
+                all_indices[i] = cand_to_full_per_row[y][cand_indices[i]];
+            }
+        }
     }
     pd_progress(1.0f);
 

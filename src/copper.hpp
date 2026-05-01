@@ -240,7 +240,13 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // CAP modes, marginal elsewhere.
                                    std::size_t neighbor_radius =
                                        std::numeric_limits<std::size_t>::max(),
-                                   float neighbor_decay = -1.0f);
+                                   float neighbor_decay = -1.0f,
+                                   // Slots the dither pass must never pick.
+                                   // Used by --reserve-range: those slots
+                                   // hold a fixed user colour (also locked
+                                   // via `locked`), and image content must
+                                   // route around them across all scanlines.
+                                   const std::vector<std::size_t>& dither_excluded = {});
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.
