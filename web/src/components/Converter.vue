@@ -1715,12 +1715,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
                    hardware buffer): preserve source aspect by letterboxing/
                    pillarboxing the image inside the fixed frame instead of
-                   stretching. C64 charset modes count as fixed-buffer
-                   when Resize is off (encoder runs at the mode default). -->
-              <div v-if="isEffectiveFixedBuffer" class="grid align-items-center">
+                   stretching. Stays visible (greyed out) for charset modes
+                   when Resize is on so the layout doesn't jump. -->
+              <div v-if="isFixedBufferMode(options.mode) || isC64CharsetMode(options.mode)"
+                   class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.nativePar" />
+                  <ToggleSwitch v-model="options.nativePar" :disabled="!isEffectiveFixedBuffer" />
                 </div>
               </div>
 
