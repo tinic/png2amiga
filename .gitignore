@@ -16,6 +16,9 @@ test_output/
 .DS_Store
 fantasy.cpp
 test.cpp
+# Ad-hoc test outputs at the repo root (test.png, test.h, etc.) — these
+# are scratch artefacts from manual CLI runs, not shipped fixtures.
+/test.*
 
 # Local scratch / debug artifacts (not shipped)
 /debug.png
