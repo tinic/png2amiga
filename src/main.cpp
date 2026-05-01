@@ -524,7 +524,7 @@ struct Config {
     // CGA-specific options
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
     std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
-    std::string c64_metric  = "blur";     // blur (PN-sRGB), mse (sRGB), ssim
+    std::string c64_metric  = "mse";      // mse (OKLab²), blur (PN-sRGB), ssim (sRGB)
     bool c64_petscii_graphics_only = false;
     int cga_bg = 0;                    // background color index (0..15 in master palette)
     bool cga_auto_palette = true;      // try all palettes, pick lowest-error

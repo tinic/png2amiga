@@ -281,19 +281,24 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
     const auto& pal_lin = palette_linear(pal);
     const auto& pal_lab = palette_oklab(pal);
 
-    // Source pixels in sRGB (display space). Cell modes brute-force
-    // their per-cell palette here — sRGB matches what the CRT emits,
-    // so all three metrics (blur / mse / ssim) operate in this space.
-    std::vector<Color3f> src_s(W * H);
+    // All cell-mode scoring (mse / blur / ssim) operates in OKLab.
+    // The score_cell helper does generic 3-vector math; storing
+    // OKLab values in Color3f's .r/.g/.b lets the same template
+    // handle either space — we just feed it OKLab here. (Earlier
+    // attempts in sRGB lost noticeably on c64 cell modes — sRGB
+    // nearest-pick is perceptually skewed by the gamma encoding.)
+    std::vector<color_space::OKLab> src_lab(W * H);
+    std::vector<Color3f>             src_s(W * H);
     for (std::size_t y = 0; y < H; ++y)
         for (std::size_t x = 0; x < W; ++x) {
-            auto srgb = color_space::linear_to_srgb(image[x, y]).clamped();
-            src_s[y * W + x] = {srgb.r, srgb.g, srgb.b};
+            auto lab = color_space::linear_to_oklab(image[x, y]);
+            src_lab[y * W + x] = lab;
+            src_s[y * W + x] = {lab.L, lab.a, lab.b};
         }
     std::array<Color3f, 16> pal_s{};
     for (std::size_t i = 0; i < 16; ++i) {
-        auto srgb = color_space::linear_to_srgb(pal_lin[i]).clamped();
-        pal_s[i] = {srgb.r, srgb.g, srgb.b};
+        auto lab = color_space::linear_to_oklab(pal_lin[i]);
+        pal_s[i] = {lab.L, lab.a, lab.b};
     }
 
     static constexpr CellTaps<kCellW, kCellH> taps_mc{};
@@ -316,29 +321,39 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
                        // the bg "slot" for their own dark-cluster colour.
                        // (Real per-image bg sweep is a TODO refinement.)
 
-    // Pass 1: per-cell brute-force quad pick. Score under chosen
-    // metric (blur / mse / ssim, all sRGB).
+    // Pass 1: per-cell brute-force quad pick. Two paths:
+    //   metric=mse  → OKLab² nearest sum (matches png2c64).
+    //   metric=blur → sRGB blur of (raw, rendered) cells, MSE on
+    //                 blurred. Empirically beats OKLab-blur on
+    //                 chunky display content (cga-text result).
+    //   metric=ssim → sRGB SSIM single-window.
     std::vector<std::array<std::uint8_t, 4>> cell_quad(kRows * kCols);
     constexpr std::size_t kCellPx = kCellW * kCellH;  // 32
+    std::array<color_space::OKLab, kCellPx> cell_lab{};
     std::array<Color3f, kCellPx> raw{};
     std::array<Color3f, kCellPx> blurred_src{};
+    std::array<std::uint8_t, kCellPx> _idx_scratch{};
+
     for (std::size_t cy = 0; cy < kRows; ++cy) {
         for (std::size_t cx = 0; cx < kCols; ++cx) {
             for (std::size_t py = 0; py < kCellH; ++py) {
                 for (std::size_t px = 0; px < kCellW; ++px) {
-                    raw[py * kCellW + px] =
-                        src_s[(cy * kCellH + py) * W + (cx * kCellW + px)];
+                    auto src_idx = (cy * kCellH + py) * W + (cx * kCellW + px);
+                    cell_lab[py * kCellW + px] = src_lab[src_idx];
+                    raw[py * kCellW + px]      = src_s[src_idx];
                 }
             }
             // Pre-blur the source cell once (used by metric=blur).
-            for (std::size_t p = 0; p < kCellPx; ++p) {
-                Color3f b{0, 0, 0};
-                for (auto& t : taps_mc.taps[p]) {
-                    b.r += t.w * raw[t.q].r;
-                    b.g += t.w * raw[t.q].g;
-                    b.b += t.w * raw[t.q].b;
+            if (metric == Metric::blur) {
+                for (std::size_t p = 0; p < kCellPx; ++p) {
+                    Color3f b{0, 0, 0};
+                    for (auto& t : taps_mc.taps[p]) {
+                        b.r += t.w * raw[t.q].r;
+                        b.g += t.w * raw[t.q].g;
+                        b.b += t.w * raw[t.q].b;
+                    }
+                    blurred_src[p] = b;
                 }
-                blurred_src[p] = b;
             }
             float best_err = std::numeric_limits<float>::infinity();
             std::array<std::uint8_t, 4> best_quad{0, 0, 0, 0};
@@ -351,12 +366,19 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
                         for (std::uint8_t k = static_cast<std::uint8_t>(j + 1);
                              k < 16; ++k) {
                             if (k == bg) continue;
-                            std::array<Color3f, 4> cand{
-                                pal_s[bg], pal_s[i], pal_s[j], pal_s[k],
-                            };
-                            float err = score_cell<4, kCellPx>(
-                                raw, blurred_src, nullptr, cand,
-                                metric, nullptr, tap_lookup);
+                            float err;
+                            if (metric == Metric::mse) {
+                                std::array<std::uint8_t, 4> q{bg, i, j, k};
+                                err = cell_error_for_quad(
+                                    cell_lab, q, pal_lab, &_idx_scratch);
+                            } else {
+                                std::array<Color3f, 4> cand{
+                                    pal_s[bg], pal_s[i], pal_s[j], pal_s[k],
+                                };
+                                err = score_cell<4, kCellPx>(
+                                    raw, blurred_src, nullptr, cand,
+                                    metric, nullptr, tap_lookup);
+                            }
                             if (err < best_err) {
                                 best_err  = err;
                                 best_quad = {bg, i, j, k};
@@ -959,12 +981,13 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
 
     const auto& pal_lin = palette_linear(pal);
 
-    // sRGB-as-OKLab "metric vector" per palette entry. Blur math is
-    // space-agnostic — palette and per-pixel cell vectors both live
-    // in this space. sRGB beats OKLab on PN-blur (cga_text result).
+    // PETSCII metric scoring runs in OKLab — perceptually-uniform
+    // distance for nearest-pick + linear-light averaging through
+    // OKLab's L channel for blur. (Matches png2c64; an earlier sRGB
+    // experiment looked noticeably worse on c64 content.) The
+    // 3-vector math below is space-agnostic; we just feed OKLab in.
     auto to_sblur = [](const Color3f& lin) -> color_space::OKLab {
-        auto s = color_space::linear_to_srgb(lin).clamped();
-        return color_space::OKLab{s.r, s.g, s.b};
+        return color_space::linear_to_oklab(lin);
     };
     std::array<color_space::OKLab, 16> pal_s{};
     for (std::size_t i = 0; i < 16; ++i) pal_s[i] = to_sblur(pal_lin[i]);

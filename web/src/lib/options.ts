@@ -92,6 +92,7 @@ export interface Options {
   c64Palette: string
   c64Metric: string
   c64PetsciiGraphicsOnly: boolean
+  matchRange: boolean
   paletteData?: Uint8Array | null
   // Slider numeric fields (declared explicitly so options[s.key] is typed
   // as number rather than the index-signature wildcard).
@@ -342,7 +343,7 @@ export const ALPHA_DITHER_METHODS: NamedItem[] = [
 ]
 
 export const SLIDERS: Slider[] = [
-  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 3, step: 0.05, default: 1,
+  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 5, step: 0.05, default: 1,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
   { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
     tip: 'Dithering intensity. 0 = no dithering effect, 1 = standard, >1 = exaggerated.' },
@@ -440,8 +441,9 @@ export function defaultOptions(): Options {
     scap: false,
     ...CGA_TEXT_DEFAULTS,
     c64Palette: 'colodore',
-    c64Metric:  'blur',
+    c64Metric:  'mse',
     c64PetsciiGraphicsOnly: false,
+    matchRange: false,
     ...sliderDefaults(),
   }
   return opts

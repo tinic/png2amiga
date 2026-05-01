@@ -884,6 +884,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         auto pal_choice = c64::parse_palette(options.c64_palette);
         auto metric     = c64::parse_metric(options.c64_metric);
+        // match_range: stretch the source's OKLab extent to span the
+        // chosen VIC-II palette's extent. Same shape as the EHB /
+        // standard-mode preprocessor — pulls highlights / shadows
+        // into the palette's reachable range so quantisation has
+        // headroom on both ends. Off by default.
+        if (options.match_range) {
+            auto pal_span = c64::palette_colors(pal_choice);
+            Palette c64_pal;
+            c64_pal.name = "c64";
+            c64_pal.colors.assign(pal_span.begin(), pal_span.end());
+            preprocess::match_palette_range(*image, c64_pal);
+        }
         dither::Settings dith;
         dith.method      = parse_dither(options.dither);
         dith.strength    = options.dither_strength;

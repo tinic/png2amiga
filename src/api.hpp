@@ -260,16 +260,15 @@ struct Options {
     std::string c64_palette = "colodore";
 
     // Per-cell error metric for C64 modes. Mirrors png2c64's metric
-    // option — useful for tweaking. All three operate in sRGB space:
-    //   "blur" (default): Pappas-Neuhoff perceptual blur. The eye
-    //          averages fg/bg through display blur, so PN-sRGB
-    //          models what hits the retina best on chunky cells.
-    //   "mse":  per-pixel sRGB squared error. Faithful luminance,
-    //          less perceptual under blur.
-    //   "ssim": Structural Similarity Index — covariance-weighted
-    //          score that rewards preserving local structure even
-    //          when individual pixels miss.
-    std::string c64_metric = "blur";
+    // option — useful for tweaking and A/B comparison.
+    //   "mse" (default): per-pixel OKLab² nearest distance. Matches
+    //          png2c64's default exactly so quality is directly
+    //          comparable.
+    //   "blur": Pappas-Neuhoff perceptual blur in sRGB (gamma-encoded
+    //          space matches what the CRT emits and the eye averages
+    //          through display blur).
+    //   "ssim": Structural Similarity Index in sRGB.
+    std::string c64_metric = "mse";
 
     // PETSCII only: when true, restrict the candidate glyph set to
     // PETSCII semi-graphics, blocks, and the reverse-video graphics
