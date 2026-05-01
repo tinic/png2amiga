@@ -103,6 +103,13 @@ constexpr std::size_t kCellH = 8;
 constexpr std::size_t kCols  = 40;  // 160 / 4
 constexpr std::size_t kRows  = 25;  // 200 / 8
 
+// FLI / AFLI hardware bug: the leftmost 3 character columns always
+// display the global $D021 background colour (on real VIC-II the
+// per-row screen-pointer reload happens too late to read valid data
+// for cells 0..2). The encoder emits whatever bytes it wants there;
+// we overpaint the preview so the PNG matches what hardware shows.
+constexpr std::size_t kFliBugCols = 3;
+
 // 3×3 binomial blur kernel — same as cga_text / petscii. sRGB
 // (gamma-encoded) space matches what the CRT emits.
 constexpr std::array<std::array<float, 3>, 3> kCellBlur = {{
@@ -1047,7 +1054,8 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
                         indices[y * W + x] & 0x3);
                     row_byte = static_cast<std::uint8_t>(
                         (row_byte << 2) | q);
-                    res.rendered[x, y] = pal_lin[quad[q]];
+                    res.rendered[x, y] =
+                        (cx < kFliBugCols) ? pal_lin[bg] : pal_lin[quad[q]];
                 }
                 res.bitmap[cell_idx * kCellH + py] = row_byte;
             }
@@ -1229,7 +1237,9 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
                         indices[y * W + x] & 0x1);
                     row_byte = static_cast<std::uint8_t>(
                         (row_byte << 1) | q);
-                    res.rendered[x, y] = pal_lin[pair[q]];
+                    res.rendered[x, y] = (cx < kFliBugCols)
+                        ? pal_lin[res.bg_color & 0xF]
+                        : pal_lin[pair[q]];
                 }
                 res.bitmap[cell_idx * kHiCellH + py] = row_byte;
             }
