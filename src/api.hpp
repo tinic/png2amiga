@@ -273,6 +273,19 @@ struct Options {
     // would look wrong.
     bool c64_petscii_graphics_only = false;
 
+    // c64 charset modes (hires / multicolor) — and later tile-based
+    // SNES / Genesis / Amiga 16x16 / PS1 64x64. When 0 the encoder
+    // uses its mode default (256 for c64). Use higher budgets when
+    // the runtime swaps charset banks across frames; the encoder
+    // emits the full glyph catalogue but writes screen_ram with the
+    // platform's hardware-native index width (8-bit on c64, 16-bit
+    // on Genesis / SNES).
+    std::size_t tile_budget = 0;
+    // Reserve N glyph slots in the final budget so dedup merges
+    // down to (budget - reserve). Useful when the runtime needs N
+    // free slots for animation frames / sprites / raster effects.
+    std::size_t tile_reserve = 0;
+
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
     std::vector<PinSpec>  pins;
@@ -455,6 +468,15 @@ struct EncodeState {
     // c64 modes: shared VIC-II background colour. Needed for PRG /
     // .koa / .hir export. 0 for non-c64 runs.
     std::uint8_t c64_bg_color = 0;
+
+    // c64 charset modes (hires + multicolor) — tile-mode metadata
+    // surfaced from c64::EncodeResult so downstream .h export doesn't
+    // need to re-run the encoder. 0 for non-charset runs.
+    std::size_t c64_cols = 0;
+    std::size_t c64_rows = 0;
+    std::size_t c64_unique_glyphs = 0;
+    std::uint8_t c64_mc1 = 0;
+    std::uint8_t c64_mc2 = 0;
 
     // Tile-dedup stats — Genesis (4bpp 8×8 = 32 B/tile) and SNES Mode 7
     // (8bpp 8×8 = 64 B/tile). 0 = not a tiled run.

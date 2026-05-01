@@ -131,6 +131,12 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("c64PetsciiGraphicsOnly"))
         opts.c64_petscii_graphics_only =
             js_opts["c64PetsciiGraphicsOnly"].as<bool>();
+    if (js_opts.hasOwnProperty("tileBudget"))
+        opts.tile_budget = static_cast<std::size_t>(
+            js_opts["tileBudget"].as<int>());
+    if (js_opts.hasOwnProperty("tileReserve"))
+        opts.tile_reserve = static_cast<std::size_t>(
+            js_opts["tileReserve"].as<int>());
     if (js_opts.hasOwnProperty("dualPlayfield"))
         opts.dual_playfield = js_opts["dualPlayfield"].as<bool>();
     if (js_opts.hasOwnProperty("scap"))

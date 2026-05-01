@@ -16,7 +16,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -698,21 +698,30 @@ function pushIf(parts: string[], cond: unknown, fragment: string): void {
   if (cond) parts.push(fragment)
 }
 
-function formatGenesisTileStats(result: ConvertResult): string {
+// C64 charset: denominator = budget (256 hw cap, minus user reserve);
+// total-cell count + dedup % move into the parenthetical, since the
+// constraint a designer worries about is the budget, not the cells.
+function formatTileStatsC64(u: number, t: number, ram_kb: string): string {
+  const budget = Math.max(1,
+    (options.tileBudget || 256) - (options.tileReserve || 0))
+  const pct = t > 0 ? (1 - u / t) * 100 : 0
+  return `tiles: ${u}/${budget} (${t} cells, ${pct.toFixed(1)}% dedup, ${ram_kb} KB charset)`
+}
+
+function formatTileStats(result: ConvertResult, mode: string): string {
   if (!result.genesisTotalCells || result.genesisUniqueTiles == null) return ''
   const u = result.genesisUniqueTiles
   const t = result.genesisTotalCells
-  const pct = t > 0 ? (1 - u / t) * 100 : 0
-  // tileDataBytes is the authoritative VRAM-bytes number (Genesis = 32
-  // B/tile, SNES Mode 7 = 64 B/tile). Fall back to *32 for older WASM.
+  // tileDataBytes is the authoritative bytes-per-tile-pool number:
+  // Genesis = 32 B/tile, SNES Mode 7 = 64 B/tile, c64 charset = 8 B/glyph.
   const bytes = result.tileDataBytes ?? (u * 32)
-  const vram_kb = (bytes / 1024).toFixed(1)
-  // Genesis warning: 1280-tile budget for plane A before sprites/plane B.
-  // SNES Mode 7 hard-caps at 256 (the packer always merges to fit; no
-  // warning needed because it's already in budget).
-  const over_budget = u > 1280
-  const tag = over_budget ? '⚠ ' : ''
-  return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${vram_kb} KB VRAM)`
+  const ram_kb = (bytes / 1024).toFixed(1)
+  if (isC64CharsetMode(mode)) return formatTileStatsC64(u, t, ram_kb)
+  const pct = t > 0 ? (1 - u / t) * 100 : 0
+  // Plane-A budget warning: only Genesis cares about 1280. SNES Mode 7
+  // hard-caps at 256 (packer merges to fit) — no warning needed.
+  const tag = (mode.startsWith('genesis-') && u > 1280) ? '⚠ ' : ''
+  return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${ram_kb} KB VRAM)`
 }
 
 // Combine PSNR + S2 into a single comma-joined fragment so
@@ -745,7 +754,7 @@ function formatResultInfo(result: ConvertResult) {
   pushIf(parts, result.quantError != null, `error: ${(result.quantError ?? 0).toFixed(2)}`)
   const quality = formatQualityStats(result)
   pushIf(parts, quality, quality)
-  const tileStats = formatGenesisTileStats(result)
+  const tileStats = formatTileStats(result, options.mode)
   pushIf(parts, tileStats, tileStats)
   return parts.join(', ')
 }

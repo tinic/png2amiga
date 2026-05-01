@@ -139,6 +139,8 @@ declare module '@wasm/png2amiga.js' {
     c64Palette?: string
     c64Metric?: string
     c64PetsciiGraphicsOnly?: boolean
+    tileBudget?: number
+    tileReserve?: number
 
     // C header export
     symbolName?: string

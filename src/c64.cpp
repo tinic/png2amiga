@@ -5,8 +5,12 @@
 
 #include <array>
 #include <bit>
+#include <cctype>
 #include <format>
 #include <limits>
+#include <span>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace png2amiga::c64 {
@@ -1276,17 +1280,29 @@ inline int popcount_xor(std::uint64_t a, std::uint64_t b) {
 
 Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
                                            const dither::Settings& settings,
-                                           Metric metric) {
-    constexpr std::size_t W = kHiCols * kHiCellW;  // 320
-    constexpr std::size_t H = kHiRows * kHiCellH;  // 200
-
-    if (image.width() != W || image.height() != H) {
+                                           Metric metric,
+                                           std::size_t tile_budget,
+                                           std::size_t tile_reserve) {
+    auto W = image.width();
+    auto H = image.height();
+    if (W == 0 || H == 0
+        || (W % kHiCellW) != 0 || (H % kHiCellH) != 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("c64::encode_charset_hires: expected {}x{} input, got {}x{}",
-                        W, H, image.width(), image.height()),
+            std::format("c64::encode_charset_hires: input must be a "
+                        "non-zero multiple of {}x{}, got {}x{}",
+                        kHiCellW, kHiCellH, W, H),
         }};
     }
+    auto cs_cols = W / kHiCellW;
+    auto cs_rows = H / kHiCellH;
+    auto kCells = cs_cols * cs_rows;
+    // c64 char index is 8-bit; cap budget at 256 in v1 even if caller
+    // requests more (banking is the runtime's job — we still emit the
+    // full glyph catalogue but screen_ram truncates entries past 255).
+    std::size_t budget = std::min(tile_budget, std::size_t{256});
+    std::size_t effective_budget = (budget > tile_reserve)
+        ? (budget - tile_reserve) : 1;
 
     const auto& pal_lin = palette_linear(pal);
     const auto& pal_lab = palette_oklab(pal);
@@ -1296,7 +1312,6 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
             src_lab[y * W + x] = color_space::linear_to_oklab(image[x, y]);
 
     constexpr std::size_t kHiCellPx = kHiCellW * kHiCellH;  // 64
-    constexpr std::size_t kCells    = kHiRows * kHiCols;    // 1000
 
     // Pass 1: per-cell brute-force pair pick. Metric dispatch
     // matches encode_hires — mse uses inlined OKLab² nearest sum
@@ -1321,8 +1336,8 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
     std::vector<std::array<std::uint8_t, 2>> cell_pair(kCells);
     std::array<color_space::OKLab, kHiCellPx> cell_lab{};
     std::array<std::uint8_t, kHiCellPx> pix_idx{};
-    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
-        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+    for (std::size_t cy = 0; cy < cs_rows; ++cy) {
+        for (std::size_t cx = 0; cx < cs_cols; ++cx) {
             for (std::size_t py = 0; py < kHiCellH; ++py) {
                 for (std::size_t px = 0; px < kHiCellW; ++px) {
                     auto idx = (cy * kHiCellH + py) * W + (cx * kHiCellW + px);
@@ -1365,7 +1380,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
                     }
                 }
             }
-            cell_pair[cy * kHiCols + cx] = best_pair;
+            cell_pair[cy * cs_cols + cx] = best_pair;
         }
     }
 
@@ -1392,8 +1407,8 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
     std::vector<std::uint8_t> indices(W * H, 0);
     Image block(k3W, k3H);
     std::vector<std::uint8_t> block_idx(k3W * k3H, 0);
-    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
-        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+    for (std::size_t cy = 0; cy < cs_rows; ++cy) {
+        for (std::size_t cx = 0; cx < cs_cols; ++cx) {
             // Mirror-fill the 3W×3H block.
             for (std::size_t by = 0; by < 3; ++by) {
                 for (std::size_t bx = 0; bx < 3; ++bx) {
@@ -1407,7 +1422,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
                     }
                 }
             }
-            const auto& pair = cell_pair[cy * kHiCols + cx];
+            const auto& pair = cell_pair[cy * cs_cols + cx];
             std::array<color_space::OKLab, 2> cp{
                 pal_lab[pair[0]], pal_lab[pair[1]],
             };
@@ -1439,8 +1454,8 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
 
     // Pack the dithered per-pixel indices into per-cell 64-bit
     // patterns + final cells[].
-    for (std::size_t cy = 0; cy < kHiRows; ++cy) {
-        for (std::size_t cx = 0; cx < kHiCols; ++cx) {
+    for (std::size_t cy = 0; cy < cs_rows; ++cy) {
+        for (std::size_t cx = 0; cx < cs_cols; ++cx) {
             std::array<std::uint8_t, kHiCellPx> px{};
             for (std::size_t py = 0; py < kHiCellH; ++py) {
                 for (std::size_t pxx = 0; pxx < kHiCellW; ++pxx) {
@@ -1449,8 +1464,8 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
                     px[py * kHiCellW + pxx] = indices[y * W + x] & 1;
                 }
             }
-            cells[cy * kHiCols + cx] = {
-                cell_pair[cy * kHiCols + cx],
+            cells[cy * cs_cols + cx] = {
+                cell_pair[cy * cs_cols + cx],
                 hi_pattern_64(px)
             };
         }
@@ -1482,7 +1497,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
     // Reserve glyph 0 for the all-zero (empty) pattern if the image
     // produces one — it's a natural snap target. Otherwise the first
     // 256 surviving glyphs land at indices 0..255.
-    while (glyphs.size() > 256) {
+    while (glyphs.size() > effective_budget) {
         // Find closest pair (smallest popcount of XOR). Brute O(N²)
         // is fine here — N ≤ ~5000 cells in practice.
         std::size_t best_a = 0, best_b = 1;
@@ -1512,9 +1527,11 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
         }
     }
 
-    // Build charset_data: 256 × 8 bytes (zero-fill unused entries).
-    std::array<std::uint8_t, 2048> charset_data{};
-    for (std::size_t g = 0; g < glyphs.size() && g < 256; ++g) {
+    // Build charset_data: unique_glyphs × 8 bytes, tightly packed.
+    // c64 char index is 8-bit; cap emitted catalogue at 256 in v1.
+    auto unique_glyphs = std::min(glyphs.size(), std::size_t{256});
+    std::vector<std::uint8_t> charset_data(unique_glyphs * 8, 0);
+    for (std::size_t g = 0; g < unique_glyphs; ++g) {
         auto bytes = hi_pattern_bytes(glyphs[g]);
         for (std::size_t r = 0; r < 8; ++r)
             charset_data[g * 8 + r] = bytes[r];
@@ -1522,18 +1539,18 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
 
     EncodeResult res;
     res.rendered = Image(W, H);
-    // Stash charset in `bitmap` for now (first 2048 bytes); a proper
-    // charset_data field can come with the .h writer.
-    res.bitmap.assign(2048, 0);
-    for (std::size_t i = 0; i < 2048; ++i) res.bitmap[i] = charset_data[i];
+    res.cols = cs_cols;
+    res.rows = cs_rows;
+    res.unique_glyphs = unique_glyphs;
+    res.bitmap = std::move(charset_data);
     res.screen_ram.assign(kCells, 0);   // char codes per cell
     res.color_ram.assign(kCells, 0);    // upper=c1, lower=c0
     res.bg_color = 0;
 
     // Render + pack screen / colour. screen_ram[cell] = glyph index.
     for (std::size_t i = 0; i < kCells; ++i) {
-        auto cy = i / kHiCols;
-        auto cx = i % kHiCols;
+        auto cy = i / cs_cols;
+        auto cx = i % cs_cols;
         std::uint8_t glyph_idx = static_cast<std::uint8_t>(
             std::min(cell_to_glyph[i], std::size_t{255}));
         res.screen_ram[i] = glyph_idx;
@@ -1594,17 +1611,25 @@ inline std::array<std::uint8_t, 8> mc_pattern_bytes(std::uint64_t key) {
 Result<EncodeResult> encode_charset_multicolor(const Image& image,
                                                 Palette pal,
                                                 const dither::Settings& settings,
-                                                Metric metric) {
-    constexpr std::size_t W = kCols * kCellW;  // 160
-    constexpr std::size_t H = kRows * kCellH;  // 200
-
-    if (image.width() != W || image.height() != H) {
+                                                Metric metric,
+                                                std::size_t tile_budget,
+                                                std::size_t tile_reserve) {
+    auto W = image.width();
+    auto H = image.height();
+    if (W == 0 || H == 0
+        || (W % kCellW) != 0 || (H % kCellH) != 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("c64::encode_charset_multicolor: expected {}x{} input, got {}x{}",
-                        W, H, image.width(), image.height()),
+            std::format("c64::encode_charset_multicolor: input must be a "
+                        "non-zero multiple of {}x{}, got {}x{}",
+                        kCellW, kCellH, W, H),
         }};
     }
+    auto cs_cols = W / kCellW;
+    auto cs_rows = H / kCellH;
+    std::size_t budget = std::min(tile_budget, std::size_t{256});
+    std::size_t effective_budget = (budget > tile_reserve)
+        ? (budget - tile_reserve) : 1;
 
     const auto& pal_lin = palette_linear(pal);
     const auto& pal_lab = palette_oklab(pal);
@@ -1623,7 +1648,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
     };
 
     constexpr std::uint8_t bg = 0;
-    constexpr std::size_t kCells = kRows * kCols;
+    auto kCells = cs_cols * cs_rows;
     constexpr std::size_t kCellPx = kCellW * kCellH;  // 32
 
     // Outer pass: brute-force shared (mc1, mc2). For each candidate,
@@ -1643,8 +1668,8 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
             if (mc2 == bg) continue;
             float total = 0.0f;
             std::vector<std::uint8_t> fgs(kCells, 0);
-            for (std::size_t cy = 0; cy < kRows; ++cy) {
-                for (std::size_t cx = 0; cx < kCols; ++cx) {
+            for (std::size_t cy = 0; cy < cs_rows; ++cy) {
+                for (std::size_t cx = 0; cx < cs_cols; ++cx) {
                     for (std::size_t py = 0; py < kCellH; ++py) {
                         for (std::size_t px = 0; px < kCellW; ++px) {
                             auto idx = (cy * kCellH + py) * W + (cx * kCellW + px);
@@ -1688,7 +1713,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
                         }
                     }
                     total += cell_best;
-                    fgs[cy * kCols + cx] = cell_fg;
+                    fgs[cy * cs_cols + cx] = cell_fg;
                 }
             }
             if (total < best_total) {
@@ -1710,8 +1735,8 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
     std::vector<std::uint8_t> indices(W * H, 0);
     Image block(k3W, k3H);
     std::vector<std::uint8_t> block_idx(k3W * k3H, 0);
-    for (std::size_t cy = 0; cy < kRows; ++cy) {
-        for (std::size_t cx = 0; cx < kCols; ++cx) {
+    for (std::size_t cy = 0; cy < cs_rows; ++cy) {
+        for (std::size_t cx = 0; cx < cs_cols; ++cx) {
             for (std::size_t by = 0; by < 3; ++by) {
                 for (std::size_t bx = 0; bx < 3; ++bx) {
                     for (std::size_t ly = 0; ly < kCellH; ++ly) {
@@ -1724,7 +1749,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
                     }
                 }
             }
-            std::uint8_t fg = best_fg[cy * kCols + cx];
+            std::uint8_t fg = best_fg[cy * cs_cols + cx];
             std::array<color_space::OKLab, 4> cp{
                 pal_lab[bg], pal_lab[best_mc1], pal_lab[best_mc2], pal_lab[fg],
             };
@@ -1755,8 +1780,8 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
 
     // Pack per-cell 64-bit patterns from dithered indices.
     std::vector<std::uint64_t> patterns(kCells, 0);
-    for (std::size_t cy = 0; cy < kRows; ++cy) {
-        for (std::size_t cx = 0; cx < kCols; ++cx) {
+    for (std::size_t cy = 0; cy < cs_rows; ++cy) {
+        for (std::size_t cx = 0; cx < cs_cols; ++cx) {
             std::array<std::uint8_t, kCellPx> px{};
             for (std::size_t py = 0; py < kCellH; ++py) {
                 for (std::size_t pxx = 0; pxx < kCellW; ++pxx) {
@@ -1765,7 +1790,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
                     px[py * kCellW + pxx] = indices[y * W + x] & 0x3;
                 }
             }
-            patterns[cy * kCols + cx] = mc_pattern_64(px);
+            patterns[cy * cs_cols + cx] = mc_pattern_64(px);
         }
     }
 
@@ -1798,7 +1823,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
         std::uint64_t any = (diff | (diff >> 1)) & 0x5555555555555555ULL;
         return std::popcount(any);
     };
-    while (glyphs.size() > 256) {
+    while (glyphs.size() > effective_budget) {
         std::size_t a_best = 0, b_best = 1;
         int best_d = std::numeric_limits<int>::max();
         for (std::size_t a = 0; a < glyphs.size(); ++a) {
@@ -1820,13 +1845,20 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
     }
 
     EncodeResult res;
-    res.rendered = Image(W, H);  // 160×200 logical (web preview pairs)
-    res.bitmap.assign(2048, 0);
-    for (std::size_t g = 0; g < glyphs.size() && g < 256; ++g) {
+    res.rendered = Image(W, H);  // logical raster (preview pairs the
+                                  // multicolor 2:1 pixel ratio at display)
+    auto unique_glyphs = std::min(glyphs.size(), std::size_t{256});
+    res.bitmap.assign(unique_glyphs * 8, 0);
+    for (std::size_t g = 0; g < unique_glyphs; ++g) {
         auto bytes = mc_pattern_bytes(glyphs[g]);
         for (std::size_t r = 0; r < 8; ++r)
             res.bitmap[g * 8 + r] = bytes[r];
     }
+    res.cols = cs_cols;
+    res.rows = cs_rows;
+    res.unique_glyphs = unique_glyphs;
+    res.mc1 = best_mc1;
+    res.mc2 = best_mc2;
     res.screen_ram.assign(kCells, 0);
     res.color_ram.assign(kCells, 0);
     res.bg_color = bg;
@@ -1837,8 +1869,8 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
         res.screen_ram[i] = glyph_idx;
         res.color_ram[i]  = best_fg[i] & 0xF;
         std::uint64_t merged = glyphs[cell_to_glyph[i]];
-        auto cy = i / kCols;
-        auto cx = i % kCols;
+        auto cy = i / cs_cols;
+        auto cx = i % cs_cols;
         for (std::size_t py = 0; py < kCellH; ++py) {
             for (std::size_t px = 0; px < kCellW; ++px) {
                 auto x = cx * kCellW + px;
@@ -2176,6 +2208,110 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
     }
 
     return res;
+}
+
+// ---------------------------------------------------------------------------
+// .h header writer for charset modes.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Convert palette entry to 12-bit OCS-style 0x0RGB hex (4 bits per
+// channel via top-nibble truncation of the 8-bit sRGB value).
+std::uint16_t to_c64_hex_word(const Color3f& linear) {
+    auto srgb = color_space::linear_to_srgb(linear);
+    auto chan = [](float v) -> std::uint8_t {
+        int q = std::clamp(static_cast<int>(std::lround(v * 15.0f)), 0, 15);
+        return static_cast<std::uint8_t>(q);
+    };
+    return static_cast<std::uint16_t>(
+        (chan(srgb.r) << 8) | (chan(srgb.g) << 4) | chan(srgb.b));
+}
+
+// Uppercase a copy of `s` for #define names.
+std::string to_upper_copy(std::string_view s) {
+    std::string out(s);
+    for (auto& c : out)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return out;
+}
+
+void write_byte_array(std::string& out, std::string_view name,
+                      std::span<const std::uint8_t> bytes) {
+    out += "static const unsigned char ";
+    out += name;
+    out += "[] = {\n   ";
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        out += std::format(" 0x{:02X}", bytes[i]);
+        if (i + 1 < bytes.size()) out += ',';
+        if ((i + 1) % 16 == 0 && i + 1 < bytes.size()) out += "\n   ";
+    }
+    out += "\n};\n\n";
+}
+
+}  // namespace
+
+Result<std::string> charset_header(const EncodeResult& enc,
+                                    std::string_view symbol_name,
+                                    bool multicolor,
+                                    Palette pal) {
+    if (enc.cols == 0 || enc.rows == 0) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_dimensions,
+            "charset_header requires a charset EncodeResult "
+            "(cols/rows must be set)",
+        }};
+    }
+    auto upper = to_upper_copy(symbol_name);
+    std::string out;
+    out.reserve(8192 + enc.bitmap.size() * 6);
+    out += std::format(
+        "// Generated by png2amiga. Do not edit.\n"
+        "//   {} {}x{} cells, {} unique glyph(s)\n\n"
+        "#pragma once\n\n"
+        "#define {}_COLS         {}\n"
+        "#define {}_ROWS         {}\n"
+        "#define {}_GLYPHS       {}\n"
+        "#define {}_CELL_BYTES   8\n"
+        "#define {}_BG_COLOR     0x{:02X}\n",
+        multicolor ? "multicolor charset" : "hires charset",
+        enc.cols, enc.rows, enc.unique_glyphs,
+        upper, enc.cols,
+        upper, enc.rows,
+        upper, enc.unique_glyphs,
+        upper,
+        upper, enc.bg_color & 0xF);
+    if (multicolor) {
+        out += std::format(
+            "#define {}_MC1          0x{:02X}\n"
+            "#define {}_MC2          0x{:02X}\n",
+            upper, enc.mc1 & 0xF,
+            upper, enc.mc2 & 0xF);
+    }
+    out += '\n';
+
+    write_byte_array(out, std::string(symbol_name) + "_charset",
+                     std::span<const std::uint8_t>(enc.bitmap));
+    write_byte_array(out, std::string(symbol_name) + "_screen",
+                     std::span<const std::uint8_t>(enc.screen_ram));
+    write_byte_array(out, std::string(symbol_name) + "_color",
+                     std::span<const std::uint8_t>(enc.color_ram));
+
+    // Full 16-colour VIC-II palette as 12-bit 0x0RGB words. The screen
+    // and colour bytes index into the standard VIC-II palette, but
+    // emitting the resolved hex makes downstream tooling self-contained.
+    auto pal_lin = palette_colors(pal);
+    out += std::format("static const unsigned short {}_palette[16] = {{\n",
+                       symbol_name);
+    out += "    ";
+    for (std::size_t i = 0; i < 16; ++i) {
+        out += std::format("0x{:04X}",
+                            to_c64_hex_word(pal_lin[i]));
+        if (i + 1 < 16) out += ", ";
+        if ((i + 1) % 8 == 0 && i + 1 < 16) out += "\n    ";
+    }
+    out += "\n};\n";
+    return out;
 }
 
 }  // namespace png2amiga::c64

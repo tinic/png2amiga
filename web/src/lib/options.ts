@@ -92,6 +92,10 @@ export interface Options {
   c64Palette: string
   c64Metric: string
   c64PetsciiGraphicsOnly: boolean
+  // Tile-based modes (c64 charset; future SNES / Genesis / Amiga 16x16
+  // / PS1 64x64). 0 = mode default (256 for c64 charset).
+  tileBudget: number
+  tileReserve: number
   matchRange: boolean
   paletteData?: Uint8Array | null
   // Slider numeric fields (declared explicitly so options[s.key] is typed
@@ -452,6 +456,8 @@ export function defaultOptions(): Options {
     c64Palette: 'colodore',
     c64Metric:  'mse',
     c64PetsciiGraphicsOnly: false,
+    tileBudget: 256,
+    tileReserve: 0,
     matchRange: false,
     ...sliderDefaults(),
   }
@@ -500,6 +506,14 @@ export function isGenesisMode(mode: string): boolean {
 export function isC64Mode(mode: string): boolean {
   return mode.startsWith('c64-')
 }
+// c64 charset modes accept arbitrary width/height (padded to cell size)
+// and a configurable tile-budget. Distinguished from the bitmap c64
+// modes (multicolor / hires / fli / afli / petscii) which stay locked
+// to hardware screen dimensions.
+export function isC64CharsetMode(mode: string): boolean {
+  return mode === 'c64-charset-hires' ||
+         mode === 'c64-charset-multicolor'
+}
 // SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
 // 2048-colour gamut comes from per-tile palette-field bits. Yliluoma
 // family (palette-aware ordered dithers) doesn't apply here — restrict
@@ -512,6 +526,10 @@ export function isSnesDirectMode(mode: string): boolean {
 // letterbox / pillarbox). DOS + SNES both fit; auto-toggled on mode
 // entry by the web UI.
 export function isFixedBufferMode(mode: string): boolean {
+  // c64 charset modes are flexible-size now; tile-based platforms with
+  // per-platform tile-budget controls (Genesis / SNES) are fixed-buffer
+  // for now and follow the same upgrade path later.
+  if (isC64CharsetMode(mode)) return false
   return isDosMode(mode) || isSnesMode(mode) || isGenesisMode(mode) ||
          isC64Mode(mode)
 }

@@ -456,10 +456,48 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     // regardless of any user-supplied width/height. (Otherwise the
     // encoder rejects mismatched input — c64::encode_multicolor wants
     // exactly 160×200, etc.)
+    //
+    // Exception: c64 charset modes (hires + multicolor) accept arbitrary
+    // dimensions, padded up to the next multiple of cell size. Lets
+    // demos use very large source bitmaps with shared charsets across
+    // many screens. When the user passes --width / --height the
+    // encoder receives those (rounded up to 8×8 / 4×8); otherwise the
+    // fixed-buf default still applies.
     bool is_fixed_buf =
         amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
         amiga::is_cga(mode)   || amiga::is_cga_text(mode) ||
         amiga::is_snes(mode)  || amiga::is_genesis(mode) || amiga::is_c64(mode);
+    bool charset_freeform =
+        amiga::is_c64_charset(mode) && (have_w || have_h);
+    if (charset_freeform) {
+        // Designer convention: --width / --height refer to *source*
+        // pixels, treated 1:1. For charset-hires every 8×8 source block
+        // becomes one 8×8 cell, so the encoder receives the user dims
+        // verbatim. For charset-multicolor every 8×8 source block
+        // becomes one 4×8 multicolor cell — round source dims up to
+        // multiples of 8, then halve the width when handing the buffer
+        // to the encoder (multicolor logical pixels are 2× wider).
+        bool mc = (mode == amiga::Mode::c64_charset_multicolor);
+        constexpr std::size_t kSrcStep = 8;
+        auto round_up = [](std::size_t v, std::size_t s) {
+            return ((v + s - 1) / s) * s;
+        };
+        std::size_t sw = have_w
+            ? round_up(static_cast<std::size_t>(options.width), kSrcStep)
+            : 0;
+        std::size_t sh = have_h
+            ? round_up(static_cast<std::size_t>(options.height), kSrcStep)
+            : 0;
+        if (!have_w) {
+            auto wf = static_cast<double>(sh) * src_aspect;
+            sw = round_up(static_cast<std::size_t>(std::lround(wf)), kSrcStep);
+        }
+        if (!have_h) {
+            auto hf = static_cast<double>(sw) / src_aspect;
+            sh = round_up(static_cast<std::size_t>(std::lround(hf)), kSrcStep);
+        }
+        return {mc ? (sw / 2) : sw, sh};
+    }
     if (is_fixed_buf && !options.native_par && params.screen_height > 0) {
         return {mode_w, params.screen_height};
     }
@@ -863,9 +901,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // a smaller letterboxed image — pad with black (matching SNES /
         // Genesis), and pad tmask in lock-step (border = transparent
         // since it's outside the source region).
+        //
+        // Charset modes are flexible: if the image's current dims are
+        // already a valid multiple of the cell size, leave them alone
+        // (the user passed --width / --height for a freeform charmap).
+        // Otherwise pad to the mode default.
         auto cparams = amiga::get_mode_params(mode);
         std::size_t kCW = cparams.screen_width;
         std::size_t kCH = cparams.screen_height;
+        if (amiga::is_c64_charset(mode)) {
+            std::size_t tw_step =
+                (mode == amiga::Mode::c64_charset_multicolor) ? 4 : 8;
+            std::size_t th_step = 8;
+            if (image->width()  != 0 && (image->width()  % tw_step) == 0
+                && image->height() != 0 && (image->height() % th_step) == 0) {
+                kCW = image->width();
+                kCH = image->height();
+            }
+        }
         if (image->width() != kCW || image->height() != kCH) {
             std::size_t old_w = image->width(), old_h = image->height();
             std::size_t ox = (kCW > old_w) ? (kCW - old_w) / 2 : 0;
@@ -916,10 +969,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             case amiga::Mode::c64_petscii:
                 return c64::encode_petscii(*image, pal_choice, dith, metric,
                                             options.c64_petscii_graphics_only);
-            case amiga::Mode::c64_charset_hires:
-                return c64::encode_charset_hires(*image, pal_choice, dith, metric);
-            case amiga::Mode::c64_charset_multicolor:
-                return c64::encode_charset_multicolor(*image, pal_choice, dith, metric);
+            case amiga::Mode::c64_charset_hires: {
+                std::size_t budget = options.tile_budget == 0
+                    ? std::size_t{256} : options.tile_budget;
+                return c64::encode_charset_hires(
+                    *image, pal_choice, dith, metric,
+                    budget, options.tile_reserve);
+            }
+            case amiga::Mode::c64_charset_multicolor: {
+                std::size_t budget = options.tile_budget == 0
+                    ? std::size_t{256} : options.tile_budget;
+                return c64::encode_charset_multicolor(
+                    *image, pal_choice, dith, metric,
+                    budget, options.tile_reserve);
+            }
             default:
                 return c64::encode_multicolor(*image, pal_choice, dith, metric);
             }
@@ -949,6 +1012,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         raw.insert(raw.end(), enc->color_ram.begin(), enc->color_ram.end());
         result.raw_frame = std::move(raw);
         result.c64_bg_color = enc->bg_color;
+        result.c64_cols = enc->cols;
+        result.c64_rows = enc->rows;
+        result.c64_unique_glyphs = enc->unique_glyphs;
+        result.c64_mc1 = enc->mc1;
+        result.c64_mc2 = enc->mc2;
+        // Re-use the Genesis tile-stats fields for the web status line:
+        // semantically identical (unique tiles, total cells, bytes/tile).
+        // Bytes/tile = 8 for c64 8-byte glyph patterns.
+        if (enc->cols > 0 && enc->rows > 0) {
+            result.genesis_unique_tiles = enc->unique_glyphs;
+            result.genesis_total_cells = enc->cols * enc->rows;
+            result.tile_data_bytes = enc->unique_glyphs * 8;
+        }
         return result;
     }
 
@@ -3293,6 +3369,11 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.ssimulacra2_score = p.ssimulacra2_score;
     s.raw_frame = std::move(p.raw_frame);
     s.c64_bg_color = p.c64_bg_color;
+    s.c64_cols = p.c64_cols;
+    s.c64_rows = p.c64_rows;
+    s.c64_unique_glyphs = p.c64_unique_glyphs;
+    s.c64_mc1 = p.c64_mc1;
+    s.c64_mc2 = p.c64_mc2;
     s.genesis_unique_tiles = p.genesis_unique_tiles;
     s.tile_data_bytes      = p.tile_data_bytes;
     s.genesis_total_cells = p.genesis_total_cells;

@@ -147,6 +147,15 @@ struct PipelineResult {
     // RAM but not bg. 0 for non-c64 runs.
     std::uint8_t c64_bg_color = 0;
 
+    // c64 charset modes — tilemap dims + dedup stats + mc1/mc2 globals
+    // surfaced so downstream .h export reads them without re-encoding.
+    // 0 for non-charset runs.
+    std::size_t c64_cols = 0;
+    std::size_t c64_rows = 0;
+    std::size_t c64_unique_glyphs = 0;
+    std::uint8_t c64_mc1 = 0;
+    std::uint8_t c64_mc2 = 0;
+
     // Tile-dedup stats — set by Genesis (4bpp 8×8 tiles, 32 B each) and
     // SNES Mode 7 (8bpp 8×8 tiles, 64 B each). 0 = not a tiled run.
     std::size_t genesis_unique_tiles = 0;

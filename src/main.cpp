@@ -527,6 +527,11 @@ struct Config {
     std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
     std::string c64_metric  = "mse";      // mse (OKLab²), blur (PN-sRGB), ssim (sRGB)
     bool c64_petscii_graphics_only = false;
+    // Tile-based modes (c64 charset; SNES / Genesis / future Amiga 16x16
+    // / PS1 64x64). 0 = mode default. >0 sets a custom dedup budget so
+    // demos can ship larger glyph catalogues across charset banks.
+    std::size_t tile_budget = 0;
+    std::size_t tile_reserve = 0;
     int cga_bg = 0;                    // background color index (0..15 in master palette)
     bool cga_auto_palette = true;      // try all palettes, pick lowest-error
 
@@ -1159,6 +1164,36 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--c64-petscii-graphics") {
             config.c64_petscii_graphics_only = true;
+            continue;
+        }
+        if (arg == "--tile-budget" && i + 1 < argc) {
+            auto v = std::string(argv[++i]);
+            try {
+                long n = std::stol(v);
+                if (n < 1) {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                        "--tile-budget must be ≥ 1"}};
+                }
+                config.tile_budget = static_cast<std::size_t>(n);
+            } catch (...) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("--tile-budget: invalid integer '{}'", v)}};
+            }
+            continue;
+        }
+        if (arg == "--tile-reserve" && i + 1 < argc) {
+            auto v = std::string(argv[++i]);
+            try {
+                long n = std::stol(v);
+                if (n < 0) {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                        "--tile-reserve must be ≥ 0"}};
+                }
+                config.tile_reserve = static_cast<std::size_t>(n);
+            } catch (...) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("--tile-reserve: invalid integer '{}'", v)}};
+            }
             continue;
         }
         if (arg == "--c64-metric" && i + 1 < argc) {
@@ -2082,6 +2117,8 @@ api::Options make_api_options(const Config& cfg) {
     opts.c64_palette = cfg.c64_palette;
     opts.c64_metric = cfg.c64_metric;
     opts.c64_petscii_graphics_only = cfg.c64_petscii_graphics_only;
+    opts.tile_budget = cfg.tile_budget;
+    opts.tile_reserve = cfg.tile_reserve;
     opts.locks = cfg.locks;
     opts.pins = cfg.pins;
     opts.palette_file = cfg.palette_file;
@@ -4021,6 +4058,57 @@ int main(int argc, char* argv[]) {
                      static_cast<std::streamsize>(st.raw_frame.size()));
             cli_status("Raw:    {} ({} bytes)", config->output_path,
                        st.raw_frame.size());
+        } else if (ends_with(config->output_path, ".h")
+                   && amiga::is_c64_charset(config->mode)) {
+            // Charset .h: reconstruct an EncodeResult from the api state
+            // (raw_frame holds the bytes; cols/rows/unique_glyphs/mc1/mc2
+            // come back through EncodeState). No re-encoding.
+            c64::EncodeResult ch_enc;
+            ch_enc.cols = st.c64_cols;
+            ch_enc.rows = st.c64_rows;
+            ch_enc.unique_glyphs = st.c64_unique_glyphs;
+            ch_enc.bg_color = st.c64_bg_color;
+            ch_enc.mc1 = st.c64_mc1;
+            ch_enc.mc2 = st.c64_mc2;
+            std::size_t charset_bytes = st.c64_unique_glyphs * 8;
+            std::size_t cells = st.c64_cols * st.c64_rows;
+            if (st.raw_frame.size() < charset_bytes + 2 * cells) {
+                std::println(stderr,
+                    "C64 charset .h: raw_frame too small ({} < {})",
+                    st.raw_frame.size(), charset_bytes + 2 * cells);
+                return exit_code::internal;
+            }
+            ch_enc.bitmap.assign(
+                st.raw_frame.begin(),
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes));
+            ch_enc.screen_ram.assign(
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes),
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes + cells));
+            ch_enc.color_ram.assign(
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes + cells),
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes + 2 * cells));
+
+            auto sym = config->symbol_name.empty()
+                ? std::string("img") : config->symbol_name;
+            auto hdr = c64::charset_header(
+                ch_enc, sym,
+                config->mode == amiga::Mode::c64_charset_multicolor,
+                c64::parse_palette(config->c64_palette));
+            if (!hdr) {
+                std::println(stderr, "Header generate: {}",
+                             hdr.error().message);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of << *hdr;
+            cli_status("Header: {} ({}x{} cells, {} glyphs)",
+                       config->output_path, ch_enc.cols, ch_enc.rows,
+                       ch_enc.unique_glyphs);
         } else if (ends_with(config->output_path, ".prg") ||
                    ends_with(config->output_path, ".koa") ||
                    ends_with(config->output_path, ".hir")) {
