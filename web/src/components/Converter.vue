@@ -329,6 +329,16 @@ const rawTooltipHtml = computed(() => {
 // Whether HAM controls should be shown
 const showHamControls = computed(() => isHamMode(options.mode))
 
+// "Effective" fixed-buffer state — c64-charset modes count as fixed-
+// buffer when Resize is off (the encoder runs at the mode default
+// 320x200 / 160x200), so Native PAR + PAR-aware preview scaling kick
+// in. With Resize on, charset modes are freeform and Native PAR is
+// meaningless.
+const isEffectiveFixedBuffer = computed(() =>
+  isFixedBufferMode(options.mode) ||
+  (isC64CharsetMode(options.mode) && !sizeOverride.value)
+)
+
 // Dual playfield: only valid for standard Amiga modes (no HAM, no EHB,
 // no Atari/DOS) at the matching depth for the current chipset (3 for
 // OCS = 8 PF2 colours, 4 for AGA = 16).
@@ -413,12 +423,14 @@ function clampDepthForMode(mode: string): void {
 }
 
 function syncNativeParToMode(mode: string, oldMode: string): void {
-  // Fixed-buffer modes (DOS + SNES) default to native PAR (letterbox /
-  // pillarbox into the fixed hardware buffer) so the preview shows the
-  // right aspect. Reset when entering a fixed-buffer mode from outside;
-  // leave alone within the family so the user toggle sticks.
-  const fixedNew = isFixedBufferMode(mode)
-  const fixedOld = isFixedBufferMode(oldMode)
+  // Fixed-buffer modes (DOS + SNES + Genesis + non-charset C64) default
+  // to native PAR (letterbox / pillarbox into the fixed hardware buffer)
+  // so the preview shows the right aspect. C64 charset modes count as
+  // fixed-buffer too when Resize is off — keep nativePar available.
+  const isFixed = (m: string): boolean =>
+    isFixedBufferMode(m) || isC64CharsetMode(m)
+  const fixedNew = isFixed(mode)
+  const fixedOld = isFixed(oldMode)
   if (fixedNew && !fixedOld) options.nativePar = true
   if (!fixedNew) options.nativePar = false
 }
@@ -784,7 +796,7 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number; cs
   // regardless of letterbox-vs-stretch.
   const cssW = dw
   let cssH = dh
-  if (isFixedBufferMode(options.mode)) {
+  if (isEffectiveFixedBuffer.value) {
     const par = modePar(options.mode)
     cssH = Math.round(dw * result.height / (result.width * par))
   }
@@ -1703,8 +1715,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
                    hardware buffer): preserve source aspect by letterboxing/
                    pillarboxing the image inside the fixed frame instead of
-                   stretching. -->
-              <div v-if="isFixedBufferMode(options.mode)" class="grid align-items-center">
+                   stretching. C64 charset modes count as fixed-buffer
+                   when Resize is off (encoder runs at the mode default). -->
+              <div v-if="isEffectiveFixedBuffer" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.nativePar" />
