@@ -13,8 +13,10 @@
 #include "scap.hpp"
 #include "iff.hpp"
 #include "console_color.hpp"
+#include "cheader_genesis.hpp"
 #include "genesis.hpp"
 #include "c64.hpp"
+#include "c64_prg.hpp"
 #include "snes_io.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
@@ -94,7 +96,14 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "genesis-h40")       return amiga::Mode::genesis_h40;
     if (s == "genesis-h32-sh")    return amiga::Mode::genesis_h32_sh;
     if (s == "genesis-h40-sh")    return amiga::Mode::genesis_h40_sh;
+    if (s == "c64-hires")         return amiga::Mode::c64_hires;
     if (s == "c64-multicolor")    return amiga::Mode::c64_multicolor;
+    if (s == "c64-fli")           return amiga::Mode::c64_fli;
+    if (s == "c64-afli")          return amiga::Mode::c64_afli;
+    if (s == "c64-petscii")       return amiga::Mode::c64_petscii;
+    if (s == "c64-charset-hires") return amiga::Mode::c64_charset_hires;
+    if (s == "c64-charset-multicolor")
+        return amiga::Mode::c64_charset_multicolor;
     return amiga::Mode::lores;
 }
 
@@ -443,6 +452,85 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     bool have_w = options.width > 0;
     bool have_h = options.height > 0;
 
+    // Fixed-buffer modes have hardware-locked screen dimensions; if the
+    // caller didn't ask for native-par, ALWAYS fit to mode_w × screen_h
+    // regardless of any user-supplied width/height. (Otherwise the
+    // encoder rejects mismatched input — c64::encode_multicolor wants
+    // exactly 160×200, etc.)
+    //
+    // Exception: c64 charset modes (hires + multicolor) accept arbitrary
+    // dimensions, padded up to the next multiple of cell size. Lets
+    // demos use very large source bitmaps with shared charsets across
+    // many screens. When the user passes --width / --height the
+    // encoder receives those (rounded up to 8×8 / 4×8); otherwise the
+    // fixed-buf default still applies.
+    bool is_fixed_buf =
+        amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
+        amiga::is_cga(mode)   || amiga::is_cga_text(mode) ||
+        amiga::is_snes(mode)  || amiga::is_genesis(mode) || amiga::is_c64(mode);
+    // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
+    // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
+    // convention as c64-charset-hires. No multicolor halving.
+    bool tile_8x8_freeform =
+        (amiga::is_genesis(mode) || amiga::is_snes(mode))
+        && (have_w || have_h);
+    if (tile_8x8_freeform) {
+        constexpr std::size_t kTileSide = 8;
+        auto round_up = [](std::size_t v, std::size_t s) {
+            return ((v + s - 1) / s) * s;
+        };
+        std::size_t tw = have_w
+            ? round_up(static_cast<std::size_t>(options.width), kTileSide)
+            : 0;
+        std::size_t th = have_h
+            ? round_up(static_cast<std::size_t>(options.height), kTileSide)
+            : 0;
+        if (!have_w) {
+            auto wf = static_cast<double>(th) * src_aspect;
+            tw = round_up(static_cast<std::size_t>(std::lround(wf)), kTileSide);
+        }
+        if (!have_h) {
+            auto hf = static_cast<double>(tw) / src_aspect;
+            th = round_up(static_cast<std::size_t>(std::lround(hf)), kTileSide);
+        }
+        return {tw, th};
+    }
+
+    bool charset_freeform =
+        amiga::is_c64_charset(mode) && (have_w || have_h);
+    if (charset_freeform) {
+        // Designer convention: --width / --height refer to *source*
+        // pixels, treated 1:1. For charset-hires every 8×8 source block
+        // becomes one 8×8 cell, so the encoder receives the user dims
+        // verbatim. For charset-multicolor every 8×8 source block
+        // becomes one 4×8 multicolor cell — round source dims up to
+        // multiples of 8, then halve the width when handing the buffer
+        // to the encoder (multicolor logical pixels are 2× wider).
+        bool mc = (mode == amiga::Mode::c64_charset_multicolor);
+        constexpr std::size_t kSrcStep = 8;
+        auto round_up = [](std::size_t v, std::size_t s) {
+            return ((v + s - 1) / s) * s;
+        };
+        std::size_t sw = have_w
+            ? round_up(static_cast<std::size_t>(options.width), kSrcStep)
+            : 0;
+        std::size_t sh = have_h
+            ? round_up(static_cast<std::size_t>(options.height), kSrcStep)
+            : 0;
+        if (!have_w) {
+            auto wf = static_cast<double>(sh) * src_aspect;
+            sw = round_up(static_cast<std::size_t>(std::lround(wf)), kSrcStep);
+        }
+        if (!have_h) {
+            auto hf = static_cast<double>(sw) / src_aspect;
+            sh = round_up(static_cast<std::size_t>(std::lround(hf)), kSrcStep);
+        }
+        return {mc ? (sw / 2) : sw, sh};
+    }
+    if (is_fixed_buf && !options.native_par && params.screen_height > 0) {
+        return {mode_w, params.screen_height};
+    }
+
     if (have_w && have_h) {
         return {static_cast<std::size_t>(options.width),
                 static_cast<std::size_t>(options.height)};
@@ -476,7 +564,7 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
         bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
                                amiga::is_ega(mode)   || amiga::is_cga(mode) ||
                                amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                               amiga::is_genesis(mode);
+                               amiga::is_genesis(mode) || amiga::is_c64(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
@@ -494,8 +582,17 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
 Options decompose_mode_options(const Options& opts) {
     auto o = opts;
     auto& s = o.mode;
-    bool has_hires = s.find("hires") != std::string::npos;
-    bool has_lace = s.size() > 4 && s.find("-lace") != std::string::npos;
+    // The "hires" / "lace" suffixes are Amiga compound-mode markers
+    // (ham6-hires, lores-lace, etc.). Other chipsets use mode strings
+    // that may *contain* the substring (c64-hires, vga-13h… though
+    // none of those collide today besides c64). Anchor by chipset
+    // prefix so non-Amiga modes don't get accidentally rewritten.
+    bool is_amiga_compound = s.starts_with("ham") || s.starts_with("lores") ||
+                              s.starts_with("hires") || s.starts_with("ehb");
+    bool has_hires = is_amiga_compound &&
+                     s.find("hires") != std::string::npos;
+    bool has_lace = is_amiga_compound &&
+                    s.size() > 4 && s.find("-lace") != std::string::npos;
     // Only override if user didn't already set these
     if (has_hires && o.width == 0) o.width = 640;
     if (has_lace) o.interlace = true;
@@ -510,7 +607,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     const Options& orig_options) {
     auto options = decompose_mode_options(orig_options);
     auto mode = parse_mode(options.mode);
-    bool compound_hires = orig_options.mode.find("hires") != std::string::npos;
+    bool compound_hires =
+        (orig_options.mode.starts_with("ham") ||
+         orig_options.mode.starts_with("lores") ||
+         orig_options.mode.starts_with("hires") ||
+         orig_options.mode.starts_with("ehb")) &&
+        orig_options.mode.find("hires") != std::string::npos;
 
     // Reject dither methods that don't apply to the chosen mode rather
     // than silently fall through to a degraded encode. HAM has no
@@ -824,15 +926,104 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        auto enc = c64::encode_multicolor(*image);
+        // Pad to the mode's screen buffer. native_par may have produced
+        // a smaller letterboxed image — pad with black (matching SNES /
+        // Genesis), and pad tmask in lock-step (border = transparent
+        // since it's outside the source region).
+        //
+        // Charset modes are flexible: if the image's current dims are
+        // already a valid multiple of the cell size, leave them alone
+        // (the user passed --width / --height for a freeform charmap).
+        // Otherwise pad to the mode default.
+        auto cparams = amiga::get_mode_params(mode);
+        std::size_t kCW = cparams.screen_width;
+        std::size_t kCH = cparams.screen_height;
+        if (amiga::is_c64_charset(mode)) {
+            std::size_t tw_step =
+                (mode == amiga::Mode::c64_charset_multicolor) ? 4 : 8;
+            std::size_t th_step = 8;
+            if (image->width()  != 0 && (image->width()  % tw_step) == 0
+                && image->height() != 0 && (image->height() % th_step) == 0) {
+                kCW = image->width();
+                kCH = image->height();
+            }
+        }
+        if (image->width() != kCW || image->height() != kCH) {
+            std::size_t old_w = image->width(), old_h = image->height();
+            std::size_t ox = (kCW > old_w) ? (kCW - old_w) / 2 : 0;
+            std::size_t oy = (kCH > old_h) ? (kCH - old_h) / 2 : 0;
+            std::size_t cw = std::min(old_w, kCW);
+            std::size_t ch = std::min(old_h, kCH);
+            Image padded(kCW, kCH);
+            for (std::size_t y = 0; y < ch; ++y)
+                for (std::size_t x = 0; x < cw; ++x)
+                    padded[ox + x, oy + y] = (*image)[x, y];
+            *image = std::move(padded);
+            if (has_transparency && tmask.size() == old_w * old_h) {
+                std::vector<bool> new_mask(kCW * kCH, true);
+                for (std::size_t y = 0; y < ch; ++y)
+                    for (std::size_t x = 0; x < cw; ++x)
+                        new_mask[(oy + y) * kCW + (ox + x)] =
+                            tmask[y * old_w + x];
+                tmask = std::move(new_mask);
+            }
+        }
+        auto pal_choice = c64::parse_palette(options.c64_palette);
+        auto metric     = c64::parse_metric(options.c64_metric);
+        // match_range: stretch the source's OKLab extent to span the
+        // chosen VIC-II palette's extent. Same shape as the EHB /
+        // standard-mode preprocessor — pulls highlights / shadows
+        // into the palette's reachable range so quantisation has
+        // headroom on both ends. Off by default.
+        if (options.match_range) {
+            auto pal_span = c64::palette_colors(pal_choice);
+            Palette c64_pal;
+            c64_pal.name = "c64";
+            c64_pal.colors.assign(pal_span.begin(), pal_span.end());
+            preprocess::match_palette_range(*image, c64_pal);
+        }
+        dither::Settings dith;
+        dith.method      = parse_dither(options.dither);
+        dith.strength    = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine  = true;
+        Result<c64::EncodeResult> enc = [&] {
+            switch (mode) {
+            case amiga::Mode::c64_hires:
+                return c64::encode_hires(*image, pal_choice, dith, metric);
+            case amiga::Mode::c64_fli:
+                return c64::encode_fli(*image, pal_choice, dith, metric);
+            case amiga::Mode::c64_afli:
+                return c64::encode_afli(*image, pal_choice, dith, metric);
+            case amiga::Mode::c64_petscii:
+                return c64::encode_petscii(*image, pal_choice, dith, metric,
+                                            options.c64_petscii_graphics_only);
+            case amiga::Mode::c64_charset_hires: {
+                std::size_t budget = options.tile_budget == 0
+                    ? std::size_t{256} : options.tile_budget;
+                return c64::encode_charset_hires(
+                    *image, pal_choice, dith, metric,
+                    budget, options.tile_reserve);
+            }
+            case amiga::Mode::c64_charset_multicolor: {
+                std::size_t budget = options.tile_budget == 0
+                    ? std::size_t{256} : options.tile_budget;
+                return c64::encode_charset_multicolor(
+                    *image, pal_choice, dith, metric,
+                    budget, options.tile_reserve);
+            }
+            default:
+                return c64::encode_multicolor(*image, pal_choice, dith, metric);
+            }
+        }();
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;
         result.rendered = std::move(enc->rendered);
-        auto pal_span = c64::pepto_palette();
+        auto pal_span = c64::palette_colors(pal_choice);
         result.palette.assign(pal_span.begin(), pal_span.end());
         result.indices.clear();
-        result.planes.depth = 2;
+        result.planes.depth = amiga::is_c64_multicolor(mode) ? 2 : 1;
         result.mode = mode;
         result.hires = false;
         result.interlace = false;
@@ -840,8 +1031,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.transparency_mask = tmask;
         result.finalize_psnr(*image, 0.0f);
         // Pack bitmap + screen + color RAM into raw_frame for downstream
-        // writers (.prg layout to follow). Order: bitmap (8000) +
-        // screen (1000) + color (1000) = 10000 bytes.
+        // writers. Order: bitmap + screen + color. Sizes vary by mode
+        // (see c64_prg.cpp for the per-mode split).
         std::vector<std::uint8_t> raw;
         raw.reserve(enc->bitmap.size() + enc->screen_ram.size() +
                     enc->color_ram.size());
@@ -849,6 +1040,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         raw.insert(raw.end(), enc->screen_ram.begin(), enc->screen_ram.end());
         raw.insert(raw.end(), enc->color_ram.begin(), enc->color_ram.end());
         result.raw_frame = std::move(raw);
+        result.c64_bg_color = enc->bg_color;
+        result.c64_cols = enc->cols;
+        result.c64_rows = enc->rows;
+        result.c64_unique_glyphs = enc->unique_glyphs;
+        result.c64_mc1 = enc->mc1;
+        result.c64_mc2 = enc->mc2;
+        // Re-use the Genesis tile-stats fields for the web status line:
+        // semantically identical (unique tiles, total cells, bytes/tile).
+        // Bytes/tile = 8 for c64 8-byte glyph patterns.
+        if (enc->cols > 0 && enc->rows > 0) {
+            result.genesis_unique_tiles = enc->unique_glyphs;
+            result.genesis_total_cells = enc->cols * enc->rows;
+            result.tile_data_bytes = enc->unique_glyphs * 8;
+        }
         return result;
     }
 
@@ -952,36 +1157,84 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         }
 
-        // 4. Per-pixel re-quantise via the central ED driver. Picker
-        //    selects the palette index in [1..15] against this tile's
-        //    assigned palette (base or shadowed for S/H modes).
+        // 4. Per-pixel re-quantise via per-tile mirrored 3×3 ED.
+        //
+        // Build a 3W×3H buffer per 8×8 tile where the centre block is
+        // the source tile and the 8 surrounding blocks are mirror
+        // reflections (h-flip on left/right, v-flip on top/bottom,
+        // both on corners). Run ED on the full 24×24, take the centre
+        // 8×8. Identical source tiles produce identical mirrored
+        // buffers → identical post-ED patterns → cleaner dedup. Same
+        // approach as c64 charset (commit 7236237).
         Image rendered(w, h);
         std::vector<std::uint8_t>& pixel_index = gres.pixel_index;
         const std::vector<std::uint8_t>& tile_pal = gres.tile_palette;
         const std::vector<std::uint8_t>& tile_shadow = gres.tile_shadow;
-        float te = dither::diffuse_raw_buffer(
-            *image, dith,
-            [&](const color_space::OKLab& target,
-                std::size_t x, std::size_t y) -> dither::PickResult {
-                std::size_t tx = x / genesis::kTileSide;
-                std::size_t ty = y / genesis::kTileSide;
+        constexpr std::size_t kTS = genesis::kTileSide;       // 8
+        constexpr std::size_t k3T = 3 * kTS;                  // 24
+        Image block(k3T, k3T);
+        std::vector<std::uint8_t> block_idx(k3T * k3T, 0);
+        std::vector<color_space::OKLab> block_chosen(k3T * k3T);
+        auto tiles_y = (h + kTS - 1) / kTS;
+        float te = 0.0f;
+        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+                // Mirror-fill the 3W×3H block.
+                for (std::size_t by = 0; by < 3; ++by) {
+                    for (std::size_t bx = 0; bx < 3; ++bx) {
+                        for (std::size_t ly = 0; ly < kTS; ++ly) {
+                            std::size_t sy_local =
+                                (by == 1) ? ly : (kTS - 1 - ly);
+                            for (std::size_t lx = 0; lx < kTS; ++lx) {
+                                std::size_t sx_local =
+                                    (bx == 1) ? lx : (kTS - 1 - lx);
+                                std::size_t sx = std::min(
+                                    tx * kTS + sx_local, w - 1);
+                                std::size_t sy = std::min(
+                                    ty * kTS + sy_local, h - 1);
+                                block[bx * kTS + lx, by * kTS + ly] =
+                                    (*image)[sx, sy];
+                            }
+                        }
+                    }
+                }
                 std::size_t cell = ty * tiles_x + tx;
                 std::uint8_t pal = tile_pal[cell];
                 bool shadowed = sh_mode && tile_shadow[cell] != 0;
                 auto& pl = shadowed ? shadow_lab[pal] : palette_lab[pal];
                 std::span<const color_space::OKLab> pl_span(pl.data(),
                                                              pl.size());
-                std::size_t k = 1;
-                color_space::OKLab chosen{};
-                float thr = dither::pick_palette_index_with_ostro(
-                    dith.method, target, pl_span, x, y,
-                    dith.strength, /*k_min=*/1, k, chosen);
-                pixel_index[y * w + x] = static_cast<std::uint8_t>(k);
-                rendered[x, y] = shadowed
-                    ? shadow_lines[pal][k]
-                    : gres.palette_lines[pal][k];
-                return {chosen, thr};
-            });
+                std::fill(block_idx.begin(), block_idx.end(), 0);
+                te += dither::diffuse_raw_buffer(
+                    block, dith,
+                    [&](const color_space::OKLab& target,
+                        std::size_t bx, std::size_t by) -> dither::PickResult {
+                        std::size_t k = 1;
+                        color_space::OKLab chosen{};
+                        float thr = dither::pick_palette_index_with_ostro(
+                            dith.method, target, pl_span, bx, by,
+                            dith.strength, /*k_min=*/1, k, chosen);
+                        std::size_t bi = by * k3T + bx;
+                        block_idx[bi] = static_cast<std::uint8_t>(k);
+                        block_chosen[bi] = chosen;
+                        return {chosen, thr};
+                    });
+                // Copy centre 8×8 back to the global buffers.
+                for (std::size_t ly = 0; ly < kTS; ++ly) {
+                    for (std::size_t lx = 0; lx < kTS; ++lx) {
+                        auto bi = (kTS + ly) * k3T + (kTS + lx);
+                        auto x = tx * kTS + lx;
+                        auto y = ty * kTS + ly;
+                        if (x >= w || y >= h) continue;
+                        std::uint8_t k = block_idx[bi];
+                        pixel_index[y * w + x] = k;
+                        rendered[x, y] = shadowed
+                            ? shadow_lines[pal][k]
+                            : gres.palette_lines[pal][k];
+                    }
+                }
+            }
+        }
 
         gres.preview = rendered;
         gres.total_error = te;
@@ -992,7 +1245,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         //    art with repeated regions (skies, gradients, decorations).
         auto dedup = genesis::dedup_tiles(
             gres.pixel_index, gres.tile_palette, w, h);
-        auto tiles_y = (h + genesis::kTileSide - 1) / genesis::kTileSide;
         auto total_cells = tiles_x * tiles_y;
 
         // Build the three byte streams: tile bytes, tilemap cells (u16),
@@ -2473,6 +2725,60 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.genesisUniqueTiles = static_cast<int>(p.genesis_unique_tiles);
     r.tileDataBytes      = static_cast<int>(p.tile_data_bytes);
     r.genesisTotalCells  = static_cast<int>(p.genesis_total_cells);
+    // c64 charset diagnostic: copy raw_frame so the web preview can
+    // render the generated charset under the image. Cheap (a few KB
+    // for typical charsets) and only populated when cols/rows are set.
+    if (amiga::is_c64_charset(p.mode) && p.c64_cols > 0 && p.c64_rows > 0) {
+        r.c64CharsetData = p.raw_frame;
+        r.c64Mc1     = p.c64_mc1;
+        r.c64Mc2     = p.c64_mc2;
+        r.c64BgColor = p.c64_bg_color;
+    }
+    // Genesis tile diagnostic: u16 vectors get serialised as little-endian
+    // 2-byte sequences so JS can DataView them with .getUint16(off, true).
+    if (amiga::is_genesis(p.mode) && !p.genesis_tile_bytes.empty()) {
+        r.genesisTileBytes = p.genesis_tile_bytes;
+        auto u16_to_bytes = [](const std::vector<std::uint16_t>& src) {
+            std::vector<std::uint8_t> out(src.size() * 2);
+            for (std::size_t i = 0; i < src.size(); ++i) {
+                out[i * 2]     = static_cast<std::uint8_t>(src[i] & 0xFF);
+                out[i * 2 + 1] = static_cast<std::uint8_t>((src[i] >> 8) & 0xFF);
+            }
+            return out;
+        };
+        r.genesisTilemapBytes  = u16_to_bytes(p.genesis_tilemap_cells);
+        r.genesisPaletteBytes  = u16_to_bytes(p.genesis_palette_words);
+    }
+    // SNES Mode 7 tile diagnostic: split packed_bytes into tilemap (first
+    // 16 KB) + tile data (rest). Palette is 256 RGB triples for 256 mode,
+    // empty for Direct (BBGGGRRR pixels self-decode).
+    if (amiga::is_snes(p.mode) && !p.raw_frame.empty()) {
+        constexpr std::size_t kTilemapBytes = 128 * 128;
+        if (p.raw_frame.size() >= kTilemapBytes) {
+            r.snesTilemapBytes.assign(
+                p.raw_frame.begin(),
+                p.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(kTilemapBytes));
+            r.snesTileBytes.assign(
+                p.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(kTilemapBytes),
+                p.raw_frame.end());
+        }
+        if (!p.palette.empty()) {
+            r.snesPaletteBytes.reserve(p.palette.size() * 3);
+            for (auto& c : p.palette) {
+                auto srgb = color_space::linear_to_srgb(c);
+                auto chan = [](float v) {
+                    return static_cast<std::uint8_t>(
+                        std::clamp(static_cast<int>(std::lround(v * 255.0f)),
+                                    0, 255));
+                };
+                r.snesPaletteBytes.push_back(chan(srgb.r));
+                r.snesPaletteBytes.push_back(chan(srgb.g));
+                r.snesPaletteBytes.push_back(chan(srgb.b));
+            }
+        }
+    }
     return r;
 }
 
@@ -2557,11 +2863,130 @@ ConvertResult convert_degas(const std::uint8_t* input_data,
     return make_result(*std::move(degas_data), *result);
 }
 
+// Build a "c_array_block" string emitting `name[]` filled with `bytes`
+// as 0xNN values, 16 per row. Used by the c64-charset / SNES inline
+// header writers.
+static std::string emit_byte_array(std::string_view name,
+                                   std::span<const std::uint8_t> bytes,
+                                   std::string_view type = "unsigned char") {
+    std::string out;
+    out.reserve(bytes.size() * 6 + 64);
+    out += std::format("static const {} {}[] = {{\n   ",
+                        type, name);
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        out += std::format(" 0x{:02X}", bytes[i]);
+        if (i + 1 < bytes.size()) out += ',';
+        if ((i + 1) % 16 == 0 && i + 1 < bytes.size()) out += "\n   ";
+    }
+    out += "\n};\n\n";
+    return out;
+}
+
+// Minimal SNES Mode 7 .h: tiles + tilemap + (256-mode) palette.
+// Direct mode skips the palette since pixels self-decode (BBGGGRRR).
+static std::string snes_header(const PipelineResult& p,
+                                std::string_view sym) {
+    std::string out;
+    out += std::format(
+        "// Generated by png2amiga. Do not edit.\n"
+        "//   SNES Mode 7 — {} tile(s), {}×{} tilemap.\n\n"
+        "#pragma once\n\n",
+        p.genesis_unique_tiles, 128, 128);
+    constexpr std::size_t kTilemapBytes = 128 * 128;
+    if (p.raw_frame.size() < kTilemapBytes) return out;
+    auto tilemap = std::span<const std::uint8_t>(
+        p.raw_frame.data(), kTilemapBytes);
+    auto tile_bytes = std::span<const std::uint8_t>(
+        p.raw_frame.data() + kTilemapBytes,
+        p.raw_frame.size() - kTilemapBytes);
+    out += std::format("#define {}_TILES   {}\n",
+                        sym, p.genesis_unique_tiles);
+    out += std::format("#define {}_TILE_BYTES   {}\n\n",
+                        sym, tile_bytes.size());
+    out += emit_byte_array(std::string(sym) + "_tiles", tile_bytes);
+    out += emit_byte_array(std::string(sym) + "_tilemap", tilemap);
+    if (!p.palette.empty()) {
+        // Emit BGR555 words (LE 2-byte pairs).
+        std::vector<std::uint8_t> pal_bytes;
+        pal_bytes.reserve(p.palette.size() * 2);
+        for (auto& c : p.palette) {
+            auto w = console_color::to_bgr555_word(c);
+            pal_bytes.push_back(static_cast<std::uint8_t>(w & 0xFF));
+            pal_bytes.push_back(static_cast<std::uint8_t>((w >> 8) & 0xFF));
+        }
+        out += emit_byte_array(std::string(sym) + "_palette",
+                                pal_bytes);
+    }
+    return out;
+}
+
 ConvertResult convert_cheader(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
+
+    auto sym = options.symbol_name.empty()
+        ? std::string{"img"} : options.symbol_name;
+
+    // C64 charset: route through the existing c64::charset_header writer.
+    // raw_frame holds charset_data + screen + color; cols/rows/glyph-count
+    // come back through PipelineResult.
+    if (amiga::is_c64_charset(result->mode)) {
+        c64::EncodeResult enc;
+        enc.cols = result->c64_cols;
+        enc.rows = result->c64_rows;
+        enc.unique_glyphs = result->c64_unique_glyphs;
+        enc.bg_color = result->c64_bg_color;
+        enc.mc1 = result->c64_mc1;
+        enc.mc2 = result->c64_mc2;
+        std::size_t charset_bytes = enc.unique_glyphs * 8;
+        std::size_t cells = enc.cols * enc.rows;
+        if (result->raw_frame.size() < charset_bytes + 2 * cells)
+            return make_error("c64-charset .h: raw_frame too small");
+        enc.bitmap.assign(
+            result->raw_frame.begin(),
+            result->raw_frame.begin()
+                + static_cast<std::ptrdiff_t>(charset_bytes));
+        enc.screen_ram.assign(
+            result->raw_frame.begin()
+                + static_cast<std::ptrdiff_t>(charset_bytes),
+            result->raw_frame.begin()
+                + static_cast<std::ptrdiff_t>(charset_bytes + cells));
+        enc.color_ram.assign(
+            result->raw_frame.begin()
+                + static_cast<std::ptrdiff_t>(charset_bytes + cells),
+            result->raw_frame.begin()
+                + static_cast<std::ptrdiff_t>(charset_bytes + 2 * cells));
+        auto pal_choice = c64::parse_palette(options.c64_palette);
+        bool mc = result->mode == amiga::Mode::c64_charset_multicolor;
+        auto hdr = c64::charset_header(enc, sym, mc, pal_choice);
+        if (!hdr) return make_error(hdr.error().message);
+        std::vector<std::uint8_t> bytes(hdr->begin(), hdr->end());
+        return make_result(std::move(bytes), *result);
+    }
+
+    // Sega Genesis: SGDK-compatible header via cheader_genesis.
+    if (amiga::is_genesis(result->mode)
+        && !result->genesis_tile_bytes.empty()) {
+        cheader_genesis::GenesisHeaderOptions hopts;
+        hopts.tile_bytes   = result->genesis_tile_bytes;
+        hopts.tilemap      = result->genesis_tilemap_cells;
+        hopts.palette      = result->genesis_palette_words;
+        hopts.width_pixels  = result->rendered.width();
+        hopts.height_pixels = result->rendered.height();
+        hopts.symbol = sym;
+        auto hdr = cheader_genesis::generate(hopts);
+        if (!hdr) return make_error(hdr.error().message);
+        return make_result(std::move(*hdr), *result);
+    }
+
+    // SNES Mode 7: minimal inline header (tiles + tilemap + palette).
+    if (amiga::is_snes(result->mode)) {
+        auto txt = snes_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
 
     auto ch_opts = pipeline::make_ch_opts({
         .symbol_override = options.symbol_name,
@@ -2750,6 +3175,15 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     auto chipset = resolve_chipset(options.chipset, result->mode);
     bool aga = (chipset == amiga::Chipset::aga);
 
+    // C64 + Genesis already pack their raw bytes into raw_frame
+    // verbatim during run_pipeline (c64: bitmap+screen+color RAM,
+    // genesis: tile_bytes + u16-BE tilemap + u16-BE palette). Hand
+    // them straight back.
+    if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode)) {
+        std::vector<std::uint8_t> raw = std::move(result->raw_frame);
+        return make_result(std::move(raw), *result);
+    }
+
     // IBM PC / DOS modes: mode-specific raw layout.
     //   Text modes (CGA 8x8 / EGA 8x14): char+attr pairs (raw_frame). No
     //     palette — attribute byte already encodes fg/bg from the fixed
@@ -2873,6 +3307,72 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     }
 
     return make_result(std::move(raw), *result);
+}
+
+// ---------------------------------------------------------------------------
+// c64 PRG / Koala / Art-Studio raw exports.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+ConvertResult c64_export(const std::uint8_t* input_data, std::size_t input_size,
+                         const Options& options,
+                         const std::function<Result<c64::prg::PrgData>(
+                             amiga::Mode, const c64::EncodeResult&)>& gen,
+                         const char* label) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    if (!amiga::is_c64(result->mode))
+        return make_error(std::string(label)
+                          + " export only supported for c64 modes");
+    auto enc = c64::prg::unpack_pipeline_raw(
+        result->mode, result->raw_frame, result->c64_bg_color);
+    if (!enc) return make_error(enc.error().message);
+    auto prg = gen(result->mode, *enc);
+    if (!prg) return make_error(prg.error().message);
+    return make_result(std::move(prg->bytes), *result);
+}
+
+}  // namespace
+
+ConvertResult convert_prg(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    return c64_export(input_data, input_size, options,
+                      [](amiga::Mode m, const c64::EncodeResult& r) {
+                          return c64::prg::from_mode(m, r);
+                      },
+                      "PRG");
+}
+
+ConvertResult convert_koa(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    return c64_export(input_data, input_size, options,
+                      [](amiga::Mode m, const c64::EncodeResult& r) {
+                          if (m != amiga::Mode::c64_multicolor)
+                              return Result<c64::prg::PrgData>{
+                                  std::unexpected{Error{
+                                      ErrorCode::unsupported_mode,
+                                      ".koa requires c64-multicolor mode"}}};
+                          return c64::prg::koala_raw(r);
+                      },
+                      "Koala raw");
+}
+
+ConvertResult convert_hir(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    return c64_export(input_data, input_size, options,
+                      [](amiga::Mode m, const c64::EncodeResult& r) {
+                          if (m != amiga::Mode::c64_hires)
+                              return Result<c64::prg::PrgData>{
+                                  std::unexpected{Error{
+                                      ErrorCode::unsupported_mode,
+                                      ".hir requires c64-hires mode"}}};
+                          return c64::prg::hires_raw(r);
+                      },
+                      "Art Studio raw");
 }
 
 ConvertResult convert_palette(const std::uint8_t* input_data,
@@ -3079,6 +3579,12 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.psnr = p.psnr;
     s.ssimulacra2_score = p.ssimulacra2_score;
     s.raw_frame = std::move(p.raw_frame);
+    s.c64_bg_color = p.c64_bg_color;
+    s.c64_cols = p.c64_cols;
+    s.c64_rows = p.c64_rows;
+    s.c64_unique_glyphs = p.c64_unique_glyphs;
+    s.c64_mc1 = p.c64_mc1;
+    s.c64_mc2 = p.c64_mc2;
     s.genesis_unique_tiles = p.genesis_unique_tiles;
     s.tile_data_bytes      = p.tile_data_bytes;
     s.genesis_total_cells = p.genesis_total_cells;

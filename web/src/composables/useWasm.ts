@@ -20,12 +20,16 @@ interface DitherDefaultsPendingEntry {
 type WorkerOutboundMessage =
   | { id: number; fn: string; args: unknown[]; wantProgress: boolean }
 
-// Shape of the worker's reply envelope. `rgba` / `data` cross the
-// thread boundary as ArrayBuffer; we wrap them as Uint8Array on this side.
-interface ReplyEnvelope extends Omit<ConvertResult, 'rgba' | 'data'> {
-  rgba?: ArrayBuffer
-  data?: ArrayBuffer
-}
+// Shape of the worker's reply envelope. Buffer-typed fields cross
+// the thread boundary as ArrayBuffer; wrapped back to Uint8Array
+// on this side.
+type BufferKey =
+  | 'rgba' | 'data' | 'c64CharsetData'
+  | 'genesisTileBytes' | 'genesisTilemapBytes' | 'genesisPaletteBytes'
+  | 'snesTileBytes' | 'snesTilemapBytes' | 'snesPaletteBytes'
+type ReplyEnvelope =
+  Omit<ConvertResult, BufferKey>
+  & Partial<Record<BufferKey, ArrayBuffer>>
 
 type WorkerInboundMessage =
   | { type: 'ready' }
@@ -45,14 +49,28 @@ const pending = new Map<number, PendingEntry | DitherDefaultsPendingEntry>()
 const sharedLoading = ref(true)
 const sharedError = ref('')
 
+function spreadIf(key: BufferKey, b: ArrayBuffer | undefined): Partial<ConvertResult> {
+  return b ? { [key]: new Uint8Array(b) } : {}
+}
+
 function unwrapConvertEnvelope(raw: ReplyEnvelope): ConvertResult {
-  // Conditional spreads (rather than `rgba: ... ?? undefined`) so we don't
-  // explicitly set optional keys to undefined under exactOptionalPropertyTypes.
-  const { rgba, data, ...rest } = raw
+  const {
+    rgba, data, c64CharsetData,
+    genesisTileBytes, genesisTilemapBytes, genesisPaletteBytes,
+    snesTileBytes, snesTilemapBytes, snesPaletteBytes,
+    ...rest
+  } = raw
   return {
     ...rest,
-    ...(rgba ? { rgba: new Uint8Array(rgba) } : {}),
-    ...(data ? { data: new Uint8Array(data) } : {}),
+    ...spreadIf('rgba', rgba),
+    ...spreadIf('data', data),
+    ...spreadIf('c64CharsetData', c64CharsetData),
+    ...spreadIf('genesisTileBytes', genesisTileBytes),
+    ...spreadIf('genesisTilemapBytes', genesisTilemapBytes),
+    ...spreadIf('genesisPaletteBytes', genesisPaletteBytes),
+    ...spreadIf('snesTileBytes', snesTileBytes),
+    ...spreadIf('snesTilemapBytes', snesTilemapBytes),
+    ...spreadIf('snesPaletteBytes', snesPaletteBytes),
   }
 }
 
@@ -146,6 +164,9 @@ export interface UseWasmReturn {
   convertViewer: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertDegas: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertRaw: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
+  convertPRG: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
+  convertKoa: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
+  convertHir: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertMask: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertMaskRaw: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   ditherDefaults: (opts: WasmOptions) => Promise<DitherDefaults>
@@ -193,6 +214,9 @@ export function useWasm(): UseWasmReturn {
     convertViewer:  (b, o, p) => callConvert('convertViewer',  [b, o],    p),
     convertDegas:   (b, o, p) => callConvert('convertDegas',   [b, o],    p),
     convertRaw:     (b, o, p) => callConvert('convertRaw',     [b, o],    p),
+    convertPRG:     (b, o, p) => callConvert('convertPRG',     [b, o],    p),
+    convertKoa:     (b, o, p) => callConvert('convertKoa',     [b, o],    p),
+    convertHir:     (b, o, p) => callConvert('convertHir',     [b, o],    p),
     convertMask:    (b, o, p) => callConvert('convertMask',    [b, o],    p),
     convertMaskRaw: (b, o, p) => callConvert('convertMaskRaw', [b, o],    p),
     // Returns the per-mode dither defaults the C++ encoder would use.

@@ -35,6 +35,16 @@ interface ReplyEnvelope {
   genesisUniqueTiles?: number
   genesisTotalCells?: number
   tileDataBytes?: number
+  c64CharsetData?: ArrayBuffer
+  c64Mc1?: number
+  c64Mc2?: number
+  c64BgColor?: number
+  genesisTileBytes?: ArrayBuffer
+  genesisTilemapBytes?: ArrayBuffer
+  genesisPaletteBytes?: ArrayBuffer
+  snesTileBytes?: ArrayBuffer
+  snesTilemapBytes?: ArrayBuffer
+  snesPaletteBytes?: ArrayBuffer
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -85,6 +95,9 @@ const DISPATCHERS: Record<string, Dispatcher> = {
   convertViewer:  (m, args) => m.convertViewer(args[0] as Uint8Array, args[1] as WasmOptions),
   convertDegas:   (m, args) => m.convertDegas(args[0] as Uint8Array, args[1] as WasmOptions),
   convertRaw:     (m, args) => m.convertRaw(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertPRG:     (m, args) => m.convertPRG(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertKoa:     (m, args) => m.convertKoa(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertHir:     (m, args) => m.convertHir(args[0] as Uint8Array, args[1] as WasmOptions),
   convertMask:    (m, args) => m.convertMask(args[0] as Uint8Array, args[1] as WasmOptions),
   convertMaskRaw: (m, args) => m.convertMaskRaw(args[0] as Uint8Array, args[1] as WasmOptions),
 }
@@ -133,9 +146,32 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('genesisUniqueTiles', result.genesisUniqueTiles),
     ...opt('genesisTotalCells', result.genesisTotalCells),
     ...opt('tileDataBytes', result.tileDataBytes),
+    ...opt('c64Mc1', result.c64Mc1),
+    ...opt('c64Mc2', result.c64Mc2),
+    ...opt('c64BgColor', result.c64BgColor),
     ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []
+
+  const forwardArrayBuffer = (
+      src: Uint8Array | ArrayBuffer | undefined,
+      dst: 'c64CharsetData' | 'genesisTileBytes' | 'genesisTilemapBytes'
+        | 'genesisPaletteBytes' | 'snesTileBytes' | 'snesTilemapBytes'
+        | 'snesPaletteBytes'
+  ): void => {
+    if (!src) return
+    const arr = new Uint8Array(src as ArrayBuffer)
+    const buf = arr.buffer.slice(arr.byteOffset, arr.byteOffset + arr.byteLength)
+    reply[dst] = buf
+    transfers.push(buf)
+  }
+  forwardArrayBuffer(result.c64CharsetData, 'c64CharsetData')
+  forwardArrayBuffer(result.genesisTileBytes, 'genesisTileBytes')
+  forwardArrayBuffer(result.genesisTilemapBytes, 'genesisTilemapBytes')
+  forwardArrayBuffer(result.genesisPaletteBytes, 'genesisPaletteBytes')
+  forwardArrayBuffer(result.snesTileBytes, 'snesTileBytes')
+  forwardArrayBuffer(result.snesTilemapBytes, 'snesTilemapBytes')
+  forwardArrayBuffer(result.snesPaletteBytes, 'snesPaletteBytes')
 
   if (result.rgba) {
     const arr = new Uint8Array(result.rgba)

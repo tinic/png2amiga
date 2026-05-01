@@ -1,5 +1,6 @@
 #include "amiga.hpp"
 #include "api.hpp"
+#include "c64_prg.hpp"
 #include "snes_io.hpp"
 #include "bitplane.hpp"
 #include "cheader.hpp"
@@ -423,6 +424,7 @@ struct Config {
     bool json = false;                 // emit JSON status object instead of human text
     std::string depfile;               // Make-format depfile path (empty = disabled)
     bool list_modes = false;           // emit mode catalog (human or JSON) and exit 0
+    bool list_dithers = false;         // emit dither-method catalog and exit 0
 
     // Batch mode: N input PNGs encoded as a single horizontally-tiled
     // atlas so they share one palette and (if --cap) one copper plan,
@@ -523,6 +525,14 @@ struct Config {
 
     // CGA-specific options
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
+    std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
+    std::string c64_metric  = "mse";      // mse (OKLab²), blur (PN-sRGB), ssim (sRGB)
+    bool c64_petscii_graphics_only = false;
+    // Tile-based modes (c64 charset; SNES / Genesis / future Amiga 16x16
+    // / PS1 64x64). 0 = mode default. >0 sets a custom dedup budget so
+    // demos can ship larger glyph catalogues across charset banks.
+    std::size_t tile_budget = 0;
+    std::size_t tile_reserve = 0;
     int cga_bg = 0;                    // background color index (0..15 in master palette)
     bool cga_auto_palette = true;      // try all palettes, pick lowest-error
 
@@ -582,277 +592,120 @@ void print_usage() {
         "Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]\n"
         "\n",
         png2amiga::version);
+    // Description column starts at byte 34 (32-char flag field + 2-space lead).
+    // Keep flag descriptions to one line where possible; second line aligned
+    // to column 34 for continuation. Run --list-modes for full mode catalog.
     std::println(stderr,
         "Modes:\n"
         "  --mode <mode>                   Graphics mode (default: lores)\n"
-        "    Amiga:\n"
-        "         lores, lores-lace, hires, hires-lace,\n"
-        "         ham6, ham6-lace, ham6-hires, ham6-hires-lace,\n"
-        "         ham8, ham8-lace, ham8-hires, ham8-hires-lace,\n"
-        "         ehb, ehb-lace\n"
-        "    Atari ST/STE:\n"
-        "         stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi\n"
-        "    IBM PC VGA:\n"
-        "         vga-13h     (320x200, 256 colors, 8bpp chunky, 18-bit DAC)\n"
-        "         vga-10h     (640x350, 16 colors, 4-plane planar, 18-bit DAC)\n"
-        "         vga-12h     (640x480, 16 colors, 4-plane planar, square pixels)\n"
-        "    IBM PC EGA (16 colors from fixed 64-color IrgbIRGB gamut):\n"
-        "         ega-320     (320x200)\n"
-        "         ega-640     (640x200)\n"
-        "         ega-hi      (640x350)\n"
-        "    IBM PC CGA:\n"
-        "         cga-320       (320x200, 4 colors, fixed palettes via --cga-palette)\n"
-        "         cga-640       (640x200, 2 colors monochrome)\n"
-        "         cga-composite (160x200 effective, 16 colors via NTSC artifacting)\n"
-        "    Text-mode graphics (AREA 5150 style glyph matching):\n"
-        "         cga-text80x100  (CGA 8x8 font, 2-scanline cells, 80x100 cells)\n"
-        "    Nintendo SNES Mode 7 (256x224, 4:3 PAR ≈ 1.167; tile + tilemap\n"
-        "    output ≤ 256 unique 8x8 tiles via greedy distance-merging):\n"
-        "         snes-mode7-256    (256-entry BGR555 palette companion)\n"
-        "         snes-mode7-direct (BBGGGRRR pixel = 256 effective colours;\n"
-        "                            Mode 7 has no tilemap palette-field byte,\n"
-        "                            so the 2048-colour Direct Color gamut\n"
-        "                            documented for Modes 3/4 isn't reachable)\n"
-        "    Sega Genesis / Mega Drive (8x8 4bpp tiles, 4 palettes × 16 BGR333):\n"
-        "         genesis-h32       (256x224, 4:3 PAR ≈ 1.167)\n"
-        "         genesis-h40       (320x224, 4:3 PAR ≈ 0.933)\n"
-        "         genesis-h32-sh    (256x224 + Shadow/Highlight, ~128 colours)\n"
-        "         genesis-h40-sh    (320x224 + Shadow/Highlight, ~128 colours)\n"
-        "                            S/H modes set the tilemap priority bit per\n"
-        "                            tile; runtime must enable VDP S/H mode\n"
-        "                            (SGDK: VDP_setHilightShadow(TRUE)).\n"
+        "    Amiga:  lores | lores-lace | hires | hires-lace |\n"
+        "            ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]\n"
+        "    Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi\n"
+        "    DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |\n"
+        "            cga-320 | cga-640 | cga-composite | cga-text80x100\n"
+        "    SNES:   snes-mode7-256 | snes-mode7-direct\n"
+        "    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh\n"
+        "    C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |\n"
+        "            c64-petscii | c64-charset-hires | c64-charset-multicolor\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
-        "  --chipset ocs|aga               OCS 12-bit / AGA 24-bit (default: auto)\n"
-        "  --dual-playfield, --dpf         Dual playfield: encode image into PF2\n"
-        "                                  (upper color regs 8-15 OCS / 16-31 AGA)\n"
-        "                                  with PF1 (foreground) zeroed. Forces\n"
-        "                                  depth=3 (OCS) or 4 (AGA).\n"
-        "\n"
-        "CAP — Copper-Augmented Palette (per-line swaps):\n"
-        "  --cap                           Per-scanline palette swaps via the copper,\n"
-        "                                  picked greedily by OKLab error reduction.\n"
-        "                                  (Legacy alias: --copper)\n"
-        "  --cap-changes <0-16>            CAP swaps per line (0 = auto, picks the\n"
-        "                                  worst-case K that fits the 14-MOVE\n"
-        "                                  budget; auto mode also tries K+1..K+3).\n"
-        "                                  (Legacy alias: --copper-changes)\n"
-        "  --best                          Best-quality search.\n"
-        "                                  Spends ~20–30× the time but searches\n"
-        "                                  many more candidates and picks the\n"
-        "                                  one that looks best.\n"
-        "  --best-metric ssimulacra2|msssim|psnr\n"
-        "                                  With --best, choose how candidates\n"
-        "                                  are scored. ssimulacra2 (default)\n"
-        "                                  is the most perceptually accurate;\n"
-        "                                  msssim is faster and tracks\n"
-        "                                  SSIMULACRA2 reasonably well; psnr\n"
-        "                                  keeps maximum fine detail.\n"
-        "\n"
-        "SCAP — Super CAP (mid-line swaps):\n"
-        "  --scap                          Mid-line palette swaps inside the displayed\n"
-        "                                  area, on top of CAP's per-line evolution.\n"
-        "                                  19 MOVEs per scanline at 16-lores-px stride;\n"
-        "                                  slot HPOS table calibrated against real OCS\n"
-        "                                  hardware. OCS lores only; pair with --dpf\n"
-        "                                  (3-plane PF2, 8 base colors) or --mode ehb\n"
-        "                                  (32 base + 32 half-brite).\n"
-        "  --scap-probe <a|b|c|d>          [developer] DPF SCAP calibration probe.\n"
-        "                                  Synthesizes a viewer that sweeps mid-line\n"
-        "                                  MOVE slots on real hardware to discover the\n"
-        "                                  slot table. Probe A only (OCS DPF) for now.\n"
-        "  --scap-debug                    [developer] SCAP slot-tuning debug bundle:\n"
-        "                                  forces base-palette MOVEs to 0x0000 and\n"
-        "                                  paints yellow PF1 ruler markers at every\n"
-        "                                  4/8/16 px. Pair with examples/ramps.png.\n"
-        "\n"
-        "HAM encoding:\n"
-        "  --ham-beam <1-256>              Beam width for DP search (default: 48)\n"
-        "  --ham-triple <0-256>            Triple-pixel refinement beam after main DP\n"
-        "                                  (default: 16; 0 = disable). Catches fringe\n"
-        "                                  artefacts the 1-pixel beam misses, ~+0.5-1 dB.\n"
-        "  --ham-fast                      Greedy HAM encoder (no DP beam search).\n"
-        "  --ham-metric <oklab2|srgb-mse>  HAM op-selection metric. 'oklab2' (default)\n"
-        "                                  optimises perceptual uniformity — measured ~+9\n"
-        "                                  SSIMULACRA2 points and ~+3.5 OKLab-dB vs\n"
-        "                                  sRGB-MSE on dithered output. 'srgb-mse'\n"
-        "                                  optimises headline sRGB-PSNR (~+0.5-1 dB) but\n"
-        "                                  scores visibly worse on perceptual metrics.\n"
-        "                                  ~15× faster, ~0.04 dB PSNR cost. For\n"
-        "                                  realtime / batch / preview workflows.\n"
-        "\n"
-        "Fixed-buffer modes (DOS / SNES):\n"
-        "  --native-par                    Preserve source aspect on fixed-buffer\n"
-        "                                  hardware (DOS / SNES) by letterboxing or\n"
-        "                                  pillarboxing inside the hardware buffer.\n"
-        "  --cga-palette <p>               CGA 320 palette variant: p0-low, p0-high,\n"
-        "                                  p1-low, p1-high (default: auto-pick best)\n"
-        "  --cga-bg <0..15>                CGA background color (master palette index,\n"
-        "                                  default: 0/black)\n"
-        "\n"
-        "Dithering:\n"
-        "  --dither <method>\n"
-        "    Palette-aware ordered:\n"
-        "      opt-checker|opt-line|opt-line-checker|tri-tone|knoll|yliluoma1|yliluoma|yliluoma2\n"
-        "    Error diffusion (ranked by mean PSNR across 10 images × 6 modes):\n"
-        "      ostromoukhov|sierra-lite|atkinson|jarvis|floyd-steinberg|\n"
-        "      stucki|gilbert|riemersma\n"
-        "    Direct Binary Search (Allebach et al. — perceptual optimum;\n"
-        "    5-30s/image but ~+1 dB over best ED):\n"
-        "      dbs\n"
-        "    Structure-aware error diffusion:\n"
-        "      structure-fs|contrast-fs|zhoufang\n"
-        "    Bayer (square / non-square / non-2^n):\n"
-        "      bayer2x2|bayer4x4|bayer8x8|bayer4x2|bayer2x4|\n"
-        "      bayer3x3|bayer5x5|bayer6x6|bayer7x7|aseprite-old|\n"
-        "      libcaca3|libcaca6|cranley-bayer|fractal16\n"
-        "    Halftone / clustered:\n"
-        "      checker|clustered-dot|halftone8x8|diagonal8x8|spiral5x5|\n"
-        "      pegasus|h2x4|v4x2\n"
-        "    Hatching / lines:\n"
-        "      line2|line4|line8|line-checker|\n"
-        "      vline2|vline4|vline8|vline-checker|crosshatch\n"
-        "    Pattern / geometric:\n"
-        "      hex8x8|hex5x5|radial|quasicrystal|truchet\n"
-        "    Aperiodic / noise:\n"
-        "      blue-noise|void-cluster|cluster-noise|\n"
-        "      ign|ign-tri|r2|r2-tri|white-noise|value-noise\n"
-        "    none\n"
-        "    (default: ostromoukhov)\n"
-        "  --dither-strength <float>       Dither amount 0.0-1.0 (default: 1.0)\n"
-        "  --error-clamp <float>           Max error per channel, squared internally\n"
-        "                                  (default: 0.35; useful range 0.0-1.0)\n"
-        "  --cga-text-metric mse|blur      CGA text mode: per-cell error metric.\n"
-        "                                    blur = Pappas-Neuhoff perceptual halftoning\n"
-        "                                           (default; ignores --dither).\n"
-        "                                    mse  = per-pixel OKLab MSE\n"
-        "                                           (pairs with --dither <method>).\n"
-        "  --refine <0-32>                Dither-aware palette refinement iterations\n"
-        "                                  (default: 4, 0 = off)\n"
-        "\n"
-        "Palette:\n"
-        "  --palette <file>                Load palette from file (GIMP .gpl, IFF, hex text)\n"
-        "  --quantizer <name>              auto (default) | median-cut | ocs-bruteforce |\n"
-        "                                  pnn — auto picks ocs-bruteforce on OCS,\n"
-        "                                  median-cut on AGA, PNN for HAM8/AGA-deep.\n"
-        "  --palette-diversity <0-9>       Remove near-duplicate palette entries (experimental)\n"
-        "  --no-reserve-color0             Don't reserve palette index 0 for black\n"
-        "                                  (gives the encoder one extra image colour;\n"
-        "                                  loses transparency / Amiga border colour 0)\n"
-        "\n"
-        "Image processing:\n"
-        "  --brightness <float>            Brightness -1.0 to 1.0 (default: 0.0)\n"
-        "  --contrast <float>              Contrast 0.0-3.0 (default: 1.0)\n"
-        "  --saturation <float>            Saturation 0.0-3.0 (default: 1.0)\n"
-        "  --gamma <float>                 Gamma 0.1-8.0 (default: 1.0)\n"
-        "  --hue-shift <float>             Hue rotation -180 to 180 (default: 0)\n"
-        "  --sharpen <float>               Sharpen/blur -1.0 to 2.0 (default: 0.0)\n"
-        "  --black-point <float>           Black point 0.0-0.5 (default: 0.0)\n"
-        "  --white-point <float>           White point 0.0-0.5 (default: 0.0)\n"
-        "  --match-range                   Match image range to palette\n"
+        "  --chipset ocs|aga               Amiga chipset (default: auto)\n"
+        "  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)\n"
         "  --width <int>                   Override output width\n"
         "  --height <int>                  Override output height\n"
+        "  --no-scale                      Use source dimensions verbatim\n"
         "\n"
-        "Transparency (color 0 = transparent when input has alpha):\n"
+        "Dithering:\n"
+        "  --dither <method>               Dither method (default: ostromoukhov;\n"
+        "                                  --list-dithers for the full catalog)\n"
+        "  --dither-strength <float>       Dither amount 0.0-2.0 (default: 1.0)\n"
+        "  --error-clamp <float>           Max error per channel (default: 0.35)\n"
+        "  --refine <0-32>                 Palette refinement iterations (default: 4)\n"
+        "\n"
+        "Palette:\n"
+        "  --palette <file>                Load palette (.gpl, IFF, hex text)\n"
+        "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn\n"
+        "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
+        "  --no-reserve-color0             Allow palette index 0 to be image colour\n"
+        "\n"
+        "Image processing:\n"
+        "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
+        "  --contrast <float>              0.0..3.0 (default: 1.0)\n"
+        "  --saturation <float>            0.0..3.0 (default: 1.0)\n"
+        "  --gamma <float>                 0.1..8.0 (default: 1.0)\n"
+        "  --hue-shift <float>             -180..180 degrees (default: 0)\n"
+        "  --sharpen <float>               -1.0..2.0 (default: 0.0)\n"
+        "  --black-point <float>           0.0..0.5 (default: 0.0)\n"
+        "  --white-point <float>           0.0..0.5 (default: 0.0)\n"
+        "  --match-range                   Stretch image range to palette extent\n"
+        "  --crop <x,y,w,h>                Manual crop region (pixels)\n"
+        "  --crop-auto                     Auto-crop to mode aspect ratio\n"
+        "\n"
+        "Transparency:\n"
         "  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)\n"
-        "  --alpha-dither <method>         Dither alpha (e.g. checker, bayer4x4)\n"
+        "  --alpha-dither <method>         Dither alpha (default: none)\n"
         "  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)\n"
-        "  --mask <file>                   Export transparency mask (.png/.iff/.raw)\n"
-        "  --mask-invert                   Invert mask (1=transparent, 0=opaque)\n"
+        "  --mask <file>                   Export transparency mask\n"
+        "  --mask-invert                   Invert mask polarity\n"
         "\n"
-        "Cropping:\n"
-        "  --crop <x,y,w,h>               Manual crop region (pixels)\n"
-        "  --crop-auto                     Auto-crop to mode aspect ratio (center)\n"
+        "CAP — Copper-Augmented Palette (Amiga, per-line swaps):\n"
+        "  --cap                           Per-scanline palette swaps\n"
+        "  --cap-changes <0-16>            Swaps per line (0 = auto)\n"
+        "  --best                          Multi-restart search (~20–30× slower)\n"
+        "  --best-metric <m>               ssimulacra2 (default) | msssim | psnr\n"
         "\n"
-        "Palette index manipulation (lores/hires/EHB/Atari only):\n"
-        "  --lock-index <id> <rgbhex>      Lock palette slot to a specific color\n"
-        "                                    e.g. --lock-index 0 000000 (force black at 0)\n"
-        "                                    repeatable; locks override implicit color 0 = black\n"
-        "  --pin-index-at <id> <x> <y>     After dither, swap whatever index pixel (x,y)\n"
-        "                                    landed at with slot <id>. Repeatable.\n"
-        "                                    Pin targets must not be locked.\n"
+        "SCAP — Super CAP (mid-line swaps, OCS lores):\n"
+        "  --scap                          Mid-line swaps; pair with --dpf or ehb\n"
         "\n"
-        "C header output:\n"
-        "  --symbol <name>                 Base symbol name (default: from filename)\n"
-        "  --fade-in                       Viewer fades in from black over 16 steps\n"
-        "                                  on entry, fades out on exit. Non-HAM,\n"
-        "                                  non-interlace only.\n"
+        "HAM:\n"
+        "  --ham-beam <1-256>              DP search beam (default: 48)\n"
+        "  --ham-triple <0-256>            Triple-pixel refinement (default: 16)\n"
+        "  --ham-fast                      Greedy encoder (no DP search)\n"
+        "  --ham-metric <oklab2|srgb-mse>  Op-selection metric (default: oklab2)\n"
         "\n"
-        "Bitplane export:\n"
-        "  --layout <which>                Bitplane byte order in .raw and .h output:\n"
-        "                                    auto              (default; mode-specific)\n"
-        "                                    interleaved       (Amiga DMA order; rows\n"
-        "                                                       interleave plane bytes)\n"
-        "                                    standard          (plane-sequential; for\n"
-        "                                                       paint programs / boot\n"
-        "                                                       blocks; aliases:\n"
-        "                                                       --non-interleaved,\n"
-        "                                                       --planar)\n"
-        "                                    word-interleaved  (Atari ST native)\n"
-        "                                  Doesn't affect .iff (uses its own format).\n"
-        "  --non-interleaved, --planar     Shortcut for --layout standard\n"
-        "  --interleaved                   Shortcut for --layout interleaved\n"
-        "  --no-scale                      Skip scaling — output uses source PNG\n"
-        "                                  dimensions verbatim. Compatible with .h,\n"
-        "                                  .iff, .raw, .pal, .png. NOT compatible with\n"
-        "                                  .cpp/.c viewer (needs fixed screen modes).\n"
+        "Platform-specific:\n"
+        "  --native-par                    Letterbox / pillarbox to preserve\n"
+        "                                  source aspect on fixed-buffer hardware\n"
+        "  --tile-budget <N>               Max unique tiles for charset / tile modes\n"
+        "  --tile-reserve <N>              Reserve N tile slots from the budget\n"
+        "  --cga-palette <p>               p0-low | p0-high | p1-low | p1-high\n"
+        "  --cga-bg <0..15>                CGA background colour\n"
+        "  --cga-text-metric <m>           blur (default) | mse\n"
+        "  --c64-palette <p>               pepto | vice | colodore (default) |\n"
+        "                                  deekay | godot | c64wiki | levy\n"
+        "  --c64-metric <m>                mse (default) | blur\n"
+        "  --c64-petscii-graphics          Restrict PETSCII to graphics glyphs\n"
         "\n"
-        "Batch (game-asset multi-frame) mode:\n"
-        "  --batch <dir>                   Encode N input PNGs as a single horizontal\n"
-        "                                  atlas so they share one palette and (if --cap)\n"
-        "                                  one per-line copper plan, then emit per-frame\n"
-        "                                  outputs into <dir>. Sprite sheets, animation\n"
-        "                                  frames, room layers — anything where N images\n"
-        "                                  must render with the same palette + copper at\n"
-        "                                  runtime. Auto-implies --no-scale.\n"
-        "                                  Constraints: all inputs same width AND height,\n"
-        "                                  width % 16 == 0 (Amiga bitplane word align),\n"
-        "                                  --scap is rejected.\n"
-        "                                  When --batch is set, ALL positional args are\n"
-        "                                  input PNGs (output path positional is unused).\n"
-        "  --batch-format <ext>            Per-frame output format: h, iff, png, raw, cpp.\n"
-        "                                  cpp emits one AmigaOS viewer that cycles frames\n"
-        "                                  on left-click (right-click exits).\n"
-        "                                  Default h. For h, a single combined .h file\n"
-        "                                  with N frame plane arrays + shared palette\n"
-        "                                  + shared copper symbols is written. For\n"
-        "                                  iff/png/raw, N separate files share CMAP/\n"
-        "                                  PCHG (iff) or palette via companion .pal.\n"
-        "\n"
-        "Build-system integration:\n"
-        "  -q, --quiet                     Suppress all stdout status; errors still go\n"
-        "                                  to stderr. Useful in CMake/Make/Ninja builds.\n"
-        "  --json                          Emit JSON status object instead of human text.\n"
-        "                                  Implies --quiet for non-JSON output.\n"
-        "  --depfile <path>                Write a Make-format depfile listing the input\n"
-        "                                  PNG and any external palette file. Used by\n"
-        "                                  CMake's add_custom_command(... DEPFILE) so a\n"
-        "                                  --palette change triggers a rebuild.\n"
-        "  --list-modes                    Print supported modes and exit (pair with\n"
-        "                                  --json for machine-readable catalog).\n"
-        "\n"
-        "Exit codes (sysexits.h-style):\n"
-        "  0  success\n"
-        "  1  internal error / encode failure\n"
-        "  64 EX_USAGE     — bad CLI args / unsupported option combo\n"
-        "  66 EX_NOINPUT   — input file missing or unreadable\n"
-        "  73 EX_CANTCREAT — output write failed\n"
+        "Palette index pinning (lores/hires/EHB/Atari):\n"
+        "  --lock-index <id> <rgbhex>      Lock palette slot to a specific colour\n"
+        "  --pin-index-at <id> <x> <y>     Swap pixel (x,y)'s slot with <id>\n"
         "\n"
         "Output:\n"
-        "  --preview                       Show iTerm2 inline image preview\n"
-        "  --preview-scale <1-8>           Preview display scale (default on macOS:\n"
-        "                                  2 on iTerm.app / Kitty / Ghostty via env\n"
-        "                                  vars; 1 elsewhere. Other OSes: 1 always —\n"
-        "                                  pass --preview-scale 2 on Linux HiDPI)\n"
-        "  --preview-video                 Batch only: loop generated frames inline\n"
-        "                                  in iTerm2 until any key is pressed.\n"
-        "  --preview-video-fps <fps>       Playback rate for --preview-video.\n"
-        "                                  Default 12.5 (8mm-ish).\n"
-        "  .png extension -> preview PNG image\n"
-        "  .iff extension -> IFF ILBM Amiga image file\n"
-        "  .h extension   -> C header with UWORD bitplane arrays\n"
-        "  .raw extension -> raw interleaved bitplane data (no header)\n"
-        "  .pal extension -> OCS 12-bit palette (2 bytes/color, big-endian 0x0RGB)\n"
-        "  .pi1/.pi2/.pi3 -> Atari Degas image (requires Atari ST/STE mode)");
+        "  --symbol <name>                 Base symbol name (default: from filename)\n"
+        "  --fade-in                       Fade in/out on viewer entry / exit\n"
+        "  --layout <which>                auto | interleaved | standard |\n"
+        "                                  word-interleaved\n"
+        "  --non-interleaved, --planar     Alias for --layout standard\n"
+        "  --interleaved                   Alias for --layout interleaved\n"
+        "  --preview                       Show iTerm2 inline preview\n"
+        "  --preview-scale <1-8>           Preview display scale\n"
+        "  --preview-video                 Batch only: loop frames inline\n"
+        "  --preview-video-fps <fps>       Playback rate (default 12.5)\n"
+        "    Extensions: .png .iff .h .raw .pal .pi1 .pi2 .pi3 .prg .koa .hir\n"
+        "\n"
+        "Batch (multi-frame, shared palette / copper):\n"
+        "  --batch <dir>                   Encode N inputs as a horizontal atlas;\n"
+        "                                  emit per-frame outputs into <dir>\n"
+        "  --batch-format <ext>            h (default) | iff | png | raw | cpp\n"
+        "\n"
+        "Build integration:\n"
+        "  -q, --quiet                     Suppress stdout status (errors → stderr)\n"
+        "  --json                          JSON status output (implies --quiet)\n"
+        "  --depfile <path>                Write a Make-format depfile\n"
+        "  --list-modes                    Print supported modes and exit\n"
+        "  --list-dithers                  Print supported dither methods and exit\n"
+        "\n"
+        "Exit codes (sysexits.h):\n"
+        "  0 ok    1 internal    64 usage    66 no input    73 cannot create\n");
 }
 
 Result<dither::Method> parse_dither_method(std::string_view s) {
@@ -1040,6 +893,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--list-dithers") {
+            config.list_dithers = true;
+            continue;
+        }
         if (arg == "--list-modes") {
             config.list_modes = true;
             continue;
@@ -1141,6 +998,63 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--mask-invert") {
             config.mask_invert = true;
+            continue;
+        }
+
+        if (arg == "--c64-petscii-graphics") {
+            config.c64_petscii_graphics_only = true;
+            continue;
+        }
+        if (arg == "--tile-budget" && i + 1 < argc) {
+            auto v = std::string(argv[++i]);
+            try {
+                long n = std::stol(v);
+                if (n < 1) {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                        "--tile-budget must be ≥ 1"}};
+                }
+                config.tile_budget = static_cast<std::size_t>(n);
+            } catch (...) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("--tile-budget: invalid integer '{}'", v)}};
+            }
+            continue;
+        }
+        if (arg == "--tile-reserve" && i + 1 < argc) {
+            auto v = std::string(argv[++i]);
+            try {
+                long n = std::stol(v);
+                if (n < 0) {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                        "--tile-reserve must be ≥ 0"}};
+                }
+                config.tile_reserve = static_cast<std::size_t>(n);
+            } catch (...) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("--tile-reserve: invalid integer '{}'", v)}};
+            }
+            continue;
+        }
+        if (arg == "--c64-metric" && i + 1 < argc) {
+            auto v = std::string_view(argv[++i]);
+            if (v != "blur" && v != "mse") {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("Unknown C64 metric: {} (expected blur/mse)", v)}};
+            }
+            config.c64_metric = std::string(v);
+            continue;
+        }
+
+        if (arg == "--c64-palette" && i + 1 < argc) {
+            auto v = std::string_view(argv[++i]);
+            if (v != "pepto" && v != "vice" && v != "colodore" &&
+                v != "deekay" && v != "godot" && v != "c64wiki" &&
+                v != "wiki" && v != "levy") {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("Unknown C64 palette: {} (expected pepto/"
+                                "vice/colodore/deekay/godot/c64wiki/levy)", v)}};
+            }
+            config.c64_palette = std::string(v == "wiki" ? "c64wiki" : v);
             continue;
         }
 
@@ -1291,6 +1205,21 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "c64-multicolor" || v == "c64-mc" ||
                          v == "c64" || v == "vic2-multicolor")
                     config.mode = amiga::Mode::c64_multicolor;
+                else if (v == "c64-hires" || v == "c64-hi" ||
+                         v == "vic2-hires")
+                    config.mode = amiga::Mode::c64_hires;
+                else if (v == "c64-fli" || v == "fli")
+                    config.mode = amiga::Mode::c64_fli;
+                else if (v == "c64-afli" || v == "afli")
+                    config.mode = amiga::Mode::c64_afli;
+                else if (v == "c64-petscii" || v == "petscii")
+                    config.mode = amiga::Mode::c64_petscii;
+                else if (v == "c64-charset-hires" || v == "c64-charset-hi" ||
+                         v == "charset-hires")
+                    config.mode = amiga::Mode::c64_charset_hires;
+                else if (v == "c64-charset-multicolor" ||
+                         v == "c64-charset-mc" || v == "charset-multicolor")
+                    config.mode = amiga::Mode::c64_charset_multicolor;
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -1543,7 +1472,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
     }
 
     if (config.input_path.empty() && config.scap_probe.empty() &&
-        !config.list_modes) {
+        !config.list_modes && !config.list_dithers) {
         print_usage();
         std::exit(exit_code::usage);
     }
@@ -2024,6 +1953,11 @@ api::Options make_api_options(const Config& cfg) {
     opts.crop_auto = cfg.crop_auto;
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
+    opts.c64_palette = cfg.c64_palette;
+    opts.c64_metric = cfg.c64_metric;
+    opts.c64_petscii_graphics_only = cfg.c64_petscii_graphics_only;
+    opts.tile_budget = cfg.tile_budget;
+    opts.tile_reserve = cfg.tile_reserve;
     opts.locks = cfg.locks;
     opts.pins = cfg.pins;
     opts.palette_file = cfg.palette_file;
@@ -2655,7 +2589,8 @@ void save_raw_vga(std::string_view path,
 // and the batch / video preview loops.
 Image scale_for_display(const Image& preview, amiga::Mode mode,
                         bool hires, bool interlace) {
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) ||
+        amiga::is_cga(mode) || amiga::is_c64(mode)) {
         auto params = amiga::get_mode_params(mode);
         std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(preview.width(), preview.height(),
@@ -2676,7 +2611,8 @@ std::vector<bool> scale_mask_for_display(const std::vector<bool>& mask,
                                          std::size_t src_w, std::size_t src_h,
                                          amiga::Mode mode,
                                          bool hires, bool interlace) {
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode)) {
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) ||
+        amiga::is_cga(mode) || amiga::is_c64(mode)) {
         auto params = amiga::get_mode_params(mode);
         std::size_t base_scale = amiga::is_cga_text(mode) ? 1u : 2u;
         auto [pw, ph] = preview_dims_for_par(src_w, src_h,
@@ -3361,6 +3297,12 @@ int main(int argc, char* argv[]) {
                 "vga-13h", "vga-10h", "vga-12h",
                 "ega-320", "ega-640", "ega-hi",
                 "cga-320", "cga-640", "cga-composite", "cga-text80x100",
+                "snes-mode7-256", "snes-mode7-direct",
+                "genesis-h32", "genesis-h40",
+                "genesis-h32-sh", "genesis-h40-sh",
+                "c64-multicolor", "c64-hires", "c64-fli", "c64-afli",
+                "c64-petscii",
+                "c64-charset-hires", "c64-charset-multicolor",
             };
             for (std::size_t i = 0; i < std::size(modes); ++i) {
                 std::print("    \"{}\"{}\n", modes[i],
@@ -3372,7 +3314,33 @@ int main(int argc, char* argv[]) {
             cli_status("  Amiga:    lores, lores-lace, hires, hires-lace, ham6, ham8, ehb (+ -lace, -hires variants)");
             cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi");
             cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, cga-text80x100");
+            cli_status("  SNES:     snes-mode7-256, snes-mode7-direct");
+            cli_status("  Genesis:  genesis-h32, genesis-h40 (+ -sh variants)");
+            cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
+            cli_status("            c64-charset-hires, c64-charset-multicolor");
         }
+        return exit_code::ok;
+    }
+
+    if (config->list_dithers) {
+        cli_status("png2amiga {} — dither methods:", png2amiga::version);
+        cli_status("  ED:        ostromoukhov (default), sierra-lite, atkinson, jarvis,");
+        cli_status("             floyd-steinberg, stucki, gilbert, riemersma");
+        cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker, tri-tone,");
+        cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
+        cli_status("  DBS:       dbs (perceptual optimum, slow)");
+        cli_status("  Structure: structure-fs, contrast-fs, zhoufang");
+        cli_status("  Bayer:     bayer2x2, bayer4x4, bayer8x8, bayer4x2, bayer2x4,");
+        cli_status("             bayer3x3, bayer5x5, bayer6x6, bayer7x7,");
+        cli_status("             aseprite-old, libcaca3, libcaca6, cranley-bayer, fractal16");
+        cli_status("  Halftone:  checker, clustered-dot, halftone8x8, diagonal8x8,");
+        cli_status("             spiral5x5, pegasus, h2x4, v4x2");
+        cli_status("  Lines:     line2, line4, line8, line-checker,");
+        cli_status("             vline2, vline4, vline8, vline-checker, crosshatch");
+        cli_status("  Pattern:   hex8x8, hex5x5, radial, quasicrystal, truchet");
+        cli_status("  Noise:     blue-noise, void-cluster, cluster-noise,");
+        cli_status("             ign, ign-tri, r2, r2-tri, white-noise, value-noise");
+        cli_status("  none");
         return exit_code::ok;
     }
 
@@ -3915,7 +3883,18 @@ int main(int argc, char* argv[]) {
         }
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
-        aopts.mode = "c64-multicolor";
+        aopts.mode = [&] -> const char* {
+            switch (config->mode) {
+            case amiga::Mode::c64_hires:           return "c64-hires";
+            case amiga::Mode::c64_fli:             return "c64-fli";
+            case amiga::Mode::c64_afli:            return "c64-afli";
+            case amiga::Mode::c64_petscii:         return "c64-petscii";
+            case amiga::Mode::c64_charset_hires:   return "c64-charset-hires";
+            case amiga::Mode::c64_charset_multicolor:
+                                                   return "c64-charset-multicolor";
+            default:                               return "c64-multicolor";
+            }
+        }();
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
@@ -3925,8 +3904,23 @@ int main(int argc, char* argv[]) {
             return exit_code::internal;
         }
         auto& st = enc.state;
-        cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell, Pepto palette)");
-        cli_status("Encoded: {} bytes (8000 bitmap + 1000 screen + 1000 color), PSNR: {:.2f} dB, S2: {:.2f}",
+        switch (config->mode) {
+        case amiga::Mode::c64_hires:
+            cli_status("Mode:   C64 hires (320×200, 2 colours/cell)"); break;
+        case amiga::Mode::c64_fli:
+            cli_status("Mode:   C64 FLI (160×200, multicolor + per-row screen)"); break;
+        case amiga::Mode::c64_afli:
+            cli_status("Mode:   C64 AFLI (320×200, hires + per-row screen)"); break;
+        case amiga::Mode::c64_petscii:
+            cli_status("Mode:   C64 PETSCII (40×25 text, PN-sRGB blur metric)"); break;
+        case amiga::Mode::c64_charset_hires:
+            cli_status("Mode:   C64 charset-hires (40×25 8×8 cells, ≤256 dedup glyphs)"); break;
+        case amiga::Mode::c64_charset_multicolor:
+            cli_status("Mode:   C64 charset-multicolor (40×25 4×8 cells, shared mc + per-cell fg)"); break;
+        default:
+            cli_status("Mode:   C64 multicolor (160×200, 4 colours/cell)"); break;
+        }
+        cli_status("Encoded: {} bytes, PSNR: {:.2f} dB, S2: {:.2f}",
                      st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
         if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {
@@ -3935,6 +3929,89 @@ int main(int argc, char* argv[]) {
                      static_cast<std::streamsize>(st.raw_frame.size()));
             cli_status("Raw:    {} ({} bytes)", config->output_path,
                        st.raw_frame.size());
+        } else if (ends_with(config->output_path, ".h")
+                   && amiga::is_c64_charset(config->mode)) {
+            // Charset .h: reconstruct an EncodeResult from the api state
+            // (raw_frame holds the bytes; cols/rows/unique_glyphs/mc1/mc2
+            // come back through EncodeState). No re-encoding.
+            c64::EncodeResult ch_enc;
+            ch_enc.cols = st.c64_cols;
+            ch_enc.rows = st.c64_rows;
+            ch_enc.unique_glyphs = st.c64_unique_glyphs;
+            ch_enc.bg_color = st.c64_bg_color;
+            ch_enc.mc1 = st.c64_mc1;
+            ch_enc.mc2 = st.c64_mc2;
+            std::size_t charset_bytes = st.c64_unique_glyphs * 8;
+            std::size_t cells = st.c64_cols * st.c64_rows;
+            if (st.raw_frame.size() < charset_bytes + 2 * cells) {
+                std::println(stderr,
+                    "C64 charset .h: raw_frame too small ({} < {})",
+                    st.raw_frame.size(), charset_bytes + 2 * cells);
+                return exit_code::internal;
+            }
+            ch_enc.bitmap.assign(
+                st.raw_frame.begin(),
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes));
+            ch_enc.screen_ram.assign(
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes),
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes + cells));
+            ch_enc.color_ram.assign(
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes + cells),
+                st.raw_frame.begin()
+                    + static_cast<std::ptrdiff_t>(charset_bytes + 2 * cells));
+
+            auto sym = config->symbol_name.empty()
+                ? std::string("img") : config->symbol_name;
+            auto hdr = c64::charset_header(
+                ch_enc, sym,
+                config->mode == amiga::Mode::c64_charset_multicolor,
+                c64::parse_palette(config->c64_palette));
+            if (!hdr) {
+                std::println(stderr, "Header generate: {}",
+                             hdr.error().message);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of << *hdr;
+            cli_status("Header: {} ({}x{} cells, {} glyphs)",
+                       config->output_path, ch_enc.cols, ch_enc.rows,
+                       ch_enc.unique_glyphs);
+        } else if (ends_with(config->output_path, ".prg") ||
+                   ends_with(config->output_path, ".koa") ||
+                   ends_with(config->output_path, ".hir")) {
+            // C64 runnable .prg (Koala/hires/FLI/AFLI/PETSCII displayer)
+            // or .koa / .hir raw image-only formats.
+            auto enc_result = c64::prg::unpack_pipeline_raw(
+                config->mode, st.raw_frame, st.c64_bg_color);
+            if (!enc_result) {
+                std::println(stderr, "C64 PRG unpack: {}",
+                             enc_result.error().message);
+                return exit_code::internal;
+            }
+            Result<c64::prg::PrgData> prg = [&] {
+                if (ends_with(config->output_path, ".koa"))
+                    return c64::prg::koala_raw(*enc_result);
+                if (ends_with(config->output_path, ".hir"))
+                    return c64::prg::hires_raw(*enc_result);
+                return c64::prg::from_mode(config->mode, *enc_result);
+            }();
+            if (!prg) {
+                std::println(stderr, "C64 PRG encode: {}",
+                             prg.error().message);
+                return exit_code::internal;
+            }
+            auto wr = c64::prg::write(config->output_path, *prg);
+            if (!wr) {
+                std::println(stderr, "C64 PRG write: {}",
+                             wr.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PRG:    {} ({} bytes)", config->output_path,
+                       prg->bytes.size());
         } else {
             auto r = save_preview(config->output_path, st.rendered,
                                   has_transparency, transparency_mask,
@@ -4032,11 +4109,20 @@ int main(int argc, char* argv[]) {
                              pal_path.string(), pal_bytes.size());
             }
         } else if (ends_with(config->output_path, ".h")) {
-            std::println(stderr, "SNES Mode 7: .h output not yet implemented "
-                                  "for the packed format. Use .bin for the "
-                                  "Mode 7-loadable frame (tilemap + tiles + "
-                                  ".pal companion).");
-            return exit_code::internal;
+            // Re-route through api::convert_cheader so the inline SNES
+            // header writer there (api.cpp::snes_header) does the work
+            // — keeps a single source of truth for the .h layout.
+            auto cr = api::convert_cheader(
+                src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "SNES header: {}", cr.error);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of.write(reinterpret_cast<const char*>(cr.data.data()),
+                     static_cast<std::streamsize>(cr.data.size()));
+            cli_status("Header: {} ({} bytes)",
+                       config->output_path, cr.data.size());
         } else {
             // PNG preview using st.rendered.
             auto r = save_preview(config->output_path, st.rendered,

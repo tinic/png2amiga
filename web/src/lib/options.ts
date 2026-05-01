@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64'
 
 export interface ModeOption {
   value: string
@@ -89,6 +89,14 @@ export interface Options {
   dualPlayfield: boolean
   scap: boolean
   cgaTextMetric: string
+  c64Palette: string
+  c64Metric: string
+  c64PetsciiGraphicsOnly: boolean
+  // Tile-based modes (c64 charset; future SNES / Genesis / Amiga 16x16
+  // / PS1 64x64). 0 = mode default (256 for c64 charset).
+  tileBudget: number
+  tileReserve: number
+  matchRange: boolean
   paletteData?: Uint8Array | null
   // Slider numeric fields (declared explicitly so options[s.key] is typed
   // as number rather than the index-signature wildcard).
@@ -152,23 +160,40 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h40',    label: 'H40 (320x224)',    chipset: 'genesis' },
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
+  // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
+  // constraints. Multicolor first / default; sprite / charset modes
+  // follow on the merge branch.
+  { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
+                             chipset: 'c64' },
+  { value: 'c64-hires',      label: 'Hires (320x200, 2/cell)',
+                             chipset: 'c64' },
+  { value: 'c64-fli',        label: 'FLI (multicolor + per-row screen)',
+                             chipset: 'c64' },
+  { value: 'c64-afli',       label: 'AFLI (hires + per-row screen)',
+                             chipset: 'c64' },
+  { value: 'c64-petscii',    label: 'PETSCII (40x25 text-mode glyphs)',
+                             chipset: 'c64' },
+  { value: 'c64-charset-hires',
+                             label: 'Charset Hires (custom 256-glyph charset)',
+                             chipset: 'c64' },
+  { value: 'c64-charset-multicolor',
+                             label: 'Charset Multicolor (shared mc + per-cell fg)',
+                             chipset: 'c64' },
 ]
+
+// Chipsets whose mode list is exactly `m.chipset === chipset`.
+const FIXED_CHIPSETS = new Set<Chipset>(
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
-  if (chipset === 'stf') return ALL_MODES.filter(m => m.chipset === 'stf')
-  if (chipset === 'ste') return ALL_MODES.filter(m => m.chipset === 'ste')
-  if (chipset === 'vga') return ALL_MODES.filter(m => m.chipset === 'vga')
-  if (chipset === 'ega') return ALL_MODES.filter(m => m.chipset === 'ega')
-  if (chipset === 'cga') return ALL_MODES.filter(m => m.chipset === 'cga')
-  if (chipset === 'snes') return ALL_MODES.filter(m => m.chipset === 'snes')
-  if (chipset === 'genesis') return ALL_MODES.filter(m => m.chipset === 'genesis')
+  if (FIXED_CHIPSETS.has(chipset)) return ALL_MODES.filter(m => m.chipset === chipset)
+  // Amiga (ocs / aga): mix of ocs-only modes plus aga-only when chipset is aga.
   return ALL_MODES.filter(m => {
-    if (['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis'].includes(m.chipset)) return false
+    if (FIXED_CHIPSETS.has(m.chipset)) return false
     // EHB is fundamentally an OCS feature (32 base + 32 hardware halve).
     // It runs on AGA hardware but the half-brite generator is OCS-tied,
-    // so the result is OCS-quantised regardless of chipset — no useful
-    // benefit from picking AGA. Hide EHB when chipset is AGA.
+    // so the result is OCS-quantised regardless of chipset.
     if (chipset === 'aga' && (m.value === 'ehb' || m.value === 'ehb-lace')) return false
     return chipset === 'aga' || m.chipset === 'ocs'
   })
@@ -186,7 +211,84 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'cga',  label: 'IBM PC CGA (fixed palette)' },
   { value: 'snes', label: 'SNES Mode 7' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
+  { value: 'c64',  label: 'Commodore 64 / VIC-II' },
 ]
+
+// VIC-II palette options — only meaningful when chipset is 'c64'.
+// Default is Colodore (measurement-based; matches png2c64).
+export interface C64PaletteOption { value: string; label: string }
+export const C64_PALETTES: C64PaletteOption[] = [
+  { value: 'colodore', label: 'Colodore (default)' },
+  { value: 'pepto',    label: 'Pepto' },
+  { value: 'vice',     label: 'VICE emulator' },
+  { value: 'deekay',   label: 'Deekay' },
+  { value: 'godot',    label: 'Godot' },
+  { value: 'c64wiki',  label: 'C64 Wiki' },
+  { value: 'levy',     label: 'Levy' },
+]
+
+// C64 per-cell error metric. Both run in OKLab; mirrors png2c64.
+// Default = mse (matches png2c64).
+export interface C64MetricOption { value: string; label: string }
+export const C64_METRICS: C64MetricOption[] = [
+  { value: 'mse',  label: 'Per-pixel MSE (default)' },
+  { value: 'blur', label: 'Blur (Pappas-Neuhoff 3x3)' },
+]
+
+// C64 palette hex values (16 entries each, 0xRRGGBB) — mirrors
+// src/palette.hpp's kC64* tables. Used by the charset diagnostic
+// renderer so JS can paint glyphs with the same colours the encoder
+// chose.
+const C64_PALETTE_HEX: Record<string, readonly number[]> = {
+  pepto:    [
+    0x000000, 0xFFFFFF, 0x68372B, 0x70A4B2,
+    0x6F3D86, 0x588D43, 0x352879, 0xB8C76F,
+    0x6F4F25, 0x433900, 0x9A6759, 0x444444,
+    0x6C6C6C, 0x9AD284, 0x6C5EB5, 0x959595,
+  ],
+  vice: [
+    0x000000, 0xFDFEFC, 0xBE1A24, 0x30E6C6,
+    0xB41AE2, 0x1FD21E, 0x211BAE, 0xDFF60A,
+    0xB84104, 0x6A3304, 0xFE4A57, 0x424540,
+    0x70746F, 0x59FE59, 0x5F53FE, 0xA4A7A2,
+  ],
+  colodore: [
+    0x000000, 0xFFFFFF, 0x813338, 0x75CEC8,
+    0x8E3C97, 0x56AC4D, 0x2E2C9B, 0xEDF171,
+    0x8E5029, 0x553800, 0xC46C71, 0x4A4A4A,
+    0x7B7B7B, 0xA9FF9F, 0x706DEB, 0xB2B2B2,
+  ],
+  deekay: [
+    0x000000, 0xFFFFFF, 0x882000, 0x68D0A8,
+    0xA838A0, 0x50B818, 0x181090, 0xF0E858,
+    0xA04800, 0x472B1B, 0xC87870, 0x484848,
+    0x808080, 0x98FF98, 0x5090D0, 0xB8B8B8,
+  ],
+  godot: [
+    0x000000, 0xFFFFFF, 0x880000, 0xAAFFEE,
+    0xCC44CC, 0x00CC55, 0x0000AA, 0xEEEE77,
+    0xDD8855, 0x664400, 0xFF7777, 0x333333,
+    0x777777, 0xAAFF66, 0x0088FF, 0xBBBBBB,
+  ],
+  c64wiki: [
+    0x000000, 0xFFFFFF, 0x880000, 0xAAFFEE,
+    0xCC44CC, 0x00CC55, 0x0000AA, 0xEEEE77,
+    0xDD8855, 0x664400, 0xFF7777, 0x333333,
+    0x777777, 0xAAFF66, 0x0088FF, 0xBBBBBB,
+  ],
+  levy: [
+    0x000000, 0xFFFFFF, 0x68372B, 0x70A4B2,
+    0x6F3D86, 0x588D43, 0x352879, 0xB8C76F,
+    0x6F4F25, 0x433900, 0x9A6759, 0x444444,
+    0x6C6C6C, 0x9AD284, 0x6C5EB5, 0x959595,
+  ],
+}
+
+export function c64PaletteRgb(name: string, idx: number): [number, number, number] {
+  const palette = C64_PALETTE_HEX[name] ?? C64_PALETTE_HEX.colodore ?? []
+  const v = palette[idx & 0xF] ?? 0
+  return [(v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF]
+}
 
 export const DITHER_METHODS: DitherGroup[] = [
   { group: 'None', items: [
@@ -305,10 +407,8 @@ export const ALPHA_DITHER_METHODS: NamedItem[] = [
 ]
 
 export const SLIDERS: Slider[] = [
-  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 3, step: 0.05, default: 1,
+  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 5, step: 0.05, default: 1,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
-  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
-    tip: 'Dithering intensity. 0 = no dithering effect, 1 = standard, >1 = exaggerated.' },
   { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1, step: 0.05, default: 0,
     tip: 'Additive lightness shift in perceptual OKLab space.' },
   { key: 'contrast',       label: 'Contrast',    min: 0,   max: 3, step: 0.05, default: 1,
@@ -323,6 +423,12 @@ export const SLIDERS: Slider[] = [
     tip: 'Clip the darkest fraction of the image. Deepens blacks.' },
   { key: 'whitePoint',     label: 'White Pt',    min: 0,   max: 0.5, step: 0.01, default: 0,
     tip: 'Clip the brightest fraction of the image. Cleans up highlights.' },
+  // Dither strength moved to the bottom — the per-mode tuning table
+  // (dither_tuning::defaults_for) auto-applies the empirical optimum
+  // whenever mode/method changes, so most users should never touch it.
+  // Kept always-visible so it can still be tweaked when needed.
+  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
+    tip: 'Dithering intensity. Auto-tuned per mode/method; manual override only.' },
 ]
 
 export const DIFFUSION_SLIDERS: Slider[] = [
@@ -402,6 +508,12 @@ export function defaultOptions(): Options {
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
     ...CGA_TEXT_DEFAULTS,
+    c64Palette: 'colodore',
+    c64Metric:  'mse',
+    c64PetsciiGraphicsOnly: false,
+    tileBudget: 256,
+    tileReserve: 0,
+    matchRange: false,
     ...sliderDefaults(),
   }
   return opts
@@ -446,6 +558,25 @@ export function isSnesMode(mode: string): boolean {
 export function isGenesisMode(mode: string): boolean {
   return mode.startsWith('genesis-')
 }
+export function isC64Mode(mode: string): boolean {
+  return mode.startsWith('c64-')
+}
+// c64 charset modes accept arbitrary width/height (padded to cell size)
+// and a configurable tile-budget. Distinguished from the bitmap c64
+// modes (multicolor / hires / fli / afli / petscii) which stay locked
+// to hardware screen dimensions.
+export function isC64CharsetMode(mode: string): boolean {
+  return mode === 'c64-charset-hires' ||
+         mode === 'c64-charset-multicolor'
+}
+
+// Tile-based modes that accept arbitrary width/height padded to the
+// per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
+// At freeform mode the Native PAR / fixed-buffer behaviour is replaced
+// by the user-typed dims; at default size they stay fixed-buffer.
+export function isTileFreeformMode(mode: string): boolean {
+  return isC64CharsetMode(mode) || isGenesisMode(mode) || isSnesMode(mode)
+}
 // SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
 // 2048-colour gamut comes from per-tile palette-field bits. Yliluoma
 // family (palette-aware ordered dithers) doesn't apply here — restrict
@@ -458,7 +589,11 @@ export function isSnesDirectMode(mode: string): boolean {
 // letterbox / pillarbox). DOS + SNES both fit; auto-toggled on mode
 // entry by the web UI.
 export function isFixedBufferMode(mode: string): boolean {
-  return isDosMode(mode) || isSnesMode(mode) || isGenesisMode(mode)
+  // Tile-freeform modes (c64-charset, Genesis, SNES Mode 7) drop out of
+  // fixed-buffer when Resize is enabled; the UI uses isEffectiveFixedBuffer
+  // (Vue side) to keep Native PAR available at default size.
+  if (isTileFreeformMode(mode)) return false
+  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode)
 }
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
@@ -487,6 +622,25 @@ const MODE_PAR: Record<string, number> = {
   'genesis-h40':    0.933,
   'genesis-h32-sh': 1.167,
   'genesis-h40-sh': 0.933,
+  // C64 hires / AFLI / PETSCII: encoder emits 320×200 native (1:1).
+  // Display ratio = PAL VIC-II hardware pixel = 0.936:1.
+  'c64-hires':           0.936,
+  'c64-afli':            0.936,
+  'c64-petscii':         0.936,
+  'c64-charset-hires':   0.936,
+  'c64-charset-multicolor': 1.872,
+  // C64 multicolor / FLI: encoder emits 160×200 logical (each
+  // logical pixel = 2 hardware pixels). Per-LOGICAL-pixel display
+  // ratio = 2 × 0.936 = 1.872 (wide).
+  'c64-multicolor':  1.872,
+  'c64-fli':         1.872,
+  // Atari ST/STE — colour modes target a 4:3 CRT.
+  //   low  320×200 → 4:3 ⇒ PAR ≈ 0.833 (slightly tall, like ega-320)
+  //   med  640×200 → 4:3 ⇒ PAR ≈ 0.417 (2.4× tall, like ega-640)
+  //   hi   640×400 monochrome monitor ⇒ PAR 1.0 (square)
+  'stf-low':  0.833,  'ste-low':  0.833,
+  'stf-med':  0.417,  'ste-med':  0.417,
+  'stf-hi':   1,      'ste-hi':   1,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
@@ -520,6 +674,19 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'ega-640':         { sx: 1, sy: 2 },
   'cga-640':         { sx: 1, sy: 2 },
   'cga-text80x100':  { sx: 1, sy: 2 },
+  // C64 modes: backing-canvas scale before PAR-aware CSS stretch.
+  //   hires / AFLI: encoder is 320×200 native; 2×2 → 640×400 backing.
+  //   multicolor / FLI: encoder is 160×200 logical; 4×2 → 640×400
+  //     backing (the 4× horizontal includes the 2:1 hardware-pixel
+  //     doubling baked into multicolor display).
+  // Both pairs land at the same physical canvas size.
+  'c64-hires':           { sx: 2, sy: 2 },
+  'c64-afli':            { sx: 2, sy: 2 },
+  'c64-petscii':         { sx: 2, sy: 2 },
+  'c64-charset-hires':       { sx: 2, sy: 2 },
+  'c64-charset-multicolor':  { sx: 4, sy: 2 },
+  'c64-multicolor':  { sx: 4, sy: 2 },
+  'c64-fli':         { sx: 4, sy: 2 },
 }
 
 // Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for
@@ -557,10 +724,15 @@ export function decomposeMode(uiMode: string): DecomposedMode {
   return { mode: uiMode, width: 0, interlace: false }
 }
 
-// Maximum bitplane depth for a given mode/chipset
+// Maximum bitplane depth for a given mode/chipset.
+// Modes whose depth is fixed by the target hardware (HAM data bits,
+// EHB always-6, Atari mode-defined, DOS hardware-defined, C64 cell
+// constraints) report 0 to mean "no user-adjustable depth slider".
+const FIXED_DEPTH_PREDICATES = [
+  isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode,
+] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
-  if (isHamMode(mode) || isEhbMode(mode) || isAtariMode(mode)) return 0
-  if (isDosMode(mode)) return 0  // DOS modes have fixed depth per hardware
+  for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
   if (isHiresMode(mode)) return chipset === 'aga' ? 8 : 4
   return chipset === 'aga' ? 8 : 5
 }

@@ -14,9 +14,9 @@ import Panel from 'primevue/panel'
 import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
-  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, EXAMPLES,
+  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isTileFreeformMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -26,7 +26,7 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertViewer, convertDegas, convertRaw, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
 
 function onStopEncode(): void {
   abortWasm()
@@ -92,6 +92,9 @@ watch(wasmLoading, async (loading) => {
 const options = reactive(defaultOptions())
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvasRef')
 const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL CRT-preview overlay canvas
+const charsetCanvasRef = useTemplateRef<HTMLCanvasElement>('charsetCanvasRef')
+const genesisTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisTilesCanvasRef')
+const snesTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('snesTilesCanvasRef')
 const crtEnabled = ref(false)
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
@@ -136,6 +139,10 @@ function renderCrt() {
     crtCanvasRef.value.style.width  = `${lastDst.w}px`
     crtCanvasRef.value.style.height = `${lastDst.h}px`
   }
+  // C64 modes simulate composite output to a PAL TV (chroma blur,
+  // delay-line averaging, chromatic aberration). Amiga modes assume an
+  // 1084S RGB monitor — leave PAL mode off.
+  crtRenderer.setPalMode(isC64Mode(options.mode))
   crtRenderer.render(lastRgba, lastSrc.w, lastSrc.h, dw, dh)
 }
 const resultInfo = ref('')
@@ -246,11 +253,13 @@ const groupedDitherOptions = computed(() => {
 const showDepthSlider = computed(() => {
   // Hidden for any mode where depth is fixed by the hardware buffer:
   // HAM (N-2 data bits), EHB (always 6), Atari (mode defines depth),
-  // DOS (EGA/VGA/CGA/text — 1/2/4/8), SNES Mode 7 (8bpp chunky), and
-  // Sega Genesis (4bpp tiles). Equivalent to "is the buffer fixed by
-  // hardware?" — isFixedBufferMode covers DOS/SNES/Genesis already.
+  // DOS (EGA/VGA/CGA/text — 1/2/4/8), SNES Mode 7 (8bpp chunky),
+  // Sega Genesis (4bpp tiles), and c64 charset (1bpp/2bpp fixed by
+  // mode). Tile-freeform modes left isFixedBufferMode in the recent
+  // refactor but their depth is still hardware-fixed.
   return !isHamMode(options.mode) && !isEhbMode(options.mode) &&
-         !isAtariMode(options.mode) && !isFixedBufferMode(options.mode)
+         !isAtariMode(options.mode) && !isFixedBufferMode(options.mode) &&
+         !isTileFreeformMode(options.mode)
 })
 
 // Raw export tooltip with format layout (HTML for fixed-width font).
@@ -323,6 +332,16 @@ const rawTooltipHtml = computed(() => {
 
 // Whether HAM controls should be shown
 const showHamControls = computed(() => isHamMode(options.mode))
+
+// "Effective" fixed-buffer state — tile-freeform modes (c64-charset,
+// Genesis, SNES) count as fixed-buffer when Resize is off (encoder
+// runs at the mode default), so Native PAR + PAR-aware preview
+// scaling kick in. With Resize on, those modes are freeform and
+// Native PAR is meaningless.
+const isEffectiveFixedBuffer = computed(() =>
+  isFixedBufferMode(options.mode) ||
+  (isTileFreeformMode(options.mode) && !sizeOverride.value)
+)
 
 // Dual playfield: only valid for standard Amiga modes (no HAM, no EHB,
 // no Atari/DOS) at the matching depth for the current chipset (3 for
@@ -408,12 +427,12 @@ function clampDepthForMode(mode: string): void {
 }
 
 function syncNativeParToMode(mode: string, oldMode: string): void {
-  // Fixed-buffer modes (DOS + SNES) default to native PAR (letterbox /
-  // pillarbox into the fixed hardware buffer) so the preview shows the
-  // right aspect. Reset when entering a fixed-buffer mode from outside;
-  // leave alone within the family so the user toggle sticks.
-  const fixedNew = isFixedBufferMode(mode)
-  const fixedOld = isFixedBufferMode(oldMode)
+  // Fixed-buffer + tile-freeform modes (DOS + SNES + Genesis + C64)
+  // default to native PAR so the preview shows the right aspect.
+  const isFixed = (m: string): boolean =>
+    isFixedBufferMode(m) || isTileFreeformMode(m)
+  const fixedNew = isFixed(mode)
+  const fixedOld = isFixed(oldMode)
   if (fixedNew && !fixedOld) options.nativePar = true
   if (!fixedNew) options.nativePar = false
 }
@@ -465,6 +484,14 @@ watch(() => options.mode, (mode, oldMode) => {
   maybeFallbackSnesDirectDither(mode)
   maybeSelectGenesisDither(mode, oldMode)
   syncNativeParToMode(mode, oldMode)
+  // Resize toggle is only meaningful for non-fixed-buffer modes (Amiga
+  // free-resolution + tile-freeform). Switching INTO a fixed-buffer
+  // mode (Atari, c64 bitmap, DOS at default size) while sizeOverride
+  // was on left the width/height inputs visible — clear the toggle so
+  // the layout matches the mode.
+  if (sizeOverride.value && isFixedBufferMode(mode)) {
+    sizeOverride.value = false
+  }
   // DPF and SCAP both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
@@ -511,6 +538,17 @@ function maybeResetModeForChipset(): void {
   options.depth = defaultDepth(options.mode)
 }
 
+// Per-chipset default dither method. Auto-set on chipset entry;
+// user can still pick another from the dither gallery.
+const CHIPSET_DEFAULT_DITHER: Record<string, string> = {
+  c64: 'opt-checker',
+}
+
+function applyChipsetDefaults(chipset: string, oldChipset: string): void {
+  const d = CHIPSET_DEFAULT_DITHER[chipset]
+  if (d && chipset !== oldChipset) options.dither = d
+}
+
 // When chipset changes, reset mode if current mode isn't available
 watch(() => options.chipset, (chipset, oldChipset) => {
   track('chipset-change', { from: oldChipset, to: chipset })
@@ -523,6 +561,7 @@ watch(() => options.chipset, (chipset, oldChipset) => {
   // above don't fire here, so reset directly.
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
+  applyChipsetDefaults(chipset, oldChipset)
 })
 
 // When size override is toggled, populate from last result or reset to 0
@@ -682,21 +721,40 @@ function pushIf(parts: string[], cond: unknown, fragment: string): void {
   if (cond) parts.push(fragment)
 }
 
-function formatGenesisTileStats(result: ConvertResult): string {
+// Tile-budget framing: when the platform has a hard tile-count cap
+// (c64-charset 256, SNES Mode 7 256), denominator = budget; total-cell
+// count + dedup % move into the parenthetical so the constraint a
+// designer worries about (budget headroom) is the headline.
+function formatTileStatsBudget(
+    u: number, t: number, ram_kb: string, budget: number,
+    storage_label: string): string {
+  const pct = t > 0 ? (1 - u / t) * 100 : 0
+  return `tiles: ${u}/${budget} (${t} cells, ${pct.toFixed(1)}% dedup, ${ram_kb} KB ${storage_label})`
+}
+
+function formatTileStatsGenesis(u: number, t: number, ram_kb: string): string {
+  const pct = t > 0 ? (1 - u / t) * 100 : 0
+  // Plane-A budget warning: 1280 tiles before sprites/plane B.
+  const tag = u > 1280 ? '⚠ ' : ''
+  return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${ram_kb} KB VRAM)`
+}
+
+function formatTileStats(result: ConvertResult, mode: string): string {
   if (!result.genesisTotalCells || result.genesisUniqueTiles == null) return ''
   const u = result.genesisUniqueTiles
   const t = result.genesisTotalCells
-  const pct = t > 0 ? (1 - u / t) * 100 : 0
-  // tileDataBytes is the authoritative VRAM-bytes number (Genesis = 32
-  // B/tile, SNES Mode 7 = 64 B/tile). Fall back to *32 for older WASM.
-  const bytes = result.tileDataBytes ?? (u * 32)
-  const vram_kb = (bytes / 1024).toFixed(1)
-  // Genesis warning: 1280-tile budget for plane A before sprites/plane B.
-  // SNES Mode 7 hard-caps at 256 (the packer always merges to fit; no
-  // warning needed because it's already in budget).
-  const over_budget = u > 1280
-  const tag = over_budget ? '⚠ ' : ''
-  return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${vram_kb} KB VRAM)`
+  // tileDataBytes is the authoritative bytes-per-tile-pool number:
+  // Genesis = 32 B/tile, SNES Mode 7 = 64 B/tile, c64 charset = 8 B/glyph.
+  const ram_kb = ((result.tileDataBytes ?? (u * 32)) / 1024).toFixed(1)
+  if (isC64CharsetMode(mode)) {
+    const budget = Math.max(1,
+      (options.tileBudget || 256) - (options.tileReserve || 0))
+    return formatTileStatsBudget(u, t, ram_kb, budget, 'charset')
+  }
+  if (isSnesMode(mode)) {
+    return formatTileStatsBudget(u, t, ram_kb, 256, 'VRAM')
+  }
+  return formatTileStatsGenesis(u, t, ram_kb)
 }
 
 // Combine PSNR + S2 into a single comma-joined fragment so
@@ -729,7 +787,7 @@ function formatResultInfo(result: ConvertResult) {
   pushIf(parts, result.quantError != null, `error: ${(result.quantError ?? 0).toFixed(2)}`)
   const quality = formatQualityStats(result)
   pushIf(parts, quality, quality)
-  const tileStats = formatGenesisTileStats(result)
+  const tileStats = formatTileStats(result, options.mode)
   pushIf(parts, tileStats, tileStats)
   return parts.join(', ')
 }
@@ -742,16 +800,23 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number; cs
   const dh = result.height * sy
   canvas.width = dw
   canvas.height = dh
-  // Native-PAR preview (DOS modes only): keep the canvas backing at
-  // integer-NN upscaled resolution for sharp pixels, but CSS-stretch
-  // the displayed HEIGHT so each pixel renders with the hardware PAR.
+  // Native-PAR preview: keep the canvas backing at integer-NN upscaled
+  // resolution for sharp pixels, but CSS-stretch the displayed HEIGHT
+  // so each pixel renders with the hardware PAR.
   //   Target CSS aspect = buffer_w * par / buffer_h (the real CRT frame)
   // With width pinned to dw, height becomes dw * buffer_h / (buffer_w * par).
   // PAR < 1 (tall pixels → EGA 640×200 etc.) stretches height UP;
-  // PAR > 1 (wide pixels → CGA composite) compresses height DOWN.
+  // PAR > 1 (wide pixels → CGA composite, C64 multicolor) compresses height DOWN.
+  //
+  // The PAR correction is independent of native_par's resize choice:
+  // native_par toggles letterbox-vs-stretch resize, but the *display
+  // aspect* of the encoded buffer always reflects what the hardware
+  // would emit on a CRT. Fixed-buffer modes always apply modePar at
+  // display time so e.g. C64 multicolor's 160×200 buffer renders 4:3-ish
+  // regardless of letterbox-vs-stretch.
   const cssW = dw
   let cssH = dh
-  if (isFixedBufferMode(options.mode) && options.nativePar) {
+  if (isEffectiveFixedBuffer.value) {
     const par = modePar(options.mode)
     cssH = Math.round(dw * result.height / (result.width * par))
   }
@@ -774,17 +839,26 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number; cs
   return { dw, dh, cssW, cssH }
 }
 
+// User-facing width matches *source* pixels (1:1 designer convention).
+// For c64-charset-multicolor the encoder's result.width is the halved
+// 4-px-per-cell logical raster (encoder halves internally — see
+// compute_target_dims), so double it back when surfacing to the UI.
+function sourceWidthFromResult(result: ConvertResult): number {
+  return options.mode === 'c64-charset-multicolor'
+    ? result.width * 2 : result.width
+}
+
 function maybeSeedSizes(result: ConvertResult): void {
   // If size-override is on but width/height are 0 (fresh image just loaded),
   // seed the inputs with the natural defaults; triggers one idempotent
   // re-convert via the deep options watcher.
   if (!sizeOverride.value || (options.width && options.height)) return
-  options.width = result.width
+  options.width = sourceWidthFromResult(result)
   options.height = result.height
 }
 
 function updateLastResultRefs(result: ConvertResult): void {
-  lastWidth.value = result.width
+  lastWidth.value = sourceWidthFromResult(result)
   lastHeight.value = result.height
   lastCopPerLine.value = result.copperChanges ?? 0
   lastPlaneBytes.value = result.planeBytes ?? 0
@@ -810,6 +884,384 @@ function trackConvertSuccess(_result: ConvertResult, convertMs: number): void {
   }
 }
 
+// Charset diagnostic: paint each unique glyph onto charsetCanvasRef,
+// coloured by the glyph's first-occurrence cell.
+//   hires:      8×8, c0/c1 = (bg/fg) from cell color nibbles.
+//   multicolor: 4×8 logical, stretched 2× horizontally for display
+//               parity; bg/mc1/mc2 from globals, fg from cell color.
+
+interface CharsetLayout {
+  cs: Uint8Array
+  firstColor: Int16Array
+  unique: number
+  mc: boolean
+  cellW: number
+  xspan: number
+  scale: number
+  cols: number
+  pixelW: number  // canvas width
+  bg: number
+  mc1: number
+  mc2: number
+  palName: string
+}
+
+function buildFirstColorMap(
+    cs: Uint8Array, unique: number, cells: number,
+    charsetEnd: number): Int16Array {
+  const screen = cs.subarray(charsetEnd, charsetEnd + cells)
+  const color = cs.subarray(charsetEnd + cells, charsetEnd + cells * 2)
+  const firstColor = new Int16Array(unique).fill(-1)
+  for (let c = 0; c < cells; c++) {
+    const g = screen[c] ?? 0
+    if (g < unique && firstColor[g] === -1) {
+      firstColor[g] = color[c] ?? 0
+    }
+  }
+  return firstColor
+}
+
+function charsetLayoutSizes(mc: boolean): { cellW: number; xspan: number } {
+  return mc ? { cellW: 4, xspan: 2 } : { cellW: 8, xspan: 1 }
+}
+
+function charsetSourceValid(
+    cs: Uint8Array | undefined, unique: number, cells: number): cs is Uint8Array {
+  if (!cs || unique === 0 || cells === 0) return false
+  return cs.length >= unique * 8 + cells * 2
+}
+
+function buildCharsetLayout(
+    result: ConvertResult, mode: string): CharsetLayout | null {
+  const unique = result.genesisUniqueTiles ?? 0
+  const cells = result.genesisTotalCells ?? 0
+  const cs = result.c64CharsetData
+  if (!charsetSourceValid(cs, unique, cells)) return null
+  const mc = mode === 'c64-charset-multicolor'
+  const { cellW, xspan } = charsetLayoutSizes(mc)
+  const scale = 1
+  const cols = 16
+  return {
+    cs,
+    firstColor: buildFirstColorMap(cs, unique, cells, unique * 8),
+    unique, mc, cellW, xspan, scale, cols,
+    pixelW: cols * cellW * xspan * scale,
+    bg:  result.c64BgColor ?? 0,
+    mc1: result.c64Mc1 ?? 0,
+    mc2: result.c64Mc2 ?? 0,
+    palName: options.c64Palette,
+  }
+}
+
+function pickGlyphPixel(byte: number, p: number, lo: CharsetLayout,
+                        fg: number, c0: number): number {
+  if (!lo.mc) return ((byte >> (lo.cellW - 1 - p)) & 1) ? fg : c0
+  const q = (byte >> ((lo.cellW - 1 - p) * 2)) & 3
+  // 4-entry lookup: bg / mc1 / mc2 / fg, indexed by the 2-bit pair.
+  const mcSlots = [lo.bg, lo.mc1, lo.mc2, fg]
+  return mcSlots[q] ?? lo.bg
+}
+
+interface FillRectArgs {
+  px: Uint8ClampedArray
+  pixelW: number
+  x: number
+  y: number
+  w: number
+  h: number
+  rgb: readonly [number, number, number]
+}
+
+function fillRect(a: FillRectArgs): void {
+  const [r, g, b] = a.rgb
+  for (let dy = 0; dy < a.h; dy++) {
+    for (let dx = 0; dx < a.w; dx++) {
+      const o = ((a.y + dy) * a.pixelW + (a.x + dx)) * 4
+      a.px[o] = r; a.px[o + 1] = g; a.px[o + 2] = b; a.px[o + 3] = 255
+    }
+  }
+}
+
+interface PaintGlyphArgs {
+  px: Uint8ClampedArray
+  lo: CharsetLayout
+  glyph: number
+  cellColor: number
+}
+
+interface RowPaintCtx {
+  args: PaintGlyphArgs
+  gx0: number
+  gy0: number
+  fg: number
+  c0: number
+}
+
+function paintGlyphRow(ctx: RowPaintCtx, byte: number, r: number): void {
+  const { args: { px, lo }, gx0, gy0, fg, c0 } = ctx
+  for (let p = 0; p < lo.cellW; p++) {
+    const pal = pickGlyphPixel(byte, p, lo, fg, c0)
+    fillRect({
+      px, pixelW: lo.pixelW,
+      x: gx0 + p * lo.xspan * lo.scale, y: gy0 + r * lo.scale,
+      w: lo.xspan * lo.scale, h: lo.scale,
+      rgb: c64PaletteRgb(lo.palName, pal),
+    })
+  }
+}
+
+function paintGlyphBlock(args: PaintGlyphArgs): void {
+  const { lo, glyph: g, cellColor: c } = args
+  const ctx: RowPaintCtx = {
+    args,
+    gx0: (g % lo.cols) * lo.cellW * lo.xspan * lo.scale,
+    gy0: Math.floor(g / lo.cols) * 8 * lo.scale,
+    fg: lo.mc ? (c & 0xF) : ((c >> 4) & 0xF),
+    c0: lo.mc ? lo.bg : (c & 0xF),
+  }
+  for (let r = 0; r < 8; r++) {
+    const byte = lo.cs[g * 8 + r] ?? 0
+    paintGlyphRow(ctx, byte, r)
+  }
+}
+
+function paintCharsetCanvas(result: ConvertResult): void {
+  const canvas = charsetCanvasRef.value
+  if (!canvas) return
+  if (!isC64CharsetMode(options.mode)) return
+  const lo = buildCharsetLayout(result, options.mode)
+  if (!lo) return
+  const gridRows = Math.ceil(lo.unique / lo.cols)
+  canvas.width = lo.pixelW
+  canvas.height = gridRows * 8 * lo.scale
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
+  canvas.style.imageRendering = 'pixelated'
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.fillStyle = 'black'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  const imgData = ctx.createImageData(canvas.width, canvas.height)
+  for (let g = 0; g < lo.unique; g++) {
+    const c = lo.firstColor[g] ?? -1
+    if (c === -1) continue
+    paintGlyphBlock({ px: imgData.data, lo, glyph: g, cellColor: c })
+  }
+  ctx.putImageData(imgData, 0, 0)
+}
+
+// ---------------------------------------------------------------------------
+// Genesis tile diagnostic.
+// ---------------------------------------------------------------------------
+
+// Decode 3-bit channel value to 8-bit sRGB via bit replication
+// (c << 5 | c << 2 | c >> 1).
+function expand3to8(c: number): number {
+  return ((c & 0x7) << 5) | ((c & 0x7) << 2) | ((c & 0x7) >> 1)
+}
+
+// Decode a Genesis BGR333 word (LE u16) to an [R, G, B] sRGB triple.
+function decodeGenesisColor(word: number): [number, number, number] {
+  const r3 = (word >> 1) & 0x7
+  const g3 = (word >> 5) & 0x7
+  const b3 = (word >> 9) & 0x7
+  return [expand3to8(r3), expand3to8(g3), expand3to8(b3)]
+}
+
+function fillGenesisPalette(
+    palette: Uint8Array): readonly [number, number, number][][] {
+  // 4 lines × 16 entries × [R, G, B].
+  const out: [number, number, number][][] = []
+  for (let line = 0; line < 4; line++) {
+    const lineOut: [number, number, number][] = []
+    for (let i = 0; i < 16; i++) {
+      const off = (line * 16 + i) * 2
+      const lo = palette[off] ?? 0
+      const hi = palette[off + 1] ?? 0
+      lineOut.push(decodeGenesisColor((hi << 8) | lo))
+    }
+    out.push(lineOut)
+  }
+  return out
+}
+
+interface GenesisFirstLineMap { firstLine: Int8Array }
+
+function genesisFirstLines(
+    tilemap: Uint8Array, uniqueTiles: number): GenesisFirstLineMap {
+  const firstLine = new Int8Array(uniqueTiles).fill(-1)
+  const cellCount = tilemap.length / 2
+  for (let c = 0; c < cellCount; c++) {
+    const lo = tilemap[c * 2] ?? 0
+    const hi = tilemap[c * 2 + 1] ?? 0
+    const word = (hi << 8) | lo
+    const idx = word & 0x07FF
+    const line = (word >> 13) & 0x3
+    if (idx < uniqueTiles && firstLine[idx] === -1) {
+      firstLine[idx] = line
+    }
+  }
+  return { firstLine }
+}
+
+interface GenesisTileCtx {
+  px: Uint8ClampedArray
+  pixelW: number
+  scale: number
+  cols: number
+  tileBytes: Uint8Array
+  palette: readonly (readonly [number, number, number])[][]
+}
+
+function paintTilePixel(args: {
+  px: Uint8ClampedArray; pixelW: number; scale: number;
+  x: number; y: number; rgb: readonly [number, number, number];
+}): void {
+  const [pr, pg, pb] = args.rgb
+  for (let dy = 0; dy < args.scale; dy++) {
+    for (let dx = 0; dx < args.scale; dx++) {
+      const o = ((args.y + dy) * args.pixelW + (args.x + dx)) * 4
+      args.px[o] = pr; args.px[o + 1] = pg
+      args.px[o + 2] = pb; args.px[o + 3] = 255
+    }
+  }
+}
+
+function paintGenesisTile(ctx: GenesisTileCtx, g: number, line: number): void {
+  const gx0 = (g % ctx.cols) * 8 * ctx.scale
+  const gy0 = Math.floor(g / ctx.cols) * 8 * ctx.scale
+  const linePal = ctx.palette[line] ?? []
+  for (let r = 0; r < 8; r++) {
+    for (let p = 0; p < 8; p++) {
+      const byte = ctx.tileBytes[g * 32 + r * 4 + (p >> 1)] ?? 0
+      const idx = (p & 1) ? (byte & 0xF) : ((byte >> 4) & 0xF)
+      paintTilePixel({
+        px: ctx.px, pixelW: ctx.pixelW, scale: ctx.scale,
+        x: gx0 + p * ctx.scale, y: gy0 + r * ctx.scale,
+        rgb: linePal[idx] ?? [0, 0, 0],
+      })
+    }
+  }
+}
+
+interface GenesisTileInputs {
+  tileBytes: Uint8Array
+  tilemap: Uint8Array
+  palBytes: Uint8Array
+  unique: number
+}
+
+function genesisTileInputs(result: ConvertResult): GenesisTileInputs | null {
+  const tileBytes = result.genesisTileBytes
+  const tilemap = result.genesisTilemapBytes
+  const palBytes = result.genesisPaletteBytes
+  const unique = result.genesisUniqueTiles ?? 0
+  if (!tileBytes || !tilemap || !palBytes || unique === 0) return null
+  return { tileBytes, tilemap, palBytes, unique }
+}
+
+function paintGenesisTilesCanvas(result: ConvertResult): void {
+  const canvas = genesisTilesCanvasRef.value
+  if (!canvas || !isGenesisMode(options.mode)) return
+  const inputs = genesisTileInputs(result)
+  if (!inputs) return
+  const palette = fillGenesisPalette(inputs.palBytes)
+  const { firstLine } = genesisFirstLines(inputs.tilemap, inputs.unique)
+  const scale = 1
+  const cols = 16
+  const rows = Math.ceil(inputs.unique / cols)
+  canvas.width = cols * 8 * scale
+  canvas.height = rows * 8 * scale
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
+  canvas.style.imageRendering = 'pixelated'
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+  ctx2d.fillStyle = 'black'
+  ctx2d.fillRect(0, 0, canvas.width, canvas.height)
+  const imgData = ctx2d.createImageData(canvas.width, canvas.height)
+  const ctx: GenesisTileCtx = {
+    px: imgData.data, pixelW: canvas.width, scale, cols,
+    tileBytes: inputs.tileBytes, palette,
+  }
+  for (let g = 0; g < inputs.unique; g++) {
+    const line = firstLine[g] ?? -1
+    if (line === -1) continue
+    paintGenesisTile(ctx, g, line)
+  }
+  ctx2d.putImageData(imgData, 0, 0)
+}
+
+// ---------------------------------------------------------------------------
+// SNES Mode 7 tile diagnostic.
+// ---------------------------------------------------------------------------
+
+interface SnesTileCtx {
+  px: Uint8ClampedArray
+  pixelW: number
+  scale: number
+  cols: number
+  tileBytes: Uint8Array
+  palette: Uint8Array | undefined  // 256×3 RGB; undefined = Direct
+}
+
+function snesPixelRgb(byte: number, palette: Uint8Array | undefined): [number, number, number] {
+  if (palette && palette.length >= 768) {
+    const off = byte * 3
+    return [palette[off] ?? 0, palette[off + 1] ?? 0, palette[off + 2] ?? 0]
+  }
+  // Direct: BBGGGRRR → expand to 8-bit per channel.
+  const r3 = byte & 0x7
+  const g3 = (byte >> 3) & 0x7
+  const b2 = (byte >> 6) & 0x3
+  // 3-bit → 8-bit replication for r/g; 2-bit → 8-bit for b.
+  const b8 = ((b2 & 0x3) << 6) | ((b2 & 0x3) << 4) | ((b2 & 0x3) << 2) | (b2 & 0x3)
+  return [expand3to8(r3), expand3to8(g3), b8]
+}
+
+function paintSnesTile(ctx: SnesTileCtx, g: number): void {
+  const gx0 = (g % ctx.cols) * 8 * ctx.scale
+  const gy0 = Math.floor(g / ctx.cols) * 8 * ctx.scale
+  for (let r = 0; r < 8; r++) {
+    for (let p = 0; p < 8; p++) {
+      const byte = ctx.tileBytes[g * 64 + r * 8 + p] ?? 0
+      paintTilePixel({
+        px: ctx.px, pixelW: ctx.pixelW, scale: ctx.scale,
+        x: gx0 + p * ctx.scale, y: gy0 + r * ctx.scale,
+        rgb: snesPixelRgb(byte, ctx.palette),
+      })
+    }
+  }
+}
+
+function paintSnesTilesCanvas(result: ConvertResult): void {
+  const canvas = snesTilesCanvasRef.value
+  if (!canvas || !isSnesMode(options.mode)) return
+  const tileBytes = result.snesTileBytes
+  if (!tileBytes) return
+  const palette = result.snesPaletteBytes
+  const unique = Math.floor(tileBytes.length / 64)
+  const scale = 1
+  const cols = 16
+  const rows = Math.ceil(unique / cols)
+  canvas.width = cols * 8 * scale
+  canvas.height = rows * 8 * scale
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
+  canvas.style.imageRendering = 'pixelated'
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+  ctx2d.fillStyle = 'black'
+  ctx2d.fillRect(0, 0, canvas.width, canvas.height)
+  const imgData = ctx2d.createImageData(canvas.width, canvas.height)
+  const ctx: SnesTileCtx = {
+    px: imgData.data, pixelW: canvas.width, scale, cols,
+    tileBytes, palette,
+  }
+  for (let g = 0; g < unique; g++) paintSnesTile(ctx, g)
+  ctx2d.putImageData(imgData, 0, 0)
+}
+
 async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   const painted = paintPreviewCanvas(result)
   if (!painted || !result.rgba) return false
@@ -822,6 +1274,9 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
     const r = await ensureCrtRenderer()
     if (r) renderCrt()
   }
+  paintCharsetCanvas(result)
+  paintGenesisTilesCanvas(result)
+  paintSnesTilesCanvas(result)
   return true
 }
 
@@ -1009,6 +1464,69 @@ async function downloadRaw() {
     downloadBlob(result.data, baseStem() + '.raw', 'application/octet-stream')
     exportCount++
     track('export', { format: 'raw', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+async function downloadPRG() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertPRG(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.prg', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'prg', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+async function downloadKoa() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertKoa(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.koa', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'koa', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+async function downloadHir() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertHir(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.hir', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'hir', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+// Plain .h export — for non-Amiga modes the C++ side dispatches per
+// platform: c64-charset → c64::charset_header, Genesis → SGDK header,
+// SNES → minimal Mode 7 .h. Amiga modes still use cheader::generate.
+async function downloadHeader() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const stem = options.symbolName ||
+      (imageName.value || 'image').replace(/\.[^.]+$/, '').replaceAll(/\W/g, '_')
+    const opts = buildWasmOptions()
+    opts.symbolName = stem
+    const result = await convertHeader(imageBytes.value, opts, stem)
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.h', 'text/plain')
+    exportCount++
+    track('export', { format: 'h', mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
@@ -1341,6 +1859,61 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
+              <!-- C64 mode only: VIC-II palette selector. The VIC-II's analogue
+                   composite output has no canonical sRGB reference; pick the
+                   one whose look you prefer. -->
+              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="VIC-II 16-colour palette. Pepto is the most-cited reference; VICE/Colodore/Deekay/Godot/C64Wiki/Levy are alternative measurements or community standards.">
+                  Palette
+                </label>
+                <div class="col-8">
+                  <Select v-model="options.c64Palette" :options="C64_PALETTES"
+                    optionLabel="label" optionValue="value" class="w-full" />
+                </div>
+              </div>
+
+              <!-- C64 mode only: per-cell error metric. Mirrors png2c64 — all
+                   three operate in sRGB (display space). -->
+              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Per-cell error metric for C64 brute-force scoring. Blur = Pappas-Neuhoff perceptual blur (default). MSE = per-pixel sRGB squared error. SSIM = structural similarity. Try them — they pick noticeably different outputs.">
+                  Metric
+                </label>
+                <div class="col-8">
+                  <Select v-model="options.c64Metric" :options="C64_METRICS"
+                    optionLabel="label" optionValue="value" class="w-full" />
+                </div>
+              </div>
+
+              <!-- C64 mode only: match palette range. Stretches the
+                   source's OKLab extent to span the VIC-II palette's
+                   reachable range so quantisation has headroom on
+                   highlights / shadows. Mirrors png2c64. -->
+              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Match the source's OKLab tonal range to the VIC-II palette's reachable extent before encoding. Pulls highlights and shadows into the palette's range so quantisation has headroom on both ends. Mirrors png2c64's behaviour.">
+                  Match range
+                </label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.matchRange" />
+                  <span style="color: #888; font-size: 0.625rem;">remap source range to palette extent</span>
+                </div>
+              </div>
+
+              <!-- PETSCII only: restrict candidate glyphs to graphics
+                   subset (no letters / digits / punctuation). -->
+              <div v-if="options.mode === 'c64-petscii'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Restrict the candidate glyph set to PETSCII semi-graphics + blocks (~130 chars). Skips letters, digits, and punctuation that would look out-of-place in smooth halftone areas.">
+                  Graphics only
+                </label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.c64PetsciiGraphicsOnly" />
+                  <span style="color: #888; font-size: 0.625rem;">no letters/digits/punctuation</span>
+                </div>
+              </div>
+
               <div v-if="!(options.mode === 'cga-text80x100' && options.cgaTextMetric !== 'mse')"
                 class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
@@ -1349,8 +1922,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS) -->
-              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !paletteData" class="grid align-items-center">
+              <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS/C64) -->
+              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="CAP — Copper-Augmented Palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">CAP</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
@@ -1403,13 +1976,16 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- Native PAR (DOS + SNES — modes with fixed hardware buffer):
-                   preserve source aspect by letterboxing/pillarboxing the
-                   image inside the fixed frame instead of stretching. -->
-              <div v-if="isFixedBufferMode(options.mode)" class="grid align-items-center">
+              <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
+                   hardware buffer): preserve source aspect by letterboxing/
+                   pillarboxing the image inside the fixed frame instead of
+                   stretching. Stays visible (greyed out) for tile-freeform
+                   modes when Resize is on so the layout doesn't jump. -->
+              <div v-if="isFixedBufferMode(options.mode) || isTileFreeformMode(options.mode)"
+                   class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.nativePar" />
+                  <ToggleSwitch v-model="options.nativePar" :disabled="!isEffectiveFixedBuffer" />
                 </div>
               </div>
 
@@ -1545,8 +2121,46 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
                 title="Download a DJGPP-compilable .cpp viewer (sets video mode, loads palette, blits image, waits for key, restores text mode). Build: i586-pc-msdosdjgpp-g++ -O2 -o out.exe out.cpp" />
             </div>
+            <!-- C64 export buttons: PNG preview + .prg displayer + format-specific raw. -->
+            <div v-if="isC64Mode(options.mode) && !isC64CharsetMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="prg" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPRG"
+                title="Download a runnable C64 .prg with embedded 6502 displayer (Koala for multicolor, Art Studio for hires, FLI/AFLI/PETSCII as appropriate)." />
+              <Button v-if="options.mode === 'c64-multicolor'" label="koa" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadKoa"
+                title="Download Koala Paint .koa (raw bitmap+screen+d800+bg, no displayer; loads at $6000)." />
+              <Button v-else-if="options.mode === 'c64-hires'" label="hir" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHir"
+                title="Download Art Studio .hir (raw bitmap+screen, no displayer; loads at $2000)." />
+            </div>
+            <!-- C64 charset export: PNG + .h header + .raw bytes. -->
+            <div v-if="isC64CharsetMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a self-contained C header: charset[] + screen[] + color[] + palette[] + COLS / ROWS / GLYPHS / BG_COLOR (and MC1 / MC2 for multicolor)." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: charset_data (unique_glyphs × 8) + screen_ram (cols × rows) + color_ram (cols × rows)." />
+            </div>
+            <!-- Genesis export: PNG + SGDK .h + raw .bin. -->
+            <div v-if="isGenesisMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download an SGDK-compatible C header: tiles[] + tilemap[] + palette[] + TileSet/TileMap/Palette wrappers ready for VDP_loadTileSet / VDP_setMap / VDP_setPalette." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: tile data (unique × 32) + tilemap (u16 BE per cell) + palette (4 lines × 16 BGR333 words BE)." />
+            </div>
+            <!-- SNES Mode 7 export: PNG + minimal .h + raw .bin. -->
+            <div v-if="isSnesMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a Mode 7 C header: tiles[] + tilemap[] + palette[] (256-mode) or tiles + tilemap (Direct, BBGGGRRR pixel bytes self-decode)." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: 16 KB tilemap (128×128, u8 tile index) + tile data (unique × 64) + 256×3-byte sRGB palette (256 mode only)." />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -1556,7 +2170,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
@@ -1714,6 +2328,20 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             <div class="flex align-items-center gap-2">
               <span v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</span>
             </div>
+          </div>
+          <!-- Charset diagnostic: actual generated glyphs, coloured by
+               each glyph's first-occurrence cell. Only for c64-charset. -->
+          <div v-if="isC64CharsetMode(options.mode)"
+               class="surface-card border-round-lg p-2">
+            <canvas ref="charsetCanvasRef" class="charset-canvas" />
+          </div>
+          <div v-if="isGenesisMode(options.mode)"
+               class="surface-card border-round-lg p-2">
+            <canvas ref="genesisTilesCanvasRef" class="charset-canvas" />
+          </div>
+          <div v-if="isSnesMode(options.mode)"
+               class="surface-card border-round-lg p-2">
+            <canvas ref="snesTilesCanvasRef" class="charset-canvas" />
           </div>
         </div>
       </div>

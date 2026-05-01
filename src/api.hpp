@@ -251,6 +251,41 @@ struct Options {
     // pre-dither stage when blur is selected.
     std::string cga_text_metric = "blur";
 
+    // C64 / VIC-II palette selector. One of: pepto, vice, colodore
+    // (default), deekay, godot, c64wiki, levy. Only affects c64-* modes;
+    // ignored everywhere else. The VIC-II palette has no unique sRGB
+    // ground-truth — different tools/scenes prefer different RGB tables.
+    // Colodore is the default (matches png2c64) — it's measurement-based
+    // so colours track real CRT output more closely than other tables.
+    std::string c64_palette = "colodore";
+
+    // Per-cell error metric for C64 modes (cell brute force). Both
+    // run in OKLab. Mirrors png2c64.
+    //   "mse" (default): per-pixel nearest-distance squared sum.
+    //   "blur": Pappas-Neuhoff 3×3 binomial blur of source vs
+    //          rendered cell — models eye-on-CRT averaging.
+    std::string c64_metric = "mse";
+
+    // PETSCII only: when true, restrict the candidate glyph set to
+    // PETSCII semi-graphics, blocks, and the reverse-video graphics
+    // (~130 chars) — skips letters / digits / punctuation. Useful
+    // for halftone-style art where letter shapes in smooth regions
+    // would look wrong.
+    bool c64_petscii_graphics_only = false;
+
+    // c64 charset modes (hires / multicolor) — and later tile-based
+    // SNES / Genesis / Amiga 16x16 / PS1 64x64. When 0 the encoder
+    // uses its mode default (256 for c64). Use higher budgets when
+    // the runtime swaps charset banks across frames; the encoder
+    // emits the full glyph catalogue but writes screen_ram with the
+    // platform's hardware-native index width (8-bit on c64, 16-bit
+    // on Genesis / SNES).
+    std::size_t tile_budget = 0;
+    // Reserve N glyph slots in the final budget so dedup merges
+    // down to (budget - reserve). Useful when the runtime needs N
+    // free slots for animation frames / sprites / raster effects.
+    std::size_t tile_reserve = 0;
+
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
     std::vector<PinSpec>  pins;
@@ -288,6 +323,32 @@ struct ConvertResult {
     int genesisTotalCells{};             // Tiled modes: tilemap cells (W/8 × H/8); 0 = not tiled
     int tileDataBytes{};                 // Tiled modes: unique × bytes-per-tile (32 for Genesis 4bpp, 64 for SNES Mode 7 8bpp)
     bool hasTransparency{};             // source image had alpha channel
+
+    // c64 charset modes — copy of the encoder's raw_frame so the web
+    // frontend can render a charset diagnostic (the actual generated
+    // glyphs, coloured by their first-occurrence cell). Layout:
+    //   bytes 0..unique_glyphs*8       — charset_data (8 bytes/glyph)
+    //   then  cols*rows                — screen_ram (glyph index)
+    //   then  cols*rows                — color_ram (per-cell colour)
+    // Empty for non-charset runs.
+    std::vector<std::uint8_t> c64CharsetData;
+    int c64Mc1{};                        // multicolor: shared mc1 (0..15)
+    int c64Mc2{};                        // multicolor: shared mc2 (0..15)
+    int c64BgColor{};                    // shared bg (0..15)
+
+    // Genesis tile diagnostic — same idea as c64CharsetData but with
+    // 4bpp 8×8 tiles and a 4-line palette structure. Empty for
+    // non-Genesis runs.
+    std::vector<std::uint8_t> genesisTileBytes;       // unique × 32
+    std::vector<std::uint8_t> genesisTilemapBytes;    // cells × 2 (u16 LE)
+    std::vector<std::uint8_t> genesisPaletteBytes;    // 4 × 16 × 2 (BGR333 LE)
+
+    // SNES Mode 7 tile diagnostic. snesPaletteBytes is empty for the
+    // Direct Color variant (BBGGGRRR pixel bytes expand inline).
+    std::vector<std::uint8_t> snesTileBytes;          // unique × 64
+    std::vector<std::uint8_t> snesTilemapBytes;       // 128×128 (16384)
+    std::vector<std::uint8_t> snesPaletteBytes;       // 256 × 3 RGB (256-mode only)
+
     std::string error;                  // error message (empty on success)
 };
 
@@ -323,6 +384,23 @@ ConvertResult convert_rgba(const std::uint8_t* input_data,
 
 // Convert raw image data and return raw bitplane bytes (interleaved, no header).
 ConvertResult convert_raw(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
+
+// c64 only: convert and return a runnable C64 .prg with embedded
+// 6502 displayer (Koala for c64-multicolor, Art-Studio for c64-hires,
+// FLI/AFLI/PETSCII as appropriate). Charset modes are not yet
+// supported pending mc1/mc2 surfacing in the c64 EncodeResult.
+ConvertResult convert_prg(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
+
+// c64 only: raw image-only formats — Koala Paint .koa
+// (multicolor) or Art Studio .hir (hires). No displayer prepended.
+ConvertResult convert_koa(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
+ConvertResult convert_hir(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options);
 
@@ -412,6 +490,19 @@ struct EncodeState {
     // palette-index array; for SNES Direct it's the 8bpp packed
     // bbgggrrr-format Direct Color pixel byte array.
     std::vector<std::uint8_t> raw_frame;
+
+    // c64 modes: shared VIC-II background colour. Needed for PRG /
+    // .koa / .hir export. 0 for non-c64 runs.
+    std::uint8_t c64_bg_color = 0;
+
+    // c64 charset modes (hires + multicolor) — tile-mode metadata
+    // surfaced from c64::EncodeResult so downstream .h export doesn't
+    // need to re-run the encoder. 0 for non-charset runs.
+    std::size_t c64_cols = 0;
+    std::size_t c64_rows = 0;
+    std::size_t c64_unique_glyphs = 0;
+    std::uint8_t c64_mc1 = 0;
+    std::uint8_t c64_mc2 = 0;
 
     // Tile-dedup stats — Genesis (4bpp 8×8 = 32 B/tile) and SNES Mode 7
     // (8bpp 8×8 = 64 B/tile). 0 = not a tiled run.

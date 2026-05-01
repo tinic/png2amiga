@@ -124,6 +124,19 @@ Options parse_js_options(val js_opts) {
         opts.native_par = js_opts["nativePar"].as<bool>();
     if (js_opts.hasOwnProperty("cgaTextMetric"))
         opts.cga_text_metric = js_opts["cgaTextMetric"].as<std::string>();
+    if (js_opts.hasOwnProperty("c64Palette"))
+        opts.c64_palette = js_opts["c64Palette"].as<std::string>();
+    if (js_opts.hasOwnProperty("c64Metric"))
+        opts.c64_metric = js_opts["c64Metric"].as<std::string>();
+    if (js_opts.hasOwnProperty("c64PetsciiGraphicsOnly"))
+        opts.c64_petscii_graphics_only =
+            js_opts["c64PetsciiGraphicsOnly"].as<bool>();
+    if (js_opts.hasOwnProperty("tileBudget"))
+        opts.tile_budget = static_cast<std::size_t>(
+            js_opts["tileBudget"].as<int>());
+    if (js_opts.hasOwnProperty("tileReserve"))
+        opts.tile_reserve = static_cast<std::size_t>(
+            js_opts["tileReserve"].as<int>());
     if (js_opts.hasOwnProperty("dualPlayfield"))
         opts.dual_playfield = js_opts["dualPlayfield"].as<bool>();
     if (js_opts.hasOwnProperty("scap"))
@@ -225,6 +238,30 @@ val js_convert_rgba(val input_array, val js_opts) {
     obj.set("genesisUniqueTiles", result.genesisUniqueTiles);
     obj.set("genesisTotalCells",  result.genesisTotalCells);
     obj.set("tileDataBytes",      result.tileDataBytes);
+    if (!result.c64CharsetData.empty()) {
+        obj.set("c64CharsetData",
+                make_uint8_array(result.c64CharsetData));
+        obj.set("c64Mc1",     result.c64Mc1);
+        obj.set("c64Mc2",     result.c64Mc2);
+        obj.set("c64BgColor", result.c64BgColor);
+    }
+    if (!result.genesisTileBytes.empty()) {
+        obj.set("genesisTileBytes",
+                make_uint8_array(result.genesisTileBytes));
+        obj.set("genesisTilemapBytes",
+                make_uint8_array(result.genesisTilemapBytes));
+        obj.set("genesisPaletteBytes",
+                make_uint8_array(result.genesisPaletteBytes));
+    }
+    if (!result.snesTileBytes.empty()) {
+        obj.set("snesTileBytes",
+                make_uint8_array(result.snesTileBytes));
+        obj.set("snesTilemapBytes",
+                make_uint8_array(result.snesTilemapBytes));
+        if (!result.snesPaletteBytes.empty())
+            obj.set("snesPaletteBytes",
+                    make_uint8_array(result.snesPaletteBytes));
+    }
     obj.set("error", result.error);
 
     if (!result.data.empty())
@@ -298,6 +335,54 @@ val js_convert_raw(val input_array, val js_opts) {
     if (!result.data.empty())
         obj.set("data", make_uint8_array(result.data));
 
+    return obj;
+}
+
+// JS API: convertPRG(Uint8Array, options) -> { data: Uint8Array(.prg), width, height, error }
+// c64 modes only — Koala/hires/FLI/AFLI/PETSCII displayer .prg.
+val js_convert_prg(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_prg(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("error", result.error);
+    if (!result.data.empty())
+        obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
+// JS API: convertKoa(Uint8Array, options) -> { data: Uint8Array(.koa), error }
+val js_convert_koa(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_koa(input.data(), input.size(), opts);
+    val obj = val::object();
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
+// JS API: convertHir(Uint8Array, options) -> { data: Uint8Array(.hir), error }
+val js_convert_hir(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_hir(input.data(), input.size(), opts);
+    val obj = val::object();
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
     return obj;
 }
 
@@ -408,6 +493,9 @@ EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convertViewer", &js_convert_viewer);
     function("convertDegas", &js_convert_degas);
     function("convertRaw", &js_convert_raw);
+    function("convertPRG", &js_convert_prg);
+    function("convertKoa", &js_convert_koa);
+    function("convertHir", &js_convert_hir);
     function("convertMask", &js_convert_mask);
     function("convertMaskRaw", &js_convert_mask_raw);
     function("ditherDefaults", &js_dither_defaults);

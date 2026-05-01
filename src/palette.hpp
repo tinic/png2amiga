@@ -151,15 +151,66 @@ constexpr Color3f quantize_to_stf(Color3f color) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Commodore 64 / VIC-II 16-color hardware palette. The VIC-II's analogue
+// Commodore 64 / VIC-II 16-color hardware palettes. The VIC-II's analogue
 // composite output doesn't have a unique sRGB ground-truth — different
-// research efforts produced slightly different RGB tables. We use Pepto's
-// 2001 derivation as the default (widely accepted reference; see
-// pepto.de/projects/colorvic/). Indexed 0..15 in standard VIC-II order:
-// black, white, red, cyan, purple, green, blue, yellow, orange, brown,
-// light red, dark grey, medium grey, light green, light blue, light grey.
+// research efforts produced slightly different RGB tables. We carry seven
+// of the most-cited variants and let the user pick. Indexed 0..15 in
+// standard VIC-II order: black, white, red, cyan, purple, green, blue,
+// yellow, orange, brown, light red, dark grey, medium grey, light green,
+// light blue, light grey.
 // ---------------------------------------------------------------------------
+
+// Pepto (Philip "Pepto" Timmermann, 2001) — pepto.de/projects/colorvic/.
+// Default; widely accepted reference.
 inline constexpr std::array<std::uint32_t, 16> kC64Pepto = {
+    0x000000, 0xFFFFFF, 0x68372B, 0x70A4B2,
+    0x6F3D86, 0x588D43, 0x352879, 0xB8C76F,
+    0x6F4F25, 0x433900, 0x9A6759, 0x444444,
+    0x6C6C6C, 0x9AD284, 0x6C5EB5, 0x959595,
+};
+
+// VICE emulator default palette.
+inline constexpr std::array<std::uint32_t, 16> kC64Vice = {
+    0x000000, 0xFDFEFC, 0xBE1A24, 0x30E6C6,
+    0xB41AE2, 0x1FD21E, 0x211BAE, 0xDFF60A,
+    0xB84104, 0x6A3304, 0xFE4A57, 0x424540,
+    0x70746F, 0x59FE59, 0x5F53FE, 0xA4A7A2,
+};
+
+// Colodore (Colodore project — colodore.com — measurement-based).
+inline constexpr std::array<std::uint32_t, 16> kC64Colodore = {
+    0x000000, 0xFFFFFF, 0x813338, 0x75CEC8,
+    0x8E3C97, 0x56AC4D, 0x2E2C9B, 0xEDF171,
+    0x8E5029, 0x553800, 0xC46C71, 0x4A4A4A,
+    0x7B7B7B, 0xA9FF9F, 0x706DEB, 0xB2B2B2,
+};
+
+// Deekay (Deekay/Crest, widely-used demoscene standard).
+inline constexpr std::array<std::uint32_t, 16> kC64Deekay = {
+    0x000000, 0xFFFFFF, 0x882000, 0x68D0A8,
+    0xA838A0, 0x50B818, 0x181090, 0xF0E858,
+    0xA04800, 0x472B1B, 0xC87870, 0x484848,
+    0x808080, 0x98FF98, 0x5090D0, 0xB8B8B8,
+};
+
+// Godot (Godot paint program, godot64.de).
+inline constexpr std::array<std::uint32_t, 16> kC64Godot = {
+    0x000000, 0xFFFFFF, 0x880000, 0xAAFFEE,
+    0xCC44CC, 0x00CC55, 0x0000AA, 0xEEEE77,
+    0xDD8855, 0x664400, 0xFF7777, 0x333333,
+    0x777777, 0xAAFF66, 0x0088FF, 0xBBBBBB,
+};
+
+// C64 Wiki "raw" palette — c64-wiki.com/wiki/Color.
+inline constexpr std::array<std::uint32_t, 16> kC64Wiki = {
+    0x000000, 0xFFFFFF, 0x880000, 0xAAFFEE,
+    0xCC44CC, 0x00CC55, 0x0000AA, 0xEEEE77,
+    0xDD8855, 0x664400, 0xFF7777, 0x333333,
+    0x777777, 0xAAFF66, 0x0088FF, 0xBBBBBB,
+};
+
+// Levy — adjusted Pepto used by some modern tools.
+inline constexpr std::array<std::uint32_t, 16> kC64Levy = {
     0x000000, 0xFFFFFF, 0x68372B, 0x70A4B2,
     0x6F3D86, 0x588D43, 0x352879, 0xB8C76F,
     0x6F4F25, 0x433900, 0x9A6759, 0x444444,

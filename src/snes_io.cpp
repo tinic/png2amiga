@@ -1,11 +1,14 @@
 #include "snes_io.hpp"
 #include "color_space.hpp"
 #include "console_color.hpp"
+#include "dither.hpp"
 #include "quantize.hpp"
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <unordered_map>
+#include <vector>
 
 namespace png2amiga::snes_io {
 
@@ -226,18 +229,102 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     //   This buffer NEVER leaves this function. Quant error here is the
     //   pre-pack quantisation cost; the final PSNR is recomputed by the
     //   caller against the post-merge `rendered`.
-    std::vector<std::uint8_t> chunky;
+    //
+    //   ED runs per-8×8-tile on a 24×24 mirror-padded buffer (centre =
+    //   source tile, 8 surrounding blocks = h/v/hv-flips of the centre).
+    //   The 24×24 ED's centre block is the steady-state response to the
+    //   tile's own content, so identical source tiles produce identical
+    //   chunky bytes → tile-dedup collapses them cleanly to one 256-tile
+    //   slot. Same fix as c64 charset (commit 7236237) and Genesis
+    //   (commit a2a8422).
+    constexpr std::size_t kTS = 8;
+    constexpr std::size_t k3T = 3 * kTS;  // 24
+    auto tiles_x = (w + kTS - 1) / kTS;
+    auto tiles_y = (h + kTS - 1) / kTS;
+    std::vector<std::uint8_t> chunky(w * h, 0);
+    Image block(k3T, k3T);
+    std::vector<std::uint8_t> block_byte(k3T * k3T, 0);
+
+    auto fill_mirror_block = [&]() {
+        for (std::size_t by = 0; by < 3; ++by) {
+            for (std::size_t bx = 0; bx < 3; ++bx) {
+                for (std::size_t ly = 0; ly < kTS; ++ly) {
+                    std::size_t sy_l = (by == 1) ? ly : (kTS - 1 - ly);
+                    for (std::size_t lx = 0; lx < kTS; ++lx) {
+                        std::size_t sx_l = (bx == 1) ? lx : (kTS - 1 - lx);
+                        // Filled per-cell by the loops below — see usage.
+                        (void)sy_l; (void)sx_l;
+                    }
+                }
+            }
+        }
+    };
+    (void)fill_mirror_block;  // inlined per-cell below for clarity
+
     if (!direct_color) {
         auto quantized = quantize::quantize(
             source, 256, quantize::Algorithm::median_cut, palette_diversity);
         if (!quantized) return std::unexpected{quantized.error()};
         for (auto& c : quantized->colors)
             c = console_color::bgr555_quantize(c);
-        auto dith_result = dither::apply(source, quantized->colors,
-                                          dither_settings);
         out.palette = quantized->colors;
-        chunky = dith_result.indices;
-        out.quant_error = dith_result.total_error;
+
+        // Pre-OKLab the 256 palette for the per-tile picker.
+        std::vector<color_space::OKLab> pal_lab_pre(out.palette.size());
+        for (std::size_t i = 0; i < out.palette.size(); ++i)
+            pal_lab_pre[i] = color_space::linear_to_oklab(out.palette[i]);
+
+        out.quant_error = 0.0f;
+        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+                for (std::size_t by = 0; by < 3; ++by) {
+                    for (std::size_t bx = 0; bx < 3; ++bx) {
+                        for (std::size_t ly = 0; ly < kTS; ++ly) {
+                            std::size_t sy_l = (by == 1) ? ly : (kTS - 1 - ly);
+                            for (std::size_t lx = 0; lx < kTS; ++lx) {
+                                std::size_t sx_l =
+                                    (bx == 1) ? lx : (kTS - 1 - lx);
+                                std::size_t sx = std::min(
+                                    tx * kTS + sx_l, w - 1);
+                                std::size_t sy = std::min(
+                                    ty * kTS + sy_l, h - 1);
+                                block[bx * kTS + lx, by * kTS + ly] =
+                                    source[sx, sy];
+                            }
+                        }
+                    }
+                }
+                std::fill(block_byte.begin(), block_byte.end(),
+                          std::uint8_t{0});
+                out.quant_error += dither::diffuse_raw_buffer(
+                    block, dither_settings,
+                    [&](const color_space::OKLab& target,
+                        std::size_t bxp, std::size_t byp) -> dither::PickResult {
+                        float bd = std::numeric_limits<float>::max();
+                        std::size_t bi = 0;
+                        for (std::size_t i = 0; i < pal_lab_pre.size(); ++i) {
+                            const auto& cl = pal_lab_pre[i];
+                            float dL = target.L - cl.L;
+                            float da = target.a - cl.a;
+                            float db = target.b - cl.b;
+                            float d = dL * dL + da * da + db * db;
+                            if (d < bd) { bd = d; bi = i; }
+                        }
+                        block_byte[byp * k3T + bxp] =
+                            static_cast<std::uint8_t>(bi);
+                        return {pal_lab_pre[bi], 0.5f};
+                    });
+                for (std::size_t ly = 0; ly < kTS; ++ly) {
+                    for (std::size_t lx = 0; lx < kTS; ++lx) {
+                        auto x = tx * kTS + lx;
+                        auto y = ty * kTS + ly;
+                        if (x >= w || y >= h) continue;
+                        chunky[y * w + x] =
+                            block_byte[(kTS + ly) * k3T + (kTS + lx)];
+                    }
+                }
+            }
+        }
         report(kStageQuant, "quantising");
     } else {
         // Mode 7 Direct: pixel byte = BBGGGRRR (3+3+2 = 256 colours).
@@ -248,22 +335,53 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         // the source of the colour artefacts: the picker thought it
         // had finer precision than the byte could hold, so the
         // diffusion residual fought the truncation.
-        chunky.assign(w * h, std::uint8_t{0});
-        out.quant_error = dither::diffuse_raw_buffer(
-            source, dither_settings,
-            [&](const color_space::OKLab& target,
-                std::size_t x, std::size_t y) -> dither::PickResult {
-                auto snapped = console_color::rgb332_quantize(
-                    color_space::oklab_to_linear(target));
-                // Pack the 3-3-2 quanta directly into BBGGGRRR.
-                auto srgb = color_space::linear_to_srgb(snapped);
-                int r3 = console_color::quantise_srgb_to_int(srgb.r, 3);
-                int g3 = console_color::quantise_srgb_to_int(srgb.g, 3);
-                int b2 = console_color::quantise_srgb_to_int(srgb.b, 2);
-                chunky[y * w + x] = static_cast<std::uint8_t>(
-                    (b2 << 6) | (g3 << 3) | r3);
-                return {color_space::linear_to_oklab(snapped), 0.5f};
-            });
+        out.quant_error = 0.0f;
+        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+                for (std::size_t by = 0; by < 3; ++by) {
+                    for (std::size_t bx = 0; bx < 3; ++bx) {
+                        for (std::size_t ly = 0; ly < kTS; ++ly) {
+                            std::size_t sy_l = (by == 1) ? ly : (kTS - 1 - ly);
+                            for (std::size_t lx = 0; lx < kTS; ++lx) {
+                                std::size_t sx_l =
+                                    (bx == 1) ? lx : (kTS - 1 - lx);
+                                std::size_t sx = std::min(
+                                    tx * kTS + sx_l, w - 1);
+                                std::size_t sy = std::min(
+                                    ty * kTS + sy_l, h - 1);
+                                block[bx * kTS + lx, by * kTS + ly] =
+                                    source[sx, sy];
+                            }
+                        }
+                    }
+                }
+                std::fill(block_byte.begin(), block_byte.end(),
+                          std::uint8_t{0});
+                out.quant_error += dither::diffuse_raw_buffer(
+                    block, dither_settings,
+                    [&](const color_space::OKLab& target,
+                        std::size_t bxp, std::size_t byp) -> dither::PickResult {
+                        auto snapped = console_color::rgb332_quantize(
+                            color_space::oklab_to_linear(target));
+                        auto srgb = color_space::linear_to_srgb(snapped);
+                        int r3 = console_color::quantise_srgb_to_int(srgb.r, 3);
+                        int g3 = console_color::quantise_srgb_to_int(srgb.g, 3);
+                        int b2 = console_color::quantise_srgb_to_int(srgb.b, 2);
+                        block_byte[byp * k3T + bxp] = static_cast<std::uint8_t>(
+                            (b2 << 6) | (g3 << 3) | r3);
+                        return {color_space::linear_to_oklab(snapped), 0.5f};
+                    });
+                for (std::size_t ly = 0; ly < kTS; ++ly) {
+                    for (std::size_t lx = 0; lx < kTS; ++lx) {
+                        auto x = tx * kTS + lx;
+                        auto y = ty * kTS + ly;
+                        if (x >= w || y >= h) continue;
+                        chunky[y * w + x] =
+                            block_byte[(kTS + ly) * k3T + (kTS + lx)];
+                    }
+                }
+            }
+        }
         out.palette.clear();
         report(kStageQuant, "quantising");
     }
@@ -396,10 +514,9 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     //
     // The two flavours share the same algorithm; only the per-pixel
     // "byte → OKLab" and "OKLab → nearest byte" maps differ.
+    // tiles_x / tiles_y reuse the values declared in Step 1 above.
     constexpr std::size_t kTile = 8;
     constexpr std::size_t kVirtualSide = 128;
-    auto tiles_x = (w + kTile - 1) / kTile;
-    auto tiles_y = (h + kTile - 1) / kTile;
 
     auto byte_to_lab = [&](std::uint8_t b) -> color_space::OKLab {
         return direct_color ? unpack_direct(b) : pal_lab[b];

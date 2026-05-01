@@ -56,6 +56,23 @@ declare module '@wasm/png2amiga.js' {
     genesisUniqueTiles?: number
     genesisTotalCells?: number
     tileDataBytes?: number
+    // c64 charset diagnostic — concatenated raw_frame bytes:
+    // charset (unique_glyphs * 8) + screen (cells) + color (cells).
+    c64CharsetData?: Uint8Array
+    c64Mc1?: number
+    c64Mc2?: number
+    c64BgColor?: number
+    // Genesis tile diagnostic — 4bpp 8×8 unique tiles + u16 tilemap +
+    // 4-line BGR333 palette. tilemap / palette are 2-byte LE per entry.
+    genesisTileBytes?: Uint8Array
+    genesisTilemapBytes?: Uint8Array
+    genesisPaletteBytes?: Uint8Array
+    // SNES Mode 7 tile diagnostic — 8bpp 8×8 unique tiles + 128×128
+    // 1-byte-per-cell tilemap. snesPaletteBytes is 256×3 RGB for the
+    // 256-mode variant, missing for Direct.
+    snesTileBytes?: Uint8Array
+    snesTilemapBytes?: Uint8Array
+    snesPaletteBytes?: Uint8Array
     error?: string
   }
 
@@ -135,6 +152,13 @@ declare module '@wasm/png2amiga.js' {
     // CGA text
     cgaTextMetric?: string
 
+    // C64 / VIC-II palette + metric
+    c64Palette?: string
+    c64Metric?: string
+    c64PetsciiGraphicsOnly?: boolean
+    tileBudget?: number
+    tileReserve?: number
+
     // C header export
     symbolName?: string
 
@@ -151,6 +175,9 @@ declare module '@wasm/png2amiga.js' {
     convertViewer(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertDegas(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertRaw(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertPRG(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertKoa(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertHir(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertMask(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertMaskRaw(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     ditherDefaults(method: string): DitherDefaults

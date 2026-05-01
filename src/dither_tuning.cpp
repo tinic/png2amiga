@@ -30,7 +30,20 @@ Defaults defaults_for(const Context& ctx) {
     // CLI surface consistency.
     switch (ctx.method) {
     // Palette-aware ordered:
-    case dither::Method::opt_checker: return Defaults{0.85f, 0.35f};  // 32.495 dB
+    case dither::Method::opt_checker:
+        // c64 modes prefer different strengths than the lores baseline.
+        // MS-SSIM sweep on 320x200/160x200 c64 source images
+        // (dragon/fantasy/face for cell modes; head substituted for face
+        // on charset modes — head has more high-frequency detail that
+        // benefits charset glyph matching). hires/afli (higher-res, 2
+        // colors per cell) prefer less dither; cell modes with restricted
+        // palettes (multicolor/fli/charset/multicolor) sit at the lores
+        // 0.85 default.
+        if (ctx.mode == amiga::Mode::c64_hires ||
+            ctx.mode == amiga::Mode::c64_afli) {
+            return Defaults{0.60f, 0.35f};
+        }
+        return Defaults{0.85f, 0.35f};  // 32.495 dB
     case dither::Method::opt_line:    return Defaults{0.70f, 0.35f};  // 32.421 dB
     case dither::Method::opt_line_checker:
                                       return Defaults{1.00f, 0.35f};  // 32.563 dB (flat below)

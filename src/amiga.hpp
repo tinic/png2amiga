@@ -82,12 +82,40 @@ enum class Mode : unsigned char {
                         // doesn't have, so the hardware really does cap
                         // at 256 here.
 
-    // Commodore 64 / VIC-II — fixed 16-color palette (Pepto by default),
-    // 8×8 cell-based with per-cell colour constraints. multicolor uses
-    // 4×8 cells with 1 shared bg + 3 per-cell foregrounds (2 bits per
-    // pixel, 4-colour cell), 160×200 logical resolution displayed
-    // at 2:1 (160 logical → 320 hardware pixels).
+    // Commodore 64 / VIC-II — fixed 16-color palette, cell-based with
+    // per-cell colour constraints.
+    //   c64_hires:      320×200, 8×8 cells, 2 colours per cell.
+    //                   1 bit per pixel; per-cell colour pair stored in
+    //                   1000-byte screen RAM (upper / lower nibble).
+    //   c64_multicolor: 160×200 logical (2:1 hardware doubling), 4×8
+    //                   cells, 4 colours per cell (1 shared bg + 3
+    //                   per-cell). 2 bits per pixel.
+    //   c64_fli:        160×200 multicolor + per-row (c1, c2) screen
+    //                   colours within each 4×8 cell. 8000-byte
+    //                   bitmap + 8 screen RAMs (1000 bytes each;
+    //                   one per cell-row) + 1000-byte color RAM. The
+    //                   per-row swap is achieved by a raster-IRQ that
+    //                   reloads the screen-RAM pointer 8× per cell.
+    //   c64_afli:       320×200 hires + per-row colour pair within
+    //                   each 8×8 cell. Same raster trick as FLI but
+    //                   on the 1bpp bitmap.
+    c64_hires,          // 320×200, 2 colours per 8×8 cell
     c64_multicolor,     // 160×200, 4 colours per 4×8 cell (1 shared bg + 3)
+    c64_fli,            // 160×200, multicolor + per-row screen pair
+    c64_afli,           // 320×200, hires + per-row screen pair
+    c64_petscii,        // 320×200, PETSCII text mode glyph match
+                        //   (40×25 cells × 256 ROM glyphs × per-cell fg
+                        //    + global bg). Pappas-Neuhoff sRGB blur
+                        //    metric — same shape as cga-text80x100.
+    c64_charset_hires,      // 320×200, hires 8×8 cells; per-cell pattern
+                            //   deduplicated to ≤256 unique glyphs +
+                            //   merged via Hamming-distance pair sort.
+                            //   Output is a custom 2 KB charset + 1000-byte
+                            //   screen RAM + 1000-byte color RAM.
+    c64_charset_multicolor, // 160×200 logical, multicolor 4×8 cells; same
+                            //   dedup + merge as charset-hires but 4
+                            //   colours per cell (1 shared bg + 2 shared
+                            //   mc colours + 1 per-cell fg).
 
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
@@ -170,15 +198,18 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {320, 0, 8, 64,  true,  false, false, false, 1, 1, 1.0f};
     case Mode::ehb:
         return {320, 0, 6, 64,  false, true,  false, false, 1, 1, 1.0f};
-    // Atari ST/STE — fixed 200 lines, square pixels (low) or tall pixels (med)
+    // Atari ST/STE — fixed 200 lines, displayed on a 4:3 CRT.
+    //   low  320×200 → PAR (4/3)/(320/200) ≈ 0.833 (slightly tall, like ega-320)
+    //   med  640×200 → PAR (4/3)/(640/200) ≈ 0.417 (2.4× tall, like ega-640)
+    //   hi   640×400 monochrome monitor ⇒ 1.0
     case Mode::stf_low:
-        return {320, 200, 4, 16, false, false, false, false, 2, 2, 1.0f};
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 0.833f};
     case Mode::stf_med:
-        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.5f};
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.417f};
     case Mode::ste_low:
-        return {320, 200, 4, 16, false, false, false, false, 2, 2, 1.0f};
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 0.833f};
     case Mode::ste_med:
-        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.5f};
+        return {640, 200, 2,  4, false, false, true,  false, 1, 2, 0.417f};
     case Mode::stf_hi:
     case Mode::ste_hi:
         return {640, 400, 1,  2, false, false, true,  false, 1, 1, 1.0f};
@@ -231,13 +262,32 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         // palette-field byte, so the 2048-colour gamut documented for
         // Modes 3/4 Direct Color isn't reachable here.
         return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
-    // C64 multicolor: 160×200 logical, 4×8 cells, 4-colour-per-cell.
-    // Hardware pixels are 2:1 (each logical pixel doubled horizontally
-    // → 320×200 display). Display PAR on a PAL CRT is ≈ 0.94 (slightly
-    // taller-than-wide), but we report 2.0 here so preview renders at
-    // 320×200 — same convention as lores_interlace.
+    // C64 hires: 320×200, 8×8 cells, 2 colours per cell. Hardware
+    // pixels are 1:1 (no doubling). PAL hardware-pixel ratio 0.936:1.
+    case Mode::c64_hires:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    // C64 multicolor: 160×200 logical buffer. Each logical pixel
+    // displays as 2 hardware pixels horizontally; PAL CRT hardware-
+    // pixel aspect = 0.936:1 → per-LOGICAL-pixel display ratio
+    // = 2 × 0.936 = 1.872 (wide).
     case Mode::c64_multicolor:
-        return {160, 200, 2, 4, false, false, false, false, 2, 1, 2.0f};
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
+    // C64 FLI: same buffer layout as multicolor + per-row screen
+    // palette pair (raster-IRQ trick).
+    case Mode::c64_fli:
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
+    // C64 AFLI: same buffer as hires + per-row screen pair.
+    case Mode::c64_afli:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    // C64 PETSCII: 320×200 text mode (40×25 cells × 8×8 glyphs).
+    case Mode::c64_petscii:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    // C64 charset-hires: 320×200 (40×25 8×8 cells), 1bpp.
+    case Mode::c64_charset_hires:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    // C64 charset-multicolor: 160×200 logical, 2:1 hardware doubling.
+    case Mode::c64_charset_multicolor:
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
     // Sega Genesis: 4 bpp tiles + 4-line palette × 16 BGR333. Display PAR
     // matches SNES at 224 lines on a 4:3 CRT.
     //   H32: (4/3) ÷ (256/224) ≈ 1.167  (square sub-pixels)
@@ -318,7 +368,33 @@ constexpr bool is_cga(Mode mode) noexcept {
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
 constexpr bool is_c64(Mode mode) noexcept {
-    return mode == Mode::c64_multicolor;
+    return mode == Mode::c64_hires      || mode == Mode::c64_multicolor      ||
+           mode == Mode::c64_fli        || mode == Mode::c64_afli            ||
+           mode == Mode::c64_petscii    || mode == Mode::c64_charset_hires   ||
+           mode == Mode::c64_charset_multicolor;
+}
+
+// PETSCII text mode — glyph-match metric (Pappas-Neuhoff sRGB blur);
+// no error-diffusion dither in the conventional sense, so the dither
+// gallery's ED methods don't apply here. UI gates on this in the
+// same way it gates cga-text80x100.
+constexpr bool is_c64_text(Mode mode) noexcept {
+    return mode == Mode::c64_petscii;
+}
+
+// Check if a mode is a "wide-pixel" multicolor variant (logical pixel
+// is 2× hardware-doubled — multicolor + FLI + charset-multicolor).
+constexpr bool is_c64_multicolor(Mode mode) noexcept {
+    return mode == Mode::c64_multicolor || mode == Mode::c64_fli ||
+           mode == Mode::c64_charset_multicolor;
+}
+
+// Charset modes — encoder produces a custom charset + screen + color
+// RAM (no per-pixel bitmap), so output / dither paths differ from
+// the bitmap modes.
+constexpr bool is_c64_charset(Mode mode) noexcept {
+    return mode == Mode::c64_charset_hires ||
+           mode == Mode::c64_charset_multicolor;
 }
 
 // Check if the mode uses NTSC composite artifacting to produce its colors.
