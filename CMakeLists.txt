@@ -87,7 +87,7 @@ if(EMSCRIPTEN)
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga_wasm PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode)
+    target_link_libraries(png2amiga_wasm PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
     # -pthread enables std::thread / std::jthread / std::mutex / std::atomic
     # in WASM via Emscripten's pthreads-on-web-workers shim. Requires the
     # browser to be cross-origin isolated (COOP/COEP headers, see
@@ -127,7 +127,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode)
+    target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     if(MINGW)

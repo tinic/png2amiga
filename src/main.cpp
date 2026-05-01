@@ -28,6 +28,8 @@
 #include "types.hpp"
 #include "version.hpp"
 
+#include <constixel.hpp>
+
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -49,6 +51,10 @@
 #ifndef _WIN32
 #include <termios.h>
 #include <unistd.h>
+// POSIX guarantees this signature; some libcs (e.g. MSYS/Cygwin GCC under
+// strict -std=c++26) hide ::fileno behind feature-test macros, so declare it
+// explicitly. Harmless on macOS/Linux where it's already declared identically.
+extern "C" int fileno(FILE*);
 #else
 #include <io.h>
 #define isatty _isatty
@@ -1659,10 +1665,13 @@ unsigned g_preview_scale = 1;
 //   - Kitty: APC _G a=T,f=100, ... <ST>. Kitty's native protocol.
 //     Ghostty implements Kitty graphics (alongside its own UI), no
 //     OSC 1337 fallback. Kitty likewise does NOT speak OSC 1337.
+//   - sixel: DEC sixel (\033Pq ... \033\\). Windows Terminal >= 1.22
+//     speaks sixel and sets WT_SESSION; older WT versions just won't
+//     render it. Detected by env var, no DA1 probe yet.
 //   - none:  Anywhere else (Terminal.app, ssh w/o env passthrough,
 //     non-image terminals). Skip the inline emit; preview becomes
 //     a no-op.
-enum class InlineImageProtocol { none, iterm, kitty };
+enum class InlineImageProtocol { none, iterm, kitty, sixel };
 
 InlineImageProtocol detect_inline_image_protocol() {
     auto eq = [](const char* a, const char* b) {
@@ -1688,6 +1697,11 @@ InlineImageProtocol detect_inline_image_protocol() {
 
     // iTerm.app — OSC 1337 only.
     if (eq(term_program, "iTerm.app"))   return InlineImageProtocol::iterm;
+
+    // Windows Terminal — sixel since 1.22. WT_SESSION is set on every
+    // pane; we don't probe DA1 because the env var is sufficient and
+    // the probe needs raw-mode stdin handling on Windows.
+    if (set("WT_SESSION"))               return InlineImageProtocol::sixel;
 
     return InlineImageProtocol::none;
 }
@@ -1721,6 +1735,91 @@ std::string inline_image_escape(const Image& image) {
     Image scaled = (g_preview_scale > 1)
         ? scale_preview(image, g_preview_scale, g_preview_scale)
         : image;
+
+    if (proto == InlineImageProtocol::sixel) {
+        // Convert linear-RGB Image to sRGB RGBA bytes. Then derive a
+        // custom palette from the unique colors present in the rendered
+        // preview — this is the encoded image's actual palette (post-
+        // dither), so the sixel maps each pixel to an exact match. If
+        // there are >256 unique colors (HAM modes), fall back to
+        // constixel's built-in 256-color quantizer.
+        // Sixel emits in 6-pixel-tall bands; pad height up to the next
+        // multiple of 6 by replicating the last row so the trailing
+        // band has defined content (avoids a terminal-bg-color stripe).
+        const auto w = scaled.width();
+        const auto orig_h = scaled.height();
+        const auto h = ((orig_h + 5) / 6) * 6;
+        std::vector<std::uint8_t> rgba(w * h * 4);
+        std::unordered_set<std::uint32_t> unique_colors;
+        unique_colors.reserve(512);
+        bool overflow = false;
+        for (std::size_t y = 0; y < orig_h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto srgb = color_space::linear_to_srgb(scaled[x, y]).clamped();
+                auto base = (y * w + x) * 4;
+                auto r = static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
+                auto g = static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
+                auto b = static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
+                rgba[base + 0] = r;
+                rgba[base + 1] = g;
+                rgba[base + 2] = b;
+                rgba[base + 3] = 255;
+                if (!overflow) {
+                    unique_colors.insert(
+                        (std::uint32_t(r) << 16) | (std::uint32_t(g) << 8) | std::uint32_t(b));
+                    if (unique_colors.size() > 256) overflow = true;
+                }
+            }
+        }
+        if (h > orig_h && orig_h > 0) {
+            const auto* src = &rgba[(orig_h - 1) * w * 4];
+            for (std::size_t y = orig_h; y < h; ++y) {
+                std::memcpy(&rgba[y * w * 4], src, w * 4);
+            }
+        }
+        std::string out;
+        out.reserve(w * h);
+        auto sink = [&](char c) { out.push_back(c); };
+        std::vector<std::array<std::uint8_t, 3>> pal;
+        if (!overflow) {
+            pal.reserve(unique_colors.size());
+            for (auto c : unique_colors) {
+                pal.push_back({static_cast<std::uint8_t>((c >> 16) & 0xFF),
+                               static_cast<std::uint8_t>((c >> 8) & 0xFF),
+                               static_cast<std::uint8_t>(c & 0xFF)});
+            }
+        } else {
+            // >256 unique colors (HAM6/8): use png2amiga's median-cut to
+            // build a 256-color palette adapted to the rendered preview.
+            // Better than constixel's generic 256-color built-in.
+            auto pal_result = quantize::quantize(scaled, 256, quantize::Algorithm::median_cut);
+            if (pal_result) {
+                pal.reserve(pal_result->size());
+                for (const auto& col : pal_result->colors) {
+                    auto srgb = color_space::linear_to_srgb(col).clamped();
+                    pal.push_back({static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f)),
+                                   static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f)),
+                                   static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f))});
+                }
+            }
+        }
+        if (!pal.empty()) {
+            constixel::dynamic_image<constixel::format_8bit_dyn> dimg(
+                w, h, std::span<const std::array<std::uint8_t, 3>>(pal));
+            dimg.blit_RGBA(0, 0, static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+                           rgba.data(), static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+                           static_cast<std::int32_t>(w * 4));
+            dimg.sixel(sink);
+        } else {
+            constixel::dynamic_image<constixel::format_8bit_dyn> dimg(w, h);
+            dimg.blit_RGBA(0, 0, static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+                           rgba.data(), static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+                           static_cast<std::int32_t>(w * 4));
+            dimg.sixel(sink);
+        }
+        return out;
+    }
+
     auto png = png_io::encode(scaled);
     if (!png) return {};
     auto encoded = base64_encode(*png);
