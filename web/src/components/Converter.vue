@@ -484,6 +484,14 @@ watch(() => options.mode, (mode, oldMode) => {
   maybeFallbackSnesDirectDither(mode)
   maybeSelectGenesisDither(mode, oldMode)
   syncNativeParToMode(mode, oldMode)
+  // Resize toggle is only meaningful for non-fixed-buffer modes (Amiga
+  // free-resolution + tile-freeform). Switching INTO a fixed-buffer
+  // mode (Atari, c64 bitmap, DOS at default size) while sizeOverride
+  // was on left the width/height inputs visible — clear the toggle so
+  // the layout matches the mode.
+  if (sizeOverride.value && isFixedBufferMode(mode)) {
+    sizeOverride.value = false
+  }
   // DPF and SCAP both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
