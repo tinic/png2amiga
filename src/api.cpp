@@ -467,6 +467,34 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
         amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
         amiga::is_cga(mode)   || amiga::is_cga_text(mode) ||
         amiga::is_snes(mode)  || amiga::is_genesis(mode) || amiga::is_c64(mode);
+    // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
+    // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
+    // convention as c64-charset-hires. No multicolor halving.
+    bool tile_8x8_freeform =
+        (amiga::is_genesis(mode) || amiga::is_snes(mode))
+        && (have_w || have_h);
+    if (tile_8x8_freeform) {
+        constexpr std::size_t kTileSide = 8;
+        auto round_up = [](std::size_t v, std::size_t s) {
+            return ((v + s - 1) / s) * s;
+        };
+        std::size_t tw = have_w
+            ? round_up(static_cast<std::size_t>(options.width), kTileSide)
+            : 0;
+        std::size_t th = have_h
+            ? round_up(static_cast<std::size_t>(options.height), kTileSide)
+            : 0;
+        if (!have_w) {
+            auto wf = static_cast<double>(th) * src_aspect;
+            tw = round_up(static_cast<std::size_t>(std::lround(wf)), kTileSide);
+        }
+        if (!have_h) {
+            auto hf = static_cast<double>(tw) / src_aspect;
+            th = round_up(static_cast<std::size_t>(std::lround(hf)), kTileSide);
+        }
+        return {tw, th};
+    }
+
     bool charset_freeform =
         amiga::is_c64_charset(mode) && (have_w || have_h);
     if (charset_freeform) {

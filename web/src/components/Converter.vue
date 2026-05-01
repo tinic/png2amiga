@@ -16,7 +16,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isTileFreeformMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -332,14 +332,14 @@ const rawTooltipHtml = computed(() => {
 // Whether HAM controls should be shown
 const showHamControls = computed(() => isHamMode(options.mode))
 
-// "Effective" fixed-buffer state — c64-charset modes count as fixed-
-// buffer when Resize is off (the encoder runs at the mode default
-// 320x200 / 160x200), so Native PAR + PAR-aware preview scaling kick
-// in. With Resize on, charset modes are freeform and Native PAR is
-// meaningless.
+// "Effective" fixed-buffer state — tile-freeform modes (c64-charset,
+// Genesis, SNES) count as fixed-buffer when Resize is off (encoder
+// runs at the mode default), so Native PAR + PAR-aware preview
+// scaling kick in. With Resize on, those modes are freeform and
+// Native PAR is meaningless.
 const isEffectiveFixedBuffer = computed(() =>
   isFixedBufferMode(options.mode) ||
-  (isC64CharsetMode(options.mode) && !sizeOverride.value)
+  (isTileFreeformMode(options.mode) && !sizeOverride.value)
 )
 
 // Dual playfield: only valid for standard Amiga modes (no HAM, no EHB,
@@ -426,12 +426,10 @@ function clampDepthForMode(mode: string): void {
 }
 
 function syncNativeParToMode(mode: string, oldMode: string): void {
-  // Fixed-buffer modes (DOS + SNES + Genesis + non-charset C64) default
-  // to native PAR (letterbox / pillarbox into the fixed hardware buffer)
-  // so the preview shows the right aspect. C64 charset modes count as
-  // fixed-buffer too when Resize is off — keep nativePar available.
+  // Fixed-buffer + tile-freeform modes (DOS + SNES + Genesis + C64)
+  // default to native PAR so the preview shows the right aspect.
   const isFixed = (m: string): boolean =>
-    isFixedBufferMode(m) || isC64CharsetMode(m)
+    isFixedBufferMode(m) || isTileFreeformMode(m)
   const fixedNew = isFixed(mode)
   const fixedOld = isFixed(oldMode)
   if (fixedNew && !fixedOld) options.nativePar = true
@@ -714,14 +712,22 @@ function pushIf(parts: string[], cond: unknown, fragment: string): void {
   if (cond) parts.push(fragment)
 }
 
-// C64 charset: denominator = budget (256 hw cap, minus user reserve);
-// total-cell count + dedup % move into the parenthetical, since the
-// constraint a designer worries about is the budget, not the cells.
-function formatTileStatsC64(u: number, t: number, ram_kb: string): string {
-  const budget = Math.max(1,
-    (options.tileBudget || 256) - (options.tileReserve || 0))
+// Tile-budget framing: when the platform has a hard tile-count cap
+// (c64-charset 256, SNES Mode 7 256), denominator = budget; total-cell
+// count + dedup % move into the parenthetical so the constraint a
+// designer worries about (budget headroom) is the headline.
+function formatTileStatsBudget(
+    u: number, t: number, ram_kb: string, budget: number,
+    storage_label: string): string {
   const pct = t > 0 ? (1 - u / t) * 100 : 0
-  return `tiles: ${u}/${budget} (${t} cells, ${pct.toFixed(1)}% dedup, ${ram_kb} KB charset)`
+  return `tiles: ${u}/${budget} (${t} cells, ${pct.toFixed(1)}% dedup, ${ram_kb} KB ${storage_label})`
+}
+
+function formatTileStatsGenesis(u: number, t: number, ram_kb: string): string {
+  const pct = t > 0 ? (1 - u / t) * 100 : 0
+  // Plane-A budget warning: 1280 tiles before sprites/plane B.
+  const tag = u > 1280 ? '⚠ ' : ''
+  return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${ram_kb} KB VRAM)`
 }
 
 function formatTileStats(result: ConvertResult, mode: string): string {
@@ -730,14 +736,16 @@ function formatTileStats(result: ConvertResult, mode: string): string {
   const t = result.genesisTotalCells
   // tileDataBytes is the authoritative bytes-per-tile-pool number:
   // Genesis = 32 B/tile, SNES Mode 7 = 64 B/tile, c64 charset = 8 B/glyph.
-  const bytes = result.tileDataBytes ?? (u * 32)
-  const ram_kb = (bytes / 1024).toFixed(1)
-  if (isC64CharsetMode(mode)) return formatTileStatsC64(u, t, ram_kb)
-  const pct = t > 0 ? (1 - u / t) * 100 : 0
-  // Plane-A budget warning: only Genesis cares about 1280. SNES Mode 7
-  // hard-caps at 256 (packer merges to fit) — no warning needed.
-  const tag = (mode.startsWith('genesis-') && u > 1280) ? '⚠ ' : ''
-  return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${ram_kb} KB VRAM)`
+  const ram_kb = ((result.tileDataBytes ?? (u * 32)) / 1024).toFixed(1)
+  if (isC64CharsetMode(mode)) {
+    const budget = Math.max(1,
+      (options.tileBudget || 256) - (options.tileReserve || 0))
+    return formatTileStatsBudget(u, t, ram_kb, budget, 'charset')
+  }
+  if (isSnesMode(mode)) {
+    return formatTileStatsBudget(u, t, ram_kb, 256, 'VRAM')
+  }
+  return formatTileStatsGenesis(u, t, ram_kb)
 }
 
 // Combine PSNR + S2 into a single comma-joined fragment so
@@ -822,17 +830,26 @@ function paintPreviewCanvas(result: ConvertResult): { dw: number; dh: number; cs
   return { dw, dh, cssW, cssH }
 }
 
+// User-facing width matches *source* pixels (1:1 designer convention).
+// For c64-charset-multicolor the encoder's result.width is the halved
+// 4-px-per-cell logical raster (encoder halves internally — see
+// compute_target_dims), so double it back when surfacing to the UI.
+function sourceWidthFromResult(result: ConvertResult): number {
+  return options.mode === 'c64-charset-multicolor'
+    ? result.width * 2 : result.width
+}
+
 function maybeSeedSizes(result: ConvertResult): void {
   // If size-override is on but width/height are 0 (fresh image just loaded),
   // seed the inputs with the natural defaults; triggers one idempotent
   // re-convert via the deep options watcher.
   if (!sizeOverride.value || (options.width && options.height)) return
-  options.width = result.width
+  options.width = sourceWidthFromResult(result)
   options.height = result.height
 }
 
 function updateLastResultRefs(result: ConvertResult): void {
-  lastWidth.value = result.width
+  lastWidth.value = sourceWidthFromResult(result)
   lastHeight.value = result.height
   lastCopPerLine.value = result.copperChanges ?? 0
   lastPlaneBytes.value = result.planeBytes ?? 0
@@ -1932,9 +1949,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
                    hardware buffer): preserve source aspect by letterboxing/
                    pillarboxing the image inside the fixed frame instead of
-                   stretching. Stays visible (greyed out) for charset modes
-                   when Resize is on so the layout doesn't jump. -->
-              <div v-if="isFixedBufferMode(options.mode) || isC64CharsetMode(options.mode)"
+                   stretching. Stays visible (greyed out) for tile-freeform
+                   modes when Resize is on so the layout doesn't jump. -->
+              <div v-if="isFixedBufferMode(options.mode) || isTileFreeformMode(options.mode)"
                    class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">

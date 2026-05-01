@@ -569,6 +569,14 @@ export function isC64CharsetMode(mode: string): boolean {
   return mode === 'c64-charset-hires' ||
          mode === 'c64-charset-multicolor'
 }
+
+// Tile-based modes that accept arbitrary width/height padded to the
+// per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
+// At freeform mode the Native PAR / fixed-buffer behaviour is replaced
+// by the user-typed dims; at default size they stay fixed-buffer.
+export function isTileFreeformMode(mode: string): boolean {
+  return isC64CharsetMode(mode) || isGenesisMode(mode) || isSnesMode(mode)
+}
 // SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
 // 2048-colour gamut comes from per-tile palette-field bits. Yliluoma
 // family (palette-aware ordered dithers) doesn't apply here — restrict
@@ -581,12 +589,11 @@ export function isSnesDirectMode(mode: string): boolean {
 // letterbox / pillarbox). DOS + SNES both fit; auto-toggled on mode
 // entry by the web UI.
 export function isFixedBufferMode(mode: string): boolean {
-  // c64 charset modes are flexible-size now; tile-based platforms with
-  // per-platform tile-budget controls (Genesis / SNES) are fixed-buffer
-  // for now and follow the same upgrade path later.
-  if (isC64CharsetMode(mode)) return false
-  return isDosMode(mode) || isSnesMode(mode) || isGenesisMode(mode) ||
-         isC64Mode(mode)
+  // Tile-freeform modes (c64-charset, Genesis, SNES Mode 7) drop out of
+  // fixed-buffer when Resize is enabled; the UI uses isEffectiveFixedBuffer
+  // (Vue side) to keep Native PAR available at default size.
+  if (isTileFreeformMode(mode)) return false
+  return isDosMode(mode) || isC64Mode(mode)
 }
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
