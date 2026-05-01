@@ -323,6 +323,19 @@ struct ConvertResult {
     int genesisTotalCells{};             // Tiled modes: tilemap cells (W/8 × H/8); 0 = not tiled
     int tileDataBytes{};                 // Tiled modes: unique × bytes-per-tile (32 for Genesis 4bpp, 64 for SNES Mode 7 8bpp)
     bool hasTransparency{};             // source image had alpha channel
+
+    // c64 charset modes — copy of the encoder's raw_frame so the web
+    // frontend can render a charset diagnostic (the actual generated
+    // glyphs, coloured by their first-occurrence cell). Layout:
+    //   bytes 0..unique_glyphs*8       — charset_data (8 bytes/glyph)
+    //   then  cols*rows                — screen_ram (glyph index)
+    //   then  cols*rows                — color_ram (per-cell colour)
+    // Empty for non-charset runs.
+    std::vector<std::uint8_t> c64CharsetData;
+    int c64Mc1{};                        // multicolor: shared mc1 (0..15)
+    int c64Mc2{};                        // multicolor: shared mc2 (0..15)
+    int c64BgColor{};                    // shared bg (0..15)
+
     std::string error;                  // error message (empty on success)
 };
 

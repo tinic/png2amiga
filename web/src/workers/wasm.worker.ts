@@ -35,6 +35,10 @@ interface ReplyEnvelope {
   genesisUniqueTiles?: number
   genesisTotalCells?: number
   tileDataBytes?: number
+  c64CharsetData?: ArrayBuffer
+  c64Mc1?: number
+  c64Mc2?: number
+  c64BgColor?: number
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -136,9 +140,19 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('genesisUniqueTiles', result.genesisUniqueTiles),
     ...opt('genesisTotalCells', result.genesisTotalCells),
     ...opt('tileDataBytes', result.tileDataBytes),
+    ...opt('c64Mc1', result.c64Mc1),
+    ...opt('c64Mc2', result.c64Mc2),
+    ...opt('c64BgColor', result.c64BgColor),
     ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []
+
+  if (result.c64CharsetData) {
+    const arr = new Uint8Array(result.c64CharsetData)
+    const buf = arr.buffer.slice(arr.byteOffset, arr.byteOffset + arr.byteLength)
+    reply.c64CharsetData = buf
+    transfers.push(buf)
+  }
 
   if (result.rgba) {
     const arr = new Uint8Array(result.rgba)

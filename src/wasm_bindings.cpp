@@ -238,6 +238,13 @@ val js_convert_rgba(val input_array, val js_opts) {
     obj.set("genesisUniqueTiles", result.genesisUniqueTiles);
     obj.set("genesisTotalCells",  result.genesisTotalCells);
     obj.set("tileDataBytes",      result.tileDataBytes);
+    if (!result.c64CharsetData.empty()) {
+        obj.set("c64CharsetData",
+                make_uint8_array(result.c64CharsetData));
+        obj.set("c64Mc1",     result.c64Mc1);
+        obj.set("c64Mc2",     result.c64Mc2);
+        obj.set("c64BgColor", result.c64BgColor);
+    }
     obj.set("error", result.error);
 
     if (!result.data.empty())

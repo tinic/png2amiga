@@ -56,6 +56,12 @@ declare module '@wasm/png2amiga.js' {
     genesisUniqueTiles?: number
     genesisTotalCells?: number
     tileDataBytes?: number
+    // c64 charset diagnostic — concatenated raw_frame bytes:
+    // charset (unique_glyphs * 8) + screen (cells) + color (cells).
+    c64CharsetData?: Uint8Array
+    c64Mc1?: number
+    c64Mc2?: number
+    c64BgColor?: number
     error?: string
   }
 

@@ -14,7 +14,7 @@ import Panel from 'primevue/panel'
 import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
-  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, EXAMPLES,
+  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
   isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
@@ -92,6 +92,7 @@ watch(wasmLoading, async (loading) => {
 const options = reactive(defaultOptions())
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvasRef')
 const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL CRT-preview overlay canvas
+const charsetCanvasRef = useTemplateRef<HTMLCanvasElement>('charsetCanvasRef')
 const crtEnabled = ref(false)
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
@@ -842,6 +843,170 @@ function trackConvertSuccess(_result: ConvertResult, convertMs: number): void {
   }
 }
 
+// Charset diagnostic: paint each unique glyph onto charsetCanvasRef,
+// coloured by the glyph's first-occurrence cell.
+//   hires:      8×8, c0/c1 = (bg/fg) from cell color nibbles.
+//   multicolor: 4×8 logical, stretched 2× horizontally for display
+//               parity; bg/mc1/mc2 from globals, fg from cell color.
+
+interface CharsetLayout {
+  cs: Uint8Array
+  firstColor: Int16Array
+  unique: number
+  mc: boolean
+  cellW: number
+  xspan: number
+  scale: number
+  cols: number
+  pixelW: number  // canvas width
+  bg: number
+  mc1: number
+  mc2: number
+  palName: string
+}
+
+function buildFirstColorMap(
+    cs: Uint8Array, unique: number, cells: number,
+    charsetEnd: number): Int16Array {
+  const screen = cs.subarray(charsetEnd, charsetEnd + cells)
+  const color = cs.subarray(charsetEnd + cells, charsetEnd + cells * 2)
+  const firstColor = new Int16Array(unique).fill(-1)
+  for (let c = 0; c < cells; c++) {
+    const g = screen[c] ?? 0
+    if (g < unique && firstColor[g] === -1) {
+      firstColor[g] = color[c] ?? 0
+    }
+  }
+  return firstColor
+}
+
+function charsetLayoutSizes(mc: boolean): { cellW: number; xspan: number } {
+  return mc ? { cellW: 4, xspan: 2 } : { cellW: 8, xspan: 1 }
+}
+
+function charsetSourceValid(
+    cs: Uint8Array | undefined, unique: number, cells: number): cs is Uint8Array {
+  if (!cs || unique === 0 || cells === 0) return false
+  return cs.length >= unique * 8 + cells * 2
+}
+
+function buildCharsetLayout(
+    result: ConvertResult, mode: string): CharsetLayout | null {
+  const unique = result.genesisUniqueTiles ?? 0
+  const cells = result.genesisTotalCells ?? 0
+  const cs = result.c64CharsetData
+  if (!charsetSourceValid(cs, unique, cells)) return null
+  const mc = mode === 'c64-charset-multicolor'
+  const { cellW, xspan } = charsetLayoutSizes(mc)
+  const scale = 2
+  const cols = 16
+  return {
+    cs,
+    firstColor: buildFirstColorMap(cs, unique, cells, unique * 8),
+    unique, mc, cellW, xspan, scale, cols,
+    pixelW: cols * cellW * xspan * scale,
+    bg:  result.c64BgColor ?? 0,
+    mc1: result.c64Mc1 ?? 0,
+    mc2: result.c64Mc2 ?? 0,
+    palName: options.c64Palette,
+  }
+}
+
+function pickGlyphPixel(byte: number, p: number, lo: CharsetLayout,
+                        fg: number, c0: number): number {
+  if (!lo.mc) return ((byte >> (lo.cellW - 1 - p)) & 1) ? fg : c0
+  const q = (byte >> ((lo.cellW - 1 - p) * 2)) & 3
+  // 4-entry lookup: bg / mc1 / mc2 / fg, indexed by the 2-bit pair.
+  const mcSlots = [lo.bg, lo.mc1, lo.mc2, fg]
+  return mcSlots[q] ?? lo.bg
+}
+
+interface FillRectArgs {
+  px: Uint8ClampedArray
+  pixelW: number
+  x: number
+  y: number
+  w: number
+  h: number
+  rgb: readonly [number, number, number]
+}
+
+function fillRect(a: FillRectArgs): void {
+  const [r, g, b] = a.rgb
+  for (let dy = 0; dy < a.h; dy++) {
+    for (let dx = 0; dx < a.w; dx++) {
+      const o = ((a.y + dy) * a.pixelW + (a.x + dx)) * 4
+      a.px[o] = r; a.px[o + 1] = g; a.px[o + 2] = b; a.px[o + 3] = 255
+    }
+  }
+}
+
+interface PaintGlyphArgs {
+  px: Uint8ClampedArray
+  lo: CharsetLayout
+  glyph: number
+  cellColor: number
+}
+
+interface RowPaintCtx {
+  args: PaintGlyphArgs
+  gx0: number
+  gy0: number
+  fg: number
+  c0: number
+}
+
+function paintGlyphRow(ctx: RowPaintCtx, byte: number, r: number): void {
+  const { args: { px, lo }, gx0, gy0, fg, c0 } = ctx
+  for (let p = 0; p < lo.cellW; p++) {
+    const pal = pickGlyphPixel(byte, p, lo, fg, c0)
+    fillRect({
+      px, pixelW: lo.pixelW,
+      x: gx0 + p * lo.xspan * lo.scale, y: gy0 + r * lo.scale,
+      w: lo.xspan * lo.scale, h: lo.scale,
+      rgb: c64PaletteRgb(lo.palName, pal),
+    })
+  }
+}
+
+function paintGlyphBlock(args: PaintGlyphArgs): void {
+  const { lo, glyph: g, cellColor: c } = args
+  const ctx: RowPaintCtx = {
+    args,
+    gx0: (g % lo.cols) * lo.cellW * lo.xspan * lo.scale,
+    gy0: Math.floor(g / lo.cols) * 8 * lo.scale,
+    fg: lo.mc ? (c & 0xF) : ((c >> 4) & 0xF),
+    c0: lo.mc ? lo.bg : (c & 0xF),
+  }
+  for (let r = 0; r < 8; r++) {
+    const byte = lo.cs[g * 8 + r] ?? 0
+    paintGlyphRow(ctx, byte, r)
+  }
+}
+
+function paintCharsetCanvas(result: ConvertResult): void {
+  const canvas = charsetCanvasRef.value
+  if (!canvas) return
+  if (!isC64CharsetMode(options.mode)) return
+  const lo = buildCharsetLayout(result, options.mode)
+  if (!lo) return
+  const gridRows = Math.ceil(lo.unique / lo.cols)
+  canvas.width = lo.pixelW
+  canvas.height = gridRows * 8 * lo.scale
+  canvas.style.imageRendering = 'pixelated'
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.fillStyle = 'black'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  const imgData = ctx.createImageData(canvas.width, canvas.height)
+  for (let g = 0; g < lo.unique; g++) {
+    const c = lo.firstColor[g] ?? -1
+    if (c === -1) continue
+    paintGlyphBlock({ px: imgData.data, lo, glyph: g, cellColor: c })
+  }
+  ctx.putImageData(imgData, 0, 0)
+}
+
 async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   const painted = paintPreviewCanvas(result)
   if (!painted || !result.rgba) return false
@@ -854,6 +1019,7 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
     const r = await ensureCrtRenderer()
     if (r) renderCrt()
   }
+  paintCharsetCanvas(result)
   return true
 }
 
@@ -1855,6 +2021,14 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             <div class="flex align-items-center gap-2">
               <span v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</span>
             </div>
+          </div>
+          <!-- Charset diagnostic: the actual generated glyphs, painted with
+               the colours of each glyph's first-occurrence cell. Visible
+               only for c64-charset modes. -->
+          <div v-if="isC64CharsetMode(options.mode)"
+               class="surface-card border-round-lg p-2 flex flex-column gap-1">
+            <span class="text-xs text-color-secondary">Generated charset (colours from first occurrence)</span>
+            <canvas ref="charsetCanvasRef" class="charset-canvas" />
           </div>
         </div>
       </div>

@@ -2696,6 +2696,15 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.genesisUniqueTiles = static_cast<int>(p.genesis_unique_tiles);
     r.tileDataBytes      = static_cast<int>(p.tile_data_bytes);
     r.genesisTotalCells  = static_cast<int>(p.genesis_total_cells);
+    // c64 charset diagnostic: copy raw_frame so the web preview can
+    // render the generated charset under the image. Cheap (a few KB
+    // for typical charsets) and only populated when cols/rows are set.
+    if (amiga::is_c64_charset(p.mode) && p.c64_cols > 0 && p.c64_rows > 0) {
+        r.c64CharsetData = p.raw_frame;
+        r.c64Mc1     = p.c64_mc1;
+        r.c64Mc2     = p.c64_mc2;
+        r.c64BgColor = p.c64_bg_color;
+    }
     return r;
 }
 

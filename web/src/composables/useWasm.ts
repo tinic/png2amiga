@@ -20,11 +20,14 @@ interface DitherDefaultsPendingEntry {
 type WorkerOutboundMessage =
   | { id: number; fn: string; args: unknown[]; wantProgress: boolean }
 
-// Shape of the worker's reply envelope. `rgba` / `data` cross the
-// thread boundary as ArrayBuffer; we wrap them as Uint8Array on this side.
-interface ReplyEnvelope extends Omit<ConvertResult, 'rgba' | 'data'> {
+// Shape of the worker's reply envelope. `rgba` / `data` /
+// `c64CharsetData` cross the thread boundary as ArrayBuffer; wrapped
+// back to Uint8Array on this side.
+interface ReplyEnvelope extends Omit<ConvertResult,
+  'rgba' | 'data' | 'c64CharsetData'> {
   rgba?: ArrayBuffer
   data?: ArrayBuffer
+  c64CharsetData?: ArrayBuffer
 }
 
 type WorkerInboundMessage =
@@ -48,11 +51,13 @@ const sharedError = ref('')
 function unwrapConvertEnvelope(raw: ReplyEnvelope): ConvertResult {
   // Conditional spreads (rather than `rgba: ... ?? undefined`) so we don't
   // explicitly set optional keys to undefined under exactOptionalPropertyTypes.
-  const { rgba, data, ...rest } = raw
+  const { rgba, data, c64CharsetData, ...rest } = raw
   return {
     ...rest,
     ...(rgba ? { rgba: new Uint8Array(rgba) } : {}),
     ...(data ? { data: new Uint8Array(data) } : {}),
+    ...(c64CharsetData
+        ? { c64CharsetData: new Uint8Array(c64CharsetData) } : {}),
   }
 }
 
