@@ -611,6 +611,7 @@ else()
         "256.bin|--mode snes-mode7-256"
         "256.h|--mode snes-mode7-256 --symbol snes_test"
         "direct.bin|--mode snes-mode7-direct"
+        "direct.h|--mode snes-mode7-direct --symbol snes_direct_test"
     )
     foreach(spec ${snes_outputs})
         string(REPLACE "|" ";" spec_parts ${spec})
