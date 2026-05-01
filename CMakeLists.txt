@@ -605,4 +605,77 @@ else()
                              PROPERTIES DEPENDS "smoke-genesis-${ext}")
     endforeach()
 
+    # SNES Mode 7: 256-mode (.bin tiles+tilemap+palette, .h header) +
+    # Direct (.bin: pixels self-decode, no palette emitted).
+    set(snes_outputs
+        "256.bin|--mode snes-mode7-256"
+        "256.h|--mode snes-mode7-256 --symbol snes_test"
+        "direct.bin|--mode snes-mode7-direct"
+    )
+    foreach(spec ${snes_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-snes-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-snes.${ext}
+        )
+        add_test(
+            NAME "smoke-snes-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-snes.${ext}
+        )
+        set_tests_properties("smoke-snes-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-snes-${ext}")
+    endforeach()
+
+    # C64 — every (mode, output-format) combo we promise. Bitmap modes:
+    # PNG preview, .raw bytes, .prg displayer; .koa for multicolor only;
+    # .hir for hires only. Charset modes: PNG, .raw, .h header. PETSCII
+    # is text-only (PNG + .prg).
+    set(c64_outputs
+        "multicolor.png|--mode c64-multicolor"
+        "multicolor.raw|--mode c64-multicolor"
+        "multicolor.prg|--mode c64-multicolor"
+        "multicolor.koa|--mode c64-multicolor"
+        "hires.png|--mode c64-hires"
+        "hires.raw|--mode c64-hires"
+        "hires.prg|--mode c64-hires"
+        "hires.hir|--mode c64-hires"
+        "fli.png|--mode c64-fli"
+        "fli.prg|--mode c64-fli"
+        "afli.png|--mode c64-afli"
+        "afli.prg|--mode c64-afli"
+        "petscii.png|--mode c64-petscii"
+        "petscii.prg|--mode c64-petscii"
+        "charsethi.png|--mode c64-charset-hires"
+        "charsethi.raw|--mode c64-charset-hires"
+        "charsethi.h|--mode c64-charset-hires --symbol charsethi_test"
+        "charsetmc.png|--mode c64-charset-multicolor"
+        "charsetmc.raw|--mode c64-charset-multicolor"
+        "charsetmc.h|--mode c64-charset-multicolor --symbol charsetmc_test"
+    )
+    foreach(spec ${c64_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-c64-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-c64.${ext}
+        )
+        add_test(
+            NAME "smoke-c64-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-c64.${ext}
+        )
+        set_tests_properties("smoke-c64-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-c64-${ext}")
+    endforeach()
+
 endif() # NOT EMSCRIPTEN

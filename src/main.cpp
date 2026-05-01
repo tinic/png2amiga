@@ -4109,11 +4109,20 @@ int main(int argc, char* argv[]) {
                              pal_path.string(), pal_bytes.size());
             }
         } else if (ends_with(config->output_path, ".h")) {
-            std::println(stderr, "SNES Mode 7: .h output not yet implemented "
-                                  "for the packed format. Use .bin for the "
-                                  "Mode 7-loadable frame (tilemap + tiles + "
-                                  ".pal companion).");
-            return exit_code::internal;
+            // Re-route through api::convert_cheader so the inline SNES
+            // header writer there (api.cpp::snes_header) does the work
+            // — keeps a single source of truth for the .h layout.
+            auto cr = api::convert_cheader(
+                src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "SNES header: {}", cr.error);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of.write(reinterpret_cast<const char*>(cr.data.data()),
+                     static_cast<std::streamsize>(cr.data.size()));
+            cli_status("Header: {} ({} bytes)",
+                       config->output_path, cr.data.size());
         } else {
             // PNG preview using st.rendered.
             auto r = save_preview(config->output_path, st.rendered,
