@@ -44,3 +44,9 @@ add_subdirectory(libwebp EXCLUDE_FROM_ALL)
 add_library(webp_headers INTERFACE)
 target_include_directories(webp_headers SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/libwebp/src)
+
+# constixel: header-only, single-file (constixel.hpp). Exposed as an INTERFACE
+# target so any consumer can `#include <constixel.hpp>` after linking.
+add_library(constixel INTERFACE)
+target_include_directories(constixel SYSTEM INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/constixel)

@@ -7,3 +7,6 @@
 [submodule "third_party/ssimulacra2"]
 	path = third_party/ssimulacra2
 	url = https://github.com/cloudinary/ssimulacra2.git
+[submodule "third_party/constixel"]
+	path = third_party/constixel
+	url = https://github.com/tinic/constixel.git
