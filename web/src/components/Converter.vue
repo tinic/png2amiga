@@ -993,11 +993,8 @@ function paintCharsetCanvas(result: ConvertResult): void {
   const gridRows = Math.ceil(lo.unique / lo.cols)
   canvas.width = lo.pixelW
   canvas.height = gridRows * 8 * lo.scale
-  // Pin CSS size to backing — without this the parent container's
-  // flex layout stretches the canvas. We want 1:1 (each backing pixel
-  // = one display pixel).
-  canvas.style.width = `${canvas.width}px`
-  canvas.style.height = `${canvas.height}px`
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
   canvas.style.imageRendering = 'pixelated'
   const ctx = canvas.getContext('2d')
   if (!ctx) return
