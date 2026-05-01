@@ -588,6 +588,10 @@ else()
         "hires|12-15|--mode hires --depth 4"
         "vga-13h|248-255|--mode vga-13h"
         "ehb|24-31|--mode ehb"
+        "stf-low|12-15|--mode stf-low"
+        "ste-low|12-15|--mode ste-low"
+        "stf-med|2-3|--mode stf-med"
+        "ste-med|2-3|--mode ste-med"
     )
     foreach(spec ${reserve_specs})
         string(REPLACE "|" ";" parts ${spec})
@@ -608,6 +612,10 @@ else()
                     ${PNG2AMIGA_TEST_INPUT}
                     ${CMAKE_BINARY_DIR}/reserve-${mname}.h
         )
+        # Validate by checking that all r_count slots in the reserve range
+        # hold the SAME value (mode-agnostic — different modes quantize the
+        # default colour differently, but reserved slots must all overlay
+        # to the identical post-quantization value).
         add_test(
             NAME "reserve-${mname}-count"
             COMMAND python3 -c
@@ -615,8 +623,9 @@ else()
                 content = open('${CMAKE_BINARY_DIR}/reserve-${mname}.h').read(); \
                 m = re.search(r'_palette\\[\\] = \\{([^}]+)\\}', content); \
                 vals = re.findall(r'0x[0-9A-Fa-f]+', m.group(1)); \
-                reserved = sum(1 for v in vals[${r_lo}:${r_hi}+1] if int(v,16) in (0x0F0C, 0x00FF00CC, 0xCC, 0x002A)); \
-                sys.exit(0 if reserved == ${r_count} else (print(f'expected ${r_count} reserves at slots ${r_lo}..${r_hi}, found '+str(reserved)) or 1))"
+                slice_ = vals[${r_lo}:${r_hi}+1]; \
+                ok = len(slice_) == ${r_count} and len(set(slice_)) == 1; \
+                sys.exit(0 if ok else (print(f'expected ${r_count} identical reserves at slots ${r_lo}..${r_hi}, got '+str(slice_)) or 1))"
         )
         set_tests_properties("reserve-${mname}-count"
                              PROPERTIES DEPENDS "reserve-${mname}")
