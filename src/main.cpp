@@ -1792,7 +1792,9 @@ std::string inline_image_escape(const Image& image) {
             // >256 unique colors (HAM6/8): use png2amiga's median-cut to
             // build a 256-color palette adapted to the rendered preview.
             // Better than constixel's generic 256-color built-in.
-            auto pal_result = quantize::quantize(scaled, 256, quantize::Algorithm::median_cut);
+            // 255 not 256: constixel's runtime_palette reserves index 0
+            // as a sentinel (sixel #0 is transparent under P2=1).
+            auto pal_result = quantize::quantize(scaled, 255, quantize::Algorithm::median_cut);
             if (pal_result) {
                 pal.reserve(pal_result->size());
                 for (const auto& col : pal_result->colors) {
