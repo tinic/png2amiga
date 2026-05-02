@@ -249,6 +249,22 @@ struct Options {
     // used together. Off in production.
     bool strips_debug = false;
 
+    // Seamless-tile mode. Pre-replicates the (already preprocessed)
+    // input image into a 3x3 layout, runs quantize / dither / encode
+    // over the full 3W x 3H buffer so the error-diffused dither at
+    // the right edge of the centre tile converges to match its left
+    // edge, then crops the centre tile for export — every output
+    // path gets only the centre W x H. The terminal `--preview` is
+    // the only consumer that re-tiles the centre back to 3x3 for
+    // visual seam verification.
+    //
+    // Allowed only on freeform indexed bitmap modes (lores / hires /
+    // EHB ± interlace ± dpf). HAM, sliced palette, strip palette,
+    // and fixed-size or tile-coded modes (Atari, VGA, EGA, CGA, SNES
+    // Mode 7, Genesis, C64) are rejected — see the gate in
+    // run_pipeline().
+    bool tile = false;
+
     // IBM PC / DOS modes only. If true, preserve source aspect ratio by
     // letterboxing or pillarboxing the image inside the fixed hardware
     // buffer (padded with black). If false (default), stretch the image

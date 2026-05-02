@@ -599,6 +599,109 @@ Options decompose_mode_options(const Options& opts) {
     return o;
 }
 
+// --- Seamless-tile helpers ----------------------------------------------
+//
+// `--tile`: replicate a W x H image into a 3W x 3H grid of identical
+// copies, run the full pipeline (quantize / dither / encode) over the
+// big buffer, then crop the centre W x H back out for export. Running
+// error diffusion across the source-period-3W width lets the dither
+// converge to a W-periodic pattern; the centre tile inherits that
+// pattern, and so its right edge dither matches its left edge dither
+// when the user actually tiles it. The outer 8 cells are scratch and
+// get discarded.
+//
+// Allowed only on freeform indexed bitmap modes (lores / hires / EHB
+// ± interlace ± dpf). Rejected for HAM, sliced palette, strips, and
+// every fixed-size or tile-coded mode (Atari, VGA, EGA, CGA, SNES
+// Mode 7, Genesis, C64). The gate lives at the top of run_pipeline.
+
+static Image tile_replicate_3x3(const Image& src) {
+    auto w = src.width();
+    auto h = src.height();
+    Image out(w * 3, h * 3);
+    for (std::size_t ty = 0; ty < 3; ++ty) {
+        for (std::size_t tx = 0; tx < 3; ++tx) {
+            for (std::size_t y = 0; y < h; ++y) {
+                for (std::size_t x = 0; x < w; ++x) {
+                    out[tx * w + x, ty * h + y] = src[x, y];
+                }
+            }
+        }
+    }
+    return out;
+}
+
+static std::vector<bool> tile_replicate_mask_3x3(const std::vector<bool>& src,
+                                                  std::size_t w, std::size_t h) {
+    if (src.empty()) return {};
+    std::vector<bool> out(w * 3 * h * 3);
+    for (std::size_t ty = 0; ty < 3; ++ty) {
+        for (std::size_t tx = 0; tx < 3; ++tx) {
+            for (std::size_t y = 0; y < h; ++y) {
+                for (std::size_t x = 0; x < w; ++x) {
+                    out[(ty * h + y) * (w * 3) + (tx * w + x)] = src[y * w + x];
+                }
+            }
+        }
+    }
+    return out;
+}
+
+static Image tile_crop_centre_image(const Image& tiled,
+                                     std::size_t w, std::size_t h) {
+    Image out(w, h);
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            out[x, y] = tiled[x + w, y + h];
+        }
+    }
+    return out;
+}
+
+static std::vector<std::uint8_t> tile_crop_centre_indices(
+        const std::vector<std::uint8_t>& tiled,
+        std::size_t w, std::size_t h) {
+    std::vector<std::uint8_t> out(w * h);
+    auto tw = w * 3;
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            out[y * w + x] = tiled[(y + h) * tw + (x + w)];
+        }
+    }
+    return out;
+}
+
+static std::vector<bool> tile_crop_centre_mask(const std::vector<bool>& tiled,
+                                                std::size_t w, std::size_t h) {
+    if (tiled.empty()) return {};
+    std::vector<bool> out(w * h);
+    auto tw = w * 3;
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            out[y * w + x] = tiled[(y + h) * tw + (x + w)];
+        }
+    }
+    return out;
+}
+
+// Apply the centre crop to a PipelineResult that was encoded from a
+// 3W x 3H replicate. Re-encodes bitplanes from the cropped indices so
+// the .iff/.h/.cpp output paths see the right dimensions and bitplane
+// data without any extra knowledge of the tile mode.
+static Result<void> tile_crop_result(PipelineResult& r,
+                                      std::size_t w, std::size_t h,
+                                      std::size_t depth,
+                                      bitplane::Layout layout) {
+    r.indices = tile_crop_centre_indices(r.indices, w, h);
+    r.rendered = tile_crop_centre_image(r.rendered, w, h);
+    if (!r.transparency_mask.empty())
+        r.transparency_mask = tile_crop_centre_mask(r.transparency_mask, w, h);
+    auto planes = bitplane::encode(r.indices, w, h, depth, layout);
+    if (!planes) return std::unexpected{planes.error()};
+    r.planes = *std::move(planes);
+    return {};
+}
+
 }  // close anon namespace so run_pipeline gets external linkage and can
    // be reached from pipeline.cpp via the api:: forwarder.
 
@@ -721,11 +824,55 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         depth = (cs == amiga::Chipset::aga) ? 4 : 3;
     }
 
+    // --- Seamless-tile gate ----------------------------------------------
+    // Allowed only on freeform indexed bitmap modes (lores / hires / EHB
+    // ± interlace ± dpf). Reject HAM, sliced palette (--copper), strips
+    // (--scap), and every fixed-size or tile-coded mode here so the
+    // downstream branches don't need to know about tile mode.
+    bool tile_active = false;
+    std::size_t tile_w = 0, tile_h = 0;
+    if (options.tile) {
+        bool tile_mode_ok =
+            mode == amiga::Mode::lores ||
+            mode == amiga::Mode::lores_interlace ||
+            mode == amiga::Mode::hires ||
+            mode == amiga::Mode::hires_interlace ||
+            mode == amiga::Mode::ehb;
+        if (!tile_mode_ok) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                "--tile is only supported on freeform indexed bitmap modes "
+                "(lores, hires, EHB; with optional --interlace and --dpf). "
+                "HAM, fixed-size, and tile-coded modes are not eligible."}};
+        }
+        if (amiga::is_ham(mode)) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                "--tile is not supported with HAM modes"}};
+        }
+        if (options.copper || options.scap) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                "--tile is not yet supported with sliced palette (--copper) "
+                "or strip palette (--scap). Drop those flags or drop --tile."}};
+        }
+        tile_active = true;
+        tile_w = target_w;
+        tile_h = target_h;
+    }
+
     std::vector<bool> tmask;
     auto image = load_and_preprocess(input_data, input_size, options,
                                       target_w, target_h, &tmask);
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
+
+    // Tile pre-processing: replicate the loaded image (and the alpha
+    // mask, if any) into a 3x3 grid. The rest of the pipeline runs on
+    // the 3W x 3H buffer; the centre crop happens at the per-branch
+    // return points below.
+    if (tile_active) {
+        *image = tile_replicate_3x3(*image);
+        if (has_transparency)
+            tmask = tile_replicate_mask_3x3(tmask, tile_w, tile_h);
+    }
 
     // Fixed-buffer modes (Atari, VGA, EGA, CGA): center the image in the full
     // hardware frame when either dimension is smaller than the buffer.
@@ -2172,6 +2319,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
         result.finalize_psnr(*image, dither_result.total_error);
+        if (tile_active) {
+            auto cropped = tile_crop_result(result, tile_w, tile_h, depth,
+                                            bitplane::Layout::interleaved);
+            if (!cropped) return std::unexpected{cropped.error()};
+        }
         return result;
     }
 
@@ -2814,6 +2966,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
     result.finalize_psnr(*image, dither_result.total_error);
     result.cga_mode_ctrl2 = cga_mode_ctrl2;
+    if (tile_active) {
+        auto cropped = tile_crop_result(result, tile_w, tile_h, depth, bp_layout);
+        if (!cropped) return std::unexpected{cropped.error()};
+    }
     return result;
 }
 

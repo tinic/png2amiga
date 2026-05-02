@@ -473,6 +473,49 @@ else()
     set_tests_properties("smoke-ham6-strips-h-content"
                          PROPERTIES DEPENDS "smoke-ham6-strips-h")
 
+    # --tile: pre-replicate input 3x3, run pipeline, crop centre. Verify
+    # that the encoded .h has the requested centre dimensions (W x H,
+    # NOT 3W x 3H), and that the same flag is rejected on a HAM mode.
+    add_test(
+        NAME "smoke-tile-lores-h"
+        COMMAND png2amiga --mode lores --depth 5 --tile
+                --width 64 --height 64 --symbol tile_smoke
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/tile-smoke.h
+    )
+    add_test(
+        NAME "smoke-tile-lores-h-dims"
+        COMMAND python3 -c
+            "content = open('${CMAKE_BINARY_DIR}/tile-smoke.h').read(); \
+            import re; \
+            w = int(re.search(r'TILE_SMOKE_WIDTH\\s+(\\d+)', content).group(1)); \
+            h = int(re.search(r'TILE_SMOKE_HEIGHT\\s+(\\d+)', content).group(1)); \
+            assert w == 64 and h == 64, f'expected 64x64 centre crop, got {w}x{h}'"
+    )
+    set_tests_properties("smoke-tile-lores-h-dims"
+                         PROPERTIES DEPENDS "smoke-tile-lores-h")
+    add_test(
+        NAME "tile-rejects-ham"
+        COMMAND png2amiga --mode ham6 --tile --width 64 --height 64
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/tile-reject-ham.png
+    )
+    set_tests_properties("tile-rejects-ham" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "tile-rejects-sliced"
+        COMMAND png2amiga --mode lores --depth 5 --sliced --tile
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/tile-reject-sliced.png
+    )
+    set_tests_properties("tile-rejects-sliced" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "tile-rejects-vga"
+        COMMAND png2amiga --mode vga-13h --tile
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/tile-reject-vga.png
+    )
+    set_tests_properties("tile-rejects-vga" PROPERTIES WILL_FAIL TRUE)
+
     # Copper supports locks (fixed palette slots for blitter objects)
     add_test(
         NAME "lock-index-copper-accepted"

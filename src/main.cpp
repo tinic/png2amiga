@@ -489,6 +489,13 @@ struct Config {
     bool best = false;
     std::string best_metric = "ssimulacra2";  // "ssimulacra2" (default) | "msssim" | "psnr"
 
+    // Seamless-tile mode. Replicates the input 3x3, runs the pipeline
+    // over the bigger buffer so error-diffused dither converges to a
+    // tile-able pattern, then crops the centre back out for export.
+    // Allowed only on freeform indexed bitmap modes (lores, hires, EHB
+    // ± interlace ± dpf). See api::Options::tile.
+    bool tile = false;
+
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
     // poorly-served image regions.
@@ -664,6 +671,10 @@ void print_usage() {
         "\n"
         "Strip palette (mid-line swaps, OCS lores):\n"
         "  --strips                        Mid-line swaps; pair with --dpf or ehb\n"
+        "\n"
+        "Seamless tile:\n"
+        "  --tile                          Replicate input 3x3 before dither, export centre\n"
+        "                                  tile only. Lores/hires/EHB only.\n"
         "\n"
         "HAM:\n"
         "  --ham-beam <1-256>              DP search beam (default: 48)\n"
@@ -885,6 +896,14 @@ Result<Config> parse_args(int argc, char* argv[]) {
             // selected by --sliced / --strips; --best toggles the parallel
             // jitter pass on top of whichever encoder runs.
             config.best = true;
+            continue;
+        }
+
+        if (arg == "--tile") {
+            // Seamless-tile mode: replicate the input 3x3, run the
+            // pipeline, crop the centre back out for export. See
+            // api::Options::tile.
+            config.tile = true;
             continue;
         }
 
@@ -2131,6 +2150,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.scap = cfg.scap;
     opts.strips_debug = cfg.strips_debug;
     opts.strips_probe = cfg.strips_probe;
+    opts.tile = cfg.tile;
     opts.alpha_threshold = cfg.alpha_threshold;
     opts.alpha_dither = std::string{dither_to_options_string(cfg.alpha_dither)};
     opts.alpha_dither_strength = cfg.alpha_dither_strength;
@@ -2842,6 +2862,25 @@ Result<void> save_preview(std::string_view path, const Image& preview,
 void show_terminal_preview(const Image& preview, amiga::Mode mode,
                            bool hires = false, bool interlace = false) {
     iterm2_display(scale_for_display(preview, mode, hires, interlace));
+}
+
+// --tile preview helper: replicate the centre tile into a 3x3 grid so the
+// user can verify that the seam between adjacent copies is invisible. Only
+// applied to terminal preview; export paths always see the centre crop.
+Image tile_3x3_for_preview(const Image& centre) {
+    auto w = centre.width();
+    auto h = centre.height();
+    Image out(w * 3, h * 3);
+    for (std::size_t ty = 0; ty < 3; ++ty) {
+        for (std::size_t tx = 0; tx < 3; ++tx) {
+            for (std::size_t y = 0; y < h; ++y) {
+                for (std::size_t x = 0; x < w; ++x) {
+                    out[tx * w + x, ty * h + y] = centre[x, y];
+                }
+            }
+        }
+    }
+    return out;
 }
 
 // CLI progress reporter. Throttles to ~20Hz redraw, writes "\rEncoding NN.N%
@@ -3741,6 +3780,38 @@ int main(int argc, char* argv[]) {
         if (amiga::is_cga(config->mode) || amiga::is_cga_text(config->mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");
+    }
+
+    // --tile gating. The api::run_pipeline gate covers Amiga lores /
+    // hires / EHB; mirror it here so non-pipeline paths (C64, SNES,
+    // Genesis, batch) and unsupported flag combinations error out
+    // early rather than silently ignoring the flag.
+    if (config->tile) {
+        auto reject_tile = [](std::string_view why) {
+            std::println(stderr, "Error: --tile: {}", why);
+            return 1;
+        };
+        if (config->copper || config->scap)
+            return reject_tile(
+                "not yet supported with sliced palette (--sliced) or "
+                "strip palette (--strips). Drop those flags or drop --tile.");
+        if (amiga::is_ham(config->mode))
+            return reject_tile("not supported with HAM modes");
+        if (config->batch)
+            return reject_tile("not supported with --batch");
+        bool tile_mode_ok =
+            config->mode == amiga::Mode::lores ||
+            config->mode == amiga::Mode::lores_interlace ||
+            config->mode == amiga::Mode::hires ||
+            config->mode == amiga::Mode::hires_interlace ||
+            config->mode == amiga::Mode::ehb;
+        if (!tile_mode_ok)
+            return reject_tile(
+                "only supported on freeform indexed bitmap modes "
+                "(lores, hires, EHB; with optional --interlace and --dpf). "
+                "Atari/VGA/EGA/CGA, SNES Mode 7, Genesis, and C64 modes "
+                "all use fixed buffers or tile-coded encodings that don't "
+                "round-trip through the 3x3 replicate.");
     }
 
     // Batch mode runs an entirely different path: build atlas, encode
@@ -5313,9 +5384,18 @@ int main(int argc, char* argv[]) {
             std::nullopt,
             static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
 
-        if (config->preview)
-            show_terminal_preview(st.rendered, config->mode,
-                                  config->hires, config->interlace);
+        if (config->preview) {
+            // --tile re-tiles the centre 3x3 so the user can verify the
+            // seams visually. Export paths still see the centre crop only.
+            if (config->tile) {
+                auto tiled = tile_3x3_for_preview(st.rendered);
+                show_terminal_preview(tiled, config->mode,
+                                      config->hires, config->interlace);
+            } else {
+                show_terminal_preview(st.rendered, config->mode,
+                                      config->hires, config->interlace);
+            }
+        }
 
         // Alias so the existing output-dispatch code below — which
         // expects a `full_palette` Color3f vector — compiles unchanged.
@@ -5949,6 +6029,29 @@ int main(int argc, char* argv[]) {
             if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
     }
 
+    // --tile pre-process: replicate the source image (and the
+    // transparency mask, if any) into a 3x3 grid. The pipeline below
+    // — quantize, dither, encode — runs over the 3W x 3H buffer, so
+    // the FS-style error diffusion converges to a tile-able pattern
+    // before the centre crop happens after bitplane::encode below.
+    std::size_t tile_w_std = 0, tile_h_std = 0;
+    if (config->tile) {
+        tile_w_std = image->width();
+        tile_h_std = image->height();
+        *image = tile_3x3_for_preview(*image);
+        if (has_transparency) {
+            std::vector<bool> rep(tile_w_std * tile_h_std * 9);
+            const std::size_t bw = tile_w_std * 3;
+            for (std::size_t ty = 0; ty < 3; ++ty)
+                for (std::size_t tx = 0; tx < 3; ++tx)
+                    for (std::size_t y = 0; y < tile_h_std; ++y)
+                        for (std::size_t x = 0; x < tile_w_std; ++x)
+                            rep[(ty * tile_h_std + y) * bw + (tx * tile_w_std + x)] =
+                                transparency_mask[y * tile_w_std + x];
+            transparency_mask = std::move(rep);
+        }
+    }
+
     // Build palette
     auto max_colors = std::size_t{1} << config->depth;
     auto is_atari_std = amiga::is_atari(config->mode);
@@ -6265,6 +6368,51 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // --tile post-process: crop the 3W x 3H pipeline output back to the
+    // centre W x H tile. Indices, bitplanes, preview, source image, and
+    // transparency mask all collapse to the centre crop so every
+    // downstream consumer (DPF expansion, PSNR, IFF/.h/.cpp emitters,
+    // save_preview) sees the right dimensions without further changes.
+    if (config->tile) {
+        auto w = tile_w_std;
+        auto h = tile_h_std;
+        const std::size_t tw = w * 3;
+        // Indices
+        std::vector<std::uint8_t> centre_idx(w * h);
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < w; ++x)
+                centre_idx[y * w + x] = dither_result.indices[(y + h) * tw + (x + w)];
+        dither_result.indices = std::move(centre_idx);
+        // Re-encode bitplanes from cropped indices
+        auto centre_planes = bitplane::encode(
+            dither_result.indices, w, h, config->depth, bp_layout);
+        if (!centre_planes) {
+            std::println(stderr, "Encode error: {}", centre_planes.error().message);
+            return 1;
+        }
+        planes = *std::move(centre_planes);
+        // Crop preview
+        Image cp(w, h);
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < w; ++x)
+                cp[x, y] = (*preview)[x + w, y + h];
+        *preview = std::move(cp);
+        // Crop source image (so PSNR is computed against the centre)
+        Image ci(w, h);
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < w; ++x)
+                ci[x, y] = (*image)[x + w, y + h];
+        *image = std::move(ci);
+        // Crop transparency mask
+        if (has_transparency) {
+            std::vector<bool> cm(w * h);
+            for (std::size_t y = 0; y < h; ++y)
+                for (std::size_t x = 0; x < w; ++x)
+                    cm[y * w + x] = transparency_mask[(y + h) * tw + (x + w)];
+            transparency_mask = std::move(cm);
+        }
+    }
+
     // Dual-playfield expansion: image lives in PF2 of a 2N-plane display,
     // PF1 zeroed, palette shifted into upper color registers.
     if (use_dpf_std) {
@@ -6301,8 +6449,16 @@ int main(int argc, char* argv[]) {
         std::nullopt,
         static_cast<double>(dither_result.total_error), std_psnr, std_s2);
 
-    // Terminal preview
-    if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+    // Terminal preview. --tile re-tiles the centre 3x3 so the user can
+    // verify seam continuity.
+    if (config->preview) {
+        if (config->tile) {
+            auto tiled = tile_3x3_for_preview(*preview);
+            show_terminal_preview(tiled, config->mode, config->hires, config->interlace);
+        } else {
+            show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+        }
+    }
 
     // Output
     if (!config->output_path.empty()) {
