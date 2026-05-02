@@ -1307,9 +1307,9 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // image looks single-palette per frame, which is very visible on
     // photographic content.
     // CAP and SCAP share the OCS hblank's MOVE budget. Adaptive split:
-    //   * Each line's hblank fits up to kHblankCeiling MOVEs (=14 for
+    //   * Each line's hblank fits up to kHblankCeiling MOVEs (=13 for
     //     OCS empirical safe ceiling). Hblank load on line y+1 is
-    //     CAP_changes[y+1] + SCAP_swaps[y] (revert) — exceeding 14
+    //     CAP_changes[y+1] + SCAP_swaps[y] (revert) — exceeding 13
     //     causes hardware overflow on busy images (verified per
     //     fantasy.png). So per-line: SCAP_swaps[y] ≤ kHblankCeiling -
     //     CAP_changes[y+1]. CAP_changes per line comes straight from
@@ -1318,7 +1318,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     //     CAP gets min(N, 2), SCAP gets the per-line adaptive value
     //     bounded by N - CAP_share.
     //   * Auto: same adaptive logic, no global cap beyond hblank.
-    constexpr std::size_t kHblankCeiling = 14;
+    constexpr std::size_t kHblankCeiling = 13;
     constexpr std::size_t kMaxCombinedEhb = 20;  // CAP=2 + SCAP=18 visible max
     std::size_t total_budget_ehb = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombinedEhb)
@@ -2371,7 +2371,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     }
 
     constexpr std::size_t kBaseColors = 16;
-    constexpr std::size_t kHblankCeiling = 14;   // MOVEs CAP can land
+    constexpr std::size_t kHblankCeiling = 13;   // MOVEs CAP can land
                                                   // in hblank.
     constexpr std::size_t kVisibleBudget = 18;   // MOVEs SCAP can land
                                                   // in the visible
