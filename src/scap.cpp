@@ -2542,7 +2542,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         // value — we override strip_pal[k] with hw_state[k] for those so
         // the encoder sees what the chip is actually displaying at line
         // entry.
-        constexpr std::size_t kHblankBudget = 14;
+        constexpr std::size_t kHblankBudget = 13;
         struct CapDiff { std::size_t k; float dist_sq; };
         std::vector<CapDiff> diffs;
         diffs.reserve(kBaseColors);
