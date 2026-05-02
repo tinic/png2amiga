@@ -36,3 +36,4 @@ test.cpp
 # Internal research / design notes — keep local
 /docs/*_research.md
 .!*
+/examples/tile/out/
