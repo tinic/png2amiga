@@ -167,7 +167,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     // --- CMAP chunk ---
     // For EHB mode, only write the 32 base colors — the Amiga hardware
     // automatically generates the other 32 at half brightness.
-    // CMAP source: when scanline_palettes is provided (CAP modes), use
+    // CMAP source: when scanline_palettes is provided (sliced modes), use
     // line 0's palette as the CMAP. PCHG diffs the rest against line 0,
     // so the reader's palette state for line 0 must match scan_pals[0]
     // exactly — otherwise every subsequent row gets a constant

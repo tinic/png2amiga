@@ -78,8 +78,8 @@ time_to() {
 run_png2amiga() {
   local label="$1"; shift
   echo "==> [png2amiga] $label"
-  # PNG preview is what PSNR reads. SCAP modes only emit PNG / .cpp /
-  # .c / .h (no IFF for SCAP — there's no PCHG-equivalent yet for the
+  # PNG preview is what PSNR reads. STRIPS modes only emit PNG / .cpp /
+  # .c / .h (no IFF for STRIPS — there's no PCHG-equivalent yet for the
   # mid-line MOVE stream), so the IFF pass is a best-effort "skip on
   # failure" to keep the harness simple. Timing covers the PNG-producing
   # invocation only — the IFF pass is a duplicate encode and would
@@ -177,20 +177,20 @@ run_ham_convert hc-ehb ehb
 # 4) ham_convert SHAM6 (ham6_sliced) + dither_fs
 run_ham_convert hc-sham6 ham6_sliced
 
-# 5) png2amiga HAM6 (no CAP, no --best — baseline for time/quality)
+# 5) png2amiga HAM6 (no SLICED, no --best — baseline for time/quality)
 run_png2amiga "p2a-ham6"             --mode ham6
 
-# 6) png2amiga HAM6 + best (no CAP, multi-restart sweep)
+# 6) png2amiga HAM6 + best (no SLICED, multi-restart sweep)
 run_png2amiga "p2a-ham6-noncap-best" --mode ham6 --best
 
-# 7) png2amiga HAM6 + CAP (no --best — single-pass per-line palette)
-run_png2amiga "p2a-ham6-cap"         --mode ham6 --cap
+# 7) png2amiga HAM6 + SLICED (no --best — single-pass per-line palette)
+run_png2amiga "p2a-ham6-cap"         --mode ham6 --sliced
 
-# 8) png2amiga HAM6 + CAP + best
-run_png2amiga "p2a-ham6-best"        --mode ham6 --cap --best
+# 8) png2amiga HAM6 + SLICED + best
+run_png2amiga "p2a-ham6-best"        --mode ham6 --sliced --best
 
-# 9) png2amiga EHB + SCAP + best
-run_png2amiga "p2a-ehb-best"         --mode ehb --scap --best
+# 9) png2amiga EHB + STRIPS + best
+run_png2amiga "p2a-ehb-best"         --mode ehb --strips --best
 
 # 10) png2amiga plain EHB (no copper) + best — head-to-head with hc-ehb
 run_png2amiga "p2a-ehb-plain-best"   --mode ehb --best

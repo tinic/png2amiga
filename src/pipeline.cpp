@@ -275,7 +275,7 @@ Image jitter_image(const Image& source, std::uint32_t seed,
 
 // Nested parallel_for detection. best_sweep already parallelises
 // across N trials; if an inner encoder also calls parallel_for (e.g.
-// HAM6 SCAP's per-row HAM-DP planner) we'd get hardware_concurrency²
+// HAM6 strips's per-row HAM-DP planner) we'd get hardware_concurrency²
 // threads competing for hardware_concurrency cores — severe over-
 // subscription that kills throughput. The outer call sets this flag,
 // inner calls see it set and run serially.
@@ -325,7 +325,7 @@ Result<Image> render_preview(
     bool is_lace,
     amiga::Chipset chipset,
     const std::vector<std::vector<Color3f>>* scanline_palettes,
-    std::size_t cap_changes_per_line) {
+    std::size_t sliced_changes_per_line) {
     bool has_scanline_pal = scanline_palettes && !scanline_palettes->empty();
     Result<Image> r = [&]() -> Result<Image> {
         if (is_ham) {
@@ -338,7 +338,7 @@ Result<Image> render_preview(
         if (has_scanline_pal) {
             return copper::render_copper_capped(
                 planes, *scanline_palettes, base_palette,
-                cap_changes_per_line, is_lace, chipset);
+                sliced_changes_per_line, is_lace, chipset);
         }
         return bitplane::render(planes, base_palette);
     }();
@@ -355,7 +355,7 @@ Result<Image> render_preview(
         // Defence in depth: every emitted pixel must be a 12-bit OCS
         // colour (nibble-replicated 8-bit sRGB byte). The snap above
         // guarantees this, but past regressions in render_copper_capped
-        // and EHB+SCAP shipped non-displayable previews that scored
+        // and EHB+strips shipped non-displayable previews that scored
         // fictional 24-bit precision. If a future code path bypasses
         // the snap, this audit makes it loud.
         std::size_t bad = 0;

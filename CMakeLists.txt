@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.54.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.55.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -61,7 +61,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/cheader.cpp
     src/palette_io.cpp
     src/copper.cpp
-    src/scap.cpp
+    src/strips.cpp
     src/dither_tuning.cpp
     src/palette_locks.cpp
     src/cga_text.cpp
@@ -155,7 +155,7 @@ else()
     )
 
     # RECOIL round-trip suite. Encodes one input through every IFF-
-    # producing combo (including --cap-best HAM6/HAM8), decodes each IFF
+    # producing combo (including --sliced-best HAM6/HAM8), decodes each IFF
     # via Piotr Fusik's recoil2png, and PSNR-compares against png2amiga's
     # own preview. Skips cleanly if recoil2png isn't installed. Run with:
     #     cmake --build build --target recoil_check
@@ -451,27 +451,27 @@ else()
     )
     set_tests_properties("pin-index-ham-rejected" PROPERTIES WILL_FAIL TRUE)
 
-    # HAM6 + SCAP: encoder produces both bitplane data and a per-line
-    # copper move table; the .h emitter must wire scap_line_moves so
-    # the SCAP copper list lands in the header (without it the .h
+    # HAM6 + STRIPS: encoder produces both bitplane data and a per-line
+    # copper move table; the .h emitter must wire strips_line_moves so
+    # the STRIPS copper list lands in the header (without it the .h
     # silently degrades to plain HAM6 against the base 16-colour
-    # palette and the SCAP gain disappears).
+    # palette and the STRIPS gain disappears).
     add_test(
-        NAME "smoke-ham6-scap-h"
-        COMMAND png2amiga --mode ham6 --scap --symbol h6scap
+        NAME "smoke-ham6-strips-h"
+        COMMAND png2amiga --mode ham6 --strips --symbol h6strips
                 ${PNG2AMIGA_TEST_INPUT}
-                ${CMAKE_BINARY_DIR}/ham6-scap.h
+                ${CMAKE_BINARY_DIR}/ham6-strips.h
     )
     add_test(
-        NAME "smoke-ham6-scap-h-content"
+        NAME "smoke-ham6-strips-h-content"
         COMMAND python3 -c
-            "content = open('${CMAKE_BINARY_DIR}/ham6-scap.h').read(); \
-            assert 'scap_ham6_ocs' in content, 'scap_ham6_ocs label missing'; \
-            assert 'h6scap_scap_copper_list' in content, \
-                'scap copper list missing'"
+            "content = open('${CMAKE_BINARY_DIR}/ham6-strips.h').read(); \
+            assert 'strips_ham6_ocs' in content, 'strips_ham6_ocs label missing'; \
+            assert 'h6strips_strips_copper_list' in content, \
+                'strips copper list missing'"
     )
-    set_tests_properties("smoke-ham6-scap-h-content"
-                         PROPERTIES DEPENDS "smoke-ham6-scap-h")
+    set_tests_properties("smoke-ham6-strips-h-content"
+                         PROPERTIES DEPENDS "smoke-ham6-strips-h")
 
     # Copper supports locks (fixed palette slots for blitter objects)
     add_test(
@@ -612,7 +612,7 @@ else()
         "ehb|24-31|--mode ehb"
         "cap-lores|28-31|--mode lores --copper --depth 5"
         "cap-ehb|28-31|--mode ehb --copper"
-        "scap-ehb|28-31|--mode ehb --scap"
+        "scap-ehb|28-31|--mode ehb --strips"
         "stf-low|12-15|--mode stf-low"
         "ste-low|12-15|--mode ste-low"
         "stf-med|2-3|--mode stf-med"

@@ -1326,7 +1326,7 @@ std::uint8_t pick_yliluoma_family_index(
 }
 
 // Per-pixel Yliluoma quantizer — exposed so callers can use it on a
-// per-row basis (e.g., copper.cpp's CAP loop) with the absolute y index
+// per-row basis (e.g., copper.cpp's sliced loop) with the absolute y index
 // for Bayer rotation. Bypassing dither::apply on a 1-row sub-image was
 // the root of the "vertical line bias" bug — bayer8[0][x%8] is the
 // same row of thresholds for every scanline.
@@ -2511,8 +2511,8 @@ DitherResult apply_dbs(
 // DBS post-pass refinement with per-pixel palette lookup.
 //
 // Same algorithm as apply_dbs but the candidate palette can vary by
-// pixel — provided by the caller via a callback. Used by CAP / SCAP /
-// EHB+CAP / EHB+SCAP encoders, where the "valid palette at this
+// pixel — provided by the caller via a callback. Used by sliced / strips /
+// EHB+sliced / EHB+strips encoders, where the "valid palette at this
 // pixel" depends on which scanline (or scanline+strip) it falls in.
 // The base encoder has already filled `indices`; we just refine in
 // place.
@@ -3081,7 +3081,7 @@ std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
     case Method::stucki:          return stucki_kernel;
     case Method::jarvis:          return jarvis_kernel;
     case Method::ostromoukhov:    return floyd_steinberg_kernel;  // F-S base kernel
-    // Structure-aware variants and Riemersma all build on F-S in CAP mode
+    // Structure-aware variants and Riemersma all build on F-S in sliced mode
     // — the per-pixel bias / queue is layered on top by the caller.
     // (Curve walking can't span per-scanline palette swaps cleanly.)
     case Method::structure_fs:    return floyd_steinberg_kernel;

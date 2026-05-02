@@ -35,3 +35,4 @@ test.cpp
 /tools/shootout/output/
 # Internal research / design notes — keep local
 /docs/*_research.md
+.!*

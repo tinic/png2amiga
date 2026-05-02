@@ -302,16 +302,16 @@ std::uint8_t pick_tri_tone_index(
 
 // ---------------------------------------------------------------------------
 // Direct Binary Search post-pass refinement for tiled-palette modes
-// (CAP per-line, SCAP per-strip). The base CAP/SCAP encoder has
+// (sliced per-line, strips per-strip). The base sliced/strips encoder has
 // already filled `indices` with an initial assignment; DBS sweeps
 // each pixel and tries every candidate in that pixel's effective
 // palette (looked up via `palette_for_pixel(x, y)`). Accepts any
 // toggle that lowers the HVS-blurred OKLab cost.
 //
 // This complements the global-palette `Method::dbs` path in apply()
-// by delegating palette resolution to the caller — so CAP/SCAP can
+// by delegating palette resolution to the caller — so sliced/strips can
 // supply per-row or per-strip palette spans without the DBS code
-// needing to know about CAP/SCAP layout.
+// needing to know about sliced/strips layout.
 // ---------------------------------------------------------------------------
 
 using PalettePerPixel =
@@ -326,8 +326,8 @@ void apply_dbs_post_pass(
 
 // ---------------------------------------------------------------------------
 // diffuse_raw_buffer — single source of truth for per-pixel error-diffusion
-// scaffolding across all "raw buffer" mode pipelines (HAM, EHB+CAP, copper,
-// SCAP, SNES Mode 7, EHB main path). Owns:
+// scaffolding across all "raw buffer" mode pipelines (HAM, EHB+sliced, copper,
+// strips, SNES Mode 7, EHB main path). Owns:
 //
 //   • input → OKLab conversion
 //   • serpentine scan

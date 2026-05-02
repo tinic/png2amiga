@@ -3,7 +3,7 @@
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "copper.hpp"
-#include "scap.hpp"
+#include "strips.hpp"
 #include "types.hpp"
 
 #include <cstddef>
@@ -23,7 +23,7 @@ namespace png2amiga::api {
 // reporting sites (CLI "Encoded" line, web disk/chip readout, viewer
 // header comments) must read from this — never re-derive size locally,
 // or numbers go stale the next time a mode adds new payload (this bit
-// us with EHB+SCAP, where scap_line_moves was missing from every call
+// us with EHB+strips, where strips_line_moves was missing from every call
 // site's bespoke math).
 //
 // Inputs:
@@ -31,13 +31,13 @@ namespace png2amiga::api {
 //   palette_size   — number of colour entries (Color3f count).
 //   aga            — chipset is AGA (palette costs 2× and copper writes
 //                    cost 2× per change for hi+lo nibble passes).
-//   cap_changes    — total CAP scanline changes across the frame
+//   sliced_changes    — total sliced scanline changes across the frame
 //                    (e.g. sum of scanline_changes[*].size()) OR 0.
 //                    Note: for the .raw grid layout we use the
 //                    (height × cpl) pre-allocated size, not the actual
 //                    count — pass that pre-multiplied number here too.
-//   scap_op_count  — total SCAP WAIT/MOVE ops across the frame
-//                    (sum of scap_line_moves[*].size()) OR 0.
+//   strips_op_count  — total strips WAIT/MOVE ops across the frame
+//                    (sum of strips_line_moves[*].size()) OR 0.
 //   height         — image height (used for chip-RAM per-line copper
 //                    list sizing).
 //   max_moves      — worst-case copper MOVEs/line (chip RAM uses this
@@ -45,7 +45,7 @@ namespace png2amiga::api {
 struct SizeBreakdown {
     int plane_bytes{};      // bitplane data
     int palette_bytes{};    // palette in .raw / .pal layout
-    int copper_bytes{};     // CAP grid + SCAP per-line ops
+    int copper_bytes{};     // sliced grid + strips per-line ops
     int disk_bytes{};       // .raw total = planes + palette + copper
     int chip_bytes{};       // worst-case Amiga chip-RAM
 };
@@ -57,16 +57,16 @@ inline SizeBreakdown compute_size_breakdown(
     int plane_bytes,
     int palette_size,
     bool aga,
-    int cap_grid_entries,    // height × cpl (CAP .raw grid)
-    int scap_op_count,       // sum of scap_line_moves[*].size()
+    int sliced_grid_entries,    // height × cpl (sliced .raw grid)
+    int strips_op_count,       // sum of strips_line_moves[*].size()
     int height,
     int max_moves) {
     SizeBreakdown s;
     s.plane_bytes = plane_bytes;
     s.palette_bytes = palette_size * (aga ? 4 : 2);
-    int cap_bytes = cap_grid_entries * (aga ? 8 : 4);  // 4 B/word, AGA = hi+lo
-    int scap_bytes = scap_op_count * 4;                // 4 B per WAIT/MOVE word
-    s.copper_bytes = cap_bytes + scap_bytes;
+    int sliced_bytes = sliced_grid_entries * (aga ? 8 : 4);  // 4 B/word, AGA = hi+lo
+    int strips_bytes = strips_op_count * 4;                // 4 B per WAIT/MOVE word
+    s.copper_bytes = sliced_bytes + strips_bytes;
     s.disk_bytes = s.plane_bytes + s.palette_bytes + s.copper_bytes;
     int has_copper = (s.copper_bytes > 0) ? 1 : 0;
     int pal_setup = palette_size * (aga ? 8 : 4);
@@ -173,7 +173,7 @@ struct Options {
     // fine detail at the cost of perceptual quality.
     // User flips via --best-metric.
     std::string best_metric = "msssim";
-    bool best = false;               // multi-candidate CAP planner +
+    bool best = false;               // multi-candidate sliced planner +
                                          // joint base-palette refinement.
                                          // HAM6 + copper and HAM8 + copper
                                          // only — indexed copper modes
@@ -183,7 +183,7 @@ struct Options {
                                          // ~4-5× cost, +0.5..4 dB PSNR
 
     // Optional progress callback. Called periodically with (progress 0..1,
-    // stage label). Currently emitted by HAM6+CAP encoders. Callback may
+    // stage label). Currently emitted by HAM6+sliced encoders. Callback may
     // run on encoder threads — must be thread-safe.
     std::function<void(float, std::string_view)> on_progress;
 
@@ -192,9 +192,9 @@ struct Options {
     int copper_changes = 0;             // override changes/line (0 = auto)
     // Per-line palette planner neighbour-row smoothing. -1 means use the
     // encode_copper default (radius=4, decay=0.85). Exposed for sweep
-    // tooling (--cap-spread-radius / --cap-spread-decay on the CLI).
-    int cap_spread_radius = -1;
-    float cap_spread_decay = -1.0f;
+    // tooling (--slice-spread-radius / --slice-spread-decay on the CLI).
+    int sliced_spread_radius = -1;
+    float sliced_spread_decay = -1.0f;
 
     // Transparency
     float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)
@@ -227,7 +227,7 @@ struct Options {
     // standard lores/hires modes (no HAM/EHB/copper/Atari/DOS).
     bool dual_playfield = false;
 
-    // SCAP calibration probe selector — DPF-only.
+    // strips calibration probe selector — DPF-only.
     //   ""   : disabled (default)
     //   "a"  : Probe A (slot HPOS sweep, OCS DPF)
     //   "b"  : Probe B (slot capacity, OCS DPF) — placeholder
@@ -237,17 +237,17 @@ struct Options {
     // per-line WAIT/MOVE copper ops and emits a viewer .cpp/.adf you run on
     // real hardware. Slot tables are populated by hand from the observed
     // results, then the production planner uses them.
-    std::string scap_probe;
+    std::string strips_probe;
 
-    // SCAP encoder — DPF-only mid-line palette swaps. Requires
+    // strips encoder — DPF-only mid-line palette swaps. Requires
     // dual_playfield + chipset=ocs + mode=lores (no interlace) for
     // Phase 1. Composes with copper (each line's per-strip palette
-    // chain is independent of CAP's end-of-line writes).
+    // chain is independent of sliced's end-of-line writes).
     bool scap = false;
-    // SCAP slot-tuning debug bundle: forces base-palette MOVEs to
+    // strips slot-tuning debug bundle: forces base-palette MOVEs to
     // 0x0000 AND paints yellow PF1 rulers at every 4/8/16 px. Always
     // used together. Off in production.
-    bool scap_debug = false;
+    bool strips_debug = false;
 
     // IBM PC / DOS modes only. If true, preserve source aspect ratio by
     // letterboxing or pillarboxing the image inside the fixed hardware
@@ -312,12 +312,12 @@ struct ConvertResult {
     float copperChanges{};              // avg actual color changes per line (0 if no copper)
     int totalColors{};                  // unique colors in rendered output
     int planeBytes{};                   // raw bitplane data size
-    int copperBytes{};                  // copper-list bytes total (CAP scanline_changes
-                                        // + SCAP per-line moves, 4 B per word).
+    int copperBytes{};                  // copper-list bytes total (sliced scanline_changes
+                                        // + strips per-line moves, 4 B per word).
                                         // 0 if mode has no copper. Use this for chip-RAM
                                         // / disk-cost reporting — call sites must NOT
                                         // re-derive size from {scanlines, cpl} because new
-                                        // modes (DPF/EHB+SCAP) carry extra data they'd miss.
+                                        // modes (DPF/EHB+strips) carry extra data they'd miss.
     int diskBytes{};                    // .raw file size: bitplanes + palette + copper data.
                                         // Computed centrally in make_result so call sites
                                         // can't drift stale as new modes are added.
@@ -458,16 +458,16 @@ DitherDefaults dither_defaults_for(const Options& options);
 // (--batch) is the primary consumer; non-batch users should call convert/
 // convertIFF/convertRGBA/convertHeader instead.
 //
-// Fields are populated for the relevant mode; CAP fields stay empty for
-// non-CAP modes, scap_line_moves stays empty for non-SCAP modes, etc.
+// Fields are populated for the relevant mode; sliced fields stay empty for
+// non-sliced modes, strips_line_moves stays empty for non-strips modes, etc.
 // ---------------------------------------------------------------------------
 struct EncodeState {
     Image rendered;                                       // preview (palette-applied RGB)
     bitplane::BitplaneData planes;                        // raw bitplane data
     std::vector<Color3f> palette;                         // base palette (linear RGB)
     std::vector<std::uint8_t> indices;                    // per-pixel palette indices
-                                                          // (non-CAP modes only; empty
-                                                          // for HAM and CAP since their
+                                                          // (non-sliced modes only; empty
+                                                          // for HAM and sliced since their
                                                           // palette varies per pixel/row)
     amiga::Mode mode{};
     bool aga = false;
@@ -478,21 +478,21 @@ struct EncodeState {
     bool scap = false;
     bool has_transparency = false;
     std::vector<bool> transparency_mask;
-    std::vector<std::vector<Color3f>> scanline_palettes;  // CAP/SCAP per-line palettes
-    std::vector<std::vector<copper::CopperChange>> scanline_changes;  // CAP per-line MOVEs
-    std::vector<std::vector<scap::ScapMove>> scap_line_moves;         // SCAP per-line ops
+    std::vector<std::vector<Color3f>> scanline_palettes;  // sliced/strips per-line palettes
+    std::vector<std::vector<copper::CopperChange>> scanline_changes;  // sliced per-line MOVEs
+    std::vector<std::vector<strips::ScapMove>> strips_line_moves;         // strips per-line ops
     std::size_t copper_num_colors{};
     std::size_t changes_per_line{};
     std::size_t max_moves_per_line{};
     float copper_changes{};
 
-    // SCAP-only stats — see PipelineResult for descriptions.
-    float scap_avg_total_moves_per_line{};
-    float scap_avg_hblank_moves_per_line{};
-    std::size_t scap_max_hblank_moves_per_line{};
-    float scap_avg_visible_moves_per_line{};
-    std::size_t scap_max_visible_moves_per_line{};
-    std::size_t scap_slot_count{};
+    // strips-only stats — see PipelineResult for descriptions.
+    float strips_avg_total_moves_per_line{};
+    float strips_avg_hblank_moves_per_line{};
+    std::size_t strips_max_hblank_moves_per_line{};
+    float strips_avg_visible_moves_per_line{};
+    std::size_t strips_max_visible_moves_per_line{};
+    std::size_t strips_slot_count{};
     float quant_error{};
     float psnr{};
     float ssimulacra2_score{};
@@ -530,7 +530,7 @@ struct EncodeState {
 // Run the encoder pipeline and return its full intermediate state. Same
 // input as convert() but instead of serialising to bytes, hands back
 // every object the caller might want to slice/recompose (planes,
-// palette, scanline_changes, scap_line_moves, etc.).
+// palette, scanline_changes, strips_line_moves, etc.).
 //
 // On failure returns a non-empty error string in EncodeState::error_msg
 // (TODO: rework as Result<EncodeState> when we want to stop folding all

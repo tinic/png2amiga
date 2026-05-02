@@ -15,8 +15,8 @@ namespace png2amiga::dither_tuning {
 // Conservative default for unlisted contexts: strength=1.0,
 // error_clamp=0.35 — the pre-tuning whole-codebase baseline.
 //
-// SCAP entries assume the CAP+SCAP layered encoder with two-pass
-// refinement (commit 9f51baa) — SCAP rides on top of CAP-driven
+// strips entries assume the sliced+strips layered encoder with two-pass
+// refinement (commit 9f51baa) — strips rides on top of sliced-driven
 // per-line palette evolution.
 Defaults defaults_for(const Context& ctx) {
     constexpr Defaults kFallback{1.0f, 0.35f};
@@ -65,7 +65,7 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::contrast_fs:     return Defaults{1.00f, 0.35f};  // 28.574 dB
     case dither::Method::zhoufang:        return Defaults{0.60f, 0.35f};  // 30.436 dB
     // DBS: warm-starts from FS, then optimises blurred-OKLab cost via
-    // greedy toggles. Use the same context-tuned (mode/depth/CAP/SCAP)
+    // greedy toggles. Use the same context-tuned (mode/depth/sliced/strips)
     // FS defaults as plain Floyd-Steinberg — DBS converges to a local
     // minimum, so the warm start matters and per-context FS values are
     // already empirically optimal for that bucket. Falling through.
@@ -73,7 +73,7 @@ Defaults defaults_for(const Context& ctx) {
     default: break;
     }
 
-    // ---- SCAP: layered on top of CAP. -----------------------------------
+    // ---- strips: layered on top of sliced. -----------------------------------
     if (ctx.scap) {
         if (ctx.dpf)        return Defaults{0.9f, 0.10f};   // 8 colours
         if (ctx.mode == amiga::Mode::ehb)
@@ -86,13 +86,13 @@ Defaults defaults_for(const Context& ctx) {
     // and error_clamp still feed through but the response is muted because
     // most of the work is the DP search itself. Sweep optima:
     if (ctx.mode == amiga::Mode::ham6) {
-        // HAM6+CAP: st=0.8, ec=0.04 (PSNR 41.49 mean)
+        // HAM6+sliced: st=0.8, ec=0.04 (PSNR 41.49 mean)
         // HAM6 alone: st=1.0, ec=0.04 (PSNR 40.34 mean)
         if (ctx.copper) return Defaults{0.8f, 0.04f};
         return Defaults{1.0f, 0.04f};
     }
     if (ctx.mode == amiga::Mode::ham8) {
-        // HAM8+CAP/AGA: st=0.7, ec=0.04 (PSNR 49.77 mean)
+        // HAM8+sliced/AGA: st=0.7, ec=0.04 (PSNR 49.77 mean)
         // HAM8 alone:   st=0.9, ec=0.10 (PSNR 46.38 mean)
         if (ctx.copper) return Defaults{0.7f, 0.04f};
         return Defaults{0.9f, 0.10f};
@@ -100,7 +100,7 @@ Defaults defaults_for(const Context& ctx) {
     // HAM4/HAM5/HAM7 not in the sweep — assume their tuning follows
     // HAM6/HAM8 by interpolation. Conservative: leave on kFallback.
 
-    // ---- CAP (per-line palette evolution, no SCAP) ----------------------
+    // ---- sliced (per-line palette evolution, no strips) ----------------------
     if (ctx.copper) {
         if (ctx.mode == amiga::Mode::ehb)
                             return Defaults{0.9f, 0.20f};   // mean 37.83
@@ -133,7 +133,7 @@ Defaults defaults_for(const Context& ctx) {
         return kFallback;
     }
 
-    // ---- Standard modes (no copper, no SCAP) ----------------------------
+    // ---- Standard modes (no copper, no strips) ----------------------------
     //
     // Strengths re-tuned 2026-04-30 against SSIMULACRA2 (mean over
     // electrichues02 / chuck31 / lovers at the mode-natural

@@ -6,7 +6,7 @@
 #include "color_space.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
-#include "scap.hpp"
+#include "strips.hpp"
 #include "ssimulacra2.hpp"
 #include "types.hpp"
 
@@ -44,7 +44,7 @@ amiga::Chipset resolve_chipset(std::string_view requested,
 // Source-of-truth for the "core" CHeaderOptions fields. Each output site
 // fills this from its current context (Config / api::Options / pipeline
 // state) and calls make_ch_opts() to produce a populated options struct.
-// Per-feature attachments (CAP scanline data, SCAP line moves, batch
+// Per-feature attachments (sliced scanline data, strips line moves, batch
 // frames) are still set on the returned struct by the caller — those
 // vary too much per-site to live here.
 struct ChOptsBase {
@@ -66,10 +66,10 @@ cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base);
 // internal helpers are un-anon-namespaced — see REFACTOR_PLAN.md). Both
 // the WASM converters and the CLI output dispatchers consume this:
 // bitplane data, derived palette, mode-specific raw hardware bytes,
-// copper / SCAP per-line state, and a rendered preview.
+// copper / strips per-line state, and a rendered preview.
 struct PipelineResult {
     // Canonical preview image — what the chip would display, post-encoder
-    // and post-CAP-cascade. Always populated by run_pipeline via
+    // and post-sliced-cascade. Always populated by run_pipeline via
     // pipeline::render_preview(); downstream consumers (convert_*, web
     // frontend, future main.cpp branches) read this rather than
     // re-rendering. Centralising the render here means preview
@@ -96,24 +96,24 @@ struct PipelineResult {
     bool scap = false;
     std::vector<std::vector<Color3f>> scanline_palettes;
     std::vector<std::vector<copper::CopperChange>> scanline_changes;
-    // Populated by the SCAP planner. Each inner vector is the raw
+    // Populated by the strips planner. Each inner vector is the raw
     // WAIT/MOVE op stream for one image scanline — fed verbatim to
-    // cheader::CHeaderOptions::scap_line_moves.
-    std::vector<std::vector<scap::ScapMove>> scap_line_moves;
+    // cheader::CHeaderOptions::strips_line_moves.
+    std::vector<std::vector<strips::ScapMove>> strips_line_moves;
     std::size_t copper_num_colors{};
     std::size_t changes_per_line{};
     std::size_t max_moves_per_line{};   // worst-case copper MOVEs/line for chip-RAM sizing
 
-    // SCAP-only stats. Populated when scap=true; zero otherwise. Match
-    // the same fields on scap::ScapResult so the CLI / web UI can show
+    // strips-only stats. Populated when scap=true; zero otherwise. Match
+    // the same fields on strips::ScapResult so the CLI / web UI can show
     // the planner's per-line move budget breakdown without re-running
     // the encoder.
-    float scap_avg_total_moves_per_line{};
-    float scap_avg_hblank_moves_per_line{};
-    std::size_t scap_max_hblank_moves_per_line{};
-    float scap_avg_visible_moves_per_line{};
-    std::size_t scap_max_visible_moves_per_line{};
-    std::size_t scap_slot_count{};
+    float strips_avg_total_moves_per_line{};
+    float strips_avg_hblank_moves_per_line{};
+    std::size_t strips_max_hblank_moves_per_line{};
+    float strips_avg_visible_moves_per_line{};
+    std::size_t strips_max_visible_moves_per_line{};
+    std::size_t strips_slot_count{};
 
     // Set after construction.
     bool has_transparency = false;
@@ -174,8 +174,8 @@ struct PipelineResult {
 
 // Single per-mode preview-render dispatcher. Picks the right back-end:
 //   - HAM (no scanline palettes)        → ham::render_ham
-//   - HAM + CAP (scanline_palettes set) → ham::render_ham_copper
-//   - indexed + CAP (scanline_palettes) → copper::render_copper_capped
+//   - HAM + sliced (scanline_palettes set) → ham::render_ham_copper
+//   - indexed + sliced (scanline_palettes) → copper::render_copper_capped
 //                                         (top-K diff cascade — matches
 //                                         the cheader-side lace_rebuild
 //                                         so the preview tracks what
@@ -193,7 +193,7 @@ struct PipelineResult {
 //     ops being intrinsically lossy).
 //   - is_lace: only render_copper_capped is lace-aware (each field
 //     replays its own diff cascade via cheader's lace_rebuild). The
-//     other renderers ignore the flag — non-CAP outputs are
+//     other renderers ignore the flag — non-sliced outputs are
 //     field-agnostic.
 //   - data_bits: HAM-only; computed from planes.depth - 2 internally.
 // Callers must still pass is_lace and chipset; they're forwarded only
@@ -207,7 +207,7 @@ Result<Image> render_preview(
     bool is_lace,
     amiga::Chipset chipset,
     const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr,
-    std::size_t cap_changes_per_line = 0);
+    std::size_t sliced_changes_per_line = 0);
 
 // Build a deterministically jittered copy of `source` (per-pixel
 // hash-based perturbation, ±0.5*amplitude/255 per channel). Used by
@@ -238,7 +238,7 @@ void parallel_for(std::size_t n,
 // Used by best_sweep as a more perceptual ranking metric than
 // PSNR. Captures local structure changes (banding, contour breakup,
 // per-line swap shimmer) that pixel-MSE PSNR averages away — the
-// horizontal-banding failure mode --cap especially produces in tight
+// horizontal-banding failure mode --sliced especially produces in tight
 // palettes.
 //
 // Both images must have identical (width, height); a/b sized at
@@ -261,7 +261,7 @@ inline BestMetric parse_best_metric(std::string_view name) {
     return BestMetric::msssim;  // default
 }
 
-// Multi-restart parallel sweep for any --best CAP-aware encoder.
+// Multi-restart parallel sweep for any --best sliced-aware encoder.
 // Sweeps:
 //   - dither_strength: 5 multipliers (0.7, 0.85, 1.0, 1.15, 1.3)
 //   - palette_diversity: 4 values when caller's base is 0; otherwise
@@ -282,9 +282,9 @@ inline BestMetric parse_best_metric(std::string_view name) {
 //
 // Ranks by rendered-preview PSNR vs the ORIGINAL source — never the
 // jittered variant — and returns the highest-PSNR T (or std::nullopt
-// if every trial failed). Caller picks jitter_count: SCAP DPF uses
-// 24 (8-colour PF2 palette is highly basin-sensitive), SCAP EHB and
-// plain CAP use 8 (32-colour and 16-colour palettes have shallower
+// if every trial failed). Caller picks jitter_count: strips DPF uses
+// 24 (8-colour PF2 palette is highly basin-sensitive), strips EHB and
+// plain sliced use 8 (32-colour and 16-colour palettes have shallower
 // basins). User explicitly OK'd unbounded compute on best, so the
 // large trial count (5×4×N + 1) is a feature.
 template <typename T, typename EncodeFn, typename RenderedFn>

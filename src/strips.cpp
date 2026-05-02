@@ -1,4 +1,4 @@
-#include "scap.hpp"
+#include "strips.hpp"
 
 #include "amiga.hpp"
 #include "bitplane.hpp"
@@ -12,7 +12,7 @@
 #include "types.hpp"
 
 // scap.cpp delegates parallel sweep machinery to pipeline::best_sweep
-// / pipeline::parallel_for. <atomic> is needed for HAM6 SCAP's per-row
+// / pipeline::parallel_for. <atomic> is needed for HAM6 strips's per-row
 // parallel planner (HAM-DP-aware swap evaluation is heavy, so the
 // per-row planning loop runs in parallel and accumulates totals via
 // atomics).
@@ -25,7 +25,7 @@
 #include <format>
 #include <vector>
 
-namespace png2amiga::scap {
+namespace png2amiga::strips {
 
 namespace {
 
@@ -44,7 +44,7 @@ namespace {
 //     (every 64 px is also a multiple of 16, so plane 0 is on too)
 //     -> PF1 index 1|2 = 3 -> color register 3
 // The probe's frame-start palette assigns reg 1 = bright yellow and
-// reg 3 = bright red, so the pixel where the SCAP MOVE fires can be
+// reg 3 = bright red, so the pixel where the strips MOVE fires can be
 // read off against the embedded ruler.
 Result<bitplane::BitplaneData> make_dpf_pf2_index1_planes(std::size_t width,
                                                           std::size_t height,
@@ -53,14 +53,14 @@ Result<bitplane::BitplaneData> make_dpf_pf2_index1_planes(std::size_t width,
     if (total_planes != 6 && total_planes != 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
-            std::format("SCAP probe: expected 6 (OCS) or 8 (AGA) planes, got {}",
+            std::format("Strips probe: expected 6 (OCS) or 8 (AGA) planes, got {}",
                         total_planes),
         }};
     }
     if (width == 0 || height == 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            "SCAP probe: zero dimensions",
+            "Strips probe: zero dimensions",
         }};
     }
 
@@ -100,7 +100,7 @@ Result<bitplane::BitplaneData> make_dpf_pf2_index1_planes(std::size_t width,
 }
 
 // HPOS sweep across the per-line copper budget [0x00, 0xE3]. 0xE3 is the
-// HPOS used by the existing CAP encoder for interlace per-line WAITs —
+// HPOS used by the existing sliced encoder for interlace per-line WAITs —
 // past that there's no DMA-allowed window before the next horizontal
 // blank ends.
 constexpr int kHpMin = 0x00;
@@ -159,7 +159,7 @@ ScapMove make_move(std::uint8_t reg, std::uint16_t rgb_ocs, int slot_index = -1)
 //     * uniform dither texture across the frame (no per-strip "blocks")
 //     * per-strip palette specialisation (good colour fidelity)
 // ---------------------------------------------------------------------------
-Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
+Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        int width_arg,
                                        int height_arg,
                                        bool lock_color0,
@@ -171,12 +171,12 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                            on_progress,
                                        bool enable_best,
                                        std::string_view best_metric,
-                                       int cap_spread_radius,
-                                       float cap_spread_decay,
+                                       int sliced_spread_radius,
+                                       float sliced_spread_decay,
                                        std::span<const Color3f>
                                            external_palette) {
     // --best: multi-restart with varied palette_diversity + dither
-    // strength. The SCAP planner is deterministic for a given input, so
+    // strength. The strips planner is deterministic for a given input, so
     // varying these knobs is the only way to sample different
     // optimisation landscapes. Each restart is a full encode (~100 ms);
     // user OK'd unbounded compute. Keep the lowest-error result.
@@ -190,11 +190,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             image, dither_settings, palette_diversity, /*jitter_count=*/24,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
-                return encode_scap_dpf_ocs(
+                return encode_strips_dpf_ocs(
                     jittered_in, width_arg, height_arg, lock_color0,
                     d, debug_overlay, copper_changes_override, div,
                     /*on_progress=*/{}, /*best=*/false, "psnr",
-                    cap_spread_radius, cap_spread_decay,
+                    sliced_spread_radius, sliced_spread_decay,
                     external_palette);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
@@ -206,11 +206,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         // (shouldn't happen with valid input, but degrade gracefully).
     }
 
-    auto& table = scap_table_for(6);
+    auto& table = strips_table_for(6);
     if (table.slots.empty()) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
-            "SCAP planner: kScap6bplOcs slot table is empty",
+            "Strips planner: kStrips6bplOcs slot table is empty",
         }};
     }
 
@@ -221,7 +221,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     if (image.width() != width || image.height() != height) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("SCAP planner: image is {}x{} but caller asked for "
+            std::format("Strips planner: image is {}x{} but caller asked for "
                         "{}x{} — resize before calling",
                         image.width(), image.height(), width, height),
         }};
@@ -260,9 +260,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     }
     auto& src = *src_image;
 
-    // ---- 1. CAP first: per-line 8-colour palette evolution.
-    // SCAP layers on top of CAP. With only 8 PF2 colours the per-line
-    // search space is tiny, but CAP still finds useful palette diffs
+    // ---- 1. sliced first: per-line 8-colour palette evolution.
+    // strips layers on top of sliced. With only 8 PF2 colours the per-line
+    // search space is tiny, but sliced still finds useful palette diffs
     // against neighbour scanlines.
     constexpr int kBaseColors = 8;        // PF2 width = 3 bitplanes
     // PF2 index → COLOR-register mapping:
@@ -280,18 +280,18 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                         : std::array<int, 2>{static_cast<int>(8 + k), -1};
     };
     // Hblank load is fixed at ~9 MOVEs (8 PF2 indices, k=0 dual-writes
-    // COLOR00+COLOR08) re-emitted unconditionally every line, so the CAP
+    // COLOR00+COLOR08) re-emitted unconditionally every line, so the sliced
     // share is whatever the user asked for — bounded by the 14-MOVE OCS
-    // hblank budget. SCAP swaps live in the visible region and don't
-    // contend for hblank, so no SCAP share split is needed.
+    // hblank budget. strips swaps live in the visible region and don't
+    // contend for hblank, so no strips share split is needed.
     constexpr std::size_t kMaxCombined = copper::max_changes_per_line(
         /*depth=*/3, false, false, amiga::Chipset::ocs, false);
     std::size_t total_budget = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombined)
         : kMaxCombined;
-    std::size_t cap_share = std::min<std::size_t>(total_budget, 2u);
+    std::size_t sliced_share = std::min<std::size_t>(total_budget, 2u);
     // External-palette plumbing for DPF: --palette gets forwarded as
-    // encode_copper's user_palette so the CAP base palette is locked
+    // encode_copper's user_palette so the sliced base palette is locked
     // to the user's choice (trimmed to 8 PF2 colors).
     std::vector<Color3f> dpf_user_pal;
     if (!external_palette.empty()) {
@@ -301,7 +301,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     auto copper_result = copper::encode_copper(
         src, /*depth=*/3, dither_settings,
         amiga::Chipset::ocs,
-        cap_share,
+        sliced_share,
         dpf_user_pal.empty() ? nullptr : &dpf_user_pal,
         lock_color0,
         /*locked=*/{},
@@ -310,19 +310,19 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         /*is_lace=*/false,
         /*is_ehb=*/false,
         /*on_progress=*/{},
-        cap_spread_radius >= 0
-            ? static_cast<std::size_t>(cap_spread_radius)
+        sliced_spread_radius >= 0
+            ? static_cast<std::size_t>(sliced_spread_radius)
             : std::numeric_limits<std::size_t>::max(),
-        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f);
+        sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f);
     if (!copper_result) return std::unexpected{copper_result.error()};
-    auto& cap_palettes = copper_result->scanline_palettes;
+    auto& sliced_palettes = copper_result->scanline_palettes;
     auto& base_palette_vec = copper_result->base_palette;
     std::array<Color3f, kBaseColors> base_palette{};
     for (std::size_t k = 0; k < kBaseColors && k < base_palette_vec.size(); ++k)
         base_palette[k] = base_palette_vec[k];
 
     // ---- 2. base_index storage. Rebuilt per-row inside the planner
-    // against the per-line CAP-evolved palette (lines below) so the
+    // against the per-line sliced-evolved palette (lines below) so the
     // per-strip cluster math sees the bindings the encoder will actually
     // produce. The previous code ran a global dither against the
     // FRAME-INIT (line-0) palette here, which produced stale bindings —
@@ -344,18 +344,18 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // the parallel worker (each row owns a private copy so the per-
     // row planner is thread-safe).
 
-    // Force k_min=1 for DPF SCAP regardless of --lock-color0. PF2
+    // Force k_min=1 for DPF strips regardless of --lock-color0. PF2
     // index 0 maps to COLOR00 on OCS and COLOR08 on AGA (per BPLCON3
     // PF2OF=011) — keeping the two in sync mid-line would require
     // emitting two MOVEs per swap, which would shift subsequent slot
-    // positions on the bus. Frame-init + per-line CAP MOVEs (both in
-    // hblank) handle the dual-write without timing impact, so SCAP
+    // positions on the bus. Frame-init + per-line sliced MOVEs (both in
+    // hblank) handle the dual-write without timing impact, so strips
     // simply never picks k=0 and the planner targets k=1..7.
     std::size_t k_min = 1u;
 
     // Stage-2 error diffusion setup. Honours the user's --dither choice
     // by pulling the diffusion kernel from dither.hpp. The buffer is
-    // a whole-image OKLab error grid (matches the EHB+CAP path in
+    // a whole-image OKLab error grid (matches the EHB+sliced path in
     // main.cpp): residuals diffuse in the perceptual space, get
     // strength-multiplied at scatter time, and per-channel-clamped on
     // read. Linear-RGB diffusion (the previous approach) blew up across
@@ -364,7 +364,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     // gaps wider than the residuals could absorb.
     // ED scaffolding (kernel, error buf, structure bias, Riemersma) all
     // live inside dither::diffuse_raw_buffer (the post-pass-1 driver
-    // call below). The CAP planner only needs to know whether dithering
+    // call below). The sliced planner only needs to know whether dithering
     // is enabled at all (yliluoma family + ordered + ED kernel) so we
     // keep the policy flags here.
 
@@ -424,8 +424,8 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     for (int pass = 0; pass < kPasses; ++pass) {
         if (pass > 0) {
             // base_index is rebuilt per-row inside the planner against
-            // the per-line CAP-evolved palette (no carry-over between
-            // passes needed; matches EHB SCAP's v1.26.2+ behaviour).
+            // the per-line sliced-evolved palette (no carry-over between
+            // passes needed; matches EHB strips's v1.26.2+ behaviour).
             for (auto& v : line_moves) v.clear();
             // err_buf is owned by dither::diffuse_raw_buffer (allocated
             // fresh each pass-2 call), so no manual reset is needed.
@@ -436,18 +436,18 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             rows_done.store(0);
         }
     // hw_state tracks the actual hardware state of the 8 PF2 colour
-    // registers across lines. With --cap-changes 1..7 we can't fully
-    // refresh the palette every line, so the PREVIOUS line's SCAP
-    // swaps + partial CAP MOVEs decide what colours sit in those
+    // registers across lines. With --slice-changes 1..7 we can't fully
+    // refresh the palette every line, so the PREVIOUS line's strips
+    // swaps + partial sliced MOVEs decide what colours sit in those
     // registers when the next line's HBLANK starts. Strip 0 MUST be
     // encoded against this real state or pixels are encoded with a
     // palette the chip isn't actually displaying.
     //
-    // Specialisation for --cap-changes 0 (default): every line's
+    // Specialisation for --slice-changes 0 (default): every line's
     // HBLANK is a full 8-slot reset, so hw_state at the start of
-    // strip 0 is always exactly target = cap_palettes[y]. No state
+    // strip 0 is always exactly target = sliced_palettes[y]. No state
     // carries between lines → rows are independent → parallel_for.
-    // For --cap-changes > 0 we keep the carry-over and run serial.
+    // For --slice-changes > 0 we keep the carry-over and run serial.
     std::array<Color3f, kBaseColors> hw_state_init{};
     for (std::size_t k = 0; k < kBaseColors; ++k)
         hw_state_init[k] = base_palette[k];
@@ -481,32 +481,32 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // Per-line target = CAP plan for this line, OR all-zero in
+        // Per-line target = sliced plan for this line, OR all-zero in
         // debug mode (hardware enters every line with 0x0000 there).
         std::array<Color3f, kBaseColors> target{};
         for (std::size_t k = 0; k < kBaseColors; ++k)
             target[k] = debug_overlay ? Color3f{0.0f, 0.0f, 0.0f}
-                                      : cap_palettes[y][k];
+                                      : sliced_palettes[y][k];
 
-        // 1. Per-line CAP MOVEs in HBLANK.
+        // 1. Per-line sliced MOVEs in HBLANK.
         //
         //   Default (copper_changes_override == 0): unconditionally
         //   re-emit all 8 PF2 base colours (≤9 hblank MOVEs; k=0
         //   dual-writes COLOR00+COLOR08, k=1..7 single MOVE each),
         //   well below the 14-MOVE OCS hblank capacity. Whatever
-        //   registers SCAP polluted on line y-1 get fully overwritten
+        //   registers strips polluted on line y-1 get fully overwritten
         //   before line y's visible region starts.
         //
-        //   --cap-changes N > 0: cap HBLANK to N MOVEs total. Diff
+        //   --slice-changes N > 0: cap HBLANK to N MOVEs total. Diff
         //   target vs the previous line's target in OKLab; emit MOVEs
         //   for the top-N most-changed slots (k=0 costs 2 of the
         //   budget, others cost 1). Slots not emitted carry the
         //   previous line's value into strip 0 of this line — the
-        //   SCAP visible-area swaps still get to evolve them.
-        //   SCAP's k_min=1 means slot 0 isn't touched mid-line, so
+        //   strips visible-area swaps still get to evolve them.
+        //   strips's k_min=1 means slot 0 isn't touched mid-line, so
         //   carrying its prev value is safe; for slots 1..7 the
-        //   approximation (assume prev line landed near its CAP
-        //   target, ignore SCAP residue) is good enough that rows
+        //   approximation (assume prev line landed near its sliced
+        //   target, ignore strips residue) is good enough that rows
         //   stay independent for parallel_for.
         std::array<bool, kBaseColors> emitted{};
         if (copper_changes_override == 0) {
@@ -526,7 +526,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                 copper_changes_override, kMaxCombined);
             // Score per-slot diff in OKLab² between actual hw_state
             // (the colour the chip is sitting on at end of line y-1)
-            // and target = cap_palettes[y]. Top-K wins emit-budget.
+            // and target = sliced_palettes[y]. Top-K wins emit-budget.
             std::array<std::pair<int, float>, kBaseColors> diffs{};
             for (std::size_t k = 0; k < kBaseColors; ++k) {
                 auto a = color_space::linear_to_oklab(hw_state_local[k]);
@@ -556,20 +556,20 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         }
 
         // Build strip-0 palette from REAL post-HBLANK hw state:
-        //   emitted slots ← target (this line's CAP MOVE landed)
+        //   emitted slots ← target (this line's sliced MOVE landed)
         //   skipped slots ← hw_state (carried from prev line)
         // This is what the chip actually displays in the leftmost
         // strip — encoding pixels against any other palette would
-        // show the artefacts users hit with --cap-changes 1..7.
+        // show the artefacts users hit with --slice-changes 1..7.
         for (std::size_t k = 0; k < kBaseColors; ++k)
             P[k] = emitted[k] ? target[k] : hw_state_local[k];
         recompute_lab_local();
         strip_palettes[0] = P;
         strip_pal_lab[0] = P_lab;
 
-        // Re-bind base_index for this row against the per-line CAP-
+        // Re-bind base_index for this row against the per-line sliced-
         // evolved 8-palette. Previously the bindings came from a frame-
-        // level dither against the FRAME-INIT palette; CAP evolves the
+        // level dither against the FRAME-INIT palette; sliced evolves the
         // palette across lines so frame-init bindings make the cluster
         // planner score against stale clusters and pick swaps that hurt
         // the actual rendered output. Cost: width × 8 distance compares
@@ -588,11 +588,11 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             base_index[y * width + x] = static_cast<std::uint8_t>(best_k);
         }
 
-        // 2. Line-gate WAIT — opens the SCAP chain at HPOS=line_gate_hpos.
+        // 2. Line-gate WAIT — opens the strips chain at HPOS=line_gate_hpos.
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
 
-        // 3. 20 SCAP MOVEs back-to-back. Joint beam-search planner:
+        // 3. 20 strips MOVEs back-to-back. Joint beam-search planner:
         //    explores B parallel sequences of (slot → register, color)
         //    decisions instead of greedy max-reduction per slot. Greedy
         //    locked onto the most-populated register slot-after-slot
@@ -872,7 +872,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
         // Carry P forward as next-line hw_state — captures every
-        // emitted CAP MOVE + every applied SCAP swap. Only writes
+        // emitted sliced MOVE + every applied strips swap. Only writes
         // the shared outer hw_state in serial mode (parallel mode
         // never reads it).
         if (serial_path) hw_state = P;
@@ -970,7 +970,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
     //
     // In debug_overlay mode all entries stay at 0x0000 — together with
     // the forced-zero per-line MOVEs this means the viewer's frame-init
-    // writes black to every register and only SCAP MOVEs change colours.
+    // writes black to every register and only strips MOVEs change colours.
     std::vector<Color3f> output_palette(16, Color3f{0.0f, 0.0f, 0.0f});
     if (!debug_overlay) {
         for (std::size_t k = 0; k < kBaseColors; ++k) {
@@ -1056,7 +1056,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
         res.max_visible_moves_per_line = vis_max;
     }
     res.line_moves = std::move(line_moves);
-    // Snap preview to OCS RGB444 — SCAP is OCS-only, and the snap-defer
+    // Snap preview to OCS RGB444 — strips is OCS-only, and the snap-defer
     // patches in copper/scap/ham left intermediate per-strip palettes at
     // full 8-bit precision. The actual chip displays RGB444; preview must
     // match. Without this, color counts > 4096 leak into the preview.
@@ -1068,9 +1068,9 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
 // half_brite() lives in palette.hpp; pull it into this TU's lookup.
 using palette::half_brite;
 
-// EHB SCAP slot-tuning debug bundle. All bitplane pixels use a
+// EHB strips slot-tuning debug bundle. All bitplane pixels use a
 // single shared register (index 2). Frame-init palette puts that
-// register at black; SCAP slot s alternates the register between
+// register at black; strips slot s alternates the register between
 // white (s even) and black (s odd) at the slot's MOVE position. Net
 // visual: 16-px-wide black/white stripes with the transition AT the
 // slot's actual hardware MOVE landing — the visible edge IS the
@@ -1078,11 +1078,11 @@ using palette::half_brite;
 //
 // PF1-style yellow rulers aren't available on EHB (no PF1 layer),
 // so the ruler paints into the bitplane data with index 1 = yellow
-// (locked in CAP). Ruler pixels override the stripe content but
+// (locked in sliced). Ruler pixels override the stripe content but
 // give stable x-coord references at 4/8/16-px hierarchy.
 static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
                                                 std::size_t height) {
-    auto& table = kScap6bplEhb;
+    auto& table = kStrips6bplEhb;
     constexpr std::size_t kStripeReg = 2;       // shared register all pixels use
     constexpr std::uint16_t kBlack = 0x0000;
     constexpr int kVStart = 44;
@@ -1129,7 +1129,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
     // ---- Output palette (32 base entries) ----------------------------
     std::vector<Color3f> palette(32, Color3f{0.0f, 0.0f, 0.0f});
     palette[1] = Color3f{1.0f, 0.0f, 0.0f};  // red ruler
-    // palette[kStripeReg] = black (default 0x000); SCAP MOVEs change it.
+    // palette[kStripeReg] = black (default 0x000); strips MOVEs change it.
 
     // ---- Per-line copper: 1 reset MOVE + line-gate WAIT + 19 swaps ----
     std::vector<std::vector<ScapMove>> line_moves(height);
@@ -1137,13 +1137,13 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
         // Reset the shared register to black at top of each line (the
-        // ONE per-line CAP MOVE we need; fits in hblank trivially).
+        // ONE per-line sliced MOVE we need; fits in hblank trivially).
         line_moves[y].push_back(make_move(
             static_cast<std::uint8_t>(kStripeReg), kBlack, -1));
         // Line-gate WAIT.
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
-        // 19 SCAP MOVEs: opposing primary/complement RGB pairs on the
+        // 19 strips MOVEs: opposing primary/complement RGB pairs on the
         // shared register. Pair N cycles through (R,C), (G,M), (B,Y);
         // pair-mod-3 picks which axis. Each stripe is a single solid
         // saturated colour. Vivid hues make slot positions easy to
@@ -1186,7 +1186,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
                         if (static_cast<int>(x) >= table.slots[s].pixel_x &&
                             (s + 1 == table.slots.size() ||
                              static_cast<int>(x) < table.slots[s + 1].pixel_x)) {
-                            // Mirror the SCAP MOVE values used above:
+                            // Mirror the strips MOVE values used above:
                             // pair N gets (0xFFF - N·0x111, N·0x111).
                             std::size_t pair_int = s / 2;
                             // Mirror cpp: cycle (R,C), (G,M), (B,Y).
@@ -1224,7 +1224,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
     return res;
 }
 
-Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
+Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                        int width_arg,
                                        int height_arg,
                                        bool lock_color0,
@@ -1236,8 +1236,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                            on_progress,
                                        bool enable_best,
                                        std::string_view best_metric,
-                                       int cap_spread_radius,
-                                       float cap_spread_decay,
+                                       int sliced_spread_radius,
+                                       float sliced_spread_decay,
                                        std::span<const Color3f>
                                            external_palette,
                                        const std::vector<std::pair<std::size_t, Color3f>>&
@@ -1251,11 +1251,11 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
-                return encode_scap_ehb_ocs(
+                return encode_strips_ehb_ocs(
                     jittered_in, width_arg, height_arg, lock_color0,
                     d, copper_changes_override, div, debug_overlay,
                     /*on_progress=*/{}, /*best=*/false, "psnr",
-                    cap_spread_radius, cap_spread_decay,
+                    sliced_spread_radius, sliced_spread_decay,
                     external_palette, reserved_slots);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
@@ -1264,11 +1264,11 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             metric);
         if (best.has_value()) return std::move(*best);
     }
-    auto& table = kScap6bplEhb;
+    auto& table = kStrips6bplEhb;
     if (table.slots.empty()) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
-            "SCAP EHB planner: kScap6bplOcs slot table is empty",
+            "Strips EHB planner: kStrips6bplOcs slot table is empty",
         }};
     }
 
@@ -1280,7 +1280,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     if (image.width() != width || image.height() != height) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("SCAP EHB planner: image is {}x{} but caller asked "
+            std::format("Strips EHB planner: image is {}x{} but caller asked "
                         "for {}x{} — resize before calling",
                         image.width(), image.height(), width, height),
         }};
@@ -1291,40 +1291,40 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     constexpr std::size_t kEffective  = 64;
     constexpr int kRegBase = 0;
 
-    // Reserved-slot mask: SCAP planner must skip these registers in its
+    // Reserved-slot mask: strips planner must skip these registers in its
     // mid-line swap candidate generation (encode_copper already keeps
-    // them locked across CAP scanlines and excludes them from the dither
+    // them locked across sliced scanlines and excludes them from the dither
     // candidate set).
     std::array<bool, kBaseColors> reserved_mask_ehb{};
     for (auto& [idx, _] : reserved_slots)
         if (idx < kBaseColors) reserved_mask_ehb[idx] = true;
 
-    // ---- 1. CAP first: per-line palette evolution.
-    // SCAP is a layer ON TOP OF CAP, not a replacement. The CAP encoder
+    // ---- 1. sliced first: per-line palette evolution.
+    // strips is a layer ON TOP OF sliced, not a replacement. The sliced encoder
     // picks a per-line set of register diffs that evolves the 32-base
-    // palette across scanlines; SCAP then adds 20 mid-line MOVEs per
+    // palette across scanlines; strips then adds 20 mid-line MOVEs per
     // line on top of that evolving state. Without this layering the
     // image looks single-palette per frame, which is very visible on
     // photographic content.
-    // CAP and SCAP share the OCS hblank's MOVE budget. Adaptive split:
+    // sliced and strips share the OCS hblank's MOVE budget. Adaptive split:
     //   * Each line's hblank fits up to kHblankCeiling MOVEs (=13 for
     //     OCS empirical safe ceiling). Hblank load on line y+1 is
-    //     CAP_changes[y+1] + SCAP_swaps[y] (revert) — exceeding 13
+    //     SLICED_changes[y+1] + STRIPS_swaps[y] (revert) — exceeding 13
     //     causes hardware overflow on busy images (verified per
-    //     fantasy.png). So per-line: SCAP_swaps[y] ≤ kHblankCeiling -
-    //     CAP_changes[y+1]. CAP_changes per line comes straight from
+    //     fantasy.png). So per-line: STRIPS_swaps[y] ≤ kHblankCeiling -
+    //     SLICED_changes[y+1]. SLICED_changes per line comes straight from
     //     copper_result->scanline_changes (already planned).
     //   * --copper-changes N caps the COMBINED budget globally.
-    //     CAP gets min(N, 2), SCAP gets the per-line adaptive value
-    //     bounded by N - CAP_share.
+    //     sliced gets min(N, 2), strips gets the per-line adaptive value
+    //     bounded by N - SLICED_share.
     //   * Auto: same adaptive logic, no global cap beyond hblank.
     constexpr std::size_t kHblankCeiling = 13;
-    constexpr std::size_t kMaxCombinedEhb = 20;  // CAP=2 + SCAP=18 visible max
+    constexpr std::size_t kMaxCombinedEhb = 20;  // sliced=2 + strips=18 visible max
     std::size_t total_budget_ehb = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kMaxCombinedEhb)
         : kMaxCombinedEhb;
-    std::size_t cap_share_ehb = std::min<std::size_t>(total_budget_ehb, 2u);
-    std::size_t scap_share_ehb_max = total_budget_ehb - cap_share_ehb;
+    std::size_t sliced_share_ehb = std::min<std::size_t>(total_budget_ehb, 2u);
+    std::size_t strips_share_ehb_max = total_budget_ehb - sliced_share_ehb;
     // External-palette plumbing for EHB: --palette becomes the 32-color
     // base palette; encode_copper produces a depth-5 frame, hardware
     // halfbrites mirror it.
@@ -1335,8 +1335,8 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     } else {
         // No external palette: build the global EHB base ourselves
         // with PNN + pair-aware refinement (and 1-opt on --best),
-        // then hand it to encode_copper. Same shape as the EHB+CAP
-        // path in api.cpp — gives the SCAP planner a better seed
+        // then hand it to encode_copper. Same shape as the EHB+sliced
+        // path in api.cpp — gives the strips planner a better seed
         // than encode_copper's internal histogram quantizer.
         auto q = quantize::quantize(src, 32,
                                     quantize::Algorithm::pnn,
@@ -1374,7 +1374,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     auto copper_result = copper::encode_copper(
         src, /*depth=*/5, dither_settings,
         amiga::Chipset::ocs,
-        cap_share_ehb,
+        sliced_share_ehb,
         ehb_user_pal.empty() ? nullptr : &ehb_user_pal,
         lock_color0,
         reserved_slots,
@@ -1383,15 +1383,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         /*is_lace=*/false,
         /*is_ehb=*/true,
         /*on_progress=*/{},
-        cap_spread_radius >= 0
-            ? static_cast<std::size_t>(cap_spread_radius)
+        sliced_spread_radius >= 0
+            ? static_cast<std::size_t>(sliced_spread_radius)
             : std::numeric_limits<std::size_t>::max(),
-        cap_spread_decay >= 0.0f ? cap_spread_decay : -1.0f,
+        sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f,
         ehb_dither_excluded);
     if (!copper_result) return std::unexpected{copper_result.error()};
     // Copies (not refs) so the joint-refinement pass below can reassign
-    // them when it re-runs CAP with a refined base palette.
-    auto cap_palettes = copper_result->scanline_palettes;
+    // them when it re-runs sliced with a refined base palette.
+    auto sliced_palettes = copper_result->scanline_palettes;
     auto base_palette = copper_result->base_palette;
 
     // Build per-line 64-effective palette (32 base + 32 half-brite).
@@ -1404,10 +1404,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         return eff;
     };
 
-    // ---- 2. base_index storage. The SCAP swap planner needs a
+    // ---- 2. base_index storage. The strips swap planner needs a
     // per-pixel-to-effective-slot binding for cluster centroid math.
     // We rebuild this per-row inside the planner against the actual
-    // per-line CAP-evolved palette (lines ~1325+). The previous code
+    // per-line sliced-evolved palette (lines ~1325+). The previous code
     // ran a global dither against the FRAME-INIT (line-0) palette
     // here, which produced stale bindings — fixed in v1.26.2 / v1.26.3
     // by removing that pass and rebuilding per-line.
@@ -1482,15 +1482,15 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // encoder will actually produce. Empirically gains ~0.05 dB per
     // additional pass through pass 6, then plateaus.
     //
-    // We tried full joint base-palette + CAP refinement (#3) — recompute
-    // base from final indices, re-run CAP, re-dither stage 1 — but that
-    // REGRESSED PSNR by ~0.9 dB on the 10-image sweep. Re-running CAP
+    // We tried full joint base-palette + sliced refinement (#3) — recompute
+    // base from final indices, re-run sliced, re-dither stage 1 — but that
+    // REGRESSED PSNR by ~0.9 dB on the 10-image sweep. Re-running sliced
     // from a different starting palette breaks the convergence the
     // index iteration was building toward. Pure index refinement wins.
     //
-    // Actual hardware register state across lines. SCAP swaps leave
+    // Actual hardware register state across lines. strips swaps leave
     // registers holding swap-colours at end-of-line; the per-line
-    // CAP MOVEs need to diff against THIS, not against cap_palettes
+    // sliced MOVEs need to diff against THIS, not against sliced_palettes
     // from the previous line.
     std::vector<Color3f> hw_state(kBaseColors);
     constexpr int kPasses = 6;
@@ -1509,7 +1509,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             hw_state[k] = base_palette[k];
         if (pass > 0) {
             // base_index is rebuilt per-row inside the planner against
-            // the per-line CAP-evolved palette (no carry-over between
+            // the per-line sliced-evolved palette (no carry-over between
             // passes needed; stale bindings were the root cause of
             // dark-content regressions in v1.26.0/.1).
             for (auto& v : line_moves) v.clear();
@@ -1522,10 +1522,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // Line entry palette = the CAP plan for this line, not a static
-        // base. cap_palettes[y] carries the evolved 32-base state from
-        // previous lines (CAP's per-scanline diffs already applied).
-        P = cap_palettes[y];
+        // Line entry palette = the sliced plan for this line, not a static
+        // base. sliced_palettes[y] carries the evolved 32-base state from
+        // previous lines (sliced's per-scanline diffs already applied).
+        P = sliced_palettes[y];
         P_eff = build_effective_64(P);
         recompute_lab();
         strip_eff[0] = P_eff;
@@ -1533,11 +1533,11 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 
         // Re-bind base_index for this row against the per-line effective
         // 64-palette. Stage 2's pre-pass dithered against the FRAME-INIT
-        // (line-0) palette, but the per-line CAP-evolved palette is
-        // typically very different — frame-init bindings make the SCAP
+        // (line-0) palette, but the per-line sliced-evolved palette is
+        // typically very different — frame-init bindings make the strips
         // cluster planner score against stale clusters and pick swaps
         // that hurt the actual rendered output (the gap was -10
-        // SSIMULACRA2 on saturated content vs EHB+CAP). Cost: 320 × 64
+        // SSIMULACRA2 on saturated content vs EHB+sliced). Cost: 320 × 64
         // distance comparisons per row, cheap.
         for (std::size_t x = 0; x < width; ++x) {
             auto& tgt = img_lab[y * width + x];
@@ -1553,10 +1553,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             base_index[y * width + x] = static_cast<std::uint8_t>(best_k);
         }
 
-        // 1. Per-line CAP MOVEs: diff vs the ACTUAL hardware register
-        // state at end of the previous line. SCAP's mid-line swaps on
+        // 1. Per-line sliced MOVEs: diff vs the ACTUAL hardware register
+        // state at end of the previous line. strips's mid-line swaps on
         // line y-1 may have left registers holding swap-colours rather
-        // than cap_palettes[y-1], so a diff vs cap_palettes misses
+        // than sliced_palettes[y-1], so a diff vs sliced_palettes misses
         // them and the registers carry stale state into line y.
         {
             for (std::size_t k = 0; k < kBaseColors; ++k) {
@@ -1575,16 +1575,16 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
 
-        // 3. SCAP MOVEs. Joint beam-search planner (matches DPF) with
+        // 3. strips MOVEs. Joint beam-search planner (matches DPF) with
         //    EHB-specific extras: each base[k] swap implicitly redefines
         //    half-brite[k] = halve(base[k]), so strip pixels can bind
         //    to either index k or index 32+k and both contribute to a
-        //    swap's strip error. Hblank ceiling: per-line CAP on line
+        //    swap's strip error. Hblank ceiling: per-line sliced on line
         //    y+1 emits a MOVE for every register where state.P[k] !=
-        //    cap_palettes[y+1][k] — beam expansion forbids candidates
+        //    sliced_palettes[y+1][k] — beam expansion forbids candidates
         //    whose application would push that count past kHblankCeiling.
-        //    useful_swap_cap = scap_share_ehb_max bounds total swaps
-        //    per chain (CAP+SCAP combined budget).
+        //    useful_swap_cap = strips_share_ehb_max bounds total swaps
+        //    per chain (sliced+strips combined budget).
         bool has_next_line = (y + 1 < height &&
                               y + 1 < copper_result->scanline_palettes.size());
 
@@ -1743,7 +1743,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 
         // Beam state. P holds 32 base linear-RGB; P_lab_b and P_lab_h
         // are the cached OKLab of base and halve(base) respectively.
-        // B=2 is the sweet spot for EHB SCAP per the same sweep: PSNR
+        // B=2 is the sweet spot for EHB strips per the same sweep: PSNR
         // peaks at 40.49 dB. Wider beams keep lowering planner error
         // but worsen preview-PSNR because dither residuals scatter
         // into noise the planner doesn't see — the OKLab² metric
@@ -1772,7 +1772,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         constexpr std::size_t kMaxVisibleMoves = 18;
         std::size_t slots_to_run =
             std::min(table.slots.size(), kMaxVisibleMoves);
-        std::size_t useful_swap_cap = scap_share_ehb_max;
+        std::size_t useful_swap_cap = strips_share_ehb_max;
 
         ENode init{};
         for (std::size_t k = 0; k < kBaseColors; ++k) {
@@ -1785,7 +1785,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             std::uint16_t h0 = 0;
             for (std::size_t k = 0; k < kBaseColors; ++k) {
                 auto& a = init.P[k];
-                auto& b = cap_palettes[y + 1][k];
+                auto& b = sliced_palettes[y + 1][k];
                 if (a.r != b.r || a.g != b.g || a.b != b.b) ++h0;
             }
             init.projected_hblank = h0;
@@ -1840,7 +1840,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                     bool old_diff = false;
                     if (has_next_line) {
                         auto& a = state.P[k];
-                        auto& b = cap_palettes[y + 1][k];
+                        auto& b = sliced_palettes[y + 1][k];
                         old_diff = (a.r != b.r || a.g != b.g || a.b != b.b);
                     }
                     // Precompute pixel_min_excl_k[x]: min over all 64
@@ -1886,7 +1886,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                         int delta = 0;
                         if (has_next_line) {
                             auto& cs = st.cands[ci];
-                            auto& nxt = cap_palettes[y + 1][k];
+                            auto& nxt = sliced_palettes[y + 1][k];
                             bool new_diff = (cs.r != nxt.r ||
                                              cs.g != nxt.g ||
                                              cs.b != nxt.b);
@@ -1995,14 +1995,14 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
             static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
         // Quality gate: estimate per-row error with vs. without the
-        // SCAP swaps (every strip = entry palette). The planner's
+        // strips swaps (every strip = entry palette). The planner's
         // cluster-centroid objective can recommend swaps that score
         // well on k-means but lose on the actual nearest-of-64 picker
         // — visible as 16-pixel-wide colored bars on dark/HDR content.
         // The underlying issue is that the planner doesn't model
         // pixel re-binding when a slot color changes; this gate is a
         // correctness backstop until the planner is reworked. Same
-        // shape as the HAM6+SCAP gate (commit 6c516d9).
+        // shape as the HAM6+strips gate (commit 6c516d9).
         bool any_scap_swap = false;
         for (auto& m : line_moves[y]) {
             if (m.kind == ScapOpKind::kMove && m.slot_index >= 0) {
@@ -2145,7 +2145,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
         total_error = static_cast<double>(te);
     }
 
-    // DBS post-pass for SCAP+EHB. Same shape as the DPF SCAP path, but
+    // DBS post-pass for strips+EHB. Same shape as the DPF strips path, but
     // the candidate set is the 64-entry effective palette (32 base +
     // 32 half-brites). DBS picks any of the 64 indices; the half-brite
     // bit is just bit 5 of the resulting index.
@@ -2218,7 +2218,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
     // is NOT 0x09 (sRGB / 2), it's 0x00 (nibble 1 >> 1 = nibble 0,
     // 8-bit 0x00). The Amiga DAC takes 4-bit nibbles per channel
     // and halve is `nibble >> 1`, not `value * 0.5`. Producing
-    // half-brite values like 0x09 (which 38% of EHB+SCAP+best
+    // half-brite values like 0x09 (which 38% of EHB+strips+best
     // output pixels were sitting at) gives an inflated SSIMULACRA2
     // reading against pixels real hardware cannot display. The
     // collapse from "15 distinct darks" to ~8 wasn't the snap
@@ -2231,10 +2231,10 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 }
 
 // ---------------------------------------------------------------------------
-// HAM6 + SCAP — v0 implementation
+// HAM6 + strips — v0 implementation
 //
 // HAM6 has the same 6-plane DMA pattern as EHB and DPF, so the
-// kScap6bplEhb slot table (19 mid-line MOVE positions) transfers
+// kStrips6bplEhb slot table (19 mid-line MOVE positions) transfers
 // directly. We mid-line-swap the 16 BASE palette registers; HAM SET ops
 // resolve against whichever strip palette is currently active, while
 // MODIFY ops continue to mutate the rolling output colour irrespective
@@ -2244,7 +2244,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 //   * Greedy single-pass strip swap planner: per-strip pixel histogram,
 //     swap the K least-used base slots with the strip's most-frequent
 //     RGB444-bucketed colours.
-//   * No multi-pass joint refinement (EHB SCAP runs 6 passes).
+//   * No multi-pass joint refinement (EHB strips runs 6 passes).
 //   * No best wiring.
 //   * Inline HAM op selector — keeps scap.cpp self-contained without
 //     needing to expose ham.cpp's anonymous-namespace helpers.
@@ -2252,7 +2252,7 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 namespace {
 
 // [v0 inline HAM picker — superseded by ham::encode_ham_pixel which is
-//  the same DP beam search used by the HAM6+CAP path. Kept commented
+//  the same DP beam search used by the HAM6+sliced path. Kept commented
 //  for reference; was 0.6 dB weaker than the production picker.]
 #if 0
 struct HamPickResult {
@@ -2311,7 +2311,7 @@ HamPickResult pick_ham6_op(
 
 }  // namespace
 
-Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
+Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                                         int width_arg,
                                         int height_arg,
                                         bool lock_color0,
@@ -2320,15 +2320,15 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         int palette_diversity,
                                         std::function<void(float, std::string_view)>
                                             on_progress,
-                                        int cap_spread_radius,
-                                        float cap_spread_decay,
+                                        int sliced_spread_radius,
+                                        float sliced_spread_decay,
                                         bool enable_best,
                                         std::string_view best_metric,
                                         std::span<const Color3f>
                                             external_palette,
                                         ham::HamMetric ham_metric) {
     // --best: 8 jitter seeds × 5 strengths × 4 diversities + 1
-    // baseline = 161 trials. Same shape as EHB SCAP since HAM6's 16
+    // baseline = 161 trials. Same shape as EHB strips since HAM6's 16
     // base palette has comparable basin depth.
     if (enable_best) {
         auto metric = pipeline::parse_best_metric(best_metric);
@@ -2336,11 +2336,11 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,
                 const dither::Settings& d, int div) {
-                return encode_scap_ham6_ocs(
+                return encode_strips_ham6_ocs(
                     jittered_in, width_arg, height_arg, lock_color0,
                     d, copper_changes_override, div,
                     /*on_progress=*/{},
-                    cap_spread_radius, cap_spread_decay,
+                    sliced_spread_radius, sliced_spread_decay,
                     /*best=*/false, "psnr",
                     external_palette, ham_metric);
             },
@@ -2350,11 +2350,11 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             metric);
         if (best.has_value()) return std::move(*best);
     }
-    auto& table = kScap6bplHam6;
+    auto& table = kStrips6bplHam6;
     if (table.slots.empty()) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
-            "SCAP HAM6 planner: kScap6bplHam6 slot table is empty",
+            "Strips HAM6 planner: kStrips6bplHam6 slot table is empty",
         }};
     }
     auto width = (width_arg > 0) ? static_cast<std::size_t>(width_arg)
@@ -2364,44 +2364,44 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     if (image.width() != width || image.height() != height) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("SCAP HAM6 planner: image is {}x{} but caller asked "
+            std::format("Strips HAM6 planner: image is {}x{} but caller asked "
                         "for {}x{} — resize before calling",
                         image.width(), image.height(), width, height),
         }};
     }
 
     constexpr std::size_t kBaseColors = 16;
-    constexpr std::size_t kHblankCeiling = 13;   // MOVEs CAP can land
+    constexpr std::size_t kHblankCeiling = 13;   // MOVEs sliced can land
                                                   // in hblank.
-    constexpr std::size_t kVisibleBudget = 18;   // MOVEs SCAP can land
+    constexpr std::size_t kVisibleBudget = 18;   // MOVEs strips can land
                                                   // in the visible
-                                                  // raster (kScap6bplEhb
+                                                  // raster (kStrips6bplEhb
                                                   // has 19 slots; cap
                                                   // at 18 mirrors EHB
-                                                  // SCAP's design).
+                                                  // strips's design).
     // Hblank and visible-line are SEPARATE DMA windows — they don't
-    // compete. CAP MOVEs (slot_index = -1) all land in hblank; SCAP
+    // compete. sliced MOVEs (slot_index = -1) all land in hblank; strips
     // MOVEs (slot_index >= 0) land mid-line during the visible
     // raster. The combined per-row MOVE count is hblank_used +
     // visible_used, but the BUDGET is per-window. copper_changes_
-    // override applies ONLY to the visible (SCAP) budget — caller
-    // can throttle SCAP without crippling CAP.
-    std::size_t cap_share = kHblankCeiling;
-    std::size_t scap_share = (copper_changes_override > 0)
+    // override applies ONLY to the visible (strips) budget — caller
+    // can throttle strips without crippling sliced.
+    std::size_t sliced_share = kHblankCeiling;
+    std::size_t strips_share = (copper_changes_override > 0)
         ? std::min<std::size_t>(copper_changes_override, kVisibleBudget)
         : kVisibleBudget;
 
     // ---- 0. Pre-dither for HAM encoding -------------------------------
     // ham::encode_ham_copper internally pre-dithers when given an ED
-    // dither_method, then runs DP on that dithered image. SCAP needs
+    // dither_method, then runs DP on that dithered image. strips needs
     // to drive its OWN per-strip beam search on the SAME dithered
-    // input — otherwise the CAP-planned palettes (derived from the
+    // input — otherwise the sliced-planned palettes (derived from the
     // dithered image inside ham::encode_ham_copper) are mismatched
-    // against the SCAP-encoded pixels (running on the raw image).
+    // against the strips-encoded pixels (running on the raw image).
     // Solution: pre-dither once here, hand the dithered image to
     // ham::encode_ham_copper with dither=none so it doesn't dither
     // again, and feed the same dithered image to our per-strip DP.
-    Image scap_input(width, height);
+    Image strips_input(width, height);
     if (dither::uses_error_diffusion(dither_settings.method)) {
         dither::Settings d{
             .method = dither_settings.method,
@@ -2427,19 +2427,19 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                     (srgb_adj.b >> (8 - kHam6DataBits)) * 17u);
                 auto quantized = color_space::srgb_u8_to_linear(
                     srgb_adj.r, srgb_adj.g, srgb_adj.b);
-                scap_input[x, y] = quantized;
+                strips_input[x, y] = quantized;
                 return {color_space::linear_to_oklab(quantized), 0.5f};
             });
     } else {
         for (std::size_t y = 0; y < height; ++y)
             for (std::size_t x = 0; x < width; ++x)
-                scap_input[x, y] = image[x, y];
+                strips_input[x, y] = image[x, y];
     }
 
-    // ---- 1. Per-line CAP base palette (16 colours, evolving across rows).
-    // Use ham::encode_ham_copper for the per-line CAP plan. We pre-
+    // ---- 1. Per-line sliced base palette (16 colours, evolving across rows).
+    // Use ham::encode_ham_copper for the per-line sliced plan. We pre-
     // dithered above (when applicable), so disable dither here to
-    // avoid double-application — the CAP planner sees the same image
+    // avoid double-application — the sliced planner sees the same image
     // as our per-strip DP.
     ham::HamOptions ham_opts;
     ham_opts.dither_method = dither::Method::none;  // pre-dithered above
@@ -2450,15 +2450,15 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                           external_palette.end());
     }
     auto ham_cap_result = ham::encode_ham_copper(
-        scap_input, amiga::Mode::ham6, amiga::Chipset::ocs, ham_opts,
-        /*is_hires=*/false, cap_share);
+        strips_input, amiga::Mode::ham6, amiga::Chipset::ocs, ham_opts,
+        /*is_hires=*/false, sliced_share);
     if (!ham_cap_result) return std::unexpected{ham_cap_result.error()};
-    auto& cap_palettes = ham_cap_result->scanline_palettes;
+    auto& sliced_palettes = ham_cap_result->scanline_palettes;
     auto base_palette = ham_cap_result->base_palette;
-    (void)cap_spread_radius;
-    (void)cap_spread_decay;
+    (void)sliced_spread_radius;
+    (void)sliced_spread_decay;
 
-    // Strip layout helpers (same shape as EHB SCAP).
+    // Strip layout helpers (same shape as EHB strips).
     std::size_t num_strips = table.slots.size() + 1;
     auto strip_for_x = [&](std::size_t x) -> std::size_t {
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
@@ -2487,7 +2487,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 image[x, y]);
     }
 
-    // ---- 2. Per-line HAM6+SCAP encoding -------------------------------
+    // ---- 2. Per-line HAM6+strips encoding -------------------------------
     constexpr int kVStart = 44;
     std::vector<std::uint8_t> ham_values(width * height, 0);
     std::vector<std::vector<ScapMove>> line_moves(height);
@@ -2501,11 +2501,11 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     std::atomic<std::size_t> total_moves_atomic{0};
     std::atomic<std::size_t> rows_done{0};
 
-    // Actual hardware register state at end of the previous line. SCAP
+    // Actual hardware register state at end of the previous line. strips
     // swaps mid-line on row y-1 leave registers holding swap-colours
-    // rather than cap_palettes[y-1], so the per-line CAP MOVEs MUST
+    // rather than sliced_palettes[y-1], so the per-line sliced MOVEs MUST
     // diff vs THIS to correctly restore the intended line-entry palette.
-    // Tracking this across rows forces a serial loop. Match EHB+SCAP.
+    // Tracking this across rows forces a serial loop. Match EHB+strips.
     std::vector<Color3f> hw_state(kBaseColors);
     for (std::size_t k = 0; k < kBaseColors; ++k)
         hw_state[k] = (k < base_palette.size())
@@ -2523,10 +2523,10 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // Strip working palette: starts as cap_palettes[y] (16 colours),
-        // mutates as SCAP MOVEs land. The HAM op picker uses whichever
+        // Strip working palette: starts as sliced_palettes[y] (16 colours),
+        // mutates as strips MOVEs land. The HAM op picker uses whichever
         // strip palette is active at the current pixel.
-        std::vector<Color3f> strip_pal = cap_palettes[y];
+        std::vector<Color3f> strip_pal = sliced_palettes[y];
         if (strip_pal.size() < kBaseColors) strip_pal.resize(kBaseColors);
         std::vector<color_space::OKLab> strip_pal_lab(kBaseColors);
         auto refresh_lab = [&]() {
@@ -2536,9 +2536,9 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         };
         refresh_lab();
 
-        // Per-line CAP MOVEs: diff vs the ACTUAL hardware register state
+        // Per-line sliced MOVEs: diff vs the ACTUAL hardware register state
         // at end of the previous line, capped at the HBLANK budget. Slots
-        // we couldn't restore in HBLANK keep their stale (SCAP-polluted)
+        // we couldn't restore in HBLANK keep their stale (strips-polluted)
         // value — we override strip_pal[k] with hw_state[k] for those so
         // the encoder sees what the chip is actually displaying at line
         // entry.
@@ -2560,18 +2560,18 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             [](const CapDiff& a, const CapDiff& b) {
                 return a.dist_sq > b.dist_sq;
             });
-        std::vector<bool> cap_emitted(kBaseColors, false);
-        std::size_t cap_emit_count = std::min(diffs.size(), kHblankBudget);
-        for (std::size_t i = 0; i < cap_emit_count; ++i) {
+        std::vector<bool> sliced_emitted(kBaseColors, false);
+        std::size_t sliced_emit_count = std::min(diffs.size(), kHblankBudget);
+        for (std::size_t i = 0; i < sliced_emit_count; ++i) {
             auto k = diffs[i].k;
             line_moves[y].push_back(make_move(
                 static_cast<std::uint8_t>(k),
                 palette::linear_to_ocs(strip_pal[k]), -1));
             hw_state[k] = strip_pal[k];
-            cap_emitted[k] = true;
+            sliced_emitted[k] = true;
         }
         for (std::size_t k = 0; k < kBaseColors; ++k) {
-            if (!cap_emitted[k] &&
+            if (!sliced_emitted[k] &&
                 (strip_pal[k].r != hw_state[k].r ||
                  strip_pal[k].g != hw_state[k].g ||
                  strip_pal[k].b != hw_state[k].b)) {
@@ -2609,14 +2609,14 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             strip_idx[x] = static_cast<std::uint16_t>(strip_for_x(x));
         std::vector<Color3f> row_pixels(width);
         for (std::size_t x = 0; x < width; ++x)
-            row_pixels[x] = scap_input[x, y];
+            row_pixels[x] = strips_input[x, y];
         auto row_span = std::span<const Color3f>(row_pixels.data(), width);
         auto idx_span = std::span<const std::uint16_t>(strip_idx.data(),
                                                         width);
 
-        // Build per-strip palette state by replaying the SCAP MOVEs
+        // Build per-strip palette state by replaying the strips MOVEs
         // currently in line_moves[y]. strip 0 starts from the line-
-        // entry palette (cap_palettes[y]); each subsequent strip
+        // entry palette (sliced_palettes[y]); each subsequent strip
         // applies the MOVEs whose slot_index matches s-1.
         auto build_strips = [&](
             std::vector<std::vector<Color3f>>& strip_pals,
@@ -2629,7 +2629,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             strip_pres.reserve(num_strips);
             strip_srgb_spans.clear();
             strip_srgb_spans.reserve(num_strips);
-            std::vector<Color3f> running_pal = cap_palettes[y];
+            std::vector<Color3f> running_pal = sliced_palettes[y];
             if (running_pal.size() < kBaseColors)
                 running_pal.resize(kBaseColors);
             for (std::size_t s = 0; s < num_strips; ++s) {
@@ -2675,7 +2675,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 idx_span, kBeamWidth, ham_metric);
         };
 
-        // Baseline: encode the row with no SCAP swaps yet (CAP only).
+        // Baseline: encode the row with no strips swaps yet (sliced only).
         std::vector<std::vector<Color3f>> cur_pals;
         std::vector<std::vector<ham::SRGBColor>> cur_srgbs;
         std::vector<ham::HamPrecomp> cur_pres;
@@ -2687,10 +2687,10 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 std::span<const std::span<const ham::SRGBColor>>(
                     cur_srgb_spans)).error);
 
-        std::size_t scap_budget = scap_share;
-        std::size_t scap_used = 0;
+        std::size_t strips_budget = strips_share;
+        std::size_t strips_used = 0;
         for (std::size_t s = 1; s < num_strips; ++s) {
-            if (scap_used >= scap_budget) break;
+            if (strips_used >= strips_budget) break;
             auto [x_lo, x_hi] = strip_x_range(s);
             if (x_lo >= x_hi) continue;
 
@@ -2853,37 +2853,37 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 rgb_ocs,
                 static_cast<int>(s - 1)));
             cur_err = best_err;
-            ++scap_used;
+            ++strips_used;
             (void)kHblankCeiling;
         }
-        // DEBUG: pad SCAP slots — every slot 0..num_slots-1 must have a
+        // DEBUG: pad strips slots — every slot 0..num_slots-1 must have a
         // MOVE (filler if no swap was chosen) so per-line copper budget
-        // is constant. Match DPF/EHB SCAP. Then close the chain with
+        // is constant. Match DPF/EHB strips. Then close the chain with
         // the end-of-line WAIT.
         {
             constexpr std::uint8_t kFillerReg = 31;
             constexpr std::uint16_t kFillerVal = 0x0000;
             const std::size_t num_slots = (num_strips > 0) ? num_strips - 1 : 0;
-            std::size_t scap_start = line_moves[y].size();
+            std::size_t strips_start = line_moves[y].size();
             for (std::size_t i = 0; i < line_moves[y].size(); ++i) {
                 if (line_moves[y][i].kind == ScapOpKind::kMove &&
                     line_moves[y][i].slot_index >= 0) {
-                    scap_start = i;
+                    strips_start = i;
                     break;
                 }
             }
-            std::vector<ScapMove> scap_moves(
+            std::vector<ScapMove> strips_moves(
                 line_moves[y].begin() +
-                    static_cast<std::ptrdiff_t>(scap_start),
+                    static_cast<std::ptrdiff_t>(strips_start),
                 line_moves[y].end());
-            line_moves[y].resize(scap_start);
+            line_moves[y].resize(strips_start);
             std::size_t mi = 0;
             for (std::size_t slot = 0; slot < num_slots; ++slot) {
-                if (mi < scap_moves.size() &&
-                    scap_moves[mi].slot_index >= 0 &&
-                    static_cast<std::size_t>(scap_moves[mi].slot_index) ==
+                if (mi < strips_moves.size() &&
+                    strips_moves[mi].slot_index >= 0 &&
+                    static_cast<std::size_t>(strips_moves[mi].slot_index) ==
                         slot) {
-                    line_moves[y].push_back(scap_moves[mi]);
+                    line_moves[y].push_back(strips_moves[mi]);
                     ++mi;
                 } else {
                     line_moves[y].push_back(make_move(
@@ -2941,7 +2941,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 out.r, out.g, out.b);
             prev = out;
         }
-        // Walk this line's MOVEs to update hw_state for next row's CAP
+        // Walk this line's MOVEs to update hw_state for next row's sliced
         // diff. Any MOVE to a base-color register (0..15) lands in the
         // simulated hardware state. Filler MOVEs (reg=31) are ignored.
         for (auto& m : line_moves[y]) {
@@ -3008,14 +3008,14 @@ Result<ScapResult> make_scap_probe_a_dpf_ocs(int width, int height) {
 
     ScapResult res;
     res.planes = *std::move(planes);
-    res.slot_table = scap_table_for(6);
+    res.slot_table = strips_table_for(6);
     res.probe_label = "probe_a_dpf_ocs";
 
     // Frame-start palette: 16 entries.
     //   reg 0  = black (bg, also PF1 idx 0 = transparent)
     //   reg 1  = yellow (PF1 minor tick every 16 px,  plane 0 only)
     //   reg 3  = red    (PF1 major tick every 64 px,  plane 0|2 -> idx 3)
-    //   reg 9  = SCAP-controlled (PF2 colour, swept by per-line copper)
+    //   reg 9  = strips-controlled (PF2 colour, swept by per-line copper)
     //   others = black
     res.palette.assign(16, Color3f{0.0f, 0.0f, 0.0f});
     res.palette[1] = Color3f{1.0f, 1.0f, 0.0f};   // yellow
@@ -3052,22 +3052,22 @@ Result<ScapResult> make_scap_probe_a_dpf_ocs(int width, int height) {
 Result<ScapResult> make_scap_probe_b_dpf_ocs(int /*w*/, int /*h*/) {
     return std::unexpected{Error{
         ErrorCode::unsupported_mode,
-        "SCAP Probe B not implemented yet (needs Probe A slot data first)",
+        "Strips Probe B not implemented yet (needs Probe A slot data first)",
     }};
 }
 
 Result<ScapResult> make_scap_probe_c_dpf_aga(int /*w*/, int /*h*/) {
     return std::unexpected{Error{
         ErrorCode::unsupported_mode,
-        "SCAP Probe C not implemented yet (AGA bandwidth, deferred)",
+        "Strips Probe C not implemented yet (AGA bandwidth, deferred)",
     }};
 }
 
 Result<ScapResult> make_scap_probe_d_dpf_ocs(int /*w*/, int /*h*/) {
     return std::unexpected{Error{
         ErrorCode::unsupported_mode,
-        "SCAP Probe D not implemented yet (at-x vs after-x pixel mapping)",
+        "Strips Probe D not implemented yet (at-x vs after-x pixel mapping)",
     }};
 }
 
-} // namespace png2amiga::scap
+} // namespace png2amiga::strips

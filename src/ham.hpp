@@ -80,7 +80,7 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
 
 // ---------------------------------------------------------------------------
 // HAM single-pixel encoding primitives — exposed so external encoders
-// (e.g. scap.cpp's HAM6+SCAP planner) can score HAM ops against a
+// (e.g. scap.cpp's HAM6+strips planner) can score HAM ops against a
 // per-strip palette without re-implementing the picker.
 //
 // HamPrecomp: caller-owned cache. Build once per palette change.
@@ -120,7 +120,7 @@ HamPixelResult encode_ham_pixel(SRGBColor prev,
 
 // Row-level DP beam search HAM encoder with per-strip palettes. Same
 // algorithm encode_ham_copper uses internally for its per-row palette
-// case — exposed so SCAP HAM6 can drive a beam search with mid-line
+// case — exposed so strips HAM6 can drive a beam search with mid-line
 // palette swaps. The HAM rolling state crosses strip boundaries
 // unchanged; only the palette consulted at each pixel swaps.
 //
@@ -160,7 +160,7 @@ void refine_scanline_triple_per_strip(
 // ---------------------------------------------------------------------------
 // HAM op-selection metric. OKLab² is perceptually-uniform and matches
 // SSIMULACRA2 (the modern subjective-quality metric) much better than
-// sRGB-MSE — measured ~+9 SSIMULACRA2 points on dithered HAM6+CAP, and
+// sRGB-MSE — measured ~+9 SSIMULACRA2 points on dithered HAM6+sliced, and
 // ~+3.5 OKLab-dB on banded/HDR content. sRGB-MSE wins headline PSNR
 // (~+0.5-1 dB) by optimising the *reported metric* directly, but PSNR
 // is a poor predictor of subjective quality on HAM output (where dither
@@ -195,7 +195,7 @@ struct HamOptions {
 
     // External base palette. When non-empty, encoders use this directly
     // (trimmed/padded to 2^(depth-2) entries) instead of running their
-    // own quantizer. Plumbed from `--palette <file>`. For HAM6+CAP, the
+    // own quantizer. Plumbed from `--palette <file>`. For HAM6+sliced, the
     // first scanline still uses the full base palette and subsequent
     // lines diverge per the planner — but the *initial* base palette
     // is fixed to this. AGA users who pass --palette get a 24-bit base;
@@ -222,7 +222,7 @@ struct HamOptions {
     // displayed line with no prior scanline to schedule a pre-display WAIT on.
     std::size_t skip_initial_swap_rows = 0;
 
-    // Better but ~2-4× slower CAP swap planner: per-iteration considers
+    // Better but ~2-4× slower sliced swap planner: per-iteration considers
     // top-K worst-error pixels + their OKLab centroid as candidates and
     // tries the top-N least-used slots, picking the (slot, color) pair
     // that drops row error the most. Off by default — the cheaper single-

@@ -26,8 +26,8 @@ struct Context {
     amiga::Mode mode;
     int depth;            // bitplane depth as the encoder will use it
     bool dpf;             // dual-playfield
-    bool scap;            // SCAP mid-line palette swaps
-    bool copper;          // CAP per-line palette evolution
+    bool scap;            // strips mid-line palette swaps
+    bool copper;          // sliced per-line palette evolution
     amiga::Chipset chipset = amiga::Chipset::ocs;
     // Optional dither method — when provided, palette-aware methods
     // (opt-checker, knoll, yliluoma, yliluoma2) get a method-specific

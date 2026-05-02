@@ -14,13 +14,13 @@
 #include <string_view>
 #include <vector>
 
-namespace png2amiga::scap {
+namespace png2amiga::strips {
 
 // ---------------------------------------------------------------------------
-// SCAP — Super Copper-Augmented Palette, dual-playfield edition.
+// strips — Super Sliced palette, dual-playfield edition.
 //
-// Plain CAP (copper.cpp) emits per-scanline COLORxx writes only at the top
-// of each line, before bitplane DMA resumes. SCAP extends that by allowing
+// Plain sliced (copper.cpp) emits per-scanline COLORxx writes only at the top
+// of each line, before bitplane DMA resumes. strips extends that by allowing
 // additional COLORxx MOVEs at fixed mid-line horizontal slot positions
 // chosen so the copper still gets DMA cycles even while bitplane fetch is
 // active.
@@ -30,7 +30,7 @@ namespace png2amiga::scap {
 // and sprite DMA — there's almost no mid-line bandwidth left. With DPF
 // the upper PF2 colors (regs 8-15 OCS / 16-31 AGA) are precisely what we
 // want to swap mid-line: a 3-plane PF2 has only 8 colors per row, and
-// SCAP buys us a per-strip palette-bank refresh. AGA DPF (4-plane PF2,
+// strips buys us a per-strip palette-bank refresh. AGA DPF (4-plane PF2,
 // 16 colors) gets the same treatment but with a different bandwidth
 // budget — handled by separate slot tables.
 //
@@ -48,7 +48,7 @@ namespace png2amiga::scap {
 // hpos      Raw HPOS comparison value used in the per-line WAIT.
 // capacity  Number of MOVEs that can be safely chained at this slot before
 //           the next bitplane fetch resumes. Probe B fills this in.
-// One real-MOVE position in the SCAP chain. Strip s covers display pixels
+// One real-MOVE position in the strips chain. Strip s covers display pixels
 // in [slots[s-1].pixel_x .. slots[s].pixel_x) and uses the palette state
 // produced by all MOVEs slots[0..s-1]. pixel_x is only used by the
 // planner to determine which pixels belong to which strip; the actual
@@ -60,20 +60,20 @@ struct ScapSlot {
 
 struct ScapSlotTable {
     int total_planes{};         // 6 = OCS DPF, 8 = AGA DPF (deferred)
-    int line_gate_hpos{};       // WAIT(hp=this, vp=N) opens the SCAP chain
+    int line_gate_hpos{};       // WAIT(hp=this, vp=N) opens the strips chain
     int end_of_line_hpos{};     // WAIT(hp=this, vp=N) closes the chain
     std::vector<ScapSlot> slots;
 };
 
-// kScap6bplOcs — OCS DPF, 6 bitplanes, lores 320 px display.
+// kStrips6bplOcs — OCS DPF, 6 bitplanes, lores 320 px display.
 //
-// Per-line copper structure (CAP-style, palette resets every line):
+// Per-line copper structure (sliced-style, palette resets every line):
 //   1. 8 base-palette MOVEs (write COLOR08..15 to the entry palette).
 //      Fires in the horizontal blank between the previous line's
 //      end-of-line WAIT and this line's line-gate WAIT.
 //   2. WAIT(hp=line_gate_hpos, vp=44+y) — gates the chain to the
 //      visible area.
-//   3. 20 SCAP MOVEs back-to-back (no fillers) — the planner picks
+//   3. 20 strips MOVEs back-to-back (no fillers) — the planner picks
 //      (reg, colour) per slot to greedy-minimise OKLab error in the
 //      upcoming strip. Strip s covers pixels [slots[s-1].pixel_x ..
 //      slots[s].pixel_x).
@@ -86,7 +86,7 @@ struct ScapSlotTable {
 // area. Right edge may stay on the final palette state if the chain
 // finishes before HPOS=DDFSTOP.
 constexpr int kOCS = 0;
-inline const ScapSlotTable kScap6bplOcs{
+inline const ScapSlotTable kStrips6bplOcs{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x38,        // Was 0x3C; pulled 8 HPOS (= 16 lores
                                     // px) earlier to fit the new preload
@@ -95,7 +95,7 @@ inline const ScapSlotTable kScap6bplOcs{
                                     // MOVE takes ~4 CCK under DPF DMA
                                     // contention, so 8 HPOS of headroom
                                     // is enough for the extra preload.
-                                    // ADJUST via --scap-debug if hw
+                                    // ADJUST via --strips-debug if hw
                                     // landings differ.
     /*end_of_line_hpos=*/0xDD,
     /*slots=*/{
@@ -104,12 +104,12 @@ inline const ScapSlotTable kScap6bplOcs{
         // Slot 0 ("preload") at pixel_x = 0: lands during HBLANK tail /
         // start of active raster, so its swap takes effect for the
         // first 8 active-area pixels. Without it the chain's first real
-        // MOVE is at x=8 and pixels 0..7 stay on CAP's entry palette,
+        // MOVE is at x=8 and pixels 0..7 stay on sliced's entry palette,
         // producing a visible discontinuity at the x=8 boundary on
         // continuous-tone content. The planner uses this slot like any
         // other; if the beam doesn't want a swap the filler MOVE writes
         // COLOR31 (unread on OCS DPF 3+3) and costs nothing.
-        // ADJUST THE LANDING POSITION via --scap-debug if the actual
+        // ADJUST THE LANDING POSITION via --strips-debug if the actual
         // hw timing puts it past x=0.
         {  0+kOCS},
         // Existing slots — shifted by −8 from the naive {16,32,…,320}
@@ -122,17 +122,17 @@ inline const ScapSlotTable kScap6bplOcs{
     }
 };
 
-// kScap6bplEhb — OCS EHB, 6 bitplanes, lores 320 px display.
+// kStrips6bplEhb — OCS EHB, 6 bitplanes, lores 320 px display.
 //
 // Same DMA shape as 6-plane DPF (6 plane fetches per 16 lores px) but
 // EHB has no PF2OF / DBLPF combiner machinery, so the actual MOVE
 // landing positions on the bus differ from DPF in subtle ways. This
 // table starts at the clean naive 16-px grid (8, 24, 40, ..., 296) —
 // no per-slot offset corrections yet. Calibrate empirically with
-// --scap-debug + the stripe tuner: each visible black/white transition
+// --strips-debug + the stripe tuner: each visible black/white transition
 // position is the actual MOVE landing for that slot. Adjust below.
 constexpr int kEHB = -1;
-inline const ScapSlotTable kScap6bplEhb{
+inline const ScapSlotTable kStrips6bplEhb{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
     /*end_of_line_hpos=*/0xDD,
@@ -143,17 +143,17 @@ inline const ScapSlotTable kScap6bplEhb{
     }
 };
 
-// kScap6bplHam6 — OCS HAM6, 6 bitplanes, lores 320 px display.
+// kStrips6bplHam6 — OCS HAM6, 6 bitplanes, lores 320 px display.
 //
 // Same 6-plane DMA shape as EHB (6 plane fetches per 16 lores px), so
-// the kScap6bplEhb slot positions transfer directly. HAM6 differs in
+// the kStrips6bplEhb slot positions transfer directly. HAM6 differs in
 // what the registers MEAN (16-entry base palette + per-pixel SET /
 // MODIFY ops) — but mid-line MOVEs land on the bus at the same hpos
 // because BPL DMA defines the timing, not the mode. Cloned from EHB
-// so HAM6+SCAP can be tuned independently if probe data later shows
+// so HAM6+strips can be tuned independently if probe data later shows
 // they diverge.
 constexpr int kHAM6 = -1;
-inline const ScapSlotTable kScap6bplHam6{
+inline const ScapSlotTable kStrips6bplHam6{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
     /*end_of_line_hpos=*/0xDD,
@@ -165,15 +165,15 @@ inline const ScapSlotTable kScap6bplHam6{
 };
 
 // Deferred — populated when we run an AGA probe.
-inline const ScapSlotTable kScap8bplAga{
+inline const ScapSlotTable kStrips8bplAga{
     /*total_planes=*/8,
     /*line_gate_hpos=*/0x40,
     /*end_of_line_hpos=*/0xDD,
     /*slots=*/{},
 };
 
-inline const ScapSlotTable& scap_table_for(int total_planes) {
-    return (total_planes == 8) ? kScap8bplAga : kScap6bplOcs;
+inline const ScapSlotTable& strips_table_for(int total_planes) {
+    return (total_planes == 8) ? kStrips8bplAga : kStrips6bplOcs;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,19 +197,19 @@ struct ScapMove {
 };
 
 // ---------------------------------------------------------------------------
-// Result of an SCAP encode (planner output) OR a probe synthesis.
+// Result of an strips encode (planner output) OR a probe synthesis.
 // ---------------------------------------------------------------------------
 struct ScapResult {
     bitplane::BitplaneData planes;
 
-    // Frame-start palette (written before the visible area, like CAP base).
+    // Frame-start palette (written before the visible area, like sliced base).
     // For DPF this is the full 16-entry (OCS) / 32-entry (AGA) palette
     // already shifted into PF2 upper registers — same convention as the
     // rest of the DPF pipeline.
     std::vector<Color3f> palette;
 
     // Per-scanline copper ops (WAIT/MOVE pairs). Emitted verbatim by the
-    // cheader SCAP block as alternating UWORDs in the copper list.
+    // cheader strips block as alternating UWORDs in the copper list.
     std::vector<std::vector<ScapMove>> line_moves;
 
     // The slot table this result targets (informational; useful for
@@ -223,12 +223,12 @@ struct ScapResult {
 
     // Stats (planner output only; probes leave these zero).
     float total_error{};
-    float avg_changes_per_line{};       // SCAP useful swaps/line
-    float avg_total_moves_per_line{};   // CAP diffs + SCAP swaps (real hw load)
+    float avg_changes_per_line{};       // strips useful swaps/line
+    float avg_total_moves_per_line{};   // sliced diffs + strips swaps (real hw load)
     std::size_t max_moves_per_line{};   // worst-case row MOVE count
     float avg_hblank_moves_per_line{};  // MOVEs before line-gate WAIT (hblank)
     std::size_t max_hblank_moves_per_line{};
-    float avg_visible_moves_per_line{}; // MOVEs after line-gate WAIT (SCAP)
+    float avg_visible_moves_per_line{}; // MOVEs after line-gate WAIT (strips)
     std::size_t max_visible_moves_per_line{};
 
     // Rendered preview produced by the planner. Width × height linear-RGB
@@ -245,7 +245,7 @@ struct ScapResult {
 // does a greedy slot-by-slot search: at each slot pixel_x boundary, find the
 // (reg, colour) MOVE that most reduces OKLab error in the upcoming strip,
 // emit it, and continue. Up to slot.capacity MOVEs may be chained per slot.
-// The accumulated palette state carries across lines (CAP-style) so swaps
+// The accumulated palette state carries across lines (sliced-style) so swaps
 // from the bottom of one line act as the entry palette for the top of the
 // next.
 //
@@ -254,10 +254,10 @@ struct ScapResult {
 // the entry palette (16 entries — 8 zero PF1 + 8 PF2 base), and a rendered
 // preview Image where each pixel reflects the per-strip palette state.
 // ---------------------------------------------------------------------------
-// debug_overlay: SCAP slot-tuning debug bundle. Enables two changes
+// debug_overlay: strips slot-tuning debug bundle. Enables two changes
 // always used together:
 //   * Force the 8 base-palette MOVEs at line start to write 0x0000, so
-//     each line opens with PF2 regs all black; the 20 SCAP MOVEs then
+//     each line opens with PF2 regs all black; the 20 strips MOVEs then
 //     do every visible colour change. Makes it obvious where each
 //     MOVE actually lands on real hardware vs. the planner's model.
 //   * Paint yellow vertical ruler markers into PF1 at every 4/8/16 px
@@ -265,7 +265,7 @@ struct ScapResult {
 //     can be read off the screen. Also recolours palette[1] to yellow.
 // Off (default) for production. Pair with examples/ramps.png as the
 // canonical visual test case.
-Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
+Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        int width,
                                        int height,
                                        bool lock_color0 = true,
@@ -278,17 +278,17 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
                                        bool enable_best = false,
                                        std::string_view best_metric =
                                            "msssim",
-                                       int cap_spread_radius = -1,
-                                       float cap_spread_decay = -1.0f,
+                                       int sliced_spread_radius = -1,
+                                       float sliced_spread_decay = -1.0f,
                                        std::span<const Color3f>
                                            external_palette = {});
 
 // ---------------------------------------------------------------------------
-// SCAP for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
+// strips for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
 // half-brite colours).
 //
 // 6bpp EHB has identical BPL DMA bandwidth to 6-plane lores (and to OCS DPF
-// 3+3) — same 6 plane fetches per 16 px — so the existing kScap6bplOcs
+// 3+3) — same 6 plane fetches per 16 px — so the existing kStrips6bplOcs
 // slot table transfers directly. The planner swaps the 32 BASE registers;
 // each swap implicitly updates the corresponding half-brite sibling
 // (hardware halves the sRGB DAC values), so a single MOVE shifts two
@@ -299,7 +299,7 @@ Result<ScapResult> encode_scap_dpf_ocs(const Image& image,
 // are reproduced by the hardware and are NOT written to CMAP), and a
 // rendered preview Image.
 // ---------------------------------------------------------------------------
-Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
+Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                        int width,
                                        int height,
                                        bool lock_color0 = true,
@@ -312,25 +312,25 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
                                        bool enable_best = false,
                                        std::string_view best_metric =
                                            "msssim",
-                                       int cap_spread_radius = -1,
-                                       float cap_spread_decay = -1.0f,
+                                       int sliced_spread_radius = -1,
+                                       float sliced_spread_decay = -1.0f,
                                        std::span<const Color3f>
                                            external_palette = {},
                                        // --reserve-range: base-palette slots
                                        // (0..31) that must keep their fixed
                                        // colour on every scanline (passed to
                                        // encode_copper as locked + dither
-                                       // excluded). The mid-line SCAP
+                                       // excluded). The mid-line strips
                                        // planner additionally avoids them.
                                        const std::vector<std::pair<std::size_t, Color3f>>&
                                            reserved_slots = {});
 
 // ---------------------------------------------------------------------------
-// SCAP for HAM6 (6 bitplanes — 2 control + 4 data, 16-colour base palette
+// strips for HAM6 (6 bitplanes — 2 control + 4 data, 16-colour base palette
 // with HAM SET / MODIFY ops at pixel granularity).
 //
 // HAM6 has the same BPL DMA pattern as EHB and OCS DPF (6 plane fetches
-// per 16-pixel slot), so the empirically-calibrated kScap6bplEhb slot
+// per 16-pixel slot), so the empirically-calibrated kStrips6bplEhb slot
 // table transfers directly. The encoder mid-line-swaps the 16 BASE
 // palette registers on the same 19-slot grid; HAM op selection happens
 // per pixel against whichever strip palette is currently active. The
@@ -338,12 +338,12 @@ Result<ScapResult> encode_scap_ehb_ocs(const Image& image,
 // unchanged — MODIFY ops apply to the prior colour irrespective of
 // palette, SET ops resolve against the new strip palette.
 //
-// Output: 6-plane bitplane data, 16-entry base palette, per-line SCAP
+// Output: 6-plane bitplane data, 16-entry base palette, per-line strips
 // MOVE tables, and a rendered preview Image.
 //
 // v0: single greedy pass, no joint refinement, no best wiring.
 // ---------------------------------------------------------------------------
-Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
+Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                                         int width,
                                         int height,
                                         bool lock_color0 = true,
@@ -352,8 +352,8 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                                         int palette_diversity = 0,
                                         std::function<void(float, std::string_view)>
                                             on_progress = {},
-                                        int cap_spread_radius = -1,
-                                        float cap_spread_decay = -1.0f,
+                                        int sliced_spread_radius = -1,
+                                        float sliced_spread_decay = -1.0f,
                                         bool enable_best = false,
                                         std::string_view best_metric =
                                             "msssim",
@@ -395,4 +395,4 @@ Result<ScapResult> make_scap_probe_b_dpf_ocs(int width, int height);
 Result<ScapResult> make_scap_probe_c_dpf_aga(int width, int height);
 Result<ScapResult> make_scap_probe_d_dpf_ocs(int width, int height);
 
-} // namespace png2amiga::scap
+} // namespace png2amiga::strips

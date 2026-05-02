@@ -554,7 +554,7 @@ inline std::size_t find_nearest(Color3f color,
 // quantised colours through the EHB path. The previous implementation
 // used sRGB × 0.5 which is wrong for OCS: e.g. halve(0x33) is 0x11
 // (nibble 3 >> 1 = 1, nibble-replicated), not 0x19 (sRGB / 2).
-// Single source of truth replacing scap::half_brite + copper::halve_brite.
+// Single source of truth replacing strips::half_brite + copper::halve_brite.
 inline Color3f half_brite(const Color3f& c) {
     auto code = linear_to_ocs(c);
     auto r4 = static_cast<std::uint16_t>((code >> 8) & 0xF);

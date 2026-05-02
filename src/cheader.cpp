@@ -56,7 +56,7 @@ std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) 
     return camg;
 }
 
-// Emit the SCAP copper list as a UWORD array. Used by both .h (data-
+// Emit the strips copper list as a UWORD array. Used by both .h (data-
 // only export) and .cpp (viewer init code). Caller chooses whether
 // the declaration is `const` (external linkage, .h) or `static const`
 // (file-scope, .cpp viewer); pass the literal `linkage` prefix.
@@ -64,28 +64,28 @@ std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) 
 // Includes the past-0xFF wrap marker patched into line 255's end-of-line
 // WAIT when the list extends past line 255 + kVStart=44 — see the
 // detailed comment at the original emit site for the timing rationale.
-void emit_scap_copper_list(std::string& out,
+void emit_strips_copper_list(std::string& out,
                            const std::string& sym,
                            const CHeaderOptions& options,
                            std::string_view linkage) {
-    auto& moves = *options.scap_line_moves;
+    auto& moves = *options.strips_line_moves;
     constexpr int kVStart = 44;
 
-    out += std::format("// SCAP copper list — {} (anchor=0x{:02X}, "
+    out += std::format("// Strips copper list — {} (anchor=0x{:02X}, "
                        "total_planes={})\n",
-                       options.scap_label.empty() ? "unnamed"
-                                                  : options.scap_label,
-                       options.scap_anchor_hpos,
-                       options.scap_total_planes);
+                       options.strips_label.empty() ? "unnamed"
+                                                  : options.strips_label,
+                       options.strips_anchor_hpos,
+                       options.strips_total_planes);
 
-    std::size_t scap_total_words = 0;
-    for (auto& row : moves) scap_total_words += row.size() * 2;
+    std::size_t strips_total_words = 0;
+    for (auto& row : moves) strips_total_words += row.size() * 2;
     bool needs_wrap_marker =
         (kVStart + static_cast<int>(moves.size()) > 256) && !moves.empty();
-    if (scap_total_words == 0) scap_total_words = 2;
+    if (strips_total_words == 0) strips_total_words = 2;
 
-    out += std::format("{} UWORD {}_scap_copper_list[{}] = {{\n",
-                       linkage, sym, scap_total_words);
+    out += std::format("{} UWORD {}_strips_copper_list[{}] = {{\n",
+                       linkage, sym, strips_total_words);
     std::size_t emitted = 0;
     for (std::size_t y = 0; y < moves.size(); ++y) {
         auto& row = moves[y];
@@ -96,7 +96,7 @@ void emit_scap_copper_list(std::string& out,
         for (std::size_t i = 0; i < row.size(); ++i) {
             auto& op = row[i];
             std::uint16_t w0 = 0, w1 = 0;
-            if (op.kind == scap::ScapOpKind::kWait) {
+            if (op.kind == strips::ScapOpKind::kWait) {
                 w0 = static_cast<std::uint16_t>(
                     (static_cast<unsigned>(op.vpos) << 8) |
                     (op.hpos & 0xFE) | 0x0001);
@@ -111,13 +111,13 @@ void emit_scap_copper_list(std::string& out,
             }
             out += std::format("0x{:04X},0x{:04X}", w0, w1);
             emitted += 2;
-            if (emitted < scap_total_words) out += ",";
+            if (emitted < strips_total_words) out += ",";
         }
         out += std::format("  /* y={} (vp={}) */\n", y, abs_vpos & 0xFF);
     }
     if (emitted == 0) out += "    0x0000,0x0000\n";
     out += "};\n\n";
-    out += std::format("{} ULONG {}_scap_copper_words = {};\n\n",
+    out += std::format("{} ULONG {}_strips_copper_words = {};\n\n",
                        linkage, sym, emitted);
 }
 
@@ -291,12 +291,12 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
         out += "};\n\n";
     }
 
-    // SCAP copper list (data-only). The .cpp viewer also emits this
+    // strips copper list (data-only). The .cpp viewer also emits this
     // array under the same name, with `static const` linkage; here we
     // use `const` (external linkage) so user code that includes the
     // .h gets a definition it can pass to its own Copper installer.
-    if (options.scap_line_moves && !options.scap_line_moves->empty()) {
-        emit_scap_copper_list(out, sym, options, "const");
+    if (options.strips_line_moves && !options.strips_line_moves->empty()) {
+        emit_strips_copper_list(out, sym, options, "const");
     }
 
     out += std::format("#endif /* {}_H */\n", SYM);
@@ -384,10 +384,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "//\n";
     {
         // Build a human-readable mode label that mirrors the runtime
-        // exit message (e.g. "HAM6 + CAP", "EHB + SCAP",
-        // "lores 6bpl + DPF + SCAP").
+        // exit message (e.g. "HAM6 + Sliced", "EHB + Strips",
+        // "lores 6bpl + DPF + Strips").
         bool _has_cop  = options.copper_changes && !options.copper_changes->empty();
-        bool _has_scap = options.scap_line_moves && !options.scap_line_moves->empty();
+        bool _has_scap = options.strips_line_moves && !options.strips_line_moves->empty();
         std::string mode_label;
         if (params.is_ham) {
             mode_label = std::format("HAM{}", depth);
@@ -400,8 +400,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
         if (options.dpf)       mode_label += " + DPF";
         if (options.interlace) mode_label += " + lace";
-        if (_has_scap)         mode_label += " + SCAP";
-        else if (_has_cop)     mode_label += " + CAP";
+        if (_has_scap)         mode_label += " + Strips";
+        else if (_has_cop)     mode_label += " + Sliced";
         const char* chipset_str = options.aga ? "AGA" : "OCS";
         out += std::format("// Image:    {}x{}, {} ({}-bit palette)\n",
                            width, height, chipset_str,
@@ -418,14 +418,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                options.total_unique_colors);
         }
         if (_has_cop)
-            out += std::format("// CAP:      {} swaps/line max\n",
+            out += std::format("// Sliced:      {} swaps/line max\n",
                                options.copper_changes_per_line);
         if (_has_scap) {
-            std::size_t scap_words = 0;
-            for (auto& row : *options.scap_line_moves)
-                scap_words += row.size() * 2;
-            out += std::format("// SCAP:     {} bytes copper list\n",
-                               scap_words * 2);
+            std::size_t strips_words = 0;
+            for (auto& row : *options.strips_line_moves)
+                strips_words += row.size() * 2;
+            out += std::format("// Strips:     {} bytes copper list\n",
+                               strips_words * 2);
         }
         out += std::format("// CAMG:     0x{:04X}\n", camg);
     }
@@ -559,8 +559,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Computed up here so it gates both the data array's 8-byte alignment
     // and the BPLxMOD/FMODE register writes later in the copper list.
     bool has_copper = options.copper_changes && !options.copper_changes->empty();
-    bool has_scap = options.scap_line_moves && !options.scap_line_moves->empty();
-    // SCAP supplies its own per-line copper ops and replaces the CAP
+    bool has_scap = options.strips_line_moves && !options.strips_line_moves->empty();
+    // strips supplies its own per-line copper ops and replaces the sliced
     // emission path. They never compose in the same viewer.
     if (has_scap) has_copper = false;
     bool is_lace = options.interlace;
@@ -905,7 +905,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     }
 
     // --- Copper list builder helper ---
-    // --- SCAP raw copper list (calibration / mid-line palette mode) ---
+    // --- strips raw copper list (calibration / mid-line palette mode) ---
     //
     // line_moves[y] is a per-image-row sequence of (WAIT|MOVE) ops. Emit
     // them as a flat UWORD array of (cmd, data) pairs in chip RAM. The
@@ -917,7 +917,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // linkage so the array stays in this translation unit; .h uses
         // plain `const` so user code that includes the .h sees the
         // definition with external linkage.
-        emit_scap_copper_list(out, sym, options, "static const");
+        emit_strips_copper_list(out, sym, options, "static const");
     }
 
     out += "// Write bitplane pointer registers into a copper list.\n";
@@ -1017,15 +1017,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    WaitVbl();\n\n";
 
     // Calculate copper list size: display setup + bitplane ptrs + colors + copper changes + end.
-    // SCAP appends one UWORD pair per ScapMove = 4 bytes each. The past-0xFF
+    // strips appends one UWORD pair per ScapMove = 4 bytes each. The past-0xFF
     // wrap is patched into line 255's existing end-of-line WAIT, so no extra
     // bytes are needed.
-    std::size_t scap_total_bytes = 0;
+    std::size_t strips_total_bytes = 0;
     if (has_scap) {
-        for (auto& row : *options.scap_line_moves)
-            scap_total_bytes += row.size() * 4;
+        for (auto& row : *options.strips_line_moves)
+            strips_total_bytes += row.size() * 4;
     }
-    auto cop_size = 128 + depth * 4 * 2 + pal_count * 4 + scap_total_bytes;
+    auto cop_size = 128 + depth * 4 * 2 + pal_count * 4 + strips_total_bytes;
     if (pal_count > 32) {
         // AGA >32: double writes (LOCT high + low) + BPLCON3 per bank + reset
         auto num_banks = (pal_count + 31) / 32;
@@ -1481,15 +1481,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
     }
 
-    // SCAP per-line copper ops: copy the static SCAP list into the live
+    // strips per-line copper ops: copy the static strips list into the live
     // copper buffer verbatim. Each entry is a UWORD pair, and the encoder
     // already inserted the past-0xFF marker if needed, so the viewer just
     // streams it out.
     if (has_scap) {
-        out += "    // SCAP per-line copper ops (raw WAIT/MOVE pairs)\n";
+        out += "    // Strips per-line copper ops (raw WAIT/MOVE pairs)\n";
         out += std::format(
-            "    for (ULONG i = 0; i < {0}_scap_copper_words; i++)\n"
-            "        *cl++ = {0}_scap_copper_list[i];\n\n", sym);
+            "    for (ULONG i = 0; i < {0}_strips_copper_words; i++)\n"
+            "        *cl++ = {0}_strips_copper_list[i];\n\n", sym);
     }
 
     // Blank below image: 0 bitplanes, keep LACE if interlaced
@@ -1508,12 +1508,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // or beyond), don't emit it here — a second 0xFFDF after we've passed
         // vp=0xFF hangs forever. Only emit in blank-below when loop is too
         // short to have emitted one itself.
-        // The SCAP path bakes its own 0xFFDF marker into the static table
-        // when needed (see scap_copper_list emitter); suppress here so we
+        // The strips path bakes its own 0xFFDF marker into the static table
+        // when needed (see strips_copper_list emitter); suppress here so we
         // don't double-emit and hang past vp=0xFF.
-        bool scap_emitted_wrap = has_scap && (last_line >= 256);
+        bool strips_emitted_wrap = has_scap && (last_line >= 256);
         if (last_line >= 256 && (!has_copper || loop_max_line < 255)
-            && !scap_emitted_wrap) {
+            && !strips_emitted_wrap) {
             out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
                    "  // cross 256 boundary\n";
         }
@@ -1804,8 +1804,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // has_scap is already declared in the outer scope (line 416).
 
         // Mode label: combines the base mode (HAM/EHB/lores/hires) with
-        // any active modifiers (DPF, CAP, SCAP, hires, interlace) into a
-        // single human-readable string. Order: BASE [+ DPF] [+ CAP|SCAP].
+        // any active modifiers (DPF, sliced, strips, hires, interlace) into a
+        // single human-readable string. Order: BASE [+ DPF] [+ sliced|strips].
         auto mode_params = amiga::get_mode_params(mode);
         std::string mode_label;
         if (mode_params.is_ham) {
@@ -1819,8 +1819,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
         if (options.dpf)       mode_label += " + DPF";
         if (options.interlace) mode_label += " + lace";
-        if (has_scap)          mode_label += " + SCAP";
-        else if (has_cop)      mode_label += " + CAP";
+        if (has_scap)          mode_label += " + Strips";
+        else if (has_cop)      mode_label += " + Sliced";
 
         // Build the message as a C string literal. Each line starts with
         // two spaces and a label-padded prefix so the values align in a
@@ -1853,14 +1853,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
         msg += std::format("  Bitplane: {} bytes\\n", total_bytes);
         if (has_cop)
-            msg += std::format("  CAP:      {} swaps/line max\\n",
+            msg += std::format("  Sliced:      {} swaps/line max\\n",
                                options.copper_changes_per_line);
         if (has_scap) {
-            std::size_t scap_words = 0;
-            for (auto& row : *options.scap_line_moves)
-                scap_words += row.size() * 2;
-            msg += std::format("  SCAP:     {} bytes copper list\\n",
-                               scap_words * 2);
+            std::size_t strips_words = 0;
+            for (auto& row : *options.strips_line_moves)
+                strips_words += row.size() * 2;
+            msg += std::format("  Strips:     {} bytes copper list\\n",
+                               strips_words * 2);
         }
         msg += "\\n";
         msg += "  \\033[36mhttps://www.png2amiga.app\\033[0m\\n";

@@ -10,7 +10,7 @@
 #     OUTPUT   ${CMAKE_CURRENT_BINARY_DIR}/title.h
 #              ${CMAKE_CURRENT_BINARY_DIR}/title.iff
 #     MODE     ham6
-#     OPTIONS  --cap --ham-beam 32
+#     OPTIONS  --sliced --ham-beam 32
 #     PALETTE  ${CMAKE_CURRENT_SOURCE_DIR}/palette.gpl   # optional, tracked via depfile
 #   )
 #
@@ -88,13 +88,13 @@ endfunction()
 # Lets users keep the option list readable instead of one long string.
 #
 #   png2amiga_options(opts
-#       MODE ham6 CAP CAP_BEST DEPTH 5 DITHER ostromoukhov)
+#       MODE ham6 SLICED SLICED_BEST DEPTH 5 DITHER ostromoukhov)
 #
 function(png2amiga_options out_var)
     set(_opts "")
     set(_one_value MODE DEPTH DITHER DITHER_STRENGTH ERROR_CLAMP HAM_BEAM
-                   CAP_CHANGES CHIPSET PALETTE_DIVERSITY LAYOUT)
-    set(_flag      CAP CAP_BEST DPF SCAP HAM_FAST INTERLACE FADE_IN
+                   SLICE_CHANGES CHIPSET PALETTE_DIVERSITY LAYOUT)
+    set(_flag      SLICED SLICED_BEST DPF STRIPS HAM_FAST INTERLACE FADE_IN
                    NATIVE_PAR NO_RESERVE_COLOR0 MATCH_RANGE NO_SCALE)
     cmake_parse_arguments(O "${_flag}" "${_one_value}" "" ${ARGN})
 
@@ -116,8 +116,8 @@ function(png2amiga_options out_var)
     if(O_HAM_BEAM)
         list(APPEND _opts --ham-beam ${O_HAM_BEAM})
     endif()
-    if(O_CAP_CHANGES)
-        list(APPEND _opts --cap-changes ${O_CAP_CHANGES})
+    if(O_SLICE_CHANGES)
+        list(APPEND _opts --slice-changes ${O_SLICE_CHANGES})
     endif()
     if(O_CHIPSET)
         list(APPEND _opts --chipset ${O_CHIPSET})
@@ -131,17 +131,17 @@ function(png2amiga_options out_var)
     if(O_NO_SCALE)
         list(APPEND _opts --no-scale)
     endif()
-    if(O_CAP)
-        list(APPEND _opts --cap)
+    if(O_SLICED)
+        list(APPEND _opts --sliced)
     endif()
-    if(O_CAP_BEST)
-        list(APPEND _opts --cap-best)
+    if(O_SLICED_BEST)
+        list(APPEND _opts --sliced-best)
     endif()
     if(O_DPF)
         list(APPEND _opts --dpf)
     endif()
-    if(O_SCAP)
-        list(APPEND _opts --scap)
+    if(O_STRIPS)
+        list(APPEND _opts --strips)
     endif()
     if(O_HAM_FAST)
         list(APPEND _opts --ham-fast)

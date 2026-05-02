@@ -13,7 +13,7 @@
 #include "copper.hpp"
 #include "dither.hpp"
 #include "dither_tuning.hpp"
-#include "scap.hpp"
+#include "strips.hpp"
 #include "ssimulacra2.hpp"
 #include "ham.hpp"
 #include "iff.hpp"
@@ -126,12 +126,12 @@ std::string fmt_size(int bytes) {
 //   plane_bytes      bitplane data size
 //   palette_size     base palette entry count
 //   aga              AGA chipset (palette / copper costs 2× the OCS price)
-//   cap_grid_entries CAP planner's height × cpl (0 if no CAP)
-//   scap_op_count    SCAP planner's total WAIT/MOVE ops (0 if no SCAP)
+//   sliced_grid_entries sliced planner's height × cpl (0 if no sliced)
+//   strips_op_count    strips planner's total WAIT/MOVE ops (0 if no strips)
 //   max_moves        worst-case copper MOVEs per scanline (for chip-RAM)
 //   height           image height (used in chip-RAM per-line list math)
-// Pass `avg_cap` only when the mode actually has CAP — otherwise the
-// "0.0 avg CAP/line" suffix is misleading.
+// Pass `avg_cap` only when the mode actually has sliced — otherwise the
+// "0.0 avg swaps/line" suffix is misleading.
 // Forward declaration; dither_name is defined far below in this TU.
 const char* dither_name(dither::Method m);
 
@@ -168,16 +168,16 @@ inline void cli_print_dither(dither::Method method, float strength) {
 }
 
 void cli_print_encoded(int depth, int plane_bytes, int palette_size,
-                       bool aga, int cap_grid_entries, int scap_op_count,
+                       bool aga, int sliced_grid_entries, int strips_op_count,
                        int height, int max_moves, int num_colors,
                        std::optional<float> avg_cap,
                        double quant_error, float psnr, float s2) {
     auto sb = api::compute_size_breakdown(plane_bytes, palette_size, aga,
-                                          cap_grid_entries, scap_op_count,
+                                          sliced_grid_entries, strips_op_count,
                                           height, max_moves);
     if (avg_cap) {
         cli_status("Encoded: {} bitplanes, disk: {}, chip: {}, {} colors, "
-                   "{:.1f} avg CAP/line, error: {:.4f}, PSNR: {:.2f} dB, "
+                   "{:.1f} avg swaps/line, error: {:.4f}, PSNR: {:.2f} dB, "
                    "S2: {:.2f}",
                    depth, fmt_size(sb.disk_bytes), fmt_size(sb.chip_bytes),
                    num_colors, *avg_cap, quant_error, psnr, s2);
@@ -211,7 +211,7 @@ void write_depfile(const std::string& depfile_path,
 // ---------------------------------------------------------------------------
 //
 // Build a horizontal atlas from N input PNGs so the encoder's quantizer +
-// (when --cap) per-line copper planner see all frames simultaneously and
+// (when --sliced) per-line copper planner see all frames simultaneously and
 // produce ONE shared palette + ONE per-line plan covering every frame's
 // row simultaneously. Per-frame outputs are then sliced from the atlas's
 // bitplane data after the encoder runs (sharing CMAP/PCHG/copper symbols).
@@ -433,11 +433,11 @@ struct Config {
     bool list_dithers = false;         // emit dither-method catalog and exit 0
 
     // Batch mode: N input PNGs encoded as a single horizontally-tiled
-    // atlas so they share one palette and (if --cap) one copper plan,
+    // atlas so they share one palette and (if --sliced) one copper plan,
     // then per-frame outputs are sliced from the atlas. Game-asset
     // pipelines for sprite sheets, animation frames, room layers etc.
     // Constraints: all frames same width/height, width % 16 == 0,
-    // --scap rejected, --no-scale auto-implied.
+    // --strips rejected, --no-scale auto-implied.
     bool batch = false;
     std::string batch_output_dir;
     std::string batch_format = "h";        // iff, h, png, raw
@@ -479,11 +479,13 @@ struct Config {
     // PSNR. See api::Options.
     std::string ham_metric = "oklab2";
 
-    // CAP best-quality planner. Multi-candidate × all-slot search + joint
-    // base-palette refinement. HAM6 + copper and HAM8 + copper only —
-    // indexed copper modes ignore this flag (their planner is already
-    // mature). Adds ~+0.5-2 dB PSNR for ~4-5× the CAP-encoding cost.
-    // Off by default — opt-in for offline / final exports.
+    // Multi-restart best-quality sweep. Tries N jitter seeds × dither
+    // strengths × palette-diversity values, ranks trials by --best-metric
+    // (SSIMULACRA2 by default), keeps the winner. Active in HAM6/HAM8,
+    // plain EHB, sliced palette, and strip palette. Cost varies by mode
+    // (~5× on HAM-sliced, ~20–30× on plain HAM/EHB sweeps); typical gain
+    // is +0.5–2 dB PSNR. Off by default — opt-in for offline / final
+    // exports.
     bool best = false;
     std::string best_metric = "ssimulacra2";  // "ssimulacra2" (default) | "msssim" | "psnr"
 
@@ -525,8 +527,8 @@ struct Config {
     // Copper palette
     bool copper = false;               // per-scanline palette changes
     int copper_changes = 0;            // 0 = auto (based on chipset/depth)
-    int cap_spread_radius = -1;        // -1 = use encode_copper default (4)
-    float cap_spread_decay = -1.0f;    // -1 = use encode_copper default (0.85)
+    int sliced_spread_radius = -1;        // -1 = use encode_copper default (4)
+    float sliced_spread_decay = -1.0f;    // -1 = use encode_copper default (0.85)
     bool fade_in = false;              // 16-step fade-in from black
 
     // CGA-specific options
@@ -554,15 +556,15 @@ struct Config {
     // shifted into upper color registers (8-15 OCS / 16-31 AGA).
     bool dual_playfield = false;
 
-    // SCAP calibration probe (DPF-only). "" disables. "a"/"b"/"c"/"d"
+    // Strips calibration probe (DPF-only). "" disables. "a"/"b"/"c"/"d"
     // selects which probe synthesizes the test viewer. Phase 1 only
     // implements probe A (OCS DPF slot HPOS sweep).
-    std::string scap_probe;
+    std::string strips_probe;
 
-    // SCAP encoder: mid-line palette swaps inside the displayed area, with
+    // strips encoder: mid-line palette swaps inside the displayed area, with
     // up to slot.capacity MOVEs per slot. OCS DPF lores only (Phase 1).
     bool scap = false;
-    bool scap_debug = false;
+    bool strips_debug = false;
 
     // Mask export
     std::string mask_path;             // output path for transparency mask
@@ -654,14 +656,14 @@ void print_usage() {
         "  --mask <file>                   Export transparency mask\n"
         "  --mask-invert                   Invert mask polarity\n"
         "\n"
-        "CAP — Copper-Augmented Palette (Amiga, per-line swaps):\n"
-        "  --cap                           Per-scanline palette swaps\n"
-        "  --cap-changes <0-16>            Swaps per line (0 = auto)\n"
+        "Sliced palette (Amiga, per-line swaps):\n"
+        "  --sliced                        Per-scanline palette swaps\n"
+        "  --slice-changes <0-16>          Swaps per line (0 = auto)\n"
         "  --best                          Multi-restart search (~20–30× slower)\n"
         "  --best-metric <m>               ssimulacra2 (default) | msssim | psnr\n"
         "\n"
-        "SCAP — Super CAP (mid-line swaps, OCS lores):\n"
-        "  --scap                          Mid-line swaps; pair with --dpf or ehb\n"
+        "Strip palette (mid-line swaps, OCS lores):\n"
+        "  --strips                        Mid-line swaps; pair with --dpf or ehb\n"
         "\n"
         "HAM:\n"
         "  --ham-beam <1-256>              DP search beam (default: 48)\n"
@@ -867,8 +869,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg == "--cap" || arg == "--copper") {
-            // --copper kept as legacy alias for --cap.
+        if (arg == "--sliced" || arg == "--copper") {
+            // --copper kept as legacy alias for --sliced.
             config.copper = true;
             continue;
         }
@@ -880,7 +882,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--best") {
             // Best-quality multi-restart sweep. The encoder route is
-            // selected by --cap / --scap; --best toggles the parallel
+            // selected by --sliced / --strips; --best toggles the parallel
             // jitter pass on top of whichever encoder runs.
             config.best = true;
             continue;
@@ -984,25 +986,25 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
-        if (arg.starts_with("--scap-probe=")) {
-            config.scap_probe = std::string(arg.substr(13));
+        if (arg.starts_with("--strips-probe=")) {
+            config.strips_probe = std::string(arg.substr(13));
             continue;
         }
-        if (arg == "--scap-probe" && i + 1 < argc) {
-            config.scap_probe = std::string(argv[++i]);
+        if (arg == "--strips-probe" && i + 1 < argc) {
+            config.strips_probe = std::string(argv[++i]);
             continue;
         }
-        if (arg == "--scap") {
+        if (arg == "--strips") {
             config.scap = true;
-            // SCAP defaults to DPF (the production mode). The lores 5bpp
+            // strips defaults to DPF (the production mode). The lores 5bpp
             // investigation path needs --depth 5 + no --dpf — let that
             // through by NOT auto-enabling DPF here. The post-parse fixup
             // below auto-enables DPF only when the user didn't pick a
             // 5bpp lores configuration.
             continue;
         }
-        if (arg == "--scap-debug") {
-            config.scap_debug = true;
+        if (arg == "--strips-debug") {
+            config.strips_debug = true;
             continue;
         }
 
@@ -1380,15 +1382,14 @@ Result<Config> parse_args(int argc, char* argv[]) {
                         " (use auto, median-cut, ocs-bruteforce, pnn)"}};
                 }
             }
-            else if (arg == "--cap-changes" || arg == "--copper-changes") {
-                // --copper-changes kept as legacy alias for --cap-changes.
+            else if (arg == "--slice-changes") {
                 config.copper_changes = std::atoi(std::string(val).c_str());
             }
-            else if (arg == "--cap-spread-radius") {
-                config.cap_spread_radius = std::atoi(std::string(val).c_str());
+            else if (arg == "--slice-spread-radius") {
+                config.sliced_spread_radius = std::atoi(std::string(val).c_str());
             }
-            else if (arg == "--cap-spread-decay") {
-                config.cap_spread_decay = std::stof(std::string(val));
+            else if (arg == "--slice-spread-decay") {
+                config.sliced_spread_decay = std::stof(std::string(val));
             }
             else if (arg == "--weight-l") {
                 color_space::WEIGHT_L = std::stof(std::string(val));
@@ -1532,7 +1533,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
         // before we do any work.
         if (config.scap) {
             return std::unexpected{Error{ErrorCode::unsupported_mode,
-                "batch mode is incompatible with --scap (per-frame mid-line "
+                "batch mode is incompatible with --strips (per-frame mid-line "
                 "swap chains aren't shareable across frames)"}};
         }
         if (!config.batch_output_dir.empty()) {
@@ -1565,17 +1566,17 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (config.input_path.empty()) config.input_path = "<batch>";
     }
 
-    if (config.input_path.empty() && config.scap_probe.empty() &&
+    if (config.input_path.empty() && config.strips_probe.empty() &&
         !config.list_modes && !config.list_dithers) {
         print_usage();
         std::exit(exit_code::usage);
     }
 
-    // SCAP post-parse fixup. Three supported configurations:
-    //   * DPF: --scap --dpf, OCS lores depth=3, 8 PF2 colours.
-    //   * EHB: --scap --mode ehb, 32 base + 32 hardware half-brite.
+    // strips post-parse fixup. Three supported configurations:
+    //   * DPF: --strips --dpf, OCS lores depth=3, 8 PF2 colours.
+    //   * EHB: --strips --mode ehb, 32 base + 32 hardware half-brite.
     // No auto-promotion — the user must opt into one of the supported
-    // SCAP regimes explicitly. The CLI block below errors out otherwise.
+    // strips regimes explicitly. The CLI block below errors out otherwise.
 
     return config;
 }
@@ -1966,7 +1967,7 @@ std::string_view mode_to_options_string(amiga::Mode m) {
 // dither::Method → api::Options.dither string. api::parse_dither is the
 // inverse. Falls back to "floyd-steinberg" for unmapped methods.
 // Mirror of api::parse_dither — must stay in sync. Any method exposed
-// to --dither MUST round-trip through this so best / SCAP / SNES /
+// to --dither MUST round-trip through this so best / strips / SNES /
 // Genesis paths that route through api::encode_state see the user's
 // actual choice (silent fallback to floyd-steinberg here was a real
 // bug that hid opt-checker / yliluoma / structure-fs / knoll / etc.).
@@ -2053,7 +2054,7 @@ std::string_view dither_to_options_string(dither::Method m) {
 // api::encode_state / run_pipeline call won't apply preprocess again.
 //
 // CLI paths that re-encode an already-preprocessed Image to PNG bytes
-// (SNES, Genesis, SCAP, batch atlas) previously passed make_api_options()
+// (SNES, Genesis, strips, batch atlas) previously passed make_api_options()
 // straight through — opts carried Config's gamma / brightness /
 // contrast / saturation / hue_shift / sharpen / black_point /
 // white_point / match_range, and run_pipeline preprocessed those bytes
@@ -2091,7 +2092,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.match_range = cfg.match_range;
     opts.dither = std::string{dither_to_options_string(cfg.dither_method)};
     // Per-mode dither auto-tuning. Inline Amiga branches (HAM, EHB,
-    // plain CAP, plain Amiga fallback) all call dither_tuning::defaults_for
+    // plain sliced, plain Amiga fallback) all call dither_tuning::defaults_for
     // and override dither_strength/error_clamp when the user didn't
     // pass them explicitly. Migrating any of those branches to
     // api::encode_state without applying the same tuning here would
@@ -2123,13 +2124,13 @@ api::Options make_api_options(const Config& cfg) {
     opts.best_metric = cfg.best_metric;
     opts.copper = cfg.copper;
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
-    opts.cap_spread_radius = cfg.cap_spread_radius;
-    opts.cap_spread_decay = cfg.cap_spread_decay;
+    opts.sliced_spread_radius = cfg.sliced_spread_radius;
+    opts.sliced_spread_decay = cfg.sliced_spread_decay;
     opts.lock_color0 = cfg.lock_color0;
     opts.dual_playfield = cfg.dual_playfield;
     opts.scap = cfg.scap;
-    opts.scap_debug = cfg.scap_debug;
-    opts.scap_probe = cfg.scap_probe;
+    opts.strips_debug = cfg.strips_debug;
+    opts.strips_probe = cfg.strips_probe;
     opts.alpha_threshold = cfg.alpha_threshold;
     opts.alpha_dither = std::string{dither_to_options_string(cfg.alpha_dither)};
     opts.alpha_dither_strength = cfg.alpha_dither_strength;
@@ -2903,22 +2904,22 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
 
 // ---------------------------------------------------------------------------
 // Batch mode entry point — encode N PNGs as a single horizontal atlas so
-// they share one palette and (if --cap) one per-line copper plan, then
+// they share one palette and (if --sliced) one per-line copper plan, then
 // emit per-frame outputs into config.batch_output_dir.
 //
 // Strategy: build atlas Image, serialise as PNG bytes, run api::encode_state
 // once on the atlas to get all encoder intermediates (planes, palette,
-// scanline_changes, scap_line_moves, ...) in one shot. Then decode the
+// scanline_changes, strips_line_moves, ...) in one shot. Then decode the
 // atlas's bitplane data to per-pixel indices, slice column ranges per
 // frame, re-encode each slice to its own BitplaneData, and run the
 // existing per-format writers (iff::write_ilbm, cheader::save, png_io,
 // raw) against the slice + the SHARED palette/copper from the atlas.
 //
-// The shared-CAP property holds because horizontal stacking puts every
-// frame's row Y at the SAME atlas row Y, so the per-line CAP plan
+// The shared-sliced property holds because horizontal stacking puts every
+// frame's row Y at the SAME atlas row Y, so the per-line sliced plan
 // computed for the atlas applies verbatim to each frame.
 //
-// SCAP is rejected up front (per-frame mid-line swap chains aren't
+// strips is rejected up front (per-frame mid-line swap chains aren't
 // shareable across frames). HAM/EHB/DPF are all allowed.
 // ---------------------------------------------------------------------------
 int run_batch(const Config& cfg) {
@@ -3199,7 +3200,7 @@ int run_batch(const Config& cfg) {
         }
         f << "};\n\n";
 
-        // Shared CAP copper plan (per-scanline palette swaps), if any.
+        // Shared sliced copper plan (per-scanline palette swaps), if any.
         if (!st.scanline_changes.empty()) {
             auto& changes = st.scanline_changes;
             auto cpl = st.changes_per_line;
@@ -3367,12 +3368,12 @@ int run_batch(const Config& cfg) {
     }
 
     // Summary. Disk accounting splits per-frame (bitplanes only, the
-    // bytes that get duplicated per frame) from shared (palette + CAP
+    // bytes that get duplicated per frame) from shared (palette + sliced
     // copper, one copy serves all frames). The total bundle = N ×
     // per-frame planes + shared. compute_size_breakdown does the math
     // for one full image; we ask it for both halves so per-frame
     // doesn't pretend to include the shared overhead.
-    int cap_entries = st.scanline_changes.empty() ? 0
+    int sliced_entries = st.scanline_changes.empty() ? 0
         : static_cast<int>(static_cast<int>(frame_h) *
                            static_cast<int>(st.changes_per_line));
     // Skip all-zero planes in disk accounting. DPF uses two playfields'
@@ -3400,8 +3401,8 @@ int run_batch(const Config& cfg) {
                                             frame_planes[0].bytes_per_row);
     int plane_b = nonzero_planes * per_plane_bytes;
     int pal_b = static_cast<int>(st.palette.size()) * (st.aga ? 4 : 2);
-    int cap_b = cap_entries * (st.aga ? 8 : 4);
-    int shared_b = pal_b + cap_b;
+    int sliced_b = sliced_entries * (st.aga ? 8 : 4);
+    int shared_b = pal_b + sliced_b;
     int total_b = plane_b * static_cast<int>(n_frames) + shared_b;
     auto total_colors = count_unique_colors(st.rendered);
 
@@ -3425,7 +3426,7 @@ int run_batch(const Config& cfg) {
                                 : std::numeric_limits<float>::infinity();
 
     cli_status("Batch: encoded {} frames into '{}', "
-               "{} colors, {:.1f} avg CAP/line, "
+               "{} colors, {:.1f} avg swaps/line, "
                "planes {}/frame ({}/{} non-zero) × {} + shared {} = {} total, "
                "PSNR avg {:.2f} dB",
                n_frames, cfg.batch_output_dir,
@@ -3534,31 +3535,31 @@ int main(int argc, char* argv[]) {
         return exit_code::ok;
     }
 
-    // --- SCAP calibration probe path ---
+    // --- strips calibration probe path ---
     // Synthesize the probe image + per-line copper ops directly and emit a
     // viewer .cpp/.adf, bypassing the normal load-image-and-encode pipeline.
     // Output extension picks .cpp (default) / .h, run through build-amiga.sh
     // afterwards to produce an ADF.
-    if (!config->scap_probe.empty()) {
+    if (!config->strips_probe.empty()) {
         if (config->output_path.empty()) {
             std::println(stderr,
-                         "Error: --scap-probe requires -o <output.cpp>");
+                         "Error: --strips-probe requires -o <output.cpp>");
             return 1;
         }
-        auto probe = config->scap_probe;
-        scap::ScapResult res;
+        auto probe = config->strips_probe;
+        strips::ScapResult res;
         if (probe == "a") {
-            auto r = scap::make_scap_probe_a_dpf_ocs(320, 256);
+            auto r = strips::make_scap_probe_a_dpf_ocs(320, 256);
             if (!r) { std::println(stderr, "Probe A error: {}",
                                    r.error().message); return 1; }
             res = *std::move(r);
         } else if (probe == "b" || probe == "c" || probe == "d") {
-            std::println(stderr, "Error: --scap-probe {} not implemented yet "
+            std::println(stderr, "Error: --strips-probe {} not implemented yet "
                                  "(needs Probe A slot data first)", probe);
             return 1;
         } else {
             std::println(stderr,
-                         "Error: --scap-probe value must be a|b|c|d, got '{}'",
+                         "Error: --strips-probe value must be a|b|c|d, got '{}'",
                          probe);
             return 1;
         }
@@ -3568,19 +3569,19 @@ int main(int argc, char* argv[]) {
         if (res.palette.size() < 16)
             res.palette.resize(16, Color3f{0.0f, 0.0f, 0.0f});
 
-        auto fallback_sym = std::string("scap_") + res.probe_label;
+        auto fallback_sym = std::string("strips_") + res.probe_label;
         auto ch_opts = pipeline::make_ch_opts({
             .symbol_override = config->symbol_name.empty()
                 ? std::string_view{fallback_sym}
                 : std::string_view{config->symbol_name},
             .dpf = true,                // OCS DPF for Phase 1
         });
-        ch_opts.scap_line_moves = &res.line_moves;
-        ch_opts.scap_label = res.probe_label;
-        ch_opts.scap_anchor_hpos = res.slot_table.line_gate_hpos;
-        ch_opts.scap_total_planes = res.slot_table.total_planes;
+        ch_opts.strips_line_moves = &res.line_moves;
+        ch_opts.strips_label = res.probe_label;
+        ch_opts.strips_anchor_hpos = res.slot_table.line_gate_hpos;
+        ch_opts.strips_total_planes = res.slot_table.total_planes;
 
-        cli_status("SCAP probe: {} ({}x{}, {} planes, {} per-line ops)",
+        cli_status("Strips probe: {} ({}x{}, {} planes, {} per-line ops)",
                      res.probe_label,
                      res.planes.width, res.planes.height,
                      res.planes.depth,
@@ -3609,7 +3610,7 @@ int main(int argc, char* argv[]) {
             cli_status("Header: {}", config->output_path);
         } else {
             std::println(stderr,
-                         "Error: --scap-probe output must be .cpp/.c/.h");
+                         "Error: --strips-probe output must be .cpp/.c/.h");
             return 1;
         }
         return 0;
@@ -4662,7 +4663,7 @@ int main(int argc, char* argv[]) {
             ham_params.bitplane_depth - 2);
         std::size_t ham_base_colors = std::size_t{1} << ham_data_bits;
         if (config->scap && config->mode == amiga::Mode::ham6) {
-            cli_print_mode(std::format("HAM6 + SCAP (beam: {})",
+            cli_print_mode(std::format("HAM6 + Strips (beam: {})",
                                         config->ham_beam));
         } else {
             cli_print_mode(std::format("HAM{} (beam: {})",
@@ -4681,7 +4682,7 @@ int main(int argc, char* argv[]) {
 
         // Re-encode the (preprocessed, scaled, cropped) image as PNG so
         // we can route through api::encode_state — same shape as
-        // SNES/Genesis/SCAP. Auto-tuning lives in make_api_options now;
+        // SNES/Genesis/strips. Auto-tuning lives in make_api_options now;
         // dither method already includes the HAM-specific override
         // applied above (ham_dither). neutralize_preprocess prevents
         // run_pipeline's own preprocess from double-applying.
@@ -4781,21 +4782,21 @@ int main(int argc, char* argv[]) {
                     if (!st.scanline_palettes.empty())
                         ch_opts.copper_scanline_palettes = &st.scanline_palettes;
                 }
-                // HAM6+SCAP: emit the SCAP mid-line MOVE table the same
-                // way EHB+SCAP and DPF+SCAP do. HAM6 shares the EHB slot
+                // HAM6+strips: emit the strips mid-line MOVE table the same
+                // way EHB+strips and DPF+strips do. HAM6 shares the EHB slot
                 // table (6-plane DMA, 19 mid-line slots — see scap.cpp
                 // 2176). Without this the .h / .cpp drops the per-line
                 // copper list and the rendered output decodes as plain
                 // HAM6 against the base 16-colour palette.
-                if (config->scap && !st.scap_line_moves.empty()) {
-                    ch_opts.scap_line_moves = &st.scap_line_moves;
-                    bool scap_ham6 = config->mode == amiga::Mode::ham6;
-                    auto& table = scap_ham6 ? scap::kScap6bplHam6
-                                            : scap::kScap6bplOcs;
-                    ch_opts.scap_label = scap_ham6 ? "scap_ham6_ocs"
-                                                   : "scap_dpf_ocs";
-                    ch_opts.scap_anchor_hpos = table.line_gate_hpos;
-                    ch_opts.scap_total_planes = table.total_planes;
+                if (config->scap && !st.strips_line_moves.empty()) {
+                    ch_opts.strips_line_moves = &st.strips_line_moves;
+                    bool strips_ham6 = config->mode == amiga::Mode::ham6;
+                    auto& table = strips_ham6 ? strips::kStrips6bplHam6
+                                            : strips::kStrips6bplOcs;
+                    ch_opts.strips_label = strips_ham6 ? "strips_ham6_ocs"
+                                                   : "strips_dpf_ocs";
+                    ch_opts.strips_anchor_hpos = table.line_gate_hpos;
+                    ch_opts.strips_total_planes = table.total_planes;
                     ch_opts.fade_in = false;
                 }
                 if (!is_h) pad_planes_to_mode(st.planes, config->mode,
@@ -4852,7 +4853,7 @@ int main(int argc, char* argv[]) {
     }
 
     // --- EHB mode ---
-    // Skip when --scap is on so the SCAP-EHB investigation block below
+    // Skip when --strips is on so the strips-EHB investigation block below
     // gets to handle it.
     if (config->mode == amiga::Mode::ehb && !config->scap) {
         // EHB is always 6 bitplanes, 32 base + 32 half-brightness
@@ -4872,7 +4873,7 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            // --reserve-range support for EHB+CAP: validate against the
+            // --reserve-range support for EHB+sliced: validate against the
             // 32-base palette (half-brite copies are derived). Build the
             // locked + dither_excluded vectors that flow into encode_copper
             // and the per-row dither below.
@@ -4921,10 +4922,10 @@ int main(int argc, char* argv[]) {
             auto w = image->width();
             auto h = image->height();
 
-            // Single-pass EHB+CAP encode. Body factored so best
+            // Single-pass EHB+sliced encode. Body factored so best
             // below can replay it under a parallel jitter sweep without
             // duplicating the (copper → re-dither → render) flow.
-            struct EhbCapTrial {
+            struct EhbSlicedTrial {
                 copper::CopperResult copper_result;
                 std::vector<std::uint8_t> indices;
                 Image rendered;
@@ -4933,7 +4934,7 @@ int main(int argc, char* argv[]) {
             auto encode_once = [&](const Image& img,
                                    const dither::Settings& d,
                                    int diversity,
-                                   bool report_progress) -> Result<EhbCapTrial> {
+                                   bool report_progress) -> Result<EhbSlicedTrial> {
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
                     static_cast<std::size_t>(config->copper_changes),
@@ -4944,11 +4945,11 @@ int main(int argc, char* argv[]) {
                               make_cli_progress_reporter())
                         : std::function<void(float, std::string_view)>{},
                     // Sentinel → encode_copper picks depth-aware default.
-                    config->cap_spread_radius >= 0
-                        ? static_cast<std::size_t>(config->cap_spread_radius)
+                    config->sliced_spread_radius >= 0
+                        ? static_cast<std::size_t>(config->sliced_spread_radius)
                         : std::numeric_limits<std::size_t>::max(),
-                    config->cap_spread_decay >= 0.0f
-                        ? config->cap_spread_decay : -1.0f,
+                    config->sliced_spread_decay >= 0.0f
+                        ? config->sliced_spread_decay : -1.0f,
                     ehb_cap_excluded);
                 if (!cr) return std::unexpected{cr.error()};
 
@@ -5058,7 +5059,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
 
-                return EhbCapTrial{
+                return EhbSlicedTrial{
                     *std::move(cr),
                     std::move(indices),
                     std::move(rendered),
@@ -5066,29 +5067,29 @@ int main(int argc, char* argv[]) {
                 };
             };
 
-            std::optional<EhbCapTrial> winner;
+            std::optional<EhbSlicedTrial> winner;
             if (config->best) {
-                // Same sweep shape as plain CAP and SCAP EHB: 8 jitter
+                // Same sweep shape as plain sliced and strips EHB: 8 jitter
                 // seeds × 5 strengths × 4 diversities + 1 baseline.
                 // 32-colour base palette (depth=5 copper); EHB is
                 // OCS-bound so amplitude=1.0 (no AGA shimmer concern).
-                auto cap_metric = pipeline::parse_best_metric(config->best_metric);
+                auto sliced_metric = pipeline::parse_best_metric(config->best_metric);
                 auto progress_fn = make_cli_progress_reporter();
-                winner = pipeline::best_sweep<EhbCapTrial>(
+                winner = pipeline::best_sweep<EhbSlicedTrial>(
                     *image, dith, config->palette_diversity,
                     /*jitter_count=*/8,
                     [&](const Image& jittered_in,
                         const dither::Settings& d, int div)
-                            -> Result<EhbCapTrial> {
+                            -> Result<EhbSlicedTrial> {
                         return encode_once(jittered_in, d, div,
                                            /*report_progress=*/false);
                     },
-                    [](const EhbCapTrial& t) -> const Image& {
+                    [](const EhbSlicedTrial& t) -> const Image& {
                         return t.rendered;
                     },
                     progress_fn,
                     /*jitter_amp=*/1.0f,
-                    cap_metric);
+                    sliced_metric);
             }
             if (!winner.has_value()) {
                 auto r = encode_once(*image, dith,
@@ -5104,7 +5105,7 @@ int main(int argc, char* argv[]) {
 
             auto& copper_result_obj = winner->copper_result;
             cli_print_mode(std::format(
-                "EHB + CAP ({} changes/line, max {} MOVEs/line)",
+                "EHB + Sliced ({} changes/line, max {} MOVEs/line)",
                 copper_result_obj.changes_per_line,
                 copper_result_obj.max_moves_per_line));
             cli_print_palette(std::format(
@@ -5190,7 +5191,7 @@ int main(int argc, char* argv[]) {
                     cli_status("Viewer: {}", config->output_path);
                 } else if (ends_with(config->output_path, ".iff") ||
                            ends_with(config->output_path, ".ilbm")) {
-                    // EHB+CAP IFF: emit 6-plane bitplane data + CMAP
+                    // EHB+sliced IFF: emit 6-plane bitplane data + CMAP
                     // (32 base colours; EHB hardware derives the
                     // half-brites at display time) + CAMG with EHB
                     // flag set + PCHG with the per-line base palette
@@ -5217,7 +5218,7 @@ int main(int argc, char* argv[]) {
                                  config->output_path,
                                  planes->total_bytes());
                 } else if (ends_with(config->output_path, ".h")) {
-                    // .h header for EHB+CAP: bitplanes + base CMAP +
+                    // .h header for EHB+sliced: bitplanes + base CMAP +
                     // copper change data, no viewer init code.
                     auto ch_opts = pipeline::make_ch_opts({
                         .output_path = config->output_path,
@@ -5294,7 +5295,7 @@ int main(int argc, char* argv[]) {
         auto& st = enc.state;
         // st.palette holds the full 64-entry EHB palette here (the
         // EHB pipeline emits {32 base} ++ {32 half-brite} into
-        // result.palette). The SCAP-EHB path (cli_print_palette
+        // result.palette). The strips-EHB path (cli_print_palette
         // around line 5347) stores only the 32 base; that
         // inconsistency is the reason this branch can't reuse the
         // same `palette.size() / size()*2` formula. EHB is always
@@ -5419,11 +5420,11 @@ int main(int argc, char* argv[]) {
     }
 
     // --- Copper palette mode ---
-    // Mirror api::run_pipeline's gates: SCAP layers on top of CAP and
+    // Mirror api::run_pipeline's gates: strips layers on top of sliced and
     // owns the per-line stream itself, EHB has its own copper branch
     // (line 4745), HAM has its own copper branch (line 4523). Skip the
-    // plain CAP path for those so `--cap --scap` doesn't fall into
-    // depth-5 CAP and produce a 32-colour result with EHB-mode confusion.
+    // plain sliced path for those so `--sliced --strips` doesn't fall into
+    // depth-5 sliced and produce a 32-colour result with EHB-mode confusion.
     if (config->copper && !config->scap &&
         !amiga::is_ham(config->mode) &&
         config->mode != amiga::Mode::ehb) {
@@ -5442,7 +5443,7 @@ int main(int argc, char* argv[]) {
 
         dither::Settings dith;
         dith.method = config->dither_method;
-        auto cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
+        auto sliced_tune = dither_tuning::defaults_for(dither_tuning::Context{
             .mode    = config->mode,
             .depth   = static_cast<int>(config->depth),
             .dpf     = config->dual_playfield,
@@ -5452,15 +5453,15 @@ int main(int argc, char* argv[]) {
             .method  = config->dither_method,
         });
         dith.strength = config->dither_strength_explicit
-                        ? config->dither_strength : cap_tune.strength;
+                        ? config->dither_strength : sliced_tune.strength;
         dith.error_clamp = config->error_clamp_explicit
-                          ? config->error_clamp : cap_tune.error_clamp;
+                          ? config->error_clamp : sliced_tune.error_clamp;
 
         // Dither: line is now emitted AFTER Mode/Palette below.
 
         // Build locked slot list from --lock-index specs.
         // --reserve-range entries also feed `locked` (so the copper never
-        // re-programs them) AND `cap_excluded` (so the dither pass treats
+        // re-programs them) AND `sliced_excluded` (so the dither pass treats
         // them as forbidden across all scanlines).
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
         for (auto& lock : config->locks) {
@@ -5468,22 +5469,22 @@ int main(int argc, char* argv[]) {
             copper_locks.emplace_back(idx,
                 palette_locks::to_color(lock, chipset, config->mode));
         }
-        auto cap_max_colors = std::size_t{1} << config->depth;
+        auto sliced_max_colors = std::size_t{1} << config->depth;
         auto reserves_in_cap = palette_locks::validate_reserves(
-            config->reserves, config->locks, cap_max_colors,
+            config->reserves, config->locks, sliced_max_colors,
             config->lock_color0);
         if (!reserves_in_cap) {
             std::println(stderr, "{}", reserves_in_cap.error().message);
             return 1;
         }
-        std::vector<std::size_t> cap_excluded;
+        std::vector<std::size_t> sliced_excluded;
         for (auto& r : config->reserves) {
             auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < cap_max_colors) {
+            if (r.index >= 0 && i < sliced_max_colors) {
                 copper_locks.emplace_back(i, palette_locks::to_color(
                     api::LockSpec{r.index, r.r, r.g, r.b},
                     chipset, config->mode));
-                cap_excluded.push_back(i);
+                sliced_excluded.push_back(i);
             }
         }
 
@@ -5501,20 +5502,20 @@ int main(int argc, char* argv[]) {
                 config->lock_color0, copper_locks, diversity,
                 skip_initial_lace, config->interlace, /*is_ehb=*/false,
                 std::move(prog),
-                config->cap_spread_radius >= 0
-                    ? static_cast<std::size_t>(config->cap_spread_radius)
+                config->sliced_spread_radius >= 0
+                    ? static_cast<std::size_t>(config->sliced_spread_radius)
                     : std::numeric_limits<std::size_t>::max(),
-                config->cap_spread_decay >= 0.0f
-                    ? config->cap_spread_decay : -1.0f,
-                cap_excluded);
+                config->sliced_spread_decay >= 0.0f
+                    ? config->sliced_spread_decay : -1.0f,
+                sliced_excluded);
         };
 
         Result<copper::CopperResult> copper_result;
         if (config->best) {
-            // Plain CAP: 8 jitter seeds (16-colour palette has shallower
+            // Plain sliced: 8 jitter seeds (16-colour palette has shallower
             // basins than DPF's 8-colour PF2; 8 seeds × 5×4 = 161 trials,
             // ~30–60 s on 8 cores). Same parallel-sweep machinery as
-            // SCAP DPF/EHB via pipeline::best_sweep.
+            // strips DPF/EHB via pipeline::best_sweep.
             struct CapTrial {
                 copper::CopperResult result;
                 Image rendered;
@@ -5525,7 +5526,7 @@ int main(int argc, char* argv[]) {
             // OCS's discrete 12-bit gamut already snaps small nudges.
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto cap_metric = pipeline::parse_best_metric(config->best_metric);
+            auto sliced_metric = pipeline::parse_best_metric(config->best_metric);
             auto best = pipeline::best_sweep<CapTrial>(
                 *image, dith, config->palette_diversity,
                 /*jitter_count=*/8,
@@ -5543,7 +5544,7 @@ int main(int argc, char* argv[]) {
                 [](const CapTrial& t) -> const Image& { return t.rendered; },
                 make_cli_progress_reporter(),
                 jitter_amp,
-                cap_metric);
+                sliced_metric);
             if (best.has_value()) {
                 copper_result = std::move(best->result);
             } else {
@@ -5564,7 +5565,7 @@ int main(int argc, char* argv[]) {
         // Print actual cpl after orchestration (auto mode may have stretched
         // or fallen back).
         cli_print_mode(std::format(
-            "{}CAP ({} changes/line, max {} MOVEs/line)",
+            "{}Sliced ({} changes/line, max {} MOVEs/line)",
             config->dual_playfield ? "DPF + " : "",
             copper_result->changes_per_line,
             copper_result->max_moves_per_line));
@@ -5766,23 +5767,23 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // --- SCAP (mid-line palette swaps) ---
+    // --- strips (mid-line palette swaps) ---
     // Two paths:
-    //   * DPF (production): --scap + --dpf + OCS lores depth=3 → 8 PF2
+    //   * DPF (production): --strips + --dpf + OCS lores depth=3 → 8 PF2
     //     colours, full cpp viewer export.
-    //   * Lores 5bpp (investigation): --scap + OCS lores depth=5 (no
+    //   * Lores 5bpp (investigation): --strips + OCS lores depth=5 (no
     //     --dpf) → 32 colours, single playfield, PNG preview only,
     //     no copper-list cpp output yet.
     if (config->scap) {
-        bool scap_ehb = config->mode == amiga::Mode::ehb;
-        bool scap_dpf = use_dpf_std && config->mode == amiga::Mode::lores;
-        // HAM6+SCAP is handled by the HAM branch above, so the gate here
+        bool strips_ehb = config->mode == amiga::Mode::ehb;
+        bool strips_dpf = use_dpf_std && config->mode == amiga::Mode::lores;
+        // HAM6+strips is handled by the HAM branch above, so the gate here
         // only needs to cover the EHB/DPF combos. Keep the error wording
         // explicit about all three legal forms.
-        if ((!scap_dpf && !scap_ehb) || chipset != amiga::Chipset::ocs ||
+        if ((!strips_dpf && !strips_ehb) || chipset != amiga::Chipset::ocs ||
             config->interlace) {
             std::println(stderr,
-                "Error: --scap requires OCS (no interlace) with either "
+                "Error: --strips requires OCS (no interlace) with either "
                 "--dpf lores depth=3, --mode ehb, or --mode ham6.");
             return 1;
         }
@@ -5792,13 +5793,13 @@ int main(int argc, char* argv[]) {
         }
         // Re-encode the (preprocessed, scaled, cropped) image as PNG so
         // we can hand it to api::encode_state — same shape as the
-        // SNES/Genesis paths. encode_state runs the canonical SCAP
-        // pipeline (scap::encode_scap_*_ocs internally) and populates
-        // st.scap_* + the per-line move-budget breakdown the printer
+        // SNES/Genesis paths. encode_state runs the canonical strips
+        // pipeline (strips::encode_scap_*_ocs internally) and populates
+        // st.strips_* + the per-line move-budget breakdown the printer
         // below consumes.
         auto src_png = png_io::encode(*image);
         if (!src_png) {
-            std::println(stderr, "SCAP: source re-encode failed: {}",
+            std::println(stderr, "Strips: source re-encode failed: {}",
                          src_png.error().message);
             return exit_code::internal;
         }
@@ -5807,35 +5808,35 @@ int main(int argc, char* argv[]) {
         // these bytes a second time.
         neutralize_preprocess(sopts);
         sopts.scap = true;
-        sopts.scap_debug = config->scap_debug;
+        sopts.strips_debug = config->strips_debug;
         sopts.width = static_cast<int>(image->width());
         sopts.height = static_cast<int>(image->height());
         sopts.on_progress = make_cli_progress_reporter();
-        // SCAP layers on top of CAP since b0be343; force the flag so
+        // strips layers on top of sliced since b0be343; force the flag so
         // dither_tuning's per-mode defaults inside run_pipeline match
         // what the inline path computed.
         sopts.copper = true;
 
         auto enc = api::encode_state(src_png->data(), src_png->size(), sopts);
         if (!enc.ok()) {
-            std::println(stderr, "SCAP encode error: {}", enc.error_msg);
+            std::println(stderr, "Strips encode error: {}", enc.error_msg);
             return 1;
         }
         auto& st = enc.state;
 
-        const char* scap_label = scap_ehb
+        const char* strips_label = strips_ehb
             ? "OCS EHB 6bpp"
             : "OCS DPF";
         cli_print_mode(std::format(
-            "SCAP ({}, {} slots, {:.1f} useful swaps/line)",
-            scap_label, st.scap_slot_count, st.copper_changes));
-        if (scap_ehb) {
-            // EHB SCAP: st.palette holds 32 base; halfbrites are derived.
+            "Strips ({}, {} slots, {:.1f} useful swaps/line)",
+            strips_label, st.strips_slot_count, st.copper_changes));
+        if (strips_ehb) {
+            // EHB strips: st.palette holds 32 base; halfbrites are derived.
             cli_print_palette(std::format(
                 "{} base + {} half-brite = {} colors",
                 st.palette.size(), st.palette.size(), st.palette.size() * 2));
         } else {
-            // DPF SCAP: st.palette is the 16-entry COLOR00..15 register
+            // DPF strips: st.palette is the 16-entry COLOR00..15 register
             // layout (output_palette in scap.cpp); only 8 of those slots
             // are actually used (PF2 has 3 bitplanes → 8 colours).
             // Report the visible-colour count, not the register count.
@@ -5846,21 +5847,21 @@ int main(int argc, char* argv[]) {
         cli_print_dither(config->dither_method, config->dither_strength);
         cli_status("Copper:   hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
-                     st.scap_avg_hblank_moves_per_line,
-                     st.scap_max_hblank_moves_per_line,
-                     st.scap_avg_visible_moves_per_line,
-                     st.scap_max_visible_moves_per_line,
-                     st.scap_avg_total_moves_per_line,
+                     st.strips_avg_hblank_moves_per_line,
+                     st.strips_max_hblank_moves_per_line,
+                     st.strips_avg_visible_moves_per_line,
+                     st.strips_max_visible_moves_per_line,
+                     st.strips_avg_total_moves_per_line,
                      st.max_moves_per_line);
-        int scap_ops = 0;
-        for (auto& moves : st.scap_line_moves) scap_ops += static_cast<int>(moves.size());
+        int strips_ops = 0;
+        for (auto& moves : st.strips_line_moves) strips_ops += static_cast<int>(moves.size());
         cli_print_encoded(
             static_cast<int>(st.planes.depth),
             static_cast<int>(st.planes.total_bytes()),
             static_cast<int>(st.palette.size()),
             /*aga=*/false,
-            /*cap_grid_entries=*/0,
-            scap_ops,
+            /*sliced_grid_entries=*/0,
+            strips_ops,
             static_cast<int>(st.rendered.height()),
             static_cast<int>(st.max_moves_per_line),
             static_cast<int>(count_unique_colors(st.rendered)),
@@ -5890,19 +5891,19 @@ int main(int argc, char* argv[]) {
                 auto ch_opts = pipeline::make_ch_opts({
                     .output_path = config->output_path,
                     .symbol_override = config->symbol_name,
-                    .dpf = scap_dpf,        // false for EHB SCAP
+                    .dpf = strips_dpf,        // false for EHB strips
                     .total_unique_colors =
                         static_cast<std::size_t>(count_unique_colors(st.rendered)),
                 });
-                ch_opts.scap_line_moves = &st.scap_line_moves;
-                ch_opts.scap_label = scap_ehb ? "scap_ehb_ocs"
-                                              : "scap_dpf_ocs";
+                ch_opts.strips_line_moves = &st.strips_line_moves;
+                ch_opts.strips_label = strips_ehb ? "strips_ehb_ocs"
+                                              : "strips_dpf_ocs";
                 // Use the static slot tables (same shape encode_state
                 // ran against); matches api.cpp::convert_viewer.
-                auto& table = scap_ehb ? scap::kScap6bplEhb
-                                       : scap::kScap6bplOcs;
-                ch_opts.scap_anchor_hpos = table.line_gate_hpos;
-                ch_opts.scap_total_planes = table.total_planes;
+                auto& table = strips_ehb ? strips::kStrips6bplEhb
+                                       : strips::kStrips6bplOcs;
+                ch_opts.strips_anchor_hpos = table.line_gate_hpos;
+                ch_opts.strips_total_planes = table.total_planes;
                 pad_planes_to_mode(st.planes, config->mode, config->hires);
                 bool is_h = ends_with(config->output_path, ".h");
                 auto r = is_h
@@ -5922,7 +5923,7 @@ int main(int argc, char* argv[]) {
                            config->output_path);
             } else {
                 std::println(stderr,
-                    "SCAP output: only .png, .h, and .cpp/.c supported");
+                    "Strips output: only .png, .h, and .cpp/.c supported");
                 return exit_code::usage;
             }
         }
@@ -5933,7 +5934,7 @@ int main(int argc, char* argv[]) {
 
     // Mode line for the standard bitplane path: short hardware-flavour
     // label so every Amiga / DOS / Atari path prints a Mode: header,
-    // matching CAP / SCAP / HAM / EHB.
+    // matching sliced / strips / HAM / EHB.
     cli_print_mode(std::format(
         "{}{} ({}bpp)",
         config->dual_playfield ? "DPF + " : "",

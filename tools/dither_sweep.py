@@ -5,7 +5,7 @@ Outputs per-(mode, method) tables of strength vs MS-SSIM (and PSNR for
 sanity check), with a final summary suggesting the best strength per
 bucket. We DON'T auto-edit dither_tuning.cpp — the user maintains the
 table by hand based on the sweep numbers, which preserves the
-big-picture structure (palette-aware-vs-FS, mode/depth/CAP/SCAP/HAM
+big-picture structure (palette-aware-vs-FS, mode/depth/SLICED/STRIPS/HAM
 buckets).
 
 Usage:

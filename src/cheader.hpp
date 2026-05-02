@@ -3,7 +3,7 @@
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "copper.hpp"
-#include "scap.hpp"
+#include "strips.hpp"
 #include "types.hpp"
 
 #include <cstdint>
@@ -56,18 +56,18 @@ struct CHeaderOptions {
     // actually draws (row y ← row y-2) rather than the default row y-1.
     const std::vector<std::vector<Color3f>>* copper_scanline_palettes = nullptr;
 
-    // SCAP (Super Copper-Augmented Palette): mid-line COLORxx writes at
+    // strips (Super Sliced palette): mid-line COLORxx writes at
     // fixed horizontal slot positions, anchored by a per-line WAIT.
     // line_moves[y] is a sequence of raw WAIT/MOVE ops emitted verbatim
     // into the copper list for image row y. When populated, the viewer
-    // skips the CAP path entirely and installs the SCAP list as its
+    // skips the sliced path entirely and installs the strips list as its
     // primary copper list. Used by the calibration probe pipeline first;
     // the production planner emits the same shape.
-    const std::vector<std::vector<scap::ScapMove>>* scap_line_moves = nullptr;
+    const std::vector<std::vector<strips::ScapMove>>* strips_line_moves = nullptr;
     // Informational — included as comments in the emitted copper list.
-    std::string scap_label;
-    int scap_anchor_hpos = 0;
-    int scap_total_planes = 0;
+    std::string strips_label;
+    int strips_anchor_hpos = 0;
+    int strips_total_planes = 0;
 
     // Multi-frame viewer (--batch --batch-format cpp). When non-empty, the
     // viewer emits one bitplane data array per frame (including the primary
@@ -81,7 +81,7 @@ struct CHeaderOptions {
 
     // Caller-provided count of unique RGB colours actually present in the
     // rendered preview. Differs from palette.size() for HAM (MODIFY ops
-    // create intermediate colours), EHB (halfbrites get used), CAP / SCAP
+    // create intermediate colours), EHB (halfbrites get used), sliced / strips
     // (per-scanline palette evolution). Reported in the viewer's exit
     // message as "Colors: N". 0 = caller didn't compute it; viewer
     // omits the line.

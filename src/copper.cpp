@@ -255,7 +255,7 @@ SwapCandidate find_best_swap(
             }
             // [Histogram-pool snap experiment: tested and rejected.
             //  Snapping centroid to the nearest source colour in a
-            //  256-entry histogram regressed lores+CAP by ~0.5 dB
+            //  256-entry histogram regressed lores+sliced by ~0.5 dB
             //  averaged across 4 images. Reason: centroid is the
             //  optimal-for-cluster colour; snapping it onto a strict
             //  256-color subset of the 4096-RGB444-gamut loses
@@ -514,8 +514,8 @@ Result<CopperResult> encode_copper(const Image& image,
     // Precompute all rows in OKLab for neighbor lookups.
     // [Source pre-quantize to RGB444 experiment: tested and rejected.
     //  Snapping pixels to OCS grid before palette planning gave a
-    //  net -0.03 dB across 5 modes × 4 images: lores+CAP +0.39,
-    //  EHB+CAP -0.57, EHB+SCAP -0.03, DPF+SCAP +0.18. EHB+CAP loss
+    //  net -0.03 dB across 5 modes × 4 images: lores+sliced +0.39,
+    //  EHB+sliced -0.57, EHB+strips -0.03, DPF+strips +0.18. EHB+sliced loss
     //  outweighs marginal gains elsewhere — keep continuous-precision
     //  pixels for the swap planner so cluster centroids stay accurate.]
     std::vector<std::vector<color_space::OKLab>> all_lab(height);
@@ -528,7 +528,7 @@ Result<CopperResult> encode_copper(const Image& image,
 
     // [Top-N source colour histogram pool experiment: tested and
     //  rejected — snapping centroid to nearest source colour in a
-    //  256-entry RGB444 histogram regressed lores+CAP by ~0.5 dB.
+    //  256-entry RGB444 histogram regressed lores+sliced by ~0.5 dB.
     //  Centroid → OCS-grid snap is already enough; further
     //  constraining to a histogram subset loses optimization
     //  headroom. find_best_swap accepts the pool args as a
@@ -607,14 +607,14 @@ Result<CopperResult> encode_copper(const Image& image,
 
     // Depth/is_ehb-aware spread defaults from the 25-config A/B sweep
     // on FS encodes (320×213, 4 hero images). User-supplied values via
-    // --cap-spread-radius / --cap-spread-decay override.
+    // --slice-spread-radius / --slice-spread-decay override.
     //
     //   key  → (radius, decay)   Δ vs r=4,d=0.85 (was prior global default)
     //   --------------------------------------------------------------
-    //   EHB+CAP                    r=4, d=0.30    +1.23 dB
-    //   depth ≤ 3 (DPF+CAP)        r=3, d=0.85    +0.71
-    //   depth = 5 (lores+CAP d5)   r=2, d=0.85    +0.54
-    //   else (HAM6+CAP / SCAP)     r=4, d=0.85    marginal (≤±0.15)
+    //   EHB+sliced                    r=4, d=0.30    +1.23 dB
+    //   depth ≤ 3 (DPF+sliced)        r=3, d=0.85    +0.71
+    //   depth = 5 (lores+sliced d5)   r=2, d=0.85    +0.54
+    //   else (HAM6+sliced / strips)     r=4, d=0.85    marginal (≤±0.15)
     struct SpreadDefault { std::size_t radius; float decay; };
     constexpr SpreadDefault kSpreadEHB    {4, 0.30f};
     constexpr SpreadDefault kSpreadDPF    {3, 0.85f};
@@ -984,7 +984,7 @@ Result<CopperResult> encode_copper(const Image& image,
     // selects the per-row palette and yliluoma family / nearest-pair.
     // ===================================================================
 
-    // Pre-convert each row's CAP palette to OKLab once. When --reserve-range
+    // Pre-convert each row's sliced palette to OKLab once. When --reserve-range
     // is active, drop excluded slots from the candidate set (cand_to_full[y]
     // maps the filtered index back to the actual palette slot).
     std::vector<bool> excluded_mask;
@@ -1031,7 +1031,7 @@ Result<CopperResult> encode_copper(const Image& image,
             return {chosen, thr};
         });
 
-    // DBS post-pass refinement for CAP. The base picker above already
+    // DBS post-pass refinement for sliced. The base picker above already
     // picked a sensible per-row palette index per pixel; DBS sweeps
     // and toggles indices to lower the HVS-blurred OKLab cost,
     // respecting that each row has a different palette.
@@ -1177,7 +1177,7 @@ Result<Image> render_copper(const bitplane::BitplaneData& planes,
 Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
                                    const std::vector<std::vector<Color3f>>& scanline_palettes,
                                    std::span<const Color3f> base_palette,
-                                   std::size_t cap_changes_per_line,
+                                   std::size_t sliced_changes_per_line,
                                    bool is_lace,
                                    amiga::Chipset chipset) {
     auto width = planes.width;
@@ -1217,13 +1217,13 @@ Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
             auto d2 = dr * dr + dg * dg + db * db;
             if (d2 > 0.0f) cands.push_back({r, d2, cur[r]});
         }
-        if (cands.size() > cap_changes_per_line) {
+        if (cands.size() > sliced_changes_per_line) {
             std::partial_sort(
                 cands.begin(),
-                cands.begin() + static_cast<std::ptrdiff_t>(cap_changes_per_line),
+                cands.begin() + static_cast<std::ptrdiff_t>(sliced_changes_per_line),
                 cands.end(),
                 [](auto& a, auto& b) { return a.dist > b.dist; });
-            cands.resize(cap_changes_per_line);
+            cands.resize(sliced_changes_per_line);
         }
         return cands;
     };

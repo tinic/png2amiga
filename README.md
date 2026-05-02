@@ -29,8 +29,11 @@ space. Sister project to [png2c64](https://github.com/tinic/png2c64).
 
 **Amiga modes**: Lores / Hires (+ interlace), HAM6 (OCS) + HAM8 (AGA)
 with hires and/or interlace variants, EHB. 1–8 bitplanes per chipset
-limits. **CAP** (Copper-Augmented Palette, per-line swaps) and **SCAP**
-(Super CAP, mid-line swaps) for thousands of unique colors per frame.
+limits. Optional **sliced palette** (per-line copper swaps — the same
+technique behind [Sliced HAM / SHAM](https://en.wikipedia.org/wiki/Hold-And-Modify#Sliced_HAM),
+in use since 1989) and **strip palette** (additional mid-line swaps in
+the active scanline, used in demoscene productions like Desire's
+*Shuffling Around the Christmas Tree*).
 
 **Atari modes**: STF Low/Medium/Hi, STE Low/Medium/Hi (9-bit palette
 on STF, 12-bit on STE; ST-Hi is hardware-locked monochrome). Degas
@@ -105,18 +108,18 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 # HAM8 realtime / batch profile (greedy, ~15× faster)
 ./build/png2amiga --mode ham8 --chipset aga --ham-fast input.png output.png
 
-# Per-line palette (CAP) — more colors per line via Copper-Augmented Palette
-./build/png2amiga --mode lores --depth 5 --cap input.png output.iff
-./build/png2amiga --mode ham6 --cap input.png output.iff
+# Sliced palette — per-line copper swaps (more colors per scanline).
+./build/png2amiga --mode lores --depth 5 --sliced input.png output.iff
+./build/png2amiga --mode ham6 --sliced input.png output.iff
 
-# Mid-line palette swaps (SCAP) — DPF or EHB only.
-# IFF can't represent mid-line MOVEs (no standard ILBM chunk for them);
-# use .cpp (runnable AmigaOS viewer) or .h (data-only) instead.
-./build/png2amiga --mode lores --dpf --scap input.png viewer.cpp
-./build/png2amiga --mode ehb --scap input.png data.h
+# Strip palette — mid-line swaps inside the active scanline. DPF or EHB only.
+# IFF has no chunk for mid-line MOVEs, so use .cpp (runnable AmigaOS viewer)
+# or .h (data-only) instead.
+./build/png2amiga --mode lores --dpf --strips input.png viewer.cpp
+./build/png2amiga --mode ehb --strips input.png data.h
 
-# HAM6 + CAP at maximum quality (~4-5× slower, +0.5 to +2 dB PSNR)
-./build/png2amiga --mode ham6 --cap --best input.png output.iff
+# HAM6 + sliced palette, multi-restart search (~4-5× slower, +0.5 to +2 dB PSNR)
+./build/png2amiga --mode ham6 --sliced --best input.png output.iff
 
 # Generate a bootable Amiga floppy that displays the image
 ./build/png2amiga --mode ham6 input.png viewer.cpp
@@ -177,72 +180,92 @@ Run `./build/png2amiga --help` for the full flag reference.
 `--native-par` letterboxes/pillarboxes the source into the fixed DOS
 buffer; the default is to stretch-fill.
 
-## CAP — Copper-Augmented Palette (per-line swaps)
+## Sliced palette (per-line copper swaps)
 
-Add `--cap` (alias `--copper`) to any bitmap mode (lores, hires, EHB,
-HAM6, HAM8) to let the Copper coprocessor rewrite palette registers in
-the horizontal blank between every scanline. Each line displays with its
-own palette state, and the planner picks per-line color swaps that
-minimise OKLab error against the source row.
+Add `--sliced` to any bitmap mode (lores, hires, EHB, HAM6, HAM8) to let
+the Copper coprocessor rewrite palette registers in the horizontal blank
+between every scanline. Each line displays with its own palette state,
+and the planner picks per-line color swaps that minimise OKLab error
+against the source row.
 
-The encoder respects the real-hardware post-DDFSTOP DMA budget:
-**14 MOVE instructions per line** (one of the 15 copper slots is the
-per-line WAIT). Safe static budget is 14 palette swaps on OCS (one MOVE
-per change) and 3 on AGA (4 MOVEs per change worst-case under banked
-LOCT). Auto-mode tries K+3, K+2, K+1 and picks the highest K whose
-worst-case cost fits the budget — typically 6 swaps/line at depths 3–5
-on AGA.
+This is the same technique that's been used in Amiga demos and HAM
+converters since the late 1980s — the [Wikipedia article on
+HAM](https://en.wikipedia.org/wiki/Hold-And-Modify#Sliced_HAM) covers
+the lineage as "Sliced HAM" / SHAM / dynamic HAM. The reference HAM
+encoder [ham_convert](http://mrsebe.bplaced.net/blog/wordpress/?page_id=374)
+and Leonard's [Brute Force Colors](https://arnaud-carre.github.io/2022-12-30-amiga-ham/)
+both implement the per-line variant. png2amiga aims at the same target
+with a perceptual error metric and applies the technique to indexed
+modes too (lores, hires, EHB) rather than just HAM.
 
-`--cap-changes N` (alias `--copper-changes`) overrides the budget; use
-if you want to experiment with configurations that may exceed real
-hardware limits but still display correctly on emulators.
+The encoder respects the real-hardware post-DDFSTOP DMA budget: **14
+MOVE instructions per line** (one of the 15 copper slots is the per-line
+WAIT). Safe static budget is 14 palette swaps on OCS (one MOVE per
+change) and 3 on AGA (4 MOVEs per change worst-case under banked LOCT).
+Auto-mode tries K+3, K+2, K+1 and picks the highest K whose worst-case
+cost fits the budget — typically 6 swaps/line at depths 3–5 on AGA.
 
-`--best` enables a slower (~4–5×) HAM CAP planner that combines
-multi-candidate slot search with joint base-palette refinement. HAM6
-and HAM8 + CAP only. Adds roughly +0.5 to +1.5 dB PSNR on natural
-images; smooth synthetic gradients can land near lossless. The
-indexed CAP planner (lores/hires/EHB) already iterates predict-dither
-with column-error feedback and isn't improved further by this flag.
+`--slice-changes N` overrides the budget; use if you want to experiment
+with configurations that may exceed real hardware limits but still
+display correctly on emulators.
 
-## SCAP — Super CAP (mid-line swaps)
+`--best` runs a multi-restart sweep over jitter seeds, dither
+strengths, and palette-diversity values, picking the trial with the
+best result against `--best-metric` (SSIMULACRA2 by default). Available
+on plain HAM6/HAM8, plain EHB, and any combination with sliced or
+strip palette. Cost is ~20–30× the single-pass time on most modes
+(HAM-CAP / strips can land closer to ~5×); typical gain is
++0.5 to +2 dB PSNR.
 
-`--scap` extends CAP by issuing additional palette MOVEs at fixed
-**mid-line** copper slots — so a single scanline can display multiple
-palette banks across its width. Where plain CAP gives "this row's 64
-colors", SCAP gives "this strip's 64 colors", with strips on a 16-pixel
-grid. SCAP rides on top of CAP (each line opens with the CAP base, then
-SCAP swaps walk it through the visible region).
+## Strip palette (mid-line swaps inside the active scanline)
 
-Two SCAP modes:
+`--strips` extends the sliced palette by issuing additional palette
+MOVEs at fixed **mid-line** copper slots — so a single scanline can
+display multiple palette banks across its width. Where the per-line
+sliced palette gives "this row's 64 colors", strips gives "this strip's
+64 colors", with strips on a 16-pixel grid. Strips ride on top of the
+sliced base (each line opens with the sliced palette reload in hblank,
+then mid-line swaps walk it through the visible region).
 
-* **DPF + SCAP** (`--mode lores --dpf --scap`) — OCS dual-playfield,
+Mid-line copper register changes have been a demoscene staple for
+decades — Shadow of the Beast (1989) used single-color bars, Spaceballs'
+[State of the Art](https://www.pouet.net/prod.php?which=99) (1992)
+pushed full mid-line palette manipulation, and recent productions like
+Desire's [Shuffling Around the Christmas Tree](https://www.pouet.net/prod.php?which=90358)
+(2021, code by Platon42) and [Copper Chunky](https://www.powerprograms.nl/amiga/copper-chunky.html)
+by Jeroen Knoester (2021) showcase how dense the per-line copper traffic
+can get. png2amiga's contribution is wiring this style of per-strip
+palette change into a still-image converter on top of an OKLab
+error-diffused dither.
+
+Two strip modes:
+
+* **DPF + strips** (`--mode lores --dpf --strips`) — OCS dual-playfield,
   3-plane PF2 (8 base colors). The 8 PF2 registers are unconditionally
-  re-emitted in every line's hblank (~9 MOVEs, fixed) so SCAP swaps
+  re-emitted in every line's hblank (~9 MOVEs, fixed) so mid-line swaps
   cannot leak state across lines. Up to 19 useful mid-line swaps per
   scanline; ~454 unique displayed colors per frame on a typical image.
 
-* **EHB + SCAP** (`--mode ehb --scap`) — OCS Extra Half-Brite, 32 base
-  registers + 32 hardware-derived half-brites. SCAP swaps a base
-  register and the corresponding half-brite is updated automatically by
-  the hardware DAC. Adaptive per-line hblank tracking keeps each line
-  inside the 14-MOVE OCS hblank budget. ~1100+ unique displayed colors
-  per frame.
+* **EHB + strips** (`--mode ehb --strips`) — OCS Extra Half-Brite, 32
+  base registers + 32 hardware-derived half-brites. Each base swap also
+  updates the matching half-brite slot via the hardware DAC. Adaptive
+  per-line hblank tracking keeps each line inside the 14-MOVE OCS hblank
+  budget. ~1100+ unique displayed colors per frame.
 
-DPF+SCAP and EHB+SCAP are OCS-only and require lores (no interlace).
-Both compose with the existing CAP per-line palette evolution; the
-planner runs 6 iterative refinement passes alternating index dither and
-SCAP swap selection. SCAP slot positions were calibrated on real OCS
-hardware via the `--scap-probe` mode (see `src/scap.hpp` for the
-empirically-determined timing tables).
+Both modes are OCS-only, lores, no interlace. The planner runs 6
+iterative refinement passes alternating index dither and mid-line swap
+selection. Slot positions were calibrated empirically on real OCS
+hardware via `--strips-probe` (see `src/strips.hpp`); the published
+hardware budget is ~14 hblank MOVEs + ~20 visible-area MOVEs per line in
+6-plane modes, and the calibrated slot tables sit comfortably within
+that.
 
-![SCAP copper-list density and bus usage in vAmiga's debug overlay](docs/scap.png)
+![strip palette copper-list density and bus usage in vAmiga's debug overlay](docs/scap.png)
 
-The vAmiga debug overlay above shows the copper list and bus usage
-for an SCAP frame: every visible scanline runs a near-saturated MOVE
-stream through the displayed area, illustrating just how dense the
-per-line copper traffic gets — each band of activity is one scanline's
-worth of CAP base reload + ~19 mid-line SCAP swaps fitting inside the
-OCS hblank budget.
+The vAmiga debug overlay shows one frame's copper list and bus usage:
+every visible scanline runs a near-saturated MOVE stream through the
+displayed area — each band of activity is one scanline's sliced-palette
+reload in hblank plus ~19 mid-line swaps inside the visible area.
 
 ## How does it compare?
 
@@ -254,9 +277,9 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
-| **png2amiga** | **EHB + SCAP + best**       | 31.14     | **71.36**   |    50.03 |
-| png2amiga   | HAM6 + CAP + best                 | 30.94     | 69.15       |    37.38 |
-| png2amiga   | HAM6 + CAP                        | 30.32     | 65.41       |     0.49 |
+| **png2amiga** | **EHB + strips + best**       | 31.14     | **71.36**   |    50.03 |
+| png2amiga   | HAM6 + sliced + best              | 30.94     | 69.15       |    37.38 |
+| png2amiga   | HAM6 + sliced                     | 30.32     | 65.41       |     0.49 |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |    68.11 |
 | png2amiga   | EHB + best (no copper)            | 29.58     | 62.88       |     7.16 |
 | png2amiga   | HAM6 + best (no copper)           | 29.75     | 62.44       |    41.34 |
@@ -296,10 +319,10 @@ git submodule update --init
 ./run-amiga.sh viewer.adf
 ```
 
-The generated viewer takes the system, sets up the Copper list
-(including per-line CAP changes if `--cap` was used and mid-line SCAP
-swaps if `--scap` was used), and waits for the left mouse button to
-exit.
+The generated viewer takes the system, sets up the copper list
+(including per-line sliced-palette changes if `--sliced` was used and
+mid-line strip swaps if `--strips` was used), and waits for the left
+mouse button to exit.
 
 ## Build-system integration (CMake / Make / Ninja)
 
@@ -329,7 +352,7 @@ png2amiga_add_image(
   OUTPUT   ${CMAKE_CURRENT_BINARY_DIR}/title.h
            ${CMAKE_CURRENT_BINARY_DIR}/title.iff
   MODE     ham6
-  OPTIONS  --cap --ham-beam 32
+  OPTIONS  --sliced --ham-beam 32
   PALETTE  ${CMAKE_CURRENT_SOURCE_DIR}/palette.gpl   # optional
 )
 ```

@@ -523,11 +523,11 @@ void prune_beam(std::vector<BeamState>& candidates,
 }
 
 // DP beam search for a single scanline. ScanlineResult is declared
-// in ham.hpp now so SCAP and other consumers can use it.
+// in ham.hpp now so strips and other consumers can use it.
 // Per-strip variant: takes parallel arrays of HamPrecomp and base_srgb
 // (one entry per strip) plus a per-pixel strip-index lookup. The DP
 // rolling state crosses strip boundaries unchanged — only the palette
-// consulted by expand_ham swaps. Used by SCAP HAM6 to drive row-level
+// consulted by expand_ham swaps. Used by strips HAM6 to drive row-level
 // DP beam search with mid-line palette swaps.
 template <HamMetric M>
 ScanlineResult encode_scanline_dp_per_strip_t(
@@ -1590,7 +1590,7 @@ std::vector<HamSwap> find_ham_swaps(
     // candidate × multi-slot search and pick the (slot, color) pair that
     // drops row error the most. Don't bail on a single failed candidate —
     // only stop when NO candidate-slot pair improves the row. ~5-10×
-    // cost of the fast path. Mirrors SCAP's per-strip planner shape.
+    // cost of the fast path. Mirrors strips's per-strip planner shape.
     for (std::size_t s = 0; s < changes_per_line; ++s) {
         std::vector<SRGBColor> pal_srgb(num_base_colors);
         for (std::size_t i = 0; i < num_base_colors; ++i)
@@ -1691,7 +1691,7 @@ std::vector<HamSwap> find_ham_swaps(
         // state. Sequential trials are the dominant cost in --best
         // mode (16 cands × 15 slots × 7 swaps × ~213 rows × 5 passes
         // = ~1.8M row encodes), so parallelising here lifts the whole
-        // HAM6+CAP+best path from single-thread to N-core.
+        // HAM6+sliced+best path from single-thread to N-core.
         struct TrialResult {
             float    err = std::numeric_limits<float>::max();
             Color3f  color{};
@@ -1829,19 +1829,19 @@ Result<HamResult> encode_ham_copper_generic(
     // calls together cover 0..100% in one monotone sweep instead of N
     // visually-distinct sub-bars. Each row processed contributes one
     // weighted "work unit":
-    //   - pass 1 (sequential CAP planning) ≈ 5% of run_passes time
+    //   - pass 1 (sequential sliced planning) ≈ 5% of run_passes time
     //   - pass 2 (parallel DP beam search)  ≈ 95%
     // so weighting per-row bumps gives a near-linear bar in wall time.
     //
-    // best does the initial encode plus kCapBestRefineIters extra
+    // best does the initial encode plus kSlicedBestRefineIters extra
     // refinement passes (no early-stop — predictable progress + every
     // iteration is a chance to find a lower-error palette centroid).
     // User explicitly OK'd more compute for better quality.
     constexpr float kPass1Weight = 0.05f;
     constexpr float kPass2Weight = 0.95f;
-    constexpr int kCapBestRefineIters = 4;
+    constexpr int kSlicedBestRefineIters = 4;
     float run_passes_count = opts.best
-        ? static_cast<float>(1 + kCapBestRefineIters) : 1.0f;
+        ? static_cast<float>(1 + kSlicedBestRefineIters) : 1.0f;
     float total_units = run_passes_count *
         (kPass1Weight * static_cast<float>(h) +
          kPass2Weight * static_cast<float>(h));
@@ -1874,11 +1874,11 @@ Result<HamResult> encode_ham_copper_generic(
         std::vector<Color3f> current_pal = initial_base;
         std::vector<Color3f> current_pal_f2 = initial_base;
 
-        // Pass 1 (sequential): per-row CAP planning. Each row mutates
+        // Pass 1 (sequential): per-row sliced planning. Each row mutates
         // current_pal, so this must be serial. Cheap vs the beam search.
         report_global(stage);
         std::size_t pass1_step = std::max<std::size_t>(1, h / 20);
-        // 3-line neighbour context experimentally hurt HAM6+CAP across
+        // 3-line neighbour context experimentally hurt HAM6+sliced across
         // 4 hero images at both weight=0.25 and weight=0.5 (chuck31
         // -0.46/-0.50 dB, electrichues02 -0.09/-0.10, lovers -0.40,
         // fromthe +0.08). HAM op selection is sequential-state-bound
@@ -1886,7 +1886,7 @@ Result<HamResult> encode_ham_copper_generic(
         // (which roll their own HAM state from the same palette) adds
         // noise that doesn't represent real chip behaviour. The
         // ham_convert 3-line trick applies to palette quantisation,
-        // not the per-line CAP swap planner. Disabled by default;
+        // not the per-line sliced swap planner. Disabled by default;
         // structure preserved for future experimentation.
         constexpr float kHamNeighbourDecay = 0.0f;
         std::array<std::span<const Color3f>, 2> neighbour_rows;
@@ -2030,9 +2030,9 @@ Result<HamResult> encode_ham_copper_generic(
     // inside each).
     auto best = run_passes(base_pal.colors, "encoding", opts.beam_width);
 
-    // Joint base-palette + CAP refinement (--best only). The
+    // Joint base-palette + sliced refinement (--best only). The
     // initial choose_ham_palette base is fixed without knowing what
-    // CAP will do per row; refinement re-picks each slot as the OKLab
+    // sliced will do per row; refinement re-picks each slot as the OKLab
     // centroid of the per-row palettes the previous pass settled into,
     // then re-encodes from that better starting point. Each iteration
     // either lowers total_error (kept) or doesn't (kept anyway as the
@@ -2041,7 +2041,7 @@ Result<HamResult> encode_ham_copper_generic(
     // `best` so we keep the lowest-error result regardless of which
     // iteration produced it.
     //
-    // Fixed kCapBestRefineIters iterations rather than convergence-
+    // Fixed kSlicedBestRefineIters iterations rather than convergence-
     // based early stop: predictable progress, and the centroid update
     // is non-monotonic in error (one bad iter can be followed by a
     // good one).
@@ -2112,7 +2112,7 @@ Result<HamResult> encode_ham_copper_generic(
         PassResult latest = best;  // copy — must not move-from best
                                     // (retry may never improve and we'd
                                     // be left with empty vectors).
-        for (int iter = 0; iter < kCapBestRefineIters; ++iter) {
+        for (int iter = 0; iter < kSlicedBestRefineIters; ++iter) {
             auto refined = centroid_refine(latest);
             // Odd iters: jitter (escape fixed point). Even iters: pure
             // centroid (consolidate after the perturbation).

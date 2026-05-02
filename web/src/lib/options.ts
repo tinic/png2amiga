@@ -470,7 +470,7 @@ export function defaultOptions(): Options {
     height: 0,
     // HAM
     hamBeam: 16,
-    // CAP best-quality planner (multi-candidate slot search + joint
+    // sliced best-quality planner (multi-candidate slot search + joint
     // base-palette refinement). HAM6 + copper and HAM8 + copper only —
     // indexed copper modes ignore this flag (their planner is already
     // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
@@ -504,7 +504,7 @@ export function defaultOptions(): Options {
     // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3
     // (OCS) or 4 (AGA). CAMG DBLPF flag set.
     dualPlayfield: false,
-    // SCAP — Super Copper-Augmented Palette: mid-line palette swaps
+    // strips — Super Sliced palette: mid-line palette swaps
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
     ...CGA_TEXT_DEFAULTS,

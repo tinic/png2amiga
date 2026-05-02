@@ -142,7 +142,7 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("scap"))
         opts.scap = js_opts["scap"].as<bool>();
     if (js_opts.hasOwnProperty("scapDebug"))
-        opts.scap_debug = js_opts["scapDebug"].as<bool>();
+        opts.strips_debug = js_opts["scapDebug"].as<bool>();
     if (js_opts.hasOwnProperty("best"))
         opts.best = js_opts["best"].as<bool>();
     if (js_opts.hasOwnProperty("bestMetric"))

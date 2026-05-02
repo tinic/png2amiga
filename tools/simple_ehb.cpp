@@ -4,7 +4,7 @@
 //   Twin-aware k-means refine (joint base + half-brite pairing).
 //   Build 64-effective palette (32 base + sRGB-halved twins).
 //   FS error diffusion, serpentine, in OKLab perceptual nearest.
-//   Output as PNG (preview, no copper, no SCAP, no --best gymnastics).
+//   Output as PNG (preview, no copper, no STRIPS, no --best gymnastics).
 //
 // Build:
 //   clang++ -std=c++20 -O2 -I/Users/turo/png2amiga/third_party \

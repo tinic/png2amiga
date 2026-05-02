@@ -364,11 +364,11 @@ const dpfAvailable = computed(() => {
   return options.depth === 3 && !m.includes('hires')
 })
 
-// SCAP — mid-line palette swaps. Two flavours, both OCS lores only:
+// strips — mid-line palette swaps. Two flavours, both OCS lores only:
 //   * DPF + lores (depth=3): 3-plane PF2, 8 base colours.
 //   * EHB (mode=ehb): 32 base + 32 hardware-derived half-brites.
-// SCAP is an extension to CAP (per-line palette evolution); enabling
-// SCAP turns CAP on too, and turning CAP off cascades SCAP off.
+// strips is an extension to sliced (per-line palette evolution); enabling
+// strips turns sliced on too, and turning sliced off cascades strips off.
 const scapAvailable = computed(() => {
   const cs = effectiveChipset(options.mode, options.chipset)
   if (cs !== 'ocs') return false
@@ -492,15 +492,15 @@ watch(() => options.mode, (mode, oldMode) => {
   if (sizeOverride.value && isFixedBufferMode(mode)) {
     sizeOverride.value = false
   }
-  // DPF and SCAP both require chipset-/depth-specific shapes.
+  // DPF and strips both require chipset-/depth-specific shapes.
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
   track('mode-change', { from: oldMode, to: mode })
 })
 
 // DPF + copper now compose (copper branch in api.cpp expands to PF2 +
-// shifts CAP register targets into the upper palette bank). Just track
-// toggles. SCAP and copper still don't combine — SCAP supplies its own
+// shifts sliced register targets into the upper palette bank). Just track
+// toggles. strips and copper still don't combine — strips supplies its own
 // per-line copper stream.
 watch(() => options.dualPlayfield, (on) => {
   if (!scapAvailable.value) options.scap = false
@@ -508,21 +508,21 @@ watch(() => options.dualPlayfield, (on) => {
 })
 watch(() => options.scap, (on) => {
   if (on) {
-    // SCAP is an extension to CAP — make sure CAP is on too.
+    // strips is an extension to sliced — make sure sliced is on too.
     options.copper = true
   }
   track('scap-toggle', { enabled: on })
 })
 
-// Turning Copper off pulls SCAP off too — SCAP layers mid-line moves
-// on top of CAP and is meaningless without it. Disabling SCAP alone
-// only removes those mid-line moves; CAP stays on.
+// Turning Copper off pulls strips off too — strips layers mid-line moves
+// on top of the sliced palette and is meaningless without it. Disabling strips alone
+// only removes those mid-line moves; sliced stays on.
 watch(() => options.copper, (on) => {
   if (!on && options.scap) options.scap = false
 })
 
 // Depth changes can invalidate DPF (requires depth=3 OCS / 4 AGA) and
-// SCAP (depth=3 OCS lores only). Mode/dpf watchers above don't fire
+// strips (depth=3 OCS lores only). Mode/dpf watchers above don't fire
 // when only the depth slider moves, so reset here too.
 watch(() => options.depth, () => {
   if (!dpfAvailable.value) options.dualPlayfield = false
@@ -556,7 +556,7 @@ watch(() => options.chipset, (chipset, oldChipset) => {
   if (isAtariMode(options.mode) || isFixedBufferMode(options.mode)) options.copper = false
   const max = maxDepth(options.mode, options.chipset)
   if (max > 0 && options.depth > max) options.depth = max
-  // SCAP is OCS-only and DPF requires the chipset-specific depth — both
+  // strips is OCS-only and DPF requires the chipset-specific depth — both
   // get invalidated when the chipset flips. The mode/dpf/depth watchers
   // above don't fire here, so reset directly.
   if (!dpfAvailable.value) options.dualPlayfield = false
@@ -781,7 +781,7 @@ function formatResultInfo(result: ConvertResult) {
     ? Math.floor(result.depth / 2) : result.depth
   const parts = [`${result.width}x${result.height}, ${statusChipset.value}`,
                  `${visibleBpl || '?'}bpl, ${colorCount} colors`]
-  pushIf(parts, result.copperChanges, `${(result.copperChanges ?? 0).toFixed(1)} avg CAP/line`)
+  pushIf(parts, result.copperChanges, `${(result.copperChanges ?? 0).toFixed(1)} avg sliced/line`)
   const sizeStats = formatSizeStats(result)
   pushIf(parts, sizeStats, sizeStats.slice(2))  // strip leading ", "
   pushIf(parts, result.quantError != null, `error: ${(result.quantError ?? 0).toFixed(2)}`)
@@ -1721,10 +1721,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   // nextTick between the two so watchers actually observe the
   // intermediate "all defaults" state — without it Vue batches both
   // Object.assigns into a single flush and watchers compare end vs
-  // initial. For SCAP that means scap stays true→true (no fire,
+  // initial. For strips that means scap stays true→true (no fire,
   // copper never auto-enables) while the copper watcher DOES fire
   // (true→false) and cascades scap off. Net effect: clicking the
-  // SCAP example a second time toggles copper off.
+  // strips example a second time toggles copper off.
   Object.assign(options, defaultOptions())
   await nextTick()
   if (example.opts) Object.assign(options, example.opts)
@@ -1922,12 +1922,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- CAP — Copper-Augmented Palette (Amiga only; not Atari/DOS/C64) -->
+              <!-- sliced — Sliced palette (Amiga only; not Atari/DOS/C64) -->
               <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !paletteData" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="CAP — Copper-Augmented Palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">CAP</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Sliced palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Sliced</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
-                  <span style="color: #888; font-size: 0.625rem;">Copper-Augmented Palette</span>
+                  <span style="color: #888; font-size: 0.625rem;">Sliced palette</span>
                 </div>
               </div>
               <!-- Dual playfield (standard Amiga lores/hires + matching depth). -->
@@ -1939,9 +1939,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- SCAP — mid-line palette swaps (OCS lores only, DPF or EHB) -->
+              <!-- strips — mid-line palette swaps (OCS lores only, DPF or EHB) -->
               <div v-if="scapAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="SCAP — Super CAP: mid-line palette swaps inside the displayed area, on top of CAP's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">SCAP</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Strip palette: mid-line palette swaps inside the displayed area, on top of the sliced palette's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">Strips</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.scap" />
                   <span style="color: #888; font-size: 0.625rem;">mid-line swaps</span>
@@ -1954,8 +1954,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    the algorithmic choices, just the time budget. Parallel
                    multi-restart sweep over (dither_strength × diversity
                    × image-jitter); picks the best-scoring trial. Active
-                   for: HAM+CAP (centroid refinement), plain CAP, EHB+CAP,
-                   SCAP DPF, SCAP EHB. -->
+                   for: HAM+sliced (centroid refinement), plain sliced, EHB+sliced,
+                   strips DPF, strips EHB. -->
               <div v-if="options.copper || options.scap" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">Best</label>
                 <div class="col-8 flex align-items-center gap-2">
@@ -2252,9 +2252,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 <Slider v-model="options.paletteDiversity" :min="0" :max="9" :step="1" class="w-full" />
               </div>
 
-              <!-- CAP changes override -->
+              <!-- sliced changes override -->
               <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">
-                <label class="block text-xs text-color-secondary font-semibold mb-1" title="Copper-Augmented Palette swaps per scanline. 0 = auto: backend picks the worst-case K that fits the 14-MOVE budget, plus a K+3 retry path. Higher values bypass the budget check and may overshoot real hardware.">CAP Changes/Line</label>
+                <label class="block text-xs text-color-secondary font-semibold mb-1" title="Sliced palette swaps per scanline. 0 = auto: backend picks the worst-case K that fits the 14-MOVE budget, plus a K+3 retry path. Higher values bypass the budget check and may overshoot real hardware.">Slice changes/line</label>
                 <div class="flex gap-2 align-items-center">
                   <InputNumber v-model="options.copperChanges" :min="0" :max="copperMax" class="flex-1 input-sm" placeholder="0 = auto" />
                   <span class="text-xs text-color-secondary">max: {{ copperMax }}</span>
@@ -2470,7 +2470,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 }
 /* Tighten the label column inside the controls panel: PrimeFlex's
    .col-4 reserves 33.3333% which leaves a noticeable gap after short
-   labels (CAP, SCAP, Dither, Dual PF). Override to 25% / 75% so every
+   labels (Sliced, Strips, Dither, Dual PF). Override to 25% / 75% so every
    row stays aligned but the gap shrinks by ~22px. */
 .controls-col .grid.align-items-center > label.col-4 {
   width: 25%;

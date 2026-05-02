@@ -211,7 +211,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // hardware half-brite). A swap on base slot
                                    // k automatically also updates effective
                                    // slot k+32 = halve(base[k]). Without this
-                                   // flag, CAP+EHB optimises a 32-color
+                                   // flag, sliced+EHB optimises a 32-color
                                    // objective while rendering hits 64 — for
                                    // high-dynamic-range images the 32-color
                                    // planner picks middle-tone bases and
@@ -228,16 +228,16 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // smoothing. SIZE_MAX / -1.0f means
                                    // "use the depth/is_ehb-aware default";
                                    // explicit values from the CLI flags
-                                   // --cap-spread-radius / --cap-spread-decay
+                                   // --slice-spread-radius / --slice-spread-decay
                                    // override that derivation. The
                                    // depth-conditional defaults come from
                                    // a 25-config A/B sweep on FS encodes:
-                                   //   is_ehb (EHB+CAP):     r=4, d=0.3
+                                   //   is_ehb (EHB+sliced):     r=4, d=0.3
                                    //   depth=3 (DPF):        r=3, d=0.85
-                                   //   depth=5 (lores+CAP):  r=2, d=0.85
-                                   //   else (HAM6+CAP/SCAP): r=4, d=0.85
+                                   //   depth=5 (lores+sliced):  r=2, d=0.85
+                                   //   else (HAM6+sliced/strips): r=4, d=0.85
                                    // Net wins of +0.5–1.2 dB on plain
-                                   // CAP modes, marginal elsewhere.
+                                   // sliced modes, marginal elsewhere.
                                    std::size_t neighbor_radius =
                                        std::numeric_limits<std::size_t>::max(),
                                    float neighbor_decay = -1.0f,
@@ -260,7 +260,7 @@ Result<Image> render_copper(const bitplane::BitplaneData& planes,
 
 // Lace-aware overload: simulates the K-swap budget the cheader emitter
 // applies in lace mode (lace_rebuild picks the top-K diffs against the
-// previous SAME-FIELD row, drops anything past `cap_changes_per_line`).
+// previous SAME-FIELD row, drops anything past `sliced_changes_per_line`).
 // Use this for the preview path so the rendered image matches what the
 // generated viewer will actually display on hardware — without it, the
 // preview shows the planner's idealised per-row palette, but the chip
@@ -273,7 +273,7 @@ Result<Image> render_copper(const bitplane::BitplaneData& planes,
 Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
                                    const std::vector<std::vector<Color3f>>& scanline_palettes,
                                    std::span<const Color3f> base_palette,
-                                   std::size_t cap_changes_per_line,
+                                   std::size_t sliced_changes_per_line,
                                    bool is_lace,
                                    amiga::Chipset chipset);
 

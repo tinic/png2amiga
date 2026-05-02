@@ -54,42 +54,42 @@ COMBOS = [
     ("lores",      1, "ocs", [],                      "lores-d1"),
     ("lores",      3, "ocs", [],                      "lores-d3"),
     ("lores",      5, "ocs", [],                      "lores-d5"),
-    ("lores",      5, "ocs", ["--cap"],               "lores-d5-cap"),
+    ("lores",      5, "ocs", ["--sliced"],               "lores-d5-cap"),
     ("lores-lace", 5, "ocs", [],                      "lores-lace-d5"),
-    ("lores-lace", 5, "ocs", ["--cap"],               "lores-lace-d5-cap"),
+    ("lores-lace", 5, "ocs", ["--sliced"],               "lores-lace-d5-cap"),
     # OCS hires indexed
     ("hires",      4, "ocs", [],                      "hires-d4"),
-    ("hires",      4, "ocs", ["--cap"],               "hires-d4-cap"),
+    ("hires",      4, "ocs", ["--sliced"],               "hires-d4-cap"),
     ("hires-lace", 4, "ocs", [],                      "hires-lace-d4"),
     # AGA lores deep
     ("lores",      6, "aga", [],                      "lores-d6-aga"),
     ("lores",      8, "aga", [],                      "lores-d8-aga"),
-    ("lores",      8, "aga", ["--cap"],               "lores-d8-aga-cap"),
+    ("lores",      8, "aga", ["--sliced"],               "lores-d8-aga-cap"),
     # AGA hires
     ("hires",      8, "aga", [],                      "hires-d8-aga"),
     # OCS DPF (lores only, depth=3, 8 PF2 colours)
     ("lores",      3, "ocs", ["--dpf"],               "dpf-lores-d3"),
-    ("lores",      3, "ocs", ["--dpf", "--cap"],      "dpf-lores-d3-cap"),
+    ("lores",      3, "ocs", ["--dpf", "--sliced"],      "dpf-lores-d3-cap"),
     ("lores-lace", 3, "ocs", ["--dpf"],               "dpf-lores-lace-d3"),
     # AGA DPF (depth=4, 16 PF2 colours)
     ("lores",      4, "aga", ["--dpf"],               "dpf-lores-d4-aga"),
     ("hires",      4, "aga", ["--dpf"],               "dpf-hires-d4-aga"),
     # HAM6 (OCS / AGA)
     ("ham6",            6, "ocs", [],          "ham6"),
-    ("ham6",            6, "ocs", ["--cap"],   "ham6-cap"),
-    ("ham6",            6, "ocs", ["--cap", "--cap-best"], "ham6-cap-best"),
+    ("ham6",            6, "ocs", ["--sliced"],   "ham6-cap"),
+    ("ham6",            6, "ocs", ["--sliced", "--sliced-best"], "ham6-cap-best"),
     ("ham6-lace",       6, "ocs", [],          "ham6-lace"),
     ("ham6-hires",      6, "aga", [],          "ham6-hires"),
     ("ham6-hires-lace", 6, "aga", [],          "ham6-hires-lace"),
     # HAM8 (AGA only)
     ("ham8",            8, "aga", [],          "ham8"),
-    ("ham8",            8, "aga", ["--cap"],   "ham8-cap"),
-    ("ham8",            8, "aga", ["--cap", "--cap-best"], "ham8-cap-best"),
+    ("ham8",            8, "aga", ["--sliced"],   "ham8-cap"),
+    ("ham8",            8, "aga", ["--sliced", "--sliced-best"], "ham8-cap-best"),
     ("ham8-lace",       8, "aga", [],          "ham8-lace"),
     ("ham8-hires",      8, "aga", [],          "ham8-hires"),
     # EHB (OCS, fixed 6 planes)
     ("ehb",      6, "ocs", [],         "ehb"),
-    ("ehb",      6, "ocs", ["--cap"],  "ehb-cap"),
+    ("ehb",      6, "ocs", ["--sliced"],  "ehb-cap"),
     ("ehb-lace", 6, "ocs", [],         "ehb-lace"),
 ]
 
