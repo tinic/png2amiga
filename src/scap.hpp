@@ -131,14 +131,15 @@ inline const ScapSlotTable kScap6bplOcs{
 // no per-slot offset corrections yet. Calibrate empirically with
 // --scap-debug + the stripe tuner: each visible black/white transition
 // position is the actual MOVE landing for that slot. Adjust below.
+constexpr int kEHB = -1;
 inline const ScapSlotTable kScap6bplEhb{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
     /*end_of_line_hpos=*/0xDD,
     /*slots=*/{
-        {  8-1}, { 24-1}, { 40-1}, { 56-1}, { 72-1}, { 88-1}, {104-1}, {120-1},
-        {136-1}, {152-1}, {168-1}, {184-1}, {200-1}, {216-1}, {232-1}, {248-1},
-        {264-1}, {280-1}, {296-1},
+        {  8-kEHB}, { 24-kEHB}, { 40-kEHB}, { 56-kEHB}, { 72-kEHB}, { 88-kEHB}, {104-kEHB}, {120-kEHB},
+        {136-kEHB}, {152-kEHB}, {168-kEHB}, {184-kEHB}, {200-kEHB}, {216-kEHB}, {232-kEHB}, {248-kEHB},
+        {264-kEHB}, {280-kEHB}, {296-kEHB},
     }
 };
 
@@ -151,14 +152,15 @@ inline const ScapSlotTable kScap6bplEhb{
 // because BPL DMA defines the timing, not the mode. Cloned from EHB
 // so HAM6+SCAP can be tuned independently if probe data later shows
 // they diverge.
+constexpr int kHAM6 = -1;
 inline const ScapSlotTable kScap6bplHam6{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
     /*end_of_line_hpos=*/0xDD,
     /*slots=*/{
-        {  8-1}, { 24-1}, { 40-1}, { 56-1}, { 72-1}, { 88-1}, {104-1}, {120-1},
-        {136-1}, {152-1}, {168-1}, {184-1}, {200-1}, {216-1}, {232-1}, {248-1},
-        {264-1}, {280-1}, {296-1},
+        {  8+kHAM6}, { 24+kHAM6}, { 40+kHAM6}, { 56+kHAM6}, { 72+kHAM6}, { 88+kHAM6}, {104+kHAM6}, {120+kHAM6},
+        {136+kHAM6}, {152+kHAM6}, {168+kHAM6}, {184+kHAM6}, {200+kHAM6}, {216+kHAM6}, {232+kHAM6}, {248+kHAM6},
+        {264+kHAM6}, {280+kHAM6}, {296+kHAM6},
     }
 };
 

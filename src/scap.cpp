@@ -2500,7 +2500,18 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
     std::atomic<double> total_error_atomic{0.0};
     std::atomic<std::size_t> total_moves_atomic{0};
     std::atomic<std::size_t> rows_done{0};
-    pipeline::parallel_for(height, [&](std::size_t y) {
+
+    // Actual hardware register state at end of the previous line. SCAP
+    // swaps mid-line on row y-1 leave registers holding swap-colours
+    // rather than cap_palettes[y-1], so the per-line CAP MOVEs MUST
+    // diff vs THIS to correctly restore the intended line-entry palette.
+    // Tracking this across rows forces a serial loop. Match EHB+SCAP.
+    std::vector<Color3f> hw_state(kBaseColors);
+    for (std::size_t k = 0; k < kBaseColors; ++k)
+        hw_state[k] = (k < base_palette.size())
+            ? base_palette[k] : Color3f{0.0f, 0.0f, 0.0f};
+
+    for (std::size_t y = 0; y < height; ++y) {
         if (on_progress) {
             auto done = rows_done.fetch_add(1) + 1;
             if ((done & 0xF) == 0) {
@@ -2525,23 +2536,49 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         };
         refresh_lab();
 
-        // Per-line CAP MOVEs (line entry palette). v0: assume the previous
-        // line's hardware state is cap_palettes[y-1] (we don't track SCAP
-        // mid-line swaps' carryover for v0 — every CAP transition emits a
-        // MOVE, even ones that match prior swap state).
-        std::vector<Color3f> prev_line_pal = (y == 0)
-            ? base_palette : cap_palettes[y - 1];
-        if (prev_line_pal.size() < kBaseColors)
-            prev_line_pal.resize(kBaseColors);
+        // Per-line CAP MOVEs: diff vs the ACTUAL hardware register state
+        // at end of the previous line, capped at the HBLANK budget. Slots
+        // we couldn't restore in HBLANK keep their stale (SCAP-polluted)
+        // value — we override strip_pal[k] with hw_state[k] for those so
+        // the encoder sees what the chip is actually displaying at line
+        // entry.
+        constexpr std::size_t kHblankBudget = 14;
+        struct CapDiff { std::size_t k; float dist_sq; };
+        std::vector<CapDiff> diffs;
+        diffs.reserve(kBaseColors);
         for (std::size_t k = 0; k < kBaseColors; ++k) {
-            if (strip_pal[k].r != prev_line_pal[k].r ||
-                strip_pal[k].g != prev_line_pal[k].g ||
-                strip_pal[k].b != prev_line_pal[k].b) {
-                line_moves[y].push_back(make_move(
-                    static_cast<std::uint8_t>(k),
-                    palette::linear_to_ocs(strip_pal[k]), -1));
+            if (strip_pal[k].r != hw_state[k].r ||
+                strip_pal[k].g != hw_state[k].g ||
+                strip_pal[k].b != hw_state[k].b) {
+                auto a = color_space::linear_to_oklab(strip_pal[k]);
+                auto b = color_space::linear_to_oklab(hw_state[k]);
+                float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                diffs.push_back({k, dL * dL + da * da + db * db});
             }
         }
+        std::sort(diffs.begin(), diffs.end(),
+            [](const CapDiff& a, const CapDiff& b) {
+                return a.dist_sq > b.dist_sq;
+            });
+        std::vector<bool> cap_emitted(kBaseColors, false);
+        std::size_t cap_emit_count = std::min(diffs.size(), kHblankBudget);
+        for (std::size_t i = 0; i < cap_emit_count; ++i) {
+            auto k = diffs[i].k;
+            line_moves[y].push_back(make_move(
+                static_cast<std::uint8_t>(k),
+                palette::linear_to_ocs(strip_pal[k]), -1));
+            hw_state[k] = strip_pal[k];
+            cap_emitted[k] = true;
+        }
+        for (std::size_t k = 0; k < kBaseColors; ++k) {
+            if (!cap_emitted[k] &&
+                (strip_pal[k].r != hw_state[k].r ||
+                 strip_pal[k].g != hw_state[k].g ||
+                 strip_pal[k].b != hw_state[k].b)) {
+                strip_pal[k] = hw_state[k];
+            }
+        }
+        refresh_lab();
         // Line gate WAIT.
         line_moves[y].push_back(make_wait(
             static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
@@ -2819,6 +2856,43 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
             ++scap_used;
             (void)kHblankCeiling;
         }
+        // DEBUG: pad SCAP slots — every slot 0..num_slots-1 must have a
+        // MOVE (filler if no swap was chosen) so per-line copper budget
+        // is constant. Match DPF/EHB SCAP. Then close the chain with
+        // the end-of-line WAIT.
+        {
+            constexpr std::uint8_t kFillerReg = 31;
+            constexpr std::uint16_t kFillerVal = 0x0000;
+            const std::size_t num_slots = (num_strips > 0) ? num_strips - 1 : 0;
+            std::size_t scap_start = line_moves[y].size();
+            for (std::size_t i = 0; i < line_moves[y].size(); ++i) {
+                if (line_moves[y][i].kind == ScapOpKind::kMove &&
+                    line_moves[y][i].slot_index >= 0) {
+                    scap_start = i;
+                    break;
+                }
+            }
+            std::vector<ScapMove> scap_moves(
+                line_moves[y].begin() +
+                    static_cast<std::ptrdiff_t>(scap_start),
+                line_moves[y].end());
+            line_moves[y].resize(scap_start);
+            std::size_t mi = 0;
+            for (std::size_t slot = 0; slot < num_slots; ++slot) {
+                if (mi < scap_moves.size() &&
+                    scap_moves[mi].slot_index >= 0 &&
+                    static_cast<std::size_t>(scap_moves[mi].slot_index) ==
+                        slot) {
+                    line_moves[y].push_back(scap_moves[mi]);
+                    ++mi;
+                } else {
+                    line_moves[y].push_back(make_move(
+                        kFillerReg, kFillerVal, static_cast<int>(slot)));
+                }
+            }
+            line_moves[y].push_back(make_wait(
+                static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
+        }
         // Rebuild final strip state for the post-loop encode_with.
         build_strips(cur_pals, cur_srgbs, cur_pres, cur_srgb_spans);
         scanline_palettes_full[y] = strip_pal;  // end-of-line state
@@ -2867,6 +2941,19 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
                 out.r, out.g, out.b);
             prev = out;
         }
+        // Walk this line's MOVEs to update hw_state for next row's CAP
+        // diff. Any MOVE to a base-color register (0..15) lands in the
+        // simulated hardware state. Filler MOVEs (reg=31) are ignored.
+        for (auto& m : line_moves[y]) {
+            if (m.kind != ScapOpKind::kMove) continue;
+            if (m.reg >= kBaseColors) continue;
+            auto rgb12 = m.rgb_ocs & 0xFFFu;
+            float r = static_cast<float>((rgb12 >> 8) & 0xF) / 15.0f;
+            float g = static_cast<float>((rgb12 >> 4) & 0xF) / 15.0f;
+            float bv = static_cast<float>(rgb12 & 0xF) / 15.0f;
+            hw_state[m.reg] = color_space::srgb_to_linear(
+                Color3f{r, g, bv});
+        }
         // total_moves: count of MOVEs in line_moves[y].
         total_moves_atomic.fetch_add(line_moves[y].size());
         // total_error: accumulate via CAS since std::atomic<double>::fetch_add
@@ -2876,7 +2963,7 @@ Result<ScapResult> encode_scap_ham6_ocs(const Image& image,
         do {
             new_te = cur_te + static_cast<double>(sl.error);
         } while (!total_error_atomic.compare_exchange_weak(cur_te, new_te));
-    });
+    }
     total_error = total_error_atomic.load();
     total_moves = total_moves_atomic.load();
 
