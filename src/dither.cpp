@@ -1581,9 +1581,7 @@ bool is_yliluoma(Method method) {
 }
 
 bool needs_discrete_palette(Method method) {
-    return is_yliluoma(method) ||
-           method == Method::floyd_steinberg ||
-           method == Method::dbs;
+    return is_yliluoma(method) || method == Method::dbs;
 }
 
 // Per-pixel optimal-pair quantizer for the 2×2 checker variant.
