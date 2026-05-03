@@ -306,8 +306,61 @@ Palette median_cut(std::span<const Color3f> colors,
         };
         std::vector<Box> boxes;
         boxes.reserve(max_colors);
-        boxes.push_back({0, mc_work.size()});
-        boxes[0].compute(mc_work);
+
+        // libimagequant-inspired sub-box init (16 corner buckets via
+        // 1 high bit per RGB channel + 1 high bit per "lightness").
+        // Without this, median-cut starts with one giant box: the
+        // first split direction is dominated by whatever channel has
+        // the largest range across the whole image, and tiny minority
+        // colours in extreme hue corners can get buried for the first
+        // few splits. Pre-bucketing guarantees an extreme-corner
+        // colour gets an initial slot when present in the source —
+        // small bucket → contributes one centroid to the starting set,
+        // then normal median-cut takes over for the remainder.
+        //
+        // Only applied when target_colors > 2 × n_nonempty_buckets so
+        // we don't burn half the palette on corners alone — that
+        // guard mirrors libimagequant's `LIQ_MAXCLUSTER`-vs-target
+        // gate (`mediancut.rs:240-254`).
+        {
+            constexpr std::size_t kCornerBuckets = 16;
+            // Use perceptual lightness as the 4th axis: max(R, G, B) as
+            // a cheap stand-in for OKLab L. Keeps the 16-bucket
+            // partition meaningful without paying for a full conversion.
+            auto bucket_id = [](const Color3f& c) -> std::size_t {
+                std::size_t r = c.r >= 0.5f ? 1 : 0;
+                std::size_t g = c.g >= 0.5f ? 1 : 0;
+                std::size_t b = c.b >= 0.5f ? 1 : 0;
+                std::size_t l = std::max({c.r, c.g, c.b}) >= 0.5f ? 1 : 0;
+                return (r << 3) | (g << 2) | (b << 1) | l;
+            };
+            std::array<std::vector<std::size_t>, kCornerBuckets> bucket_idx;
+            for (std::size_t i = 0; i < mc_work.size(); ++i)
+                bucket_idx[bucket_id(mc_work[i])].push_back(i);
+            std::size_t n_nonempty = 0;
+            for (auto& b : bucket_idx) if (!b.empty()) ++n_nonempty;
+
+            if (n_nonempty >= 2 && max_colors > 2 * n_nonempty) {
+                // Compact mc_work into bucket-contiguous order so each
+                // non-empty corner becomes one initial Box{start, count}.
+                std::vector<Color3f> compacted;
+                compacted.reserve(mc_work.size());
+                std::size_t off = 0;
+                for (auto& bi : bucket_idx) {
+                    if (bi.empty()) continue;
+                    Box bx{off, bi.size()};
+                    for (auto idx : bi) compacted.push_back(mc_work[idx]);
+                    bx.compute(compacted);
+                    boxes.push_back(bx);
+                    off += bi.size();
+                }
+                mc_work = std::move(compacted);
+            } else {
+                boxes.push_back({0, mc_work.size()});
+                boxes[0].compute(mc_work);
+            }
+        }
+
         while (boxes.size() < max_colors) {
             std::size_t bi = 0; float bv = -1;
             for (std::size_t i = 0; i < boxes.size(); ++i)
