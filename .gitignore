@@ -13,6 +13,9 @@ web/dist/
 *.o
 *.d
 test_output/
+# DIV2K sweep focus sets: 25-image-per-mode buckets the sweep tooling
+# copies in for visual review. Reproducible from ~/png2amiga-testset.
+test-suite-*/
 .DS_Store
 fantasy.cpp
 test.cpp

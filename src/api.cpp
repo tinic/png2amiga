@@ -173,7 +173,9 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "sierra-lite") return dither::Method::sierra_lite;
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
-    if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "fs-ostro") return dither::Method::fs_ostro;
+    // Back-compat: historical name for the same heuristic.
+    if (s == "ostromoukhov") return dither::Method::fs_ostro;
     if (s == "dbs") return dither::Method::dbs;
     if (s == "gilbert") return dither::Method::gilbert;
     if (s == "riemersma") return dither::Method::riemersma;
@@ -203,7 +205,7 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "crosshatch") return dither::Method::crosshatch;
     if (s == "radial") return dither::Method::radial;
     if (s == "value-noise") return dither::Method::value_noise;
-    return dither::Method::ostromoukhov;
+    return dither::Method::fs_ostro;
 }
 
 // Crop an image to a sub-region

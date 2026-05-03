@@ -58,7 +58,7 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::sierra_lite:     return Defaults{0.85f, 0.35f};  // 33.836 dB
     case dither::Method::stucki:          return Defaults{0.85f, 0.35f};  // 33.597 dB (OKLab-tuned kernel)
     case dither::Method::jarvis:          return Defaults{0.95f, 0.35f};  // 33.606 dB (OKLab-tuned kernel)
-    case dither::Method::ostromoukhov:    return Defaults{0.85f, 0.35f};  // 33.757 dB
+    case dither::Method::fs_ostro:    return Defaults{0.85f, 0.35f};  // 33.757 dB
     case dither::Method::gilbert:         return Defaults{0.85f, 0.35f};  // 33.750 dB
     case dither::Method::riemersma:       return Defaults{0.70f, 0.35f};  // 32.593 dB
     case dither::Method::structure_fs:    return Defaults{0.80f, 0.35f};  // 29.184 dB

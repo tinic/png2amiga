@@ -584,7 +584,7 @@ struct Config {
     std::string quantizer;
 
     // Dithering
-    dither::Method dither_method = dither::Method::ostromoukhov;
+    dither::Method dither_method = dither::Method::fs_ostro;
     bool dither_explicit = false;       // true if user passed --dither
     bool dither_strength_explicit = false;
     bool error_clamp_explicit = false;  // true if user passed --error-clamp
@@ -725,7 +725,7 @@ void print_usage() {
         "  --no-scale                      Use source dimensions verbatim\n"
         "\n"
         "Dithering:\n"
-        "  --dither <method>               Dither method (default: ostromoukhov;\n"
+        "  --dither <method>               Dither method (default: fs-ostro;\n"
         "                                  --list-dithers for the full catalog)\n"
         "  --dither-strength <float>       Dither amount 0.0-2.0 (default: 1.0)\n"
         "  --error-clamp <float>           Max error per channel (default: 0.35)\n"
@@ -868,7 +868,11 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "sierra-lite") return dither::Method::sierra_lite;
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
-    if (s == "ostromoukhov") return dither::Method::ostromoukhov;
+    if (s == "fs-ostro") return dither::Method::fs_ostro;
+    // Back-compat: "ostromoukhov" was the historical name for this method
+    // before we audited and confirmed it's a custom heuristic, not the
+    // 2001 paper's algorithm. Saved presets / web UI / scripts keep working.
+    if (s == "ostromoukhov") return dither::Method::fs_ostro;
     if (s == "dbs") return dither::Method::dbs;
     if (s == "gilbert") return dither::Method::gilbert;
     if (s == "riemersma") return dither::Method::riemersma;
@@ -2063,7 +2067,7 @@ const char* dither_name(dither::Method m) {
     case dither::Method::sierra_lite: return "sierra-lite";
     case dither::Method::stucki: return "stucki";
     case dither::Method::jarvis: return "jarvis";
-    case dither::Method::ostromoukhov: return "ostromoukhov";
+    case dither::Method::fs_ostro: return "fs-ostro";
     case dither::Method::dbs: return "dbs";
     case dither::Method::gilbert: return "gilbert";
     case dither::Method::riemersma: return "riemersma";
@@ -2172,7 +2176,7 @@ std::string_view dither_to_options_string(dither::Method m) {
     case dither::Method::sierra_lite:     return "sierra-lite";
     case dither::Method::stucki:          return "stucki";
     case dither::Method::jarvis:          return "jarvis";
-    case dither::Method::ostromoukhov:    return "ostromoukhov";
+    case dither::Method::fs_ostro:  return "fs-ostro";
     case dither::Method::dbs:             return "dbs";
     case dither::Method::gilbert:         return "gilbert";
     case dither::Method::riemersma:       return "riemersma";
@@ -4436,7 +4440,7 @@ int main(int argc, char* argv[]) {
 
     if (config->list_dithers) {
         cli_status("png2amiga {} — dither methods:", png2amiga::version);
-        cli_status("  ED:        ostromoukhov (default), sierra-lite, atkinson, jarvis,");
+        cli_status("  ED:        fs-ostro (default), sierra-lite, atkinson, jarvis,");
         cli_status("             floyd-steinberg, stucki, gilbert, riemersma");
         cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker, tri-tone,");
         cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");

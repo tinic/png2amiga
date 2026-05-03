@@ -906,11 +906,21 @@ DitherResult apply_error_diffusion(
 }
 
 // ===========================================================================
-// Ostromoukhov variable-coefficient error diffusion.
-// Uses 3 coefficients that vary with the "threshold" level — the fractional
-// position between the two nearest palette colors.  The coefficients are
-// from Ostromoukhov's 2001 paper, simplified to a smooth interpolation
-// between three regimes (near-black, midtone, near-white).
+// FS-uncertainty: Floyd-Steinberg with kernel strength scaled by palette
+// uncertainty. For each pixel we find the two nearest palette entries and
+// compute t = sqrt(d_best) / (sqrt(d_best) + sqrt(d_second)). When the
+// pixel sits cleanly on a palette colour (t ≈ 0) we damp the FS kernel to
+// 0.6×; when it's equidistant between two palette entries (t ≈ 0.5) we
+// boost to 1.4×. The kernel shape stays Floyd-Steinberg's 4-cell
+// (7/3/5/1)/16; only the magnitude varies.
+//
+// Was historically named "ostromoukhov" — that was a mislabel; this is
+// not Ostromoukhov 2001 (which uses a 256-entry intensity-indexed
+// coefficient LUT and a 3-cell kernel). On photo-content benchmarks our
+// FS-uncertainty heuristic outscores both real Ostromoukhov and plain FS
+// at low colour counts, so we keep it as the default ED method but
+// surface it under an honest name. "ostromoukhov" remains accepted as a
+// back-compat alias.
 // ===========================================================================
 
 // ===========================================================================
@@ -1588,7 +1598,7 @@ bool is_yliluoma(Method method) {
 
 bool needs_discrete_palette(Method method) {
     return is_yliluoma(method) ||
-           method == Method::ostromoukhov ||
+           method == Method::fs_ostro ||
            method == Method::dbs;
 }
 
@@ -2086,7 +2096,7 @@ DitherResult apply_structure_fs(
     return result;
 }
 
-DitherResult apply_ostromoukhov(
+DitherResult apply_fs_ostro(
     const Image& image,
     std::span<const OKLab> palette_lab,
     float strength, float error_clamp_val,
@@ -2913,8 +2923,8 @@ DitherResult apply(const Image& image,
             settings.strength, settings.error_clamp,
             settings.serpentine, jarvis_kernel);
 
-    case Method::ostromoukhov:
-        return apply_ostromoukhov(
+    case Method::fs_ostro:
+        return apply_fs_ostro(
             image, pal_span,
             settings.strength, settings.error_clamp,
             settings.serpentine);
@@ -3080,7 +3090,7 @@ std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
     case Method::sierra_lite:     return sierra_lite_kernel;
     case Method::stucki:          return stucki_kernel;
     case Method::jarvis:          return jarvis_kernel;
-    case Method::ostromoukhov:    return floyd_steinberg_kernel;  // F-S base kernel
+    case Method::fs_ostro:    return floyd_steinberg_kernel;  // F-S base kernel
     // Structure-aware variants and Riemersma all build on F-S in sliced mode
     // — the per-pixel bias / queue is layered on top by the caller.
     // (Curve walking can't span per-scanline palette swaps cleanly.)
@@ -3284,7 +3294,7 @@ float diffuse_raw_buffer(const Image& image,
     auto kernel  = error_diffusion_kernel(settings.method);
     bool is_diff = settings.method != Method::none && !is_ord &&
                    !kernel.empty();
-    bool is_ostro = (settings.method == Method::ostromoukhov);
+    bool is_ostro = (settings.method == Method::fs_ostro);
     bool needs_riem = is_diff && needs_riemersma_queue(settings.method);
 
     auto bias_map = is_diff

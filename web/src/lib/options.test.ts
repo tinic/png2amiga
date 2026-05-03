@@ -216,7 +216,8 @@ describe('isErrorDiffusion', () => {
     ['sierra-lite',      true],
     ['stucki',           true],
     ['jarvis',           true],
-    ['ostromoukhov',     true],
+    ['fs-ostro',         true],
+    ['ostromoukhov',     true],  // back-compat alias
     ['none',             false],
     ['bayer8x8',         false],
     ['checker',          false],

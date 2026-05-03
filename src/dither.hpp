@@ -77,7 +77,10 @@ enum class Method : unsigned char {
     jarvis,
 
     // Advanced error diffusion
-    ostromoukhov,     // variable-coefficient error diffusion
+    fs_ostro,   // FS with palette-uncertainty-scaled kernel strength
+                      // (was named "ostromoukhov" historically — that was a
+                      // mislabel; this is a custom heuristic, not the
+                      // 2001 paper's coefficient-LUT algorithm)
     gilbert,          // Gilbert space-filling-curve error diffusion
     riemersma,        // Riemersma curve dither (exponential-decay error queue)
     structure_fs,     // FS with Laplacian-modulated threshold (dalpil/structure-aware)
@@ -113,7 +116,7 @@ enum class Method : unsigned char {
 // ---------------------------------------------------------------------------
 
 struct Settings {
-    Method method = Method::ostromoukhov;
+    Method method = Method::fs_ostro;
     float strength = 1.0f;      // 0.0 = no dithering, 1.0 = full
     float error_clamp = 0.12f;  // max error magnitude per OKLab channel
     bool serpentine = true;      // alternate scan direction (error diffusion)
@@ -350,7 +353,7 @@ void apply_dbs_post_pass(
 
 struct PickResult {
     color_space::OKLab chosen_lab;
-    // Used only for Method::ostromoukhov: sqrt(best)/(sqrt(best)+sqrt(2nd))
+    // Used only for Method::fs_ostro: sqrt(best)/(sqrt(best)+sqrt(2nd))
     // ∈ [0, 0.5]. Pickers without a meaningful "second nearest" (raw grid
     // snap, HAM ops) leave this at 0.5 → unit kernel scale.
     float ostro_threshold = 0.5f;

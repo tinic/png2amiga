@@ -32,7 +32,7 @@ struct Context {
     // Optional dither method — when provided, palette-aware methods
     // (opt-checker, knoll, yliluoma, yliluoma2) get a method-specific
     // optimal strength override. Default (none) keeps the F-S table.
-    dither::Method method = dither::Method::ostromoukhov;
+    dither::Method method = dither::Method::fs_ostro;
 };
 
 Defaults defaults_for(const Context& ctx);
