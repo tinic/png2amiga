@@ -2006,7 +2006,8 @@ std::array<GlyphPre, 256> build_glyph_precompute(
 Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
                                      const dither::Settings& /*settings*/,
                                      Metric metric,
-                                     bool graphics_only) {
+                                     bool graphics_only,
+                                     ProgressCb on_progress) {
     if (image.width() != kPetW || image.height() != kPetH) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
@@ -2143,7 +2144,11 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
         return err;
     };
 
+    if (on_progress) on_progress(0.0f, "petscii");
     for (std::uint8_t bg = 0; bg < 16; ++bg) {
+        if (on_progress) {
+            on_progress(static_cast<float>(bg) / 16.0f, "petscii");
+        }
         float total = 0.0f;
         std::array<std::uint8_t, kPetCols * kPetRows> chars{};
         std::array<std::uint8_t, kPetCols * kPetRows> fgs{};
@@ -2191,6 +2196,7 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
         }
     }
 
+    if (on_progress) on_progress(1.0f, "done");
     res.bg_color = best_bg;
     for (std::size_t i = 0; i < kPetCols * kPetRows; ++i) {
         res.screen_ram[i] = best_chars[i];

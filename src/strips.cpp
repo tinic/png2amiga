@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <limits>
 #include <format>
+#include <mutex>
 #include <vector>
 
 namespace png2amiga::strips {
@@ -409,11 +410,16 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
     constexpr int kPasses = 6;
+    // run_row below executes inside pipeline::parallel_for, so report_pass
+    // can be invoked concurrently from N worker threads. Without a mutex,
+    // the per-thread on_progress invocations interleave on stdout.
+    std::mutex progress_mu;
     auto report_pass = [&](int pass_idx, float local) {
         if (on_progress) {
             float p = (static_cast<float>(pass_idx) +
                        std::clamp(local, 0.0f, 1.0f)) /
                       static_cast<float>(kPasses);
+            std::lock_guard<std::mutex> lock(progress_mu);
             on_progress(p, "encoding");
         }
     };

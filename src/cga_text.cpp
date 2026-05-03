@@ -52,21 +52,44 @@ encode(const Image& image, amiga::Mode mode,
         }};
     }
 
-    // CGA 80x100 : 640x200, 8x8 font, 2-scanline rows.
+    // CGA 80x100 default = 640x200 (80 cols × 8 px wide, 100 rows ×
+    // 2-scanline cells). Source can also be larger for scrolling /
+    // charmap use cases — same convention as c64-charset modes.
+    //
+    // Two source-pixel conventions are supported:
+    //   1. Hardware-buffer (canonical 640×200): one source pixel = one
+    //      hardware dot. Cell is 8 px wide × 2 scanlines tall.
+    //   2. Square-pixel (any other freeform size, e.g. 512×512): the
+    //      source is treated as what would appear on a CRT, i.e. each
+    //      hardware scanline is double-scanned to 2 visible rows. So a
+    //      cell spans 8 source-px wide × 4 source-px tall in this mode
+    //      (preserves square aspect on output).
     const palette::FontRef& font = palette::kFontCga8x8;
-    const std::size_t disp_w = 640;
-    const std::size_t disp_h = 200u;
-    const std::size_t cell_h = 2u;
-    const std::size_t cols = 80;
-    const std::size_t rows = disp_h / cell_h;
-
-    if (image.width() != disp_w || image.height() != disp_h) {
+    const std::size_t cell_h_hw = 2u;          // hardware scanlines per cell
+    constexpr std::size_t cell_w = 8u;
+    bool is_canonical_640x200 =
+        (image.width() == 640 && image.height() == 200);
+    const std::size_t cell_h_src = is_canonical_640x200
+        ? cell_h_hw : (cell_h_hw * 2u);  // 2 src rows in canonical, 4 in freeform
+    if (image.width()  == 0 || image.height() == 0
+        || (image.width()  % cell_w)     != 0
+        || (image.height() % cell_h_src) != 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("cga_text::encode: expected {}x{} input, got {}x{}",
-                        disp_w, disp_h, image.width(), image.height()),
+            std::format("cga_text::encode: input must be a non-zero "
+                        "multiple of {}x{}, got {}x{}",
+                        cell_w, cell_h_src, image.width(), image.height()),
         }};
     }
+    const std::size_t disp_w = image.width();
+    const std::size_t disp_h = image.height();
+    const std::size_t cols = disp_w / cell_w;
+    const std::size_t rows = disp_h / cell_h_src;
+    // The encoder's metric / blur arrays are sized to (8 × cell_h_hw); we
+    // average vertical pairs of source rows into a single hardware
+    // scanline when reading freeform input below.
+    const std::size_t cell_h = cell_h_hw;
+    const std::size_t v_avg = cell_h_src / cell_h_hw;  // 1 or 2
 
     // Candidate character set. If empty, use all 256.
     std::vector<std::uint8_t> chars;
@@ -367,11 +390,21 @@ encode(const Image& image, amiga::Mode mode,
 
     auto read_cell_source = [&](std::size_t col, std::size_t row,
                                 std::array<color_space::OKLab, 16>& out) {
+        // For freeform v_avg=2 we average each pair of source rows into
+        // one hardware-scanline metric vector. For canonical 640×200
+        // (v_avg=1) it's a straight pass-through.
         for (std::size_t py = 0; py < cell_h; ++py) {
             for (std::size_t px = 0; px < 8; ++px) {
                 auto img_x = col * 8 + px;
-                auto img_y = row * cell_h + py;
-                out[py * 8 + px] = to_metric_space(image[img_x, img_y]);
+                color_space::OKLab acc{0, 0, 0};
+                for (std::size_t k = 0; k < v_avg; ++k) {
+                    auto img_y = row * cell_h_src + py * v_avg + k;
+                    auto v = to_metric_space(image[img_x, img_y]);
+                    acc.L += v.L; acc.a += v.a; acc.b += v.b;
+                }
+                float inv = 1.0f / static_cast<float>(v_avg);
+                acc.L *= inv; acc.a *= inv; acc.b *= inv;
+                out[py * 8 + px] = acc;
             }
         }
     };

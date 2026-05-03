@@ -1176,7 +1176,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 return c64::encode_afli(*image, pal_choice, dith, metric);
             case amiga::Mode::c64_petscii:
                 return c64::encode_petscii(*image, pal_choice, dith, metric,
-                                            options.c64_petscii_graphics_only);
+                                            options.c64_petscii_graphics_only,
+                                            options.on_progress);
             case amiga::Mode::c64_charset_hires: {
                 std::size_t budget = options.tile_budget == 0
                     ? std::size_t{256} : options.tile_budget;
@@ -1208,7 +1209,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.finalize_psnr(*image, 0.0f);
+        // c64::EncodeResult doesn't expose a total_error (the per-cell
+        // brute force scores cells in isolation under either mse or blur
+        // metric — neither is an image-wide sum we want to surface).
+        // Reconstruct one as the OKLab² sum between source and rendered,
+        // matching the convention of every other path's total_error.
+        float te_c64 = 0.0f;
+        {
+            auto src_px = image->pixels();
+            auto ren_px = result.rendered.pixels();
+            std::size_t n = std::min(src_px.size(), ren_px.size());
+            for (std::size_t i = 0; i < n; ++i)
+                te_c64 += color_space::perceptual_distance_sq(
+                    src_px[i], ren_px[i]);
+        }
+        result.finalize_psnr(*image, te_c64);
         // Pack bitmap + screen + color RAM into raw_frame for downstream
         // writers. Order: bitmap + screen + color. Sizes vary by mode
         // (see c64_prg.cpp for the per-mode split).
@@ -1595,6 +1610,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 trial_opts.error_clamp = d.error_clamp;
                 trial_opts.palette_diversity = div;
                 trial_opts.best = false;  // best replaced by the sweep
+                // Silence per-trial progress: best_sweep parallelises trials,
+                // and N workers all firing options.on_progress = chaos. The
+                // sweep-level reporter (passed below into best_sweep) is the
+                // single clean stream the user sees.
+                trial_opts.on_progress = nullptr;
                 auto r = ham::encode_ham(img, mode, chipset, trial_opts);
                 if (!r) return std::unexpected{r.error()};
                 auto p = pipeline::render_preview(
@@ -1735,6 +1755,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         img.pixels(),
                         /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
                     if (options.best) {
+                        // Silence per-trial progress: best_sweep parallelises
+                        // trials, and N workers all firing options.on_progress
+                        // garbles the output. The sweep-level reporter passed
+                        // into best_sweep below is the single clean stream.
                         palette::extra_ehb_optimization(
                             std::span<Color3f>(seed_pal.colors.data(), 32),
                             img.pixels(),
@@ -1744,7 +1768,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                std::function<void(std::size_t)> f) {
                                 pipeline::parallel_for(n, std::move(f));
                             },
-                            options.on_progress);
+                            /*on_progress=*/{});
                     }
                 }
                 auto cr = copper::encode_copper(

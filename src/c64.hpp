@@ -16,10 +16,18 @@
 #include "dither.hpp"
 #include "types.hpp"
 
+#include <functional>
 #include <span>
 #include <string_view>
 
 namespace png2amiga::c64 {
+
+// `on_progress(fraction, stage_name)` reports rough progress through the
+// per-cell brute-force loops in the slower c64 encoders (PETSCII,
+// charset-hires, charset-multicolor). Optional — pass `{}` / `nullptr`
+// to silence.
+using ProgressCb =
+    std::function<void(float fraction, std::string_view stage_name)>;
 
 // Available VIC-II palettes. The C64's analogue composite output doesn't
 // have a unique sRGB ground-truth; pick the one whose look you prefer.
@@ -161,7 +169,8 @@ Result<EncodeResult> encode_petscii(
     Palette pal = Palette::colodore,
     const dither::Settings& settings = {},
     Metric metric = Metric::blur,
-    bool graphics_only = false);
+    bool graphics_only = false,
+    ProgressCb on_progress = nullptr);
 
 // Encode an arbitrary-size image (W % 8 == 0, H % 8 == 0) to a c64
 // hires charset. Per-cell brute force picks the best 2-colour pair

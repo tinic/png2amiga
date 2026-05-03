@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -1851,9 +1852,15 @@ Result<HamResult> encode_ham_copper_generic(
         float old = work_done.load(std::memory_order_relaxed);
         while (!work_done.compare_exchange_weak(old, old + weight)) {}
     };
+    // Pass 2 calls report_global from N parallel workers — without
+    // serialisation the per-thread on_progress invocations interleave
+    // on stdout (e.g. "30.0% [encoding] / 31.0% [encoding]" garbled).
+    // The mutex only guards the callback dispatch, not the work.
+    std::mutex progress_mu;
     auto report_global = [&](std::string_view stage) {
         if (!opts.on_progress) return;
         float p = std::clamp(work_done.load() / total_units, 0.0f, 1.0f);
+        std::lock_guard<std::mutex> lock(progress_mu);
         opts.on_progress(p, stage);
     };
 
