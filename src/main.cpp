@@ -5129,17 +5129,26 @@ int main(int argc, char* argv[]) {
         target_h = *config->height;
     } else if (config->width) {
         target_w = *config->width;
-        // Freeform-capable modes (c64-charset / Genesis / SNES tile /
-        // cga-text) treat --width as a SOURCE-pixel dim with square
-        // pixels — preserve source aspect by computing target_h
-        // directly from src_aspect, no PAR distortion. Canonical
-        // fixed-buffer modes use the encoder-frame-aspect formula
-        // below so the buffer fills correctly.
         bool freeform_dim = amiga::is_c64_charset(config->mode) ||
                             amiga::is_genesis(config->mode) ||
                             amiga::is_snes(config->mode) ||
                             amiga::is_cga_text(config->mode);
-        if (freeform_dim) {
+        // Freeform-capable modes treat --width as a SOURCE-pixel dim
+        // with square pixels — preserve source aspect (no PAR
+        // distortion). EXCEPTION: when target_w equals the mode's
+        // canonical screen_width (e.g. --width 640 on cga-text80x100
+        // whose canonical buffer is 640×200), fall through to
+        // stretch-to-canonical so the encoder sees the canonical
+        // hardware buffer rather than a freeform aspect-preserved
+        // strip — that's what the user means by "give me canonical
+        // 640-wide output."
+        bool to_canonical = freeform_dim &&
+                            target_w == params.screen_width &&
+                            params.screen_height > 0 &&
+                            !config->native_par;
+        if (to_canonical) {
+            target_h = params.screen_height;
+        } else if (freeform_dim) {
             target_h = round_h(
                 static_cast<double>(target_w) / src_aspect);
         } else {
@@ -5156,7 +5165,13 @@ int main(int argc, char* argv[]) {
                             amiga::is_genesis(config->mode) ||
                             amiga::is_snes(config->mode) ||
                             amiga::is_cga_text(config->mode);
-        if (freeform_dim) {
+        bool to_canonical = freeform_dim &&
+                            target_h == params.screen_height &&
+                            params.screen_width > 0 &&
+                            !config->native_par;
+        if (to_canonical) {
+            target_w = params.screen_width;
+        } else if (freeform_dim) {
             target_w = static_cast<std::size_t>(std::lround(
                 static_cast<double>(target_h) * src_aspect));
         } else {
