@@ -86,6 +86,27 @@ struct CHeaderOptions {
     // message as "Colors: N". 0 = caller didn't compute it; viewer
     // omits the line.
     std::size_t total_unique_colors = 0;
+
+    // Multi-frame palette fade animation. When non-empty, the viewer
+    // emits per-frame palette VALUE arrays + a runtime that walks
+    // copper1 once at startup to capture the address of every COLOR
+    // MOVE's value word, then patches those addresses with per-frame
+    // values every `fade_frame_hold_vbls` VBLs. Right-click exits.
+    //
+    // fade_per_frame_values[f] is the flat list of 16-bit colour
+    // values to write for frame f, in the same order the cop list
+    // emits its COLOR MOVEs (per-row HI sweep then per-row LO sweep
+    // for AGA; per-row sweep only for OCS). Frame 0 should match
+    // the cop list's baked-in values (frame 0 of the fade IS the
+    // source palette). fade_per_frame_values.size() = F frames.
+    //
+    // Restriction (v1): AGA banked palettes (>32 colours) are not yet
+    // supported because the runtime cop-list scan would have to track
+    // BPLCON3 bank/LOCT context per MOVE. Caller must guard with that
+    // check before populating.
+    std::vector<std::vector<std::uint16_t>> fade_per_frame_values;
+    int  fade_frame_hold_vbls = 3;
+    bool fade_ping_pong = true;  // false → wrap last → first
 };
 
 // ---------------------------------------------------------------------------

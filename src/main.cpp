@@ -47,6 +47,7 @@
 #include <unordered_set>
 #include <string>
 #include <string_view>
+#include <random>
 #include <thread>
 #ifndef _WIN32
 #include <termios.h>
@@ -118,6 +119,72 @@ std::string fmt_size(int bytes) {
     if (bytes < 1024 * 1024)
         return std::format("{:.1f} K", static_cast<double>(bytes) / 1024.0);
     return std::format("{:.1f} M", static_cast<double>(bytes) / (1024.0 * 1024.0));
+}
+
+// Actual chip-RAM cost of a fade animation. The copper has only
+// `budget` MOVE slots per line — diffs beyond that get dropped at
+// hardware playback time, so they don't contribute to the size.
+// Each frame transition is one copper sub-list of (1 WAIT + clipped
+// MOVEs) per row. Frame 0 is the source bitmap's existing copper
+// list (already counted in "Encoded:"); the fade only adds
+// F−1 transition lists on top.
+//
+// OCS: each MOVE = 4 B (one 32-bit copper instruction). AGA: each
+// 24-bit colour update = 2 MOVEs (HI + LO mux), so 8 B per slot
+// change. WAIT word = 4 B once per row per frame.
+inline int fade_actual_bytes(
+        const std::vector<std::vector<std::vector<Color3f>>>& seq,
+        std::size_t budget,
+        amiga::Chipset chipset) {
+    if (seq.size() < 2) return 0;
+    int aga_mul = (chipset == amiga::Chipset::aga) ? 2 : 1;
+    std::size_t total_words = 0;
+    for (std::size_t f = 1; f < seq.size(); ++f) {
+        for (std::size_t y = 0; y < seq[f].size(); ++y) {
+            auto& cur = seq[f][y];
+            auto& prev = seq[f - 1][y];
+            std::size_t n = std::min(cur.size(), prev.size());
+            std::size_t diffs = 0;
+            for (std::size_t k = 0; k < n; ++k)
+                if (cur[k] != prev[k]) ++diffs;
+            std::size_t clipped = std::min(diffs, budget);
+            if (clipped > 0)
+                total_words += 1 + clipped * static_cast<std::size_t>(aga_mul);
+        }
+    }
+    return static_cast<int>(total_words) * 4;
+}
+
+inline int fade_actual_bytes(
+        const std::vector<std::vector<Color3f>>& seq,
+        std::size_t budget,
+        amiga::Chipset chipset) {
+    if (seq.size() < 2) return 0;
+    int aga_mul = (chipset == amiga::Chipset::aga) ? 2 : 1;
+    std::size_t total_words = 0;
+    for (std::size_t f = 1; f < seq.size(); ++f) {
+        std::size_t n = std::min(seq[f].size(), seq[f - 1].size());
+        std::size_t diffs = 0;
+        for (std::size_t k = 0; k < n; ++k)
+            if (seq[f][k] != seq[f - 1][k]) ++diffs;
+        std::size_t clipped = std::min(diffs, budget);
+        if (clipped > 0)
+            total_words += clipped * static_cast<std::size_t>(aga_mul);
+    }
+    return static_cast<int>(total_words) * 4;
+}
+
+inline void cli_print_fade_data(int actual_bytes,
+                                std::size_t frames,
+                                std::size_t budget,
+                                amiga::Chipset chipset,
+                                std::string_view kind) {
+    int per_move = (chipset == amiga::Chipset::aga) ? 8 : 4;
+    cli_status("Data:   {} fade copper RAM ({}, {} transition lists, "
+               "≤{} MOVEs/line @ {} B, post-OKLab/snap diff)",
+               fmt_size(actual_bytes), kind,
+               (frames > 0 ? frames - 1 : std::size_t{0}),
+               budget, per_move);
 }
 
 // Canonical "Encoded:" status line. ALL CLI encoders should funnel
@@ -538,6 +605,22 @@ struct Config {
     float sliced_spread_decay = -1.0f;    // -1 = use encode_copper default (0.85)
     bool fade_in = false;              // 16-step fade-in from black
 
+    // Cross-fade: encode the bitmap once, animate the palette through one
+    // or more target images. Indices stay constant; per-slot palette
+    // colours interpolate in OKLab between consecutive stops, snapped to
+    // chipset gamut on every frame so the transition doesn't band on a
+    // 12-bit DAC. --preview animates the sequence in the terminal.
+    //
+    // Example: source=day.png, --fade-to night.png,dawn.png,sunset.png,
+    // --fade-frames 16 produces 64 palettes (16 day→night, 16 night→dawn,
+    // 16 dawn→sunset, plus 16 sunset→day if --fade-loop is set).
+    //
+    // Allowed only on freeform indexed bitmap modes (lores, hires, EHB ±
+    // interlace ± dpf). Same gate as --tile.
+    std::vector<std::string> fade_to_paths;
+    std::size_t fade_frames = 16;
+    bool fade_loop = false;
+
     // CGA-specific options
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
     std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
@@ -675,6 +758,12 @@ void print_usage() {
         "Seamless tile:\n"
         "  --tile                          Replicate input 3x3 before dither, export centre\n"
         "                                  tile only. Lores/hires/EHB only.\n"
+        "\n"
+        "Cross-fade (lores/hires/EHB; --preview animates):\n"
+        "  --fade-to <a.png[,b.png,...]>   Targets to fade INPUT into (INPUT is the start).\n"
+        "  --fade-frames <2-256>           Frames per segment (default: 16)\n"
+        "  --fade-loop                     Loop forward (source→...→target→source); else\n"
+        "                                  ping-pong (source→...→target→...→source).\n"
         "\n"
         "HAM:\n"
         "  --ham-beam <1-256>              DP search beam (default: 48)\n"
@@ -909,6 +998,40 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--fade-in") {
             config.fade_in = true;
+            continue;
+        }
+
+        if (arg == "--fade-to" && i + 1 < argc) {
+            // Comma-separated list of target images. Each is an extra
+            // palette stop; the source's palette → stop 1 → stop 2 → ...
+            std::string raw{argv[++i]};
+            std::size_t start = 0;
+            while (start <= raw.size()) {
+                auto comma = raw.find(',', start);
+                auto piece = raw.substr(start,
+                    comma == std::string::npos ? std::string::npos : comma - start);
+                if (!piece.empty()) config.fade_to_paths.push_back(std::move(piece));
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+            continue;
+        }
+        if (arg == "--fade-frames" && i + 1 < argc) {
+            try {
+                auto n = std::stol(argv[++i]);
+                if (n < 2 || n > 256) {
+                    return std::unexpected{Error{ErrorCode::invalid_depth,
+                        "--fade-frames must be in [2, 256]"}};
+                }
+                config.fade_frames = static_cast<std::size_t>(n);
+            } catch (...) {
+                return std::unexpected{Error{ErrorCode::invalid_depth,
+                    "--fade-frames: bad integer"}};
+            }
+            continue;
+        }
+        if (arg == "--fade-loop") {
+            config.fade_loop = true;
             continue;
         }
 
@@ -2883,6 +3006,744 @@ Image tile_3x3_for_preview(const Image& centre) {
     return out;
 }
 
+// --- Cross-fade helpers --------------------------------------------------
+//
+// `--fade-to a.png[,b.png,...] --fade-frames N [--fade-loop]` lets the user
+// animate a static indexed bitmap by morphing the palette through one or
+// more target images. The bitmap's dither indices stay constant; only the
+// per-slot palette colours change. For each target, the per-slot target
+// palette is the OKLab centroid of all target pixels currently assigned to
+// that slot — so slot k naturally fades from "what those pixels looked
+// like in the source" to "what they look like in the target".
+
+// Forward declaration — fade_postprocess() (defined further below)
+// calls fade_build_palette_sequence() (also further below); both are
+// in this same anonymous namespace so the fwd-decl just satisfies
+// the call site's name lookup without reordering the file.
+std::vector<std::vector<Color3f>> fade_build_palette_sequence(
+        const std::vector<Palette>& stops,
+        std::size_t frames_per_segment,
+        amiga::Chipset chipset, amiga::Mode mode);
+
+// --- Joint k-means clustering in (source ⊕ target_1 ⊕ ... ⊕ target_N) space.
+//
+// Naive centroid-from-source-indices averages target pixels that happen
+// to share a source-only slot, which collapses to mud whenever pixels
+// that look the same in source look different in target. Joint k-means
+// fixes this: each cluster occupies a 3·(1+T)-dimensional region in
+// OKLab space, so a slot represents "pixels that are X in source AND
+// Y_1 in target_1 AND Y_2 in target_2 AND ...". When the runtime
+// cycles the palette through the per-target projections of these
+// centroids, every pixel transitions through a sequence its slot was
+// specifically chosen to fit, not the average of unrelated content.
+//
+// The trade-off: the bitmap's slot assignment now comes from joint
+// k-means rather than FS-dither against the source palette, so the
+// source render is posterised (no FS smoothing) for the duration of
+// the fade. A future joint-FS pass would restore smoothness.
+
+struct FadeJointResult {
+    std::vector<Color3f> palette_source;
+    std::vector<std::vector<Color3f>> palette_targets;  // one per target image
+    std::vector<std::uint8_t> indices;                   // per-pixel cluster id
+};
+
+FadeJointResult fade_joint_kmeans(const Image& source,
+                                  const std::vector<Image>& targets,
+                                  std::size_t k_palette,
+                                  int iterations,
+                                  amiga::Chipset chipset,
+                                  amiga::Mode mode,
+                                  bool reserve_slot0) {
+    const std::size_t npix = source.pixels().size();
+    const std::size_t n_dim = 3 * (1 + targets.size());
+    // First slot used for actual clustering. When --lock-color0 is in
+    // effect, slot 0 is reserved for the background and we cluster
+    // pixels across slots 1..k_palette-1 only. Slot 0 stays at black.
+    const std::size_t k_first = reserve_slot0 ? std::size_t{1} : std::size_t{0};
+
+    std::vector<float> features(npix * n_dim);
+    for (std::size_t i = 0; i < npix; ++i) {
+        auto sl = color_space::linear_to_oklab(source.pixels()[i]);
+        features[i * n_dim + 0] = sl.L;
+        features[i * n_dim + 1] = sl.a;
+        features[i * n_dim + 2] = sl.b;
+        for (std::size_t t = 0; t < targets.size(); ++t) {
+            auto tp = (i < targets[t].pixels().size())
+                      ? targets[t].pixels()[i] : Color3f{0, 0, 0};
+            auto tl = color_space::linear_to_oklab(tp);
+            features[i * n_dim + 3 + t * 3 + 0] = tl.L;
+            features[i * n_dim + 3 + t * 3 + 1] = tl.a;
+            features[i * n_dim + 3 + t * 3 + 2] = tl.b;
+        }
+    }
+
+    // Forgy init: pick k distinct random pixels as initial centroids.
+    // Slot 0 (when reserved) initialises to all-zeros so OKLab→linear
+    // round-trips to black on every axis.
+    std::vector<float> centroids(k_palette * n_dim, 0.0f);
+    std::mt19937 rng(42);
+    std::uniform_int_distribution<std::size_t> pick(0, npix - 1);
+    std::vector<std::size_t> picked;
+    picked.reserve(k_palette);
+    for (std::size_t k = k_first; k < k_palette; ++k) {
+        std::size_t idx;
+        // Light de-duplication; full dedup would be O(k²) and isn't
+        // worth it — duplicate inits resolve in 1-2 iterations.
+        bool repeat;
+        do {
+            idx = pick(rng);
+            repeat = false;
+            for (auto p : picked) {
+                if (p == idx) { repeat = true; break; }
+            }
+        } while (repeat && picked.size() < npix);
+        picked.push_back(idx);
+        std::copy_n(features.data() + idx * n_dim, n_dim,
+                    centroids.data() + k * n_dim);
+    }
+
+    std::vector<std::uint8_t> assignments(npix);
+    for (int iter = 0; iter < iterations; ++iter) {
+        // E-step: nearest-centroid assignment in n_dim space (skipping
+        // reserved slot 0 when --lock-color0 is in effect).
+        for (std::size_t i = 0; i < npix; ++i) {
+            float best_d = std::numeric_limits<float>::max();
+            std::uint8_t best_k = static_cast<std::uint8_t>(k_first);
+            for (std::size_t k = k_first; k < k_palette; ++k) {
+                float d = 0.0f;
+                for (std::size_t j = 0; j < n_dim; ++j) {
+                    float v = features[i * n_dim + j] - centroids[k * n_dim + j];
+                    d += v * v;
+                }
+                if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
+            }
+            assignments[i] = best_k;
+        }
+        // M-step: per-cluster centroid recompute. Stay in float — n_dim
+        // is at most 30 (1 source + 9 targets × 3 dims) and per-cluster
+        // count rarely exceeds image area, well within float precision.
+        std::vector<float> sums(k_palette * n_dim, 0.0f);
+        std::vector<std::size_t> counts(k_palette, 0);
+        for (std::size_t i = 0; i < npix; ++i) {
+            auto k = assignments[i];
+            for (std::size_t j = 0; j < n_dim; ++j)
+                sums[k * n_dim + j] += features[i * n_dim + j];
+            ++counts[k];
+        }
+        for (std::size_t k = k_first; k < k_palette; ++k) {
+            if (counts[k] == 0) continue;
+            float inv_n = 1.0f / static_cast<float>(counts[k]);
+            for (std::size_t j = 0; j < n_dim; ++j)
+                centroids[k * n_dim + j] = sums[k * n_dim + j] * inv_n;
+        }
+    }
+
+    auto snap = [&](Color3f rgb) {
+        if (amiga::is_stf(mode)) return palette::quantize_to_stf(rgb);
+        if (chipset != amiga::Chipset::aga) return palette::quantize_to_ocs(rgb);
+        return rgb;
+    };
+
+    FadeJointResult result;
+    result.indices = std::move(assignments);
+    result.palette_source.resize(k_palette);
+    result.palette_targets.assign(targets.size(),
+                                  std::vector<Color3f>(k_palette));
+    for (std::size_t k = 0; k < k_palette; ++k) {
+        color_space::OKLab src_lab{
+            centroids[k * n_dim + 0],
+            centroids[k * n_dim + 1],
+            centroids[k * n_dim + 2],
+        };
+        result.palette_source[k] =
+            snap(color_space::oklab_to_linear(src_lab));
+        for (std::size_t t = 0; t < targets.size(); ++t) {
+            color_space::OKLab tgt_lab{
+                centroids[k * n_dim + 3 + t * 3 + 0],
+                centroids[k * n_dim + 3 + t * 3 + 1],
+                centroids[k * n_dim + 3 + t * 3 + 2],
+            };
+            result.palette_targets[t][k] =
+                snap(color_space::oklab_to_linear(tgt_lab));
+        }
+    }
+    return result;
+}
+
+// Per-frame palette values for non-sliced (global) fade. Cop list
+// emits initial COLOR MOVEs in this order:
+//   OCS / EHB: K MOVEs (slots 0..K−1, packed $0RGB)
+//   AGA ≤32:   K HI MOVEs, BPLCON3 LOCT=1, K LO MOVEs, BPLCON3 LOCT=0.
+//              Total 2K COLOR MOVEs in cop list.
+//   AGA >32:   per bank b in 0..num_banks-1:
+//                BPLCON3 (bank=b),         32_b HI MOVEs,
+//                BPLCON3 (bank=b, LOCT=1), 32_b LO MOVEs.
+//              Total 2K COLOR MOVEs across all banks.
+// The runtime scan walks copper1 ignoring BPLCON3 writes and visits
+// COLOR MOVEs in cop-list order, so this flat array must be packed
+// in the same order.
+//
+// `lock_color0_black`: when --lock-color0 is in effect the encoder
+// reserved slot 0 for the screen background; pin its HI (and LO,
+// AGA) value to $0000 in every frame so COLOR0 stays black. With
+// --no-lock-color0 slot 0 lerps naturally with the rest.
+//
+// EHB: pass slot_count=32 (cop list writes only base; half-brite
+// is hardware-derived).
+std::vector<std::vector<std::uint16_t>> fade_compute_viewer_values_global(
+        const std::vector<std::vector<Color3f>>& fade_seq,
+        std::size_t slot_count,
+        bool lock_color0_black,
+        bool aga) {
+    auto value_at = [&](const std::vector<Color3f>& pal, std::size_t k,
+                        bool want_lo) -> std::uint16_t {
+        if (k == 0 && lock_color0_black) return 0x0000;
+        Color3f col = (k < pal.size()) ? pal[k] : Color3f{0, 0, 0};
+        if (!aga) return palette::linear_to_ocs(col);
+        auto hl = palette::linear_to_aga_hilo(col);
+        return want_lo ? hl.lo : hl.hi;
+    };
+    std::vector<std::vector<std::uint16_t>> out(fade_seq.size());
+    for (std::size_t f = 0; f < fade_seq.size(); ++f) {
+        if (slot_count > 32 && aga) {
+            for (std::size_t base = 0; base < slot_count; base += 32) {
+                std::size_t end = std::min(base + 32, slot_count);
+                for (std::size_t k = base; k < end; ++k)
+                    out[f].push_back(value_at(fade_seq[f], k, false));
+                for (std::size_t k = base; k < end; ++k)
+                    out[f].push_back(value_at(fade_seq[f], k, true));
+            }
+        } else {
+            for (std::size_t k = 0; k < slot_count; ++k)
+                out[f].push_back(value_at(fade_seq[f], k, false));
+            if (aga) {
+                for (std::size_t k = 0; k < slot_count; ++k)
+                    out[f].push_back(value_at(fade_seq[f], k, true));
+            }
+        }
+    }
+    return out;
+}
+
+// EHB joint k-means: 32 base clusters in linear-RGB joint space, with
+// each pixel allowed to bind to either the base slot k (0..31) or the
+// hardware half-brite slot k+32 (32..63 = palette::half_brite(base[k])).
+// Half-brite is non-linear (per-nibble OCS shift), so it's cleanest to
+// pre-compute halfbrite OKLab from the base linear centroid before each
+// E-step and reverse the binding on the fly during the M-step:
+//
+//   slot k pixel  → contributes pixel_linear directly to base[k].
+//   slot k+32     → contributes min(2·pixel_linear, 1.0) to base[k]
+//                   (an approximate inverse of OCS halve, exact at
+//                   nibble boundaries).
+//
+// At output time, palette[k] = snap(centroid[k]_linear),
+// palette[k+32] = palette::half_brite(palette[k]).
+FadeJointResult fade_joint_kmeans_ehb(const Image& source,
+                                      const std::vector<Image>& targets,
+                                      int iterations,
+                                      amiga::Chipset /*chipset*/,
+                                      bool reserve_slot0) {
+    constexpr std::size_t k_base = 32;
+    constexpr std::size_t k_eff = 64;
+    const std::size_t npix = source.pixels().size();
+    const std::size_t n_axes = 1 + targets.size();
+    const std::size_t k_first = reserve_slot0 ? std::size_t{1} : std::size_t{0};
+
+    // Per-pixel per-axis linear RGB.
+    std::vector<Color3f> pixels(npix * n_axes);
+    for (std::size_t i = 0; i < npix; ++i) {
+        pixels[i * n_axes] = source.pixels()[i];
+        for (std::size_t t = 0; t < targets.size(); ++t)
+            pixels[i * n_axes + 1 + t] =
+                (i < targets[t].pixels().size())
+                ? targets[t].pixels()[i] : Color3f{0, 0, 0};
+    }
+
+    // Forgy init in linear RGB. Slot 0 (when reserved) stays at black.
+    std::vector<Color3f> centroids(k_base * n_axes, Color3f{0, 0, 0});
+    std::mt19937 rng(42);
+    std::uniform_int_distribution<std::size_t> pick(0, npix - 1);
+    std::vector<std::size_t> picked;
+    picked.reserve(k_base);
+    for (std::size_t k = k_first; k < k_base; ++k) {
+        std::size_t idx;
+        bool repeat;
+        do {
+            idx = pick(rng);
+            repeat = false;
+            for (auto p : picked) if (p == idx) { repeat = true; break; }
+        } while (repeat && picked.size() < npix);
+        picked.push_back(idx);
+        for (std::size_t a = 0; a < n_axes; ++a)
+            centroids[k * n_axes + a] = pixels[idx * n_axes + a];
+    }
+
+    auto undo_halve = [](Color3f c) {
+        // Approximate inverse of OCS halve: x → min(1, 2x) per channel.
+        return Color3f{
+            std::min(1.0f, c.r * 2.0f),
+            std::min(1.0f, c.g * 2.0f),
+            std::min(1.0f, c.b * 2.0f),
+        };
+    };
+
+    std::vector<std::uint8_t> assignments(npix);
+    // Pre-allocated OKLab caches for the E-step.
+    std::vector<color_space::OKLab> base_lab(k_base * n_axes);
+    std::vector<color_space::OKLab> hb_lab(k_base * n_axes);
+    std::vector<color_space::OKLab> px_lab(npix * n_axes);
+    for (std::size_t i = 0; i < npix; ++i)
+        for (std::size_t a = 0; a < n_axes; ++a)
+            px_lab[i * n_axes + a] =
+                color_space::linear_to_oklab(pixels[i * n_axes + a]);
+
+    for (int iter = 0; iter < iterations; ++iter) {
+        // Project current centroids to OKLab + halfbrite-OKLab.
+        for (std::size_t k = 0; k < k_base; ++k) {
+            for (std::size_t a = 0; a < n_axes; ++a) {
+                auto base = centroids[k * n_axes + a];
+                base_lab[k * n_axes + a] = color_space::linear_to_oklab(base);
+                hb_lab[k * n_axes + a]   = color_space::linear_to_oklab(
+                    palette::half_brite(base));
+            }
+        }
+        // E-step: nearest of 64 effective slots per pixel (skipping
+        // slot 0 / 32 when reserve_slot0 is set so no pixel binds to
+        // base[0] or its half-brite copy).
+        for (std::size_t i = 0; i < npix; ++i) {
+            float best_d = std::numeric_limits<float>::max();
+            std::uint8_t best_slot = static_cast<std::uint8_t>(k_first);
+            for (std::size_t k = k_first; k < k_base; ++k) {
+                float d_base = 0.0f;
+                float d_hb   = 0.0f;
+                for (std::size_t a = 0; a < n_axes; ++a) {
+                    auto& p = px_lab[i * n_axes + a];
+                    auto& b = base_lab[k * n_axes + a];
+                    auto& h = hb_lab[k * n_axes + a];
+                    auto dl = p.L - b.L, da = p.a - b.a, db = p.b - b.b;
+                    d_base += dl * dl + da * da + db * db;
+                    auto dlh = p.L - h.L, dah = p.a - h.a, dbh = p.b - h.b;
+                    d_hb += dlh * dlh + dah * dah + dbh * dbh;
+                }
+                if (d_base < best_d) { best_d = d_base; best_slot = static_cast<std::uint8_t>(k); }
+                if (d_hb   < best_d) { best_d = d_hb;   best_slot = static_cast<std::uint8_t>(k + k_base); }
+            }
+            assignments[i] = best_slot;
+        }
+        // M-step: linear RGB averaging, with halfbrite contributions
+        // pre-undone (·2 capped at 1.0).
+        std::vector<float> sums(k_base * n_axes * 3, 0.0f);
+        std::vector<std::size_t> counts(k_base, 0);
+        for (std::size_t i = 0; i < npix; ++i) {
+            auto a = assignments[i];
+            std::size_t k = a % k_base;
+            bool is_hb = a >= k_base;
+            for (std::size_t ax = 0; ax < n_axes; ++ax) {
+                auto px = pixels[i * n_axes + ax];
+                if (is_hb) px = undo_halve(px);
+                sums[(k * n_axes + ax) * 3 + 0] += px.r;
+                sums[(k * n_axes + ax) * 3 + 1] += px.g;
+                sums[(k * n_axes + ax) * 3 + 2] += px.b;
+            }
+            ++counts[k];
+        }
+        for (std::size_t k = k_first; k < k_base; ++k) {
+            if (counts[k] == 0) continue;
+            float inv_n = 1.0f / static_cast<float>(counts[k]);
+            for (std::size_t ax = 0; ax < n_axes; ++ax) {
+                centroids[k * n_axes + ax] = Color3f{
+                    sums[(k * n_axes + ax) * 3 + 0] * inv_n,
+                    sums[(k * n_axes + ax) * 3 + 1] * inv_n,
+                    sums[(k * n_axes + ax) * 3 + 2] * inv_n,
+                };
+            }
+        }
+    }
+
+    // Project final centroids: 32 base + 32 halfbrite per axis.
+    FadeJointResult result;
+    result.indices = std::move(assignments);
+    result.palette_source.resize(k_eff);
+    result.palette_targets.assign(targets.size(),
+                                  std::vector<Color3f>(k_eff));
+    auto build_pal = [&](std::vector<Color3f>& pal, std::size_t axis) {
+        for (std::size_t k = 0; k < k_base; ++k) {
+            // Snap base to OCS gamut so the encoded palette matches what
+            // the EHB hardware will display; halfbrite is then exact.
+            auto base = palette::quantize_to_ocs(centroids[k * n_axes + axis]);
+            pal[k] = base;
+            pal[k_base + k] = palette::half_brite(base);
+        }
+    };
+    build_pal(result.palette_source, 0);
+    for (std::size_t t = 0; t < targets.size(); ++t)
+        build_pal(result.palette_targets[t], 1 + t);
+    return result;
+}
+
+// Joint dither — replaces the joint-k-means hard assignments with
+// dither-smoothed indices that minimise the SUM of OKLab distance
+// across source and every target axis.
+//
+// Source axis is driven by dither::diffuse_raw_buffer: it handles
+// FS-family ED (own kernel + accumulated error) AND ordered methods
+// (Bayer / halftone / blue-noise / etc. — applies a per-pixel ordered
+// threshold offset in OKLab to the target before calling the picker).
+// We mirror its work for each target axis inside the picker:
+//
+//   - ED methods (kernel non-empty): per-target accumulated error
+//     buffer; diffuse error after slot pick using the same kernel.
+//   - Ordered methods: dither::ordered_threshold(method, x, y) gives
+//     the per-pixel offset; apply it to each target axis's OKLab
+//     before computing joint distance, with no error diffusion.
+//   - Yliluoma family / other non-ED non-ordered methods: caller is
+//     expected to have already substituted FS via the gate in
+//     fade_postprocess (joint dither doesn't compose with their
+//     candidate-set picker).
+std::vector<std::uint8_t> fade_joint_dither(
+        const Image& source,
+        const std::vector<Image>& targets,
+        std::span<const Color3f> source_palette,
+        const std::vector<std::vector<Color3f>>& target_palettes,
+        const dither::Settings& settings) {
+    const auto w = source.width(), h = source.height();
+    const std::size_t T = targets.size();
+    const std::size_t n_slots = source_palette.size();
+    std::vector<std::uint8_t> indices(w * h);
+
+    // Pre-compute palette OKLab per axis.
+    std::vector<color_space::OKLab> pal_src_lab(n_slots);
+    for (std::size_t k = 0; k < n_slots; ++k)
+        pal_src_lab[k] = color_space::linear_to_oklab(source_palette[k]);
+    std::vector<std::vector<color_space::OKLab>> pal_tgt_lab(T);
+    for (std::size_t t = 0; t < T; ++t) {
+        pal_tgt_lab[t].resize(n_slots);
+        for (std::size_t k = 0; k < n_slots; ++k)
+            pal_tgt_lab[t][k] =
+                color_space::linear_to_oklab(target_palettes[t][k]);
+    }
+
+    const bool is_ord = dither::is_ordered(settings.method);
+    auto kernel = dither::error_diffusion_kernel(settings.method);
+    if (!is_ord && kernel.empty())
+        kernel = dither::error_diffusion_kernel(dither::Method::floyd_steinberg);
+
+    // Per-target linear-RGB error buffer (only used in ED mode).
+    std::vector<std::vector<Color3f>> tgt_err;
+    if (!is_ord) {
+        tgt_err.resize(T);
+        for (auto& e : tgt_err) e.assign(w * h, Color3f{0, 0, 0});
+    }
+
+    auto clamp01 = [](Color3f c) {
+        return Color3f{
+            std::clamp(c.r, 0.0f, 1.0f),
+            std::clamp(c.g, 0.0f, 1.0f),
+            std::clamp(c.b, 0.0f, 1.0f),
+        };
+    };
+
+    auto picker = [&](const color_space::OKLab& src_target,
+                      std::size_t x, std::size_t y) -> dither::PickResult {
+        const auto idx = y * w + x;
+
+        // Adjusted target pixels:
+        //   ED mode      → pixel + per-target accumulated error.
+        //   Ordered mode → pixel; apply ordered_threshold offset to
+        //                  OKLab L/a/b (matching diffuse_raw_buffer's
+        //                  source-side bias at lines 3358-3362).
+        std::vector<color_space::OKLab> tgt_cur_lab(T);
+        std::vector<Color3f>            tgt_cur_lin(T);
+        float ord_thr = is_ord
+            ? dither::ordered_threshold(settings.method, x, y)
+            : 0.0f;
+        for (std::size_t t = 0; t < T; ++t) {
+            auto& tp = targets[t].pixels()[idx];
+            Color3f adj;
+            if (is_ord) {
+                adj = clamp01(tp);
+            } else {
+                auto& te = tgt_err[t][idx];
+                adj = clamp01({tp.r + te.r, tp.g + te.g, tp.b + te.b});
+            }
+            tgt_cur_lin[t] = adj;
+            auto lab = color_space::linear_to_oklab(adj);
+            if (is_ord) {
+                lab.L += ord_thr * settings.strength * 0.15f;
+                lab.a += ord_thr * settings.strength * 0.03f;
+                lab.b += ord_thr * settings.strength * 0.03f;
+            }
+            tgt_cur_lab[t] = lab;
+        }
+
+        // Find slot minimising joint OKLab² distance.
+        float best_cost = std::numeric_limits<float>::max();
+        std::size_t best_k = 0;
+        for (std::size_t k = 0; k < n_slots; ++k) {
+            auto& sp = pal_src_lab[k];
+            auto dl = src_target.L - sp.L;
+            auto da = src_target.a - sp.a;
+            auto db = src_target.b - sp.b;
+            float cost = dl * dl + da * da + db * db;
+            for (std::size_t t = 0; t < T; ++t) {
+                auto& p = pal_tgt_lab[t][k];
+                auto& c = tgt_cur_lab[t];
+                auto dlt = c.L - p.L;
+                auto dat = c.a - p.a;
+                auto dbt = c.b - p.b;
+                cost += dlt * dlt + dat * dat + dbt * dbt;
+            }
+            if (cost < best_cost) {
+                best_cost = cost;
+                best_k = k;
+            }
+        }
+        indices[idx] = static_cast<std::uint8_t>(best_k);
+
+        // Diffuse target errors only in ED mode. Ordered methods
+        // don't accumulate per-pixel error.
+        if (!is_ord) {
+            for (std::size_t t = 0; t < T; ++t) {
+                auto chosen = target_palettes[t][best_k];
+                Color3f e{
+                    tgt_cur_lin[t].r - chosen.r,
+                    tgt_cur_lin[t].g - chosen.g,
+                    tgt_cur_lin[t].b - chosen.b,
+                };
+                for (auto& kdx_kdy_w : kernel) {
+                    auto& [kdx, kdy, weight] = kdx_kdy_w;
+                    int nx = static_cast<int>(x) + kdx;
+                    int ny = static_cast<int>(y) + kdy;
+                    if (nx < 0 || nx >= static_cast<int>(w) ||
+                        ny < 0 || ny >= static_cast<int>(h)) continue;
+                    auto& slot = tgt_err[t][static_cast<std::size_t>(ny) * w +
+                                            static_cast<std::size_t>(nx)];
+                    slot.r += e.r * weight;
+                    slot.g += e.g * weight;
+                    slot.b += e.b * weight;
+                }
+            }
+        }
+
+        // Tell diffuse_raw_buffer the source's chosen colour so it
+        // diffuses source-side error itself (or, in ordered mode,
+        // just records the choice).
+        dither::PickResult r;
+        r.chosen_lab = pal_src_lab[best_k];
+        r.ostro_threshold = 0.5f;
+        return r;
+    };
+
+    dither::diffuse_raw_buffer(source, settings, picker);
+    return indices;
+}
+
+
+// Fade post-process — runs after the main pipeline produced an indexed
+// bitmap, mutates indices/palette/planes/rendered to reflect the joint
+// k-means clustering, and returns the per-frame palette sequence the
+// preview animator consumes. Shared between lores/hires and EHB
+// branches. is_ehb routes to the half-brite-aware joint k-means.
+std::vector<std::vector<Color3f>> fade_postprocess(
+        const Image& source,
+        const std::vector<std::string>& fade_to_paths,
+        std::size_t fade_frames,
+        bool fade_loop,
+        bool is_ehb,
+        std::size_t depth,
+        bitplane::Layout layout,
+        amiga::Chipset chipset,
+        amiga::Mode mode,
+        bool interlace,
+        const dither::Settings& dither_settings,
+        bool reserve_slot0,
+        std::vector<std::uint8_t>& indices,
+        std::vector<Color3f>& palette,
+        bitplane::BitplaneData& planes,
+        Image& rendered) {
+    // 1. Load + scale targets to source dimensions.
+    std::vector<Image> targets;
+    targets.reserve(fade_to_paths.size());
+    for (auto& path : fade_to_paths) {
+        auto loaded = png_io::load(path);
+        if (!loaded) {
+            std::println(stderr, "Error: --fade-to: cannot read '{}': {}",
+                         path, loaded.error().message);
+            return {};
+        }
+        Image t = *std::move(loaded);
+        if (t.width() != source.width() || t.height() != source.height()) {
+            auto resized = scale::resample(t, source.width(), source.height());
+            if (!resized) {
+                std::println(stderr, "Error: --fade-to: resample of '{}' failed: {}",
+                             path, resized.error().message);
+                return {};
+            }
+            t = *std::move(resized);
+        }
+        targets.push_back(std::move(t));
+    }
+
+    // 2. Joint k-means (EHB or non-EHB) — produces the palette set.
+    auto k_pal = std::size_t{1} << depth;
+    FadeJointResult joint = is_ehb
+        ? fade_joint_kmeans_ehb(source, targets, /*iter=*/12, chipset,
+                                reserve_slot0)
+        : fade_joint_kmeans(source, targets, k_pal, /*iter=*/12,
+                            chipset, mode, reserve_slot0);
+
+    // 3. Joint dither using the joint palette set. Source-axis ED
+    //    runs through dither::diffuse_raw_buffer with the user's
+    //    --dither setting; target axes use the same kernel.
+    //
+    // Yliluoma family methods drive their per-pixel slot pick from
+    // Bayer-position candidate sets, not from nearest-OKLab + error,
+    // so they don't compose with the joint-distance picker. Fall back
+    // to FS for the fade pass with a clear status line.
+    //
+    // Ordered methods (Bayer / halftone / blue-noise / etc.) DO work
+    // — fade_joint_dither applies dither::ordered_threshold to each
+    // axis independently before computing joint distance.
+    auto fade_dither = dither_settings;
+    if (dither::is_yliluoma(fade_dither.method) ||
+        fade_dither.method == dither::Method::none) {
+        cli_status("Fade:   --dither {} doesn't compose with joint "
+                   "dither — using floyd-steinberg for the fade pass.",
+                   dither_to_options_string(fade_dither.method));
+        fade_dither.method = dither::Method::floyd_steinberg;
+    }
+    indices = fade_joint_dither(source, targets,
+                                joint.palette_source,
+                                joint.palette_targets,
+                                fade_dither);
+    palette = joint.palette_source;
+    auto rebuilt = bitplane::encode(indices, source.width(), source.height(),
+                                    is_ehb ? std::size_t{6} : depth, layout);
+    if (!rebuilt) {
+        std::println(stderr, "Encode error: {}", rebuilt.error().message);
+        return {};
+    }
+    planes = *std::move(rebuilt);
+    auto rerender = pipeline::render_preview(
+        planes, palette, /*is_ham=*/false, interlace, chipset);
+    if (!rerender) {
+        std::println(stderr, "Render error: {}", rerender.error().message);
+        return {};
+    }
+    rendered = *std::move(rerender);
+
+    // 4. Build stops list + interpolated palette sequence.
+    Palette source_pal;
+    source_pal.colors = palette;
+    std::vector<Palette> stops{source_pal};
+    for (auto& tpal : joint.palette_targets) {
+        Palette p;
+        p.colors = tpal;
+        stops.push_back(std::move(p));
+    }
+    if (fade_loop) stops.push_back(source_pal);
+    auto seq = fade_build_palette_sequence(stops, fade_frames, chipset, mode);
+    cli_status("Fade:   {} stops × {} frames/segment = {} frames "
+               "({}joint k-means + joint dither / {})",
+               stops.size(), fade_frames, seq.size(),
+               is_ehb ? "EHB " : "",
+               dither_to_options_string(fade_dither.method));
+    return seq;
+}
+
+// Lerp each palette slot in OKLab space, snap each frame's palette to
+// chipset so the in-flight transition fits the DAC grid (no banding when
+// the runtime cycles a 12-bit DAC palette through these states).
+std::vector<std::vector<Color3f>> fade_build_palette_sequence(
+        const std::vector<Palette>& stops,
+        std::size_t frames_per_segment,
+        amiga::Chipset chipset, amiga::Mode mode) {
+    std::vector<std::vector<Color3f>> out;
+    if (stops.size() < 2 || frames_per_segment < 2) return out;
+    const auto n_slots = stops[0].colors.size();
+    auto snap = [&](Color3f rgb) {
+        if (amiga::is_stf(mode)) return palette::quantize_to_stf(rgb);
+        if (chipset != amiga::Chipset::aga) return palette::quantize_to_ocs(rgb);
+        return rgb;
+    };
+    out.reserve((stops.size() - 1) * frames_per_segment + 1);
+    for (std::size_t seg = 0; seg + 1 < stops.size(); ++seg) {
+        auto& a = stops[seg];
+        auto& b = stops[seg + 1];
+        // For all but the last segment, emit frames in [0, frames_per_segment).
+        // The last segment emits frames in [0, frames_per_segment] so the
+        // final endpoint lands in the sequence.
+        bool last = (seg + 1 == stops.size() - 1);
+        std::size_t count = last ? frames_per_segment + 1 : frames_per_segment;
+        for (std::size_t f = 0; f < count; ++f) {
+            float t = static_cast<float>(f) /
+                      static_cast<float>(frames_per_segment);
+            std::vector<Color3f> palette(n_slots);
+            for (std::size_t k = 0; k < n_slots; ++k) {
+                auto la = color_space::linear_to_oklab(
+                    k < a.colors.size() ? a.colors[k] : Color3f{0, 0, 0});
+                auto lb = color_space::linear_to_oklab(
+                    k < b.colors.size() ? b.colors[k] : Color3f{0, 0, 0});
+                color_space::OKLab mid{
+                    (1.0f - t) * la.L + t * lb.L,
+                    (1.0f - t) * la.a + t * lb.a,
+                    (1.0f - t) * la.b + t * lb.b,
+                };
+                palette[k] = snap(color_space::oklab_to_linear(mid));
+            }
+            out.push_back(std::move(palette));
+        }
+    }
+    return out;
+}
+
+// Render an indexed image with a specific palette into an RGB Image.
+Image fade_render_with_palette(std::span<const std::uint8_t> indices,
+                               std::size_t w, std::size_t h,
+                               std::span<const Color3f> palette) {
+    Image out(w, h);
+    auto px = out.pixels();
+    for (std::size_t i = 0; i < w * h && i < indices.size(); ++i) {
+        auto k = indices[i];
+        px[i] = (k < palette.size()) ? palette[k] : Color3f{0.0f, 0.0f, 0.0f};
+    }
+    return out;
+}
+
+// Animate the fade in the terminal. Each frame's rendered Image is
+// pushed via the existing show_terminal_preview path, so it reuses
+// the iTerm2/sixel detection and PAR scaling. Cursor-home (\x1b[H)
+// before each frame keeps the animation in place rather than scrolling.
+// Loops the sequence until the user hits Ctrl+C.
+void fade_animate_preview(std::span<const std::uint8_t> indices,
+                          std::size_t w, std::size_t h,
+                          const std::vector<std::vector<Color3f>>& sequence,
+                          amiga::Mode mode, bool hires, bool interlace,
+                          bool loop_back_to_start) {
+    if (sequence.empty()) return;
+    cli_status("Fade preview: {} frames per segment, {} total. "
+               "Ctrl+C to exit.",
+               sequence.size() ? sequence.size() : 0, sequence.size());
+    // Build the playback order: forward, then reversed if !loop (so the
+    // user sees a ping-pong); or just the forward sequence if loop is on.
+    std::vector<std::size_t> order;
+    order.reserve(sequence.size() * 2);
+    for (std::size_t i = 0; i < sequence.size(); ++i) order.push_back(i);
+    if (!loop_back_to_start && sequence.size() >= 3) {
+        for (std::size_t i = sequence.size() - 2; i >= 1; --i) order.push_back(i);
+    }
+    while (true) {
+        for (auto idx : order) {
+            std::fputs("\x1b[H", stdout);
+            auto frame = fade_render_with_palette(indices, w, h, sequence[idx]);
+            show_terminal_preview(frame, mode, hires, interlace);
+            std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        }
+    }
+}
+
 // CLI progress reporter. Throttles to ~20Hz redraw, writes "\rEncoding NN.N%
 // [stage]\033[K" to stderr when it's a TTY (no-op otherwise so piped runs
 // don't get carriage returns in their stderr capture). Thread-safe — encoder
@@ -3812,6 +4673,43 @@ int main(int argc, char* argv[]) {
                 "Atari/VGA/EGA/CGA, SNES Mode 7, Genesis, and C64 modes "
                 "all use fixed buffers or tile-coded encodings that don't "
                 "round-trip through the 3x3 replicate.");
+    }
+
+    // --fade-to gating. Same shape as --tile: indexed lores / hires /
+    // EHB only, no copper / scap / HAM / batch / fixed-buffer modes.
+    // The fade animates the palette while indices stay constant, which
+    // requires a single static indexed bitmap.
+    if (!config->fade_to_paths.empty()) {
+        auto reject_fade = [](std::string_view why) {
+            std::println(stderr, "Error: --fade-to: {}", why);
+            return 1;
+        };
+        if (config->scap)
+            return reject_fade(
+                "not supported with strip palette (--strips).");
+        if (config->copper)
+            return reject_fade(
+                "not supported with --sliced. Joint per-line palette "
+                "evolution under the MOVE budget would need encode_copper "
+                "rewritten in joint (source ⊕ targets) OKLab — deferred.");
+        if (amiga::is_ham(config->mode))
+            return reject_fade("not supported in HAM modes (palette is "
+                               "dynamic per pixel; there's no static "
+                               "palette to fade).");
+        if (config->batch)
+            return reject_fade("not supported with --batch");
+        bool fade_mode_ok =
+            config->mode == amiga::Mode::lores ||
+            config->mode == amiga::Mode::lores_interlace ||
+            config->mode == amiga::Mode::hires ||
+            config->mode == amiga::Mode::hires_interlace ||
+            config->mode == amiga::Mode::ehb;
+        if (!fade_mode_ok)
+            return reject_fade(
+                "supports lores / hires / EHB (with optional "
+                "--interlace and --dpf) only.");
+        if (config->fade_to_paths.size() > 8)
+            return reject_fade("max 8 target stops in --fade-to");
     }
 
     // Batch mode runs an entirely different path: build atlas, encode
@@ -5174,6 +6072,7 @@ int main(int argc, char* argv[]) {
                 winner = std::move(*r);
             }
 
+
             auto& copper_result_obj = winner->copper_result;
             cli_print_mode(std::format(
                 "EHB + Sliced ({} changes/line, max {} MOVEs/line)",
@@ -5221,7 +6120,9 @@ int main(int argc, char* argv[]) {
                 std::optional<float>{copper_result->avg_changes_per_line},
                 static_cast<double>(total_error), ehb_psnr, ehb_s2);
 
-            if (config->preview) show_terminal_preview(rendered, config->mode, config->hires, config->interlace);
+            if (config->preview)
+                show_terminal_preview(rendered, config->mode,
+                                      config->hires, config->interlace);
 
             // Use base palette for CMAP
             std::vector<Color3f> cmap_palette = copper_result->base_palette;
@@ -5364,6 +6265,30 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         auto& st = enc.state;
+
+        // --fade-to (EHB): joint k-means in (source ⊕ targets) linear-
+        // RGB space, with each pixel allowed to bind to slot k or its
+        // hardware half-brite slot k+32. Post-process replaces st's
+        // indices / palette / planes / rendered with the joint result.
+        std::vector<std::vector<Color3f>> fade_sequence;
+        if (!config->fade_to_paths.empty()) {
+            // Use the user's --dither setting for joint dither;
+            // fall back to floyd-steinberg if the user picked
+            // something exotic.
+            dither::Settings fade_dith;
+            fade_dith.method = config->dither_method;
+            fade_dith.strength = aopts.dither_strength;
+            fade_dith.error_clamp = aopts.error_clamp;
+            fade_sequence = fade_postprocess(
+                *image, config->fade_to_paths, config->fade_frames,
+                config->fade_loop, /*is_ehb=*/true,
+                /*depth=*/6, bitplane::Layout::interleaved,
+                chipset, config->mode, config->interlace, fade_dith,
+                config->lock_color0,
+                st.indices, st.palette, st.planes, st.rendered);
+            if (fade_sequence.empty()) return 1;
+        }
+
         // st.palette holds the full 64-entry EHB palette here (the
         // EHB pipeline emits {32 base} ++ {32 half-brite} into
         // result.palette). The strips-EHB path (cli_print_palette
@@ -5384,10 +6309,29 @@ int main(int argc, char* argv[]) {
             std::nullopt,
             static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
 
+        // EHB only writes the 32 base entries per frame; halve is hw.
+        if (!fade_sequence.empty()) {
+            std::vector<std::vector<Color3f>> base_only(fade_sequence.size());
+            for (std::size_t f = 0; f < fade_sequence.size(); ++f) {
+                auto& src = fade_sequence[f];
+                base_only[f].assign(src.begin(),
+                    src.begin() + static_cast<std::ptrdiff_t>(
+                        std::min<std::size_t>(32, src.size())));
+            }
+            cli_print_fade_data(
+                fade_actual_bytes(base_only, /*budget=*/32, chipset),
+                base_only.size(), /*budget=*/32, chipset, "EHB base");
+        }
+
         if (config->preview) {
-            // --tile re-tiles the centre 3x3 so the user can verify the
-            // seams visually. Export paths still see the centre crop only.
-            if (config->tile) {
+            if (!fade_sequence.empty()) {
+                fade_animate_preview(st.indices,
+                                     st.rendered.width(), st.rendered.height(),
+                                     fade_sequence, config->mode,
+                                     config->hires, config->interlace,
+                                     config->fade_loop);
+                // fade_animate_preview loops forever — Ctrl+C exits.
+            } else if (config->tile) {
                 auto tiled = tile_3x3_for_preview(st.rendered);
                 show_terminal_preview(tiled, config->mode,
                                       config->hires, config->interlace);
@@ -5453,6 +6397,15 @@ int main(int argc, char* argv[]) {
                     .total_unique_colors =
                         static_cast<std::size_t>(count_unique_colors(st.rendered)),
                 });
+                if (!fade_sequence.empty() && !config->interlace) {
+                    // EHB cop list writes only the 32 base slots
+                    // (OCS-format $0RGB; halve is hardware-derived).
+                    ch_opts2.fade_per_frame_values =
+                        fade_compute_viewer_values_global(
+                            fade_sequence, /*slot_count=*/32,
+                            config->lock_color0, /*aga=*/false);
+                    ch_opts2.fade_ping_pong = !config->fade_loop;
+                }
 
                 pad_planes_to_mode(st.planes, config->mode, config->hires);
                 auto result2 = cheader::save_viewer(
@@ -5667,6 +6620,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
+
         // Render preview BEFORE any DPF expansion: render_copper decodes
         // a combined index from all planes, which would land on
         // non-contiguous slots once PF1 zeros are interleaved.
@@ -5738,7 +6692,8 @@ int main(int argc, char* argv[]) {
             std::optional<float>{copper_result->avg_changes_per_line},
             static_cast<double>(copper_result->total_error), cop_psnr, cop_s2);
 
-        if (config->preview) show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+        if (config->preview)
+            show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
 
         // Output
         if (!config->output_path.empty()) {
@@ -6449,10 +7404,68 @@ int main(int argc, char* argv[]) {
         std::nullopt,
         static_cast<double>(dither_result.total_error), std_psnr, std_s2);
 
+    // --fade-to: joint k-means clusters (source ⊕ targets) and replaces
+    // the bitmap's indices / palette / planes / rendered preview with
+    // the joint result. Returns the per-frame palette sequence used by
+    // --preview. Joint dither restores source FS smoothness while
+    // keeping every target axis's slot-choice consistent.
+    std::vector<std::vector<Color3f>> fade_sequence;
+    if (!config->fade_to_paths.empty()) {
+        bitplane::BitplaneData planes_obj = *std::move(planes);
+        Image preview_obj = *std::move(preview);
+        fade_sequence = fade_postprocess(
+            *image, config->fade_to_paths, config->fade_frames,
+            config->fade_loop, /*is_ehb=*/false,
+            config->depth, bp_layout, chipset, config->mode,
+            config->interlace, dith,
+            config->lock_color0,
+            dither_result.indices, used_palette, planes_obj, preview_obj);
+        if (fade_sequence.empty()) return 1;
+        planes = std::move(planes_obj);
+        preview = std::move(preview_obj);
+        cli_print_fade_data(
+            fade_actual_bytes(fade_sequence, used_palette.size(), chipset),
+            fade_sequence.size(), used_palette.size(),
+            chipset, "global");
+
+        // Env-gated frame dump for tooling (README GIF, etc.). Set
+        // FADE_DUMP_DIR=/some/dir to emit one PNG per fade frame
+        // (frame_000.png … frame_NNN.png) rendered via the same
+        // path the sixel preview animator uses.
+        if (auto* dump_dir = std::getenv("FADE_DUMP_DIR")) {
+            const auto fw = image->width();
+            const auto fh = image->height();
+            for (std::size_t f = 0; f < fade_sequence.size(); ++f) {
+                Image frame(fw, fh);
+                auto px = frame.pixels();
+                const auto& fpal = fade_sequence[f];
+                for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
+                    auto k = dither_result.indices[i];
+                    px[i] = (k < fpal.size()) ? fpal[k]
+                                              : Color3f{0.0f, 0.0f, 0.0f};
+                }
+                auto path = std::format("{}/frame_{:03}.png", dump_dir, f);
+                save_preview(path, frame, false, {}, config->mode,
+                             config->hires, config->interlace);
+            }
+            std::println(stderr, "[fade-dump] wrote {} frames to {}",
+                         fade_sequence.size(), dump_dir);
+        }
+    }
+
     // Terminal preview. --tile re-tiles the centre 3x3 so the user can
-    // verify seam continuity.
+    // verify seam continuity. --fade-to animates the palette sequence;
+    // both compose orthogonally with the regular static preview.
     if (config->preview) {
-        if (config->tile) {
+        if (!fade_sequence.empty()) {
+            fade_animate_preview(dither_result.indices,
+                                 image->width(), image->height(),
+                                 fade_sequence, config->mode,
+                                 config->hires, config->interlace,
+                                 config->fade_loop);
+            // fade_animate_preview loops forever (Ctrl+C exits the
+            // process), so control never returns here.
+        } else if (config->tile) {
             auto tiled = tile_3x3_for_preview(*preview);
             show_terminal_preview(tiled, config->mode, config->hires, config->interlace);
         } else {
@@ -6658,6 +7671,14 @@ int main(int argc, char* argv[]) {
                     .total_unique_colors =
                         static_cast<std::size_t>(count_unique_colors(*preview)),
                 });
+                if (!fade_sequence.empty() && !config->interlace) {
+                    ch_opts.fade_per_frame_values =
+                        fade_compute_viewer_values_global(
+                            fade_sequence, used_palette.size(),
+                            config->lock_color0,
+                            chipset == amiga::Chipset::aga);
+                    ch_opts.fade_ping_pong = !config->fade_loop;
+                }
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result = cheader::save_viewer(

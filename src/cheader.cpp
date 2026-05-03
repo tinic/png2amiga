@@ -370,6 +370,16 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     auto pal_count = palette.size();
     if (mode == amiga::Mode::ehb && pal_count > 32) pal_count = 32;
 
+    // Fade-to (multi-frame palette animation). v1 limits: progressive,
+    // non-HAM, no fade-in mixing. AGA banks (>32 colours) are
+    // supported because the runtime scan walks COLOR MOVEs in cop-
+    // list order ignoring BPLCON3 toggles, and the value table is
+    // packed in the same per-bank HI-then-LO order.
+    bool do_fade_to =
+        !options.fade_per_frame_values.empty() &&
+        options.fade_per_frame_values.size() >= 2 &&
+        !options.interlace && !is_ham && !do_fade;
+
     std::string out;
     out.reserve(planes.total_bytes() * 8 + 8192);
 
@@ -918,6 +928,41 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // plain `const` so user code that includes the .h sees the
         // definition with external linkage.
         emit_strips_copper_list(out, sym, options, "static const");
+    }
+
+    // Fade-to per-frame palette value tables. One UWORD per COLOR MOVE
+    // in the cop list, in cop-list emission order. Frame 0 is the
+    // baked-in source palette (matches what the cop list builder
+    // writes); the animation loop patches in frames 1..F−1 each
+    // hold-tick.
+    if (do_fade_to) {
+        auto F = options.fade_per_frame_values.size();
+        auto N = options.fade_per_frame_values[0].size();
+        for (std::size_t f = 0; f < F; ++f) {
+            if (options.fade_per_frame_values[f].size() != N) {
+                return std::unexpected{Error{
+                    ErrorCode::invalid_dimensions,
+                    std::format("fade_per_frame_values[{}] has {} entries, "
+                                "expected {} to match frame 0", f,
+                                options.fade_per_frame_values[f].size(), N)
+                }};
+            }
+        }
+        out += std::format("// Fade-to: {} frames × {} palette MOVEs\n", F, N);
+        out += std::format("static const UWORD {}_fade_values[{}][{}] = {{\n",
+                           sym, F, std::max(N, std::size_t{1}));
+        for (std::size_t f = 0; f < F; ++f) {
+            out += "    {";
+            for (std::size_t i = 0; i < N; ++i) {
+                out += std::format("0x{:04X}", options.fade_per_frame_values[f][i]);
+                if (i + 1 < N) out += ",";
+                if ((i + 1) % 16 == 0 && i + 1 < N) out += "\n     ";
+            }
+            out += "}";
+            if (f + 1 < F) out += ",";
+            out += "\n";
+        }
+        out += "};\n\n";
     }
 
     out += "// Write bitplane pointer registers into a copper list.\n";
@@ -1745,6 +1790,55 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    Enable();  // allow CPU to service interrupts\n\n";
     }
 
+    // Fade-to: walk copper1 once to capture each COLOR MOVE's value-
+    // word address, then animate by patching those addresses from
+    // per-frame value tables every fade_frame_hold_vbls VBLs.
+    if (do_fade_to) {
+        auto F = options.fade_per_frame_values.size();
+        auto N = options.fade_per_frame_values[0].size();
+        out += std::format(
+            "    // Fade-to setup: scan cop list for COLOR MOVE value-word "
+            "addresses\n"
+            "    USHORT* fade_addrs[{}];\n"
+            "    int fade_n = 0;\n"
+            "    for (USHORT* p = copper1; "
+            "!(p[0] == 0xFFFF && p[1] == 0xFFFE); p += 2) {{\n"
+            "        UWORD reg = p[0];\n"
+            "        if ((reg & 1) == 0 && reg >= 0x0180 && reg <= 0x01BE) {{\n"
+            "            if (fade_n < {}) fade_addrs[fade_n++] = &p[1];\n"
+            "        }}\n"
+            "    }}\n", N, N);
+        out += std::format(
+            "    // Animation: cycle frame every {} VBLs ({} → {} → 0).\n"
+            "    {{\n"
+            "        int frame = 0, dir = 1, hold = 0;\n"
+            "        for (;;) {{\n"
+            "            WaitVbl();\n"
+            "            // Right-click exits.\n"
+            "            if (((*(volatile UWORD*)0xdff016) & (1<<10)) == 0) "
+            "break;\n"
+            "            if (++hold >= {}) {{\n"
+            "                hold = 0;\n"
+            "                const UWORD* vals = {}_fade_values[frame];\n"
+            "                for (int i = 0; i < fade_n; i++) "
+            "*fade_addrs[i] = vals[i];\n",
+            options.fade_frame_hold_vbls,
+            options.fade_ping_pong ? "0..F-1..0" : "0..F-1, wrap",
+            F - 1, options.fade_frame_hold_vbls, sym);
+        if (options.fade_ping_pong) {
+            out += std::format(
+                "                frame += dir;\n"
+                "                if (frame >= {}) {{ dir = -1; frame = {}; }}\n"
+                "                else if (frame < 0) {{ dir = 1; frame = 1; }}\n",
+                F, F >= 2 ? F - 2 : 0);
+        } else {
+            out += std::format(
+                "                if (++frame >= {}) frame = 0;\n", F);
+        }
+        out += "            }\n"
+               "        }\n"
+               "    }\n\n";
+    } else
     // Wait for left mouse button. Multi-frame batch viewer: each click
     // advances to the next frame (wraps around); right-click exits.
     if (n_extra > 0) {

@@ -516,6 +516,65 @@ else()
     )
     set_tests_properties("tile-rejects-vga" PROPERTIES WILL_FAIL TRUE)
 
+    # --fade-to: bitmap encodes once, palette interpolates through one or
+    # more target images. v1 supports lores/hires only; --preview animates.
+    add_test(
+        NAME "smoke-fade-to-lores"
+        COMMAND png2amiga --mode lores --depth 5
+                --fade-to ${CMAKE_SOURCE_DIR}/examples/tile/diamond.png
+                --fade-frames 4
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/fade-smoke.png
+    )
+    add_test(
+        NAME "smoke-fade-to-multi"
+        COMMAND png2amiga --mode lores --depth 5
+                --fade-to ${CMAKE_SOURCE_DIR}/examples/tile/diamond.png,${CMAKE_SOURCE_DIR}/examples/tile/plasma.png,${CMAKE_SOURCE_DIR}/examples/tile/ramp_horizontal.png
+                --fade-frames 4 --fade-loop
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/fade-multi.png
+    )
+    add_test(
+        NAME "fade-to-rejects-ham"
+        COMMAND png2amiga --mode ham6
+                --fade-to ${CMAKE_SOURCE_DIR}/examples/tile/diamond.png
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/fade-reject-ham.png
+    )
+    set_tests_properties("fade-to-rejects-ham" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "fade-to-rejects-sliced"
+        COMMAND png2amiga --mode lores --depth 5 --sliced
+                --fade-to ${CMAKE_SOURCE_DIR}/examples/tile/diamond.png
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/fade-reject-sliced.png
+    )
+    set_tests_properties("fade-to-rejects-sliced" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "fade-to-rejects-strips"
+        COMMAND png2amiga --mode ehb --strips
+                --fade-to ${CMAKE_SOURCE_DIR}/examples/tile/diamond.png
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/fade-reject-strips.png
+    )
+    set_tests_properties("fade-to-rejects-strips" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "fade-to-rejects-ehb-sliced"
+        COMMAND png2amiga --mode ehb --sliced
+                --fade-to ${CMAKE_SOURCE_DIR}/examples/tile/diamond.png
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/fade-reject-ehb-sliced.png
+    )
+    set_tests_properties("fade-to-rejects-ehb-sliced" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "smoke-fade-to-ehb"
+        COMMAND png2amiga --mode ehb
+                --fade-to ${CMAKE_SOURCE_DIR}/examples/tile/diamond.png,${CMAKE_SOURCE_DIR}/examples/tile/plasma.png
+                --fade-frames 4
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/fade-ehb.png
+    )
+
     # Copper supports locks (fixed palette slots for blitter objects)
     add_test(
         NAME "lock-index-copper-accepted"
