@@ -760,7 +760,7 @@ void print_usage() {
         "                                  tile only. Lores/hires/EHB only.\n"
         "\n"
         "Cross-fade (lores/hires/EHB; --preview animates):\n"
-        "  --fade-to <a.png[,b.png,...]>   Targets to fade INPUT into (INPUT is the start).\n"
+        "  --fade-to <target.png>          Target image to fade INPUT into (INPUT is the start).\n"
         "  --fade-frames <2-256>           Frames per segment (default: 16)\n"
         "  --fade-loop                     Loop forward (source→...→target→source); else\n"
         "                                  ping-pong (source→...→target→...→source).\n"
