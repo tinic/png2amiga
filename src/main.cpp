@@ -4557,10 +4557,25 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // Per-method strength / error_clamp defaults from the resweep
+        // table (dither_tuning::defaults_for). Mode is not relevant for
+        // the per-method ED entries — use lores as a placeholder so the
+        // function picks the early-return per-method branch.
+        auto tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = amiga::Mode::lores,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = false,
+            .scap    = false,
+            .copper  = false,
+            .chipset = amiga::Chipset::aga,
+            .method  = config->dither_method,
+        });
         dither::Settings dith;
         dith.method = config->dither_method;
-        dith.strength = config->dither_strength;
-        dith.error_clamp = config->error_clamp;
+        dith.strength = config->dither_strength_explicit
+            ? config->dither_strength : tune.strength;
+        dith.error_clamp = config->error_clamp_explicit
+            ? config->error_clamp : tune.error_clamp;
 
         // Dither-aware palette refinement (skipped when dither off).
         // Standard pipeline runs this for non-Amiga modes; the PNG
@@ -5688,10 +5703,23 @@ int main(int argc, char* argv[]) {
                 for (std::size_t x = 0; x < image->width(); ++x)
                     dithered[x, y] = (*image)[x, y];
         } else {
+            // Pull per-method tuning from the table; fall back to the
+            // user's explicit value if they passed --dither-strength.
+            auto cga_tune = dither_tuning::defaults_for(dither_tuning::Context{
+                .mode    = config->mode,
+                .depth   = static_cast<int>(config->depth),
+                .dpf     = false,
+                .scap    = false,
+                .copper  = false,
+                .chipset = effective_chipset(*config),
+                .method  = config->dither_method,
+            });
             auto dith = dither::apply(*image, text_pal, {
                 .method = config->dither_method,
-                .strength = config->dither_strength,
-                .error_clamp = config->error_clamp,
+                .strength = config->dither_strength_explicit
+                    ? config->dither_strength : cga_tune.strength,
+                .error_clamp = config->error_clamp_explicit
+                    ? config->error_clamp : cga_tune.error_clamp,
                 .serpentine = true,
             });
             for (std::size_t y = 0; y < image->height(); ++y)

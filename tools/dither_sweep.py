@@ -147,7 +147,7 @@ PALETTE_AWARE = [
 ]
 ERROR_DIFFUSION = [
     'floyd-steinberg', 'atkinson', 'sierra-lite', 'stucki', 'jarvis',
-    'ostromoukhov', 'gilbert', 'riemersma',
+    'fs-ostro', 'gilbert', 'riemersma',
 ]
 STRUCTURE_AWARE = ['structure-fs', 'contrast-fs', 'zhoufang']
 ALL_METHODS = PALETTE_AWARE + ERROR_DIFFUSION + STRUCTURE_AWARE
@@ -231,12 +231,18 @@ def prepare_images(spec: ModeSpec, work_dir: Path) -> list[Path]:
 
 
 def run_encoder(spec: ModeSpec, src: Path, method: str,
-                strength: float, work_dir: Path) -> Path:
-    """Invoke png2amiga with the given (mode, method, strength). Output PNG."""
+                strength: float, work_dir: Path,
+                want_s2: bool = False) -> tuple[Path, float | None]:
+    """Invoke png2amiga with the given (mode, method, strength). Returns
+    (output_path, s2_or_None). When want_s2 is True we parse SSIMULACRA2
+    from the encoder's `Encoded:` stdout line — avoids re-implementing
+    the metric in Python and matches what every other internal harness
+    uses."""
     name = f"{spec.name}_{src.stem}_{method}_{strength:.2f}.png"
     out = work_dir / name
+    quiet_flag = [] if want_s2 else ['--quiet']
     args: list[str] = [
-        str(PNG2AMIGA), '--quiet', '--no-scale',
+        str(PNG2AMIGA), *quiet_flag, '--no-scale',
         '--dither', method, '--dither-strength', f'{strength:.2f}',
     ]
     # If extra_args includes --mode (amiga depth variants), use it; otherwise
@@ -247,8 +253,19 @@ def run_encoder(spec: ModeSpec, src: Path, method: str,
     args += [str(src), '-o', str(out)]
     res = subprocess.run(args, capture_output=True, text=True)
     if res.returncode != 0 or not out.is_file():
-        return Path('')  # signal failure
-    return out
+        return Path(''), None
+    s2_val: float | None = None
+    if want_s2:
+        # Parse the canonical "Encoded: ... S2: NN.NN" status line.
+        for line in res.stdout.splitlines():
+            if line.startswith('Encoded:') and 'S2:' in line:
+                tail = line.rsplit('S2:', 1)[-1].strip()
+                try:
+                    s2_val = float(tail.split()[0])
+                except (ValueError, IndexError):
+                    pass
+                break
+    return out, s2_val
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +281,21 @@ def sweep_one(spec: ModeSpec, methods: list[str], strengths: list[float],
     if not sources:
         print("  no usable source images, skipping")
         return {}
-    score_fn = msssim if metric == 'msssim' else psnr
-    fmt = '{:.4f}' if metric == 'msssim' else '{:.2f}'
-    fwid = 7 if metric == 'msssim' else 6
+    if metric == 'msssim':
+        score_fn = msssim
+        fmt = '{:.4f}'
+        fwid = 7
+        decimals = 4
+    elif metric == 's2':
+        score_fn = None  # parsed from encoder stdout
+        fmt = '{:.2f}'
+        fwid = 6
+        decimals = 2
+    else:  # psnr
+        score_fn = psnr
+        fmt = '{:.2f}'
+        fwid = 6
+        decimals = 2
     results: dict = {}
     for method in methods:
         if method not in spec.methods:
@@ -277,11 +306,18 @@ def sweep_one(spec: ModeSpec, methods: list[str], strengths: list[float],
         for s in strengths:
             scores: list[float] = []
             for src in sources:
-                out = run_encoder(spec, src, method, s, work_dir)
+                out, s2_val = run_encoder(spec, src, method, s, work_dir,
+                                          want_s2=(metric == 's2'))
                 if out == Path(''):
                     ok_method = False
                     break
-                v = score_fn(src, out)
+                if metric == 's2':
+                    if s2_val is None:
+                        ok_method = False
+                        break
+                    v = s2_val
+                else:
+                    v = score_fn(src, out)
                 scores.append(v)
                 per_img.setdefault(src.stem.split('_', 1)[1], []).append(v)
             if not ok_method:
@@ -300,7 +336,7 @@ def sweep_one(spec: ModeSpec, methods: list[str], strengths: list[float],
         for img_key, vals in per_img.items():
             row = f"    {img_key:<16}"
             for v in vals:
-                row += f"  {v:>{fwid}.{4 if metric == 'msssim' else 2}f}"
+                row += f"  {v:>{fwid}.{decimals}f}"
             print(row)
         # Avg row + best.
         best_i = max(range(len(avg)), key=lambda i: avg[i])
@@ -363,7 +399,11 @@ def main() -> int:
     p.add_argument('--strengths',
                    default='0.50,0.60,0.70,0.80,0.85,0.90,0.95,1.00',
                    help='CSV of dither strengths to test')
-    p.add_argument('--metric', choices=['msssim', 'psnr'], default='msssim')
+    p.add_argument('--metric', choices=['msssim', 'psnr', 's2'],
+                   default='msssim',
+                   help='msssim/psnr computed in Python; s2 parsed from '
+                        'png2amiga\'s in-process SSIMULACRA2 port via the '
+                        '"Encoded:" status line.')
     p.add_argument('--quick', action='store_true',
                    help='Smoke run: 3 strengths, opt-checker + floyd-steinberg only')
     p.add_argument('--work-dir', help='Cache dir for resized inputs and outputs '

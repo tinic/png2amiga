@@ -52,15 +52,20 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::yliluoma1:   return Defaults{0.50f, 0.35f};  // 31.055 dB (monotone declining)
     case dither::Method::yliluoma:    return Defaults{0.70f, 0.35f};  // 32.296 dB
     case dither::Method::yliluoma2:   return Defaults{0.60f, 0.35f};  // 32.007 dB
-    // Error diffusion family (lores d=5 sweep — strength only; the
-    // mode-context table below still owns error_clamp tuning):
-    case dither::Method::atkinson:        return Defaults{0.85f, 0.35f};  // 33.799 dB (OKLab-tuned kernel)
-    case dither::Method::sierra_lite:     return Defaults{0.85f, 0.35f};  // 33.836 dB
-    case dither::Method::stucki:          return Defaults{0.85f, 0.35f};  // 33.597 dB (OKLab-tuned kernel)
-    case dither::Method::jarvis:          return Defaults{0.95f, 0.35f};  // 33.606 dB (OKLab-tuned kernel)
-    case dither::Method::fs_ostro:    return Defaults{0.85f, 0.35f};  // 33.757 dB
-    case dither::Method::gilbert:         return Defaults{0.85f, 0.35f};  // 33.750 dB
-    case dither::Method::riemersma:       return Defaults{0.70f, 0.35f};  // 32.593 dB
+    // Error diffusion family — resweep 2026-05-03 against SSIMULACRA2 at
+    // lores d=5 (electrichues02 / chuck31 / lovers) after the
+    // refine_with_dither fix (commit 1303439) made the algorithm
+    // monotonically converge and bumped the default --refine 4 → 8.
+    // Better palette ⇒ less dither needed: most methods shifted DOWN
+    // by 0.05–0.20 strength versus the old PSNR-tuned values.
+    case dither::Method::floyd_steinberg: return Defaults{0.80f, 0.35f};  // S2 56.68 (new entry)
+    case dither::Method::atkinson:        return Defaults{0.70f, 0.35f};  // S2 56.38 (was 0.85)
+    case dither::Method::sierra_lite:     return Defaults{0.70f, 0.35f};  // S2 56.59 (was 0.85)
+    case dither::Method::stucki:          return Defaults{0.80f, 0.35f};  // S2 56.09 (was 0.85)
+    case dither::Method::jarvis:          return Defaults{0.85f, 0.35f};  // S2 55.96 (was 0.95)
+    case dither::Method::fs_ostro:        return Defaults{0.80f, 0.35f};  // S2 56.75 (was 0.85)
+    case dither::Method::gilbert:         return Defaults{0.70f, 0.35f};  // S2 56.09 (was 0.85)
+    case dither::Method::riemersma:       return Defaults{0.50f, 0.35f};  // S2 48.79 (was 0.70)
     case dither::Method::structure_fs:    return Defaults{0.80f, 0.35f};  // 29.184 dB
     case dither::Method::contrast_fs:     return Defaults{1.00f, 0.35f};  // 28.574 dB
     case dither::Method::zhoufang:        return Defaults{0.60f, 0.35f};  // 30.436 dB
