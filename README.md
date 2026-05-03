@@ -267,6 +267,21 @@ every visible scanline runs a near-saturated MOVE stream through the
 displayed area — each band of activity is one scanline's sliced-palette
 reload in hblank plus ~19 mid-line swaps inside the visible area.
 
+## Cross-fade between images (`--fade-to`)
+
+Encode one bitmap and morph the palette through one or more target
+images at runtime — joint k-means clusters every (source ⊕ target₁ ⊕ …)
+slot together so a single shared index buffer reproduces every stop.
+The emitted `.cpp` viewer cycles `cop1lc` through per-frame value tables
+on real hardware. Lores / hires / EHB only (sliced is rejected — see
+`project_joint_cap_encoder.md`).
+
+![day → night fade demo](docs/fade-demo.gif)
+
+```
+png2amiga --depth 5 --fade-to night.png --fade-to dawn.png day.png day.cpp
+```
+
 ## How does it compare?
 
 Source: `examples/electrichues02.jpg` resized to 320×213 (Lanczos),
