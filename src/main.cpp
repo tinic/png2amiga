@@ -526,6 +526,17 @@ struct Config {
     bool interlace = false;            // LACE bit in CAMG
     std::size_t depth = 5;
     bool depth_explicit = false;  // true if user passed --depth on the CLI
+
+    // Benchmark/comparison mode: emit indexed PNG-8 (no Amiga encoding) so
+    // we can compare our quantizer head-to-head against pngquant et al.
+    // Set by `--mode png`. Bypasses the entire Amiga dispatch in main().
+    bool png_benchmark = false;
+
+    // Score-only mode: load <input> + this reference image, print PSNR / S2,
+    // exit. Used by the pngquant comparison harness so distorted images
+    // produced by other encoders get scored with the same in-process metric
+    // as our `--mode png` output.
+    std::string score_vs;
     preprocess::Settings preprocess{};
     std::optional<std::size_t> width;
     std::optional<std::size_t> height;
@@ -1458,6 +1469,13 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "c64-charset-multicolor" ||
                          v == "c64-charset-mc" || v == "charset-multicolor")
                     config.mode = amiga::Mode::c64_charset_multicolor;
+                else if (v == "png") {
+                    // Benchmark-only path: emit indexed PNG-8 directly
+                    // (no Amiga encoding). Used to compare our quantizer
+                    // head-to-head against pngquant. config.mode is left
+                    // at its default; main() short-circuits on this flag.
+                    config.png_benchmark = true;
+                }
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
@@ -1472,6 +1490,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                                 amiga::is_ega(config.mode) ||
                                 amiga::is_cga(config.mode);
                 if (!dos_mode) config.hires = config.hires || mp.is_hires;
+            }
+            else if (arg == "--score-vs") {
+                config.score_vs = std::string(val);
             }
             else if (arg == "--depth") {
                 int d = std::atoi(std::string(val).c_str());
@@ -4432,6 +4453,132 @@ int main(int argc, char* argv[]) {
         cli_status("  Noise:     blue-noise, void-cluster, cluster-noise,");
         cli_status("             ign, ign-tri, r2, r2-tri, white-noise, value-noise");
         cli_status("  none");
+        return exit_code::ok;
+    }
+
+    // --- `--score-vs` path: pure scoring, no encoding ---
+    // Loads <input> and the reference at --score-vs, compares dimensions,
+    // emits the same Encoded:-style metrics line so the pngquant harness
+    // can rank distorted outputs from other tools against our originals.
+    if (!config->score_vs.empty()) {
+        if (config->input_path.empty()) {
+            std::println(stderr,
+                "Error: --score-vs requires <distorted.png> as input");
+            return exit_code::usage;
+        }
+        auto distorted = png_io::load(config->input_path);
+        if (!distorted) {
+            std::println(stderr, "Load distorted: {}", distorted.error().message);
+            return 1;
+        }
+        auto reference = png_io::load(config->score_vs);
+        if (!reference) {
+            std::println(stderr, "Load reference: {}", reference.error().message);
+            return 1;
+        }
+        if (distorted->width() != reference->width() ||
+            distorted->height() != reference->height()) {
+            std::println(stderr,
+                "Error: --score-vs dimensions differ: distorted {}x{}, "
+                "reference {}x{}",
+                distorted->width(), distorted->height(),
+                reference->width(), reference->height());
+            return 1;
+        }
+        auto w = reference->width();
+        auto h = reference->height();
+        float psnr = color_space::compute_psnr_blurred(
+            reference->pixels(), distorted->pixels(), w, h);
+        float s2 = ssimulacra2::compute(
+            reference->pixels(), distorted->pixels(), w, h);
+        cli_status("Encoded: scored, PSNR: {:.2f} dB, S2: {:.2f}", psnr, s2);
+        return exit_code::ok;
+    }
+
+    // --- `--mode png` benchmark path ---
+    // Indexed-PNG output (PNG-8 with PLTE) so we can compare our quantizer
+    // head-to-head against pngquant / libimagequant on a level playing field.
+    // No Amiga encoding, no copper, no CAP. Honours --depth (1..8 = 2..256
+    // colours), --dither, --dither-strength, --error-clamp, --palette-diversity,
+    // --quantizer, --width / --height (passthrough resize). Everything else
+    // is ignored.
+    if (config->png_benchmark) {
+        if (config->input_path.empty() || config->output_path.empty()) {
+            std::println(stderr,
+                "Error: --mode png requires <input> <output.png>");
+            return exit_code::usage;
+        }
+        if (config->depth < 1 || config->depth > 8) {
+            std::println(stderr,
+                "Error: --mode png needs --depth 1..8 (2..256 colours)");
+            return exit_code::usage;
+        }
+
+        auto loaded = png_io::load(config->input_path);
+        if (!loaded) {
+            std::println(stderr, "Load error: {}", loaded.error().message);
+            return 1;
+        }
+        Image img = *std::move(loaded);
+
+        // Optional resize. Defaults to source dimensions so the comparison
+        // against pngquant runs on identical pixel grids.
+        std::size_t tw = config->width.value_or(img.width());
+        std::size_t th = config->height.value_or(img.height());
+        if (tw != img.width() || th != img.height()) {
+            auto scaled = scale::resample(img, tw, th);
+            if (!scaled) {
+                std::println(stderr, "Scale error: {}", scaled.error().message);
+                return 1;
+            }
+            img = *std::move(scaled);
+        }
+
+        preprocess::apply(img, config->preprocess);
+
+        auto max_colors = std::size_t{1} << config->depth;
+        auto quantized = quantize::quantize(img, max_colors,
+                                            quantize::Algorithm::median_cut,
+                                            config->palette_diversity);
+        if (!quantized) {
+            std::println(stderr, "Quantize error: {}",
+                         quantized.error().message);
+            return 1;
+        }
+
+        dither::Settings dith;
+        dith.method = config->dither_method;
+        dith.strength = config->dither_strength;
+        dith.error_clamp = config->error_clamp;
+        auto dith_result = dither::apply(img, quantized->colors, dith);
+
+        auto w = img.width(), h = img.height();
+        Image rendered(w, h);
+        for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
+            rendered.pixels()[i] = quantized->colors[dith_result.indices[i]];
+
+        auto saved = png_io::save_palettized(config->output_path,
+                                             dith_result.indices,
+                                             quantized->colors, w, h);
+        if (!saved) {
+            std::println(stderr, "Save error: {}", saved.error().message);
+            return 1;
+        }
+
+        cli_print_input(img.width(), img.height());
+        cli_print_target(w, h, static_cast<int>(config->depth));
+        cli_print_palette(std::format("{} colours, indexed PNG-8 (benchmark)",
+                                      quantized->colors.size()));
+        cli_print_dither(dith.method, dith.strength);
+
+        float psnr = color_space::compute_psnr_blurred(
+            img.pixels(), rendered.pixels(), w, h);
+        float s2 = ssimulacra2::compute(
+            img.pixels(), rendered.pixels(), w, h);
+        cli_status("Encoded: indexed PNG-8, {} colours, "
+                   "error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
+                   quantized->colors.size(),
+                   static_cast<double>(dith_result.total_error), psnr, s2);
         return exit_code::ok;
     }
 
