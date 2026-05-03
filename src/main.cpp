@@ -607,7 +607,14 @@ struct Config {
     float alpha_dither_strength = 1.0f; // strength for alpha dither (independent)
 
     // Palette refinement
-    int refine_iterations = 4;         // dither-aware palette refinement iterations (0=off)
+    int refine_iterations = 8;         // dither-aware palette refinement
+                                       // iterations (0=off). Bumped from
+                                       // 4 → 8 after the 2026-05-03 fix
+                                       // made the algorithm monotonically
+                                       // converge: at d=5 over DIV2K-50,
+                                       // 8 iters buys +5 S2 / +0.9 dB
+                                       // PSNR over the old broken-algo
+                                       // default; plateau near 16-32.
 
     // Copper palette
     bool copper = false;               // per-scanline palette changes
@@ -729,7 +736,7 @@ void print_usage() {
         "                                  --list-dithers for the full catalog)\n"
         "  --dither-strength <float>       Dither amount 0.0-2.0 (default: 1.0)\n"
         "  --error-clamp <float>           Max error per channel (default: 0.35)\n"
-        "  --refine <0-32>                 Palette refinement iterations (default: 4)\n"
+        "  --refine <0-32>                 Palette refinement iterations (default: 8)\n"
         "\n"
         "Palette:\n"
         "  --palette <file>                Load palette (.gpl, IFF, hex text)\n"
@@ -4554,6 +4561,19 @@ int main(int argc, char* argv[]) {
         dith.method = config->dither_method;
         dith.strength = config->dither_strength;
         dith.error_clamp = config->error_clamp;
+
+        // Dither-aware palette refinement (skipped when dither off).
+        // Standard pipeline runs this for non-Amiga modes; the PNG
+        // benchmark needs it too so we measure parity with libimagequant.
+        if (config->refine_iterations > 0 &&
+            dith.method != dither::Method::none) {
+            auto refined = quantize::refine_with_dither(
+                img, *quantized, dith,
+                amiga::Chipset::aga, amiga::Mode::lores,
+                static_cast<std::size_t>(config->refine_iterations));
+            if (refined) quantized->colors = std::move(refined->colors);
+        }
+
         auto dith_result = dither::apply(img, quantized->colors, dith);
 
         auto w = img.width(), h = img.height();

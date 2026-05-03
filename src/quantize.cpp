@@ -1123,43 +1123,85 @@ Result<Palette> refine_with_dither(
     auto w = image.width();
     auto h = image.height();
 
+    // Precompute palette in OKLab once per iteration (rebuilt below).
+    std::vector<color_space::OKLab> pal_lab(num_colors);
+
+    // Per-pixel nearest-palette assignment buffer (nearest-color, NOT
+    // dither-driven). The previous implementation used the dither's
+    // index buffer here, which has pixels rerouted across cluster
+    // boundaries by neighbour error — that breaks K-means' convergence
+    // guarantee (assignment metric ≠ centroid metric) and pollutes
+    // each cluster's centroid with pixels that don't perceptually
+    // belong. Nearest-match is the K-means assignment libimagequant
+    // uses (kmeans.rs:92-108); dither-awareness comes from the
+    // neighbour-coherence weight below, not from re-routing pixels.
+    std::vector<std::uint8_t> nearest(w * h);
+    std::vector<color_space::OKLab> img_lab(w * h);
+    for (std::size_t y = 0; y < h; ++y)
+        for (std::size_t x = 0; x < w; ++x)
+            img_lab[y * w + x] = color_space::linear_to_oklab(image[x, y]);
+
+    // Per-pixel feedback weight (libimagequant `adjusted_weight`,
+    // kmeans.rs:97-108). Starts at 1.0; each iteration's residual
+    // perceptual error rescales it so persistent high-error pixels
+    // pull progressively harder on their cluster centroid in
+    // subsequent iterations. Capped to keep tail outliers from
+    // dominating.
+    std::vector<float> feedback(w * h, 1.0f);
+    std::vector<float> pixel_err(w * h, 0.0f);
+
     for (std::size_t iter = 0; iter < max_iterations; ++iter) {
-        // Run the ditherer with the current palette
-        auto dith = dither::apply(image, pal.colors, dither_settings);
+        for (std::size_t i = 0; i < num_colors; ++i)
+            pal_lab[i] = color_space::linear_to_oklab(pal.colors[i]);
+
+        // Per-pixel nearest-palette assignment in OKLab; cache the
+        // residual error for the feedback rule below.
+        for (std::size_t i = 0; i < w * h; ++i) {
+            float best_d = std::numeric_limits<float>::max();
+            std::size_t best_k = 0;
+            for (std::size_t k = 0; k < num_colors; ++k) {
+                float d = oklab_dist_sq(img_lab[i], pal_lab[k]);
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            nearest[i] = static_cast<std::uint8_t>(best_k);
+            pixel_err[i] = best_d;
+        }
 
         // Spatial Color Quantization: weight each pixel's contribution to
         // its cluster centroid by how many of its 4-neighbors share the
-        // same palette assignment. Pixels in contiguous same-color regions
-        // pull harder on the centroid; isolated single-pixel "islands"
-        // pull less. This naturally pushes the palette toward colors that
-        // serve large visual regions and away from scattered outliers.
-        //
-        // Weight = 1.0 + matching_neighbors * 0.5
-        //   0 matching neighbors → weight 1.0  (isolated pixel)
-        //   4 matching neighbors → weight 3.0  (interior of region)
+        // same nearest-palette assignment. Pixels in contiguous same-
+        // colour regions pull harder on the centroid; isolated single-
+        // pixel "islands" pull less.
+        //   0 matching neighbours → weight 1.0  (isolated pixel)
+        //   4 matching neighbours → weight 3.0  (interior of a region)
         struct Acc { double L{}, a{}, b{}, w{}; };
         std::vector<Acc> acc(num_colors);
 
         for (std::size_t y = 0; y < h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
-                auto idx = dith.indices[y * w + x];
+                auto idx = nearest[y * w + x];
                 if (idx >= num_colors) continue;
 
-                // Count 4-neighbors with the same assignment
                 int neighbors = 0;
-                if (x > 0     && dith.indices[y * w + (x - 1)] == idx) ++neighbors;
-                if (x + 1 < w && dith.indices[y * w + (x + 1)] == idx) ++neighbors;
-                if (y > 0     && dith.indices[(y - 1) * w + x] == idx) ++neighbors;
-                if (y + 1 < h && dith.indices[(y + 1) * w + x] == idx) ++neighbors;
+                if (x > 0     && nearest[y * w + (x - 1)] == idx) ++neighbors;
+                if (x + 1 < w && nearest[y * w + (x + 1)] == idx) ++neighbors;
+                if (y > 0     && nearest[(y - 1) * w + x] == idx) ++neighbors;
+                if (y + 1 < h && nearest[(y + 1) * w + x] == idx) ++neighbors;
 
-                double weight = 1.0 + static_cast<double>(neighbors) * 0.5;
-                auto lab = color_space::linear_to_oklab(image[x, y]);
+                double base = 1.0 + static_cast<double>(neighbors) * 0.5;
+                double weight = base * static_cast<double>(feedback[y * w + x]);
+                const auto& lab = img_lab[y * w + x];
                 acc[idx].L += static_cast<double>(lab.L) * weight;
                 acc[idx].a += static_cast<double>(lab.a) * weight;
                 acc[idx].b += static_cast<double>(lab.b) * weight;
                 acc[idx].w += weight;
             }
         }
+        // dither_settings is consulted via the API but the assignment
+        // pass uses nearest-match (not dither) — the aware-ness comes
+        // from the feedback weight scaling above. Suppress unused-arg
+        // warnings while keeping the parameter in the public API.
+        (void)dither_settings;
 
         // Update palette: move each unlocked slot to its weighted centroid
         bool changed = false;
@@ -1200,6 +1242,29 @@ Result<Palette> refine_with_dither(
         }
 
         if (!changed) break;
+
+        // Update per-pixel feedback weights (libimagequant's
+        // adjust_weight rule, normalised against the per-iteration p99
+        // error so typical pixels stay near weight 1 and only the
+        // long-tail outliers grow). Capped at 8 to keep extreme
+        // pixels from monopolising the centroid.
+        if (iter + 1 < max_iterations) {
+            std::vector<float> sorted_err = pixel_err;
+            auto p99_idx = std::min(
+                sorted_err.size() - 1,
+                sorted_err.size() * 99 / 100);
+            std::nth_element(sorted_err.begin(),
+                             sorted_err.begin() +
+                                 static_cast<std::ptrdiff_t>(p99_idx),
+                             sorted_err.end());
+            float p99 = std::max(sorted_err[p99_idx], 1e-6f);
+            for (std::size_t i = 0; i < w * h; ++i) {
+                float d_norm = std::min(pixel_err[i] / p99, 1.5f);
+                float target = 1.0f + 4.0f * d_norm;
+                feedback[i] = std::min(
+                    0.5f * feedback[i] + 0.5f * target, 8.0f);
+            }
+        }
     }
 
     return pal;
