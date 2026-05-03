@@ -21,6 +21,31 @@ namespace png2amiga::dither_tuning {
 Defaults defaults_for(const Context& ctx) {
     constexpr Defaults kFallback{1.0f, 0.35f};
 
+    // ---- HAM short-circuit: jump straight to the mode-context table.
+    // The per-method switch below was tuned against the indexed ED path
+    // (lores d=5, refine=8). HAM has its own pre-dither (ham.cpp's
+    // diffuse_raw_buffer + DP beam search) that wants a tight
+    // error_clamp (0.04) for the beam to land cleanly on local optima.
+    // Letting the per-method switch fire shadows the HAM-specific
+    // entries below with the wrong (too-loose) error_clamp, so jump
+    // past it.
+    if (ctx.mode == amiga::Mode::ham6 || ctx.mode == amiga::Mode::ham8) {
+        // Resweep 2026-05-03 against SSIMULACRA2 on (electrichues02 /
+        // chuck31 / lovers, 320×200), 0.02 strength granularity around
+        // the optimum. The previous PSNR-tuned values were dominated:
+        // HAM6 alone 1.0/0.04 → 0.80/0.08 (mean S2 66.93 → 67.17 plateau);
+        // HAM6+copper has a sharp peak at 0.82 (+0.12 S2 over 0.80);
+        // HAM8 alone has the same 0.82 peak (+0.11 S2 over 0.80);
+        // HAM8+copper is flat across the entire range — keep 0.70.
+        if (ctx.mode == amiga::Mode::ham6) {
+            if (ctx.copper) return Defaults{0.82f, 0.04f};  // mean S2 70.09
+            return Defaults{0.80f, 0.08f};                   // mean S2 67.17
+        }
+        // HAM8.
+        if (ctx.copper) return Defaults{0.70f, 0.04f};      // mean S2 85.40 (flat)
+        return Defaults{0.82f, 0.10f};                       // mean S2 83.30
+    }
+
     // ---- Palette-aware ordered methods: per-method optimal strength
     // (mean-PSNR sweep over the 10 example images, lores depth=5,
     // strengths 0.50, 0.60, 0.70, 0.80, 0.85, 0.90, 0.95, 1.00).
@@ -52,29 +77,28 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::yliluoma1:   return Defaults{0.50f, 0.35f};  // 31.055 dB (monotone declining)
     case dither::Method::yliluoma:    return Defaults{0.70f, 0.35f};  // 32.296 dB
     case dither::Method::yliluoma2:   return Defaults{0.60f, 0.35f};  // 32.007 dB
-    // Error diffusion family — resweep 2026-05-03 against SSIMULACRA2 at
-    // lores d=5 (electrichues02 / chuck31 / lovers) after the
-    // refine_with_dither fix (commit 1303439) made the algorithm
-    // monotonically converge and bumped the default --refine 4 → 8.
-    // Better palette ⇒ less dither needed: most methods shifted DOWN
-    // by 0.05–0.20 strength versus the old PSNR-tuned values.
-    case dither::Method::floyd_steinberg: return Defaults{0.80f, 0.35f};  // S2 56.68 (new entry)
-    case dither::Method::atkinson:        return Defaults{0.70f, 0.35f};  // S2 56.38 (was 0.85)
-    case dither::Method::sierra_lite:     return Defaults{0.70f, 0.35f};  // S2 56.59 (was 0.85)
-    case dither::Method::stucki:          return Defaults{0.80f, 0.35f};  // S2 56.09 (was 0.85)
-    case dither::Method::jarvis:          return Defaults{0.85f, 0.35f};  // S2 55.96 (was 0.95)
-    case dither::Method::fs_ostro:        return Defaults{0.80f, 0.35f};  // S2 56.75 (was 0.85)
-    case dither::Method::gilbert:         return Defaults{0.70f, 0.35f};  // S2 56.09 (was 0.85)
-    case dither::Method::riemersma:       return Defaults{0.50f, 0.35f};  // S2 48.79 (was 0.70)
-    case dither::Method::structure_fs:    return Defaults{0.80f, 0.35f};  // 29.184 dB
-    case dither::Method::contrast_fs:     return Defaults{1.00f, 0.35f};  // 28.574 dB
-    case dither::Method::zhoufang:        return Defaults{0.60f, 0.35f};  // 30.436 dB
-    // DBS: warm-starts from FS, then optimises blurred-OKLab cost via
-    // greedy toggles. Use the same context-tuned (mode/depth/sliced/strips)
-    // FS defaults as plain Floyd-Steinberg — DBS converges to a local
-    // minimum, so the warm start matters and per-context FS values are
-    // already empirically optimal for that bucket. Falling through.
-    case dither::Method::dbs: break;
+    // Error diffusion + structure-aware methods: fall through to the
+    // mode-context tables below — per-mode tuning wins when there's an
+    // entry. The per-method defaults are a separate switch at the end
+    // of the function, used only when no mode-specific entry matches.
+    //
+    // HAM6/HAM8 short-circuit BEFORE this switch (see top of function);
+    // HAM has its own pre-dither pipeline (ham.cpp's diffuse_raw_buffer
+    // → DP beam search) that wants a tight error_clamp (0.04) and is
+    // tuned in the HAM block.
+    case dither::Method::floyd_steinberg:
+    case dither::Method::atkinson:
+    case dither::Method::sierra_lite:
+    case dither::Method::stucki:
+    case dither::Method::jarvis:
+    case dither::Method::fs_ostro:
+    case dither::Method::gilbert:
+    case dither::Method::riemersma:
+    case dither::Method::structure_fs:
+    case dither::Method::contrast_fs:
+    case dither::Method::zhoufang:
+    case dither::Method::dbs:
+        break;
     default: break;
     }
 
@@ -86,24 +110,8 @@ Defaults defaults_for(const Context& ctx) {
         return kFallback;
     }
 
-    // ---- HAM (own dither pipeline) --------------------------------------
-    // HAM dithers via the beam-search pre-dither in ham.cpp; the strength
-    // and error_clamp still feed through but the response is muted because
-    // most of the work is the DP search itself. Sweep optima:
-    if (ctx.mode == amiga::Mode::ham6) {
-        // HAM6+sliced: st=0.8, ec=0.04 (PSNR 41.49 mean)
-        // HAM6 alone: st=1.0, ec=0.04 (PSNR 40.34 mean)
-        if (ctx.copper) return Defaults{0.8f, 0.04f};
-        return Defaults{1.0f, 0.04f};
-    }
-    if (ctx.mode == amiga::Mode::ham8) {
-        // HAM8+sliced/AGA: st=0.7, ec=0.04 (PSNR 49.77 mean)
-        // HAM8 alone:   st=0.9, ec=0.10 (PSNR 46.38 mean)
-        if (ctx.copper) return Defaults{0.7f, 0.04f};
-        return Defaults{0.9f, 0.10f};
-    }
-    // HAM4/HAM5/HAM7 not in the sweep — assume their tuning follows
-    // HAM6/HAM8 by interpolation. Conservative: leave on kFallback.
+    // (HAM6/HAM8 already short-circuited at the top of the function;
+    // HAM4/HAM5/HAM7 fall through to the per-method ED fallback below.)
 
     // ---- sliced (per-line palette evolution, no strips) ----------------------
     if (ctx.copper) {
@@ -150,28 +158,51 @@ Defaults defaults_for(const Context& ctx) {
     // most buckets. lace variants share their non-lace siblings —
     // the encoded bitplane buffer is identical (lace is purely a
     // CAMG flag), so the same tuning applies.
-    if (ctx.mode == amiga::Mode::ehb) return Defaults{0.8f, 0.35f};
+    // Resweep 2026-05-03 against SSIMULACRA2 at 0.02 strength
+    // granularity (electrichues02 / chuck31 / lovers). error_clamp left
+    // at the previous PSNR-tuned values for d=2 and d=4 — those weren't
+    // re-explored in this pass and are conservative defaults.
+    if (ctx.mode == amiga::Mode::ehb) return Defaults{0.74f, 0.35f};       // S2 59.37 (was 0.80)
     if (ctx.mode == amiga::Mode::lores ||
         ctx.mode == amiga::Mode::lores_interlace) {
         switch (ctx.depth) {
-            case 1: return Defaults{0.90f, 0.35f};
-            case 2: return Defaults{0.70f, 0.10f};
-            case 3: return Defaults{0.60f, 0.35f};
-            case 4: return Defaults{0.70f, 0.20f};
-            case 5: return Defaults{0.70f, 0.35f};
-            case 6: return Defaults{0.70f, 0.35f};
+            case 1: return Defaults{0.90f, 0.35f};                          // unswept (1-bit)
+            case 2: return Defaults{0.76f, 0.10f};                          // S2 -33.92 (was 0.70)
+            case 3: return Defaults{0.72f, 0.35f};                          // S2   6.59 (was 0.60)
+            case 4: return Defaults{0.72f, 0.20f};                          // S2  34.51 (was 0.70)
+            case 5: return Defaults{0.72f, 0.35f};                          // S2  56.81 (was 0.70)
+            case 6: return Defaults{0.78f, 0.35f};                          // S2  72.74 (was 0.70, AGA only)
             default: break;
         }
     }
     if (ctx.mode == amiga::Mode::hires ||
         ctx.mode == amiga::Mode::hires_interlace) {
         switch (ctx.depth) {
-            case 1: return Defaults{0.85f, 0.35f};
-            case 2: return Defaults{0.70f, 0.35f};
-            case 3: return Defaults{0.60f, 0.35f};
-            case 4: return Defaults{0.70f, 0.35f};
+            case 1: return Defaults{0.85f, 0.35f};                          // unswept (1-bit)
+            case 2: return Defaults{0.72f, 0.35f};                          // S2 -39.05 (was 0.70)
+            case 3: return Defaults{0.70f, 0.35f};                          // S2  -0.07 (was 0.60)
+            case 4: return Defaults{0.76f, 0.35f};                          // S2  33.49 (was 0.70)
             default: break;
         }
+    }
+
+    // ---- Per-method ED fallback ------------------------------------------
+    // Reached only when no mode-context entry matched (unsupported modes,
+    // chunky / DOS / SNES / Genesis / etc.). These are the lores-d=5 sweep
+    // optima at 0.02 granularity (commit history for details).
+    switch (ctx.method) {
+    case dither::Method::floyd_steinberg: return Defaults{0.76f, 0.35f};  // S2 56.80
+    case dither::Method::atkinson:        return Defaults{0.74f, 0.35f};  // S2 56.53
+    case dither::Method::sierra_lite:     return Defaults{0.76f, 0.35f};  // S2 56.79
+    case dither::Method::stucki:          return Defaults{0.74f, 0.35f};  // S2 56.33
+    case dither::Method::jarvis:          return Defaults{0.83f, 0.35f};  // S2 56.11
+    case dither::Method::fs_ostro:        return Defaults{0.80f, 0.35f};  // S2 56.75
+    case dither::Method::gilbert:         return Defaults{0.72f, 0.35f};  // S2 56.16
+    case dither::Method::riemersma:       return Defaults{0.52f, 0.35f};  // S2 48.96
+    case dither::Method::structure_fs:    return Defaults{0.80f, 0.35f};  // legacy
+    case dither::Method::contrast_fs:     return Defaults{1.00f, 0.35f};  // legacy
+    case dither::Method::zhoufang:        return Defaults{0.60f, 0.35f};  // legacy
+    default: break;
     }
 
     return kFallback;

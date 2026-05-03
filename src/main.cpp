@@ -5448,7 +5448,7 @@ int main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
         cli_status("Dither:   {} (strength: {:.2f})",                     dither_name(config->dither_method),
-                     config->dither_strength);
+                     make_api_options(*config).dither_strength);
         cli_status("Mode:   SNES Mode 7 ({}), {}x{}, 256 colours",
                      (config->mode == amiga::Mode::snes_mode7_256
                           ? "256-palette BGR555"
@@ -5574,7 +5574,7 @@ int main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
         cli_status("Dither:   {} (strength: {:.2f})",                     dither_name(genesis_dither),
-                     config->dither_strength);
+                     make_api_options(*config).dither_strength);
         const char* mode_label = "";
         switch (config->mode) {
         case amiga::Mode::genesis_h32:    mode_label = "H32 256-wide"; break;
@@ -5840,7 +5840,15 @@ int main(int argc, char* argv[]) {
         }
         cli_print_palette(std::format(
             "{} base colors, {}-bit MODIFY", ham_base_colors, ham_data_bits));
-        cli_print_dither(ham_dither, config->dither_strength);
+        // Print the strength the encoder will actually use, not the raw
+        // CLI default — make_api_options consults dither_tuning, so the
+        // log line should reflect that. Builds aopts early just to read
+        // the resolved strength; the real make_api_options call below
+        // happens after transparency masking so this is a cheap probe.
+        {
+            auto probe_aopts = make_api_options(*config);
+            cli_print_dither(ham_dither, probe_aopts.dither_strength);
+        }
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
@@ -7078,7 +7086,8 @@ int main(int argc, char* argv[]) {
             cli_print_palette(std::format(
                 "{} colors (PF2 3bpl)", pf2_colors));
         }
-        cli_print_dither(config->dither_method, config->dither_strength);
+        cli_print_dither(config->dither_method,
+                         make_api_options(*config).dither_strength);
         cli_status("Copper:   hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
                      st.strips_avg_hblank_moves_per_line,
