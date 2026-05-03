@@ -306,6 +306,7 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'stucki',          label: 'Stucki' },
     { value: 'gilbert',         label: 'Gilbert' },
     { value: 'riemersma',       label: 'Riemersma' },
+    { value: 'dbs',             label: 'DBS\n(slow)' },
     { value: 'opt-checker',     label: 'Optimal\nChecker' },
     { value: 'opt-line',        label: 'Optimal\nLine' },
     { value: 'opt-line-checker',label: 'Optimal\nLine-Chk' },
@@ -321,7 +322,6 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'structure-fs',    label: 'Structure\nFS' },
     { value: 'contrast-fs',     label: 'Contrast\nFS' },
     { value: 'zhoufang',        label: 'Zhou–\nFang' },
-    { value: 'dbs',             label: 'DBS\n(slow)' },
   ]},
   { group: 'Bayer', items: [
     { value: 'bayer2x2', label: 'Bayer 2×2' },
