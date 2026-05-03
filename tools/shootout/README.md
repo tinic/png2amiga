@@ -24,6 +24,17 @@ at 32 colours — same colour count, different palette quantizers. This
 isolates the quantizer + dither head-to-head independent of HAM-style
 per-pixel modify ops.
 
+ham_convert's `ocs32` lags by ~16 SSIMULACRA2 points despite identical
+colour count and dither kernel. Confirmed via a 19-combo sweep over
+`propagation_{15,30,50,70,85,100}` × `color_{rgb,lab_cie76,lab_cie94,ictcp}`:
+`propagation_85` is its honest peak (31.28); lower / higher prop and
+non-FS dithers all score worse. Two underlying reasons: (a) ham_convert's
+median-cut quantizer is HAM-tuned (palette = base + modify ops, not
+plain indexed), and (b) it picks the palette once before dithering with
+no post-FS refinement. libimagequant's Lab-perceptual median-cut and
+png2amiga's brute-force OCS k-means + dither-aware refinement both
+adapt the palette to the post-dither error distribution.
+
 ## Why no other tools
 
 | Tool | Why excluded |
