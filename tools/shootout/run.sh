@@ -39,6 +39,7 @@ JAVA="${JAVA:-/opt/homebrew/opt/openjdk/bin/java}"
 PNG2AMIGA="$REPO_ROOT/build/png2amiga"
 HAM_CONVERT_JAR="$VENDOR/ham_convert/ham_convert.jar"
 ABC2="$VENDOR/abc/abc2"
+PNGQUANT="${PNGQUANT:-$(command -v pngquant || true)}"
 
 for x in "$PNG2AMIGA" "$HAM_CONVERT_JAR" "$ABC2"; do
   if [ ! -e "$x" ]; then
@@ -46,6 +47,11 @@ for x in "$PNG2AMIGA" "$HAM_CONVERT_JAR" "$ABC2"; do
     exit 1
   fi
 done
+if [ -z "$PNGQUANT" ] || [ ! -x "$PNGQUANT" ]; then
+  echo "WARNING: pngquant (libimagequant CLI) not found — lores-d5" >&2
+  echo "         comparison will skip the libimagequant entry." >&2
+  echo "         Install via: brew install pngquant" >&2
+fi
 
 # --- Step 1: pre-resize source to the target dims ---------------------------
 # Use png2amiga with --no-scale=off (default) just so the resize is the
@@ -197,6 +203,31 @@ run_png2amiga "p2a-ehb-plain-best"   --mode ehb --best
 
 # 11) png2amiga plain EHB (no copper, no best) — fast baseline
 run_png2amiga "p2a-ehb-plain"        --mode ehb
+
+# 12) png2amiga lores 5bpp (32-color indexed, no copper) — head-to-head
+#     with ham_convert ocs32 and libimagequant in the same colour-count
+#     regime.
+run_png2amiga "p2a-lores-d5"         --mode lores --depth 5
+
+# 13) png2amiga lores 5bpp + --best (multi-restart sweep)
+run_png2amiga "p2a-lores-d5-best"    --mode lores --depth 5 --best
+
+# 14) ham_convert ocs32 (32-colour OCS lores indexed) + dither_fs.
+#     ham_convert's full mode list includes indexed OCS/AGA modes
+#     (ocs2/4/8/16/32, aga64/128/256), not just HAM/EHB.
+run_ham_convert hc-lores-d5  ocs32
+
+# 15) libimagequant via pngquant CLI: 32 colours, max quality (--speed 1),
+#     Floyd-Steinberg (the default for pngquant). pngquant outputs an
+#     indexed PNG-8 (PLTE chunk) at the input dimensions — same shape
+#     as our --mode lores --depth 5 output, so the PSNR script reads
+#     it identically. Skipped when pngquant isn't installed.
+if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
+    echo "==> [pngquant] 32 colours + floyd"
+    time_to "$OUT/libimagequant-32.time" \
+      "$PNGQUANT" --speed 1 --strip --output "$OUT/libimagequant-32.png" \
+        --force 32 "$TARGET"
+fi
 
 # --- Step 3: PSNR table ----------------------------------------------------
 echo

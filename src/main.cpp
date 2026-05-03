@@ -5299,7 +5299,13 @@ int main(int argc, char* argv[]) {
         }
         cli_status("Encoded: {} bytes, PSNR: {:.2f} dB, S2: {:.2f}",
                      st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
-        if (ends_with(config->output_path, ".bin") ||
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode,
+                                  /*hires=*/false, /*interlace=*/false);
+        if (config->output_path.empty()) {
+            // No -o given (e.g. `--preview` only, or scoring run).
+            // Skip all output writing.
+        } else if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {
             std::ofstream of(config->output_path, std::ios::binary);
             of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
@@ -5450,7 +5456,13 @@ int main(int argc, char* argv[]) {
         cli_status("Quantised: {} bytes (32 KB Mode 7 frame after pack), PSNR: {:.2f} dB, S2: {:.2f}",
                      st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
 
-        if (ends_with(config->output_path, ".bin") ||
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode,
+                                  /*hires=*/false, /*interlace=*/false);
+
+        if (config->output_path.empty()) {
+            // No -o (e.g. `--preview` only). Skip output writing.
+        } else if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {
             // api::encode_state has already packed the Mode 7 frame
             // (tilemap + tile data) into st.raw_frame. Just write it
@@ -5600,7 +5612,13 @@ int main(int argc, char* argv[]) {
                      "PSNR: {:.2f} dB, S2: {:.2f}",
                      st.raw_frame.size(), st.psnr, st.ssimulacra2_score);
 
-        if (ends_with(config->output_path, ".bin") ||
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode,
+                                  /*hires=*/false, /*interlace=*/false);
+
+        if (config->output_path.empty()) {
+            // No -o (e.g. `--preview` only). Skip output writing.
+        } else if (ends_with(config->output_path, ".bin") ||
             ends_with(config->output_path, ".raw")) {
             std::ofstream of(config->output_path, std::ios::binary);
             of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
@@ -7215,6 +7233,21 @@ int main(int argc, char* argv[]) {
     auto lock_zero_std = !user_pal_std && config->lock_color0 &&
                              (has_transparency || !is_atari_std);
 
+    // Locals that the post-encode emission block (line ~7600+) consumes.
+    // Hoisted so both the inline encoder body below AND the --best
+    // delegation can populate them. Results start in an "uninit" error
+    // state; either branch must replace them with valid values before
+    // the emission block runs.
+    std::size_t pal_size = 0;
+    dither::Settings dith;
+    dither::DitherResult dither_result;
+    bitplane::Layout bp_layout = bitplane::Layout::interleaved;
+    Result<bitplane::BitplaneData> planes{
+        std::unexpected{Error{ErrorCode::write_failed, "uninit"}}};
+    std::vector<Color3f> used_palette;
+    Result<Image> preview{std::unexpected{Error{ErrorCode::write_failed, "uninit"}}};
+    bool plain_best_done = false;
+
     // Validate locks/pins
     if (auto v = palette_locks::validate_locks(config->locks, max_colors); !v) {
         std::println(stderr, "{}", v.error().message);
@@ -7242,6 +7275,68 @@ int main(int argc, char* argv[]) {
     Palette pal;
     std::vector<bool> std_locked(max_colors, false);
 
+    // --- Plain lores/hires + --best multi-restart delegation ----------
+    // Routes to api::run_pipeline's lores+best block (api.cpp ~2660),
+    // which jitters the source N times, sweeps (diversity, strength),
+    // and ranks by best_metric. Avoids duplicating the multi-restart
+    // machinery here. The inline body below stays the canonical
+    // single-pass path; this delegation only fires when --best is set
+    // AND the encoding context is simple enough that api::run_pipeline
+    // produces an equivalent output (no DPF, --tile, user palette,
+    // locks/reserves/pins, or transparency — those features touch
+    // palette generation in ways the api closure doesn't replicate).
+    bool plain_best_eligible = config->best &&
+        (config->mode == amiga::Mode::lores ||
+         config->mode == amiga::Mode::lores_interlace ||
+         config->mode == amiga::Mode::hires ||
+         config->mode == amiga::Mode::hires_interlace) &&
+        !config->copper && !config->scap && !config->dual_playfield &&
+        !config->tile && !user_pal_std && !has_transparency &&
+        config->locks.empty() && config->reserves.empty() &&
+        config->pins.empty();
+    if (plain_best_eligible) {
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr,
+                         "lores --best: source re-encode failed: {}",
+                         src_png.error().message);
+            return 1;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+        aopts.on_progress = make_cli_progress_reporter();
+        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "lores --best encode error: {}",
+                         enc.error_msg);
+            return 1;
+        }
+        auto& st = enc.state;
+        pal.colors = st.palette;
+        pal_size = st.palette.size();
+        used_palette = st.palette;
+        dither_result.indices = st.indices;
+        dither_result.total_error = static_cast<float>(st.quant_error);
+        planes = bitplane::BitplaneData{st.planes};
+        preview = Image{st.rendered};
+        dith.method = config->dither_method;
+        dith.strength = aopts.dither_strength;
+        dith.error_clamp = aopts.error_clamp;
+        bool dos_planar_b = (amiga::is_ega(config->mode) ||
+                              amiga::is_vga(config->mode))
+                             && !amiga::is_chunky(config->mode);
+        bp_layout = config->layout_override
+            ? *config->layout_override
+            : (amiga::is_atari(config->mode)
+                ? bitplane::Layout::word_interleaved
+                : dos_planar_b ? bitplane::Layout::standard
+                               : bitplane::Layout::interleaved);
+        plain_best_done = true;
+    }
+
+  if (!plain_best_done) {
     // CGA: build the fixed 4- or 2-color palette (auto-select variant if asked).
     if (amiga::is_cga(config->mode) && !user_pal_std) {
         if (amiga::is_composite(config->mode)) {
@@ -7401,9 +7496,8 @@ int main(int argc, char* argv[]) {
     // hires / lores-lace / ehb / etc. get the per-mode strength tuned
     // against SSIMULACRA2 rather than the unsafe-at-low-color
     // strength=1.0 fallback (which used to runaway-FS at hires d=4).
-    auto pal_size = std::min(pal.size(), max_colors);
+    pal_size = std::min(pal.size(), max_colors);
 
-    dither::Settings dith;
     dith.method = config->dither_method;
     auto plain_tune = dither_tuning::defaults_for(dither_tuning::Context{
         .mode    = config->mode,
@@ -7454,7 +7548,10 @@ int main(int argc, char* argv[]) {
 
     cli_print_dither(dith.method, dith.strength);
 
-    dither::DitherResult dither_result;
+    // dither_result hoisted to outer scope; just reset state here in
+    // case the --best delegation populated it but we still ran the
+    // inline body (shouldn't happen, but be defensive).
+    dither_result = {};
     // Build candidate palette: skip reserved slots (and slot 0 if
     // transparency, the legacy "color 0 = transparent" rule).
     if (reserve_count_std > 0 || has_transparency) {
@@ -7498,31 +7595,32 @@ int main(int argc, char* argv[]) {
     // to line-interleaved for DMA.
     bool dos_planar = (amiga::is_ega(config->mode) || amiga::is_vga(config->mode))
                       && !amiga::is_chunky(config->mode);
-    auto bp_layout = config->layout_override
+    bp_layout = config->layout_override
         ? *config->layout_override
         : (amiga::is_atari(config->mode)
             ? bitplane::Layout::word_interleaved
             : dos_planar ? bitplane::Layout::standard
                          : bitplane::Layout::interleaved);
-    auto planes = bitplane::encode(dither_result.indices,
-                                   image->width(), image->height(),
-                                   config->depth, bp_layout);
+    planes = bitplane::encode(dither_result.indices,
+                              image->width(), image->height(),
+                              config->depth, bp_layout);
     if (!planes) {
         std::println(stderr, "Encode error: {}", planes.error().message);
         return 1;
     }
 
-    std::vector<Color3f> used_palette(pal_span.begin(), pal_span.end());
+    used_palette.assign(pal_span.begin(), pal_span.end());
 
     // Render preview before any DPF expansion (combined indices read from
     // the expanded planes would be non-contiguous).
-    auto preview = pipeline::render_preview(
+    preview = pipeline::render_preview(
         *planes, used_palette,
         /*is_ham=*/false, config->interlace, chipset);
     if (!preview) {
         std::println(stderr, "Render error: {}", preview.error().message);
         return 1;
     }
+  }  // end if (!plain_best_done)
 
     // --tile post-process: crop the 3W x 3H pipeline output back to the
     // centre W x H tile. Indices, bitplanes, preview, source image, and

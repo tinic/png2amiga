@@ -1,21 +1,28 @@
-# PNG-to-Amiga HAM/SHAM converter shootout
+# PNG-to-Amiga converter shootout
 
 This is the project that produces the comparison table in the main
 README. Reproducible end-to-end.
 
 ## What's compared
 
-| Encoder | HAM6 | SHAM6 |
-|---------|:----:|:-----:|
-| `abc` (arnaud-carre) | ✓ `-floyd` | ✓ `-floyd` |
-| `ham_convert` (Solo761, max-quality `q7`) | ✓ `dither_fs` | ✓ `dither_fs` (`ham6_sliced`) |
-| `png2amiga` plain HAM6 | ✓ `--dither floyd-steinberg` | — |
-| `png2amiga` HAM6 + SLICED + best | ✓ FS | — |
-| `png2amiga` EHB + STRIPS + best | — | (STRIPS fills the SHAM-equivalent role) |
+| Encoder | HAM6 | SHAM6 | EHB | lores 32-col |
+|---------|:----:|:-----:|:---:|:------------:|
+| `abc` (arnaud-carre) | ✓ `-floyd` | ✓ `-floyd` | — | — |
+| `ham_convert` (Solo761) | ✓ `ham6_q7` | ✓ `ham6_sliced` | ✓ `ehb` | ✓ `ocs32` |
+| `pngquant` (libimagequant) | — | — | — | ✓ `--speed 1 32` |
+| `png2amiga` plain | ✓ HAM6 | — | ✓ EHB | ✓ lores d=5 |
+| `png2amiga` + best | ✓ HAM6 | — | ✓ EHB | ✓ lores d=5 |
+| `png2amiga` + sliced/strips + best | ✓ HAM6 SLICED | — | ✓ EHB STRIPS | — |
 
 All entries use Floyd-Steinberg as the error-diffusion kernel for
 apples-to-apples comparison. Each encoder's other tuning knobs are set
 to their respective "best quality" configuration.
+
+The lores 32-colour comparison is png2amiga's plain indexed encoder
+vs ham_convert's `ocs32` (5-bitplane OCS) vs libimagequant's pngquant
+at 32 colours — same colour count, different palette quantizers. This
+isolates the quantizer + dither head-to-head independent of HAM-style
+per-pixel modify ops.
 
 ## Why no other tools
 
@@ -75,3 +82,6 @@ the metric we now optimise against.
   submodule at `third_party/ssimulacra2/`)
 - A built `png2amiga` at `<repo>/build/png2amiga` (run the project
   CMake build first)
+- `pngquant` (libimagequant CLI) for the lores 32-colour comparison
+  (`brew install pngquant`). The shootout skips that entry with a
+  warning if pngquant isn't on PATH.

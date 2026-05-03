@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.58.2 LANGUAGES C CXX)
+project(png2amiga VERSION 1.59.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_STANDARD 23)
@@ -893,6 +893,40 @@ else()
         )
         set_tests_properties("smoke-c64-${ext}-exists"
                              PROPERTIES DEPENDS "smoke-c64-${ext}")
+    endforeach()
+
+    # --- No-output (--preview only / scoring) regression tests ---
+    # Bug 2026-05-03: invoking modes without an output path (just
+    # `<input>`, no `-o`) used to fail with "PNG write error: Failed
+    # to write PNG: " on Genesis / SNES / C64 because their emission
+    # blocks fell through to save_preview() with an empty path. Each
+    # mode-dispatch path now has an `if (config->output_path.empty())`
+    # short-circuit before the emission switch.
+    set(no_output_modes
+        "genesis-h32|--mode genesis-h32"
+        "genesis-h40|--mode genesis-h40"
+        "snes-mode7-256|--mode snes-mode7-256"
+        "snes-mode7-direct|--mode snes-mode7-direct"
+        "c64-multicolor|--mode c64-multicolor"
+        "c64-hires|--mode c64-hires"
+        "c64-fli|--mode c64-fli"
+        "c64-afli|--mode c64-afli"
+        "c64-petscii|--mode c64-petscii"
+        "c64-charset-hires|--mode c64-charset-hires"
+    )
+    foreach(spec ${no_output_modes})
+        string(REPLACE "|" ";" parts ${spec})
+        list(GET parts 0 mname)
+        list(GET parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "no-output-${mname}"
+            COMMAND png2amiga ${mode_args} ${PNG2AMIGA_TEST_INPUT}
+        )
+        # Must NOT print "PNG write error" — even if the binary
+        # exits 0, the stderr leak signals the bug.
+        set_tests_properties("no-output-${mname}"
+            PROPERTIES FAIL_REGULAR_EXPRESSION "PNG write error")
     endforeach()
 
 endif() # NOT EMSCRIPTEN

@@ -2668,6 +2668,119 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     auto max_colors = std::size_t{1} << depth;
 
+    // ----- Plain lores/hires + --best multi-restart sweep ---------------
+    // Same shape as the EHB plain-best path above (api.cpp:1922) but
+    // for indexed lores/hires without copper or strips. Each trial gets
+    // a fresh jittered source → fresh median-cut basin → fresh palette,
+    // then refine_with_dither + dither + render preview. Ranked by
+    // best_metric (SSIMULACRA2 by default), winner's state populates
+    // the PipelineResult and we return early — bypassing the general
+    // single-pass encode body below.
+    //
+    // Gated to clean cases only: no user palette, no locks/reserves/
+    // pins, no transparency. These features touch palette generation
+    // in ways the trial closure doesn't replicate; the user's setup
+    // already constrains those to specific slots so a sweep won't
+    // help anyway.
+    bool lores_plain_best_eligible =
+        options.best &&
+        (mode == amiga::Mode::lores ||
+         mode == amiga::Mode::lores_interlace ||
+         mode == amiga::Mode::hires ||
+         mode == amiga::Mode::hires_interlace) &&
+        !options.copper && !options.scap && !options.dual_playfield &&
+        !has_user_palette(options) && !has_transparency &&
+        options.locks.empty() && options.reserves.empty() &&
+        options.pins.empty();
+    if (lores_plain_best_eligible) {
+        struct LoresTrial {
+            Palette pal;
+            std::vector<std::uint8_t> indices;
+            bitplane::BitplaneData planes;
+            Image rendered;
+            float total_error;
+        };
+        dither::Settings base_dith;
+        base_dith.method = parse_dither(options.dither);
+        base_dith.strength = options.dither_strength;
+        base_dith.error_clamp = options.error_clamp;
+        auto encode_once = [&](const Image& img,
+                               const dither::Settings& d,
+                               int diversity) -> Result<LoresTrial> {
+            auto q = quantize::quantize(img, max_colors,
+                                        quantize_algo(chipset, mode),
+                                        diversity);
+            if (!q) return std::unexpected{q.error()};
+            Palette pal_t = std::move(*q);
+            snap_to_chipset(pal_t, chipset, mode);
+            auto pal_size_t = std::min(pal_t.size(), max_colors);
+            // Dither-aware refinement on the trial palette. Same gates
+            // as the main path: skip for chunky/EGA/CGA/atari-hi.
+            if (options.refine_iterations > 0 &&
+                d.method != dither::Method::none &&
+                !amiga::is_chunky(mode) && !amiga::is_cga(mode) &&
+                !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
+                auto refined = quantize::refine_with_dither(
+                    img,
+                    Palette{"refined",
+                            {pal_t.colors.begin(),
+                             pal_t.colors.begin() +
+                                 static_cast<std::ptrdiff_t>(pal_size_t)}},
+                    d, chipset, mode,
+                    static_cast<std::size_t>(options.refine_iterations));
+                if (refined) {
+                    pal_t.colors = std::move(refined->colors);
+                    pal_size_t = pal_t.colors.size();
+                }
+            }
+            std::span<const Color3f> pal_span_t{pal_t.colors.data(), pal_size_t};
+            auto dr = dither::apply(img, pal_span_t, d);
+            auto pl = bitplane::encode(dr.indices, img.width(), img.height(),
+                                       depth);
+            if (!pl) return std::unexpected{pl.error()};
+            auto pv = pipeline::render_preview(*pl, std::vector<Color3f>(
+                                                pal_span_t.begin(),
+                                                pal_span_t.end()),
+                                                /*is_ham=*/false,
+                                                options.interlace, chipset);
+            if (!pv) return std::unexpected{pv.error()};
+            return LoresTrial{
+                std::move(pal_t), std::move(dr.indices), *std::move(pl),
+                *std::move(pv), dr.total_error,
+            };
+        };
+        auto bm = pipeline::parse_best_metric(options.best_metric);
+        auto winner = pipeline::best_sweep<LoresTrial>(
+            *image, base_dith, options.palette_diversity,
+            /*jitter_count=*/8,
+            encode_once,
+            [](const LoresTrial& t) -> const Image& { return t.rendered; },
+            options.on_progress, /*jitter_amplitude=*/1.0f, bm);
+        if (winner) {
+            auto pal_size_w = std::min(winner->pal.size(), max_colors);
+            std::vector<Color3f> used_pal(
+                winner->pal.colors.begin(),
+                winner->pal.colors.begin() +
+                    static_cast<std::ptrdiff_t>(pal_size_w));
+
+            PipelineResult result;
+            result.rendered = std::move(winner->rendered);
+            result.planes = std::move(winner->planes);
+            result.palette = std::move(used_pal);
+            result.indices = std::move(winner->indices);
+            result.mode = mode;
+            result.hires = compound_hires ||
+                           amiga::get_mode_params(mode).is_hires;
+            result.interlace = options.interlace;
+            result.dpf = false;
+            result.aga = is_aga;
+            result.has_transparency = false;
+            result.finalize_psnr(*image, winner->total_error);
+            return result;
+        }
+        // Fall through to single-pass on sweep failure.
+    }
+
     // Build palette.
     // Atari mono: fixed B/W palette (no quantization needed).
     // Amiga: always reserve index 0 for black (border/background color).

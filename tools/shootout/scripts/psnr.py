@@ -86,6 +86,13 @@ LABELS = {
     'p2a-ehb-plain':         'png2amiga EHB (FS)',
     'p2a-ehb-plain-best':    'png2amiga EHB + best (FS)',
     'p2a-ehb-best':          'png2amiga EHB + STRIPS + best (FS)',
+    # Lores 32-colour head-to-head: png2amiga lores-d5 vs ham_convert
+    # ocs32 vs libimagequant (pngquant). Same colour count, same FS
+    # dither — isolates quantizer + dither without HAM-style ops.
+    'p2a-lores-d5':          'png2amiga lores d=5 (FS)',
+    'p2a-lores-d5-best':     'png2amiga lores d=5 + best (FS)',
+    'hc-lores-d5':           'ham_convert ocs32 (dither_fs)',
+    'libimagequant-32':      'libimagequant 32 (FS)',
 }
 
 def read_time(stem: str) -> float | None:
