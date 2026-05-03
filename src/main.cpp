@@ -5967,15 +5967,47 @@ int main(int argc, char* argv[]) {
         return exit_code::ok;
     }
 
-    // --- Text-mode graphics (glyph-matched, CGA or EGA font) ---
     if (amiga::is_cga_text(config->mode)) {
-        // Pad source up to the encoder's cell grid: 8 px wide,
-        // 2 px tall for canonical 640×200 input, 4 px tall otherwise
-        // (square-pixel freeform). Keeps the user's --no-scale promise
-        // when their source isn't aligned (e.g. 1024×637 → 1024×640).
+        // CGA text 80x100 hardware pixels are 1:2 (each scanline is
+        // double-scanned on a 4:3 CRT). For --no-scale on a square-
+        // pixel source (anything other than the canonical 640×200
+        // hardware buffer), the user expects square output cells, so
+        // we halve the source height with vertical averaging — each
+        // hardware scanline becomes one averaged pair of source rows.
+        // Without this, a 1024×640 source produced 128×160 cells
+        // (squashed 2:1) instead of the correct 128×80.
         bool ct_canonical = (image->width() == 640 && image->height() == 200);
+        if (!ct_canonical && (image->height() % 2) != 0) {
+            // Pad to even height first so the halve below has a
+            // clean pair to average.
+            Image padded(image->width(), image->height() + 1);
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    padded[x, y] = (*image)[x, y];
+            *image = std::move(padded);
+        }
+        if (!ct_canonical) {
+            std::size_t halved_h = image->height() / 2;
+            Image halved(image->width(), halved_h);
+            for (std::size_t y = 0; y < halved_h; ++y) {
+                for (std::size_t x = 0; x < image->width(); ++x) {
+                    auto a = (*image)[x, y * 2];
+                    auto b = (*image)[x, y * 2 + 1];
+                    halved[x, y] = {(a.r + b.r) * 0.5f,
+                                    (a.g + b.g) * 0.5f,
+                                    (a.b + b.b) * 0.5f};
+                }
+            }
+            cli_status("PAR:      {}x{} -> {}x{} (halve height for 1:2 CRT)",
+                       image->width(), image->height(),
+                       image->width(), halved_h);
+            *image = std::move(halved);
+        }
+        // Pad source up to the encoder's cell grid: 8 px wide × 2 px
+        // tall (after the optional halve above, freeform input is now in
+        // hardware-pixel space, same as canonical 640×200).
         std::size_t ct_cw = 8;
-        std::size_t ct_ch = ct_canonical ? 2u : 4u;
+        std::size_t ct_ch = 2u;
         std::size_t ct_pw = ((image->width()  + ct_cw - 1) / ct_cw) * ct_cw;
         std::size_t ct_ph = ((image->height() + ct_ch - 1) / ct_ch) * ct_ch;
         if (ct_pw != image->width() || ct_ph != image->height()) {
