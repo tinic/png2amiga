@@ -5,8 +5,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace png2amiga::dither {
@@ -906,24 +908,6 @@ DitherResult apply_error_diffusion(
 }
 
 // ===========================================================================
-// FS-uncertainty: Floyd-Steinberg with kernel strength scaled by palette
-// uncertainty. For each pixel we find the two nearest palette entries and
-// compute t = sqrt(d_best) / (sqrt(d_best) + sqrt(d_second)). When the
-// pixel sits cleanly on a palette colour (t ≈ 0) we damp the FS kernel to
-// 0.6×; when it's equidistant between two palette entries (t ≈ 0.5) we
-// boost to 1.4×. The kernel shape stays Floyd-Steinberg's 4-cell
-// (7/3/5/1)/16; only the magnitude varies.
-//
-// Was historically named "ostromoukhov" — that was a mislabel; this is
-// not Ostromoukhov 2001 (which uses a 256-entry intensity-indexed
-// coefficient LUT and a 3-cell kernel). On photo-content benchmarks our
-// FS-uncertainty heuristic outscores both real Ostromoukhov and plain FS
-// at low colour counts, so we keep it as the default ED method but
-// surface it under an honest name. "ostromoukhov" remains accepted as a
-// back-compat alias.
-// ===========================================================================
-
-// ===========================================================================
 // Gilbert-curve error diffusion
 //
 // Instead of scanning row-by-row, walk a generalized Hilbert (Červený's
@@ -1598,7 +1582,7 @@ bool is_yliluoma(Method method) {
 
 bool needs_discrete_palette(Method method) {
     return is_yliluoma(method) ||
-           method == Method::fs_ostro ||
+           method == Method::floyd_steinberg ||
            method == Method::dbs;
 }
 
@@ -2096,118 +2080,6 @@ DitherResult apply_structure_fs(
     return result;
 }
 
-DitherResult apply_fs_ostro(
-    const Image& image,
-    std::span<const OKLab> palette_lab,
-    float strength, float error_clamp_val,
-    bool serpentine) {
-
-    auto w = image.width();
-    auto h = image.height();
-
-    float ec = error_clamp_val;
-
-    DitherResult result;
-    result.indices.resize(w * h);
-    result.total_error = 0.0f;
-
-    std::vector<OKLab>  image_lab(w * h);
-    std::vector<Color3f> image_s(w * h);
-    std::vector<Color3f> palette_s(palette_lab.size());
-    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
-        palette_s[i] = color_space::linear_to_srgb(
-            color_space::oklab_to_linear(palette_lab[i])).clamped();
-    }
-    for (std::size_t y = 0; y < h; ++y)
-        for (std::size_t x = 0; x < w; ++x) {
-            auto lin = image[x, y];
-            image_lab[y * w + x] = color_space::linear_to_oklab(lin);
-            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
-        }
-
-    std::vector<Color3f> err_buf_s(w * h, Color3f{0, 0, 0});
-
-    for (std::size_t y = 0; y < h; ++y) {
-        bool reverse = serpentine && (y % 2 == 1);
-        for (std::size_t step = 0; step < w; ++step) {
-            std::size_t x = reverse ? (w - 1 - step) : step;
-            auto buf_idx = y * w + x;
-
-            auto& e = err_buf_s[buf_idx];
-            Color3f target_s{
-                image_s[buf_idx].r + std::clamp(e.r, -ec, ec),
-                image_s[buf_idx].g + std::clamp(e.g, -ec, ec),
-                image_s[buf_idx].b + std::clamp(e.b, -ec, ec),
-            };
-            auto adjusted = color_space::linear_to_oklab(
-                color_space::srgb_to_linear(target_s));
-
-            // Find nearest AND second-nearest to compute threshold level
-            float best_d = std::numeric_limits<float>::max();
-            float second_d = std::numeric_limits<float>::max();
-            std::size_t best_k = 0;
-            for (std::size_t k = 0; k < palette_lab.size(); ++k) {
-                float dL = adjusted.L - palette_lab[k].L;
-                float da = adjusted.a - palette_lab[k].a;
-                float db = adjusted.b - palette_lab[k].b;
-                float d = dL * dL + da * da + db * db;
-                if (d < best_d) {
-                    second_d = best_d;
-                    best_d = d;
-                    best_k = k;
-                } else if (d < second_d) {
-                    second_d = d;
-                }
-            }
-            result.indices[buf_idx] = static_cast<std::uint8_t>(best_k);
-            result.total_error += best_d;
-
-            // Threshold: 0 = pixel is exactly on nearest, 1 = equidistant
-            float threshold = 0.0f;
-            if (second_d > 1e-12f) {
-                float sqrt_best = std::sqrt(best_d);
-                float sqrt_second = std::sqrt(second_d);
-                threshold = sqrt_best / (sqrt_best + sqrt_second);
-            }
-
-            // Variable coefficients: at threshold=0 (near palette color),
-            // distribute less error (pixel is well-served). At threshold=0.5
-            // (equidistant), distribute more aggressively.
-            // F-S base: right=7/16, bottom-left=3/16, bottom=5/16, bottom-right=1/16
-            // Scale by threshold: more aggressive diffusion for uncertain pixels
-            float scale = 0.6f + 0.8f * threshold;  // 0.6 to 1.4
-            float w0 = (7.0f / 16.0f) * scale;
-            float w1 = (3.0f / 16.0f) * scale;
-            float w2 = (5.0f / 16.0f) * scale;
-            float w3 = (1.0f / 16.0f) * scale;
-
-            const auto& chosen_s = palette_s[best_k];
-            Color3f qe_s{
-                (target_s.r - chosen_s.r) * strength,
-                (target_s.g - chosen_s.g) * strength,
-                (target_s.b - chosen_s.b) * strength,
-            };
-
-            struct { int dx, dy; float wt; } entries[] = {
-                {1, 0, w0}, {-1, 1, w1}, {0, 1, w2}, {1, 1, w3}};
-            for (auto& [kdx, kdy, wt] : entries) {
-                int actual_dx = reverse ? -kdx : kdx;
-                auto nx = static_cast<int>(x) + actual_dx;
-                auto ny = static_cast<int>(y) + kdy;
-                if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                    ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                    auto nidx = static_cast<std::size_t>(ny) * w +
-                                static_cast<std::size_t>(nx);
-                    auto& en = err_buf_s[nidx];
-                    en.r = std::clamp(en.r + qe_s.r * wt, -ec, ec);
-                    en.g = std::clamp(en.g + qe_s.g * wt, -ec, ec);
-                    en.b = std::clamp(en.b + qe_s.b * wt, -ec, ec);
-                }
-            }
-        }
-    }
-    return result;
-}
 
 // ===========================================================================
 // Direct Binary Search (Allebach et al. ~1992)
@@ -2923,12 +2795,6 @@ DitherResult apply(const Image& image,
             settings.strength, settings.error_clamp,
             settings.serpentine, jarvis_kernel);
 
-    case Method::fs_ostro:
-        return apply_fs_ostro(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine);
-
     case Method::dbs:
         return apply_dbs(image, pal_span, settings);
 
@@ -3090,7 +2956,6 @@ std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
     case Method::sierra_lite:     return sierra_lite_kernel;
     case Method::stucki:          return stucki_kernel;
     case Method::jarvis:          return jarvis_kernel;
-    case Method::fs_ostro:    return floyd_steinberg_kernel;  // F-S base kernel
     // Structure-aware variants and Riemersma all build on F-S in sliced mode
     // — the per-pixel bias / queue is layered on top by the caller.
     // (Curve walking can't span per-scanline palette swaps cleanly.)
@@ -3294,7 +3159,6 @@ float diffuse_raw_buffer(const Image& image,
     auto kernel  = error_diffusion_kernel(settings.method);
     bool is_diff = settings.method != Method::none && !is_ord &&
                    !kernel.empty();
-    bool is_ostro = (settings.method == Method::fs_ostro);
     bool needs_riem = is_diff && needs_riemersma_queue(settings.method);
 
     auto bias_map = is_diff
@@ -3387,9 +3251,6 @@ float diffuse_raw_buffer(const Image& image,
                     (target_s.g - chosen_s.g) * settings.strength,
                     (target_s.b - chosen_s.b) * settings.strength,
                 };
-                float ostro_scale = is_ostro
-                    ? (0.6f + 0.8f * picked.ostro_threshold)
-                    : 1.0f;
                 if (needs_riem) {
                     riem_queue_s[riem_head] = qe_s;
                     riem_head = (riem_head + 1) % RIEM_QSIZE;
@@ -3404,9 +3265,9 @@ float diffuse_raw_buffer(const Image& image,
                         auto& en = err_buf_s[
                             static_cast<std::size_t>(ny) * w +
                             static_cast<std::size_t>(nx)];
-                        en.r += qe_s.r * kw * ostro_scale;
-                        en.g += qe_s.g * kw * ostro_scale;
-                        en.b += qe_s.b * kw * ostro_scale;
+                        en.r += qe_s.r * kw;
+                        en.g += qe_s.g * kw;
+                        en.b += qe_s.b * kw;
                     }
                 }
             }

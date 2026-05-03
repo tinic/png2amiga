@@ -91,7 +91,6 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::sierra_lite:
     case dither::Method::stucki:
     case dither::Method::jarvis:
-    case dither::Method::fs_ostro:
     case dither::Method::gilbert:
     case dither::Method::riemersma:
     case dither::Method::structure_fs:
@@ -196,7 +195,6 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::sierra_lite:     return Defaults{0.76f, 0.35f};  // S2 56.79
     case dither::Method::stucki:          return Defaults{0.74f, 0.35f};  // S2 56.33
     case dither::Method::jarvis:          return Defaults{0.83f, 0.35f};  // S2 56.11
-    case dither::Method::fs_ostro:        return Defaults{0.80f, 0.35f};  // S2 56.75
     case dither::Method::gilbert:         return Defaults{0.72f, 0.35f};  // S2 56.16
     case dither::Method::riemersma:       return Defaults{0.52f, 0.35f};  // S2 48.96
     case dither::Method::structure_fs:    return Defaults{0.80f, 0.35f};  // legacy

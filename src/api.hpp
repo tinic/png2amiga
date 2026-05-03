@@ -126,15 +126,7 @@ struct Options {
     int height = 0;                     // override output height (0 = mode default)
 
     // Dithering
-    std::string dither = "fs-ostro";  // Top of the ED leaderboard
-                                            // (was "ostromoukhov" before the
-                                            // 2026-05-03 audit confirmed the
-                                            // implementation is FS with a
-                                            // palette-uncertainty-scaled
-                                            // kernel, not the 2001 paper's
-                                            // coefficient LUT — back-compat
-                                            // alias keeps "ostromoukhov"
-                                            // accepted on input.)
+    std::string dither = "floyd-steinberg";
                                             // (mean PSNR across 10 images × 6
                                             // modes). Other ED options:
                                             // sierra-lite, atkinson, jarvis,

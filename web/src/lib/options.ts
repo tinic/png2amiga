@@ -294,24 +294,15 @@ export const DITHER_METHODS: DitherGroup[] = [
   { group: 'None', items: [
     { value: 'none', label: 'None' },
   ]},
-  // Order within "Error Diffusion" reflects the mean PSNR ranking from
-  // a 10-image × 6-mode sweep (lores/ham6/ham8/ehb plus copper variants):
-  // fs-ostro 37.116 dB > sierra-lite 37.100 > atkinson 37.089 >
-  // jarvis 37.062 > floyd-steinberg 37.039 > stucki 36.767 > gilbert
-  // 35.767 > riemersma 35.081. Top-5 sit within 0.08 dB so the order is
-  // a guideline, not a verdict; fs-ostro is the global default.
-  // (fs-ostro was misnamed "ostromoukhov" before the 2026-05-03
-  // audit confirmed it's a custom palette-uncertainty-scaled FS, not
-  // the 2001 paper's algorithm.) Structure-aware variants sit at the
-  // bottom because they intentionally sacrifice PSNR for perceptual
-  // quality. Palette-aware methods (yliluoma family / knoll / opt-* /
-  // tri-tone) follow.
+  // Default ED method is plain Floyd-Steinberg. Structure-aware
+  // variants intentionally sacrifice PSNR for perceptual quality.
+  // Palette-aware methods (yliluoma family / knoll / opt-* / tri-tone)
+  // follow.
   { group: 'Error Diffusion', items: [
-    { value: 'fs-ostro',        label: 'FS-Ostro' },
+    { value: 'floyd-steinberg', label: 'Floyd–\nSteinberg' },
     { value: 'sierra-lite',     label: 'Sierra Lite' },
     { value: 'atkinson',        label: 'Atkinson' },
     { value: 'jarvis',          label: 'Jarvis' },
-    { value: 'floyd-steinberg', label: 'Floyd–\nSteinberg' },
     { value: 'stucki',          label: 'Stucki' },
     { value: 'gilbert',         label: 'Gilbert' },
     { value: 'riemersma',       label: 'Riemersma' },
@@ -449,14 +440,14 @@ export const CGA_TEXT_DEFAULTS = {
 }
 
 export const EXAMPLES: Example[] = [
-  { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'fs-ostro', ditherStrength: 0.5 } },
+  { name: 'electrichues', file: 'electrichues02.jpg', opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', ditherStrength: 0.5 } },
   { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'ehb', dither: 'sierra-lite', copper: true, scap: true } },
-  { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'fs-ostro', alphaThreshold: 0 } },
+  { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', alphaThreshold: 0 } },
   { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'opt-checker', ditherStrength: 0.5 } },
   { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
-  { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'fs-ostro', copper: true } },
+  { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'floyd-steinberg', copper: true } },
   { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'opt-checker', dualPlayfield: true, scap: true } },
   { name: 'asterix',      file: 'asterix.png',         opts: { mode: 'cga-text80x100', chipset: 'cga', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
 ]
@@ -468,7 +459,7 @@ export function defaultOptions(): Options {
     depth: 5,
     interlace: false,
     copper: false,
-    dither: 'fs-ostro',
+    dither: 'floyd-steinberg',
     width: 0,
     height: 0,
     // HAM
@@ -648,7 +639,7 @@ const MODE_PAR: Record<string, number> = {
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
 
-const ERROR_DIFFUSION = new Set(['fs-ostro', 'ostromoukhov', 'sierra-lite', 'atkinson', 'jarvis', 'floyd-steinberg', 'stucki', 'gilbert', 'riemersma', 'dbs'])
+const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'sierra-lite', 'atkinson', 'jarvis', 'stucki', 'gilbert', 'riemersma', 'dbs'])
 
 export function isErrorDiffusion(dither: string): boolean {
   return ERROR_DIFFUSION.has(dither)

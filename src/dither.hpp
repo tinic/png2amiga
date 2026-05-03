@@ -77,10 +77,6 @@ enum class Method : unsigned char {
     jarvis,
 
     // Advanced error diffusion
-    fs_ostro,   // FS with palette-uncertainty-scaled kernel strength
-                      // (was named "ostromoukhov" historically — that was a
-                      // mislabel; this is a custom heuristic, not the
-                      // 2001 paper's coefficient-LUT algorithm)
     gilbert,          // Gilbert space-filling-curve error diffusion
     riemersma,        // Riemersma curve dither (exponential-decay error queue)
     structure_fs,     // FS with Laplacian-modulated threshold (dalpil/structure-aware)
@@ -116,7 +112,7 @@ enum class Method : unsigned char {
 // ---------------------------------------------------------------------------
 
 struct Settings {
-    Method method = Method::fs_ostro;
+    Method method = Method::floyd_steinberg;
     float strength = 1.0f;      // 0.0 = no dithering, 1.0 = full
     float error_clamp = 0.12f;  // max error magnitude per OKLab channel
     bool serpentine = true;      // alternate scan direction (error diffusion)
@@ -244,7 +240,7 @@ bool needs_riemersma_queue(Method method);
 bool is_yliluoma(Method method);
 
 // Methods that need a discrete palette to operate on: yliluoma family
-// (palette-aware ordered), ostromoukhov (variable scaling against the
+// (palette-aware ordered) (variable scaling against the
 // nearest palette pair), and DBS (sweeps palette indices). HAM modes
 // have no palette to dither against per pixel — the encoder picks
 // SET/MODIFY ops dynamically — so these methods silently degenerate.
@@ -353,7 +349,7 @@ void apply_dbs_post_pass(
 
 struct PickResult {
     color_space::OKLab chosen_lab;
-    // Used only for Method::fs_ostro: sqrt(best)/(sqrt(best)+sqrt(2nd))
+    // Used only for Method::floyd_steinberg: sqrt(best)/(sqrt(best)+sqrt(2nd))
     // ∈ [0, 0.5]. Pickers without a meaningful "second nearest" (raw grid
     // snap, HAM ops) leave this at 0.5 → unit kernel scale.
     float ostro_threshold = 0.5f;

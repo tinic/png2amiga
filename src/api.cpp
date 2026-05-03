@@ -173,9 +173,6 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "sierra-lite") return dither::Method::sierra_lite;
     if (s == "stucki") return dither::Method::stucki;
     if (s == "jarvis") return dither::Method::jarvis;
-    if (s == "fs-ostro") return dither::Method::fs_ostro;
-    // Back-compat: historical name for the same heuristic.
-    if (s == "ostromoukhov") return dither::Method::fs_ostro;
     if (s == "dbs") return dither::Method::dbs;
     if (s == "gilbert") return dither::Method::gilbert;
     if (s == "riemersma") return dither::Method::riemersma;
@@ -205,7 +202,7 @@ dither::Method parse_dither(const std::string& s) {
     if (s == "crosshatch") return dither::Method::crosshatch;
     if (s == "radial") return dither::Method::radial;
     if (s == "value-noise") return dither::Method::value_noise;
-    return dither::Method::fs_ostro;
+    return dither::Method::floyd_steinberg;
 }
 
 // Crop an image to a sub-region
@@ -723,7 +720,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // than silently fall through to a degraded encode. HAM has no
     // discrete palette per pixel — the encoder picks SET/MODIFY ops
     // dynamically — so palette-pair / palette-index methods (yliluoma
-    // family, ostromoukhov, dbs) silently degenerate. SNES Mode 7
+    // family, dbs) silently degenerate. SNES Mode 7
     // Direct has no palette table at all, same problem for the
     // yliluoma family. Web frontend has matching auto-fallback gates
     // (see Converter.vue HAM_INCOMPATIBLE_DITHERS); CLI errors out

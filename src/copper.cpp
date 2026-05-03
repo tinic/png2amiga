@@ -980,7 +980,7 @@ Result<CopperResult> encode_copper(const Image& image,
     // is applied against that row's (different) palette.
     //
     // The driver owns the ED scaffolding (kernel, serpentine, structure
-    // bias, Riemersma, ostromoukhov scaling, ordered offsets). The picker
+    // bias, Riemersma scaling, ordered offsets). The picker
     // selects the per-row palette and yliluoma family / nearest-pair.
     // ===================================================================
 

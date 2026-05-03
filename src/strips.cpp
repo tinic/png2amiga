@@ -899,7 +899,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
 
     // ---- Pass 2: whole-image dither against per-row, per-strip
     // palettes. Driver owns ED scaffolding (kernel, serpentine, bias
-    // map, Riemersma queue, ostromoukhov scaling, ordered offsets);
+    // map, Riemersma queue scaling, ordered offsets);
     // picker resolves x_strip[x] → row's strip palette.
     total_error = 0.0;
     {
@@ -1440,7 +1440,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
     std::size_t k_min = 0;
 
     // ED scaffolding (kernel, error buf, structure bias, Riemersma queue,
-    // ostromoukhov scaling, ordered offsets) lives inside
+    // ordered offsets) lives inside
     // dither::diffuse_raw_buffer (the post-pass-1 driver call below).
 
     constexpr int kVStart = 44;
@@ -2079,7 +2079,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
 
     // Stage-2 render across all 64 effective entries per pixel against
     // the per-row, per-strip palette. Driver owns ED scaffolding
-    // (kernel, serpentine, structure bias, Riemersma, ostromoukhov,
+    // (kernel, serpentine, structure bias, Riemersma,
     // ordered offsets); picker resolves x_strip[x] → row's strip
     // palette, then yliluoma family or nearest pair pick.
     total_error = 0.0;

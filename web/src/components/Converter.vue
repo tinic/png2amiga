@@ -227,7 +227,6 @@ const YLIL_FAMILY = new Set([
 
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
-  const hide_ostro = ht !== null
   const hide_nonsquare = ht !== null
   const hide_yliluoma = ht !== null || isSnesDirectMode(options.mode)
   // DBS sweeps palette indices and so doesn't apply in HAM (no fixed
@@ -237,7 +236,6 @@ const groupedDitherOptions = computed(() => {
     .map(g => ({
       label: g.group,
       items: g.items
-        .filter(d => !(hide_ostro && d.value === 'fs-ostro'))
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
         .filter(d => !(hide_yliluoma && YLIL_FAMILY.has(d.value)))
         .filter(d => !(hide_dbs && d.value === 'dbs'))
@@ -437,21 +435,21 @@ function syncNativeParToMode(mode: string, oldMode: string): void {
   if (!fixedNew) options.nativePar = false
 }
 
-// Methods that don't dither in HAM — auto-fallback to F-S on mode change
-// so the dither dropdown never shows a "selected but inactive" pick.
+// Methods that don't dither in HAM — auto-fallback to atkinson on mode
+// change so the dither dropdown never shows a "selected but inactive"
+// pick. Yliluoma-family methods need a palette index per pixel, which
+// HAM doesn't have (it picks SET/MODIFY ops); DBS sweeps palette indices
+// for the same reason. Plain FS is valid for HAM (used as a pre-pass
+// before the DP beam search).
 const HAM_INCOMPATIBLE_DITHERS = new Set([
-  'fs-ostro', 'ostromoukhov', 'yliluoma', 'yliluoma2', 'opt-checker', 'knoll',
+  'yliluoma', 'yliluoma2', 'opt-checker', 'knoll',
   'tri-tone', 'yliluoma1', 'opt-line', 'opt-line-checker',
-  'dbs',  // DBS sweeps palette indices; HAM has none
+  'dbs',
 ])
 
 function maybeFallbackHamDither(mode: string): void {
   if (hamType(mode) !== null && HAM_INCOMPATIBLE_DITHERS.has(options.dither)) {
-    // Atkinson wins HAM6 7/10 in our sweep and ties HAM8 4/10. The
-    // previous fallback to fs-ostro was a self-loop bug — fs-ostro
-    // is in the incompatible set above (no palette pair to compute
-    // its variable scaling against, so it silently degenerates to FS
-    // in HAM modes).
+    // Atkinson wins HAM6 7/10 in our sweep and ties HAM8 4/10.
     options.dither = 'atkinson'
   }
 }
@@ -461,7 +459,7 @@ function maybeFallbackSnesDirectDither(mode: string): void {
   // aware pattern dithers) is meaningless. Snap any yliluoma selection
   // to F-S; everything else routes through dither::diffuse_raw_buffer.
   if (isSnesDirectMode(mode) && YLIL_FAMILY.has(options.dither)) {
-    options.dither = 'fs-ostro'
+    options.dither = 'floyd-steinberg'
   }
 }
 

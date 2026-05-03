@@ -81,7 +81,7 @@ struct EncodeResult {
 // outer brute-force pass picks 4 colours per cell (nearest-distance
 // scoring under the chosen metric). The dither pass then runs over
 // the per-cell 4-colour palette through diffuse_raw_buffer with the
-// full dither suite (FS-family, ostromoukhov, gilbert, riemersma,
+// full dither suite (FS-family, gilbert, riemersma,
 // structure-fs, ordered, knoll, opt-checker, yliluoma).
 Result<EncodeResult> encode_multicolor(
     const Image& image,
