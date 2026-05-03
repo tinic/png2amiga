@@ -273,7 +273,7 @@ Encode one bitmap and morph its palette toward a second image at
 runtime — joint k-means clusters every (source ⊕ target) slot together
 so the same index buffer reproduces both stops. The emitted `.cpp`
 viewer patches per-frame value tables on real hardware. Lores / hires
-/ EHB only (sliced is rejected — see `project_joint_cap_encoder.md`).
+/ EHB only.
 
 ![source → target fade demo](docs/fade-demo.gif)
 
