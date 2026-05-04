@@ -1034,22 +1034,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     cga_metric, options.on_progress);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
-        // Freeform: post-double the rendered preview vertically so
-        // returned dims match the user's source-pixel target (each hw
-        // scanline shown twice = the un-halve from above). Default
-        // canonical keeps the raw 640×200 hw render — downstream PAR
-        // display logic doubles to 4:3 visible.
-        if (cga_freeform) {
-            Image doubled(preview.width(), preview.height() * 2);
-            for (std::size_t y = 0; y < preview.height(); ++y) {
-                for (std::size_t x = 0; x < preview.width(); ++x) {
-                    auto v = preview[x, y];
-                    doubled[x, y * 2]     = v;
-                    doubled[x, y * 2 + 1] = v;
-                }
-            }
-            preview = std::move(doubled);
-        }
+        // No post-double here: result.rendered stays at hardware-pixel
+        // dims (cols*8 × rows*2). The display layer un-halves freeform
+        // via sy=2 in paintPreviewCanvas (web) / scale_for_display
+        // (CLI). Doubling here would compound with that and produce a
+        // 2× overstretch.
 
         PipelineResult result;
         result.rendered = std::move(preview);
