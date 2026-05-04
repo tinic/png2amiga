@@ -107,6 +107,43 @@ static inline f32x4 fast_cbrt4_walczyk(f32x4 x) noexcept {
     return std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) | sign);
 }
 
+// Newton iterating on r := 1/cbrt(x) instead of cbrt(x) directly.
+// f(r) = 1/r^3 - x = 0  =>  r_{n+1} = r * (4 - x*r^3) / 3
+// Multiply-only Newton step (no divides) — recover cbrt at the end via
+// y = x * r^2. Magic seed K - i/3 where K ≈ (4/3) * (127<<23) =
+// 0x54AAAAAA; 0x54a2fa8c is the literature-tuned value that minimises
+// max relative error of the seed itself.
+[[gnu::always_inline]]
+static inline f32x4 fast_cbrt4_invnewton(f32x4 x) noexcept {
+    u32x4 sign_mask = {0x80000000u, 0x80000000u, 0x80000000u, 0x80000000u};
+    u32x4 xbits = std::bit_cast<u32x4>(x);
+    u32x4 sign = xbits & sign_mask;
+    u32x4 absbits = xbits & ~sign_mask;
+
+    u32x4 three = {3u, 3u, 3u, 3u};
+    u32x4 K = {0x54a2fa8cu, 0x54a2fa8cu, 0x54a2fa8cu, 0x54a2fa8cu};
+    u32x4 i = K - absbits / three;
+
+    f32x4 absx = std::bit_cast<f32x4>(absbits);
+    f32x4 r = std::bit_cast<f32x4>(i);
+    f32x4 third = {0.33333333f, 0.33333333f, 0.33333333f, 0.33333333f};
+    f32x4 four  = {4.0f, 4.0f, 4.0f, 4.0f};
+    // Three Newton iterations on r = x^(-1/3) — quadratic convergence
+    // means the seed's ~5 bits compound 5 -> 10 -> 20 -> 40 bits, so
+    // three iters saturate f32. Two iters left ~93 mean ULP error.
+    f32x4 r3 = r * r * r;
+    r = r * (four - absx * r3) * third;
+    r3 = r * r * r;
+    r = r * (four - absx * r3) * third;
+    r3 = r * r * r;
+    r = r * (four - absx * r3) * third;
+
+    f32x4 y = absx * r * r;
+    u32x4 nonzero_mask = (absbits != 0);
+    y = std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) & nonzero_mask);
+    return std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) | sign);
+}
+
 static inline f32x4 std_cbrt4(f32x4 x) noexcept {
     return f32x4{std::cbrt(x[0]), std::cbrt(x[1]), std::cbrt(x[2]), 0.0f};
 }
@@ -342,6 +379,7 @@ int main() {
     auto tab_1step = build_ocs_table<fast_cbrt4>();
     auto tab_2step = build_ocs_table<fast_cbrt4_2step>();
     auto tab_walc  = build_ocs_table<fast_cbrt4_walczyk>();
+    auto tab_inv   = build_ocs_table<fast_cbrt4_invnewton>();
     auto tab_prec  = build_ocs_table<std_cbrt4>();
 
     std::array<float, 256> lin{};
@@ -353,10 +391,12 @@ int main() {
     sweep_cbrt_ulp<fast_cbrt4>("fast_cbrt4 (1 Halley)");
     sweep_cbrt_ulp<fast_cbrt4_2step>("fast_cbrt4 (2 Halley)");
     sweep_cbrt_ulp<fast_cbrt4_walczyk>("fast_cbrt4 (Walczyk, 2 Newton)");
+    sweep_cbrt_ulp<fast_cbrt4_invnewton>("fast_cbrt4 (1/cbrt Newton, 2 iters, no divs)");
 
     sweep_one<fast_cbrt4>("linear_to_ocs(1-step)", lin, tab_1step, tab_prec, total);
     sweep_one<fast_cbrt4_2step>("linear_to_ocs(2-step)", lin, tab_2step, tab_prec, total);
     sweep_one<fast_cbrt4_walczyk>("linear_to_ocs(Walczyk)", lin, tab_walc, tab_prec, total);
+    sweep_one<fast_cbrt4_invnewton>("linear_to_ocs(InvNewton)", lin, tab_inv, tab_prec, total);
 
     // ---- perf benchmarks (single-threaded, fixed workload) ----
     std::printf("\n=== Performance benchmark (single thread, no OpenMP) ===\n");
@@ -369,6 +409,7 @@ int main() {
     double t_1 = bench_oklab<fast_cbrt4>(lin, reps_oklab);
     double t_2 = bench_oklab<fast_cbrt4_2step>(lin, reps_oklab);
     double t_w = bench_oklab<fast_cbrt4_walczyk>(lin, reps_oklab);
+    double t_i = bench_oklab<fast_cbrt4_invnewton>(lin, reps_oklab);
     double t_s = bench_oklab<std_cbrt4>(lin, reps_oklab);
     double n = static_cast<double>(total * reps_oklab);
     std::printf("  1 Halley:   %.3fs  (%.2f ns/call,  %.1f Mops/s)\n",
@@ -377,6 +418,8 @@ int main() {
                 t_2, 1e9 * t_2 / n, 1e-6 * n / t_2, 100.0 * (t_2 - t_1) / t_1);
     std::printf("  Walczyk 2N: %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
                 t_w, 1e9 * t_w / n, 1e-6 * n / t_w, 100.0 * (t_w - t_1) / t_1);
+    std::printf("  InvNewton:  %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
+                t_i, 1e9 * t_i / n, 1e-6 * n / t_i, 100.0 * (t_i - t_1) / t_1);
     std::printf("  std::cbrt:  %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
                 t_s, 1e9 * t_s / n, 1e-6 * n / t_s, 100.0 * (t_s - t_1) / t_1);
 
@@ -386,6 +429,7 @@ int main() {
     double o_1 = bench_ocs<fast_cbrt4>(lin, tab_1step, reps_ocs);
     double o_2 = bench_ocs<fast_cbrt4_2step>(lin, tab_2step, reps_ocs);
     double o_w = bench_ocs<fast_cbrt4_walczyk>(lin, tab_walc, reps_ocs);
+    double o_i = bench_ocs<fast_cbrt4_invnewton>(lin, tab_inv, reps_ocs);
     double o_s = bench_ocs<std_cbrt4>(lin, tab_prec, reps_ocs);
     double m = static_cast<double>(total * reps_ocs);
     std::printf("  1 Halley:   %.3fs  (%.0f ns/call)\n",
@@ -394,6 +438,8 @@ int main() {
                 o_2, 1e9 * o_2 / m, 100.0 * (o_2 - o_1) / o_1);
     std::printf("  Walczyk 2N: %.3fs  (%.0f ns/call)  +%.0f%%\n",
                 o_w, 1e9 * o_w / m, 100.0 * (o_w - o_1) / o_1);
+    std::printf("  InvNewton:  %.3fs  (%.0f ns/call)  +%.0f%%\n",
+                o_i, 1e9 * o_i / m, 100.0 * (o_i - o_1) / o_1);
     std::printf("  std::cbrt:  %.3fs  (%.0f ns/call)  +%.0f%%\n",
                 o_s, 1e9 * o_s / m, 100.0 * (o_s - o_1) / o_1);
 
