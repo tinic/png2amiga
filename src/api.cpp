@@ -1841,7 +1841,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     seed_pal = std::move(*q);
                     snap_to_chipset(seed_pal, chipset, mode);
                     while (seed_pal.colors.size() < 32)
-                        seed_pal.colors.emplace_back(0, 0, 0);
+                        seed_pal.colors.emplace_back(0.0f, 0.0f, 0.0f);
                     palette::refine_ehb_base_palette(
                         std::span<Color3f>(seed_pal.colors.data(), 32),
                         img.pixels(),
@@ -1887,7 +1887,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
                 for (std::size_t y = 0; y < h; ++y) {
                     auto& base32 = cr->scanline_palettes[y];
-                    while (base32.size() < 32) base32.emplace_back(0, 0, 0);
+                    while (base32.size() < 32) base32.emplace_back(0.0f, 0.0f, 0.0f);
                     // Pair-aware refinement on the row's base palette
                     // using only that row's pixels — same idea as plain
                     // EHB but per-line, so each scanline's 32 base
@@ -2095,7 +2095,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 snap_to_chipset(bp, chipset, mode);
                 // Pair-aware refinement: jointly optimise the 32 base
                 // colours under the hardware-tied half-brite pairing.
-                while (bp.colors.size() < 32) bp.colors.emplace_back(0, 0, 0);
+                while (bp.colors.size() < 32) bp.colors.emplace_back(0.0f, 0.0f, 0.0f);
                 palette::refine_ehb_base_palette(
                     std::span<Color3f>(bp.colors.data(), 32),
                     img.pixels(),

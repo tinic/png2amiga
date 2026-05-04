@@ -6,6 +6,28 @@
 #include <cstddef>
 #include <vector>
 
+// SIMD backend selection — same gates as src/quantize.cpp.
+// x86_64 → AVX2+FMA (256-bit, 8 lanes); AArch64 → NEON (128-bit, 4 lanes);
+// Emscripten → WASM SIMD (128-bit, 4 lanes). No scalar fallback.
+#if defined(__wasm_simd128__)
+    #include <wasm_simd128.h>
+    #define PNG2AMIGA_BACKEND_WASM_SIMD 1
+    #define PNG2AMIGA_BACKEND_AVX2      0
+    #define PNG2AMIGA_BACKEND_NEON      0
+#elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define PNG2AMIGA_BACKEND_AVX2      1
+    #define PNG2AMIGA_BACKEND_WASM_SIMD 0
+    #define PNG2AMIGA_BACKEND_NEON      0
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    #include <arm_neon.h>
+    #define PNG2AMIGA_BACKEND_NEON      1
+    #define PNG2AMIGA_BACKEND_AVX2      0
+    #define PNG2AMIGA_BACKEND_WASM_SIMD 0
+#else
+    #error "ssimulacra2.cpp requires AVX2 (x86), NEON (ARM64), or WASM SIMD."
+#endif
+
 namespace png2amiga::ssimulacra2 {
 
 namespace {
@@ -70,39 +92,156 @@ const std::array<float, kBlurSize>& blur_kernel() {
     return k;
 }
 
+// Separable Gaussian, σ=1.5, kernel size 13. Hand-SIMDed (AVX2 8-lane,
+// WASM SIMD 4-lane). Boundary handling: zero-pad with no renormalisation,
+// matching libjxl FastGaussian semantics. The horizontal pass splits each
+// row into left-boundary / interior / right-boundary so the interior runs
+// branch-free at full SIMD throughput; the vertical pass is row-uniform
+// (every output column at row y uses the same set of source rows) so the
+// boundary check moves to the outer loop.
 void gaussian_blur(const std::vector<float>& in,
                    std::vector<float>& out,
                    std::size_t w, std::size_t h) {
     auto& k = blur_kernel();
     std::vector<float> tmp(w * h);
-    int W = static_cast<int>(w);
-    int H = static_cast<int>(h);
-    // Horizontal — zero-pad: out-of-bounds samples contribute 0, no
-    // renormalisation (the reference's FastGaussian does the same).
+    const int W = static_cast<int>(w);
+    const int H = static_cast<int>(h);
+
+    // ---- Horizontal pass ----
+    const std::size_t bx_lo = std::min<std::size_t>(kBlurHalf, w);
+    const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf))
+                                  ? (w - kBlurHalf) : bx_lo;
     for (std::size_t y = 0; y < h; ++y) {
-        for (std::size_t x = 0; x < w; ++x) {
+        const float* row  = in.data()  + y * w;
+        float*       trow = tmp.data() + y * w;
+        // Left boundary: scalar with bounds check.
+        for (std::size_t x = 0; x < bx_lo; ++x) {
             float s = 0.0f;
             for (int i = 0; i < kBlurSize; ++i) {
                 int sx = static_cast<int>(x) + i - kBlurHalf;
                 if (sx < 0 || sx >= W) continue;
                 s += k[static_cast<std::size_t>(i)] *
-                     in[y * w + static_cast<std::size_t>(sx)];
+                     row[static_cast<std::size_t>(sx)];
             }
-            tmp[y * w + x] = s;
+            trow[x] = s;
+        }
+        // Interior: branch-free SIMD across 8 columns (or 4×2 for WASM).
+        std::size_t x = bx_lo;
+        const std::size_t simd_end = (bx_hi > bx_lo)
+                                         ? (bx_lo + ((bx_hi - bx_lo) & ~7u))
+                                         : bx_lo;
+        for (; x < simd_end; x += 8) {
+#if PNG2AMIGA_BACKEND_AVX2
+            __m256 acc = _mm256_setzero_ps();
+            for (int i = 0; i < kBlurSize; ++i) {
+                __m256 kv = _mm256_set1_ps(k[static_cast<std::size_t>(i)]);
+                __m256 v  = _mm256_loadu_ps(row + x + i - kBlurHalf);
+                acc = _mm256_fmadd_ps(kv, v, acc);
+            }
+            _mm256_storeu_ps(trow + x, acc);
+#elif PNG2AMIGA_BACKEND_NEON
+            for (std::size_t lane = 0; lane < 8; lane += 4) {
+                float32x4_t acc = vdupq_n_f32(0.0f);
+                for (int i = 0; i < kBlurSize; ++i) {
+                    float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
+                    float32x4_t v  = vld1q_f32(row + x + lane + i - kBlurHalf);
+                    acc = vfmaq_f32(acc, kv, v);
+                }
+                vst1q_f32(trow + x + lane, acc);
+            }
+#else  // WASM SIMD
+            for (std::size_t lane = 0; lane < 8; lane += 4) {
+                v128_t acc = wasm_f32x4_const_splat(0.0f);
+                for (int i = 0; i < kBlurSize; ++i) {
+                    v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
+                    v128_t v  = wasm_v128_load(row + x + lane + i - kBlurHalf);
+                    acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
+                }
+                wasm_v128_store(trow + x + lane, acc);
+            }
+#endif
+        }
+        // Interior tail (< 8 left).
+        for (; x < bx_hi; ++x) {
+            float s = 0.0f;
+            for (int i = 0; i < kBlurSize; ++i) {
+                s += k[static_cast<std::size_t>(i)] *
+                     row[x + i - kBlurHalf];
+            }
+            trow[x] = s;
+        }
+        // Right boundary.
+        for (; x < w; ++x) {
+            float s = 0.0f;
+            for (int i = 0; i < kBlurSize; ++i) {
+                int sx = static_cast<int>(x) + i - kBlurHalf;
+                if (sx < 0 || sx >= W) continue;
+                s += k[static_cast<std::size_t>(i)] *
+                     row[static_cast<std::size_t>(sx)];
+            }
+            trow[x] = s;
         }
     }
-    // Vertical — same zero-pad policy.
+
+    // ---- Vertical pass ----
     out.assign(w * h, 0.0f);
+    const std::size_t simd_w_end = w & ~7u;
     for (std::size_t y = 0; y < h; ++y) {
-        for (std::size_t x = 0; x < w; ++x) {
+        const int sy_lo = static_cast<int>(y) - kBlurHalf;
+        const int sy_hi = static_cast<int>(y) + kBlurHalf;
+        const bool clip = (sy_lo < 0) || (sy_hi >= H);
+        float* orow = out.data() + y * w;
+        std::size_t x = 0;
+        for (; x < simd_w_end; x += 8) {
+#if PNG2AMIGA_BACKEND_AVX2
+            __m256 acc = _mm256_setzero_ps();
+            for (int i = 0; i < kBlurSize; ++i) {
+                int sy = static_cast<int>(y) + i - kBlurHalf;
+                if (clip && (sy < 0 || sy >= H)) continue;
+                __m256 kv = _mm256_set1_ps(k[static_cast<std::size_t>(i)]);
+                __m256 v  = _mm256_loadu_ps(tmp.data() +
+                                static_cast<std::size_t>(sy) * w + x);
+                acc = _mm256_fmadd_ps(kv, v, acc);
+            }
+            _mm256_storeu_ps(orow + x, acc);
+#elif PNG2AMIGA_BACKEND_NEON
+            for (std::size_t lane = 0; lane < 8; lane += 4) {
+                float32x4_t acc = vdupq_n_f32(0.0f);
+                for (int i = 0; i < kBlurSize; ++i) {
+                    int sy = static_cast<int>(y) + i - kBlurHalf;
+                    if (clip && (sy < 0 || sy >= H)) continue;
+                    float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
+                    float32x4_t v  = vld1q_f32(tmp.data() +
+                                static_cast<std::size_t>(sy) * w + x + lane);
+                    acc = vfmaq_f32(acc, kv, v);
+                }
+                vst1q_f32(orow + x + lane, acc);
+            }
+#else  // WASM SIMD
+            for (std::size_t lane = 0; lane < 8; lane += 4) {
+                v128_t acc = wasm_f32x4_const_splat(0.0f);
+                for (int i = 0; i < kBlurSize; ++i) {
+                    int sy = static_cast<int>(y) + i - kBlurHalf;
+                    if (clip && (sy < 0 || sy >= H)) continue;
+                    v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
+                    v128_t v  = wasm_v128_load(tmp.data() +
+                                static_cast<std::size_t>(sy) * w + x + lane);
+                    acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
+                }
+                wasm_v128_store(orow + x + lane, acc);
+            }
+#endif
+        }
+        // Tail across x (< 8 columns left).
+        for (; x < w; ++x) {
             float s = 0.0f;
             for (int i = 0; i < kBlurSize; ++i) {
                 int sy = static_cast<int>(y) + i - kBlurHalf;
-                if (sy < 0 || sy >= H) continue;
+                if (clip && (sy < 0 || sy >= H)) continue;
                 s += k[static_cast<std::size_t>(i)] *
                      tmp[static_cast<std::size_t>(sy) * w + x];
             }
-            out[y * w + x] = s;
+            orow[x] = s;
         }
     }
 }

@@ -508,6 +508,7 @@ struct Config {
     std::string output_path;           // .png for preview, .iff for ILBM, .h for C header
     bool quiet = false;                // suppress all stdout status (errors → stderr)
     bool json = false;                 // emit JSON status object instead of human text
+    int  profile_repeats = 1;          // run main encoding loop N times for profilers (--profile N)
     std::string depfile;               // Make-format depfile path (empty = disabled)
     bool list_modes = false;           // emit mode catalog (human or JSON) and exit 0
     bool list_dithers = false;         // emit dither-method catalog and exit 0
@@ -846,6 +847,7 @@ void print_usage() {
         "  --depfile <path>                Write a Make-format depfile\n"
         "  --list-modes                    Print supported modes and exit\n"
         "  --list-dithers                  Print supported dither methods and exit\n"
+        "  --profile <N>                   Run encode N times for sampling profilers\n"
         "\n"
         "Exit codes (sysexits.h):\n"
         "  0 ok    1 internal    64 usage    66 no input    73 cannot create\n");
@@ -1074,6 +1076,16 @@ Result<Config> parse_args(int argc, char* argv[]) {
             config.json = true;
             // JSON implies quiet — no human text mixed with the JSON object.
             config.quiet = true;
+            continue;
+        }
+
+        // --profile N: run the encoding loop N times so a sampling
+        // profiler (AMDuProf, VTune, Linux perf) collects enough samples on
+        // short-running images. Iterations 2..N suppress stdout (the first
+        // run already printed the banner) but still write the output file.
+        if (arg == "--profile" && i + 1 < argc) {
+            int n = std::atoi(argv[++i]);
+            config.profile_repeats = (n >= 1) ? n : 1;
             continue;
         }
 
@@ -4552,7 +4564,7 @@ int run_batch(const Config& cfg) {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+int run_main(int argc, char* argv[]) {
     auto config = parse_args(argc, argv);
     if (!config) {
         std::println(stderr, "Error: {}", config.error().message);
@@ -8495,4 +8507,27 @@ int main(int argc, char* argv[]) {
     }
 
     return exit_code::ok;
+}
+
+int main(int argc, char* argv[]) {
+    // --profile <N>: re-run the full encoding pipeline N times so sampling
+    // profilers (AMDuProf, VTune, perf) get a workable number of samples on
+    // images that complete in milliseconds. Pre-scan argv (rather than
+    // calling parse_args here) so the wrapper stays a thin loop and the
+    // existing run_main keeps full ownership of arg validation. Pair with
+    // --quiet to suppress per-iteration banner spam.
+    int repeats = 1;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} == "--profile") {
+            int n = std::atoi(argv[i + 1]);
+            if (n >= 1) repeats = n;
+            break;
+        }
+    }
+    int rc = 0;
+    for (int i = 0; i < repeats; ++i) {
+        rc = run_main(argc, argv);
+        if (rc != 0) break;
+    }
+    return rc;
 }

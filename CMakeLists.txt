@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 project(png2amiga VERSION 1.61.0 LANGUAGES C CXX)
 
-if(EMSCRIPTEN)
+if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
 else()
     set(CMAKE_CXX_STANDARD 26)
@@ -129,6 +129,48 @@ else()
         ${CMAKE_BINARY_DIR}/generated)
     target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+
+    # SIMD baseline for the hand-vectorized kernels in quantize.cpp /
+    # ssimulacra2.cpp. Three backends are supported in source:
+    #   - AVX2 + FMA   → x86_64 Windows / Linux / Intel Mac
+    #   - ARM NEON     → Apple Silicon / ARM64 Linux (implicit on AArch64)
+    #   - WASM SIMD    → Emscripten (set via -msimd128 on the WASM target)
+    # No scalar fallback. AVX2 is universal on modern x86_64 (Intel
+    # Haswell 2013+, AMD Zen 2017+); NEON is mandatory on AArch64.
+    if(MSVC)
+        target_compile_options(png2amiga PRIVATE /arch:AVX2)
+    else()
+        # Probe for AVX2 — succeeds on x86_64, fails on ARM64 (Apple
+        # Silicon, etc.) where NEON is the default ISA and no flag is
+        # needed. CMake re-runs the probe whenever the compiler changes,
+        # so universal-binary builds switching arch will Do The Right Thing.
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-mavx2" PNG2AMIGA_HAS_MAVX2)
+        if(PNG2AMIGA_HAS_MAVX2)
+            target_compile_options(png2amiga PRIVATE -mavx2 -mfma)
+        endif()
+    endif()
+
+    if(MSVC)
+        # CMake 4.0.2 doesn't yet map CMAKE_CXX_STANDARD=26 to /std:c++26 for
+        # MSVC, but /std:c++latest enables the same C++26 features we need
+        # (constexpr <cmath>: std::pow / std::cbrt called from constexpr LUT
+        # initializers in color_space.hpp / palette.hpp). CMAKE_CXX_STANDARD
+        # stays at 23 so CMake's feature-test step succeeds; this flag is
+        # appended after, so /std:c++latest wins.
+        target_compile_options(png2amiga PRIVATE /std:c++latest)
+        # MSVC's "secure CRT" deprecation noise (getenv, etc.) is W4-fatal
+        # under /WX. We're not switching to *_s variants — they're MSVC-only.
+        target_compile_definitions(png2amiga PRIVATE _CRT_SECURE_NO_WARNINGS)
+        # Emit PDBs even in Release so AMDuProf / VTune can resolve symbols.
+        # /Zi adds debug info to the .obj; /DEBUG tells the linker to write
+        # the .pdb. /OPT:REF and /OPT:ICF restore the dead-strip and COMDAT
+        # folding that /DEBUG would otherwise turn off, so we keep release
+        # codegen. Source line tables are coarse at /O2 — that's expected;
+        # function-level symbols are what AMDuProf needs.
+        target_compile_options(png2amiga PRIVATE /Zi)
+        target_link_options(png2amiga PRIVATE /DEBUG /OPT:REF /OPT:ICF)
+    endif()
 
     if(MINGW)
         # std::print's terminal helpers (__open_terminal, __write_to_terminal)

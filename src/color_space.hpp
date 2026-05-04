@@ -45,11 +45,16 @@ constexpr Color3f linear_to_srgb(Color3f linear) noexcept {
 }
 
 // LUT: byte value -> linear float
-// constexpr on GCC (constexpr pow), const on clang/emscripten (runtime init)
+// constexpr on GCC (constexpr pow since C++14 as a GCC extension); runtime-
+// init on clang (libc++ doesn't have constexpr std::pow yet) and MSVC (STL
+// hasn't shipped C++26 P1383 constexpr <cmath> as of MSVC 14.50).
 #if defined(__GNUC__) && !defined(__clang__)
 #define PNG2AMIGA_LUT_CONSTEXPR constexpr
 #else
-#define PNG2AMIGA_LUT_CONSTEXPR
+// `inline` (not blank) — these definitions live in headers; without `inline`
+// each TU emits its own copy and the linker rejects the program with LNK2005
+// on MSVC. `constexpr` implies inline, which is why GCC didn't need this.
+#define PNG2AMIGA_LUT_CONSTEXPR inline
 #endif
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -90,7 +95,7 @@ inline Color3f srgb_u8_to_linear(std::uint8_t r, std::uint8_t g,
 #endif
 
 // Convert sRGB hex (0xRRGGBB) to linear Color3f
-constexpr Color3f srgb_hex_to_linear(std::uint32_t hex) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f srgb_hex_to_linear(std::uint32_t hex) noexcept {
     auto r = static_cast<std::uint8_t>((hex >> 16) & 0xFF);
     auto g = static_cast<std::uint8_t>((hex >> 8) & 0xFF);
     auto b = static_cast<std::uint8_t>(hex & 0xFF);
@@ -115,8 +120,28 @@ struct OKLab {
 // not bit-exact. Full conversion overhead from std::cbrt over the
 // approximation is ~2% (the OCS search dominates), so we use the exact
 // path everywhere.
+#if defined(__GNUC__) || defined(__clang__)
 using f32x4 [[gnu::vector_size(16)]] = float;
 using u32x4 [[gnu::vector_size(16)]] = std::uint32_t;
+#else
+// MSVC fallback. The GCC vector-extension type supports aggregate init
+// `{a,b,c,d}`, subscript `v[i]`, and elementwise/scalar arithmetic. A plain
+// aggregate of `float[4]` covers all three with brace-elision so call sites
+// don't need to change. u32x4 isn't used in the MSVC build path
+// (only by tools/cbrt_audit.cpp, which is GCC-only).
+struct f32x4 {
+    float v[4];
+    constexpr float& operator[](std::size_t i) noexcept { return v[i]; }
+    constexpr float operator[](std::size_t i) const noexcept { return v[i]; }
+};
+constexpr f32x4 operator+(f32x4 a, f32x4 b) noexcept {
+    return {{a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]}};
+}
+constexpr f32x4 operator*(f32x4 a, float s) noexcept {
+    return {{a[0] * s, a[1] * s, a[2] * s, a[3] * s}};
+}
+constexpr f32x4 operator*(float s, f32x4 a) noexcept { return a * s; }
+#endif
 
 [[gnu::always_inline]]
 inline f32x4 fast_cbrt4(f32x4 x) noexcept {

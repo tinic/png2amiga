@@ -367,25 +367,46 @@ void expand_ham_t(
     auto num_data_values = pre.num_data_values;
     auto nmax = static_cast<int>(num_data_values);
 
+    // Compute MODIFY windows up front so we can size `candidates` exactly
+    // once. The previous structure had push_back inside each of the four
+    // sub-loops (SET / MODIFY R / G / B); the per-iter capacity check
+    // landed at the top of the CPU profile (~5.7s of 19s for HAM6 in a
+    // recent run). Resize once + indexed pointer stores eliminates the
+    // capacity branch and lets the compiler emit straight-line stores.
+    auto tbv = reduce_to_bits(target_srgb.b, data_bits);
+    auto trv = reduce_to_bits(target_srgb.r, data_bits);
+    auto tgv = reduce_to_bits(target_srgb.g, data_bits);
+    int lo_b = std::max(0, static_cast<int>(tbv) - kModifyDpRadius);
+    int hi_b = std::min(nmax, static_cast<int>(tbv) + kModifyDpRadius + 1);
+    int lo_r = std::max(0, static_cast<int>(trv) - kModifyDpRadius);
+    int hi_r = std::min(nmax, static_cast<int>(trv) + kModifyDpRadius + 1);
+    int lo_g = std::max(0, static_cast<int>(tgv) - kModifyDpRadius);
+    int hi_g = std::min(nmax, static_cast<int>(tgv) + kModifyDpRadius + 1);
+
+    auto n_set = pre.palette_lab.size();
+    auto n_b   = static_cast<std::size_t>(hi_b - lo_b);
+    auto n_r   = static_cast<std::size_t>(hi_r - lo_r);
+    auto n_g   = static_cast<std::size_t>(hi_g - lo_g);
+    auto base  = candidates.size();
+    candidates.resize(base + n_set + n_b + n_r + n_g);
+    BeamState* out = candidates.data() + base;
+    std::size_t oi = 0;
+
     // SET palette color (control = 00)
-    for (std::size_t i = 0; i < pre.palette_lab.size(); ++i) {
+    for (std::size_t i = 0; i < n_set; ++i) {
         float err;
         if constexpr (M == HamMetric::srgb_mse) {
             err = score_srgb_mse(target_srgb, base_srgb[i]);
         } else {
             err = score_oklab2(target_lab, pre.palette_lab[i]);
         }
-        candidates.push_back({
+        out[oi++] = BeamState{
             base_srgb[i],
             prev_error + err,
             make_ham_value(0b00, static_cast<std::uint8_t>(i), data_bits),
             parent_idx,
-        });
+        };
     }
-
-    auto tbv = reduce_to_bits(target_srgb.b, data_bits);
-    auto trv = reduce_to_bits(target_srgb.r, data_bits);
-    auto tgv = reduce_to_bits(target_srgb.g, data_bits);
 
     // For OKLab² scoring we need linear-LMS partials of `prev` so we can
     // cheaply derive each modified output's OKLab. sRGB-MSE doesn't need
@@ -401,8 +422,6 @@ void expand_ham_t(
     }
 
     // MODIFY BLUE (control = 01) — focused around target
-    auto lo_b = std::max(0, static_cast<int>(tbv) - kModifyDpRadius);
-    auto hi_b = std::min(nmax, static_cast<int>(tbv) + kModifyDpRadius + 1);
     {
         [[maybe_unused]] color_space::f32x4 rg_lms;
         if constexpr (M == HamMetric::oklab2)
@@ -418,17 +437,15 @@ void expand_ham_t(
                     color_space::fast_cbrt4(rg_lms + lms_t[2][b8]));
                 err = score_oklab2(target_lab, lab);
             }
-            candidates.push_back({
+            out[oi++] = BeamState{
                 modified, prev_error + err,
                 make_ham_value(0b01, static_cast<std::uint8_t>(bv), data_bits),
                 parent_idx,
-            });
+            };
         }
     }
 
     // MODIFY RED (control = 10)
-    auto lo_r = std::max(0, static_cast<int>(trv) - kModifyDpRadius);
-    auto hi_r = std::min(nmax, static_cast<int>(trv) + kModifyDpRadius + 1);
     {
         [[maybe_unused]] color_space::f32x4 gb_lms;
         if constexpr (M == HamMetric::oklab2)
@@ -444,17 +461,15 @@ void expand_ham_t(
                     color_space::fast_cbrt4(lms_t[0][r8] + gb_lms));
                 err = score_oklab2(target_lab, lab);
             }
-            candidates.push_back({
+            out[oi++] = BeamState{
                 modified, prev_error + err,
                 make_ham_value(0b10, static_cast<std::uint8_t>(rv), data_bits),
                 parent_idx,
-            });
+            };
         }
     }
 
     // MODIFY GREEN (control = 11)
-    auto lo_g = std::max(0, static_cast<int>(tgv) - kModifyDpRadius);
-    auto hi_g = std::min(nmax, static_cast<int>(tgv) + kModifyDpRadius + 1);
     {
         [[maybe_unused]] color_space::f32x4 rb_lms;
         if constexpr (M == HamMetric::oklab2)
@@ -470,11 +485,11 @@ void expand_ham_t(
                     color_space::fast_cbrt4(rb_lms + lms_t[1][g8]));
                 err = score_oklab2(target_lab, lab);
             }
-            candidates.push_back({
+            out[oi++] = BeamState{
                 modified, prev_error + err,
                 make_ham_value(0b11, static_cast<std::uint8_t>(gv), data_bits),
                 parent_idx,
-            });
+            };
         }
     }
 }
@@ -761,7 +776,8 @@ void refine_triple_t(
     // Score matches expand_ham's metric (compile-time M) so this post-pass
     // re-ranks consistently with the beam DP's choice.
     auto op_error = [&](SRGBColor prev, std::uint8_t ham_value,
-                        OKLab target_lab, SRGBColor target_srgb)
+                        [[maybe_unused]] OKLab target_lab,
+                        [[maybe_unused]] SRGBColor target_srgb)
                         -> std::pair<float, SRGBColor> {
         auto [ctrl, data] = split_ham_value(ham_value, pre.data_bits);
         SRGBColor out = prev;

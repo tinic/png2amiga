@@ -19,7 +19,7 @@ namespace png2amiga::palette {
 // Amiga hardware stores R/G/B nibbles: 0xRGB
 // ---------------------------------------------------------------------------
 
-constexpr Color3f ocs_to_linear(std::uint16_t rgb12) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f ocs_to_linear(std::uint16_t rgb12) noexcept {
     auto r4 = static_cast<std::uint8_t>((rgb12 >> 8) & 0xF);
     auto g4 = static_cast<std::uint8_t>((rgb12 >> 4) & 0xF);
     auto b4 = static_cast<std::uint8_t>(rgb12 & 0xF);
@@ -124,7 +124,7 @@ constexpr AGA_HiLo linear_to_aga_hilo(Color3f color) noexcept {
 // Stored as 0x0RGB where each nibble is 0-7
 // ---------------------------------------------------------------------------
 
-constexpr Color3f stf_to_linear(std::uint16_t rgb9) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f stf_to_linear(std::uint16_t rgb9) noexcept {
     auto r3 = static_cast<std::uint8_t>((rgb9 >> 8) & 0x7);
     auto g3 = static_cast<std::uint8_t>((rgb9 >> 4) & 0x7);
     auto b3 = static_cast<std::uint8_t>(rgb9 & 0x7);
@@ -146,7 +146,7 @@ constexpr std::uint16_t linear_to_stf(Color3f color) noexcept {
     return static_cast<std::uint16_t>((r3 << 8) | (g3 << 4) | b3);
 }
 
-constexpr Color3f quantize_to_stf(Color3f color) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f quantize_to_stf(Color3f color) noexcept {
     return stf_to_linear(linear_to_stf(color));
 }
 
@@ -333,7 +333,7 @@ inline constexpr std::uint8_t cga_composite_pattern(std::uint8_t idx) noexcept {
 // matches our "snap color to 4 levels per channel" quantization goal.
 // ---------------------------------------------------------------------------
 
-constexpr Color3f ega_to_linear(std::uint8_t rgb6) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f ega_to_linear(std::uint8_t rgb6) noexcept {
     auto r2 = static_cast<std::uint8_t>((rgb6 >> 4) & 0x3);
     auto g2 = static_cast<std::uint8_t>((rgb6 >> 2) & 0x3);
     auto b2 = static_cast<std::uint8_t>(rgb6 & 0x3);
@@ -356,7 +356,7 @@ constexpr std::uint8_t linear_to_ega(Color3f color) noexcept {
     return static_cast<std::uint8_t>((r2 << 4) | (g2 << 2) | b2);
 }
 
-constexpr Color3f quantize_to_ega(Color3f color) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f quantize_to_ega(Color3f color) noexcept {
     return ega_to_linear(linear_to_ega(color));
 }
 
@@ -392,7 +392,7 @@ constexpr std::uint8_t ega_to_hw(std::uint8_t rrggbb) noexcept {
 // Stored in a uint32_t as 0x00RRGGBB where each byte is 0-63.
 // ---------------------------------------------------------------------------
 
-constexpr Color3f vga_to_linear(std::uint32_t rgb18) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f vga_to_linear(std::uint32_t rgb18) noexcept {
     auto r6 = static_cast<std::uint8_t>((rgb18 >> 16) & 0x3F);
     auto g6 = static_cast<std::uint8_t>((rgb18 >> 8) & 0x3F);
     auto b6 = static_cast<std::uint8_t>(rgb18 & 0x3F);
@@ -411,7 +411,7 @@ constexpr std::uint32_t linear_to_vga(Color3f color) noexcept {
     return (r6 << 16) | (g6 << 8) | b6;
 }
 
-constexpr Color3f quantize_to_vga(Color3f color) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f quantize_to_vga(Color3f color) noexcept {
     return vga_to_linear(linear_to_vga(color));
 }
 
@@ -420,7 +420,7 @@ constexpr Color3f quantize_to_vga(Color3f color) noexcept {
 // Stored as 0x00RRGGBB
 // ---------------------------------------------------------------------------
 
-constexpr Color3f aga_to_linear(std::uint32_t rgb24) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f aga_to_linear(std::uint32_t rgb24) noexcept {
     auto r = static_cast<std::uint8_t>((rgb24 >> 16) & 0xFF);
     auto g = static_cast<std::uint8_t>((rgb24 >> 8) & 0xFF);
     auto b = static_cast<std::uint8_t>(rgb24 & 0xFF);
@@ -439,7 +439,7 @@ constexpr std::uint32_t linear_to_aga(Color3f color) noexcept {
 // Quantize a Color3f to OCS 12-bit precision (snap to nearest OCS color)
 // ---------------------------------------------------------------------------
 
-constexpr Color3f quantize_to_ocs(Color3f color) noexcept {
+PNG2AMIGA_LUT_CONSTEXPR Color3f quantize_to_ocs(Color3f color) noexcept {
     return ocs_to_linear(linear_to_ocs(color));
 }
 

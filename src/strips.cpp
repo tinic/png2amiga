@@ -1351,7 +1351,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             Palette seed_pal = std::move(*q);
             for (auto& c : seed_pal.colors) c = palette::quantize_to_ocs(c);
             while (seed_pal.colors.size() < 32)
-                seed_pal.colors.emplace_back(0, 0, 0);
+                seed_pal.colors.emplace_back(0.0f, 0.0f, 0.0f);
             palette::refine_ehb_base_palette(
                 std::span<Color3f>(seed_pal.colors.data(), 32),
                 src.pixels(),
