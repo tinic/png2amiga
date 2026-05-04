@@ -147,6 +147,17 @@ inline double fma_dist_sq(double dx, double dy, double dz) noexcept {
     return std::fma(dx, dx, std::fma(dy, dy, dz * dz));
 }
 
+// 3-coefficient FMA dot product: c0*x0 + c1*x1 + c2*x2. Used by the OKLab
+// matrix-row computations (3 rows of 3 mul-adds each, twice over for
+// linear<->OKLab). Two std::fma calls + one mul = 3 ops vs the naive
+// 3 mul + 2 add = 5 ops; same throughput on FMA hardware but tighter
+// rounding and better port pressure.
+[[gnu::always_inline]]
+inline float fma_dot3(float c0, float x0, float c1, float x1,
+                      float c2, float x2) noexcept {
+    return std::fma(c0, x0, std::fma(c1, x1, c2 * x2));
+}
+
 
 // 4-lane cube root for OKLab LMS conversion (lane 3 is padding).
 //
@@ -352,6 +363,10 @@ inline f32x4 fast_cbrt4(f32x4 x) noexcept {
 }
 
 [[gnu::always_inline]]
+// Forward decl — definition below, after the f32x4 LMS LUT helpers.
+inline OKLab lms_cbrt_to_oklab(f32x4 lms_) noexcept;
+
+[[gnu::always_inline]]
 inline OKLab linear_to_oklab(Color3f c) noexcept {
     // LMS matrix applied as column-vec linear combinations of (r, g, b).
     // Pack LMS into a single f32x4 (lane 3 ignored) so the cbrt can SIMD.
@@ -359,12 +374,7 @@ inline OKLab linear_to_oklab(Color3f c) noexcept {
         f32x4{0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f} * c.r +
         f32x4{0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f} * c.g +
         f32x4{0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f} * c.b;
-    f32x4 lms_ = fast_cbrt4(lms);
-    return {
-        0.2104542553f * lms_[0] + 0.7936177850f * lms_[1] - 0.0040720468f * lms_[2],
-        1.9779984951f * lms_[0] - 2.4285922050f * lms_[1] + 0.4505937099f * lms_[2],
-        0.0259040371f * lms_[0] + 0.7827717662f * lms_[1] - 0.8086757660f * lms_[2],
-    };
+    return lms_cbrt_to_oklab(fast_cbrt4(lms));
 }
 
 // ---------------------------------------------------------------------------
@@ -415,9 +425,9 @@ inline f32x4 srgb8_to_lms(std::uint8_t r, std::uint8_t g,
 [[gnu::always_inline]]
 inline OKLab lms_cbrt_to_oklab(f32x4 lms_) noexcept {
     return {
-        0.2104542553f * lms_[0] + 0.7936177850f * lms_[1] - 0.0040720468f * lms_[2],
-        1.9779984951f * lms_[0] - 2.4285922050f * lms_[1] + 0.4505937099f * lms_[2],
-        0.0259040371f * lms_[0] + 0.7827717662f * lms_[1] - 0.8086757660f * lms_[2],
+        fma_dot3( 0.2104542553f, lms_[0],  0.7936177850f, lms_[1], -0.0040720468f, lms_[2]),
+        fma_dot3( 1.9779984951f, lms_[0], -2.4285922050f, lms_[1],  0.4505937099f, lms_[2]),
+        fma_dot3( 0.0259040371f, lms_[0],  0.7827717662f, lms_[1], -0.8086757660f, lms_[2]),
     };
 }
 
@@ -427,19 +437,23 @@ inline OKLab srgb8_to_oklab(std::uint8_t r, std::uint8_t g,
     return lms_cbrt_to_oklab(fast_cbrt4(srgb8_to_lms(r, g, b)));
 }
 
-constexpr Color3f oklab_to_linear(OKLab lab) noexcept {
-    float l_ = lab.L + 0.3963377774f * lab.a + 0.2158037573f * lab.b;
-    float m_ = lab.L - 0.1055613458f * lab.a - 0.0638541728f * lab.b;
-    float s_ = lab.L - 0.0894841775f * lab.a - 1.2914855480f * lab.b;
+inline Color3f oklab_to_linear(OKLab lab) noexcept {
+    // Inverse OKLab matrix: L + c1*a + c2*b shape, fold via nested fma.
+    float l_ = std::fma(0.3963377774f, lab.a,
+                std::fma(0.2158037573f, lab.b, lab.L));
+    float m_ = std::fma(-0.1055613458f, lab.a,
+                std::fma(-0.0638541728f, lab.b, lab.L));
+    float s_ = std::fma(-0.0894841775f, lab.a,
+                std::fma(-1.2914855480f, lab.b, lab.L));
 
     float l = l_ * l_ * l_;
     float m = m_ * m_ * m_;
     float s = s_ * s_ * s_;
 
     return {
-        +4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * s,
-        -1.2684380046f * l + 2.6097574011f * m - 0.3413193965f * s,
-        -0.0041960863f * l - 0.7034186147f * m + 1.7076147010f * s,
+        fma_dot3( 4.0767416621f, l, -3.3077115913f, m,  0.2309699292f, s),
+        fma_dot3(-1.2684380046f, l,  2.6097574011f, m, -0.3413193965f, s),
+        fma_dot3(-0.0041960863f, l, -0.7034186147f, m,  1.7076147010f, s),
     };
 }
 
