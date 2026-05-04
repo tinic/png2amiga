@@ -50,9 +50,10 @@ test('switching example image re-encodes the preview', async ({ page }) => {
   await secondExample.scrollIntoViewIfNeeded()
   await secondExample.click()
 
-  // Wait for the debounced re-convert (150 ms) + WASM work to land.
-  await page.waitForTimeout(2000)
-
-  const after = await canvas.evaluate(sample)
-  expect(after).not.toBe(before)
+  // Poll for the canvas to actually change. HAM6 cold-start on a CI
+  // runner can take well over 2 s; a fixed timeout was flaky.
+  await expect.poll(
+    () => canvas.evaluate(sample),
+    { timeout: 20_000, intervals: [200, 500, 1000] }
+  ).not.toBe(before)
 })
