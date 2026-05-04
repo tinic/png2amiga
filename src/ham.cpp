@@ -688,7 +688,15 @@ void prune_beam(std::vector<BeamState>& candidates,
         scratch[i].idx = static_cast<std::uint32_t>(i);
     }
 
-    std::partial_sort(
+    // nth_element vs partial_sort: AMDuProf showed the comparator
+    // lambda (heap-pop + partial_sort combined) consuming ~34 % of
+    // total CPU on HAM6+strips. Beam search keeps the top-K
+    // unordered — every downstream consumer scans the beam linearly
+    // for the min (see `min_element` at the end of encode_scanline_dp_t
+    // and the `last[j].cumulative_error` linear scan in refine_triple),
+    // so order-within-K isn't observed. nth_element is O(n) avg vs
+    // partial_sort's O(n log K).
+    std::nth_element(
         scratch.begin(),
         scratch.begin() + static_cast<std::ptrdiff_t>(beam_width),
         scratch.end(),
