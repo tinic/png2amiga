@@ -6117,7 +6117,8 @@ int main(int argc, char* argv[]) {
         // metric absorbs; measured 0.16% error reduction at 30s cost.
         // Skip the sweep for this mode and use the single-pass encode.
         auto res = cga_text::encode(dithered, config->mode, {}, text_pal,
-                                    fixed_offset, cga_metric);
+                                    fixed_offset, cga_metric,
+                                    make_cli_progress_reporter());
         if (!res) {
             std::println(stderr, "CGA text encode error: {}",
                          res.error().message);

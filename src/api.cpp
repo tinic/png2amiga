@@ -988,7 +988,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     dithered[x, y] = text_pal[dith_result.indices[y * image->width() + x]];
         }
         auto res = cga_text::encode(dithered, mode, {}, text_pal, -1,
-                                    cga_metric);
+                                    cga_metric, options.on_progress);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
 

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <mutex>
 #ifndef __EMSCRIPTEN__
 #include <thread>
 #endif
@@ -37,7 +38,8 @@ encode(const Image& image, amiga::Mode mode,
        std::span<const std::uint8_t> restrict_chars,
        std::span<const Color3f> palette16,
        int fixed_offset,
-       Metric metric) {
+       Metric metric,
+       ProgressCb on_progress) {
 
     if (!amiga::is_cga_text(mode)) {
         return std::unexpected{Error{
@@ -134,6 +136,16 @@ encode(const Image& image, amiga::Mode mode,
     }
     CgaTextResult best_result;
     best_result.total_error = std::numeric_limits<float>::infinity();
+
+    // Total per-cell work across all offset trials, used to drive the
+    // progress callback. Workers fetch_add a counter per cell finished;
+    // a mutex serialises the actual on_progress invocation so parallel
+    // jthreads don't race onto stdout.
+    std::size_t total_cells = (offset_end - offset_start) * cols * rows;
+    if (total_cells == 0) total_cells = 1;
+    std::atomic<std::size_t> cells_done_global{0};
+    std::mutex progress_mu;
+    if (on_progress) on_progress(0.0f, "cga-text");
 
     for (std::size_t offset = offset_start; offset < offset_end; ++offset) {
         // Dedupe candidate glyphs by their cell-h scanline pattern. Many
@@ -411,6 +423,21 @@ encode(const Image& image, amiga::Mode mode,
             double old = atomic_err.load(std::memory_order_relaxed);
             while (!atomic_err.compare_exchange_weak(
                 old, old + static_cast<double>(pick.err))) {}
+            if (on_progress) {
+                auto done = cells_done_global.fetch_add(1) + 1;
+                // Throttle: every ~1% of total work, take the mutex
+                // and fire the callback. Keeps the bar moving without
+                // contention from N parallel jthreads.
+                std::size_t throttle = std::max<std::size_t>(
+                    1, total_cells / 100);
+                if ((done % throttle) == 0 || done == total_cells) {
+                    std::lock_guard<std::mutex> lk(progress_mu);
+                    on_progress(
+                        static_cast<float>(done) /
+                            static_cast<float>(total_cells),
+                        "cga-text");
+                }
+            }
         }
     };
 #ifdef __EMSCRIPTEN__
@@ -429,6 +456,7 @@ encode(const Image& image, amiga::Mode mode,
         best_result = std::move(result);
     }
     }  // end scanline-offset loop
+    if (on_progress) on_progress(1.0f, "done");
     return best_result;
 }
 

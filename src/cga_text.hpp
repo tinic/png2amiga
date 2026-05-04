@@ -6,10 +6,18 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::cga_text {
+
+// Progress callback. fraction ∈ [0, 1]; stage is a short label
+// ("cga-text" during the per-cell brute force, "done" on terminal
+// tick). Pass `{}` / nullptr to silence.
+using ProgressCb =
+    std::function<void(float fraction, std::string_view stage_name)>;
 
 // Per-cell error metric driving the brute-force glyph + (fg, bg) search.
 //
@@ -80,7 +88,8 @@ encode(const Image& image, amiga::Mode mode,
                                      //       target hardware can't shift ROM font —
                                      //       e.g. CGA, which has no custom-font
                                      //       slot like EGA/VGA).
-       Metric metric = Metric::blur);// see Metric enum above.
+       Metric metric = Metric::blur, // see Metric enum above.
+       ProgressCb on_progress = nullptr);
 
 // Render a CgaTextResult back to an RGB image for preview.
 Image render(const CgaTextResult& r);
