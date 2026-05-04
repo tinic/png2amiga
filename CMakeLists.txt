@@ -179,6 +179,20 @@ else()
         # target_link_libraries (not CMAKE_EXE_LINKER_FLAGS, which is positioned
         # before objects and won't pull any symbols from a static archive).
         target_link_libraries(png2amiga PRIVATE -lstdc++exp)
+        # Default Windows thread stack reserve is 1 MB (PE header
+        # SizeOfStackReserve, used by CreateThread when dwStackSize=0).
+        # std::thread / std::jthread go through CreateThread, so HAM's
+        # parallel encoders inherit that 1 MB. Linux gives 8 MB by
+        # default — bump to match. The HAM ctests on UCRT64 were all
+        # exiting 0xc0000374 (STATUS_HEAP_CORRUPTION) which is the
+        # classic symptom of a thread stack overflow scribbling into
+        # heap metadata.
+        target_link_options(png2amiga PRIVATE -Wl,--stack,8388608)
+    endif()
+    if(MSVC)
+        # Same rationale as the MinGW --stack bump above. /STACK sets
+        # SizeOfStackReserve in the PE header.
+        target_link_options(png2amiga PRIVATE /STACK:8388608)
     endif()
 
     enable_testing()
