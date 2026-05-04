@@ -188,13 +188,20 @@ const FIXED_CHIPSETS = new Set<Chipset>(
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
   if (FIXED_CHIPSETS.has(chipset)) return ALL_MODES.filter(m => m.chipset === chipset)
-  // Amiga (ocs / aga): mix of ocs-only modes plus aga-only when chipset is aga.
+  // OCS-tied modes that should be hidden when chipset == aga:
+  //   - EHB: 32 base + hardware half-brite generator is OCS-only,
+  //     output is OCS-quantised regardless of chipset.
+  //   - HAM6: canonical OCS HAM (12-bit base + 4-bit MODIFY); on AGA
+  //     HAM8 (24-bit base + 6-bit MODIFY) is strictly better, so the
+  //     HAM6 variants just clutter the AGA picker with inferior
+  //     choices.
+  const HIDE_ON_AGA = new Set([
+    'ehb', 'ehb-lace',
+    'ham6', 'ham6-lace', 'ham6-hires', 'ham6-hires-lace',
+  ])
   return ALL_MODES.filter(m => {
     if (FIXED_CHIPSETS.has(m.chipset)) return false
-    // EHB is fundamentally an OCS feature (32 base + 32 hardware halve).
-    // It runs on AGA hardware but the half-brite generator is OCS-tied,
-    // so the result is OCS-quantised regardless of chipset.
-    if (chipset === 'aga' && (m.value === 'ehb' || m.value === 'ehb-lace')) return false
+    if (chipset === 'aga' && HIDE_ON_AGA.has(m.value)) return false
     return chipset === 'aga' || m.chipset === 'ocs'
   })
 }
