@@ -89,11 +89,22 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
 //   value (control<<data_bits | data), the actual output sRGB colour,
 //   and OKLab² error.
 // ---------------------------------------------------------------------------
+// Padded to 4 bytes. The natural 3-byte layout caused a store-to-load
+// forwarding stall in expand_ham_t's SET loop: `out[oi] = BeamState{
+// base_srgb[i], …}` compiled to a 2-byte + 1-byte store into a stack
+// temp followed by a 4-byte read back — store-buffer can't forward
+// mismatched-width writes. AMDuProf attributed ~9.6s (of 14s total)
+// to that single 4-byte mov. With explicit pad, the read of
+// base_srgb[i] and the write to out[oi].color are both single 4-byte
+// movs, so no round-trip via stack and no SLF stall.
 struct SRGBColor {
     std::uint8_t r{};
     std::uint8_t g{};
     std::uint8_t b{};
-    bool operator==(const SRGBColor&) const = default;
+    std::uint8_t _pad{};
+    bool operator==(const SRGBColor& other) const noexcept {
+        return r == other.r && g == other.g && b == other.b;
+    }
 };
 
 struct HamPixelResult {

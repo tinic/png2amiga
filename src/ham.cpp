@@ -421,75 +421,107 @@ void expand_ham_t(
         lms_prev_b = lms_t[2][prev.b];
     }
 
-    // MODIFY BLUE (control = 01) — focused around target
+    // MODIFY BLUE / RED / GREEN: each loop has two channels constant
+    // (the `prev.*` values that don't change in this op) and one varying
+    // channel. Pre-packing the constant channels into the low 16 bits of
+    // a uint32 and OR-ing the varying byte at runtime lets us memcpy a
+    // single 4-byte color slot into `out[oi].color` per iteration —
+    // avoiding the stack-temp + narrow-stores + 4-byte-readback that
+    // produced the SLF stall on the per-iter BeamState write
+    // (~3.9-4.2s/branch in profile). The pad byte is left as 0 from the
+    // BeamState default construction in candidates.resize().
+
+    // MODIFY BLUE (control = 01) — varying byte at offset 16
     {
         [[maybe_unused]] color_space::f32x4 rg_lms;
         if constexpr (M == HamMetric::oklab2)
             rg_lms = lms_prev_r + lms_prev_g;
+        const std::uint32_t prev_rg_pack =
+            static_cast<std::uint32_t>(prev.r) |
+            (static_cast<std::uint32_t>(prev.g) << 8);
+        const std::uint8_t  ham_op = make_ham_value(
+            0b01, 0, data_bits);  // op-only; data bits OR'd per iter
         for (int bv = lo_b; bv < hi_b; ++bv) {
             auto b8 = pre.expand_lut[static_cast<std::size_t>(bv)];
-            SRGBColor modified{prev.r, prev.g, b8};
             float err;
             if constexpr (M == HamMetric::srgb_mse) {
+                SRGBColor modified{prev.r, prev.g, b8};
                 err = score_srgb_mse(target_srgb, modified);
             } else {
                 auto lab = color_space::lms_cbrt_to_oklab(
                     color_space::fast_cbrt4(rg_lms + lms_t[2][b8]));
                 err = score_oklab2(target_lab, lab);
             }
-            out[oi++] = BeamState{
-                modified, prev_error + err,
-                make_ham_value(0b01, static_cast<std::uint8_t>(bv), data_bits),
-                parent_idx,
-            };
+            const std::uint32_t color_raw = prev_rg_pack |
+                (static_cast<std::uint32_t>(b8) << 16);
+            std::memcpy(&out[oi].color, &color_raw, sizeof(color_raw));
+            out[oi].cumulative_error = prev_error + err;
+            out[oi].ham_value = static_cast<std::uint8_t>(
+                ham_op | static_cast<std::uint8_t>(bv));
+            out[oi].parent_idx = parent_idx;
+            ++oi;
         }
     }
 
-    // MODIFY RED (control = 10)
+    // MODIFY RED (control = 10) — varying byte at offset 0
     {
         [[maybe_unused]] color_space::f32x4 gb_lms;
         if constexpr (M == HamMetric::oklab2)
             gb_lms = lms_prev_g + lms_prev_b;
+        const std::uint32_t prev_gb_pack =
+            (static_cast<std::uint32_t>(prev.g) << 8) |
+            (static_cast<std::uint32_t>(prev.b) << 16);
+        const std::uint8_t  ham_op = make_ham_value(0b10, 0, data_bits);
         for (int rv = lo_r; rv < hi_r; ++rv) {
             auto r8 = pre.expand_lut[static_cast<std::size_t>(rv)];
-            SRGBColor modified{r8, prev.g, prev.b};
             float err;
             if constexpr (M == HamMetric::srgb_mse) {
+                SRGBColor modified{r8, prev.g, prev.b};
                 err = score_srgb_mse(target_srgb, modified);
             } else {
                 auto lab = color_space::lms_cbrt_to_oklab(
                     color_space::fast_cbrt4(lms_t[0][r8] + gb_lms));
                 err = score_oklab2(target_lab, lab);
             }
-            out[oi++] = BeamState{
-                modified, prev_error + err,
-                make_ham_value(0b10, static_cast<std::uint8_t>(rv), data_bits),
-                parent_idx,
-            };
+            const std::uint32_t color_raw = prev_gb_pack |
+                static_cast<std::uint32_t>(r8);
+            std::memcpy(&out[oi].color, &color_raw, sizeof(color_raw));
+            out[oi].cumulative_error = prev_error + err;
+            out[oi].ham_value = static_cast<std::uint8_t>(
+                ham_op | static_cast<std::uint8_t>(rv));
+            out[oi].parent_idx = parent_idx;
+            ++oi;
         }
     }
 
-    // MODIFY GREEN (control = 11)
+    // MODIFY GREEN (control = 11) — varying byte at offset 8
     {
         [[maybe_unused]] color_space::f32x4 rb_lms;
         if constexpr (M == HamMetric::oklab2)
             rb_lms = lms_prev_r + lms_prev_b;
+        const std::uint32_t prev_rb_pack =
+            static_cast<std::uint32_t>(prev.r) |
+            (static_cast<std::uint32_t>(prev.b) << 16);
+        const std::uint8_t  ham_op = make_ham_value(0b11, 0, data_bits);
         for (int gv = lo_g; gv < hi_g; ++gv) {
             auto g8 = pre.expand_lut[static_cast<std::size_t>(gv)];
-            SRGBColor modified{prev.r, g8, prev.b};
             float err;
             if constexpr (M == HamMetric::srgb_mse) {
+                SRGBColor modified{prev.r, g8, prev.b};
                 err = score_srgb_mse(target_srgb, modified);
             } else {
                 auto lab = color_space::lms_cbrt_to_oklab(
                     color_space::fast_cbrt4(rb_lms + lms_t[1][g8]));
                 err = score_oklab2(target_lab, lab);
             }
-            out[oi++] = BeamState{
-                modified, prev_error + err,
-                make_ham_value(0b11, static_cast<std::uint8_t>(gv), data_bits),
-                parent_idx,
-            };
+            const std::uint32_t color_raw = prev_rb_pack |
+                (static_cast<std::uint32_t>(g8) << 8);
+            std::memcpy(&out[oi].color, &color_raw, sizeof(color_raw));
+            out[oi].cumulative_error = prev_error + err;
+            out[oi].ham_value = static_cast<std::uint8_t>(
+                ham_op | static_cast<std::uint8_t>(gv));
+            out[oi].parent_idx = parent_idx;
+            ++oi;
         }
     }
 }
