@@ -29,8 +29,29 @@
 #include <span>
 #include <vector>
 
-#if defined(__AVX2__)
-#include <immintrin.h>
+// SIMD backend selection — mirrors quantize.cpp / ssimulacra2.cpp.
+// AVX2 (256-bit, 8 lanes) wins for x86_64 release builds; NEON (128-bit,
+// 4 lanes) and WASM SIMD (128-bit, 4 lanes, no native FMA) cover Apple
+// Silicon and the web build. Scalar fallback covers everything else.
+#if defined(__wasm_simd128__)
+    #include <wasm_simd128.h>
+    #define PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD 1
+    #define PNG2AMIGA_STRIPS_BACKEND_AVX2      0
+    #define PNG2AMIGA_STRIPS_BACKEND_NEON      0
+#elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define PNG2AMIGA_STRIPS_BACKEND_AVX2      1
+    #define PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD 0
+    #define PNG2AMIGA_STRIPS_BACKEND_NEON      0
+#elif defined(__ARM_NEON) || defined(__aarch64__) || defined(_M_ARM64)
+    #include <arm_neon.h>
+    #define PNG2AMIGA_STRIPS_BACKEND_NEON      1
+    #define PNG2AMIGA_STRIPS_BACKEND_AVX2      0
+    #define PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD 0
+#else
+    #define PNG2AMIGA_STRIPS_BACKEND_AVX2      0
+    #define PNG2AMIGA_STRIPS_BACKEND_NEON      0
+    #define PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD 0
 #endif
 
 namespace png2amiga::strips {
@@ -77,7 +98,7 @@ inline void build_strip_soa(StripPixelsSoA& soa,
 inline void min_dist_update(const StripPixelsSoA& soa,
                             float cL, float ca, float cb,
                             float* pixel_min) noexcept {
-#if defined(__AVX2__)
+#if PNG2AMIGA_STRIPS_BACKEND_AVX2
     __m256 vcL = _mm256_set1_ps(cL);
     __m256 vca = _mm256_set1_ps(ca);
     __m256 vcb = _mm256_set1_ps(cb);
@@ -90,6 +111,37 @@ inline void min_dist_update(const StripPixelsSoA& soa,
                             _mm256_mul_ps(db, db)));
         __m256 cur = _mm256_loadu_ps(pixel_min + i);
         _mm256_storeu_ps(pixel_min + i, _mm256_min_ps(cur, d));
+    }
+#elif PNG2AMIGA_STRIPS_BACKEND_NEON
+    float32x4_t vcL = vdupq_n_f32(cL);
+    float32x4_t vca = vdupq_n_f32(ca);
+    float32x4_t vcb = vdupq_n_f32(cb);
+    // padded_n is a multiple of 8 → also a multiple of 4, so the 4-lane
+    // step is exact. FMA chain order matches the AVX2 path.
+    for (std::size_t i = 0; i < soa.padded_n; i += 4) {
+        float32x4_t dL = vsubq_f32(vld1q_f32(&soa.L[i]), vcL);
+        float32x4_t da = vsubq_f32(vld1q_f32(&soa.a[i]), vca);
+        float32x4_t db = vsubq_f32(vld1q_f32(&soa.b[i]), vcb);
+        float32x4_t d  = vmulq_f32(db, db);
+        d = vfmaq_f32(d, da, da);
+        d = vfmaq_f32(d, dL, dL);
+        float32x4_t cur = vld1q_f32(pixel_min + i);
+        vst1q_f32(pixel_min + i, vminq_f32(cur, d));
+    }
+#elif PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD
+    v128_t vcL = wasm_f32x4_splat(cL);
+    v128_t vca = wasm_f32x4_splat(ca);
+    v128_t vcb = wasm_f32x4_splat(cb);
+    for (std::size_t i = 0; i < soa.padded_n; i += 4) {
+        v128_t dL = wasm_f32x4_sub(wasm_v128_load(&soa.L[i]), vcL);
+        v128_t da = wasm_f32x4_sub(wasm_v128_load(&soa.a[i]), vca);
+        v128_t db = wasm_f32x4_sub(wasm_v128_load(&soa.b[i]), vcb);
+        // No native FMA in wasm-simd128 core spec — separate mul+add.
+        v128_t d  = wasm_f32x4_add(
+            wasm_f32x4_mul(dL, dL),
+            wasm_f32x4_add(wasm_f32x4_mul(da, da), wasm_f32x4_mul(db, db)));
+        v128_t cur = wasm_v128_load(pixel_min + i);
+        wasm_v128_store(pixel_min + i, wasm_f32x4_min(cur, d));
     }
 #else
     for (std::size_t i = 0; i < soa.valid_n; ++i) {
@@ -109,7 +161,7 @@ inline double dist_min2_sum(const StripPixelsSoA& soa,
                             const float* pixel_min_excl,
                             float bL, float ba, float bb,
                             float hL, float ha, float hb) noexcept {
-#if defined(__AVX2__)
+#if PNG2AMIGA_STRIPS_BACKEND_AVX2
     __m256 vbL = _mm256_set1_ps(bL); __m256 vba = _mm256_set1_ps(ba);
     __m256 vbb = _mm256_set1_ps(bb);
     __m256 vhL = _mm256_set1_ps(hL); __m256 vha = _mm256_set1_ps(ha);
@@ -141,6 +193,66 @@ inline double dist_min2_sum(const StripPixelsSoA& soa,
     sum = _mm_hadd_ps(sum, sum);
     sum = _mm_hadd_ps(sum, sum);
     return static_cast<double>(_mm_cvtss_f32(sum));
+#elif PNG2AMIGA_STRIPS_BACKEND_NEON
+    float32x4_t vbL = vdupq_n_f32(bL); float32x4_t vba = vdupq_n_f32(ba);
+    float32x4_t vbb = vdupq_n_f32(bb);
+    float32x4_t vhL = vdupq_n_f32(hL); float32x4_t vha = vdupq_n_f32(ha);
+    float32x4_t vhb = vdupq_n_f32(hb);
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    for (std::size_t i = 0; i < soa.padded_n; i += 4) {
+        float32x4_t pL = vld1q_f32(&soa.L[i]);
+        float32x4_t pa = vld1q_f32(&soa.a[i]);
+        float32x4_t pb = vld1q_f32(&soa.b[i]);
+        float32x4_t cur = vld1q_f32(pixel_min_excl + i);
+        // base candidate
+        float32x4_t dL = vsubq_f32(pL, vbL);
+        float32x4_t da = vsubq_f32(pa, vba);
+        float32x4_t db = vsubq_f32(pb, vbb);
+        float32x4_t d = vmulq_f32(db, db);
+        d = vfmaq_f32(d, da, da);
+        d = vfmaq_f32(d, dL, dL);
+        cur = vminq_f32(cur, d);
+        // halfbrite mirror
+        dL = vsubq_f32(pL, vhL); da = vsubq_f32(pa, vha); db = vsubq_f32(pb, vhb);
+        d = vmulq_f32(db, db);
+        d = vfmaq_f32(d, da, da);
+        d = vfmaq_f32(d, dL, dL);
+        cur = vminq_f32(cur, d);
+        acc = vaddq_f32(acc, cur);
+    }
+    return static_cast<double>(vaddvq_f32(acc));
+#elif PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD
+    v128_t vbL = wasm_f32x4_splat(bL); v128_t vba = wasm_f32x4_splat(ba);
+    v128_t vbb = wasm_f32x4_splat(bb);
+    v128_t vhL = wasm_f32x4_splat(hL); v128_t vha = wasm_f32x4_splat(ha);
+    v128_t vhb = wasm_f32x4_splat(hb);
+    v128_t acc = wasm_f32x4_const_splat(0.0f);
+    for (std::size_t i = 0; i < soa.padded_n; i += 4) {
+        v128_t pL = wasm_v128_load(&soa.L[i]);
+        v128_t pa = wasm_v128_load(&soa.a[i]);
+        v128_t pb = wasm_v128_load(&soa.b[i]);
+        v128_t cur = wasm_v128_load(pixel_min_excl + i);
+        v128_t dL = wasm_f32x4_sub(pL, vbL);
+        v128_t da = wasm_f32x4_sub(pa, vba);
+        v128_t db = wasm_f32x4_sub(pb, vbb);
+        v128_t d  = wasm_f32x4_add(
+            wasm_f32x4_mul(dL, dL),
+            wasm_f32x4_add(wasm_f32x4_mul(da, da), wasm_f32x4_mul(db, db)));
+        cur = wasm_f32x4_min(cur, d);
+        dL = wasm_f32x4_sub(pL, vhL);
+        da = wasm_f32x4_sub(pa, vha);
+        db = wasm_f32x4_sub(pb, vhb);
+        d = wasm_f32x4_add(
+            wasm_f32x4_mul(dL, dL),
+            wasm_f32x4_add(wasm_f32x4_mul(da, da), wasm_f32x4_mul(db, db)));
+        cur = wasm_f32x4_min(cur, d);
+        acc = wasm_f32x4_add(acc, cur);
+    }
+    float h = wasm_f32x4_extract_lane(acc, 0)
+            + wasm_f32x4_extract_lane(acc, 1)
+            + wasm_f32x4_extract_lane(acc, 2)
+            + wasm_f32x4_extract_lane(acc, 3);
+    return static_cast<double>(h);
 #else
     double e = 0;
     for (std::size_t i = 0; i < soa.valid_n; ++i) {
@@ -163,7 +275,7 @@ inline double dist_min2_sum(const StripPixelsSoA& soa,
 inline double dist_min1_sum(const StripPixelsSoA& soa,
                             const float* pixel_min_excl,
                             float cL, float ca, float cb) noexcept {
-#if defined(__AVX2__)
+#if PNG2AMIGA_STRIPS_BACKEND_AVX2
     __m256 vcL = _mm256_set1_ps(cL); __m256 vca = _mm256_set1_ps(ca);
     __m256 vcb = _mm256_set1_ps(cb);
     __m256 acc = _mm256_setzero_ps();
@@ -182,6 +294,42 @@ inline double dist_min1_sum(const StripPixelsSoA& soa,
     sum = _mm_hadd_ps(sum, sum);
     sum = _mm_hadd_ps(sum, sum);
     return static_cast<double>(_mm_cvtss_f32(sum));
+#elif PNG2AMIGA_STRIPS_BACKEND_NEON
+    float32x4_t vcL = vdupq_n_f32(cL);
+    float32x4_t vca = vdupq_n_f32(ca);
+    float32x4_t vcb = vdupq_n_f32(cb);
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    for (std::size_t i = 0; i < soa.padded_n; i += 4) {
+        float32x4_t dL = vsubq_f32(vld1q_f32(&soa.L[i]), vcL);
+        float32x4_t da = vsubq_f32(vld1q_f32(&soa.a[i]), vca);
+        float32x4_t db = vsubq_f32(vld1q_f32(&soa.b[i]), vcb);
+        float32x4_t d = vmulq_f32(db, db);
+        d = vfmaq_f32(d, da, da);
+        d = vfmaq_f32(d, dL, dL);
+        float32x4_t cur = vld1q_f32(pixel_min_excl + i);
+        acc = vaddq_f32(acc, vminq_f32(cur, d));
+    }
+    return static_cast<double>(vaddvq_f32(acc));
+#elif PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD
+    v128_t vcL = wasm_f32x4_splat(cL);
+    v128_t vca = wasm_f32x4_splat(ca);
+    v128_t vcb = wasm_f32x4_splat(cb);
+    v128_t acc = wasm_f32x4_const_splat(0.0f);
+    for (std::size_t i = 0; i < soa.padded_n; i += 4) {
+        v128_t dL = wasm_f32x4_sub(wasm_v128_load(&soa.L[i]), vcL);
+        v128_t da = wasm_f32x4_sub(wasm_v128_load(&soa.a[i]), vca);
+        v128_t db = wasm_f32x4_sub(wasm_v128_load(&soa.b[i]), vcb);
+        v128_t d  = wasm_f32x4_add(
+            wasm_f32x4_mul(dL, dL),
+            wasm_f32x4_add(wasm_f32x4_mul(da, da), wasm_f32x4_mul(db, db)));
+        v128_t cur = wasm_v128_load(pixel_min_excl + i);
+        acc = wasm_f32x4_add(acc, wasm_f32x4_min(cur, d));
+    }
+    float h = wasm_f32x4_extract_lane(acc, 0)
+            + wasm_f32x4_extract_lane(acc, 1)
+            + wasm_f32x4_extract_lane(acc, 2)
+            + wasm_f32x4_extract_lane(acc, 3);
+    return static_cast<double>(h);
 #else
     double e = 0;
     for (std::size_t i = 0; i < soa.valid_n; ++i) {
@@ -200,7 +348,7 @@ inline double dist_min1_sum(const StripPixelsSoA& soa,
 [[gnu::always_inline]]
 inline double sum_pixel_min(const float* pixel_min,
                             std::size_t padded_n) noexcept {
-#if defined(__AVX2__)
+#if PNG2AMIGA_STRIPS_BACKEND_AVX2
     __m256 acc = _mm256_setzero_ps();
     for (std::size_t i = 0; i < padded_n; i += 8) {
         acc = _mm256_add_ps(acc, _mm256_loadu_ps(pixel_min + i));
@@ -211,6 +359,22 @@ inline double sum_pixel_min(const float* pixel_min,
     sum = _mm_hadd_ps(sum, sum);
     sum = _mm_hadd_ps(sum, sum);
     return static_cast<double>(_mm_cvtss_f32(sum));
+#elif PNG2AMIGA_STRIPS_BACKEND_NEON
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    for (std::size_t i = 0; i < padded_n; i += 4) {
+        acc = vaddq_f32(acc, vld1q_f32(pixel_min + i));
+    }
+    return static_cast<double>(vaddvq_f32(acc));
+#elif PNG2AMIGA_STRIPS_BACKEND_WASM_SIMD
+    v128_t acc = wasm_f32x4_const_splat(0.0f);
+    for (std::size_t i = 0; i < padded_n; i += 4) {
+        acc = wasm_f32x4_add(acc, wasm_v128_load(pixel_min + i));
+    }
+    float h = wasm_f32x4_extract_lane(acc, 0)
+            + wasm_f32x4_extract_lane(acc, 1)
+            + wasm_f32x4_extract_lane(acc, 2)
+            + wasm_f32x4_extract_lane(acc, 3);
+    return static_cast<double>(h);
 #else
     double e = 0;
     for (std::size_t i = 0; i < padded_n; ++i)
