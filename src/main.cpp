@@ -3361,8 +3361,8 @@ FadeJointResult fade_joint_kmeans(const Image& source,
     FadeJointResult result;
     result.indices = std::move(assignments);
     result.palette_source.resize(k_palette);
-    result.palette_targets.assign(targets.size(),
-                                  std::vector<Color3f>(k_palette));
+    result.palette_targets = std::vector<std::vector<Color3f>>(
+        targets.size(), std::vector<Color3f>(k_palette));
     for (std::size_t k = 0; k < k_palette; ++k) {
         color_space::OKLab src_lab{
             centroids[k * n_dim + 0],
@@ -3579,8 +3579,8 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
     FadeJointResult result;
     result.indices = std::move(assignments);
     result.palette_source.resize(k_eff);
-    result.palette_targets.assign(targets.size(),
-                                  std::vector<Color3f>(k_eff));
+    result.palette_targets = std::vector<std::vector<Color3f>>(
+        targets.size(), std::vector<Color3f>(k_eff));
     auto build_pal = [&](std::vector<Color3f>& pal, std::size_t axis) {
         for (std::size_t k = 0; k < k_base; ++k) {
             // Snap base to OCS gamut so the encoded palette matches what
@@ -8164,8 +8164,12 @@ int main(int argc, char* argv[]) {
                                               : Color3f{0.0f, 0.0f, 0.0f};
                 }
                 auto path = std::format("{}/frame_{:03}.png", dump_dir, f);
-                save_preview(path, frame, false, {}, config->mode,
-                             config->hires, config->interlace);
+                if (auto r = save_preview(path, frame, false, {}, config->mode,
+                                          config->hires, config->interlace);
+                    !r) {
+                    std::println(stderr, "[fade-dump] failed to write {}: {}",
+                                 path, r.error().message);
+                }
             }
             std::println(stderr, "[fade-dump] wrote {} frames to {}",
                          fade_sequence.size(), dump_dir);
