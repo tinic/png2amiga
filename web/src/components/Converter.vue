@@ -2599,6 +2599,16 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   right: 2.4rem;
 }
 
+/* PrimeVue's Aura ProgressBar defaults to a 1s ease-in-out CSS
+   `transition: width 1s` on .p-progressbar-value. Encoder progress
+   ticks fire ~once per cell, so the visible fill always lags the
+   percentage label (you can see "50%" while the bar is still around
+   ~10% wide). Override with a much shorter transition so the fill
+   tracks the value updates in real time. */
+:deep(.p-progressbar-determinate .p-progressbar-value) {
+  transition: width 0.12s linear !important;
+}
+
 .stop-btn {
   flex: 0 0 auto;
   width: 1.75rem;
