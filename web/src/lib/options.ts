@@ -493,7 +493,7 @@ export function defaultOptions(): Options {
     nativePar: false,
     // Advanced
     lockColor0: true,
-    paletteDiversity: 0,
+    paletteDiversity: 4,
     // Dual playfield: encode image into PF2 (upper color regs 8-15 OCS /
     // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3
     // (OCS) or 4 (AGA). CAMG DBLPF flag set.

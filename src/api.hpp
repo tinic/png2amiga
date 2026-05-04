@@ -141,7 +141,7 @@ struct Options {
     // Palette
     std::string palette_file;           // load palette from file (empty = auto)
     std::vector<std::uint8_t> palette_data; // inline palette data (empty = auto)
-    int palette_diversity = 0;          // 0 = off, 1-5 = remove near-duplicate
+    int palette_diversity = 4;          // 0 = off, 1-5 = remove near-duplicate
                                         // colors, re-seed from worst-served pixels
     std::string quantizer;              // "", "auto" = auto-select, or
                                         // "median-cut", "ocs-bruteforce", "pnn"

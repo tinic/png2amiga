@@ -590,7 +590,7 @@ struct Config {
     // Palette diversity (ham_convert-style). 0 = off, 1-5 = progressively
     // aggressive removal of near-duplicate palette entries, re-seeded from
     // poorly-served image regions.
-    int palette_diversity = 0;
+    int palette_diversity = 4;
 
     // Quantizer selection (empty = auto: OCS brute-force for OCS, median-cut
     // for AGA). "pnn" uses Pairwise Nearest Neighbor (experimental).

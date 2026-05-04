@@ -306,7 +306,13 @@ std::optional<T> best_sweep(
     std::vector<Trial> trials;
     trials.push_back({base_settings, base_diversity, 0});  // baseline
     const float strengths[] = { 0.7f, 0.85f, 1.0f, 1.15f, 1.3f };
-    const int diversities[] = { 0, 1, 2, 3 };
+    // {3, 4} only — a 32-image × 8-depth × 7-diversity sweep on
+    // test-suite-lores + examples confirmed d∈{0,1,2} never wins on
+    // mean SSIMULACRA2 at any depth. d=4 is the per-depth peak from
+    // depth 4 upward; d=3 stays in the sweep so individual images that
+    // happen to favour a slightly less aggressive reseed still get
+    // sampled. Trims --best trial count by 2× over the previous {0..3}.
+    const int diversities[] = { 3, 4 };
     for (auto s : strengths) {
         for (auto div : diversities) {
             for (int js = 0; js < jitter_count; ++js) {
