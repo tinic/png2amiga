@@ -2437,7 +2437,7 @@ Palette ega_histogram_quantize_inline(const Image& image, std::size_t K) {
                 if (p == i) { min_d = 0; break; }
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[p];
                 double dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                double d = dL*dL + da*da + db*db;
+                double d = color_space::fma_dist_sq(dL, da, db);
                 if (d < min_d) min_d = d;
             }
             score[i] = static_cast<double>(hist[i]) * min_d;
@@ -2469,7 +2469,7 @@ Palette ega_histogram_quantize_inline(const Image& image, std::size_t K) {
             for (std::size_t k = 0; k < picked.size(); ++k) {
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[picked[k]];
                 float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                float d = dL*dL + da*da + db*db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best_k = k; }
             }
             auto w = static_cast<double>(hist[i]);
@@ -2509,7 +2509,7 @@ Palette ega_histogram_quantize_inline(const Image& image, std::size_t K) {
                 if (taken[g]) continue;
                 auto& gl = gamut_lab[g];
                 float dL = cent.L - gl.L, da = cent.a - gl.a, db = cent.b - gl.b;
-                float d = dL*dL + da*da + db*db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best = static_cast<std::uint8_t>(g); }
             }
             new_picked[k] = best;
@@ -3548,9 +3548,9 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
                     auto& b = base_lab[k * n_axes + a];
                     auto& h = hb_lab[k * n_axes + a];
                     auto dl = p.L - b.L, da = p.a - b.a, db = p.b - b.b;
-                    d_base += dl * dl + da * da + db * db;
+                    d_base += color_space::fma_dist_sq(dl, da, db);
                     auto dlh = p.L - h.L, dah = p.a - h.a, dbh = p.b - h.b;
-                    d_hb += dlh * dlh + dah * dah + dbh * dbh;
+                    d_hb += color_space::fma_dist_sq(dlh, dah, dbh);
                 }
                 if (d_base < best_d) { best_d = d_base; best_slot = static_cast<std::uint8_t>(k); }
                 if (d_hb   < best_d) { best_d = d_hb;   best_slot = static_cast<std::uint8_t>(k + k_base); }
@@ -3711,14 +3711,14 @@ std::vector<std::uint8_t> fade_joint_dither(
             auto dl = src_target.L - sp.L;
             auto da = src_target.a - sp.a;
             auto db = src_target.b - sp.b;
-            float cost = dl * dl + da * da + db * db;
+            float cost = color_space::fma_dist_sq(dl, da, db);
             for (std::size_t t = 0; t < T; ++t) {
                 auto& p = pal_tgt_lab[t][k];
                 auto& c = tgt_cur_lab[t];
                 auto dlt = c.L - p.L;
                 auto dat = c.a - p.a;
                 auto dbt = c.b - p.b;
-                cost += dlt * dlt + dat * dat + dbt * dbt;
+                cost += color_space::fma_dist_sq(dlt, dat, dbt);
             }
             if (cost < best_cost) {
                 best_cost = cost;
@@ -7802,7 +7802,7 @@ int run_main(int argc, char* argv[]) {
                                 float dL = lab.L - pl.L;
                                 float da = lab.a - pl.a;
                                 float db = lab.b - pl.b;
-                                float d = dL*dL + da*da + db*db;
+                                float d = color_space::fma_dist_sq(dL, da, db);
                                 if (d < best_d) best_d = d;
                             }
                             err += best_d;

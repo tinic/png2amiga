@@ -57,7 +57,7 @@ inline float oklab_dist_sq(OKLab a, OKLab b) noexcept {
     float dL = (a.L - b.L) * png2amiga::color_space::WEIGHT_L;
     float da = (a.a - b.a) * png2amiga::color_space::WEIGHT_A;
     float db = (a.b - b.b) * png2amiga::color_space::WEIGHT_B;
-    return dL * dL + da * da + db * db;
+    return png2amiga::color_space::fma_dist_sq(dL, da, db);
 }
 
 // Pad an entry count up to the SIMD-friendly multiple. We pick 8 so AVX2
@@ -636,13 +636,81 @@ Palette median_cut(std::span<const Color3f> colors,
             std::size_t start, count;
             float vol{};
             int axis{};
+            // Three single-channel min/max passes auto-vectorize cleanly under
+            // MSVC's loop optimizer: each pass touches one float per Color3f,
+            // which the optimizer recognises as a strided gather it can hoist
+            // into a tight scalar reduction with FP min/max instructions.
+            // The fused 6-way loop above mixed all three channels per iter and
+            // didn't vectorize.
             void compute(std::span<const Color3f> c) {
                 if (count == 0) { vol = 0; return; }
-                float minr=1e9f,maxr=-1e9f,ming=1e9f,maxg=-1e9f,minb=1e9f,maxb=-1e9f;
-                for (std::size_t i = start; i < start+count; ++i) {
-                    minr=std::min(minr,c[i].r); maxr=std::max(maxr,c[i].r);
-                    ming=std::min(ming,c[i].g); maxg=std::max(maxg,c[i].g);
-                    minb=std::min(minb,c[i].b); maxb=std::max(maxb,c[i].b);
+                const auto* p = c.data() + start;
+                float minr = p[0].r, maxr = p[0].r;
+                float ming = p[0].g, maxg = p[0].g;
+                float minb = p[0].b, maxb = p[0].b;
+                for (std::size_t i = 1; i < count; ++i) {
+                    float r = p[i].r;
+                    minr = std::min(minr, r); maxr = std::max(maxr, r);
+                }
+                for (std::size_t i = 1; i < count; ++i) {
+                    float g = p[i].g;
+                    ming = std::min(ming, g); maxg = std::max(maxg, g);
+                }
+                for (std::size_t i = 1; i < count; ++i) {
+                    float b = p[i].b;
+                    minb = std::min(minb, b); maxb = std::max(maxb, b);
+                }
+                float rr=maxr-minr, rg=maxg-ming, rb=maxb-minb;
+                vol = std::max({rr,rg,rb});
+                axis = (rr>=rg && rr>=rb) ? 0 : (rg>=rb) ? 1 : 2;
+            }
+            // Fast path used after a median-cut split: the upper half's min on
+            // the parent's split axis is exactly *mid (nth_element guarantees
+            // it sits at position m and all elements >= it follow). Skips one
+            // of the six min/max scans; bit-identical to compute().
+            void compute_upper_after_split(std::span<const Color3f> c,
+                                           int split_axis,
+                                           float split_axis_min) {
+                if (count == 0) { vol = 0; return; }
+                const auto* p = c.data() + start;
+                float minr = p[0].r, maxr = p[0].r;
+                float ming = p[0].g, maxg = p[0].g;
+                float minb = p[0].b, maxb = p[0].b;
+                if (split_axis == 0) {
+                    minr = split_axis_min;
+                    for (std::size_t i = 1; i < count; ++i) {
+                        float r = p[i].r;
+                        maxr = std::max(maxr, r);
+                    }
+                } else {
+                    for (std::size_t i = 1; i < count; ++i) {
+                        float r = p[i].r;
+                        minr = std::min(minr, r); maxr = std::max(maxr, r);
+                    }
+                }
+                if (split_axis == 1) {
+                    ming = split_axis_min;
+                    for (std::size_t i = 1; i < count; ++i) {
+                        float g = p[i].g;
+                        maxg = std::max(maxg, g);
+                    }
+                } else {
+                    for (std::size_t i = 1; i < count; ++i) {
+                        float g = p[i].g;
+                        ming = std::min(ming, g); maxg = std::max(maxg, g);
+                    }
+                }
+                if (split_axis == 2) {
+                    minb = split_axis_min;
+                    for (std::size_t i = 1; i < count; ++i) {
+                        float b = p[i].b;
+                        maxb = std::max(maxb, b);
+                    }
+                } else {
+                    for (std::size_t i = 1; i < count; ++i) {
+                        float b = p[i].b;
+                        minb = std::min(minb, b); maxb = std::max(maxb, b);
+                    }
                 }
                 float rr=maxr-minr, rg=maxg-ming, rb=maxb-minb;
                 vol = std::max({rr,rg,rb});
@@ -714,14 +782,24 @@ Palette median_cut(std::span<const Color3f> colors,
             auto& b = boxes[bi];
             auto bb = mc_work.begin()+static_cast<std::ptrdiff_t>(b.start);
             auto be = bb+static_cast<std::ptrdiff_t>(b.count);
-            switch (b.axis) {
-            case 0: std::sort(bb,be,[](auto&p,auto&q){return p.r<q.r;}); break;
-            case 1: std::sort(bb,be,[](auto&p,auto&q){return p.g<q.g;}); break;
-            case 2: std::sort(bb,be,[](auto&p,auto&q){return p.b<q.b;}); break;
-            }
             auto m = b.count/2;
+            // Median-cut only needs the median position partitioned, not the
+            // whole box ordered — nth_element is O(N) vs std::sort's O(N log N).
+            // Within each half the order is irrelevant: the next split recomputes
+            // bbox extents and re-partitions on whichever axis still dominates.
+            auto mid = bb + static_cast<std::ptrdiff_t>(m);
+            int split_axis = b.axis;
+            switch (split_axis) {
+            case 0: std::nth_element(bb,mid,be,[](auto&p,auto&q){return p.r<q.r;}); break;
+            case 1: std::nth_element(bb,mid,be,[](auto&p,auto&q){return p.g<q.g;}); break;
+            case 2: std::nth_element(bb,mid,be,[](auto&p,auto&q){return p.b<q.b;}); break;
+            }
+            float split_val = (split_axis == 0) ? mid->r
+                            : (split_axis == 1) ? mid->g
+                            : mid->b;
             Box a{b.start,m}, c{b.start+m,b.count-m};
-            a.compute(mc_work); c.compute(mc_work);
+            a.compute(mc_work);
+            c.compute_upper_after_split(mc_work, split_axis, split_val);
             boxes[bi] = a; boxes.push_back(c);
         }
         std::vector<Color3f> centroids;
@@ -1717,7 +1795,7 @@ Palette ega_histogram(const Image& image, std::size_t K) {
                 if (p == i) { min_d = 0; break; }
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[p];
                 double dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                double d = dL*dL + da*da + db*db;
+                double d = png2amiga::color_space::fma_dist_sq(dL, da, db);
                 if (d < min_d) min_d = d;
             }
             score[i] = static_cast<double>(hist[i]) * min_d;
@@ -1743,7 +1821,7 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             for (std::size_t k = 0; k < picked.size(); ++k) {
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[picked[k]];
                 float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                float d = dL*dL + da*da + db*db;
+                float d = png2amiga::color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best_k = k; }
             }
             auto w = static_cast<double>(hist[i]);
@@ -1777,7 +1855,7 @@ Palette ega_histogram(const Image& image, std::size_t K) {
                 if (taken[g]) continue;
                 auto& gl = gamut_lab[g];
                 float dL = cent.L - gl.L, da = cent.a - gl.a, db = cent.b - gl.b;
-                float d = dL*dL + da*da + db*db;
+                float d = png2amiga::color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best = static_cast<std::uint8_t>(g); }
             }
             new_picked[k] = best;

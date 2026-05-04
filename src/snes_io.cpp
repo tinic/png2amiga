@@ -307,7 +307,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                             float dL = target.L - cl.L;
                             float da = target.a - cl.a;
                             float db = target.b - cl.b;
-                            float d = dL * dL + da * da + db * db;
+                            float d = color_space::fma_dist_sq(dL, da, db);
                             if (d < bd) { bd = d; bi = i; }
                         }
                         block_byte[byp * k3T + bxp] =
@@ -471,7 +471,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             float dL = a_lab[i].L - b_lab[i].L;
             float da = a_lab[i].a - b_lab[i].a;
             float dbb = a_lab[i].b - b_lab[i].b;
-            per_pixel += dL * dL + da * da + dbb * dbb;
+            per_pixel += color_space::fma_dist_sq(dL, da, dbb);
         }
         std::array<color_space::OKLab, 64> a_blur, b_blur;
         blur_3x3(a_lab, a_blur);
@@ -481,7 +481,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             float dL = a_blur[i].L - b_blur[i].L;
             float da = a_blur[i].a - b_blur[i].a;
             float dbb = a_blur[i].b - b_blur[i].b;
-            coarse += dL * dL + da * da + dbb * dbb;
+            coarse += color_space::fma_dist_sq(dL, da, dbb);
         }
         // α = 0.4 (60% per-pixel, 40% coarse). Higher α favours
         // structural matches over fine-detail accuracy; lower keeps
@@ -538,7 +538,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             float dL = lab.L - pal_lab[i].L;
             float da = lab.a - pal_lab[i].a;
             float db = lab.b - pal_lab[i].b;
-            float d = dL * dL + da * da + db * db;
+            float d = color_space::fma_dist_sq(dL, da, db);
             if (d < best_d) { best_d = d; best = i; }
         }
         return static_cast<std::uint8_t>(best);
@@ -610,7 +610,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                         float dL = cur.L - new_pal_lab[k].L;
                         float da = cur.a - new_pal_lab[k].a;
                         float db = cur.b - new_pal_lab[k].b;
-                        float d = dL * dL + da * da + db * db;
+                        float d = color_space::fma_dist_sq(dL, da, db);
                         if (d < best_d) { best_d = d; best = k; }
                     }
                     return static_cast<std::uint8_t>(best);

@@ -143,7 +143,7 @@ inline float score_oklab2(const OKLab& a, const OKLab& b) {
     float dL = a.L - b.L;
     float da = a.a - b.a;
     float db_ = a.b - b.b;
-    return dL * dL + da * da + db_ * db_;
+    return color_space::fma_dist_sq(dL, da, db_);
 }
 
 template <HamMetric M>
@@ -302,6 +302,47 @@ struct BeamState {
     std::uint8_t ham_value;     // the HAM value chosen at the current pixel
     std::uint16_t parent_idx;   // index into previous beam's state array
 };
+
+// Per-thread scratch buffers for the HAM scanline encoders. Profiling
+// (AMDuProf, MSVC build) attributed ~12.6 GCYC across vector destructor
+// (`<lambda_1>` of `Color3f*`) + `_Value_init_tag` zero-init at the top of
+// the profile — that was per-scanline std::vector construction in
+// encode_scanline_dp_t / encode_scanline_dp_per_strip_t / refine_triple_t /
+// refine_triple_per_strip_t. Reusing thread_local buffers (capacity stays
+// across rows; only size shrinks/grows) eliminates the alloc churn.
+//
+// Each worker thread gets its own instance via thread_local; no locking
+// needed. Sized lazily — first call grows to the row width, subsequent
+// rows reuse without reallocation.
+// (err, idx) pair for prune_beam's index-based partial_sort. 8 bytes vs
+// 12-byte BeamState — partial_sort moves these instead of swapping
+// BeamStates, then a final gather builds the output beam. Cuts byte
+// movement during the sort by ~33% and improves L1 locality on the
+// comparator's input.
+struct ErrIdx {
+    float err;
+    std::uint32_t idx;
+};
+
+struct HamScratch {
+    // DP encoder per-row buffers
+    std::vector<OKLab>                     row_lab;
+    std::vector<SRGBColor>                 row_srgb;
+    std::vector<BeamState>                 candidates;
+    std::vector<BeamState>                 prev_beam;        // x=0 seed only
+    std::vector<std::vector<BeamState>>    beam_history;
+    std::vector<ErrIdx>                    err_idx;
+    // refine_triple per-row buffers
+    std::vector<SRGBColor>                 states;
+    std::vector<BeamState>                 window_candidates;
+    std::vector<BeamState>                 window_prev_beam; // p=0 seed only
+    std::vector<BeamState>                 window_hist[3];
+};
+
+inline HamScratch& thread_scratch() {
+    thread_local HamScratch s;
+    return s;
+}
 
 // Shared thread-local OKLab cache for HAM encoding. sRGB (24-bit) → OKLab
 // memoization with closed hashing and generation-bump invalidation.
@@ -544,30 +585,36 @@ inline void expand_ham(
         prev_error, parent_idx, pre, base_srgb, candidates);
 }
 
-// Prune candidates to the top beam_width by cumulative error.
+// Prune candidates to the top beam_width by cumulative error. Writes the
+// result into `beam` (cleared first). The caller passes &beam_history[x]
+// directly so the top-K gather lands in its final destination — no extra
+// copy. Index-based partial_sort moves 8-byte (err, idx) pairs instead of
+// 12-byte BeamStates.
 void prune_beam(std::vector<BeamState>& candidates,
                 std::vector<BeamState>& beam,
-                std::size_t beam_width) {
-    beam.clear();
-
+                std::size_t beam_width,
+                std::vector<ErrIdx>& scratch) {
     if (candidates.size() <= beam_width) {
-        beam = std::move(candidates);
+        beam = candidates;     // small copy; this branch is rare
         return;
     }
 
-    // partial_sort's heap selection outperforms nth_element for small N
-    // (tested: beam candidates are ~300, heap locality wins over
-    //  nth_element's quickselect swaps).
-    std::partial_sort(
-        candidates.begin(),
-        candidates.begin() + static_cast<std::ptrdiff_t>(beam_width),
-        candidates.end(),
-        [](const BeamState& a, const BeamState& b) {
-            return a.cumulative_error < b.cumulative_error;
-        });
+    scratch.resize(candidates.size());
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        scratch[i].err = candidates[i].cumulative_error;
+        scratch[i].idx = static_cast<std::uint32_t>(i);
+    }
 
-    beam.assign(candidates.begin(),
-                candidates.begin() + static_cast<std::ptrdiff_t>(beam_width));
+    std::partial_sort(
+        scratch.begin(),
+        scratch.begin() + static_cast<std::ptrdiff_t>(beam_width),
+        scratch.end(),
+        [](const ErrIdx& a, const ErrIdx& b) { return a.err < b.err; });
+
+    beam.resize(beam_width);
+    for (std::size_t i = 0; i < beam_width; ++i) {
+        beam[i] = candidates[scratch[i].idx];
+    }
 }
 
 // DP beam search for a single scanline. ScanlineResult is declared
@@ -590,38 +637,38 @@ ScanlineResult encode_scanline_dp_per_strip_t(
     if (width == 0) return {{}, 0.0f};
     if (pres.empty() || base_srgbs.empty()) return {{}, 0.0f};
 
-    std::vector<std::vector<BeamState>> beam_history(width);
-    std::vector<BeamState> candidates;
-    std::vector<BeamState> current_beam;
+    auto& sc = thread_scratch();
     auto ops_per_state = pres[0].palette_lab.size() +
                          static_cast<std::size_t>(3 * (2 * kModifyDpRadius + 1));
-    candidates.reserve(beam_width * ops_per_state);
+    sc.candidates.reserve(beam_width * ops_per_state);
 
-    std::vector<OKLab> row_lab(width);
-    std::vector<SRGBColor> row_srgb(width);
+    if (sc.beam_history.size() < width) sc.beam_history.resize(width);
+    sc.row_lab.resize(width);
+    sc.row_srgb.resize(width);
     for (std::size_t x = 0; x < width; ++x) {
-        row_lab[x] = color_space::linear_to_oklab(target_row[x]);
-        row_srgb[x] = linear_to_srgb8(target_row[x]);
+        sc.row_lab[x] = color_space::linear_to_oklab(target_row[x]);
+        sc.row_srgb[x] = linear_to_srgb8(target_row[x]);
     }
 
-    std::vector<BeamState> prev_beam;
-    prev_beam.push_back({start_color, 0.0f, 0, 0});
+    sc.prev_beam.clear();
+    sc.prev_beam.push_back({start_color, 0.0f, 0, 0});
     for (std::size_t x = 0; x < width; ++x) {
-        candidates.clear();
+        // Read prev beam from history slot for x>0 — eliminates the
+        // current_beam vector and the per-row copy + swap.
+        const auto& prev = (x == 0) ? sc.prev_beam : sc.beam_history[x - 1];
+        sc.candidates.clear();
         auto si = static_cast<std::size_t>(strip_for_x[x]);
         if (si >= pres.size()) si = pres.size() - 1;
-        for (std::size_t s = 0; s < prev_beam.size(); ++s) {
+        for (std::size_t s = 0; s < prev.size(); ++s) {
             auto parent_idx = static_cast<std::uint16_t>(s);
-            expand_ham_t<M>(prev_beam[s].color, row_lab[x], row_srgb[x],
-                       prev_beam[s].cumulative_error, parent_idx,
-                       pres[si], base_srgbs[si], candidates);
+            expand_ham_t<M>(prev[s].color, sc.row_lab[x], sc.row_srgb[x],
+                       prev[s].cumulative_error, parent_idx,
+                       pres[si], base_srgbs[si], sc.candidates);
         }
-        prune_beam(candidates, current_beam, beam_width);
-        beam_history[x] = current_beam;
-        prev_beam.swap(current_beam);
+        prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
     }
 
-    auto& final_beam = beam_history[width - 1];
+    auto& final_beam = sc.beam_history[width - 1];
     auto best_it = std::min_element(final_beam.begin(), final_beam.end(),
         [](const BeamState& a, const BeamState& b) {
             return a.cumulative_error < b.cumulative_error;
@@ -632,7 +679,7 @@ ScanlineResult encode_scanline_dp_per_strip_t(
         std::distance(final_beam.begin(), best_it));
     for (auto x = static_cast<std::ptrdiff_t>(width) - 1; x >= 0; --x) {
         auto ux = static_cast<std::size_t>(x);
-        auto& state = beam_history[ux][state_idx];
+        auto& state = sc.beam_history[ux][state_idx];
         values[ux] = state.ham_value;
         state_idx = state.parent_idx;
     }
@@ -650,43 +697,42 @@ ScanlineResult encode_scanline_dp_t(
     auto width = target_row.size();
     if (width == 0) return {{}, 0.0f};
 
-    std::vector<std::vector<BeamState>> beam_history(width);
-    std::vector<BeamState> candidates;
-    std::vector<BeamState> current_beam;
+    auto& sc = thread_scratch();
 
     // Operations per state: num_base + 3 * (2*radius+1), not full 2^data_bits
     auto ops_per_state = pre.palette_lab.size() +
                          static_cast<std::size_t>(3 * (2 * kModifyDpRadius + 1));
-    candidates.reserve(beam_width * ops_per_state);
+    sc.candidates.reserve(beam_width * ops_per_state);
+
+    if (sc.beam_history.size() < width) sc.beam_history.resize(width);
 
     // Precompute per-pixel target OKLab + sRGB once (previously recomputed
     // inside the beam loop).
-    std::vector<OKLab> row_lab(width);
-    std::vector<SRGBColor> row_srgb(width);
+    sc.row_lab.resize(width);
+    sc.row_srgb.resize(width);
     for (std::size_t x = 0; x < width; ++x) {
-        row_lab[x] = color_space::linear_to_oklab(target_row[x]);
-        row_srgb[x] = linear_to_srgb8(target_row[x]);
+        sc.row_lab[x] = color_space::linear_to_oklab(target_row[x]);
+        sc.row_srgb[x] = linear_to_srgb8(target_row[x]);
     }
 
-    std::vector<BeamState> prev_beam;
-    prev_beam.push_back({start_color, 0.0f, 0, 0});
+    sc.prev_beam.clear();
+    sc.prev_beam.push_back({start_color, 0.0f, 0, 0});
 
     for (std::size_t x = 0; x < width; ++x) {
-        candidates.clear();
-        for (std::size_t s = 0; s < prev_beam.size(); ++s) {
+        const auto& prev = (x == 0) ? sc.prev_beam : sc.beam_history[x - 1];
+        sc.candidates.clear();
+        for (std::size_t s = 0; s < prev.size(); ++s) {
             auto parent_idx = static_cast<std::uint16_t>(s);
-            expand_ham_t<M>(prev_beam[s].color, row_lab[x], row_srgb[x],
-                       prev_beam[s].cumulative_error, parent_idx,
-                       pre, base_srgb, candidates);
+            expand_ham_t<M>(prev[s].color, sc.row_lab[x], sc.row_srgb[x],
+                       prev[s].cumulative_error, parent_idx,
+                       pre, base_srgb, sc.candidates);
         }
 
-        prune_beam(candidates, current_beam, beam_width);
-        beam_history[x] = current_beam;
-        prev_beam.swap(current_beam);
+        prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
     }
 
     // Find the best final state
-    auto& final_beam = beam_history[width - 1];
+    auto& final_beam = sc.beam_history[width - 1];
     auto best_it = std::min_element(final_beam.begin(), final_beam.end(),
         [](const BeamState& a, const BeamState& b) {
             return a.cumulative_error < b.cumulative_error;
@@ -701,7 +747,7 @@ ScanlineResult encode_scanline_dp_t(
 
     for (auto x = static_cast<std::ptrdiff_t>(width) - 1; x >= 0; --x) {
         auto ux = static_cast<std::size_t>(x);
-        auto& state = beam_history[ux][state_idx];
+        auto& state = sc.beam_history[ux][state_idx];
         values[ux] = state.ham_value;
         state_idx = state.parent_idx;
     }
@@ -772,12 +818,14 @@ void refine_triple_t(
     auto width = values.size();
     if (width < 3) return;
 
+    auto& sc = thread_scratch();
+
     // Reconstruct the per-pixel output color sequence from `values`.
-    std::vector<SRGBColor> states(width + 1);
-    states[0] = start_color;
+    sc.states.resize(width + 1);
+    sc.states[0] = start_color;
     for (std::size_t x = 0; x < width; ++x) {
         auto [ctrl, data] = split_ham_value(values[x], pre.data_bits);
-        auto prev = states[x];
+        auto prev = sc.states[x];
         SRGBColor out = prev;
         switch (ctrl) {
         case 0b00:  out = base_srgb[data]; break;
@@ -785,16 +833,16 @@ void refine_triple_t(
         case 0b10:  out = {pre.expand_lut[data], prev.g, prev.b}; break;
         case 0b11:  out = {prev.r, pre.expand_lut[data], prev.b}; break;
         }
-        states[x + 1] = out;
+        sc.states[x + 1] = out;
     }
 
     // Precompute target OKLab and sRGB once per scanline — each window
     // previously recomputed these 3 times.
-    std::vector<OKLab> row_lab(width);
-    std::vector<SRGBColor> row_srgb(width);
+    sc.row_lab.resize(width);
+    sc.row_srgb.resize(width);
     for (std::size_t x = 0; x < width; ++x) {
-        row_lab[x] = color_space::linear_to_oklab(target_row[x]);
-        row_srgb[x] = linear_to_srgb8(target_row[x]);
+        sc.row_lab[x] = color_space::linear_to_oklab(target_row[x]);
+        sc.row_srgb[x] = linear_to_srgb8(target_row[x]);
     }
 
     // Use the shared thread-local OKLab cache. Bump the generation for
@@ -826,10 +874,8 @@ void refine_triple_t(
         }
     };
 
-    std::vector<BeamState> window_candidates;
-    std::vector<BeamState> window_beam;
     auto ops_per_state = pre.palette_lab.size() + 3 * pre.num_data_values;
-    window_candidates.reserve(beam_k * ops_per_state);
+    sc.window_candidates.reserve(beam_k * ops_per_state);
 
 
     // Cheap early-skip threshold: if every pixel in a window is already
@@ -846,18 +892,18 @@ void refine_triple_t(
     // this guards against "improvements" that shift state out of the window
     // in a way that hurts the next pixel.
     for (std::size_t i = 0; i + 3 <= width; ++i) {
-        auto prev_state = states[i];
+        auto prev_state = sc.states[i];
 
         // Current window error (just the 3 pixels — we assume their states
         // continue correctly because we'll only commit if the final state
         // either matches the original or the continuation pixel's op still
         // makes sense).
-        OKLab tgt0 = row_lab[i];
-        OKLab tgt1 = row_lab[i + 1];
-        OKLab tgt2 = row_lab[i + 2];
-        SRGBColor tgts0 = row_srgb[i];
-        SRGBColor tgts1 = row_srgb[i + 1];
-        SRGBColor tgts2 = row_srgb[i + 2];
+        OKLab tgt0 = sc.row_lab[i];
+        OKLab tgt1 = sc.row_lab[i + 1];
+        OKLab tgt2 = sc.row_lab[i + 2];
+        SRGBColor tgts0 = sc.row_srgb[i];
+        SRGBColor tgts1 = sc.row_srgb[i + 1];
+        SRGBColor tgts2 = sc.row_srgb[i + 2];
 
         auto [e0_cur, s0_cur] = op_error(prev_state, values[i], tgt0, tgts0);
         auto [e1_cur, s1_cur] = op_error(s0_cur, values[i + 1], tgt1, tgts1);
@@ -876,43 +922,46 @@ void refine_triple_t(
         bool has_next = (i + 3) < width;
         float cur_next_err = 0.0f;
         if (has_next) {
-            OKLab tgt3 = row_lab[i + 3];
-            SRGBColor tgts3 = row_srgb[i + 3];
+            OKLab tgt3 = sc.row_lab[i + 3];
+            SRGBColor tgts3 = sc.row_srgb[i + 3];
             auto [e3, _] = op_error(s2_cur, values[i + 3], tgt3, tgts3);
             cur_next_err = e3;
         }
         float cur_total = cur_err + cur_next_err;
 
-        // Beam expansion over the 3-pixel window.
-        std::vector<BeamState> prev_beam{{prev_state, 0.0f, 0, 0}};
-        std::vector<std::vector<BeamState>> hist(3);
+        // Beam expansion over the 3-pixel window. p=0 reads the seed
+        // from window_prev_beam; p>0 reads the previous step's hist slot
+        // directly — eliminates window_beam vector and its copies.
+        sc.window_prev_beam.clear();
+        sc.window_prev_beam.push_back({prev_state, 0.0f, 0, 0});
 
         SRGBColor tgt_srgb[3] = {
-            row_srgb[i],
-            row_srgb[i + 1],
-            row_srgb[i + 2],
+            sc.row_srgb[i],
+            sc.row_srgb[i + 1],
+            sc.row_srgb[i + 2],
         };
 
         for (std::size_t p = 0; p < 3; ++p) {
             OKLab tgt = (p == 0) ? tgt0 : (p == 1) ? tgt1 : tgt2;
-            window_candidates.clear();
-            for (std::size_t s = 0; s < prev_beam.size(); ++s) {
-                expand_ham_t<M>(prev_beam[s].color, tgt, tgt_srgb[p],
-                           prev_beam[s].cumulative_error,
+            const auto& prev = (p == 0) ? sc.window_prev_beam
+                                        : sc.window_hist[p - 1];
+            sc.window_candidates.clear();
+            for (std::size_t s = 0; s < prev.size(); ++s) {
+                expand_ham_t<M>(prev[s].color, tgt, tgt_srgb[p],
+                           prev[s].cumulative_error,
                            static_cast<std::uint16_t>(s),
-                           pre, base_srgb, window_candidates);
+                           pre, base_srgb, sc.window_candidates);
             }
-            prune_beam(window_candidates, window_beam, beam_k);
-            hist[p] = window_beam;
-            prev_beam.swap(window_beam);
+            prune_beam(sc.window_candidates, sc.window_hist[p], beam_k,
+                       sc.err_idx);
         }
 
         // Find the best window sequence (with the continuation penalty).
         std::size_t best_idx = 0;
         float best_total = std::numeric_limits<float>::max();
-        auto& last = hist[2];
-        OKLab tgt3 = has_next ? row_lab[i + 3] : OKLab{};
-        SRGBColor tgts3 = has_next ? row_srgb[i + 3] : SRGBColor{};
+        auto& last = sc.window_hist[2];
+        OKLab tgt3 = has_next ? sc.row_lab[i + 3] : OKLab{};
+        SRGBColor tgts3 = has_next ? sc.row_srgb[i + 3] : SRGBColor{};
         for (std::size_t j = 0; j < last.size(); ++j) {
             float total = last[j].cumulative_error;
             if (has_next) {
@@ -932,8 +981,8 @@ void refine_triple_t(
             std::size_t idx = best_idx;
             std::uint8_t new_ops[3];
             for (auto p = static_cast<std::ptrdiff_t>(2); p >= 0; --p) {
-                new_ops[p] = hist[static_cast<std::size_t>(p)][idx].ham_value;
-                idx = hist[static_cast<std::size_t>(p)][idx].parent_idx;
+                new_ops[p] = sc.window_hist[static_cast<std::size_t>(p)][idx].ham_value;
+                idx = sc.window_hist[static_cast<std::size_t>(p)][idx].parent_idx;
             }
             for (std::size_t p = 0; p < 3; ++p) values[i + p] = new_ops[p];
 
@@ -941,9 +990,9 @@ void refine_triple_t(
             auto [_e0, ns0] = op_error(prev_state, values[i],     tgt0, tgts0);
             auto [_e1, ns1] = op_error(ns0,        values[i + 1], tgt1, tgts1);
             auto [_e2, ns2] = op_error(ns1,        values[i + 2], tgt2, tgts2);
-            states[i + 1] = ns0;
-            states[i + 2] = ns1;
-            states[i + 3] = ns2;
+            sc.states[i + 1] = ns0;
+            sc.states[i + 2] = ns1;
+            sc.states[i + 3] = ns2;
         }
     }
 }
@@ -991,14 +1040,16 @@ void refine_triple_per_strip_t(
         return si;
     };
 
-    std::vector<SRGBColor> states(width + 1);
-    states[0] = start_color;
+    auto& sc = thread_scratch();
+
+    sc.states.resize(width + 1);
+    sc.states[0] = start_color;
     for (std::size_t x = 0; x < width; ++x) {
         auto si = strip_at(x);
         auto& pre = pres[si];
         auto base_srgb = base_srgbs[si];
         auto [ctrl, data] = split_ham_value(values[x], pre.data_bits);
-        auto prev = states[x];
+        auto prev = sc.states[x];
         SRGBColor out = prev;
         switch (ctrl) {
         case 0b00: if (data < base_srgb.size()) out = base_srgb[data]; break;
@@ -1006,14 +1057,14 @@ void refine_triple_per_strip_t(
         case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
         case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
         }
-        states[x + 1] = out;
+        sc.states[x + 1] = out;
     }
 
-    std::vector<OKLab> row_lab(width);
-    std::vector<SRGBColor> row_srgb(width);
+    sc.row_lab.resize(width);
+    sc.row_srgb.resize(width);
     for (std::size_t x = 0; x < width; ++x) {
-        row_lab[x] = color_space::linear_to_oklab(target_row[x]);
-        row_srgb[x] = linear_to_srgb8(target_row[x]);
+        sc.row_lab[x] = color_space::linear_to_oklab(target_row[x]);
+        sc.row_srgb[x] = linear_to_srgb8(target_row[x]);
     }
 
     bump_ham_oklab_cache_gen();
@@ -1035,26 +1086,24 @@ void refine_triple_per_strip_t(
         case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
         }
         if constexpr (M == HamMetric::srgb_mse) {
-            return { score_srgb_mse(row_srgb[pixel_x], out), out };
+            return { score_srgb_mse(sc.row_srgb[pixel_x], out), out };
         } else {
-            return { score_oklab2(row_lab[pixel_x], cached_oklab(out)), out };
+            return { score_oklab2(sc.row_lab[pixel_x], cached_oklab(out)), out };
         }
     };
 
-    std::vector<BeamState> window_candidates;
-    std::vector<BeamState> window_beam;
     auto ops_per_state = pres[0].palette_lab.size()
         + 3 * pres[0].num_data_values;
-    window_candidates.reserve(beam_k * ops_per_state);
+    sc.window_candidates.reserve(beam_k * ops_per_state);
 
     constexpr float skip_threshold_per_pixel = 5e-5f;
 
     for (std::size_t i = 0; i + 3 <= width; ++i) {
-        auto prev_state = states[i];
+        auto prev_state = sc.states[i];
 
-        OKLab tgt0 = row_lab[i];
-        OKLab tgt1 = row_lab[i + 1];
-        OKLab tgt2 = row_lab[i + 2];
+        OKLab tgt0 = sc.row_lab[i];
+        OKLab tgt1 = sc.row_lab[i + 1];
+        OKLab tgt2 = sc.row_lab[i + 2];
 
         auto [e0_cur, s0_cur] = op_error(prev_state, values[i], i);
         auto [e1_cur, s1_cur] = op_error(s0_cur, values[i + 1], i + 1);
@@ -1075,31 +1124,32 @@ void refine_triple_per_strip_t(
         }
         float cur_total = cur_err + cur_next_err;
 
-        std::vector<BeamState> prev_beam{{prev_state, 0.0f, 0, 0}};
-        std::vector<std::vector<BeamState>> hist(3);
+        sc.window_prev_beam.clear();
+        sc.window_prev_beam.push_back({prev_state, 0.0f, 0, 0});
 
         SRGBColor tgt_srgb[3] = {
-            row_srgb[i], row_srgb[i + 1], row_srgb[i + 2],
+            sc.row_srgb[i], sc.row_srgb[i + 1], sc.row_srgb[i + 2],
         };
 
         for (std::size_t p = 0; p < 3; ++p) {
             OKLab tgt = (p == 0) ? tgt0 : (p == 1) ? tgt1 : tgt2;
             auto si = strip_at(i + p);
-            window_candidates.clear();
-            for (std::size_t s = 0; s < prev_beam.size(); ++s) {
-                expand_ham_t<M>(prev_beam[s].color, tgt, tgt_srgb[p],
-                           prev_beam[s].cumulative_error,
+            const auto& prev = (p == 0) ? sc.window_prev_beam
+                                        : sc.window_hist[p - 1];
+            sc.window_candidates.clear();
+            for (std::size_t s = 0; s < prev.size(); ++s) {
+                expand_ham_t<M>(prev[s].color, tgt, tgt_srgb[p],
+                           prev[s].cumulative_error,
                            static_cast<std::uint16_t>(s),
-                           pres[si], base_srgbs[si], window_candidates);
+                           pres[si], base_srgbs[si], sc.window_candidates);
             }
-            prune_beam(window_candidates, window_beam, beam_k);
-            hist[p] = window_beam;
-            prev_beam.swap(window_beam);
+            prune_beam(sc.window_candidates, sc.window_hist[p], beam_k,
+                       sc.err_idx);
         }
 
         std::size_t best_idx = 0;
         float best_total = std::numeric_limits<float>::max();
-        auto& last = hist[2];
+        auto& last = sc.window_hist[2];
         for (std::size_t j = 0; j < last.size(); ++j) {
             float total = last[j].cumulative_error;
             if (has_next) {
@@ -1117,17 +1167,17 @@ void refine_triple_per_strip_t(
             std::size_t idx = best_idx;
             std::uint8_t new_ops[3];
             for (auto p = static_cast<std::ptrdiff_t>(2); p >= 0; --p) {
-                new_ops[p] = hist[static_cast<std::size_t>(p)][idx].ham_value;
-                idx = hist[static_cast<std::size_t>(p)][idx].parent_idx;
+                new_ops[p] = sc.window_hist[static_cast<std::size_t>(p)][idx].ham_value;
+                idx = sc.window_hist[static_cast<std::size_t>(p)][idx].parent_idx;
             }
             for (std::size_t p = 0; p < 3; ++p) values[i + p] = new_ops[p];
 
             auto [_e0, ns0] = op_error(prev_state, values[i],     i);
             auto [_e1, ns1] = op_error(ns0,        values[i + 1], i + 1);
             auto [_e2, ns2] = op_error(ns1,        values[i + 2], i + 2);
-            states[i + 1] = ns0;
-            states[i + 2] = ns1;
-            states[i + 3] = ns2;
+            sc.states[i + 1] = ns0;
+            sc.states[i + 2] = ns1;
+            sc.states[i + 3] = ns2;
         }
     }
 }

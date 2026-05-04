@@ -100,7 +100,7 @@ inline std::uint16_t linear_to_ocs(Color3f color) noexcept {
         float dL = t.L - e.L;
         float da = t.a - e.a;
         float db = t.b - e.b;
-        float d = dL * dL + da * da + db * db;
+        float d = color_space::fma_dist_sq(dL, da, db);
         if (d < best_d) { best_d = d; best = *p; }
     }
     return best;
@@ -672,7 +672,7 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
             for (std::size_t k = 0; k < 64; ++k) {
                 auto& e = full_oklab[k];
                 float dL = t.L - e.L, da = t.a - e.a, db = t.b - e.b;
-                float d  = dL * dL + da * da + db * db;
+                float d  = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best = k; }
             }
             auto s = color_space::linear_to_srgb(image_pixels[i]).clamped();
@@ -746,7 +746,7 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
             float dr = base_colors[k].r - new_lin.r;
             float dg = base_colors[k].g - new_lin.g;
             float db = base_colors[k].b - new_lin.b;
-            drift += dr * dr + dg * dg + db * db;
+            drift += color_space::fma_dist_sq(dr, dg, db);
             base_colors[k] = new_lin;
         }
         if (drift < 1e-6f) break;
@@ -798,7 +798,7 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
             for (std::size_t k = 0; k < 64; ++k) {
                 auto& e = full_lab[k];
                 float dL = t.L - e.L, da = t.a - e.a, db = t.b - e.b;
-                float d  = dL * dL + da * da + db * db;
+                float d  = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) best_d = d;
             }
             total += static_cast<double>(best_d);

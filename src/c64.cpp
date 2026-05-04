@@ -171,7 +171,7 @@ inline std::vector<std::uint8_t> global_fs_indices(
                 float dL = adj.L - cl.L;
                 float da = adj.a - cl.a;
                 float db = adj.b - cl.b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < bd) { bd = d; bi = static_cast<std::uint8_t>(c); }
             }
             out[idx] = bi;
@@ -279,7 +279,7 @@ inline float cell_error_for_quad(
         for (std::uint8_t q = 0; q < 4; ++q) {
             const auto& c = pal_lab[cand[q]];
             float dL = t.L - c.L, da = t.a - c.a, db = t.b - c.b;
-            float d = dL * dL + da * da + db * db;
+            float d = color_space::fma_dist_sq(dL, da, db);
             if (d < best_d) { best_d = d; best_q = q; }
         }
         total += best_d;
@@ -313,7 +313,7 @@ inline float score_cell(
             float dr = raw[p].r - cand[q].r;
             float dg = raw[p].g - cand[q].g;
             float db = raw[p].b - cand[q].b;
-            float d = dr * dr + dg * dg + db * db;
+            float d = color_space::fma_dist_sq(dr, dg, db);
             if (d < best) { best = d; best_q = q; }
         }
         idx[p] = best_q;
@@ -329,7 +329,7 @@ inline float score_cell(
             float dr = raw[p].r - rendered[p].r;
             float dg = raw[p].g - rendered[p].g;
             float db = raw[p].b - rendered[p].b;
-            err += dr * dr + dg * dg + db * db;
+            err += color_space::fma_dist_sq(dr, dg, db);
         }
         return err;
     case Metric::blur: {
@@ -348,7 +348,7 @@ inline float score_cell(
             float dr = blurred_src[p].r - b.r;
             float dg = blurred_src[p].g - b.g;
             float db = blurred_src[p].b - b.b;
-            err += dr * dr + dg * dg + db * db;
+            err += color_space::fma_dist_sq(dr, dg, db);
         }
         return err;
     }
@@ -614,8 +614,8 @@ inline float cell_error_for_pair(
         const auto& t = pix_lab[p];
         float dLa = t.L - a.L, daa = t.a - a.a, dba = t.b - a.b;
         float dLb = t.L - b.L, dab = t.a - b.a, dbb = t.b - b.b;
-        float ea = dLa * dLa + daa * daa + dba * dba;
-        float eb = dLb * dLb + dab * dab + dbb * dbb;
+        float ea = color_space::fma_dist_sq(dLa, daa, dba);
+        float eb = color_space::fma_dist_sq(dLb, dab, dbb);
         if (ea <= eb) { total += ea; if (pixel_idx_out) (*pixel_idx_out)[p] = 0; }
         else          { total += eb; if (pixel_idx_out) (*pixel_idx_out)[p] = 1; }
     }
@@ -743,8 +743,8 @@ Result<EncodeResult> encode_hires(const Image& image, Palette pal,
                                 const auto& t = cell_lab[p];
                                 float dLa = t.L - a.L, daa = t.a - a.a, dba = t.b - a.b;
                                 float dLb = t.L - b.L, dab = t.a - b.a, dbb = t.b - b.b;
-                                float ea = dLa*dLa + daa*daa + dba*dba;
-                                float eb = dLb*dLb + dab*dab + dbb*dbb;
+                                float ea = color_space::fma_dist_sq(dLa, daa, dba);
+                                float eb = color_space::fma_dist_sq(dLb, dab, dbb);
                                 total += std::min(ea, eb);
                             }
                             err = total;
@@ -2139,7 +2139,7 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
             float dL = raw[p].L - c.L;
             float da = raw[p].a - c.a;
             float db = raw[p].b - c.b;
-            err += dL * dL + da * da + db * db;
+            err += color_space::fma_dist_sq(dL, da, db);
         }
         return err;
     };

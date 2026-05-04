@@ -2969,7 +2969,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         float dL = lab.L - pl.L;
                         float da = lab.a - pl.a;
                         float db = lab.b - pl.b;
-                        float d = dL*dL + da*da + db*db;
+                        float d = color_space::fma_dist_sq(dL, da, db);
                         if (d < d_best) d_best = d;
                     }
                     err += d_best;

@@ -20,13 +20,213 @@
 #include <array>
 #include <atomic>
 #include <optional>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <format>
 #include <mutex>
+#include <numeric>
+#include <span>
 #include <vector>
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
 namespace png2amiga::strips {
+
+// ===========================================================================
+// SoA strip-pixel distance helpers — used by both DPF and EHB strip
+// scorers. The hot loops compute OKLab² distances between strip pixels
+// (~16 per strip, AoS Color3f-style) and palette entries. AoS forces
+// scalar `vsubss`/`vmulss`/`vaddss` per channel; SoA + AVX2 packs 8
+// pixels into one `vsubps`/`vfmadd*ps`/`vminps` step.
+//
+// Padding contract: SoA L/a/b are padded to a multiple of 8 with
+// FLT_MAX. For pre-pass (min-dist update) and reduction (sum) callers
+// keep pixel_min[0..valid_n) at FLT_MAX init and pixel_min[valid_n..
+// padded_n) at 0 — that way the per-lane min stays 0 in the tail (since
+// min(0, huge) = 0) and the sum naturally drops the tail without a
+// scalar epilogue.
+// ===========================================================================
+struct StripPixelsSoA {
+    std::vector<float> L, a, b;
+    std::size_t valid_n{};
+    std::size_t padded_n{};
+};
+
+inline void build_strip_soa(StripPixelsSoA& soa,
+                            std::span<const color_space::OKLab> pixels) {
+    constexpr float kInf = std::numeric_limits<float>::max();
+    soa.valid_n  = pixels.size();
+    soa.padded_n = (pixels.size() + 7u) & ~std::size_t{7};
+    soa.L.assign(soa.padded_n, kInf);
+    soa.a.assign(soa.padded_n, kInf);
+    soa.b.assign(soa.padded_n, kInf);
+    for (std::size_t i = 0; i < soa.valid_n; ++i) {
+        soa.L[i] = pixels[i].L;
+        soa.a[i] = pixels[i].a;
+        soa.b[i] = pixels[i].b;
+    }
+}
+
+// pixel_min must be sized to padded_n. Tail [valid_n..padded_n) should
+// be 0; in-range [0..valid_n) should be FLT_MAX initially, then updated
+// over multiple calls.
+[[gnu::always_inline]]
+inline void min_dist_update(const StripPixelsSoA& soa,
+                            float cL, float ca, float cb,
+                            float* pixel_min) noexcept {
+#if defined(__AVX2__)
+    __m256 vcL = _mm256_set1_ps(cL);
+    __m256 vca = _mm256_set1_ps(ca);
+    __m256 vcb = _mm256_set1_ps(cb);
+    for (std::size_t i = 0; i < soa.padded_n; i += 8) {
+        __m256 dL = _mm256_sub_ps(_mm256_loadu_ps(&soa.L[i]), vcL);
+        __m256 da = _mm256_sub_ps(_mm256_loadu_ps(&soa.a[i]), vca);
+        __m256 db = _mm256_sub_ps(_mm256_loadu_ps(&soa.b[i]), vcb);
+        __m256 d  = _mm256_fmadd_ps(dL, dL,
+                        _mm256_fmadd_ps(da, da,
+                            _mm256_mul_ps(db, db)));
+        __m256 cur = _mm256_loadu_ps(pixel_min + i);
+        _mm256_storeu_ps(pixel_min + i, _mm256_min_ps(cur, d));
+    }
+#else
+    for (std::size_t i = 0; i < soa.valid_n; ++i) {
+        float dL = soa.L[i] - cL;
+        float da = soa.a[i] - ca;
+        float db = soa.b[i] - cb;
+        float d  = std::fma(dL, dL, std::fma(da, da, db * db));
+        if (d < pixel_min[i]) pixel_min[i] = d;
+    }
+#endif
+}
+
+// Returns sum over i<valid_n of min(pixel_min_excl[i], dist²(b), dist²(h)).
+// Tail of pixel_min_excl must be 0 so it contributes nothing to the sum.
+[[gnu::always_inline]]
+inline double dist_min2_sum(const StripPixelsSoA& soa,
+                            const float* pixel_min_excl,
+                            float bL, float ba, float bb,
+                            float hL, float ha, float hb) noexcept {
+#if defined(__AVX2__)
+    __m256 vbL = _mm256_set1_ps(bL); __m256 vba = _mm256_set1_ps(ba);
+    __m256 vbb = _mm256_set1_ps(bb);
+    __m256 vhL = _mm256_set1_ps(hL); __m256 vha = _mm256_set1_ps(ha);
+    __m256 vhb = _mm256_set1_ps(hb);
+    __m256 acc = _mm256_setzero_ps();
+    for (std::size_t i = 0; i < soa.padded_n; i += 8) {
+        __m256 pL = _mm256_loadu_ps(&soa.L[i]);
+        __m256 pa = _mm256_loadu_ps(&soa.a[i]);
+        __m256 pb = _mm256_loadu_ps(&soa.b[i]);
+        __m256 cur = _mm256_loadu_ps(pixel_min_excl + i);
+        __m256 dL = _mm256_sub_ps(pL, vbL);
+        __m256 da = _mm256_sub_ps(pa, vba);
+        __m256 db = _mm256_sub_ps(pb, vbb);
+        __m256 d  = _mm256_fmadd_ps(dL, dL,
+                        _mm256_fmadd_ps(da, da, _mm256_mul_ps(db, db)));
+        cur = _mm256_min_ps(cur, d);
+        dL = _mm256_sub_ps(pL, vhL);
+        da = _mm256_sub_ps(pa, vha);
+        db = _mm256_sub_ps(pb, vhb);
+        d  = _mm256_fmadd_ps(dL, dL,
+                _mm256_fmadd_ps(da, da, _mm256_mul_ps(db, db)));
+        cur = _mm256_min_ps(cur, d);
+        acc = _mm256_add_ps(acc, cur);
+    }
+    // Horizontal sum of 8 lanes.
+    __m128 lo = _mm256_castps256_ps128(acc);
+    __m128 hi = _mm256_extractf128_ps(acc, 1);
+    __m128 sum = _mm_add_ps(lo, hi);
+    sum = _mm_hadd_ps(sum, sum);
+    sum = _mm_hadd_ps(sum, sum);
+    return static_cast<double>(_mm_cvtss_f32(sum));
+#else
+    double e = 0;
+    for (std::size_t i = 0; i < soa.valid_n; ++i) {
+        float pL = soa.L[i], pa = soa.a[i], pb = soa.b[i];
+        float best = pixel_min_excl[i];
+        float dL = pL - bL, da = pa - ba, db = pb - bb;
+        float d  = std::fma(dL, dL, std::fma(da, da, db * db));
+        if (d < best) best = d;
+        dL = pL - hL; da = pa - ha; db = pb - hb;
+        d  = std::fma(dL, dL, std::fma(da, da, db * db));
+        if (d < best) best = d;
+        e += static_cast<double>(best);
+    }
+    return e;
+#endif
+}
+
+// Single-cand variant for DPF (no halfbrite mirror).
+[[gnu::always_inline]]
+inline double dist_min1_sum(const StripPixelsSoA& soa,
+                            const float* pixel_min_excl,
+                            float cL, float ca, float cb) noexcept {
+#if defined(__AVX2__)
+    __m256 vcL = _mm256_set1_ps(cL); __m256 vca = _mm256_set1_ps(ca);
+    __m256 vcb = _mm256_set1_ps(cb);
+    __m256 acc = _mm256_setzero_ps();
+    for (std::size_t i = 0; i < soa.padded_n; i += 8) {
+        __m256 dL = _mm256_sub_ps(_mm256_loadu_ps(&soa.L[i]), vcL);
+        __m256 da = _mm256_sub_ps(_mm256_loadu_ps(&soa.a[i]), vca);
+        __m256 db = _mm256_sub_ps(_mm256_loadu_ps(&soa.b[i]), vcb);
+        __m256 d  = _mm256_fmadd_ps(dL, dL,
+                        _mm256_fmadd_ps(da, da, _mm256_mul_ps(db, db)));
+        __m256 cur = _mm256_loadu_ps(pixel_min_excl + i);
+        acc = _mm256_add_ps(acc, _mm256_min_ps(cur, d));
+    }
+    __m128 lo = _mm256_castps256_ps128(acc);
+    __m128 hi = _mm256_extractf128_ps(acc, 1);
+    __m128 sum = _mm_add_ps(lo, hi);
+    sum = _mm_hadd_ps(sum, sum);
+    sum = _mm_hadd_ps(sum, sum);
+    return static_cast<double>(_mm_cvtss_f32(sum));
+#else
+    double e = 0;
+    for (std::size_t i = 0; i < soa.valid_n; ++i) {
+        float dL = soa.L[i] - cL, da = soa.a[i] - ca, db = soa.b[i] - cb;
+        float d  = std::fma(dL, dL, std::fma(da, da, db * db));
+        float best = pixel_min_excl[i];
+        if (d < best) best = d;
+        e += static_cast<double>(best);
+    }
+    return e;
+#endif
+}
+
+// Sum of pixel_min[0..valid_n). Tail (valid_n..padded_n) assumed 0,
+// allowing a clean SIMD reduction over padded_n.
+[[gnu::always_inline]]
+inline double sum_pixel_min(const float* pixel_min,
+                            std::size_t padded_n) noexcept {
+#if defined(__AVX2__)
+    __m256 acc = _mm256_setzero_ps();
+    for (std::size_t i = 0; i < padded_n; i += 8) {
+        acc = _mm256_add_ps(acc, _mm256_loadu_ps(pixel_min + i));
+    }
+    __m128 lo = _mm256_castps256_ps128(acc);
+    __m128 hi = _mm256_extractf128_ps(acc, 1);
+    __m128 sum = _mm_add_ps(lo, hi);
+    sum = _mm_hadd_ps(sum, sum);
+    sum = _mm_hadd_ps(sum, sum);
+    return static_cast<double>(_mm_cvtss_f32(sum));
+#else
+    double e = 0;
+    for (std::size_t i = 0; i < padded_n; ++i)
+        e += static_cast<double>(pixel_min[i]);
+    return e;
+#endif
+}
+
+// Reset pixel_min for a fresh pre-pass: in-range = FLT_MAX, tail = 0.
+inline void reset_pixel_min(std::vector<float>& pixel_min,
+                            const StripPixelsSoA& soa) {
+    pixel_min.assign(soa.padded_n, 0.0f);
+    constexpr float kInf = std::numeric_limits<float>::max();
+    for (std::size_t i = 0; i < soa.valid_n; ++i) pixel_min[i] = kInf;
+}
+
 
 namespace {
 
@@ -539,7 +739,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 auto b = color_space::linear_to_oklab(target[k]);
                 float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
                 diffs[k] = {static_cast<int>(k),
-                            dL * dL + da * da + db * db};
+                            color_space::fma_dist_sq(dL, da, db)};
             }
             std::sort(diffs.begin(), diffs.end(),
                 [](auto& a, auto& b) { return a.second > b.second; });
@@ -588,7 +788,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 float dL = tgt.L - P_lab[k].L;
                 float da = tgt.a - P_lab[k].a;
                 float db = tgt.b - P_lab[k].b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best_k = k; }
             }
             base_index[y * width + x] = static_cast<std::uint8_t>(best_k);
@@ -632,6 +832,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         // EHB v1.26.4. Cost: ~16 px per strip × 16 strips = 256 entries
         // per row, cheap.
         std::vector<std::vector<color_space::OKLab>> strip_pixels_lab(num_strips);
+        std::vector<StripPixelsSoA> strip_pixels_soa(num_strips);
         auto strip_x_range = [&](std::size_t s) {
             std::size_t lo = (s == 0) ? std::size_t{0}
                 : std::min(width,
@@ -648,6 +849,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
             strip_pixels_lab[s].reserve(x_hi - x_lo);
             for (std::size_t x = x_lo; x < x_hi; ++x)
                 strip_pixels_lab[s].push_back(img_lab[y * width + x]);
+            build_strip_soa(strip_pixels_soa[s], strip_pixels_lab[s]);
             // Per-cluster centroid is still used to seed candidate set —
             // pixels near a cluster centroid are good swap targets even
             // though the SCORING is now per-pixel min-of-8.
@@ -694,23 +896,20 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         // 8-base palette — matches what the actual encoder picker does.
         // Replaces cluster-centroid math (which scored against frozen
         // mean colors that the picker doesn't actually use).
+        // SoA-SIMD scorer; inverts loop nest (outer k, inner pixels)
+        // so AVX2 packs 8 pixels per iter. See helpers at top of file.
+        thread_local std::vector<float> tl_pixel_min_dpf;
         auto strip_err_dither =
             [&](std::size_t s,
                 const std::array<color_space::OKLab, kBaseColors>& P_lab_v) {
-                double e = 0;
-                auto& pixels = strip_pixels_lab[s];
-                for (auto& tgt : pixels) {
-                    float best_d = std::numeric_limits<float>::max();
-                    for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                        float dL = tgt.L - P_lab_v[k].L;
-                        float da = tgt.a - P_lab_v[k].a;
-                        float db = tgt.b - P_lab_v[k].b;
-                        float d = dL * dL + da * da + db * db;
-                        if (d < best_d) best_d = d;
-                    }
-                    e += static_cast<double>(best_d);
+                auto& soa = strip_pixels_soa[s];
+                if (soa.valid_n == 0) return 0.0;
+                reset_pixel_min(tl_pixel_min_dpf, soa);
+                for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    min_dist_update(soa, P_lab_v[k].L, P_lab_v[k].a,
+                                    P_lab_v[k].b, tl_pixel_min_dpf.data());
                 }
-                return e;
+                return sum_pixel_min(tl_pixel_min_dpf.data(), soa.padded_n);
             };
 
         // Beam search params. Tuned by sweep across the test image set
@@ -759,8 +958,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 // precompute every pixel's min distance over the 7 OTHER
                 // base slots. Then per candidate we just compare against
                 // c_lab once per pixel — O(width × |cands|) instead of
-                // O(width × 8 × |cands|).
-                auto& pixels = strip_pixels_lab[s + 1];
+                // O(width × 8 × |cands|). SoA via strip_pixels_soa[s+1].
                 struct Move {
                     int reg;
                     std::size_t cand_idx;
@@ -769,33 +967,20 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 std::vector<Move> moves;
                 moves.reserve(kBaseColors * st.cands.size());
 
+                auto& soa_pixels = strip_pixels_soa[s + 1];
                 for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                    std::vector<float> pixel_min_excl_k(pixels.size(),
-                        std::numeric_limits<float>::max());
+                    reset_pixel_min(tl_pixel_min_dpf, soa_pixels);
                     for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
                         if (k2 == k) continue;
-                        for (std::size_t i = 0; i < pixels.size(); ++i) {
-                            auto& tgt = pixels[i];
-                            float dL = tgt.L - state.P_lab[k2].L;
-                            float da = tgt.a - state.P_lab[k2].a;
-                            float db = tgt.b - state.P_lab[k2].b;
-                            float d = dL * dL + da * da + db * db;
-                            if (d < pixel_min_excl_k[i]) pixel_min_excl_k[i] = d;
-                        }
+                        min_dist_update(soa_pixels,
+                            state.P_lab[k2].L, state.P_lab[k2].a,
+                            state.P_lab[k2].b, tl_pixel_min_dpf.data());
                     }
                     for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
                         auto& c_lab = st.cands_lab[ci];
-                        double e = 0;
-                        for (std::size_t i = 0; i < pixels.size(); ++i) {
-                            auto& tgt = pixels[i];
-                            float best_d = pixel_min_excl_k[i];
-                            float dL = tgt.L - c_lab.L;
-                            float da = tgt.a - c_lab.a;
-                            float db = tgt.b - c_lab.b;
-                            float d = dL * dL + da * da + db * db;
-                            if (d < best_d) best_d = d;
-                            e += static_cast<double>(best_d);
-                        }
+                        double e = dist_min1_sum(soa_pixels,
+                            tl_pixel_min_dpf.data(),
+                            c_lab.L, c_lab.a, c_lab.b);
                         if (e >= filler_err) continue;
                         moves.push_back({static_cast<int>(k), ci, e});
                     }
@@ -1553,7 +1738,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 float dL = tgt.L - P_eff_lab[k].L;
                 float da = tgt.a - P_eff_lab[k].a;
                 float db = tgt.b - P_eff_lab[k].b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best_k = k; }
             }
             base_index[y * width + x] = static_cast<std::uint8_t>(best_k);
@@ -1617,6 +1802,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
         // outcome (the picker the encoder will use), not just against
         // frozen cluster centroids.
         std::vector<std::vector<color_space::OKLab>> strip_pixels_lab(num_strips);
+        std::vector<StripPixelsSoA> strip_pixels_soa(num_strips);
         auto strip_x_range = [&](std::size_t s) {
             std::size_t lo = (s == 0) ? std::size_t{0}
                 : std::min(width,
@@ -1631,10 +1817,12 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             auto [x_lo, x_hi] = strip_x_range(s);
             if (x_lo >= x_hi) continue;
             // Snapshot per-strip pixel OKLab (cheap; ~16 entries per
-            // strip × 18 strips per row).
+            // strip × 18 strips per row). Build SoA in parallel for the
+            // SIMD distance helpers.
             strip_pixels_lab[s].reserve(x_hi - x_lo);
             for (std::size_t x = x_lo; x < x_hi; ++x)
                 strip_pixels_lab[s].push_back(img_lab[y * width + x]);
+            build_strip_soa(strip_pixels_soa[s], strip_pixels_lab[s]);
             std::array<double, kBaseColors> sumLb{}, sumab{}, sumbb{};
             std::array<double, kBaseColors> sumLh{}, sumah{}, sumbh{};
             std::array<std::uint32_t, kBaseColors> cntb{}, cnth{};
@@ -1678,7 +1866,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 float dL = lab.L - cl.L;
                 float da = lab.a - cl.a;
                 float db = lab.b - cl.b;
-                cl.spread += static_cast<double>(dL * dL + da * da + db * db);
+                cl.spread += static_cast<double>(color_space::fma_dist_sq(dL, da, db));
             }
             std::array<bool, 4096> seen{};
             auto ocs_key = [](const Color3f& c) -> std::size_t {
@@ -1720,31 +1908,25 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
 
         // Per-strip dither-error scorer. For each pixel in the strip,
         // computes the OKLab² distance to its nearest-of-64 entry in
-        // the effective palette (32 base + 32 halfbrites). This
-        // matches what the actual encoder picker does.
+        // the effective palette (32 base + 32 halfbrites). SIMD'd via
+        // SoA pixel buffers + AVX2 packed singles — see helpers at top
+        // of file. Inverts the loop nest (outer k, inner pixels) so the
+        // inner can vectorize across 8 pixels per AVX2 step.
+        thread_local std::vector<float> tl_pixel_min;
         auto e_strip_dither =
             [&](std::size_t s,
                 const std::array<color_space::OKLab, kBaseColors>& Plb,
                 const std::array<color_space::OKLab, kBaseColors>& Plh) {
-                double e = 0;
-                auto& pixels = strip_pixels_lab[s];
-                for (auto& tgt : pixels) {
-                    float best_d = std::numeric_limits<float>::max();
-                    for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                        float dLb = tgt.L - Plb[k].L;
-                        float dab = tgt.a - Plb[k].a;
-                        float dbb = tgt.b - Plb[k].b;
-                        float db = dLb * dLb + dab * dab + dbb * dbb;
-                        if (db < best_d) best_d = db;
-                        float dLh = tgt.L - Plh[k].L;
-                        float dah = tgt.a - Plh[k].a;
-                        float dbh = tgt.b - Plh[k].b;
-                        float dh = dLh * dLh + dah * dah + dbh * dbh;
-                        if (dh < best_d) best_d = dh;
-                    }
-                    e += static_cast<double>(best_d);
+                auto& soa = strip_pixels_soa[s];
+                if (soa.valid_n == 0) return 0.0;
+                reset_pixel_min(tl_pixel_min, soa);
+                for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    min_dist_update(soa, Plb[k].L, Plb[k].a, Plb[k].b,
+                                    tl_pixel_min.data());
+                    min_dist_update(soa, Plh[k].L, Plh[k].a, Plh[k].b,
+                                    tl_pixel_min.data());
                 }
-                return e;
+                return sum_pixel_min(tl_pixel_min.data(), soa.padded_n);
             };
 
         // Beam state. P holds 32 base linear-RGB; P_lab_b and P_lab_h
@@ -1828,8 +2010,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 // Per-pixel min-of-62 (excluding base[k] and halfbrite[k]
                 // for each k) — precomputed once per state-strip-k so
                 // the candidate eval becomes O(width × candidates),
-                // not O(width × 64 × candidates).
-                auto& pixels = strip_pixels_lab[s + 1];
+                // not O(width × 64 × candidates). SoA via
+                // strip_pixels_soa[s+1].
                 struct Move {
                     int reg;
                     std::size_t cand_idx;
@@ -1850,44 +2032,26 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                         old_diff = (a.r != b.r || a.g != b.g || a.b != b.b);
                     }
                     // Precompute pixel_min_excl_k[x]: min over all 64
-                    // slots EXCEPT base[k] and halfbrite[k+32].
-                    std::vector<float> pixel_min_excl_k(pixels.size(),
-                        std::numeric_limits<float>::max());
+                    // slots EXCEPT base[k] and halfbrite[k+32]. SIMD'd
+                    // via SoA + AVX2 helpers (8 pixels/iter).
+                    auto& soa_pixels = strip_pixels_soa[s + 1];
+                    reset_pixel_min(tl_pixel_min, soa_pixels);
                     for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
                         if (k2 == k) continue;
-                        for (std::size_t i = 0; i < pixels.size(); ++i) {
-                            auto& tgt = pixels[i];
-                            float dLb = tgt.L - state.P_lab_b[k2].L;
-                            float dab = tgt.a - state.P_lab_b[k2].a;
-                            float dbb = tgt.b - state.P_lab_b[k2].b;
-                            float db = dLb * dLb + dab * dab + dbb * dbb;
-                            if (db < pixel_min_excl_k[i]) pixel_min_excl_k[i] = db;
-                            float dLh = tgt.L - state.P_lab_h[k2].L;
-                            float dah = tgt.a - state.P_lab_h[k2].a;
-                            float dbh = tgt.b - state.P_lab_h[k2].b;
-                            float dh = dLh * dLh + dah * dah + dbh * dbh;
-                            if (dh < pixel_min_excl_k[i]) pixel_min_excl_k[i] = dh;
-                        }
+                        min_dist_update(soa_pixels,
+                            state.P_lab_b[k2].L, state.P_lab_b[k2].a,
+                            state.P_lab_b[k2].b, tl_pixel_min.data());
+                        min_dist_update(soa_pixels,
+                            state.P_lab_h[k2].L, state.P_lab_h[k2].a,
+                            state.P_lab_h[k2].b, tl_pixel_min.data());
                     }
                     for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
                         auto& c_lab_b = st.cands_lab_b[ci];
                         auto& c_lab_h = st.cands_lab_h[ci];
-                        double e = 0;
-                        for (std::size_t i = 0; i < pixels.size(); ++i) {
-                            auto& tgt = pixels[i];
-                            float best_d = pixel_min_excl_k[i];
-                            float dLb = tgt.L - c_lab_b.L;
-                            float dab = tgt.a - c_lab_b.a;
-                            float dbb = tgt.b - c_lab_b.b;
-                            float db = dLb * dLb + dab * dab + dbb * dbb;
-                            if (db < best_d) best_d = db;
-                            float dLh = tgt.L - c_lab_h.L;
-                            float dah = tgt.a - c_lab_h.a;
-                            float dbh = tgt.b - c_lab_h.b;
-                            float dh = dLh * dLh + dah * dah + dbh * dbh;
-                            if (dh < best_d) best_d = dh;
-                            e += static_cast<double>(best_d);
-                        }
+                        double e = dist_min2_sum(soa_pixels,
+                            tl_pixel_min.data(),
+                            c_lab_b.L, c_lab_b.a, c_lab_b.b,
+                            c_lab_h.L, c_lab_h.a, c_lab_h.b);
                         if (e >= filler_err) continue;
                         int delta = 0;
                         if (has_next_line) {
@@ -2025,7 +2189,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                     float dL = src_lab.L - pal_lab[k].L;
                     float da = src_lab.a - pal_lab[k].a;
                     float db = src_lab.b - pal_lab[k].b;
-                    float d = dL * dL + da * da + db * db;
+                    float d = color_space::fma_dist_sq(dL, da, db);
                     if (d < best_d) best_d = d;
                 }
                 return best_d;
@@ -2276,7 +2440,7 @@ HamPickResult pick_ham6_op(
         float dL = target_lab.L - lab.L;
         float da = target_lab.a - lab.a;
         float db = target_lab.b - lab.b;
-        return dL * dL + da * da + db * db;
+        return color_space::fma_dist_sq(dL, da, db);
     };
     // SET ops (control=00).
     for (std::size_t k = 0; k < base_pal.size() && k < 16; ++k) {
@@ -2559,7 +2723,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                 auto a = color_space::linear_to_oklab(strip_pal[k]);
                 auto b = color_space::linear_to_oklab(hw_state[k]);
                 float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                diffs.push_back({k, dL * dL + da * da + db * db});
+                diffs.push_back({k, color_space::fma_dist_sq(dL, da, db)});
             }
         }
         std::sort(diffs.begin(), diffs.end(),
@@ -2718,7 +2882,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                     float dL = lab.L - strip_pal_lab[k].L;
                     float da = lab.a - strip_pal_lab[k].a;
                     float db = lab.b - strip_pal_lab[k].b;
-                    float d = dL * dL + da * da + db * db;
+                    float d = color_space::fma_dist_sq(dL, da, db);
                     if (d < best_d) { best_d = d; best_k = k; }
                 }
                 assign[x - x_lo] = static_cast<std::uint8_t>(best_k);
@@ -2789,7 +2953,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                 float db_old = centroid[k].b - strip_pal_lab[k].b;
                 double old_e = static_cast<double>(clust[k].count) *
                     static_cast<double>(
-                        dL_old * dL_old + da_old * da_old + db_old * db_old);
+                        color_space::fma_dist_sq(dL_old, da_old, db_old));
                 for (std::size_t ci = 0; ci < cands.size(); ++ci) {
                     auto& cl = cands_lab[ci];
                     float dL = centroid[k].L - cl.L;
@@ -2797,7 +2961,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                     float db = centroid[k].b - cl.b;
                     double new_e = static_cast<double>(clust[k].count) *
                         static_cast<double>(
-                            dL * dL + da * da + db * db);
+                            color_space::fma_dist_sq(dL, da, db));
                     double red = old_e - new_e;
                     if (red > 0.0)
                         ranked.push_back({k, ci, red});

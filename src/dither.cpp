@@ -608,7 +608,7 @@ NearestResult find_nearest_oklab(OKLab pixel_lab,
         float dL = pixel_lab.L - cl.L;
         float da = pixel_lab.a - cl.a;
         float db = pixel_lab.b - cl.b;
-        float dist = dL * dL + da * da + db * db;
+        float dist = color_space::fma_dist_sq(dL, da, db);
 
         if (dist < best_dist) {
             best_dist = dist;
@@ -641,7 +641,7 @@ NearestPair find_nearest_pair(OKLab pixel,
         float dL = pixel.L - palette_lab[k].L;
         float da = pixel.a - palette_lab[k].a;
         float db = pixel.b - palette_lab[k].b;
-        float d = dL * dL + da * da + db * db;
+        float d = color_space::fma_dist_sq(dL, da, db);
         if (d < best) {
             second = best; si = bi;
             best = d; bi = k;
@@ -692,7 +692,7 @@ DitherResult apply_ordered(const Image& image,
                 float dL = pixel_lab.L - palette_lab[i].L;
                 float da = pixel_lab.a - palette_lab[i].a;
                 float db = pixel_lab.b - palette_lab[i].b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best = i; }
             }
             auto chosen = palette_lab[best];
@@ -702,7 +702,7 @@ DitherResult apply_ordered(const Image& image,
             float da = orig.a - chosen.a;
             float db = orig.b - chosen.b;
             result.indices[y * w + x] = static_cast<std::uint8_t>(best);
-            result.total_error += dL * dL + da * da + db * db;
+            result.total_error += color_space::fma_dist_sq(dL, da, db);
         }
     }
 
@@ -1057,7 +1057,7 @@ DitherResult apply_gilbert(
                 float dL = palette_lab[i].L - palette_lab[j].L;
                 float da = palette_lab[i].a - palette_lab[j].a;
                 float db = palette_lab[i].b - palette_lab[j].b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best) best = d;
             }
             total_nn += std::sqrt(best);
@@ -1119,7 +1119,7 @@ DitherResult apply_gilbert(
             float dL = lookup.L - palette_lab[k].L;
             float da = lookup.a - palette_lab[k].a;
             float db = lookup.b - palette_lab[k].b;
-            float d = dL * dL + da * da + db * db;
+            float d = color_space::fma_dist_sq(dL, da, db);
             if (d < best_d) { best_d = d; best_k = k; }
         }
         result.indices[idx] = static_cast<std::uint8_t>(best_k);
@@ -1244,7 +1244,7 @@ DitherResult apply_riemersma(
             float dL = target.L - palette_lab[k].L;
             float da = target.a - palette_lab[k].a;
             float db = target.b - palette_lab[k].b;
-            float d = dL * dL + da * da + db * db;
+            float d = color_space::fma_dist_sq(dL, da, db);
             if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
         }
 
@@ -1262,7 +1262,7 @@ DitherResult apply_riemersma(
         float dL = image_lab[idx].L - best_lab.L;
         float da = image_lab[idx].a - best_lab.a;
         float db = image_lab[idx].b - best_lab.b;
-        result.total_error += dL * dL + da * da + db * db;
+        result.total_error += color_space::fma_dist_sq(dL, da, db);
     }
 
     return result;
@@ -1353,8 +1353,8 @@ std::uint8_t pick_yliluoma_index(
             float da = avg.a - target.a;
             float db = avg.b - target.b;
             float err = mode2
-                ? (4.0f * dL * dL + da * da + db * db)
-                : (dL * dL + da * da + db * db);
+                ? color_space::fma_dist_sq(2.0f * dL, da, db)  // (2*dL)² weights luma 4×
+                : color_space::fma_dist_sq(dL, da, db);
             if (err < best_err) { best_err = err; best_k = k; }
         }
         plan[step] = best_k;
@@ -1417,7 +1417,7 @@ std::uint8_t pick_knoll_index(
             float dL = avg.L - target.L;
             float da = avg.a - target.a;
             float db = avg.b - target.b;
-            float err = dL * dL + da * da + db * db;
+            float err = color_space::fma_dist_sq(dL, da, db);
             if (err < best_err) { best_err = err; best_k = k; }
         }
         plan[step] = best_k;
@@ -1482,7 +1482,7 @@ std::uint8_t pick_tri_tone_index(
             float dL = avg.L - target.L;
             float da = avg.a - target.a;
             float db = avg.b - target.b;
-            float err = dL * dL + da * da + db * db;
+            float err = color_space::fma_dist_sq(dL, da, db);
             if (err < best_err) { best_err = err; best_k = k; }
         }
         plan[step] = best_k;
@@ -1558,7 +1558,7 @@ std::uint8_t pick_yliluoma1_index(
                 float dL = aL - target.L;
                 float da = aa - target.a;
                 float db = ab - target.b;
-                float err = dL * dL + da * da + db * db;
+                float err = color_space::fma_dist_sq(dL, da, db);
                 if (err < best_err) {
                     best_err = err; best_i = i; best_j = j; best_r = r;
                 }
@@ -1619,7 +1619,7 @@ static std::uint8_t opt_pair_pick(
         float dL = palette_lab[k].L - target.L;
         float da = palette_lab[k].a - target.a;
         float db = palette_lab[k].b - target.b;
-        float d = dL * dL + da * da + db * db;
+        float d = color_space::fma_dist_sq(dL, da, db);
         if (d < best_a) { best_a = d; A = k; }
     }
 
@@ -1654,11 +1654,11 @@ static std::uint8_t opt_pair_pick(
         float dL = aL - target.L;
         float da = aa - target.a;
         float db = ab - target.b;
-        float avg_err = dL * dL + da * da + db * db;
+        float avg_err = color_space::fma_dist_sq(dL, da, db);
         float sL = palette_lab[A].L - palette_lab[k].L;
         float sa = palette_lab[A].a - palette_lab[k].a;
         float sb = palette_lab[A].b - palette_lab[k].b;
-        float sep = sL * sL + sa * sa + sb * sb;
+        float sep = color_space::fma_dist_sq(sL, sa, sb);
         float err = avg_err + sep_w * sep;
         if (err < best_b) { best_b = err; B = k; }
     }
@@ -1721,7 +1721,7 @@ std::uint8_t pick_opt_line_checker_index(
             float dL = avg.L - target.L;
             float da = avg.a - target.a;
             float db = avg.b - target.b;
-            float err = dL * dL + da * da + db * db;
+            float err = color_space::fma_dist_sq(dL, da, db);
             if (err < best_err) { best_err = err; best_k = k; }
         }
         plan[step] = best_k;
@@ -1806,8 +1806,8 @@ DitherResult apply_yliluoma(
                     // gradients smooth at the cost of slightly worse hue
                     // matching, the canonical Yliluoma-2 trade-off.
                     float err = mode2
-                        ? (4.0f * dL * dL + da * da + db * db)
-                        : (dL * dL + da * da + db * db);
+                        ? color_space::fma_dist_sq(2.0f * dL, da, db)  // (2*dL)² weights luma 4×
+                        : color_space::fma_dist_sq(dL, da, db);
                     if (err < best_err) { best_err = err; best_k = k; }
                 }
                 plan[step] = best_k;
@@ -1844,7 +1844,7 @@ DitherResult apply_yliluoma(
             float dL = target.L - palette_lab[pick].L;
             float da = target.a - palette_lab[pick].a;
             float db = target.b - palette_lab[pick].b;
-            result.total_error += dL * dL + da * da + db * db;
+            result.total_error += color_space::fma_dist_sq(dL, da, db);
         }
     }
 
@@ -2040,7 +2040,7 @@ DitherResult apply_structure_fs(
                 float dL = target.L - palette_lab[k].L;
                 float da = target.a - palette_lab[k].a;
                 float db = target.b - palette_lab[k].b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
             }
 
@@ -2071,7 +2071,7 @@ DitherResult apply_structure_fs(
             float dL = image_lab[idx].L - best_lab.L;
             float da = image_lab[idx].a - best_lab.a;
             float db = image_lab[idx].b - best_lab.b;
-            result.total_error += dL * dL + da * da + db * db;
+            result.total_error += color_space::fma_dist_sq(dL, da, db);
         }
     }
 
@@ -2251,7 +2251,7 @@ DitherResult apply_dbs(
         auto& s = source_blur[idx];
         auto& g = half_blur[idx];
         float dL = s.L - g.L, da = s.a - g.a, db = s.b - g.b;
-        return dL * dL + da * da + db * db;
+        return color_space::fma_dist_sq(dL, da, db);
     };
 
     for (int sweep = 0; sweep < kMaxSweeps; ++sweep) {
@@ -2320,7 +2320,7 @@ DitherResult apply_dbs(
                             float dL = s.L - (g.L + delta_h.L * kk);
                             float da = s.a - (g.a + delta_h.a * kk);
                             float db = s.b - (g.b + delta_h.b * kk);
-                            new_cost += dL * dL + da * da + db * db;
+                            new_cost += color_space::fma_dist_sq(dL, da, db);
                         }
                     }
                     float delta = new_cost - current_cost;
@@ -2378,7 +2378,7 @@ DitherResult apply_dbs(
             float dL = src_ok.L - chosen.L;
             float da = src_ok.a - chosen.a;
             float db = src_ok.b - chosen.b;
-            total_err += dL * dL + da * da + db * db;
+            total_err += color_space::fma_dist_sq(dL, da, db);
         }
     }
     res.total_error = total_err;
@@ -2478,7 +2478,7 @@ void apply_dbs_post_pass(
         auto& s = source_blur[idx];
         auto& g = half_blur[idx];
         float dL = s.L - g.L, da = s.a - g.a, db = s.b - g.b;
-        return dL * dL + da * da + db * db;
+        return color_space::fma_dist_sq(dL, da, db);
     };
 
     for (int sweep = 0; sweep < max_sweeps; ++sweep) {
@@ -2531,7 +2531,7 @@ void apply_dbs_post_pass(
                             float dL = s.L - (g.L + delta_h.L * kk);
                             float da = s.a - (g.a + delta_h.a * kk);
                             float db = s.b - (g.b + delta_h.b * kk);
-                            new_cost += dL * dL + da * da + db * db;
+                            new_cost += color_space::fma_dist_sq(dL, da, db);
                         }
                     }
                     float delta = new_cost - current_cost;
@@ -2760,7 +2760,7 @@ DitherResult apply(const Image& image,
                 float da = pixel_lab.a - chosen.a;
                 float db = pixel_lab.b - chosen.b;
                 r.indices[y * w + x] = static_cast<std::uint8_t>(idx);
-                r.total_error += dL * dL + da * da + db * db;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
             }
         }
         return r;
@@ -2825,7 +2825,7 @@ DitherResult apply(const Image& image,
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
                 float db = t.b - pal_span[idx].b;
-                r.total_error += dL * dL + da * da + db * db;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
             }
         }
         return r;
@@ -2845,7 +2845,7 @@ DitherResult apply(const Image& image,
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
                 float db = t.b - pal_span[idx].b;
-                r.total_error += dL * dL + da * da + db * db;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
             }
         }
         return r;
@@ -2864,7 +2864,7 @@ DitherResult apply(const Image& image,
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
                 float db = t.b - pal_span[idx].b;
-                r.total_error += dL * dL + da * da + db * db;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
             }
         }
         return r;
@@ -2883,7 +2883,7 @@ DitherResult apply(const Image& image,
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
                 float db = t.b - pal_span[idx].b;
-                r.total_error += dL * dL + da * da + db * db;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
             }
         }
         return r;
@@ -2902,7 +2902,7 @@ DitherResult apply(const Image& image,
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
                 float db = t.b - pal_span[idx].b;
-                r.total_error += dL * dL + da * da + db * db;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
             }
         }
         return r;
@@ -2921,7 +2921,7 @@ DitherResult apply(const Image& image,
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
                 float db = t.b - pal_span[idx].b;
-                r.total_error += dL * dL + da * da + db * db;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
             }
         }
         return r;
@@ -3118,7 +3118,7 @@ float pick_palette_index_with_ostro(
         float dL = target.L - palette_lab[k].L;
         float da = target.a - palette_lab[k].a;
         float db = target.b - palette_lab[k].b;
-        float d = dL * dL + da * da + db * db;
+        float d = color_space::fma_dist_sq(dL, da, db);
         if (d < best_d) {
             second_d = best_d;
             best_d = d;
@@ -3239,7 +3239,7 @@ float diffuse_raw_buffer(const Image& image,
             float dL = src_lab.L - picked.chosen_lab.L;
             float da = src_lab.a - picked.chosen_lab.a;
             float db = src_lab.b - picked.chosen_lab.b;
-            total_error += dL * dL + da * da + db * db;
+            total_error += color_space::fma_dist_sq(dL, da, db);
 
             if (is_diff) {
                 Color3f chosen_lin = color_space::oklab_to_linear(picked.chosen_lab);

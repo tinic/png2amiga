@@ -775,7 +775,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                     auto dr = pal_cur[r].r - pal_prev[r].r;
                     auto dg = pal_cur[r].g - pal_prev[r].g;
                     auto db = pal_cur[r].b - pal_prev[r].b;
-                    auto d2 = dr*dr + dg*dg + db*db;
+                    auto d2 = color_space::fma_dist_sq(dr, dg, db);
                     if (d2 > 0.0f) {
                         cands.push_back({static_cast<std::uint8_t>(r),
                                          d2, pal_cur[r]});

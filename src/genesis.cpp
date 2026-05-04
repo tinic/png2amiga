@@ -56,7 +56,7 @@ TileFingerprint fingerprint_tile(const Image& img,
             float dL = lab.L - fp.centroid.L;
             float da = lab.a - fp.centroid.a;
             float db = lab.b - fp.centroid.b;
-            spread += dL * dL + da * da + db * db;
+            spread += color_space::fma_dist_sq(dL, da, db);
         }
     }
     fp.spread = spread;
@@ -82,7 +82,7 @@ std::vector<std::uint8_t> kmeans_tiles(
 
     auto sq_dist = [](const OKLab& a, const OKLab& b) {
         float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-        return dL * dL + da * da + db * db;
+        return color_space::fma_dist_sq(dL, da, db);
     };
 
     for (std::size_t k = 1; k < K; ++k) {
@@ -312,7 +312,7 @@ GenesisResult cluster_tiles_into_palettes_sh(
                     float dL = lab.L - pl_lab[i].L;
                     float da = lab.a - pl_lab[i].a;
                     float db = lab.b - pl_lab[i].b;
-                    float d = dL * dL + da * da + db * db;
+                    float d = color_space::fma_dist_sq(dL, da, db);
                     if (d < best) best = d;
                 }
                 sum += best;

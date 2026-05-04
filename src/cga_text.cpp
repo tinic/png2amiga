@@ -275,7 +275,7 @@ encode(const Image& image, amiga::Mode mode,
             for (std::size_t c = 0; c < 16; ++c) {
                 auto& a = cell_lab[p]; auto& b = pal.lab[c];
                 float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 pix_d[p][c] = d;
                 total_sum[c] += d;
             }

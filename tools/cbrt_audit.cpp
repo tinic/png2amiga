@@ -72,6 +72,41 @@ static inline f32x4 fast_cbrt4_2step(f32x4 x) noexcept {
     return std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) | sign);
 }
 
+// Walczyk-style: replaces the integer /3 (which SIMD-ifies awkwardly) with
+// a series of integer add+srli that converges to ~i/3 (final ratio 21845/65536
+// = 0.333343..., 1 part in 30k high — the magic constant compensates).
+// 2 Newton iterations (cheaper per step than Halley but cubic less aggressive;
+// equivalent or better than 1 Halley after 2 iters).
+[[gnu::always_inline]]
+static inline f32x4 fast_cbrt4_walczyk(f32x4 x) noexcept {
+    u32x4 sign_mask = {0x80000000u, 0x80000000u, 0x80000000u, 0x80000000u};
+    u32x4 xbits = std::bit_cast<u32x4>(x);
+    u32x4 sign = xbits & sign_mask;
+    u32x4 absbits = xbits & ~sign_mask;
+
+    // Successive shift-and-add approximation of i/3:
+    //   step 1: i*(1/4 + 1/16) = i*5/16
+    //   step 2: i*5/16 + i*5/256 = i*5/16 * 17/16 = i*85/256
+    //   step 3: i*85/256 + i*85/65536 = i*85/256 * 257/256 = i*21845/65536
+    u32x4 t = (absbits >> 2u) + (absbits >> 4u);
+    t = t + (t >> 4u);
+    t = t + (t >> 8u);
+    u32x4 off = {0x2a5137a0u, 0x2a5137a0u, 0x2a5137a0u, 0x2a5137a0u};
+    u32x4 i = off + t;
+
+    f32x4 absx = std::bit_cast<f32x4>(absbits);
+    f32x4 y = std::bit_cast<f32x4>(i);
+    f32x4 third = {0.33333333f, 0.33333333f, 0.33333333f, 0.33333333f};
+    f32x4 two = {2.0f, 2.0f, 2.0f, 2.0f};
+    // Newton: y <- (2y + x/y^2) / 3
+    y = third * (two * y + absx / (y * y));
+    y = third * (two * y + absx / (y * y));
+
+    u32x4 nonzero_mask = (absbits != 0);
+    y = std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) & nonzero_mask);
+    return std::bit_cast<f32x4>(std::bit_cast<u32x4>(y) | sign);
+}
+
 static inline f32x4 std_cbrt4(f32x4 x) noexcept {
     return f32x4{std::cbrt(x[0]), std::cbrt(x[1]), std::cbrt(x[2]), 0.0f};
 }
@@ -306,6 +341,7 @@ static double bench_ocs(const std::array<float, 256>& lin,
 int main() {
     auto tab_1step = build_ocs_table<fast_cbrt4>();
     auto tab_2step = build_ocs_table<fast_cbrt4_2step>();
+    auto tab_walc  = build_ocs_table<fast_cbrt4_walczyk>();
     auto tab_prec  = build_ocs_table<std_cbrt4>();
 
     std::array<float, 256> lin{};
@@ -316,9 +352,11 @@ int main() {
 
     sweep_cbrt_ulp<fast_cbrt4>("fast_cbrt4 (1 Halley)");
     sweep_cbrt_ulp<fast_cbrt4_2step>("fast_cbrt4 (2 Halley)");
+    sweep_cbrt_ulp<fast_cbrt4_walczyk>("fast_cbrt4 (Walczyk, 2 Newton)");
 
     sweep_one<fast_cbrt4>("linear_to_ocs(1-step)", lin, tab_1step, tab_prec, total);
     sweep_one<fast_cbrt4_2step>("linear_to_ocs(2-step)", lin, tab_2step, tab_prec, total);
+    sweep_one<fast_cbrt4_walczyk>("linear_to_ocs(Walczyk)", lin, tab_walc, tab_prec, total);
 
     // ---- perf benchmarks (single-threaded, fixed workload) ----
     std::printf("\n=== Performance benchmark (single thread, no OpenMP) ===\n");
@@ -330,13 +368,16 @@ int main() {
     (void)bench_oklab<fast_cbrt4>(lin, 1);
     double t_1 = bench_oklab<fast_cbrt4>(lin, reps_oklab);
     double t_2 = bench_oklab<fast_cbrt4_2step>(lin, reps_oklab);
+    double t_w = bench_oklab<fast_cbrt4_walczyk>(lin, reps_oklab);
     double t_s = bench_oklab<std_cbrt4>(lin, reps_oklab);
     double n = static_cast<double>(total * reps_oklab);
-    std::printf("  1 Halley:  %.3fs  (%.2f ns/call,  %.1f Mops/s)\n",
+    std::printf("  1 Halley:   %.3fs  (%.2f ns/call,  %.1f Mops/s)\n",
                 t_1, 1e9 * t_1 / n, 1e-6 * n / t_1);
-    std::printf("  2 Halley:  %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
+    std::printf("  2 Halley:   %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
                 t_2, 1e9 * t_2 / n, 1e-6 * n / t_2, 100.0 * (t_2 - t_1) / t_1);
-    std::printf("  std::cbrt: %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
+    std::printf("  Walczyk 2N: %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
+                t_w, 1e9 * t_w / n, 1e-6 * n / t_w, 100.0 * (t_w - t_1) / t_1);
+    std::printf("  std::cbrt:  %.3fs  (%.2f ns/call,  %.1f Mops/s)  +%.0f%%\n",
                 t_s, 1e9 * t_s / n, 1e-6 * n / t_s, 100.0 * (t_s - t_1) / t_1);
 
     constexpr std::size_t reps_ocs = 1;
@@ -344,13 +385,16 @@ int main() {
     (void)bench_ocs<fast_cbrt4>(lin, tab_1step, 1);
     double o_1 = bench_ocs<fast_cbrt4>(lin, tab_1step, reps_ocs);
     double o_2 = bench_ocs<fast_cbrt4_2step>(lin, tab_2step, reps_ocs);
+    double o_w = bench_ocs<fast_cbrt4_walczyk>(lin, tab_walc, reps_ocs);
     double o_s = bench_ocs<std_cbrt4>(lin, tab_prec, reps_ocs);
     double m = static_cast<double>(total * reps_ocs);
-    std::printf("  1 Halley:  %.3fs  (%.0f ns/call)\n",
+    std::printf("  1 Halley:   %.3fs  (%.0f ns/call)\n",
                 o_1, 1e9 * o_1 / m);
-    std::printf("  2 Halley:  %.3fs  (%.0f ns/call)  +%.0f%%\n",
+    std::printf("  2 Halley:   %.3fs  (%.0f ns/call)  +%.0f%%\n",
                 o_2, 1e9 * o_2 / m, 100.0 * (o_2 - o_1) / o_1);
-    std::printf("  std::cbrt: %.3fs  (%.0f ns/call)  +%.0f%%\n",
+    std::printf("  Walczyk 2N: %.3fs  (%.0f ns/call)  +%.0f%%\n",
+                o_w, 1e9 * o_w / m, 100.0 * (o_w - o_1) / o_1);
+    std::printf("  std::cbrt:  %.3fs  (%.0f ns/call)  +%.0f%%\n",
                 o_s, 1e9 * o_s / m, 100.0 * (o_s - o_1) / o_1);
 
     return 0;

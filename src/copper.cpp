@@ -80,7 +80,7 @@ void build_swap_scratch(
                 float dL = rl[x].L - current_lab[k].L;
                 float da = rl[x].a - current_lab[k].a;
                 float db = rl[x].b - current_lab[k].b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best_k = k; }
             }
             float col_w = column_weights.empty() ? 1.0f : column_weights[x];
@@ -128,7 +128,7 @@ void refresh_swap_scratch(
                 float dL = rl[x].L - new_lab.L;
                 float da = rl[x].a - new_lab.a;
                 float db = rl[x].b - new_lab.b;
-                d_to_new = dL * dL + da * da + db * db;
+                d_to_new = color_space::fma_dist_sq(dL, da, db);
             }
 
             bool was_in_changed = sc.assignments[idx] == changed_slot;
@@ -157,7 +157,7 @@ void refresh_swap_scratch(
                     float dL = rl[x].L - current_lab[k].L;
                     float da = rl[x].a - current_lab[k].a;
                     float db = rl[x].b - current_lab[k].b;
-                    float d = dL * dL + da * da + db * db;
+                    float d = color_space::fma_dist_sq(dL, da, db);
                     if (d < best_d) { best_d = d; best_k = k; }
                 }
             } else {
@@ -241,7 +241,7 @@ SwapCandidate find_best_swap(
                 float dL = rl[x].L - centroid.L;
                 float da = rl[x].a - centroid.a;
                 float db = rl[x].b - centroid.b;
-                new_error += static_cast<double>(dL * dL + da * da + db * db)
+                new_error += static_cast<double>(color_space::fma_dist_sq(dL, da, db))
                            * static_cast<double>(pixel_weights[base + x]);
             }
         }
@@ -324,7 +324,7 @@ SwapCandidate find_best_swap_ehb(
                     float da = rl[x].a - ref.a;
                     float db = rl[x].b - ref.b;
                     new_err +=
-                        static_cast<double>(dL * dL + da * da + db * db) *
+                        static_cast<double>(color_space::fma_dist_sq(dL, da, db)) *
                         static_cast<double>(pixel_weights[base + x]);
                 }
             }
@@ -558,7 +558,7 @@ Result<CopperResult> encode_copper(const Image& image,
                     float dL = rl[x].L - base_lab[k].L;
                     float da = rl[x].a - base_lab[k].a;
                     float db = rl[x].b - base_lab[k].b;
-                    float d = dL * dL + da * da + db * db;
+                    float d = color_space::fma_dist_sq(dL, da, db);
                     if (d < best_d) { best_d = d; best_k = k; }
                 }
                 ++freq[best_k];
@@ -748,7 +748,7 @@ Result<CopperResult> encode_copper(const Image& image,
             float ddL = base_lab.L - new_lab.L;
             float dda = base_lab.a - new_lab.a;
             float ddb = base_lab.b - new_lab.b;
-            if (ddL * ddL + dda * dda + ddb * ddb > kMaxDriftSq) break;
+            if (color_space::fma_dist_sq(ddL, dda, ddb) > kMaxDriftSq) break;
 
             // Nibble-skip optimization (AGA only): if the new color shares its
             // high 4-bit nibble with the slot's previous value, the LOCT=0 (high)
@@ -810,7 +810,7 @@ Result<CopperResult> encode_copper(const Image& image,
                         float dL = all_lab[y][x].L - pal_lab_sort[k].L;
                         float da = all_lab[y][x].a - pal_lab_sort[k].a;
                         float db = all_lab[y][x].b - pal_lab_sort[k].b;
-                        float d = dL * dL + da * da + db * db;
+                        float d = color_space::fma_dist_sq(dL, da, db);
                         if (d < best_d) { best_d = d; best_k = k; }
                     }
                     if (best_k == ch.reg) {
@@ -839,7 +839,7 @@ Result<CopperResult> encode_copper(const Image& image,
                 float dL = pixel_lab.L - pal_lab[k].L;
                 float da = pixel_lab.a - pal_lab[k].a;
                 float db = pixel_lab.b - pal_lab[k].b;
-                float d = dL * dL + da * da + db * db;
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) best_d = d;
             }
             pass1_column_error[x] = pass1_column_error[x] * col_decay + best_d;
@@ -927,7 +927,7 @@ Result<CopperResult> encode_copper(const Image& image,
                     float dL = com_lab.L - can_lab.L;
                     float da = com_lab.a - can_lab.a;
                     float db = com_lab.b - can_lab.b;
-                    float dist = dL * dL + da * da + db * db;
+                    float dist = color_space::fma_dist_sq(dL, da, db);
 
                     if (dist >= hard_switch_de2) {
                         committed = candidate;
@@ -1086,7 +1086,7 @@ Result<CopperResult> encode_copper(const Image& image,
                 float dL = pixel.L - chosen.L;
                 float da = pixel.a - chosen.a;
                 float db = pixel.b - chosen.b;
-                column_error[x] += dL * dL + da * da + db * db;
+                column_error[x] += color_space::fma_dist_sq(dL, da, db);
             }
         }
     }
@@ -1214,7 +1214,7 @@ Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
             auto dr = cur[r].r - prev[r].r;
             auto dg = cur[r].g - prev[r].g;
             auto db = cur[r].b - prev[r].b;
-            auto d2 = dr * dr + dg * dg + db * db;
+            auto d2 = color_space::fma_dist_sq(dr, dg, db);
             if (d2 > 0.0f) cands.push_back({r, d2, cur[r]});
         }
         if (cands.size() > sliced_changes_per_line) {
