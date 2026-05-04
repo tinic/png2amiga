@@ -182,17 +182,20 @@ else()
         # Default Windows thread stack reserve is 1 MB (PE header
         # SizeOfStackReserve, used by CreateThread when dwStackSize=0).
         # std::thread / std::jthread go through CreateThread, so HAM's
-        # parallel encoders inherit that 1 MB. Linux gives 8 MB by
-        # default — bump to match. The HAM ctests on UCRT64 were all
-        # exiting 0xc0000374 (STATUS_HEAP_CORRUPTION) which is the
-        # classic symptom of a thread stack overflow scribbling into
-        # heap metadata.
-        target_link_options(png2amiga PRIVATE -Wl,--stack,8388608)
+        # parallel encoders inherit that 1 MB. The HAM ctests on UCRT64
+        # were all exiting 0xc0000374 (STATUS_HEAP_CORRUPTION) which is
+        # the classic symptom of a thread stack overflow scribbling
+        # into heap metadata. 8 MB (Linux default) cleared most but not
+        # all HAM tests — ham6-fast, ham6-optimal-png, ham8-optimal,
+        # ham8-dithered-atkinson, smoke-ham6-strips-h still crashed.
+        # 32 MB to give the heaviest workloads (HAM beam search per
+        # row, strips-h with copper) plenty of headroom.
+        target_link_options(png2amiga PRIVATE -Wl,--stack,33554432)
     endif()
     if(MSVC)
         # Same rationale as the MinGW --stack bump above. /STACK sets
         # SizeOfStackReserve in the PE header.
-        target_link_options(png2amiga PRIVATE /STACK:8388608)
+        target_link_options(png2amiga PRIVATE /STACK:33554432)
     endif()
 
     enable_testing()
