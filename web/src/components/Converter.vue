@@ -589,8 +589,17 @@ watch(imageBytes, () => {
 // Only callable when sizeOverride is already on (UI hides the buttons otherwise).
 function setSizePreset(scale: number) {
   if (!imageWidth.value || !imageHeight.value) return
-  options.width = Math.max(16, Math.round(imageWidth.value * scale / 16) * 16)
-  options.height = Math.max(2, Math.round(imageHeight.value * scale))
+  // Width snapped to 16-pixel boundary (Amiga bitplane alignment).
+  // Height derived from the SNAPPED width × source aspect so the
+  // resulting aspect matches source exactly — using `imageHeight *
+  // scale` independently of the snap drifts on sources whose width
+  // doesn't divide cleanly by 16, producing a slight horizontal
+  // stretch in the preview.
+  const w = Math.max(16, Math.round(imageWidth.value * scale / 16) * 16)
+  const h = Math.max(2, Math.round(
+    w * imageHeight.value / imageWidth.value))
+  options.width = w
+  options.height = h
 }
 
 // Aspect-ratio lock: when enabled, committing width or height keeps the
