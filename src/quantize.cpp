@@ -2,6 +2,17 @@
 #include "color_space.hpp"
 #include "palette.hpp"
 
+namespace {
+using OKLab = png2amiga::color_space::OKLab;
+
+inline float oklab_dist_sq(OKLab a, OKLab b) noexcept {
+    float dL = (a.L - b.L) * png2amiga::color_space::WEIGHT_L;
+    float da = (a.a - b.a) * png2amiga::color_space::WEIGHT_A;
+    float db = (a.b - b.b) * png2amiga::color_space::WEIGHT_B;
+    return png2amiga::color_space::fma_dist_sq(dL, da, db);
+}
+} // namespace
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -14,337 +25,6 @@
 #include <thread>
 #endif
 #include <vector>
-
-// ============================================================================
-// SIMD backend selection.
-//
-// Three backends — pick exactly one at compile time:
-//   - x86_64 AVX2 + FMA     (256-bit, 8 lanes) — Windows / Linux / Intel Mac
-//   - Apple Silicon NEON    (128-bit, 4 lanes) — AArch64 macOS / Linux
-//   - WASM SIMD             (128-bit, 4 lanes) — Emscripten
-//
-// All hot kernels operate on SoA float buffers padded to a multiple of 8
-// (LCM of both lane counts) with weight=0 in the tail, so the tail is
-// numerically harmless across all three backends. Build flags wired in
-// CMakeLists.txt: /arch:AVX2 (MSVC) or -mavx2 -mfma (GCC/Clang) for x86;
-// no flag needed for AArch64 NEON; -msimd128 for the WASM target.
-// ============================================================================
-#if defined(__wasm_simd128__)
-    #include <wasm_simd128.h>
-    #define PNG2AMIGA_BACKEND_WASM_SIMD 1
-    #define PNG2AMIGA_BACKEND_AVX2      0
-    #define PNG2AMIGA_BACKEND_NEON      0
-#elif defined(__AVX2__)
-    #include <immintrin.h>
-    #define PNG2AMIGA_BACKEND_AVX2      1
-    #define PNG2AMIGA_BACKEND_WASM_SIMD 0
-    #define PNG2AMIGA_BACKEND_NEON      0
-#elif defined(__ARM_NEON) || defined(__aarch64__)
-    #include <arm_neon.h>
-    #define PNG2AMIGA_BACKEND_NEON      1
-    #define PNG2AMIGA_BACKEND_AVX2      0
-    #define PNG2AMIGA_BACKEND_WASM_SIMD 0
-#else
-    #error "quantize.cpp requires AVX2 (x86_64), NEON (ARM64), or WASM SIMD \
-(Emscripten). For x86 enable /arch:AVX2 (MSVC) or -mavx2 -mfma (GCC/Clang); \
-for ARM64 NEON is implicit; for WASM use -msimd128."
-#endif
-
-namespace {
-using OKLab = png2amiga::color_space::OKLab;
-
-inline float oklab_dist_sq(OKLab a, OKLab b) noexcept {
-    float dL = (a.L - b.L) * png2amiga::color_space::WEIGHT_L;
-    float da = (a.a - b.a) * png2amiga::color_space::WEIGHT_A;
-    float db = (a.b - b.b) * png2amiga::color_space::WEIGHT_B;
-    return png2amiga::color_space::fma_dist_sq(dL, da, db);
-}
-
-// Pad an entry count up to the SIMD-friendly multiple. We pick 8 so AVX2
-// (8 lanes) consumes one block per iteration and WASM SIMD (4 lanes) two.
-constexpr std::size_t kSimdPadGroup = 8;
-constexpr std::size_t simd_pad(std::size_t n) noexcept {
-    return (n + kSimdPadGroup - 1) & ~(kSimdPadGroup - 1);
-}
-
-// Pre-weighted SoA OKLab samples. Each component is multiplied by the
-// per-channel perceptual weight at fill time so the distance kernel reduces
-// to plain (eL - cL)^2 + (ea - ca)^2 + (eb - cb)^2.
-struct SoaLab {
-    std::vector<float> L, a, b;
-    std::size_t valid_n{0};
-    std::size_t padded_n{0};
-};
-
-inline SoaLab build_soa_lab(std::span<const OKLab> in) {
-    SoaLab out;
-    out.valid_n  = in.size();
-    out.padded_n = simd_pad(in.size());
-    out.L.assign(out.padded_n, 0.0f);
-    out.a.assign(out.padded_n, 0.0f);
-    out.b.assign(out.padded_n, 0.0f);
-    for (std::size_t i = 0; i < in.size(); ++i) {
-        out.L[i] = in[i].L * png2amiga::color_space::WEIGHT_L;
-        out.a[i] = in[i].a * png2amiga::color_space::WEIGHT_A;
-        out.b[i] = in[i].b * png2amiga::color_space::WEIGHT_B;
-    }
-    return out;
-}
-
-// Kernel 1 — sum_i min(d_i, best[i]) * weight[i] for a single candidate.
-// Used by ocs_bruteforce_quantize's per-candidate scoring loop. Tail
-// entries have weight=0 so they contribute nothing regardless of d / best.
-inline float simd_clamped_weighted_sse(
-    const float* sL, const float* sA, const float* sB, const float* sW,
-    const float* best_dist, std::size_t n_padded,
-    float cl_L, float cl_a, float cl_b) noexcept
-{
-#if PNG2AMIGA_BACKEND_AVX2
-    __m256 cL = _mm256_set1_ps(cl_L);
-    __m256 cA = _mm256_set1_ps(cl_a);
-    __m256 cB = _mm256_set1_ps(cl_b);
-    __m256 acc = _mm256_setzero_ps();
-    for (std::size_t i = 0; i < n_padded; i += 8) {
-        __m256 eL = _mm256_loadu_ps(sL + i);
-        __m256 eA = _mm256_loadu_ps(sA + i);
-        __m256 eB = _mm256_loadu_ps(sB + i);
-        __m256 dL = _mm256_sub_ps(eL, cL);
-        __m256 dA = _mm256_sub_ps(eA, cA);
-        __m256 dB = _mm256_sub_ps(eB, cB);
-        __m256 d  = _mm256_fmadd_ps(dL, dL,
-                        _mm256_fmadd_ps(dA, dA,
-                            _mm256_mul_ps(dB, dB)));
-        __m256 bd = _mm256_loadu_ps(best_dist + i);
-        __m256 ef = _mm256_min_ps(d, bd);
-        __m256 w  = _mm256_loadu_ps(sW + i);
-        acc = _mm256_fmadd_ps(ef, w, acc);
-    }
-    __m128 lo = _mm256_castps256_ps128(acc);
-    __m128 hi = _mm256_extractf128_ps(acc, 1);
-    __m128 s  = _mm_add_ps(lo, hi);
-    s = _mm_add_ps(s, _mm_movehl_ps(s, s));
-    s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
-    return _mm_cvtss_f32(s);
-#elif PNG2AMIGA_BACKEND_NEON
-    float32x4_t cL = vdupq_n_f32(cl_L);
-    float32x4_t cA = vdupq_n_f32(cl_a);
-    float32x4_t cB = vdupq_n_f32(cl_b);
-    float32x4_t acc = vdupq_n_f32(0.0f);
-    for (std::size_t i = 0; i < n_padded; i += 4) {
-        float32x4_t eL = vld1q_f32(sL + i);
-        float32x4_t eA = vld1q_f32(sA + i);
-        float32x4_t eB = vld1q_f32(sB + i);
-        float32x4_t dL = vsubq_f32(eL, cL);
-        float32x4_t dA = vsubq_f32(eA, cA);
-        float32x4_t dB = vsubq_f32(eB, cB);
-        // d = dB*dB + dA*dA + dL*dL via two FMAs.
-        float32x4_t d  = vfmaq_f32(
-                            vfmaq_f32(vmulq_f32(dB, dB), dA, dA),
-                            dL, dL);
-        float32x4_t bd = vld1q_f32(best_dist + i);
-        float32x4_t ef = vminq_f32(d, bd);
-        float32x4_t w  = vld1q_f32(sW + i);
-        acc = vfmaq_f32(acc, ef, w);
-    }
-    return vaddvq_f32(acc);  // AArch64 horizontal add of 4 floats
-#else  // WASM SIMD
-    v128_t cL = wasm_f32x4_splat(cl_L);
-    v128_t cA = wasm_f32x4_splat(cl_a);
-    v128_t cB = wasm_f32x4_splat(cl_b);
-    v128_t acc = wasm_f32x4_const_splat(0.0f);
-    for (std::size_t i = 0; i < n_padded; i += 4) {
-        v128_t eL = wasm_v128_load(sL + i);
-        v128_t eA = wasm_v128_load(sA + i);
-        v128_t eB = wasm_v128_load(sB + i);
-        v128_t dL = wasm_f32x4_sub(eL, cL);
-        v128_t dA = wasm_f32x4_sub(eA, cA);
-        v128_t dB = wasm_f32x4_sub(eB, cB);
-        v128_t d  = wasm_f32x4_add(
-                        wasm_f32x4_mul(dL, dL),
-                        wasm_f32x4_add(
-                            wasm_f32x4_mul(dA, dA),
-                            wasm_f32x4_mul(dB, dB)));
-        v128_t bd = wasm_v128_load(best_dist + i);
-        v128_t ef = wasm_f32x4_min(d, bd);
-        v128_t w  = wasm_v128_load(sW + i);
-        acc = wasm_f32x4_add(acc, wasm_f32x4_mul(ef, w));
-    }
-    alignas(16) float buf[4];
-    wasm_v128_store(buf, acc);
-    return buf[0] + buf[1] + buf[2] + buf[3];
-#endif
-}
-
-// Kernel 2 — best_dist[i] = min(best_dist[i], d_i). Used after the greedy
-// picks a new palette colour to fold its distances into the running best.
-inline void simd_update_min_dist(
-    const float* sL, const float* sA, const float* sB,
-    float* best_dist, std::size_t n_padded,
-    float cl_L, float cl_a, float cl_b) noexcept
-{
-#if PNG2AMIGA_BACKEND_AVX2
-    __m256 cL = _mm256_set1_ps(cl_L);
-    __m256 cA = _mm256_set1_ps(cl_a);
-    __m256 cB = _mm256_set1_ps(cl_b);
-    for (std::size_t i = 0; i < n_padded; i += 8) {
-        __m256 eL = _mm256_loadu_ps(sL + i);
-        __m256 eA = _mm256_loadu_ps(sA + i);
-        __m256 eB = _mm256_loadu_ps(sB + i);
-        __m256 dL = _mm256_sub_ps(eL, cL);
-        __m256 dA = _mm256_sub_ps(eA, cA);
-        __m256 dB = _mm256_sub_ps(eB, cB);
-        __m256 d  = _mm256_fmadd_ps(dL, dL,
-                        _mm256_fmadd_ps(dA, dA,
-                            _mm256_mul_ps(dB, dB)));
-        __m256 bd = _mm256_loadu_ps(best_dist + i);
-        __m256 mn = _mm256_min_ps(bd, d);
-        _mm256_storeu_ps(best_dist + i, mn);
-    }
-#elif PNG2AMIGA_BACKEND_NEON
-    float32x4_t cL = vdupq_n_f32(cl_L);
-    float32x4_t cA = vdupq_n_f32(cl_a);
-    float32x4_t cB = vdupq_n_f32(cl_b);
-    for (std::size_t i = 0; i < n_padded; i += 4) {
-        float32x4_t eL = vld1q_f32(sL + i);
-        float32x4_t eA = vld1q_f32(sA + i);
-        float32x4_t eB = vld1q_f32(sB + i);
-        float32x4_t dL = vsubq_f32(eL, cL);
-        float32x4_t dA = vsubq_f32(eA, cA);
-        float32x4_t dB = vsubq_f32(eB, cB);
-        float32x4_t d  = vfmaq_f32(
-                            vfmaq_f32(vmulq_f32(dB, dB), dA, dA),
-                            dL, dL);
-        float32x4_t bd = vld1q_f32(best_dist + i);
-        float32x4_t mn = vminq_f32(bd, d);
-        vst1q_f32(best_dist + i, mn);
-    }
-#else  // WASM SIMD
-    v128_t cL = wasm_f32x4_splat(cl_L);
-    v128_t cA = wasm_f32x4_splat(cl_a);
-    v128_t cB = wasm_f32x4_splat(cl_b);
-    for (std::size_t i = 0; i < n_padded; i += 4) {
-        v128_t eL = wasm_v128_load(sL + i);
-        v128_t eA = wasm_v128_load(sA + i);
-        v128_t eB = wasm_v128_load(sB + i);
-        v128_t dL = wasm_f32x4_sub(eL, cL);
-        v128_t dA = wasm_f32x4_sub(eA, cA);
-        v128_t dB = wasm_f32x4_sub(eB, cB);
-        v128_t d  = wasm_f32x4_add(
-                        wasm_f32x4_mul(dL, dL),
-                        wasm_f32x4_add(
-                            wasm_f32x4_mul(dA, dA),
-                            wasm_f32x4_mul(dB, dB)));
-        v128_t bd = wasm_v128_load(best_dist + i);
-        v128_t mn = wasm_f32x4_min(bd, d);
-        wasm_v128_store(best_dist + i, mn);
-    }
-#endif
-}
-
-// Kernel 3 — k-means assignment. For each sample, find the nearest centroid
-// (argmin over k) and write best_d[i] / best_k[i]. Outer loop iterates over
-// centroids so the SoA sample buffers stream cache-linearly. Centroids are
-// expected pre-weighted (multiplied by WEIGHT_L/A/B at fill time).
-//
-// best_d / best_k must already be initialized — best_d to FLT_MAX, best_k
-// to 0 — so the first centroid pass populates them via the "d < best_d"
-// blend. Padded sample lanes write into best_k tail entries that the caller
-// will discard.
-inline void simd_assign_nearest(
-    const float* sL, const float* sA, const float* sB,
-    std::size_t n_samples_padded,
-    const float* cL, const float* cA, const float* cB,
-    std::size_t n_centroids,
-    float* best_d, std::uint32_t* best_k) noexcept
-{
-#if PNG2AMIGA_BACKEND_AVX2
-    for (std::size_t k = 0; k < n_centroids; ++k) {
-        __m256 ck   = _mm256_set1_ps(cL[k]);
-        __m256 cak  = _mm256_set1_ps(cA[k]);
-        __m256 cbk  = _mm256_set1_ps(cB[k]);
-        // Broadcast centroid index k as a float bit pattern (uint32 → ps
-        // reinterpretation). We use _mm256_blendv_ps to select between the
-        // existing best_k vector and the new k, treating both as raw bits.
-        // Bit-preserving so the integer pattern survives.
-        union { std::uint32_t u; float f; } kbits{static_cast<std::uint32_t>(k)};
-        __m256 kvec = _mm256_set1_ps(kbits.f);
-        for (std::size_t i = 0; i < n_samples_padded; i += 8) {
-            __m256 sLv = _mm256_loadu_ps(sL + i);
-            __m256 sAv = _mm256_loadu_ps(sA + i);
-            __m256 sBv = _mm256_loadu_ps(sB + i);
-            __m256 dL  = _mm256_sub_ps(sLv, ck);
-            __m256 dA  = _mm256_sub_ps(sAv, cak);
-            __m256 dB  = _mm256_sub_ps(sBv, cbk);
-            __m256 d   = _mm256_fmadd_ps(dL, dL,
-                            _mm256_fmadd_ps(dA, dA,
-                                _mm256_mul_ps(dB, dB)));
-            __m256 bd  = _mm256_loadu_ps(best_d + i);
-            __m256 cmp = _mm256_cmp_ps(d, bd, _CMP_LT_OQ);  // d < bd
-            __m256 nd  = _mm256_min_ps(d, bd);
-            _mm256_storeu_ps(best_d + i, nd);
-            // best_k as 32-bit bit pattern: blend uses the float form; the
-            // union round-trip keeps the integer encoding intact through the
-            // _ps register.
-            __m256 bk_f = _mm256_loadu_ps(reinterpret_cast<const float*>(best_k + i));
-            __m256 nbk  = _mm256_blendv_ps(bk_f, kvec, cmp);
-            _mm256_storeu_ps(reinterpret_cast<float*>(best_k + i), nbk);
-        }
-    }
-#elif PNG2AMIGA_BACKEND_NEON
-    for (std::size_t k = 0; k < n_centroids; ++k) {
-        float32x4_t ck   = vdupq_n_f32(cL[k]);
-        float32x4_t cak  = vdupq_n_f32(cA[k]);
-        float32x4_t cbk  = vdupq_n_f32(cB[k]);
-        uint32x4_t  kvec = vdupq_n_u32(static_cast<std::uint32_t>(k));
-        for (std::size_t i = 0; i < n_samples_padded; i += 4) {
-            float32x4_t sLv = vld1q_f32(sL + i);
-            float32x4_t sAv = vld1q_f32(sA + i);
-            float32x4_t sBv = vld1q_f32(sB + i);
-            float32x4_t dL  = vsubq_f32(sLv, ck);
-            float32x4_t dA  = vsubq_f32(sAv, cak);
-            float32x4_t dB  = vsubq_f32(sBv, cbk);
-            float32x4_t d   = vfmaq_f32(
-                                vfmaq_f32(vmulq_f32(dB, dB), dA, dA),
-                                dL, dL);
-            float32x4_t bd  = vld1q_f32(best_d + i);
-            uint32x4_t  cmp = vcltq_f32(d, bd);   // d < bd → all-1s mask
-            float32x4_t nd  = vminq_f32(d, bd);
-            vst1q_f32(best_d + i, nd);
-            uint32x4_t  bk  = vld1q_u32(best_k + i);
-            uint32x4_t  nbk = vbslq_u32(cmp, kvec, bk);  // cmp ? kvec : bk
-            vst1q_u32(best_k + i, nbk);
-        }
-    }
-#else  // WASM SIMD
-    for (std::size_t k = 0; k < n_centroids; ++k) {
-        v128_t ck  = wasm_f32x4_splat(cL[k]);
-        v128_t cak = wasm_f32x4_splat(cA[k]);
-        v128_t cbk = wasm_f32x4_splat(cB[k]);
-        v128_t kvec = wasm_u32x4_splat(static_cast<std::uint32_t>(k));
-        for (std::size_t i = 0; i < n_samples_padded; i += 4) {
-            v128_t sLv = wasm_v128_load(sL + i);
-            v128_t sAv = wasm_v128_load(sA + i);
-            v128_t sBv = wasm_v128_load(sB + i);
-            v128_t dL  = wasm_f32x4_sub(sLv, ck);
-            v128_t dA  = wasm_f32x4_sub(sAv, cak);
-            v128_t dB  = wasm_f32x4_sub(sBv, cbk);
-            v128_t d   = wasm_f32x4_add(
-                            wasm_f32x4_mul(dL, dL),
-                            wasm_f32x4_add(
-                                wasm_f32x4_mul(dA, dA),
-                                wasm_f32x4_mul(dB, dB)));
-            v128_t bd  = wasm_v128_load(best_d + i);
-            v128_t cmp = wasm_f32x4_lt(d, bd);   // mask, all-1s where true
-            v128_t nd  = wasm_f32x4_min(d, bd);
-            wasm_v128_store(best_d + i, nd);
-            v128_t bk  = wasm_v128_load(best_k + i);
-            v128_t nbk = wasm_v128_bitselect(kvec, bk, cmp);  // cmp ? kvec : bk
-            wasm_v128_store(best_k + i, nbk);
-        }
-    }
-#endif
-}
-} // namespace
 
 namespace png2amiga::quantize {
 
@@ -466,38 +146,8 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
     // Same approach as abc (AmigAtari Bitmap Converter).
     std::vector<std::uint16_t> palette_ocs(max_colors);
 
-    // SoA, pre-weighted entry buffers for the AVX2/WASM-SIMD inner loops.
-    // Padded to a multiple of 8 (kSimdPadGroup); padded entries carry
-    // weight=0 so they contribute nothing to the running total regardless
-    // of the distance they produce against any candidate.
-    std::size_t n_entries = entries.size();
-    std::size_t n_padded  = simd_pad(n_entries);
-    std::vector<float> e_L(n_padded, 0.0f);
-    std::vector<float> e_a(n_padded, 0.0f);
-    std::vector<float> e_b(n_padded, 0.0f);
-    std::vector<float> e_w(n_padded, 0.0f);
-    for (std::size_t i = 0; i < n_entries; ++i) {
-        auto& lab = lut.oklab[entries[i].ocs_index];
-        e_L[i] = lab.L * color_space::WEIGHT_L;
-        e_a[i] = lab.a * color_space::WEIGHT_A;
-        e_b[i] = lab.b * color_space::WEIGHT_B;
-        e_w[i] = static_cast<float>(entries[i].weight);
-    }
-
-    // Pre-weighted candidate OKLab table. Computing this once amortises
-    // the WEIGHT_* multiplies across max_colors × 4096 candidate visits.
-    std::array<float, 4096> cand_L, cand_a, cand_b;
-    for (std::uint16_t c = 0; c < 4096; ++c) {
-        cand_L[c] = lut.oklab[c].L * color_space::WEIGHT_L;
-        cand_a[c] = lut.oklab[c].a * color_space::WEIGHT_A;
-        cand_b[c] = lut.oklab[c].b * color_space::WEIGHT_B;
-    }
-
-    // Per-entry cache: current minimum distance to any palette colour
-    // already chosen. Padded tail set to FLT_MAX so the min in the SIMD
-    // kernel is a no-op, while the matching weight=0 ensures no
-    // contribution to the total either.
-    std::vector<float> best_dist(n_padded,
+    // Per-entry cache: current minimum distance to any existing palette color
+    std::vector<float> best_dist(entries.size(),
                                  std::numeric_limits<float>::max());
 
     // Track which OCS codes are already in the palette so the greedy
@@ -524,10 +174,14 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
 
         for (std::uint16_t candidate = 0; candidate < 4096; ++candidate) {
             if (picked[candidate]) continue;
-            float total = simd_clamped_weighted_sse(
-                e_L.data(), e_a.data(), e_b.data(), e_w.data(),
-                best_dist.data(), n_padded,
-                cand_L[candidate], cand_a[candidate], cand_b[candidate]);
+            auto cand_lab = lut.oklab[candidate];
+            float total = 0.0f;
+
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                float d = oklab_dist_sq(lut.oklab[entries[i].ocs_index], cand_lab);
+                float effective = std::min(d, best_dist[i]);
+                total += effective * static_cast<float>(entries[i].weight);
+            }
 
             bool cand_gray = is_gray_code(candidate);
             constexpr float kTieEps = 1e-6f;
@@ -560,11 +214,12 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
         palette_ocs[k] = best_ocs;
         picked[best_ocs] = true;
 
-        // Fold the newly-added colour's distances into the running best.
-        simd_update_min_dist(
-            e_L.data(), e_a.data(), e_b.data(),
-            best_dist.data(), n_padded,
-            cand_L[best_ocs], cand_a[best_ocs], cand_b[best_ocs]);
+        // Update per-entry best distances with the newly added color
+        auto new_lab = lut.oklab[best_ocs];
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            float d = oklab_dist_sq(lut.oklab[entries[i].ocs_index], new_lab);
+            best_dist[i] = std::min(best_dist[i], d);
+        }
     }
 
     // (k-means refinement removed — greedy sequential is sufficient)
@@ -636,81 +291,13 @@ Palette median_cut(std::span<const Color3f> colors,
             std::size_t start, count;
             float vol{};
             int axis{};
-            // Three single-channel min/max passes auto-vectorize cleanly under
-            // MSVC's loop optimizer: each pass touches one float per Color3f,
-            // which the optimizer recognises as a strided gather it can hoist
-            // into a tight scalar reduction with FP min/max instructions.
-            // The fused 6-way loop above mixed all three channels per iter and
-            // didn't vectorize.
             void compute(std::span<const Color3f> c) {
                 if (count == 0) { vol = 0; return; }
-                const auto* p = c.data() + start;
-                float minr = p[0].r, maxr = p[0].r;
-                float ming = p[0].g, maxg = p[0].g;
-                float minb = p[0].b, maxb = p[0].b;
-                for (std::size_t i = 1; i < count; ++i) {
-                    float r = p[i].r;
-                    minr = std::min(minr, r); maxr = std::max(maxr, r);
-                }
-                for (std::size_t i = 1; i < count; ++i) {
-                    float g = p[i].g;
-                    ming = std::min(ming, g); maxg = std::max(maxg, g);
-                }
-                for (std::size_t i = 1; i < count; ++i) {
-                    float b = p[i].b;
-                    minb = std::min(minb, b); maxb = std::max(maxb, b);
-                }
-                float rr=maxr-minr, rg=maxg-ming, rb=maxb-minb;
-                vol = std::max({rr,rg,rb});
-                axis = (rr>=rg && rr>=rb) ? 0 : (rg>=rb) ? 1 : 2;
-            }
-            // Fast path used after a median-cut split: the upper half's min on
-            // the parent's split axis is exactly *mid (nth_element guarantees
-            // it sits at position m and all elements >= it follow). Skips one
-            // of the six min/max scans; bit-identical to compute().
-            void compute_upper_after_split(std::span<const Color3f> c,
-                                           int split_axis,
-                                           float split_axis_min) {
-                if (count == 0) { vol = 0; return; }
-                const auto* p = c.data() + start;
-                float minr = p[0].r, maxr = p[0].r;
-                float ming = p[0].g, maxg = p[0].g;
-                float minb = p[0].b, maxb = p[0].b;
-                if (split_axis == 0) {
-                    minr = split_axis_min;
-                    for (std::size_t i = 1; i < count; ++i) {
-                        float r = p[i].r;
-                        maxr = std::max(maxr, r);
-                    }
-                } else {
-                    for (std::size_t i = 1; i < count; ++i) {
-                        float r = p[i].r;
-                        minr = std::min(minr, r); maxr = std::max(maxr, r);
-                    }
-                }
-                if (split_axis == 1) {
-                    ming = split_axis_min;
-                    for (std::size_t i = 1; i < count; ++i) {
-                        float g = p[i].g;
-                        maxg = std::max(maxg, g);
-                    }
-                } else {
-                    for (std::size_t i = 1; i < count; ++i) {
-                        float g = p[i].g;
-                        ming = std::min(ming, g); maxg = std::max(maxg, g);
-                    }
-                }
-                if (split_axis == 2) {
-                    minb = split_axis_min;
-                    for (std::size_t i = 1; i < count; ++i) {
-                        float b = p[i].b;
-                        maxb = std::max(maxb, b);
-                    }
-                } else {
-                    for (std::size_t i = 1; i < count; ++i) {
-                        float b = p[i].b;
-                        minb = std::min(minb, b); maxb = std::max(maxb, b);
-                    }
+                float minr=1e9f,maxr=-1e9f,ming=1e9f,maxg=-1e9f,minb=1e9f,maxb=-1e9f;
+                for (std::size_t i = start; i < start+count; ++i) {
+                    minr=std::min(minr,c[i].r); maxr=std::max(maxr,c[i].r);
+                    ming=std::min(ming,c[i].g); maxg=std::max(maxg,c[i].g);
+                    minb=std::min(minb,c[i].b); maxb=std::max(maxb,c[i].b);
                 }
                 float rr=maxr-minr, rg=maxg-ming, rb=maxb-minb;
                 vol = std::max({rr,rg,rb});
@@ -782,24 +369,14 @@ Palette median_cut(std::span<const Color3f> colors,
             auto& b = boxes[bi];
             auto bb = mc_work.begin()+static_cast<std::ptrdiff_t>(b.start);
             auto be = bb+static_cast<std::ptrdiff_t>(b.count);
-            auto m = b.count/2;
-            // Median-cut only needs the median position partitioned, not the
-            // whole box ordered — nth_element is O(N) vs std::sort's O(N log N).
-            // Within each half the order is irrelevant: the next split recomputes
-            // bbox extents and re-partitions on whichever axis still dominates.
-            auto mid = bb + static_cast<std::ptrdiff_t>(m);
-            int split_axis = b.axis;
-            switch (split_axis) {
-            case 0: std::nth_element(bb,mid,be,[](auto&p,auto&q){return p.r<q.r;}); break;
-            case 1: std::nth_element(bb,mid,be,[](auto&p,auto&q){return p.g<q.g;}); break;
-            case 2: std::nth_element(bb,mid,be,[](auto&p,auto&q){return p.b<q.b;}); break;
+            switch (b.axis) {
+            case 0: std::sort(bb,be,[](auto&p,auto&q){return p.r<q.r;}); break;
+            case 1: std::sort(bb,be,[](auto&p,auto&q){return p.g<q.g;}); break;
+            case 2: std::sort(bb,be,[](auto&p,auto&q){return p.b<q.b;}); break;
             }
-            float split_val = (split_axis == 0) ? mid->r
-                            : (split_axis == 1) ? mid->g
-                            : mid->b;
+            auto m = b.count/2;
             Box a{b.start,m}, c{b.start+m,b.count-m};
-            a.compute(mc_work);
-            c.compute_upper_after_split(mc_work, split_axis, split_val);
+            a.compute(mc_work); c.compute(mc_work);
             boxes[bi] = a; boxes.push_back(c);
         }
         std::vector<Color3f> centroids;
@@ -827,59 +404,42 @@ Palette median_cut(std::span<const Color3f> colors,
 
     constexpr int kmeans_max_iter = 40;
 
-    // Pre-weighted SoA samples. Pad to a multiple of 8 with zeros so the
-    // SIMD assignment kernel can stream evenly without a tail loop. The
-    // padded sample lanes deterministically resolve to centroid 0 (or
-    // whichever lies closest to the origin in pre-weighted OKLab space);
-    // we ignore those tail entries when accumulating cluster stats.
-    std::size_t n_samples = work.size();
-    std::size_t n_pad     = simd_pad(n_samples);
-    std::vector<float> sLv(n_pad, 0.0f), sAv(n_pad, 0.0f), sBv(n_pad, 0.0f);
-    for (std::size_t i = 0; i < n_samples; ++i) {
-        auto lab = color_space::linear_to_oklab(work[i]);
-        sLv[i] = lab.L * color_space::WEIGHT_L;
-        sAv[i] = lab.a * color_space::WEIGHT_A;
-        sBv[i] = lab.b * color_space::WEIGHT_B;
+    // Precompute all samples in OKLab
+    std::vector<color_space::OKLab> samples_lab(work.size());
+    for (std::size_t i = 0; i < work.size(); ++i) {
+        samples_lab[i] = color_space::linear_to_oklab(work[i]);
     }
 
-    // Centroids: kept in pre-weighted SoA for the SIMD kernel, plus
-    // unweighted OKLab so we can read them back at the end and compute
-    // raw deltas. (The k-means convergence check needs raw OKLab.)
-    std::vector<float> cLv(n_colors), cAv(n_colors), cBv(n_colors);
+    // Initialize centroids in OKLab from median-cut
     std::vector<color_space::OKLab> centroids(n_colors);
     for (std::size_t i = 0; i < n_colors; ++i) {
         centroids[i] = color_space::linear_to_oklab(result.colors[i]);
-        cLv[i] = centroids[i].L * color_space::WEIGHT_L;
-        cAv[i] = centroids[i].a * color_space::WEIGHT_A;
-        cBv[i] = centroids[i].b * color_space::WEIGHT_B;
     }
 
-    // Per-sample assignment + per-sample squared distance to its assigned
-    // centroid. Both padded to n_pad. uint32 for assignments so the SIMD
-    // blend can write 32-bit lanes.
-    std::vector<std::uint32_t> assignments(n_pad, 0);
-    std::vector<float>         pixel_errors(n_pad, std::numeric_limits<float>::max());
+    std::vector<std::size_t> assignments(work.size());
+    std::vector<float> pixel_errors(work.size());
 
     for (int iter = 0; iter < kmeans_max_iter; ++iter) {
-        // Reset to FLT_MAX before each pass; simd_assign_nearest folds
-        // the new minimum in via cmplt+blend.
-        std::fill(pixel_errors.begin(), pixel_errors.end(),
-                  std::numeric_limits<float>::max());
-        std::fill(assignments.begin(), assignments.end(), 0u);
-        simd_assign_nearest(
-            sLv.data(), sAv.data(), sBv.data(), n_pad,
-            cLv.data(), cAv.data(), cBv.data(), n_colors,
-            pixel_errors.data(), assignments.data());
+        // Assign each sample to nearest centroid
+        for (std::size_t i = 0; i < work.size(); ++i) {
+            float best_d = std::numeric_limits<float>::max();
+            std::size_t best_k = 0;
+            for (std::size_t k = 0; k < n_colors; ++k) {
+                float d = oklab_dist_sq(samples_lab[i], centroids[k]);
+                if (d < best_d) { best_d = d; best_k = k; }
+            }
+            assignments[i] = best_k;
+            pixel_errors[i] = best_d;
+        }
 
-        // Accumulate per-cluster stats. Only the first n_samples lanes are
-        // real input; padded tail is excluded.
+        // Accumulate per-cluster stats
         struct Acc { double L{}, a{}, b{}; std::size_t n{}; double total_err{}; };
         std::vector<Acc> acc(n_colors);
-        for (std::size_t i = 0; i < n_samples; ++i) {
+        for (std::size_t i = 0; i < work.size(); ++i) {
             auto k = assignments[i];
-            acc[k].L += static_cast<double>(sLv[i]) / static_cast<double>(color_space::WEIGHT_L);
-            acc[k].a += static_cast<double>(sAv[i]) / static_cast<double>(color_space::WEIGHT_A);
-            acc[k].b += static_cast<double>(sBv[i]) / static_cast<double>(color_space::WEIGHT_B);
+            acc[k].L += static_cast<double>(samples_lab[i].L);
+            acc[k].a += static_cast<double>(samples_lab[i].a);
+            acc[k].b += static_cast<double>(samples_lab[i].b);
             acc[k].n++;
             acc[k].total_err += static_cast<double>(pixel_errors[i]);
         }
@@ -888,7 +448,7 @@ Palette median_cut(std::span<const Color3f> colors,
         bool changed = false;
         for (std::size_t k = 0; k < n_colors; ++k) {
             if (acc[k].n == 0) {
-                // Re-seed from the farthest pixel of the worst cluster.
+                // Re-seed from the farthest pixel of the worst cluster
                 std::size_t worst_cluster = 0;
                 double worst_err = -1.0;
                 for (std::size_t j = 0; j < n_colors; ++j) {
@@ -897,23 +457,17 @@ Palette median_cut(std::span<const Color3f> colors,
                         worst_cluster = j;
                     }
                 }
+                // Find the farthest pixel in the worst cluster
                 float farthest_d = -1.0f;
                 std::size_t farthest_idx = 0;
-                for (std::size_t i = 0; i < n_samples; ++i) {
+                for (std::size_t i = 0; i < work.size(); ++i) {
                     if (assignments[i] == worst_cluster &&
                         pixel_errors[i] > farthest_d) {
                         farthest_d = pixel_errors[i];
                         farthest_idx = i;
                     }
                 }
-                centroids[k] = color_space::OKLab{
-                    sLv[farthest_idx] / color_space::WEIGHT_L,
-                    sAv[farthest_idx] / color_space::WEIGHT_A,
-                    sBv[farthest_idx] / color_space::WEIGHT_B,
-                };
-                cLv[k] = sLv[farthest_idx];
-                cAv[k] = sAv[farthest_idx];
-                cBv[k] = sBv[farthest_idx];
+                centroids[k] = samples_lab[farthest_idx];
                 changed = true;
                 continue;
             }
@@ -927,9 +481,6 @@ Palette median_cut(std::span<const Color3f> colors,
             if (oklab_dist_sq(nlab, centroids[k]) > 1e-12f) {
                 changed = true;
                 centroids[k] = nlab;
-                cLv[k] = nlab.L * color_space::WEIGHT_L;
-                cAv[k] = nlab.a * color_space::WEIGHT_A;
-                cBv[k] = nlab.b * color_space::WEIGHT_B;
             }
         }
         if (!changed) break;
@@ -1241,31 +792,19 @@ std::pair<std::size_t, std::size_t> find_closest_pair(
 
 // Compute total weighted SSE (sum over samples of squared distance to nearest
 // palette entry). Used as the objective for greedy swap acceptance.
-//
-// SoA conversion happens inside: each call is O(n + n*k); the SoA build
-// is dwarfed by the SIMD assignment kernel except at trivially small
-// sample counts (where the function isn't hot anyway).
 float palette_total_sse(
     std::span<const color_space::OKLab> samples_lab,
     std::span<const color_space::OKLab> pal_lab) {
 
-    auto soa = build_soa_lab(samples_lab);
-    std::size_t k_n = pal_lab.size();
-    std::vector<float> cL(k_n), cA(k_n), cB(k_n);
-    for (std::size_t k = 0; k < k_n; ++k) {
-        cL[k] = pal_lab[k].L * color_space::WEIGHT_L;
-        cA[k] = pal_lab[k].a * color_space::WEIGHT_A;
-        cB[k] = pal_lab[k].b * color_space::WEIGHT_B;
-    }
-    std::vector<float> best_d(soa.padded_n,
-                              std::numeric_limits<float>::max());
-    std::vector<std::uint32_t> best_k(soa.padded_n, 0u);
-    simd_assign_nearest(soa.L.data(), soa.a.data(), soa.b.data(), soa.padded_n,
-                        cL.data(), cA.data(), cB.data(), k_n,
-                        best_d.data(), best_k.data());
-
     float total = 0.0f;
-    for (std::size_t i = 0; i < soa.valid_n; ++i) total += best_d[i];
+    for (auto& s : samples_lab) {
+        float best = std::numeric_limits<float>::max();
+        for (auto& pc : pal_lab) {
+            float d = oklab_dist_sq(s, pc);
+            if (d < best) best = d;
+        }
+        total += best;
+    }
     return total;
 }
 
@@ -1276,34 +815,25 @@ std::vector<color_space::OKLab> kmeans_refine(
     std::vector<color_space::OKLab> centroids,
     int iterations) {
 
-    auto soa = build_soa_lab(samples_lab);
     auto n = centroids.size();
-    std::vector<float> cL(n), cA(n), cB(n);
-    for (std::size_t k = 0; k < n; ++k) {
-        cL[k] = centroids[k].L * color_space::WEIGHT_L;
-        cA[k] = centroids[k].a * color_space::WEIGHT_A;
-        cB[k] = centroids[k].b * color_space::WEIGHT_B;
-    }
-    std::vector<std::uint32_t> assignments(soa.padded_n, 0u);
-    std::vector<float>         pixel_errors(soa.padded_n,
-                                            std::numeric_limits<float>::max());
-
+    std::vector<std::size_t> assignments(samples_lab.size());
     for (int iter = 0; iter < iterations; ++iter) {
-        std::fill(pixel_errors.begin(), pixel_errors.end(),
-                  std::numeric_limits<float>::max());
-        std::fill(assignments.begin(), assignments.end(), 0u);
-        simd_assign_nearest(soa.L.data(), soa.a.data(), soa.b.data(),
-                            soa.padded_n,
-                            cL.data(), cA.data(), cB.data(), n,
-                            pixel_errors.data(), assignments.data());
-
+        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
+            float best = std::numeric_limits<float>::max();
+            std::size_t bk = 0;
+            for (std::size_t k = 0; k < n; ++k) {
+                float d = oklab_dist_sq(samples_lab[i], centroids[k]);
+                if (d < best) { best = d; bk = k; }
+            }
+            assignments[i] = bk;
+        }
         struct Acc { double L{}, a{}, b{}; std::size_t n{}; };
         std::vector<Acc> acc(n);
-        for (std::size_t i = 0; i < soa.valid_n; ++i) {
+        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
             auto& A = acc[assignments[i]];
-            A.L += static_cast<double>(soa.L[i]) / static_cast<double>(color_space::WEIGHT_L);
-            A.a += static_cast<double>(soa.a[i]) / static_cast<double>(color_space::WEIGHT_A);
-            A.b += static_cast<double>(soa.b[i]) / static_cast<double>(color_space::WEIGHT_B);
+            A.L += static_cast<double>(samples_lab[i].L);
+            A.a += static_cast<double>(samples_lab[i].a);
+            A.b += static_cast<double>(samples_lab[i].b);
             ++A.n;
         }
         bool changed = false;
@@ -1318,9 +848,6 @@ std::vector<color_space::OKLab> kmeans_refine(
             if (oklab_dist_sq(nlab, centroids[k]) > 1e-12f) {
                 changed = true;
                 centroids[k] = nlab;
-                cL[k] = nlab.L * color_space::WEIGHT_L;
-                cA[k] = nlab.a * color_space::WEIGHT_A;
-                cB[k] = nlab.b * color_space::WEIGHT_B;
             }
         }
         if (!changed) break;
@@ -1352,10 +879,6 @@ void apply_palette_diversity(Palette& palette,
     for (std::size_t i = 0; i < work.size(); ++i)
         samples_lab[i] = color_space::linear_to_oklab(work[i]);
 
-    // SoA samples shared across all hot loops in this function. Built once
-    // (the AOS samples_lab is kept around for the AOS-out push at the end).
-    auto soa_samples = build_soa_lab(samples_lab);
-
     // Working palette in OKLab
     std::vector<color_space::OKLab> pal_lab(palette.colors.size());
     for (std::size_t i = 0; i < palette.colors.size(); ++i)
@@ -1365,35 +888,22 @@ void apply_palette_diversity(Palette& palette,
     float best_sse = palette_total_sse(samples_lab, pal_lab);
 
     // Cluster-assignment error accumulation: find the cluster with highest
-    // total SSE — that's where we should reseed a centroid. One SIMD assign
-    // pass populates best_d / best_k for every sample; both the cluster-
-    // error accumulation and the farthest-sample scan reuse those buffers.
+    // total SSE — that's where we should reseed a centroid.
     auto find_worst_cluster_centroid = [&](std::vector<color_space::OKLab>& out_centroid) -> bool {
-        std::size_t k_n = pal_lab.size();
-        std::vector<float> pcL(k_n), pcA(k_n), pcB(k_n);
-        for (std::size_t k = 0; k < k_n; ++k) {
-            pcL[k] = pal_lab[k].L * color_space::WEIGHT_L;
-            pcA[k] = pal_lab[k].a * color_space::WEIGHT_A;
-            pcB[k] = pal_lab[k].b * color_space::WEIGHT_B;
-        }
-        std::vector<float> best_d(soa_samples.padded_n,
-                                  std::numeric_limits<float>::max());
-        std::vector<std::uint32_t> best_k(soa_samples.padded_n, 0u);
-        simd_assign_nearest(
-            soa_samples.L.data(), soa_samples.a.data(), soa_samples.b.data(),
-            soa_samples.padded_n,
-            pcL.data(), pcA.data(), pcB.data(), k_n,
-            best_d.data(), best_k.data());
-
         struct Acc { double L{}, a{}, b{}, err{}; std::size_t n{}; };
-        std::vector<Acc> acc(k_n);
-        for (std::size_t i = 0; i < soa_samples.valid_n; ++i) {
-            auto& A = acc[best_k[i]];
-            A.L += static_cast<double>(samples_lab[i].L);
-            A.a += static_cast<double>(samples_lab[i].a);
-            A.b += static_cast<double>(samples_lab[i].b);
-            A.err += static_cast<double>(best_d[i]);
-            ++A.n;
+        std::vector<Acc> acc(pal_lab.size());
+        for (auto& s : samples_lab) {
+            float best = std::numeric_limits<float>::max();
+            std::size_t bk = 0;
+            for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                float d = oklab_dist_sq(s, pal_lab[k]);
+                if (d < best) { best = d; bk = k; }
+            }
+            acc[bk].L += static_cast<double>(s.L);
+            acc[bk].a += static_cast<double>(s.a);
+            acc[bk].b += static_cast<double>(s.b);
+            acc[bk].err += static_cast<double>(best);
+            ++acc[bk].n;
         }
         // Pick cluster with largest total error, then split it: new centroid
         // at the pixel farthest from the cluster's current centroid.
@@ -1402,11 +912,17 @@ void apply_palette_diversity(Palette& palette,
             if (acc[k].err > worst_err) { worst_err = acc[k].err; worst_k = k; }
         }
         if (acc[worst_k].n < 2) return false;
+        // Find farthest sample assigned to worst_k
         float fd = -1.0f; std::size_t fi = 0;
-        for (std::size_t i = 0; i < soa_samples.valid_n; ++i) {
-            if (best_k[i] == worst_k && best_d[i] > fd) {
-                fd = best_d[i]; fi = i;
+        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
+            // Recompute assignment (cheap enough for a single pass)
+            float bd = std::numeric_limits<float>::max();
+            std::size_t bk = 0;
+            for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                float d = oklab_dist_sq(samples_lab[i], pal_lab[k]);
+                if (d < bd) { bd = d; bk = k; }
             }
+            if (bk == worst_k && bd > fd) { fd = bd; fi = i; }
         }
         out_centroid.clear();
         out_centroid.push_back(samples_lab[fi]);
@@ -1794,10 +1310,8 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             for (auto p : picked) {
                 if (p == i) { min_d = 0; break; }
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[p];
-                double dL = static_cast<double>(a.L) - static_cast<double>(b.L);
-                double da = static_cast<double>(a.a) - static_cast<double>(b.a);
-                double db = static_cast<double>(a.b) - static_cast<double>(b.b);
-                double d = png2amiga::color_space::fma_dist_sq(dL, da, db);
+                double dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                double d = dL*dL + da*da + db*db;
                 if (d < min_d) min_d = d;
             }
             score[i] = static_cast<double>(hist[i]) * min_d;
@@ -1823,7 +1337,7 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             for (std::size_t k = 0; k < picked.size(); ++k) {
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[picked[k]];
                 float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-                float d = png2amiga::color_space::fma_dist_sq(dL, da, db);
+                float d = dL*dL + da*da + db*db;
                 if (d < best_d) { best_d = d; best_k = k; }
             }
             auto w = static_cast<double>(hist[i]);
@@ -1857,7 +1371,7 @@ Palette ega_histogram(const Image& image, std::size_t K) {
                 if (taken[g]) continue;
                 auto& gl = gamut_lab[g];
                 float dL = cent.L - gl.L, da = cent.a - gl.a, db = cent.b - gl.b;
-                float d = png2amiga::color_space::fma_dist_sq(dL, da, db);
+                float d = dL*dL + da*da + db*db;
                 if (d < best_d) { best_d = d; best = static_cast<std::uint8_t>(g); }
             }
             new_picked[k] = best;

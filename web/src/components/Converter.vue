@@ -16,7 +16,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isTileFreeformMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaText, isTileFreeformMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -606,14 +606,14 @@ const aspectLocked = ref(true)
 // modes keep the simple source-aspect rule.
 const cgaTextLockedAspect = ref<number>(0)
 watch([aspectLocked, () => options.mode], ([locked, mode]) => {
-  cgaTextLockedAspect.value = (locked && mode === 'cga-text80x100' &&
+  cgaTextLockedAspect.value = (locked && isCgaText(mode) &&
                                options.width > 0 && options.height > 0)
     ? options.height / options.width
     : 0
 })
 
 function widthHeightRatio(): number {
-  if (options.mode === 'cga-text80x100' && cgaTextLockedAspect.value > 0) {
+  if (isCgaText(options.mode) && cgaTextLockedAspect.value > 0) {
     return cgaTextLockedAspect.value
   }
   if (!imageWidth.value || !imageHeight.value) return 0
@@ -790,7 +790,7 @@ function formatTileStatsTiled(result: ConvertResult, mode: string): string {
 }
 
 function formatTileStats(result: ConvertResult, mode: string): string {
-  if (mode === 'cga-text80x100') return formatTileStatsCgaText(result)
+  if (isCgaText(mode)) return formatTileStatsCgaText(result)
   return formatTileStatsTiled(result, mode)
 }
 
@@ -896,7 +896,7 @@ function sourceWidthFromResult(result: ConvertResult): number {
 // flipping Resize on prepopulates 640x200 instead of 640x400 for a
 // canonical default.
 function sourceHeightFromResult(result: ConvertResult): number {
-  return options.mode === 'cga-text80x100'
+  return isCgaText(options.mode)
     ? result.height * 2 : result.height
 }
 
@@ -1910,7 +1910,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <!-- CGA text mode only: per-cell error metric. When blur is
                    selected the dither selector below is hidden, since blur
                    needs the continuous source. -->
-              <div v-if="options.mode === 'cga-text80x100'" class="grid align-items-center">
+              <div v-if="isCgaText(options.mode)" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold"
                   title="Per-cell error metric for the glyph + (fg, bg) brute-force search. Pappas-Neuhoff (perceptual blur) needs the continuous source and hides the dither selector. MSE pairs with pixel-level dither below.">
                   Metric
@@ -1976,7 +1976,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <div v-if="!(options.mode === 'cga-text80x100' && options.cgaTextMetric !== 'mse')"
+              <div v-if="!(isCgaText(options.mode) && options.cgaTextMetric !== 'mse')"
                 class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
                 <div class="col-8">

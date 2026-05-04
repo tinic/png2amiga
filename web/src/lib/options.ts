@@ -146,7 +146,10 @@ const ALL_MODES: ModeOption[] = [
   { value: 'cga-320',          label: 'CGA 320x200 (4 colors)',        chipset: 'cga' },
   { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
   { value: 'cga-composite',    label: 'CGA Composite (160x200)',       chipset: 'cga' },
-  { value: 'cga-text80x100',   label: 'CGA Text 80x100 (8x8 font)',    chipset: 'cga' },
+  { value: 'cga-text80x200',   label: 'CGA Text 80x200',  chipset: 'cga' },
+  { value: 'cga-text80x100',   label: 'CGA Text 80x100',  chipset: 'cga' },
+  { value: 'cga-text80x50',    label: 'CGA Text 80x50',   chipset: 'cga' },
+  { value: 'cga-text80x25',    label: 'CGA Text 80x25',   chipset: 'cga' },
   // SNES Mode 7 — packed tile + tilemap output, ≤ 256 unique tiles via
   // greedy distance-merging when content has more.
   { value: 'snes-mode7-256',    label: 'Mode 7 (256 BGR555 palette)',
@@ -572,12 +575,19 @@ export function isC64CharsetMode(mode: string): boolean {
 }
 
 // Tile-based modes that accept arbitrary width/height padded to the
+// True for any cga-text super-chunky mode (80×{200, 100, 50, 25}).
+// All four use the same encoder + UI shape; only the cell height (and
+// hence row count / output buffer size) differs.
+export function isCgaText(mode: string): boolean {
+  return mode === 'cga-text80x200' || mode === 'cga-text80x100'
+      || mode === 'cga-text80x50'  || mode === 'cga-text80x25'
+}
 // per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
 // At freeform mode the Native PAR / fixed-buffer behaviour is replaced
 // by the user-typed dims; at default size they stay fixed-buffer.
 export function isTileFreeformMode(mode: string): boolean {
   return isC64CharsetMode(mode) || isGenesisMode(mode) || isSnesMode(mode)
-      || mode === 'cga-text80x100'
+      || isCgaText(mode)
 }
 // SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
 // 2048-colour gamut comes from per-tile palette-field bits. Yliluoma
@@ -614,7 +624,10 @@ const MODE_PAR: Record<string, number> = {
   'cga-320':    0.833,
   'cga-640':    0.417,
   'cga-composite': 1.667,
+  'cga-text80x200': 0.417,
   'cga-text80x100': 0.417,
+  'cga-text80x50':  0.417,
+  'cga-text80x25':  0.417,
   // SNES Mode 7 — 256×224 → 4:3 ⇒ PAR ≈ 1.167 (slightly wide pixels).
   'snes-mode7-256':    1.167,
   'snes-mode7-direct': 1.167,
@@ -675,7 +688,10 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'ega-hi':          { sx: 1, sy: 1 },
   'ega-640':         { sx: 1, sy: 2 },
   'cga-640':         { sx: 1, sy: 2 },
+  'cga-text80x200':  { sx: 1, sy: 1 },  // 1-scan cells: backing already 200 high
   'cga-text80x100':  { sx: 1, sy: 2 },
+  'cga-text80x50':   { sx: 1, sy: 2 },
+  'cga-text80x25':   { sx: 1, sy: 2 },
   // C64 modes: backing-canvas scale before PAR-aware CSS stretch.
   //   hires / AFLI: encoder is 320×200 native; 2×2 → 640×400 backing.
   //   multicolor / FLI: encoder is 160×200 logical; 4×2 → 640×400

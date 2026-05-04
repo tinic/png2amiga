@@ -284,6 +284,18 @@ thread_local bool t_in_parallel_for = false;
 void parallel_for(std::size_t n,
                   std::function<void(std::size_t)> body) {
     if (n == 0) return;
+#ifdef __EMSCRIPTEN__
+    // WASM: convertRGBA / convertViewer / convertIFF / etc. already
+    // run on a Web-Worker-hosted pthread. Spawning more pthreads from
+    // that worker hits an Emscripten limitation: pthread_setspecific
+    // on the new thread's __thread_struct OOBs because TLS for the
+    // child wasn't mapped (the parent isn't the main thread). Run
+    // serially under WASM — the strips / HAM-DP / HAM-ED workloads
+    // are quick enough at 320×N that the perf cost is acceptable on
+    // the web. Native build keeps real parallelism via the path below.
+    for (std::size_t i = 0; i < n; ++i) body(i);
+    return;
+#else
     if (t_in_parallel_for) {
         // Already inside a parallel_for on this thread — run serially
         // to avoid nested oversubscription.
@@ -294,10 +306,7 @@ void parallel_for(std::size_t n,
         std::thread::hardware_concurrency());
     n_threads = std::min(n_threads, static_cast<unsigned>(n));
     if (n_threads == 1) {
-        // Skip thread overhead on single-core hosts (or when WASM
-        // navigator.hardwareConcurrency reports 1 because the browser
-        // isn't cross-origin isolated and pthreads aren't really
-        // available — Emscripten falls back to serial in that case).
+        // Skip thread overhead on single-core hosts.
         for (std::size_t i = 0; i < n; ++i) body(i);
         return;
     }
@@ -316,6 +325,7 @@ void parallel_for(std::size_t n,
     for (unsigned t = 0; t < n_threads; ++t)
         threads.emplace_back(worker);
     threads.clear();  // join on destruction
+#endif
 }
 
 Result<Image> render_preview(

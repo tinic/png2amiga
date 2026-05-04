@@ -1414,6 +1414,9 @@ Result<HamResult> encode_ham_generic(
             }
         };
 
+#ifdef __EMSCRIPTEN__
+        worker();
+#else
         auto n_threads = std::max<unsigned>(1,
             std::thread::hardware_concurrency());
         if (n_threads > h) n_threads = static_cast<unsigned>(h);
@@ -1426,6 +1429,7 @@ Result<HamResult> encode_ham_generic(
                 threads.emplace_back(worker);
             threads.clear();
         }
+#endif
         total_error += static_cast<float>(atomic_err.load());
     } else if (use_error_diffusion) {
         // Error diffusion for HAM: pre-dither the image from full precision
@@ -1495,6 +1499,9 @@ Result<HamResult> encode_ham_generic(
             }
         };
         {
+#ifdef __EMSCRIPTEN__
+            worker_ed();
+#else
             auto n = std::max<unsigned>(1, std::thread::hardware_concurrency());
             if (n > h) n = static_cast<unsigned>(h);
             if (n == 1) {
@@ -1506,6 +1513,7 @@ Result<HamResult> encode_ham_generic(
                     threads.emplace_back(worker_ed);
                 threads.clear();
             }
+#endif
         }
         total_error += static_cast<float>(atomic_err_ed.load());
     } else {
@@ -1536,6 +1544,9 @@ Result<HamResult> encode_ham_generic(
             }
         };
 
+#ifdef __EMSCRIPTEN__
+        worker();
+#else
         auto n_threads = std::max<unsigned>(1,
             std::thread::hardware_concurrency());
         if (n_threads > h) n_threads = static_cast<unsigned>(h);
@@ -1548,6 +1559,7 @@ Result<HamResult> encode_ham_generic(
                 threads.emplace_back(worker);
             threads.clear();  // join on destruction
         }
+#endif
         total_error += static_cast<float>(atomic_err.load());
     }
 
@@ -2131,6 +2143,9 @@ Result<HamResult> encode_ham_copper_generic(
             }
         };
 
+#ifdef __EMSCRIPTEN__
+        worker();
+#else
         auto n_threads = std::max<unsigned>(1,
             std::thread::hardware_concurrency());
         if (n_threads > h) n_threads = static_cast<unsigned>(h);
@@ -2143,6 +2158,7 @@ Result<HamResult> encode_ham_copper_generic(
                 threads.emplace_back(worker);
             threads.clear();  // join on destruction
         }
+#endif
         out.total_error = static_cast<float>(atomic_err.load());
         report_global(stage);
         return out;
