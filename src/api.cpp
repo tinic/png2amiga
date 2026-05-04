@@ -1065,6 +1065,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.text_scanline_offset = res->scanline_offset;
         result.text_cell_height =
             static_cast<std::uint8_t>(res->cell_height_scanlines);
+        // Surface the cell grid via the genesis-cells field so the web
+        // result string can show "cells: 80×100" same way the CLI's
+        // Encoded line does. cols = width/8 always; rows is derived as
+        // genesis_total_cells / cols on the consumer side.
+        result.genesis_total_cells = res->cols * res->rows;
         // Note: convert_raw appends the 16-byte IrgbIRGB ATC palette
         // onto .raw output for EGA text modes — kept out of raw_frame
         // here so convert_viewer can hand only the char+attr bytes to

@@ -737,7 +737,18 @@ function formatTileStatsGenesis(u: number, t: number, ram_kb: string): string {
   return `${tag}tiles: ${u}/${t} (${pct.toFixed(1)}% dedup, ${ram_kb} KB VRAM)`
 }
 
-function formatTileStats(result: ConvertResult, mode: string): string {
+function formatTileStatsCgaText(result: ConvertResult): string {
+  // cga-text80x100 reports cell-grid only (no glyph dedup): cols = w/8,
+  // rows derived from genesisTotalCells (re-used as the total cell
+  // count). Matches the CLI's "Encoded: 8000 cells (80×100)" line.
+  const t = result.genesisTotalCells ?? 0
+  if (!t) return ''
+  const cols = Math.max(1, Math.floor(result.width / 8))
+  const rows = Math.max(1, Math.round(t / cols))
+  return `${t} cells (${cols}×${rows})`
+}
+
+function formatTileStatsTiled(result: ConvertResult, mode: string): string {
   if (!result.genesisTotalCells || result.genesisUniqueTiles == null) return ''
   const u = result.genesisUniqueTiles
   const t = result.genesisTotalCells
@@ -753,6 +764,11 @@ function formatTileStats(result: ConvertResult, mode: string): string {
     return formatTileStatsBudget(u, t, ram_kb, 256, 'VRAM')
   }
   return formatTileStatsGenesis(u, t, ram_kb)
+}
+
+function formatTileStats(result: ConvertResult, mode: string): string {
+  if (mode === 'cga-text80x100') return formatTileStatsCgaText(result)
+  return formatTileStatsTiled(result, mode)
 }
 
 // Combine PSNR + S2 into a single comma-joined fragment so
