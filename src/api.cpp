@@ -951,6 +951,49 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
+        // Freeform = user passed --width / --height (web Resize override
+        // path). Halve the image vertically (averaging row pairs) so
+        // square-pixel source lands in the encoder's hardware-pixel
+        // space (1 source row = 1 hw scanline). Default canonical
+        // 640×200 input is already at hw dims — no halve. Mirrors
+        // main.cpp's freeform halve so CLI and web produce identical
+        // cell counts.
+        bool cga_freeform = options.width > 0 || options.height > 0;
+        if (cga_freeform) {
+            if ((image->height() % 2) != 0) {
+                Image padded(image->width(), image->height() + 1);
+                for (std::size_t y = 0; y < image->height(); ++y)
+                    for (std::size_t x = 0; x < image->width(); ++x)
+                        padded[x, y] = (*image)[x, y];
+                *image = std::move(padded);
+            }
+            std::size_t halved_h = image->height() / 2;
+            Image halved(image->width(), halved_h);
+            for (std::size_t y = 0; y < halved_h; ++y) {
+                for (std::size_t x = 0; x < image->width(); ++x) {
+                    auto a = (*image)[x, y * 2];
+                    auto b = (*image)[x, y * 2 + 1];
+                    halved[x, y] = {(a.r + b.r) * 0.5f,
+                                    (a.g + b.g) * 0.5f,
+                                    (a.b + b.b) * 0.5f};
+                }
+            }
+            *image = std::move(halved);
+        }
+        // Pad to encoder's 8×2 cell grid.
+        {
+            constexpr std::size_t cw = 8;
+            constexpr std::size_t ch = 2;
+            std::size_t pw = ((image->width()  + cw - 1) / cw) * cw;
+            std::size_t ph = ((image->height() + ch - 1) / ch) * ch;
+            if (pw != image->width() || ph != image->height()) {
+                Image padded(pw, ph);
+                for (std::size_t y = 0; y < image->height(); ++y)
+                    for (std::size_t x = 0; x < image->width(); ++x)
+                        padded[x, y] = (*image)[x, y];
+                *image = std::move(padded);
+            }
+        }
         // Build fg/bg candidate palette: CGA text = fixed IRGB master,
         // EGA text = image-adaptive 16-of-64 via the EGA histogram quantizer
         // (same mechanism as EGA graphics modes). The 16 colors correspond
@@ -991,6 +1034,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     cga_metric, options.on_progress);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
+        // Freeform: post-double the rendered preview vertically so
+        // returned dims match the user's source-pixel target (each hw
+        // scanline shown twice = the un-halve from above). Default
+        // canonical keeps the raw 640×200 hw render — downstream PAR
+        // display logic doubles to 4:3 visible.
+        if (cga_freeform) {
+            Image doubled(preview.width(), preview.height() * 2);
+            for (std::size_t y = 0; y < preview.height(); ++y) {
+                for (std::size_t x = 0; x < preview.width(); ++x) {
+                    auto v = preview[x, y];
+                    doubled[x, y * 2]     = v;
+                    doubled[x, y * 2 + 1] = v;
+                }
+            }
+            preview = std::move(doubled);
+        }
 
         PipelineResult result;
         result.rendered = std::move(preview);
