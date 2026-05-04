@@ -23,6 +23,48 @@ namespace png2amiga::cga_text {
 
 namespace {
 
+// ---------------------------------------------------------------------------
+// Per-mode default glyph-exclusion predicate — applied when the caller
+// doesn't pass an explicit `restrict_chars` span (i.e. the encoder would
+// otherwise try all 256 IBM CP437 glyphs).
+//
+// Each cell-geometry has different aliasing characteristics, so the
+// useful glyph palette differs:
+//
+//   cga_text80x200 (1-scan cells, 8×1 px) — a single scanline of each
+//      glyph contributes. Almost every glyph collapses to a one-byte
+//      pattern; the dedup pass folds 256 glyphs to ≤ 256 patterns.
+//
+//   cga_text80x100 (2-scan cells, 8×2 px) — only the top 2 scanlines of
+//      each glyph contribute. Most glyphs collapse to a tiny blob; box-
+//      drawing characters in particular look like odd dashes.
+//
+//   cga_text80x50  (4-scan cells, 8×4 px) — half-height glyphs. Letters
+//      are starting to be recognisable; box-drawing block (0xB3..0xCF)
+//      reads as straight lines through detail and tends to be wrong.
+//
+//   cga_text80x25  (8-scan cells, 8×8 px) — full glyphs. All 256
+//      glyphs are usable in principle, but the box-drawing block still
+//      tends to inject "schematic" lines through natural images.
+//
+// EDIT THIS to play with what's allowed per mode. Add ranges, list
+// specific codes, flip the condition, etc.
+constexpr bool is_excluded_glyph(amiga::Mode mode, std::uint8_t ch) noexcept {
+    switch (mode) {
+    case amiga::Mode::cga_text80x200:
+        return false;
+    case amiga::Mode::cga_text80x100:
+        return false;
+    case amiga::Mode::cga_text80x50:
+        return ch >= 0xB3;
+    case amiga::Mode::cga_text80x25:
+        return false;
+    default:
+        return false;  // not a cga-text mode; encode() rejects upstream
+    }
+}
+// ---------------------------------------------------------------------------
+
 // Per-cell metric vectors for each of the 16 CGA master colors. The
 // .lab field name is historical — its contents depend on the metric
 // space chosen by encode() (currently sRGB; see comment there).
@@ -54,14 +96,21 @@ encode(const Image& image, amiga::Mode mode,
         }};
     }
 
-    // CGA 80x100 hardware: 80 cols × 8 px wide cells, 2 hardware scanlines
-    // tall. The encoder takes the input as hardware-pixel dims (1 source
-    // pixel = 1 hardware dot). Callers that have square-pixel source pre-
-    // halve the image vertically before invoking the encoder. Single
-    // mode — no canonical/freeform branch here.
+    // CGA 80x100 / 80x50 hardware: 80 cols × 8 px wide cells, 2 or 4
+    // hardware scanlines per cell (CRTC max-scan-line=1 for 80x100,
+    // max-scan-line=3 for 80x50). The encoder takes the input as
+    // hardware-pixel dims (1 source pixel = 1 hardware dot). Callers
+    // that have square-pixel source pre-halve the image vertically
+    // before invoking the encoder.
     const palette::FontRef& font = palette::kFontCga8x8;
-    constexpr std::size_t cell_h = 2u;
+    const std::size_t cell_h = amiga::cga_text_cell_height(mode);
     constexpr std::size_t cell_w = 8u;
+    // Stack-allocated cell buffers are sized to the max supported cell
+    // height (8 — the 80x25 standard-text-geom cell) so a single code
+    // path handles 80x100 (cell_h=2), 80x50 (cell_h=4), and 80x25
+    // (cell_h=8). Entries past `cell_n = 8 * cell_h` stay untouched.
+    constexpr std::size_t kMaxCellH = 8u;
+    constexpr std::size_t kMaxCellN = 8u * kMaxCellH;  // 64
     if (image.width()  == 0 || image.height() == 0
         || (image.width()  % cell_w) != 0
         || (image.height() % cell_h) != 0) {
@@ -77,12 +126,19 @@ encode(const Image& image, amiga::Mode mode,
     const std::size_t cols = disp_w / cell_w;
     const std::size_t rows = disp_h / cell_h;
 
-    // Candidate character set. If empty, use all 256.
+    // Candidate character set. If the caller passed an explicit list, use
+    // it verbatim — they're driving glyph selection on purpose. If empty,
+    // start from all 256 CP437 glyphs and drop anything that the file-level
+    // `is_excluded_glyph` predicate rejects (default: box-drawing block
+    // 0xB3..0xCF).
     std::vector<std::uint8_t> chars;
     if (restrict_chars.empty()) {
-        chars.resize(256);
-        for (int i = 0; i < 256; ++i) chars[static_cast<std::size_t>(i)] =
-            static_cast<std::uint8_t>(i);
+        chars.reserve(256);
+        for (int i = 0; i < 256; ++i) {
+            auto ch = static_cast<std::uint8_t>(i);
+            if (is_excluded_glyph(mode, ch)) continue;
+            chars.push_back(ch);
+        }
     } else {
         chars.assign(restrict_chars.begin(), restrict_chars.end());
     }
@@ -163,27 +219,29 @@ encode(const Image& image, amiga::Mode mode,
         // (cell × glyph), which dominated the constant factor.
         struct Candidate {
             std::uint8_t ch;        // a representative char for this pattern
-            std::uint32_t fg_mask;  // bit i set = pixel i is fg (else bg)
+            std::uint64_t fg_mask;  // bit i set = pixel i is fg (else bg)
+                                    // — u64 holds up to 8×8 = 64 pixels.
         };
         std::vector<Candidate> candidates;
         candidates.reserve(std::min<std::size_t>(chars.size(), 256));
-        std::unordered_map<std::uint16_t, std::size_t> pattern_to_idx;
+        // Key packs cell_h scanline bytes into the low bytes — u64 holds
+        // up to 8 scanlines (cell_h ≤ 8; covers 80x100 / 80x50 / 80x25).
+        std::unordered_map<std::uint64_t, std::size_t> pattern_to_idx;
         pattern_to_idx.reserve(chars.size() * 2);
         for (auto ch : chars) {
-            std::array<std::uint8_t, 2> pat{};
+            std::array<std::uint8_t, kMaxCellH> pat{};
             for (std::size_t line = 0; line < cell_h; ++line)
                 pat[line] = palette::font_scanline(font, ch, offset + line);
-            std::uint16_t key = static_cast<std::uint16_t>(
-                pat[0] | (cell_h > 1
-                              ? static_cast<unsigned>(pat[1]) << 8
-                              : 0u));
+            std::uint64_t key = 0;
+            for (std::size_t line = 0; line < cell_h; ++line)
+                key |= static_cast<std::uint64_t>(pat[line]) << (line * 8);
             if (pattern_to_idx.contains(key)) continue;
-            std::uint32_t fg_mask = 0;
+            std::uint64_t fg_mask = 0;
             for (std::size_t line = 0; line < cell_h; ++line) {
                 auto sl = pat[line];
                 for (std::size_t px = 0; px < 8; ++px) {
                     if (sl & (0x80u >> px))
-                        fg_mask |= (1u << (line * 8 + px));
+                        fg_mask |= (std::uint64_t{1} << (line * 8 + px));
                 }
             }
             pattern_to_idx.emplace(key, candidates.size());
@@ -260,7 +318,7 @@ encode(const Image& image, amiga::Mode mode,
     // Outputs: best (ch, fg, bg, mask, err) for that cell
     struct CellPick {
         std::uint8_t ch, fg, bg;
-        std::uint32_t fg_mask;
+        std::uint64_t fg_mask;
         float err;
     };
 
@@ -268,8 +326,8 @@ encode(const Image& image, amiga::Mode mode,
     // Independent argmins over fg and bg (16+16 comparisons), so the
     // (fg, bg) search is O(16) per candidate instead of O(256). Fast
     // baseline; pairs naturally with a pre-dithered input image.
-    auto encode_cell_mse = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
-        std::array<std::array<float, 16>, 16> pix_d{};
+    auto encode_cell_mse = [&](const std::array<color_space::OKLab, kMaxCellN>& cell_lab) -> CellPick {
+        std::array<std::array<float, 16>, kMaxCellN> pix_d{};
         std::array<float, 16> total_sum{};
         for (std::size_t p = 0; p < cell_n; ++p) {
             for (std::size_t c = 0; c < 16; ++c) {
@@ -315,8 +373,8 @@ encode(const Image& image, amiga::Mode mode,
     // err = ||blurred(source) − blurred(rendered)||². Closed-form pair
     // expansion: K0 − 2·K1·fg − 2·K2·bg + 2·K3·(fg·bg) + K4·||fg||² + K5·||bg||².
     // K0 is per-cell, K1..K5 are per-candidate, per-pair is then ~9 ops.
-    auto encode_cell_blur = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
-        std::array<color_space::OKLab, 16> blurred;
+    auto encode_cell_blur = [&](const std::array<color_space::OKLab, kMaxCellN>& cell_lab) -> CellPick {
+        std::array<color_space::OKLab, kMaxCellN> blurred;
         float K0 = 0;
         for (std::size_t p = 0; p < cell_n; ++p) {
             color_space::OKLab b{0, 0, 0};
@@ -378,7 +436,7 @@ encode(const Image& image, amiga::Mode mode,
         return best;
     };
 
-    auto encode_cell = [&](const std::array<color_space::OKLab, 16>& cell_lab) -> CellPick {
+    auto encode_cell = [&](const std::array<color_space::OKLab, kMaxCellN>& cell_lab) -> CellPick {
         switch (metric) {
         case Metric::blur: return encode_cell_blur(cell_lab);
         case Metric::mse:  return encode_cell_mse(cell_lab);
@@ -387,7 +445,7 @@ encode(const Image& image, amiga::Mode mode,
     };
 
     auto read_cell_source = [&](std::size_t col, std::size_t row,
-                                std::array<color_space::OKLab, 16>& out) {
+                                std::array<color_space::OKLab, kMaxCellN>& out) {
         for (std::size_t py = 0; py < cell_h; ++py) {
             for (std::size_t px = 0; px < 8; ++px) {
                 auto img_x = col * 8 + px;
@@ -416,7 +474,7 @@ encode(const Image& image, amiga::Mode mode,
             if (linear >= cols * rows) break;
             auto col = linear % cols;
             auto row = linear / cols;
-            std::array<color_space::OKLab, 16> cell_lab;
+            std::array<color_space::OKLab, kMaxCellN> cell_lab;
             read_cell_source(col, row, cell_lab);
             auto pick = encode_cell(cell_lab);
             write_cell(col, row, pick);

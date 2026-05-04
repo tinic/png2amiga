@@ -60,6 +60,23 @@ enum class Mode : unsigned char {
                         // resolution. 16000 bytes (char+attr per cell). Fits
                         // in real CGA's 16 KB VRAM. Used in 8088 MPH's 1K-
                         // color mode, AREA 5150, many demos.
+    cga_text80x50,      // Same CRTC hack, 4-scanline rows: glyph-matched
+                        // graphics at 80x50 cells. 8000 bytes (char+attr per
+                        // cell) — half the 80x100 buffer, leaving room for
+                        // a second video page in the 16 KB CGA VRAM. Useful
+                        // when double-buffered video is required (page-flip
+                        // animation, scrolling demos).
+    cga_text80x25,      // Standard 80x25 text-mode geometry (full 8x8 glyphs,
+                        // CRTC max-scan-line=7) treated as a glyph-matched
+                        // graphics target. 4000 bytes per page → four pages
+                        // fit in the 16 KB CGA VRAM (quad-buffering for
+                        // smoothest video playback).
+    cga_text80x200,     // Single-scanline cells (CRTC max-scan-line=0): every
+                        // hardware scanline is its own char row. 80x200 cells
+                        // → 32000 bytes, which OVERFLOWS the 16 KB CGA VRAM,
+                        // so the DOS viewer (cheader_dos_c) refuses to emit a
+                        // runnable .c file for this mode. Useful for png/preview
+                        // analysis of the maximum-density glyph encoding.
 
     // SNES Mode 7 — affine-transformable 8bpp BG1, hardware-loadable.
     // The encoder packs the 256×224 pixel buffer into ≤ 256 unique 8×8
@@ -250,6 +267,19 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // reports 16 here so the palette-handling logic uses 16 colors.
     case Mode::cga_text80x100:
         return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
+    // 80x50 cells: same hardware buffer dims (640x200, 4-scanline rows
+    // via CRTC), half the cell count → 8000 bytes (page-flip friendly).
+    case Mode::cga_text80x50:
+        return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
+    // 80x25 cells: standard CGA text geometry (full 8×8 glyphs,
+    // 8-scanline rows). 4000 bytes per page → four pages fit in the
+    // 16 KB CGA VRAM.
+    case Mode::cga_text80x25:
+        return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
+    // 80x200 cells: 1-scanline rows. 32000 bytes — OVERFLOWS 16 KB
+    // CGA VRAM; analysis-only mode (DOS viewer export disabled).
+    case Mode::cga_text80x200:
+        return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
     // SNES Mode 7 — 256×224 native, 8bpp chunky pixels. Display PAR is
     // (4/3)÷(256/224) = 896/768 ≈ 1.167 — pixels render slightly wider
     // than tall on a 4:3 CRT. Same auto-native-par opt-in plumbing as
@@ -363,7 +393,8 @@ constexpr bool is_ega(Mode mode) noexcept {
 constexpr bool is_cga(Mode mode) noexcept {
     return mode == Mode::cga_320 || mode == Mode::cga_640 ||
            mode == Mode::cga_composite ||
-           mode == Mode::cga_text80x100;
+           mode == Mode::cga_text80x100 || mode == Mode::cga_text80x50 ||
+           mode == Mode::cga_text80x25  || mode == Mode::cga_text80x200;
 }
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
@@ -406,7 +437,42 @@ constexpr bool is_composite(Mode mode) noexcept {
 
 // Check if the mode is a CGA text-mode graphics hack (glyph-per-cell).
 constexpr bool is_cga_text(Mode mode) noexcept {
-    return mode == Mode::cga_text80x100;
+    return mode == Mode::cga_text80x100 ||
+           mode == Mode::cga_text80x50  ||
+           mode == Mode::cga_text80x25  ||
+           mode == Mode::cga_text80x200;
+}
+
+// CGA-text cell height in hardware scanlines (CRTC max-scan-line + 1).
+//   80x200 = 1 scanline per cell (max-scan-line = 0, every line a row)
+//   80x100 = 2 scanlines per cell (max-scan-line = 1)
+//   80x50  = 4 scanlines per cell (max-scan-line = 3)
+//   80x25  = 8 scanlines per cell (max-scan-line = 7, standard text geom)
+// All variants target the 200-line CGA frame.
+constexpr std::size_t cga_text_cell_height(Mode mode) noexcept {
+    return (mode == Mode::cga_text80x200) ? 1u
+         : (mode == Mode::cga_text80x100) ? 2u
+         : (mode == Mode::cga_text80x50)  ? 4u
+         : (mode == Mode::cga_text80x25)  ? 8u
+                                          : 0u;
+}
+
+// CGA-text cell row count (200 / 100 / 50 / 25). Convenience for
+// dispatch sites that don't want to do `200 / cell_height`.
+constexpr std::size_t cga_text_rows(Mode mode) noexcept {
+    return (mode == Mode::cga_text80x200) ? 200u
+         : (mode == Mode::cga_text80x100) ? 100u
+         : (mode == Mode::cga_text80x50)  ?  50u
+         : (mode == Mode::cga_text80x25)  ?  25u
+                                          :   0u;
+}
+
+// True when the encoded buffer for a cga-text mode fits in the standard
+// 16 KB CGA video RAM (so a real-hardware viewer can be emitted).
+// 80x200 (32000 bytes) overflows; everything else fits with room for
+// page-flipping pages.
+constexpr bool cga_text_fits_vram(Mode mode) noexcept {
+    return is_cga_text(mode) && cga_text_rows(mode) * 80u * 2u <= 16384u;
 }
 
 // Check if a mode uses chunky (1 byte per pixel) output instead of bitplane

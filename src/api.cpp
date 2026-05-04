@@ -90,6 +90,9 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "cga-640") return amiga::Mode::cga_640;
     if (s == "cga-composite")   return amiga::Mode::cga_composite;
     if (s == "cga-text80x100")  return amiga::Mode::cga_text80x100;
+    if (s == "cga-text80x50")   return amiga::Mode::cga_text80x50;
+    if (s == "cga-text80x25")   return amiga::Mode::cga_text80x25;
+    if (s == "cga-text80x200")  return amiga::Mode::cga_text80x200;
     if (s == "snes-mode7-256")    return amiga::Mode::snes_mode7_256;
     if (s == "snes-mode7-direct") return amiga::Mode::snes_mode7_direct;
     if (s == "genesis-h32")       return amiga::Mode::genesis_h32;
@@ -3600,7 +3603,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
                     result->indices, w, h, mode);
             if (mode == Mode::cga_320 && result->cga_mode_ctrl2 != 0xFF)
                 opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
-        } else if (mode == Mode::cga_text80x100) {
+        } else if (amiga::is_cga_text(mode)) {
             raw = result->raw_frame;   // char+attr pairs
         } else if (mode == Mode::ega_320 || mode == Mode::ega_640 ||
                    mode == Mode::ega_hi) {

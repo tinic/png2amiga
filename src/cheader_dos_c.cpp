@@ -209,29 +209,38 @@ ModeSetup mode_setup(amiga::Mode m, std::uint8_t cga_mode_ctrl2) {
 
 namespace {
 
-// cga_text80x100 viewer: 80 cols × 100 rows × 2 bytes = 16000 bytes
-// linear in B800. Reprogram the 6845 from 80x25 (8-scan cells) to 80x100
-// (2-scan cells) via the canonical LORES / FastDoom table that writes
-// ALL 14 CRTC registers (not just the differences) — relying on BIOS
-// mode-03 defaults is fragile because BIOS may leave cursor on, start-
-// address non-zero, or subtly different H-timing. Same table as
-// github.com/dschmenk/LORES/blob/main/SRC/LIB/LORES.C.
+// cga_text80x100 / 80x50 / 80x25 viewer: 80 cols × {100, 50, 25} rows ×
+// 2 bytes = {16000, 8000, 4000} bytes linear in B800. Reprogram the 6845
+// to use {2, 4, 8}-scanline cells via a canonical LORES / FastDoom-style
+// table that writes ALL 14 CRTC registers (not just the differences) —
+// relying on BIOS mode-03 defaults is fragile because BIOS may leave
+// cursor on, start-address non-zero, or subtly different H-timing.
 //
-// Register values:
-//   0 H total          0x71 (113) — 80-col H timing, same as mode 03
-//   1 H displayed      0x50 (80)
-//   2 H sync pos       0x59 (89)
-//   3 H sync width     0x0F (15)
-//   4 V total          0x7F (128 char rows)
-//   5 V total adjust   0x06 (extra scanlines)
-//   6 V displayed      0x64 (100 rows)
-//   7 V sync pos       0x70 (112)
-//   8 Interlace mode   0x02 (non-interlaced)
-//   9 Max scan line    0x01 (2 scans / char row)
-//  10 Cursor start     0x20 (cursor disabled — bit 5 = 1)
-//  11 Cursor end       0x00
-//  12 Start addr hi    0x00 — critical: BIOS may leave this non-zero
-//  13 Start addr lo    0x00   and the CRTC would display garbage
+// Register layout (constant H-timing, V-timing scales with cell_h to
+// keep the 200-line / 60 Hz NTSC frame intact):
+//   0  H total          0x71      H timing identical to BIOS mode 03
+//   1  H displayed      0x50      (80-column).
+//   2  H sync pos       0x59
+//   3  H sync width     0x0F
+//   4  V total          (256 / cell_h) − 1     scaled char-row count
+//   5  V total adjust   0x06                   trailing scanlines
+//   6  V displayed      rows                   visible char rows
+//   7  V sync pos       224 / cell_h           vsync at scan 224
+//   8  Interlace mode   0x02                   non-interlaced
+//   9  Max scan line    cell_h − 1             scanlines per cell minus 1
+//   10 Cursor start     0x20                   cursor disabled (bit 5)
+//   11 Cursor end       0x00
+//   12 Start addr hi    0x00                   BIOS may leave non-zero
+//   13 Start addr lo    0x00
+//
+// Total scanlines (canonical NTSC frame): (V_total + 1) × cell_h
+// + V_total_adj = 256 + 6 = 262 — matches the original CGA mode 03.
+//
+// Per-mode register values (cell_h shown in the 4-scan / 8-scan rows):
+//   80x100 (cell_h=2): V_total=0x7F  V_disp=0x64  V_sync=0x70  Max=0x01
+//   80x50  (cell_h=4): V_total=0x3F  V_disp=0x32  V_sync=0x38  Max=0x03
+//   80x25  (cell_h=8): V_total=0x1F  V_disp=0x19  V_sync=0x1C  Max=0x07
+//                                                  ^- standard BIOS mode 03
 //
 // 0x3D8 bits: 0x01 = video OFF + 80-col during reprogram (avoids CGA
 // snow and incomplete-latch artifacts); 0x09 = video ON + 80-col +
@@ -239,13 +248,19 @@ namespace {
 std::string generate_cga_text(std::span<const std::uint8_t> char_attr,
                               std::size_t rows,
                               std::string_view sym) {
+    const std::size_t cell_h = 200 / rows;
+    const unsigned v_total     = static_cast<unsigned>(256u / cell_h - 1u);
+    const unsigned v_displayed = static_cast<unsigned>(rows) & 0xFFu;
+    const unsigned v_sync_pos  = static_cast<unsigned>(224u / cell_h);
+    const unsigned max_scan    = static_cast<unsigned>(cell_h - 1) & 0xFFu;
+
     std::string out;
     out.reserve(char_attr.size() * 6 + 2048);
     out += std::format(
         "/* Mode: cga-text80x{} (8x{} cells, 80x{} effective)\n"
         " * Symbol: {}\n"
         " */\n",
-        rows, 200 / rows, rows, sym);
+        rows, cell_h, rows, sym);
     out += kPreamble;
     out += std::format(
         "\n/* Char+attr pairs: byte 0 = char at (0,0), byte 1 = attr at (0,0), ... */\n"
@@ -254,10 +269,10 @@ std::string generate_cga_text(std::span<const std::uint8_t> char_attr,
     out += emit_byte_array(char_attr);
     out += "};\n\n";
     out += std::format(
-        "/* Full 14-register 6845 CRTC init for 80x{} text (2-scan cells). */\n"
+        "/* Full 14-register 6845 CRTC init for 80x{} text ({}-scan cells). */\n"
         "static const unsigned char crtc_init[14] = {{\n"
-        "    0x71, 0x50, 0x59, 0x0F, 0x7F, 0x06, 0x64, 0x70,\n"
-        "    0x02, 0x01, 0x20, 0x00, 0x00, 0x00\n"
+        "    0x71, 0x50, 0x59, 0x0F, 0x{:02X}, 0x06, 0x{:02X}, 0x{:02X},\n"
+        "    0x02, 0x{:02X}, 0x20, 0x00, 0x00, 0x00\n"
         "}};\n\n"
         "int main(void) {{\n"
         "    set_mode(0x03);               /* BIOS 80x25 color text */\n"
@@ -272,7 +287,7 @@ std::string generate_cga_text(std::span<const std::uint8_t> char_attr,
         "    set_mode(0x03);               /* BIOS mode-set restores 6845 */\n"
         "    return 0;\n"
         "}}\n",
-        rows, sym, sym);
+        rows, cell_h, v_total, v_displayed, v_sync_pos, max_scan, sym, sym);
     return out;
 }
 
@@ -602,14 +617,31 @@ generate(amiga::Mode mode,
     using namespace amiga;
     auto sym = sanitize_symbol(options.symbol_name);
 
-    if (mode == Mode::cga_text80x100) {
-        if (raw_frame.size() != 80 * 100 * 2) {
+    if (is_cga_text(mode)) {
+        std::size_t expected_rows = cga_text_rows(mode);
+        std::size_t expected_bytes = 80 * expected_rows * 2;
+        // 80x200 (32 KB) overflows the 16 KB CGA video RAM — there's no
+        // way to load it on real hardware, so refuse to emit a viewer
+        // that would be silently broken (would only display the first
+        // 16 KB and read garbage off the second half from BIOS data).
+        if (!cga_text_fits_vram(mode)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                std::format("cheader_dos_c: cga-text80x{} buffer ({} bytes) "
+                            "overflows the 16384-byte CGA video RAM. Use "
+                            "this mode only for png/preview analysis; pick "
+                            "cga-text80x{{100,50,25}} for a runnable viewer.",
+                            expected_rows, expected_bytes)}};
+        }
+        if (raw_frame.size() != expected_bytes) {
             return std::unexpected{Error{
                 ErrorCode::invalid_dimensions,
-                std::format("cheader_dos_c: cga_text80x100 expects 16000 "
-                            "char+attr bytes, got {}", raw_frame.size())}};
+                std::format("cheader_dos_c: cga-text80x{} expects {} "
+                            "char+attr bytes, got {}",
+                            expected_rows, expected_bytes,
+                            raw_frame.size())}};
         }
-        return generate_cga_text(raw_frame, 100, sym);
+        return generate_cga_text(raw_frame, expected_rows, sym);
     }
     if (mode == Mode::vga_13h) {
         if (raw_frame.size() != 64000) {

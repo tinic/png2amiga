@@ -733,7 +733,8 @@ void print_usage() {
         "            ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]\n"
         "    Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi\n"
         "    DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |\n"
-        "            cga-320 | cga-640 | cga-composite | cga-text80x100\n"
+        "            cga-320 | cga-640 | cga-composite |\n"
+        "            cga-text80x{{200,100,50,25}}\n"
         "    SNES:   snes-mode7-256 | snes-mode7-direct\n"
         "    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh\n"
         "    C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |\n"
@@ -1481,6 +1482,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "cga-text80x100" || v == "cga-text-1k" ||
                          v == "cga-80x100")
                     config.mode = amiga::Mode::cga_text80x100;
+                else if (v == "cga-text80x50" || v == "cga-80x50")
+                    config.mode = amiga::Mode::cga_text80x50;
+                else if (v == "cga-text80x25" || v == "cga-80x25")
+                    config.mode = amiga::Mode::cga_text80x25;
+                else if (v == "cga-text80x200" || v == "cga-80x200")
+                    config.mode = amiga::Mode::cga_text80x200;
                 else if (v == "snes-mode7-256" || v == "snes-256")
                     config.mode = amiga::Mode::snes_mode7_256;
                 else if (v == "snes-mode7-direct" || v == "snes-direct" ||
@@ -2177,6 +2184,9 @@ std::string_view mode_to_options_string(amiga::Mode m) {
     case amiga::Mode::cga_640:          return "cga-640";
     case amiga::Mode::cga_composite:    return "cga-composite";
     case amiga::Mode::cga_text80x100:   return "cga-text80x100";
+    case amiga::Mode::cga_text80x50:    return "cga-text80x50";
+    case amiga::Mode::cga_text80x25:    return "cga-text80x25";
+    case amiga::Mode::cga_text80x200:   return "cga-text80x200";
     case amiga::Mode::snes_mode7_256:   return "snes-mode7-256";
     case amiga::Mode::snes_mode7_direct:return "snes-mode7-direct";
     case amiga::Mode::genesis_h32:      return "genesis-h32";
@@ -3019,6 +3029,9 @@ preview_display_dims(std::size_t w, std::size_t h, amiga::Mode mode,
         case amiga::Mode::cga_640:
         case amiga::Mode::ega_640:
         case amiga::Mode::cga_text80x100:
+        case amiga::Mode::cga_text80x50:
+        case amiga::Mode::cga_text80x25:
+        case amiga::Mode::cga_text80x200:
             sx = 1; sy = 2; break;
         case amiga::Mode::vga_12h:
         case amiga::Mode::vga_10h:
@@ -4608,7 +4621,9 @@ int run_main(int argc, char* argv[]) {
                 "ste-low", "ste-med", "ste-hi",
                 "vga-13h", "vga-10h", "vga-12h",
                 "ega-320", "ega-640", "ega-hi",
-                "cga-320", "cga-640", "cga-composite", "cga-text80x100",
+                "cga-320", "cga-640", "cga-composite",
+                "cga-text80x100", "cga-text80x50", "cga-text80x25",
+                "cga-text80x200",
                 "snes-mode7-256", "snes-mode7-direct",
                 "genesis-h32", "genesis-h40",
                 "genesis-h32-sh", "genesis-h40-sh",
@@ -4625,7 +4640,7 @@ int run_main(int argc, char* argv[]) {
             cli_status("png2amiga {} — supported modes:", png2amiga::version);
             cli_status("  Amiga:    lores, lores-lace, hires, hires-lace, ham6, ham8, ehb (+ -lace, -hires variants)");
             cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi");
-            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, cga-text80x100");
+            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, cga-text80x{{200,100,50,25}}");
             cli_status("  SNES:     snes-mode7-256, snes-mode7-direct");
             cli_status("  Genesis:  genesis-h32, genesis-h40 (+ -sh variants)");
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
@@ -6044,7 +6059,8 @@ int run_main(int argc, char* argv[]) {
             *image = std::move(padded);
         }
         cli_print_mode(std::format(
-            "CGA text 80x100 ({}x{}, IBM 8x8 ROM glyphs, 16 fg x 16 bg attr)",
+            "CGA text 80x{} ({}x{}, IBM 8x8 ROM glyphs, 16 fg x 16 bg attr)",
+            amiga::cga_text_rows(config->mode),
             image->width(), image->height()));
         // Force transparent source pixels to black before glyph matching,
         // so logos / sprites with alpha cutouts don't contribute stray
