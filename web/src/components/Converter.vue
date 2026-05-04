@@ -589,17 +589,8 @@ watch(imageBytes, () => {
 // Only callable when sizeOverride is already on (UI hides the buttons otherwise).
 function setSizePreset(scale: number) {
   if (!imageWidth.value || !imageHeight.value) return
-  // Width snapped to 16-pixel boundary (Amiga bitplane alignment).
-  // Height derived from the SNAPPED width × source aspect so the
-  // resulting aspect matches source exactly — using `imageHeight *
-  // scale` independently of the snap drifts on sources whose width
-  // doesn't divide cleanly by 16, producing a slight horizontal
-  // stretch in the preview.
-  const w = Math.max(16, Math.round(imageWidth.value * scale / 16) * 16)
-  const h = Math.max(2, Math.round(
-    w * imageHeight.value / imageWidth.value))
-  options.width = w
-  options.height = h
+  options.width = Math.max(16, Math.round(imageWidth.value * scale / 16) * 16)
+  options.height = Math.max(2, Math.round(imageHeight.value * scale))
 }
 
 // Aspect-ratio lock: when enabled, committing width or height keeps the
@@ -1794,6 +1785,16 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   const type = example.file.endsWith('.jpg') || example.file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
   const blob = new Blob([buf], { type })
   imageUrl.value = URL.createObjectURL(blob)
+  // Decode the example's intrinsic dimensions so Resize presets
+  // (100% / 50% / 25%) and the aspect-lock pick up the new image.
+  // Without this, imageWidth/imageHeight stay at the previous
+  // example's dims and presets always emit the same numbers.
+  const img = new Image()
+  img.addEventListener('load', () => {
+    imageWidth.value = img.width
+    imageHeight.value = img.height
+  })
+  img.src = imageUrl.value
 }
 </script>
 
