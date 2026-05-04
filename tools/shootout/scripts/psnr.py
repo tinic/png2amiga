@@ -93,6 +93,13 @@ LABELS = {
     'p2a-lores-d5-best':     'png2amiga lores d=5 + best (FS)',
     'hc-lores-d5':           'ham_convert ocs32 (dither_fs)',
     'libimagequant-32':      'libimagequant 32 (FS)',
+    # 256-colour GIF head-to-head: png2amiga's quantizer + dither
+    # vs gifsicle vs ImageMagick. Same colour count (256), same
+    # FS dither — isolates the quantizer + the dither pipeline
+    # without involving Amiga / HAM ops.
+    'p2a-gif-d8':            'png2amiga GIF d=8 (FS)',
+    'imagemagick-gif':       'ImageMagick GIF (-dither FloydSteinberg)',
+    'gifsicle':              'gifsicle (--colors 256 --dither)',
 }
 
 def read_time(stem: str) -> float | None:
@@ -106,16 +113,30 @@ def read_time(stem: str) -> float | None:
 
 results = []
 for stem, label in LABELS.items():
-    png = os.path.join(output_dir, f'{stem}.png')
-    if not os.path.exists(png):
+    # Accept either <stem>.png (most encoders) or <stem>.gif (the
+    # GIF benchmark entries: p2a-gif-d8, imagemagick-gif, gifsicle).
+    # ssimulacra2's binary needs PNG input on both sides, so when
+    # the encoder produced a GIF we transcode it to a temp PNG once
+    # via Pillow before scoring — the indices/palette decode is
+    # lossless, just a container change.
+    candidates = [os.path.join(output_dir, f'{stem}.png'),
+                  os.path.join(output_dir, f'{stem}.gif')]
+    src = next((p for p in candidates if os.path.exists(p)), None)
+    if src is None:
         results.append((label, None, None, None, "MISSING"))
         continue
-    img = Image.open(png).convert('RGB')
+    img = Image.open(src).convert('RGB')
     if img.size != (target.shape[1], target.shape[0]):
         img = img.resize((target.shape[1], target.shape[0]), Image.NEAREST)
     arr = np.asarray(img, dtype=np.int32)
     db = psnr(target, arr)
-    s2 = ssimulacra2(target_path, png)
+    # SSIMULACRA2 binary wants PNG; for GIF outputs save a temp PNG.
+    if src.endswith('.gif'):
+        png_tmp = src + '.s2tmp.png'
+        Image.open(src).convert('RGB').save(png_tmp)
+        s2 = ssimulacra2(target_path, png_tmp)
+    else:
+        s2 = ssimulacra2(target_path, src)
     t  = read_time(stem)
     results.append((label, db, s2, t, "OK"))
 

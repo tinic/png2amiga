@@ -229,6 +229,49 @@ if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
         --force 32 "$TARGET"
 fi
 
+# 16) png2amiga GIF mode: same quantizer + dither pipeline as lores d=5,
+#     wrapped in single-frame GIF89a. Lets us put png2amiga on the same
+#     PSNR/S2 leaderboard as gifsicle / ImageMagick at 256 colours so
+#     the comparison isn't apples-to-pears against pure-pngquant.
+echo "==> [png2amiga] gif d=8 + floyd"
+time_to "$OUT/p2a-gif-d8.time" \
+  "$PNG2AMIGA" --quiet --dither floyd-steinberg --mode gif --depth 8 \
+    "$TARGET" -o "$OUT/p2a-gif-d8.gif"
+
+# 17) ImageMagick (`magick` or `convert`) → 256-colour GIF with Floyd-
+#     Steinberg dither. Auto-skipped if neither binary is on PATH.
+MAGICK="${MAGICK:-$(command -v magick || command -v convert || true)}"
+if [ -n "$MAGICK" ] && [ -x "$MAGICK" ]; then
+    echo "==> [imagemagick] gif 256 + floyd-steinberg"
+    time_to "$OUT/imagemagick-gif.time" \
+      "$MAGICK" "$TARGET" -dither FloydSteinberg -colors 256 \
+        "$OUT/imagemagick-gif.gif"
+else
+    echo "WARNING: ImageMagick (magick / convert) not found — skipping" >&2
+    echo "         GIF comparison entry. brew install imagemagick" >&2
+fi
+
+# 18) gifsicle: dither + colours 256. Quoting per gifsicle docs:
+#     `--colors N --dither` performs Floyd-Steinberg on a 256-colour
+#     palette. Auto-skipped if not installed.
+GIFSICLE="${GIFSICLE:-$(command -v gifsicle || true)}"
+if [ -n "$GIFSICLE" ] && [ -x "$GIFSICLE" ]; then
+    echo "==> [gifsicle] 256 + floyd-steinberg"
+    # gifsicle works on GIF input only — convert the target to a GIF
+    # first via ImageMagick if available; fall back to feeding the PNG
+    # through `gif` directly (some gifsicle builds accept PNG input).
+    GIFSICLE_INPUT="$TARGET"
+    if [ -n "$MAGICK" ] && [ -x "$MAGICK" ]; then
+        "$MAGICK" "$TARGET" "$OUT/_gifsicle_in.gif" 2>/dev/null
+        GIFSICLE_INPUT="$OUT/_gifsicle_in.gif"
+    fi
+    time_to "$OUT/gifsicle.time" \
+      "$GIFSICLE" --colors 256 --dither "$GIFSICLE_INPUT" \
+        -o "$OUT/gifsicle.gif"
+else
+    echo "WARNING: gifsicle not found — skipping. brew install gifsicle" >&2
+fi
+
 # --- Step 3: PSNR table ----------------------------------------------------
 echo
 echo "==> Computing PSNR..."
