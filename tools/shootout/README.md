@@ -35,6 +35,36 @@ no post-FS refinement. libimagequant's Lab-perceptual median-cut and
 png2amiga's brute-force OCS k-means + dither-aware refinement both
 adapt the palette to the post-dither error distribution.
 
+### GIF 256-colour comparison (`p2a-gif-d8` / `imagemagick-gif` / `gifski`)
+
+png2amiga's `--mode gif --depth 8` (single-frame GIF89a, same OKLab
+quantizer + FS dither + dither-aware refinement as `--mode lores`)
+goes head-to-head against the two best-in-class FOSS GIF encoders.
+
+ImageMagick is run at its honest peak (`-quantize Lab -dither None`,
+mean S2 79.00) — picked via a 9-combo sweep over `-dither
+{FloydSteinberg,Riemersma,None}` × `-quantize {sRGB,Lab,OKLab,Jzazbz}`.
+The default `-dither FloydSteinberg -colors 256` only scores 77.77;
+counter-intuitively, switching to Lab quantize and disabling dither
+beats every dithered combination on SSIMULACRA2.
+
+gifski (Kornel Lesiński, advertised "highest quality") wins outright —
+mean S2 82.56 across electrichues02 / asterix / fantasy at 256 colours,
+~1.6 above png2amiga (80.95). It uses libimagequant under the hood
+(same engine as pngquant), so this is essentially "libimagequant in a
+GIF container vs png2amiga's OKLab quantizer + FS dither." gifski
+refuses single-frame input; the harness feeds the same PNG twice and
+reads frame 0 — purely a workaround for gifski's animation
+requirement, not part of the quality measurement. `-Q 100 --extra` is
+its honest peak.
+
+gifsicle was tested but dropped: it accepts only GIF input, so the
+harness has to pre-convert via ImageMagick — that step already reduces
+to 256 colours, making gifsicle's `--colors 256` and `--color-method`
+no-ops. Confirmed empirically (every combo scored identically at S2
+76.05). gifsicle isn't a 24-bit-source quantizer; it's a GIF
+optimiser. Use gifski for the quantizer comparison.
+
 ## Why no other tools
 
 | Tool | Why excluded |

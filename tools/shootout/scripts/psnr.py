@@ -98,8 +98,8 @@ LABELS = {
     # FS dither — isolates the quantizer + the dither pipeline
     # without involving Amiga / HAM ops.
     'p2a-gif-d8':            'png2amiga GIF d=8 (FS)',
-    'imagemagick-gif':       'ImageMagick GIF (-dither FloydSteinberg)',
-    'gifsicle':              'gifsicle (--colors 256 --dither)',
+    'imagemagick-gif':       'ImageMagick GIF (-quantize Lab -dither None, peak)',
+    'gifski':                'gifski -Q 100 --extra (pngquant-based)',
 }
 
 def read_time(stem: str) -> float | None:

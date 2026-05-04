@@ -238,38 +238,40 @@ time_to "$OUT/p2a-gif-d8.time" \
   "$PNG2AMIGA" --quiet --dither floyd-steinberg --mode gif --depth 8 \
     "$TARGET" -o "$OUT/p2a-gif-d8.gif"
 
-# 17) ImageMagick (`magick` or `convert`) → 256-colour GIF with Floyd-
-#     Steinberg dither. Auto-skipped if neither binary is on PATH.
+# 17) ImageMagick (`magick` or `convert`) → 256-colour GIF.
+#     Honest-best knobs picked via the /tmp/gif_honest_best.sh probe:
+#     `-quantize Lab -dither None` averaged S2 79.00 across electrichues
+#     / asterix / fantasy at 320×213, beating every dither + colourspace
+#     permutation (FS+RGB default = 77.77, FS+Lab = 73.07, etc). Lab
+#     quantize without dither produces a slightly posterised look that
+#     SSIMULACRA2 rewards more than dither noise.
 MAGICK="${MAGICK:-$(command -v magick || command -v convert || true)}"
 if [ -n "$MAGICK" ] && [ -x "$MAGICK" ]; then
-    echo "==> [imagemagick] gif 256 + floyd-steinberg"
+    echo "==> [imagemagick] gif 256 (-quantize Lab -dither None, honest peak)"
     time_to "$OUT/imagemagick-gif.time" \
-      "$MAGICK" "$TARGET" -dither FloydSteinberg -colors 256 \
+      "$MAGICK" "$TARGET" -quantize Lab -dither None -colors 256 \
         "$OUT/imagemagick-gif.gif"
 else
     echo "WARNING: ImageMagick (magick / convert) not found — skipping" >&2
     echo "         GIF comparison entry. brew install imagemagick" >&2
 fi
 
-# 18) gifsicle: dither + colours 256. Quoting per gifsicle docs:
-#     `--colors N --dither` performs Floyd-Steinberg on a 256-colour
-#     palette. Auto-skipped if not installed.
-GIFSICLE="${GIFSICLE:-$(command -v gifsicle || true)}"
-if [ -n "$GIFSICLE" ] && [ -x "$GIFSICLE" ]; then
-    echo "==> [gifsicle] 256 + floyd-steinberg"
-    # gifsicle works on GIF input only — convert the target to a GIF
-    # first via ImageMagick if available; fall back to feeding the PNG
-    # through `gif` directly (some gifsicle builds accept PNG input).
-    GIFSICLE_INPUT="$TARGET"
-    if [ -n "$MAGICK" ] && [ -x "$MAGICK" ]; then
-        "$MAGICK" "$TARGET" "$OUT/_gifsicle_in.gif" 2>/dev/null
-        GIFSICLE_INPUT="$OUT/_gifsicle_in.gif"
-    fi
-    time_to "$OUT/gifsicle.time" \
-      "$GIFSICLE" --colors 256 --dither "$GIFSICLE_INPUT" \
-        -o "$OUT/gifsicle.gif"
+# 18) gifski: pngquant-based GIF encoder by Kornel Lesiński, advertised
+#     as "highest quality." A 9-combo probe vs ImageMagick / gifsicle
+#     showed gifski outranks both on SSIMULACRA2, so it's our headline
+#     "best-in-class FOSS GIF encoder" comparator. gifski refuses
+#     single-frame input — workaround: feed the same PNG twice and read
+#     frame 0; the duplicate-frame trick is purely to satisfy gifski's
+#     animation requirement, not part of the quality measurement.
+#     `-Q 100 --extra` is its honest peak (highest quality + slow mode).
+GIFSKI="${GIFSKI:-$(command -v gifski || true)}"
+if [ -n "$GIFSKI" ] && [ -x "$GIFSKI" ]; then
+    echo "==> [gifski] -Q 100 --extra (single-frame, duplicate trick)"
+    time_to "$OUT/gifski.time" \
+      "$GIFSKI" -Q 100 --extra --repeat -1 -o "$OUT/gifski.gif" \
+        "$TARGET" "$TARGET"
 else
-    echo "WARNING: gifsicle not found — skipping. brew install gifsicle" >&2
+    echo "WARNING: gifski not found — skipping. brew install gifski" >&2
 fi
 
 # --- Step 3: PSNR table ----------------------------------------------------
