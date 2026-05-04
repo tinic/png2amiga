@@ -5129,31 +5129,17 @@ int main(int argc, char* argv[]) {
         target_h = *config->height;
     } else if (config->width) {
         target_w = *config->width;
-        bool freeform_dim = amiga::is_c64_charset(config->mode) ||
-                            amiga::is_genesis(config->mode) ||
-                            amiga::is_snes(config->mode) ||
-                            amiga::is_cga_text(config->mode);
-        // Freeform-capable modes treat --width as a SOURCE-pixel dim
-        // with square pixels — preserve source aspect (no PAR
-        // distortion). EXCEPTION: when target_w equals the mode's
-        // canonical screen_width (e.g. --width 640 on cga-text80x100
-        // whose canonical buffer is 640×200), fall through to
-        // stretch-to-canonical so the encoder sees the canonical
-        // hardware buffer rather than a freeform aspect-preserved
-        // strip — that's what the user means by "give me canonical
-        // 640-wide output."
-        bool to_canonical = freeform_dim &&
-                            target_w == params.screen_width &&
-                            params.screen_height > 0 &&
-                            !config->native_par;
-        if (to_canonical) {
-            target_h = params.screen_height;
-        } else if (freeform_dim) {
-            target_h = round_h(
-                static_cast<double>(target_w) / src_aspect);
+        // cga-text accepts arbitrary multiples of (8 × cell_h_src) for
+        // freeform / scrolling charmaps. With --width only, preserve
+        // source aspect (target_h = target_w / src_aspect) so cells map
+        // 1:1 to source — matches the no-PAR-distortion convention used
+        // by c64-charset / Genesis / SNES tile modes. Other modes keep
+        // the encoder-frame-aspect formula (target_h ≈ screen_width *
+        // par / src_aspect) which keeps target_h pinned at the mode's
+        // default-canonical height regardless of --width.
+        if (amiga::is_cga_text(config->mode)) {
+            target_h = round_h(static_cast<double>(target_w) / src_aspect);
         } else {
-            // Adjust PAR when width differs from mode default
-            // (e.g. ham6 at 640px = hires).
             auto w_par = (target_w != params.screen_width && params.screen_width > 0)
                 ? par * static_cast<double>(params.screen_width) / static_cast<double>(target_w)
                 : par;
@@ -5161,17 +5147,7 @@ int main(int argc, char* argv[]) {
         }
     } else if (config->height) {
         target_h = *config->height;
-        bool freeform_dim = amiga::is_c64_charset(config->mode) ||
-                            amiga::is_genesis(config->mode) ||
-                            amiga::is_snes(config->mode) ||
-                            amiga::is_cga_text(config->mode);
-        bool to_canonical = freeform_dim &&
-                            target_h == params.screen_height &&
-                            params.screen_width > 0 &&
-                            !config->native_par;
-        if (to_canonical) {
-            target_w = params.screen_width;
-        } else if (freeform_dim) {
+        if (amiga::is_cga_text(config->mode)) {
             target_w = static_cast<std::size_t>(std::lround(
                 static_cast<double>(target_h) * src_aspect));
         } else {
@@ -6007,14 +5983,42 @@ int main(int argc, char* argv[]) {
         return exit_code::ok;
     }
 
+    // --- Text-mode graphics (glyph-matched, CGA or EGA font) ---
     if (amiga::is_cga_text(config->mode)) {
-        // Pad source up to the encoder's cell grid: canonical 640×200
-        // uses 8×2 cells (hardware buffer); any other freeform size
-        // is square-pixel source where the encoder uses 8×8 cells per
-        // visible cell (8 hw cols × 4 hw scanlines × 2 double-scan).
-        bool ct_canonical = (image->width() == 640 && image->height() == 200);
-        std::size_t ct_cw = 8;
-        std::size_t ct_ch = ct_canonical ? 2u : 8u;
+        // Freeform = user passed any sizing flag (--no-scale / --width /
+        // --height). In freeform we treat input as square-pixel source
+        // and halve vertically (averaging row pairs) to convert to the
+        // hardware-pixel space the encoder expects. Default (no sizing
+        // flag): input is already at canonical 640×200 from the
+        // upstream scale step — no halve.
+        bool freeform = config->no_scale ||
+                        config->width.has_value() ||
+                        config->height.has_value();
+        if (freeform) {
+            // Pad to even height first so the halve has clean pairs.
+            if ((image->height() % 2) != 0) {
+                Image padded(image->width(), image->height() + 1);
+                for (std::size_t y = 0; y < image->height(); ++y)
+                    for (std::size_t x = 0; x < image->width(); ++x)
+                        padded[x, y] = (*image)[x, y];
+                *image = std::move(padded);
+            }
+            std::size_t halved_h = image->height() / 2;
+            Image halved(image->width(), halved_h);
+            for (std::size_t y = 0; y < halved_h; ++y) {
+                for (std::size_t x = 0; x < image->width(); ++x) {
+                    auto a = (*image)[x, y * 2];
+                    auto b = (*image)[x, y * 2 + 1];
+                    halved[x, y] = {(a.r + b.r) * 0.5f,
+                                    (a.g + b.g) * 0.5f,
+                                    (a.b + b.b) * 0.5f};
+                }
+            }
+            *image = std::move(halved);
+        }
+        // Pad to encoder's 8×2 cell grid (always 8×2 — single mode).
+        constexpr std::size_t ct_cw = 8;
+        constexpr std::size_t ct_ch = 2;
         std::size_t ct_pw = ((image->width()  + ct_cw - 1) / ct_cw) * ct_cw;
         std::size_t ct_ph = ((image->height() + ct_ch - 1) / ct_ch) * ct_ch;
         if (ct_pw != image->width() || ct_ph != image->height()) {
@@ -6119,28 +6123,10 @@ int main(int argc, char* argv[]) {
                          res.error().message);
             return 1;
         }
-        // Render once: used for stats line, terminal preview, and any
-        // PNG output.
+        // Render once. PSNR / S2 compare in the encoder's hardware-pixel
+        // space — preview and image are both at hw dims after the halve
+        // above, so direct comparison is fair.
         auto preview = cga_text::render(*res);
-        // PSNR / S2 against the resolved input. For square-pixel
-        // freeform the encoder collapses 4 source rows → 1 hardware
-        // scanline; pixel-quadruple the preview vertically so PSNR/S2
-        // compare in the user's source pixel space.
-        if (preview.width() == image->width() &&
-            preview.height() != image->height() &&
-            preview.height() > 0 &&
-            (image->height() % preview.height()) == 0) {
-            std::size_t rep = image->height() / preview.height();
-            Image stretched(preview.width(), preview.height() * rep);
-            for (std::size_t y = 0; y < preview.height(); ++y) {
-                for (std::size_t x = 0; x < preview.width(); ++x) {
-                    auto v = preview[x, y];
-                    for (std::size_t k = 0; k < rep; ++k)
-                        stretched[x, y * rep + k] = v;
-                }
-            }
-            preview = std::move(stretched);
-        }
         float cga_psnr = std::numeric_limits<float>::quiet_NaN();
         float cga_s2   = std::numeric_limits<float>::quiet_NaN();
         if (preview.width() == image->width() &&
@@ -6151,6 +6137,22 @@ int main(int argc, char* argv[]) {
             cga_s2 = ssimulacra2::compute(
                 image->pixels(), preview.pixels(),
                 image->width(), image->height());
+        }
+        // Freeform displays at source-pixel dims (preserve user aspect).
+        // Post-double the rendered preview vertically (each hw scanline
+        // shown twice) so save / terminal preview match source aspect.
+        // Default keeps the raw 640×200 hw render; scale_for_display
+        // applies the canonical sy=2+PAR for 4:3 CRT visible.
+        if (freeform) {
+            Image doubled(preview.width(), preview.height() * 2);
+            for (std::size_t y = 0; y < preview.height(); ++y) {
+                for (std::size_t x = 0; x < preview.width(); ++x) {
+                    auto v = preview[x, y];
+                    doubled[x, y * 2]     = v;
+                    doubled[x, y * 2 + 1] = v;
+                }
+            }
+            preview = std::move(doubled);
         }
         cli_print_encoded_other(
             std::format("{} cells ({}×{}), {} bytes (text buffer), "
@@ -6196,9 +6198,19 @@ int main(int argc, char* argv[]) {
                              config->output_path);
             } else {
                 std::vector<bool> empty_mask;
-                auto result = save_preview(config->output_path, preview,
-                                           false, empty_mask,
-                                           config->mode, false, false);
+                Result<void> result;
+                if (freeform) {
+                    // Save at the post-doubled preview's native dims —
+                    // never apply sy=2 / PAR / any other stretch. Aspect
+                    // matches source.
+                    result = png_io::save(config->output_path, preview);
+                } else {
+                    // Default canonical: scale_for_display applies the
+                    // sy=2+PAR canonical CRT 4:3 stretch.
+                    result = save_preview(config->output_path, preview,
+                                          false, empty_mask,
+                                          config->mode, false, false);
+                }
                 if (!result) {
                     std::println(stderr, "PNG write error: {}",
                                  result.error().message);
@@ -6208,8 +6220,14 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (config->preview)
-            show_terminal_preview(preview, config->mode, false, false);
+        if (config->preview) {
+            if (freeform) {
+                // Same rule as save: no PAR / sy=2 stretch in preview.
+                iterm2_display(preview);
+            } else {
+                show_terminal_preview(preview, config->mode, false, false);
+            }
+        }
         return 0;
     }
 

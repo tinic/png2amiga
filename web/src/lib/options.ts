@@ -570,6 +570,7 @@ export function isC64CharsetMode(mode: string): boolean {
 // by the user-typed dims; at default size they stay fixed-buffer.
 export function isTileFreeformMode(mode: string): boolean {
   return isC64CharsetMode(mode) || isGenesisMode(mode) || isSnesMode(mode)
+      || mode === 'cga-text80x100'
 }
 // SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
 // 2048-colour gamut comes from per-tile palette-field bits. Yliluoma

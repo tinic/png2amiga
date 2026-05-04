@@ -52,36 +52,28 @@ encode(const Image& image, amiga::Mode mode,
         }};
     }
 
-    // CGA 80x100: 80 cols × 8 px wide cells, 2 hardware scanlines tall.
-    // Two source-pixel conventions:
-    //   - Canonical 640×200 hardware buffer (cell = 8×2 source px).
-    //   - Square-pixel freeform (any other size): each visible cell
-    //     spans 8 source-px wide × 8 source-px tall. The encoder
-    //     averages every 4 source rows into one hardware scanline so
-    //     the cell footprint stays 8×2 in the metric/render space.
+    // CGA 80x100 hardware: 80 cols × 8 px wide cells, 2 hardware scanlines
+    // tall. The encoder takes the input as hardware-pixel dims (1 source
+    // pixel = 1 hardware dot). Callers that have square-pixel source pre-
+    // halve the image vertically before invoking the encoder. Single
+    // mode — no canonical/freeform branch here.
     const palette::FontRef& font = palette::kFontCga8x8;
-    constexpr std::size_t cell_h_hw = 2u;
+    constexpr std::size_t cell_h = 2u;
     constexpr std::size_t cell_w = 8u;
-    bool is_canonical_640x200 =
-        (image.width() == 640 && image.height() == 200);
-    const std::size_t cell_h_src = is_canonical_640x200
-        ? cell_h_hw : (cell_h_hw * 4u);  // 2 src rows canonical, 8 src rows freeform
     if (image.width()  == 0 || image.height() == 0
-        || (image.width()  % cell_w)     != 0
-        || (image.height() % cell_h_src) != 0) {
+        || (image.width()  % cell_w) != 0
+        || (image.height() % cell_h) != 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
             std::format("cga_text::encode: input must be a non-zero "
                         "multiple of {}x{}, got {}x{}",
-                        cell_w, cell_h_src, image.width(), image.height()),
+                        cell_w, cell_h, image.width(), image.height()),
         }};
     }
     const std::size_t disp_w = image.width();
     const std::size_t disp_h = image.height();
     const std::size_t cols = disp_w / cell_w;
-    const std::size_t rows = disp_h / cell_h_src;
-    const std::size_t cell_h = cell_h_hw;
-    const std::size_t v_avg = cell_h_src / cell_h_hw;  // 1 canonical, 4 freeform
+    const std::size_t rows = disp_h / cell_h;
 
     // Candidate character set. If empty, use all 256.
     std::vector<std::uint8_t> chars;
@@ -190,6 +182,8 @@ encode(const Image& image, amiga::Mode mode,
     result.data.assign(cols * rows * 2, 0);
     result.cols = cols;
     result.rows = rows;
+    // Always 2 hardware scanlines per cell — the encoder operates in
+    // hardware-pixel space, so cell_height_scanlines == cell_h.
     result.cell_height_scanlines = cell_h;
     result.font_height = font.glyph_height;
     result.scanline_offset = static_cast<std::uint8_t>(offset);
@@ -382,21 +376,11 @@ encode(const Image& image, amiga::Mode mode,
 
     auto read_cell_source = [&](std::size_t col, std::size_t row,
                                 std::array<color_space::OKLab, 16>& out) {
-        // For freeform v_avg=4 we average 4 source rows into one
-        // hardware-scanline metric vector. Canonical 640×200 (v_avg=1)
-        // is a straight pass-through.
         for (std::size_t py = 0; py < cell_h; ++py) {
             for (std::size_t px = 0; px < 8; ++px) {
                 auto img_x = col * 8 + px;
-                color_space::OKLab acc{0, 0, 0};
-                for (std::size_t k = 0; k < v_avg; ++k) {
-                    auto img_y = row * cell_h_src + py * v_avg + k;
-                    auto v = to_metric_space(image[img_x, img_y]);
-                    acc.L += v.L; acc.a += v.a; acc.b += v.b;
-                }
-                float inv = 1.0f / static_cast<float>(v_avg);
-                acc.L *= inv; acc.a *= inv; acc.b *= inv;
-                out[py * 8 + px] = acc;
+                auto img_y = row * cell_h + py;
+                out[py * 8 + px] = to_metric_space(image[img_x, img_y]);
             }
         }
     };

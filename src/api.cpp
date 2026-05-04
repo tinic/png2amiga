@@ -495,6 +495,38 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
         return {tw, th};
     }
 
+    // cga-text80x100 freeform: --width / --height treats source as
+    // square-pixel and the cell grid is 8 × cell_h_src (cell_h_src=2 for
+    // canonical 200-line buffer, =4 for any other size). Preserve source
+    // aspect (target_h = target_w / src_aspect) — same rule the CLI's
+    // main.cpp applies. Pad up to 8×4 alignment so the encoder accepts.
+    bool cga_text_freeform =
+        amiga::is_cga_text(mode) && (have_w || have_h);
+    if (cga_text_freeform) {
+        constexpr std::size_t kCellW = 8;
+        constexpr std::size_t kCellH = 4;
+        auto round_up = [](std::size_t v, std::size_t s) {
+            return ((v + s - 1) / s) * s;
+        };
+        std::size_t tw = have_w
+            ? static_cast<std::size_t>(options.width)
+            : 0;
+        std::size_t th = have_h
+            ? static_cast<std::size_t>(options.height)
+            : 0;
+        if (!have_w) {
+            tw = static_cast<std::size_t>(std::lround(
+                static_cast<double>(th) * src_aspect));
+        }
+        if (!have_h) {
+            th = static_cast<std::size_t>(std::lround(
+                static_cast<double>(tw) / src_aspect));
+        }
+        if (tw == 0) tw = kCellW;
+        if (th == 0) th = kCellH;
+        return {round_up(tw, kCellW), round_up(th, kCellH)};
+    }
+
     bool charset_freeform =
         amiga::is_c64_charset(mode) && (have_w || have_h);
     if (charset_freeform) {
