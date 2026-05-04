@@ -483,7 +483,46 @@ void expand_ham_t(
             (static_cast<std::uint32_t>(prev.g) << 8);
         const std::uint8_t  ham_op = make_ham_value(
             0b01, 0, data_bits);  // op-only; data bits OR'd per iter
-        for (int bv = lo_b; bv < hi_b; ++bv) {
+        // commit_one stores one candidate's result. Body shared between
+        // the 4-wide batch path and the scalar tail.
+        auto commit_one = [&](std::uint8_t b8, int bv, float err) {
+            const std::uint32_t color_raw = prev_rg_pack |
+                (static_cast<std::uint32_t>(b8) << 16);
+            std::memcpy(static_cast<void*>(&out[oi].color),
+                        &color_raw, sizeof(color_raw));
+            out[oi].cumulative_error = prev_error + err;
+            out[oi].ham_value = static_cast<std::uint8_t>(
+                ham_op | static_cast<std::uint8_t>(bv));
+            out[oi].parent_idx = parent_idx;
+            ++oi;
+        };
+        int bv = lo_b;
+        if constexpr (M == HamMetric::oklab2) {
+            // 4-wide batch: cbrt 4 candidates' (L, M, S) channel-wise so
+            // all 4 SIMD lanes do productive work (vs lane 3 = 0 padding
+            // in the per-candidate form). Three fast_cbrt4 calls cover
+            // 12 channel values, saving one cbrt's worth of divides per
+            // 4 candidates — the bottleneck on WASM SIMD.
+            for (; bv + 4 <= hi_b; bv += 4) {
+                std::uint8_t b8_0 = pre.expand_lut[static_cast<std::size_t>(bv + 0)];
+                std::uint8_t b8_1 = pre.expand_lut[static_cast<std::size_t>(bv + 1)];
+                std::uint8_t b8_2 = pre.expand_lut[static_cast<std::size_t>(bv + 2)];
+                std::uint8_t b8_3 = pre.expand_lut[static_cast<std::size_t>(bv + 3)];
+                color_space::f32x4 lms_0 = rg_lms + lms_t[2][b8_0];
+                color_space::f32x4 lms_1 = rg_lms + lms_t[2][b8_1];
+                color_space::f32x4 lms_2 = rg_lms + lms_t[2][b8_2];
+                color_space::f32x4 lms_3 = rg_lms + lms_t[2][b8_3];
+                color_space::f32x4 L4{lms_0[0], lms_1[0], lms_2[0], lms_3[0]};
+                color_space::f32x4 M4{lms_0[1], lms_1[1], lms_2[1], lms_3[1]};
+                color_space::f32x4 S4{lms_0[2], lms_1[2], lms_2[2], lms_3[2]};
+                auto batch = color_space::lms4_to_oklab4(L4, M4, S4);
+                commit_one(b8_0, bv + 0, score_oklab2(target_lab, batch.labs[0]));
+                commit_one(b8_1, bv + 1, score_oklab2(target_lab, batch.labs[1]));
+                commit_one(b8_2, bv + 2, score_oklab2(target_lab, batch.labs[2]));
+                commit_one(b8_3, bv + 3, score_oklab2(target_lab, batch.labs[3]));
+            }
+        }
+        for (; bv < hi_b; ++bv) {
             auto b8 = pre.expand_lut[static_cast<std::size_t>(bv)];
             float err;
             if constexpr (M == HamMetric::srgb_mse) {
@@ -494,20 +533,7 @@ void expand_ham_t(
                     color_space::fast_cbrt4(rg_lms + lms_t[2][b8]));
                 err = score_oklab2(target_lab, lab);
             }
-            const std::uint32_t color_raw = prev_rg_pack |
-                (static_cast<std::uint32_t>(b8) << 16);
-            // void* cast silences GCC -Wclass-memaccess: SRGBColor has
-            // default member initializers (`{}`) which makes GCC treat it
-            // as non-trivial, but the type is in fact trivially copyable.
-            // The single-mov 32-bit store IS the perf hack here — see
-            // commit 3c68109 (kill SLF stalls).
-            std::memcpy(static_cast<void*>(&out[oi].color),
-                        &color_raw, sizeof(color_raw));
-            out[oi].cumulative_error = prev_error + err;
-            out[oi].ham_value = static_cast<std::uint8_t>(
-                ham_op | static_cast<std::uint8_t>(bv));
-            out[oi].parent_idx = parent_idx;
-            ++oi;
+            commit_one(b8, bv, err);
         }
     }
 
@@ -520,7 +546,39 @@ void expand_ham_t(
             (static_cast<std::uint32_t>(prev.g) << 8) |
             (static_cast<std::uint32_t>(prev.b) << 16);
         const std::uint8_t  ham_op = make_ham_value(0b10, 0, data_bits);
-        for (int rv = lo_r; rv < hi_r; ++rv) {
+        auto commit_one = [&](std::uint8_t r8, int rv, float err) {
+            const std::uint32_t color_raw = prev_gb_pack |
+                static_cast<std::uint32_t>(r8);
+            std::memcpy(static_cast<void*>(&out[oi].color),
+                        &color_raw, sizeof(color_raw));
+            out[oi].cumulative_error = prev_error + err;
+            out[oi].ham_value = static_cast<std::uint8_t>(
+                ham_op | static_cast<std::uint8_t>(rv));
+            out[oi].parent_idx = parent_idx;
+            ++oi;
+        };
+        int rv = lo_r;
+        if constexpr (M == HamMetric::oklab2) {
+            for (; rv + 4 <= hi_r; rv += 4) {
+                std::uint8_t r8_0 = pre.expand_lut[static_cast<std::size_t>(rv + 0)];
+                std::uint8_t r8_1 = pre.expand_lut[static_cast<std::size_t>(rv + 1)];
+                std::uint8_t r8_2 = pre.expand_lut[static_cast<std::size_t>(rv + 2)];
+                std::uint8_t r8_3 = pre.expand_lut[static_cast<std::size_t>(rv + 3)];
+                color_space::f32x4 lms_0 = lms_t[0][r8_0] + gb_lms;
+                color_space::f32x4 lms_1 = lms_t[0][r8_1] + gb_lms;
+                color_space::f32x4 lms_2 = lms_t[0][r8_2] + gb_lms;
+                color_space::f32x4 lms_3 = lms_t[0][r8_3] + gb_lms;
+                color_space::f32x4 L4{lms_0[0], lms_1[0], lms_2[0], lms_3[0]};
+                color_space::f32x4 M4{lms_0[1], lms_1[1], lms_2[1], lms_3[1]};
+                color_space::f32x4 S4{lms_0[2], lms_1[2], lms_2[2], lms_3[2]};
+                auto batch = color_space::lms4_to_oklab4(L4, M4, S4);
+                commit_one(r8_0, rv + 0, score_oklab2(target_lab, batch.labs[0]));
+                commit_one(r8_1, rv + 1, score_oklab2(target_lab, batch.labs[1]));
+                commit_one(r8_2, rv + 2, score_oklab2(target_lab, batch.labs[2]));
+                commit_one(r8_3, rv + 3, score_oklab2(target_lab, batch.labs[3]));
+            }
+        }
+        for (; rv < hi_r; ++rv) {
             auto r8 = pre.expand_lut[static_cast<std::size_t>(rv)];
             float err;
             if constexpr (M == HamMetric::srgb_mse) {
@@ -531,20 +589,7 @@ void expand_ham_t(
                     color_space::fast_cbrt4(lms_t[0][r8] + gb_lms));
                 err = score_oklab2(target_lab, lab);
             }
-            const std::uint32_t color_raw = prev_gb_pack |
-                static_cast<std::uint32_t>(r8);
-            // void* cast silences GCC -Wclass-memaccess: SRGBColor has
-            // default member initializers (`{}`) which makes GCC treat it
-            // as non-trivial, but the type is in fact trivially copyable.
-            // The single-mov 32-bit store IS the perf hack here — see
-            // commit 3c68109 (kill SLF stalls).
-            std::memcpy(static_cast<void*>(&out[oi].color),
-                        &color_raw, sizeof(color_raw));
-            out[oi].cumulative_error = prev_error + err;
-            out[oi].ham_value = static_cast<std::uint8_t>(
-                ham_op | static_cast<std::uint8_t>(rv));
-            out[oi].parent_idx = parent_idx;
-            ++oi;
+            commit_one(r8, rv, err);
         }
     }
 
@@ -557,7 +602,39 @@ void expand_ham_t(
             static_cast<std::uint32_t>(prev.r) |
             (static_cast<std::uint32_t>(prev.b) << 16);
         const std::uint8_t  ham_op = make_ham_value(0b11, 0, data_bits);
-        for (int gv = lo_g; gv < hi_g; ++gv) {
+        auto commit_one = [&](std::uint8_t g8, int gv, float err) {
+            const std::uint32_t color_raw = prev_rb_pack |
+                (static_cast<std::uint32_t>(g8) << 8);
+            std::memcpy(static_cast<void*>(&out[oi].color),
+                        &color_raw, sizeof(color_raw));
+            out[oi].cumulative_error = prev_error + err;
+            out[oi].ham_value = static_cast<std::uint8_t>(
+                ham_op | static_cast<std::uint8_t>(gv));
+            out[oi].parent_idx = parent_idx;
+            ++oi;
+        };
+        int gv = lo_g;
+        if constexpr (M == HamMetric::oklab2) {
+            for (; gv + 4 <= hi_g; gv += 4) {
+                std::uint8_t g8_0 = pre.expand_lut[static_cast<std::size_t>(gv + 0)];
+                std::uint8_t g8_1 = pre.expand_lut[static_cast<std::size_t>(gv + 1)];
+                std::uint8_t g8_2 = pre.expand_lut[static_cast<std::size_t>(gv + 2)];
+                std::uint8_t g8_3 = pre.expand_lut[static_cast<std::size_t>(gv + 3)];
+                color_space::f32x4 lms_0 = rb_lms + lms_t[1][g8_0];
+                color_space::f32x4 lms_1 = rb_lms + lms_t[1][g8_1];
+                color_space::f32x4 lms_2 = rb_lms + lms_t[1][g8_2];
+                color_space::f32x4 lms_3 = rb_lms + lms_t[1][g8_3];
+                color_space::f32x4 L4{lms_0[0], lms_1[0], lms_2[0], lms_3[0]};
+                color_space::f32x4 M4{lms_0[1], lms_1[1], lms_2[1], lms_3[1]};
+                color_space::f32x4 S4{lms_0[2], lms_1[2], lms_2[2], lms_3[2]};
+                auto batch = color_space::lms4_to_oklab4(L4, M4, S4);
+                commit_one(g8_0, gv + 0, score_oklab2(target_lab, batch.labs[0]));
+                commit_one(g8_1, gv + 1, score_oklab2(target_lab, batch.labs[1]));
+                commit_one(g8_2, gv + 2, score_oklab2(target_lab, batch.labs[2]));
+                commit_one(g8_3, gv + 3, score_oklab2(target_lab, batch.labs[3]));
+            }
+        }
+        for (; gv < hi_g; ++gv) {
             auto g8 = pre.expand_lut[static_cast<std::size_t>(gv)];
             float err;
             if constexpr (M == HamMetric::srgb_mse) {
@@ -568,20 +645,7 @@ void expand_ham_t(
                     color_space::fast_cbrt4(rb_lms + lms_t[1][g8]));
                 err = score_oklab2(target_lab, lab);
             }
-            const std::uint32_t color_raw = prev_rb_pack |
-                (static_cast<std::uint32_t>(g8) << 8);
-            // void* cast silences GCC -Wclass-memaccess: SRGBColor has
-            // default member initializers (`{}`) which makes GCC treat it
-            // as non-trivial, but the type is in fact trivially copyable.
-            // The single-mov 32-bit store IS the perf hack here — see
-            // commit 3c68109 (kill SLF stalls).
-            std::memcpy(static_cast<void*>(&out[oi].color),
-                        &color_raw, sizeof(color_raw));
-            out[oi].cumulative_error = prev_error + err;
-            out[oi].ham_value = static_cast<std::uint8_t>(
-                ham_op | static_cast<std::uint8_t>(gv));
-            out[oi].parent_idx = parent_idx;
-            ++oi;
+            commit_one(g8, gv, err);
         }
     }
 }

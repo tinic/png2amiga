@@ -437,6 +437,36 @@ inline OKLab srgb8_to_oklab(std::uint8_t r, std::uint8_t g,
     return lms_cbrt_to_oklab(fast_cbrt4(srgb8_to_lms(r, g, b)));
 }
 
+// 4-candidate batched cbrt + OKLab. Inputs are packed by channel:
+//   L = (L_0, L_1, L_2, L_3), same for M and S.
+// Three `fast_cbrt4` calls cover all 12 channel values with every lane
+// productive — vs four single-candidate calls that each waste lane 3.
+// Saves 25 % of cbrt work in the HAM hot loop's modify-{R,G,B} batches.
+struct OKLabBatch4 {
+    OKLab labs[4];
+};
+[[gnu::always_inline]]
+inline OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
+    f32x4 cL = fast_cbrt4(L);
+    f32x4 cM = fast_cbrt4(M);
+    f32x4 cS = fast_cbrt4(S);
+    OKLabBatch4 out;
+    for (int i = 0; i < 4; ++i) {
+        out.labs[i] = {
+            fma_dot3( 0.2104542553f, cL[i],
+                      0.7936177850f, cM[i],
+                     -0.0040720468f, cS[i]),
+            fma_dot3( 1.9779984951f, cL[i],
+                     -2.4285922050f, cM[i],
+                      0.4505937099f, cS[i]),
+            fma_dot3( 0.0259040371f, cL[i],
+                      0.7827717662f, cM[i],
+                     -0.8086757660f, cS[i]),
+        };
+    }
+    return out;
+}
+
 inline Color3f oklab_to_linear(OKLab lab) noexcept {
     // Inverse OKLab matrix: L + c1*a + c2*b shape, fold via nested fma.
     float l_ = std::fma(0.3963377774f, lab.a,
