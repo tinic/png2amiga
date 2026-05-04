@@ -793,7 +793,12 @@ function formatResultInfo(result: ConvertResult) {
   // the CLI / .cpp viewer's Palette line.
   const visibleBpl = options.dualPlayfield && result.depth
     ? Math.floor(result.depth / 2) : result.depth
-  const parts = [`${result.width}x${result.height}, ${statusChipset.value}`,
+  // For cga-text the api keeps result.height at hw scanlines (200 for
+  // canonical, halved for freeform). Show source-pixel dim so the
+  // label matches the displayed canvas + user-typed Resize value.
+  const dispW = sourceWidthFromResult(result)
+  const dispH = sourceHeightFromResult(result)
+  const parts = [`${dispW}x${dispH}, ${statusChipset.value}`,
                  `${visibleBpl || '?'}bpl, ${colorCount} colors`]
   pushIf(parts, result.copperChanges, `${(result.copperChanges ?? 0).toFixed(1)} avg sliced/line`)
   const sizeStats = formatSizeStats(result)
@@ -862,18 +867,28 @@ function sourceWidthFromResult(result: ConvertResult): number {
     ? result.width * 2 : result.width
 }
 
+// User-facing height matches *source* pixels too. For cga-text80x100
+// the encoder operates on the hardware-pixel buffer (halved height),
+// so double it back when surfacing to the Resize inputs — otherwise
+// flipping Resize on prepopulates 640x200 instead of 640x400 for a
+// canonical default.
+function sourceHeightFromResult(result: ConvertResult): number {
+  return options.mode === 'cga-text80x100'
+    ? result.height * 2 : result.height
+}
+
 function maybeSeedSizes(result: ConvertResult): void {
   // If size-override is on but width/height are 0 (fresh image just loaded),
   // seed the inputs with the natural defaults; triggers one idempotent
   // re-convert via the deep options watcher.
   if (!sizeOverride.value || (options.width && options.height)) return
   options.width = sourceWidthFromResult(result)
-  options.height = result.height
+  options.height = sourceHeightFromResult(result)
 }
 
 function updateLastResultRefs(result: ConvertResult): void {
   lastWidth.value = sourceWidthFromResult(result)
-  lastHeight.value = result.height
+  lastHeight.value = sourceHeightFromResult(result)
   lastCopPerLine.value = result.copperChanges ?? 0
   lastPlaneBytes.value = result.planeBytes ?? 0
   lastCopperBytes.value = result.copperBytes ?? 0
