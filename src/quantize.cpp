@@ -877,9 +877,9 @@ Palette median_cut(std::span<const Color3f> colors,
         std::vector<Acc> acc(n_colors);
         for (std::size_t i = 0; i < n_samples; ++i) {
             auto k = assignments[i];
-            acc[k].L += static_cast<double>(sLv[i]) / color_space::WEIGHT_L;
-            acc[k].a += static_cast<double>(sAv[i]) / color_space::WEIGHT_A;
-            acc[k].b += static_cast<double>(sBv[i]) / color_space::WEIGHT_B;
+            acc[k].L += static_cast<double>(sLv[i]) / static_cast<double>(color_space::WEIGHT_L);
+            acc[k].a += static_cast<double>(sAv[i]) / static_cast<double>(color_space::WEIGHT_A);
+            acc[k].b += static_cast<double>(sBv[i]) / static_cast<double>(color_space::WEIGHT_B);
             acc[k].n++;
             acc[k].total_err += static_cast<double>(pixel_errors[i]);
         }
@@ -1301,9 +1301,9 @@ std::vector<color_space::OKLab> kmeans_refine(
         std::vector<Acc> acc(n);
         for (std::size_t i = 0; i < soa.valid_n; ++i) {
             auto& A = acc[assignments[i]];
-            A.L += static_cast<double>(soa.L[i]) / color_space::WEIGHT_L;
-            A.a += static_cast<double>(soa.a[i]) / color_space::WEIGHT_A;
-            A.b += static_cast<double>(soa.b[i]) / color_space::WEIGHT_B;
+            A.L += static_cast<double>(soa.L[i]) / static_cast<double>(color_space::WEIGHT_L);
+            A.a += static_cast<double>(soa.a[i]) / static_cast<double>(color_space::WEIGHT_A);
+            A.b += static_cast<double>(soa.b[i]) / static_cast<double>(color_space::WEIGHT_B);
             ++A.n;
         }
         bool changed = false;
@@ -1794,7 +1794,9 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             for (auto p : picked) {
                 if (p == i) { min_d = 0; break; }
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[p];
-                double dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                double dL = static_cast<double>(a.L) - static_cast<double>(b.L);
+                double da = static_cast<double>(a.a) - static_cast<double>(b.a);
+                double db = static_cast<double>(a.b) - static_cast<double>(b.b);
                 double d = png2amiga::color_space::fma_dist_sq(dL, da, db);
                 if (d < min_d) min_d = d;
             }

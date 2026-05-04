@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <thread>
@@ -495,7 +496,13 @@ void expand_ham_t(
             }
             const std::uint32_t color_raw = prev_rg_pack |
                 (static_cast<std::uint32_t>(b8) << 16);
-            std::memcpy(&out[oi].color, &color_raw, sizeof(color_raw));
+            // void* cast silences GCC -Wclass-memaccess: SRGBColor has
+            // default member initializers (`{}`) which makes GCC treat it
+            // as non-trivial, but the type is in fact trivially copyable.
+            // The single-mov 32-bit store IS the perf hack here — see
+            // commit 3c68109 (kill SLF stalls).
+            std::memcpy(static_cast<void*>(&out[oi].color),
+                        &color_raw, sizeof(color_raw));
             out[oi].cumulative_error = prev_error + err;
             out[oi].ham_value = static_cast<std::uint8_t>(
                 ham_op | static_cast<std::uint8_t>(bv));
@@ -526,7 +533,13 @@ void expand_ham_t(
             }
             const std::uint32_t color_raw = prev_gb_pack |
                 static_cast<std::uint32_t>(r8);
-            std::memcpy(&out[oi].color, &color_raw, sizeof(color_raw));
+            // void* cast silences GCC -Wclass-memaccess: SRGBColor has
+            // default member initializers (`{}`) which makes GCC treat it
+            // as non-trivial, but the type is in fact trivially copyable.
+            // The single-mov 32-bit store IS the perf hack here — see
+            // commit 3c68109 (kill SLF stalls).
+            std::memcpy(static_cast<void*>(&out[oi].color),
+                        &color_raw, sizeof(color_raw));
             out[oi].cumulative_error = prev_error + err;
             out[oi].ham_value = static_cast<std::uint8_t>(
                 ham_op | static_cast<std::uint8_t>(rv));
@@ -557,7 +570,13 @@ void expand_ham_t(
             }
             const std::uint32_t color_raw = prev_rb_pack |
                 (static_cast<std::uint32_t>(g8) << 8);
-            std::memcpy(&out[oi].color, &color_raw, sizeof(color_raw));
+            // void* cast silences GCC -Wclass-memaccess: SRGBColor has
+            // default member initializers (`{}`) which makes GCC treat it
+            // as non-trivial, but the type is in fact trivially copyable.
+            // The single-mov 32-bit store IS the perf hack here — see
+            // commit 3c68109 (kill SLF stalls).
+            std::memcpy(static_cast<void*>(&out[oi].color),
+                        &color_raw, sizeof(color_raw));
             out[oi].cumulative_error = prev_error + err;
             out[oi].ham_value = static_cast<std::uint8_t>(
                 ham_op | static_cast<std::uint8_t>(gv));

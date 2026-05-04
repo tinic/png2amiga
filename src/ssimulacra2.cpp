@@ -166,7 +166,8 @@ void gaussian_blur(const std::vector<float>& in,
             float s = 0.0f;
             for (int i = 0; i < kBlurSize; ++i) {
                 s += k[static_cast<std::size_t>(i)] *
-                     row[x + i - kBlurHalf];
+                     row[x + static_cast<std::size_t>(i)
+                           - static_cast<std::size_t>(kBlurHalf)];
             }
             trow[x] = s;
         }
