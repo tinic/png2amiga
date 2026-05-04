@@ -916,7 +916,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                            amiga::is_ega(mode)   || amiga::is_cga(mode) ||
                            amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                                amiga::is_genesis(mode);
-    if (mode_h > 0 && is_fixed_buffer &&
+    // cga-text accepts arbitrary multiples of 8×2 in freeform (--width
+    // / --height set). Don't center-pad freeform input up to the
+    // canonical 640×200 buffer — that would silently turn a 200×400
+    // target back into 640×200 and the encoder would produce 80×100
+    // cells instead of the user-typed 25×100.
+    bool cga_text_freeform_skip_pad =
+        amiga::is_cga_text(mode) && (options.width > 0 || options.height > 0);
+    if (mode_h > 0 && is_fixed_buffer && !cga_text_freeform_skip_pad &&
         (image->height() < mode_h || image->width() < mode_w_fixed)) {
         auto w = image->width();
         auto h = image->height();
