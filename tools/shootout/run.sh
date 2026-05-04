@@ -229,6 +229,23 @@ if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
         --force 32 "$TARGET"
 fi
 
+# 16) png2amiga lores 8bpp (256-color AGA indexed). 32-image probe
+#     showed our quantizer with the new default palette_diversity=4
+#     beats libimagequant by ~5 S2 at depth 8 — adding the entry here
+#     so the leaderboard shows where we land at 256 colours too.
+run_png2amiga "p2a-lores-d8"         --mode lores --depth 8 --chipset aga
+
+# 17) png2amiga lores 8bpp + --best (multi-restart sweep)
+run_png2amiga "p2a-lores-d8-best"    --mode lores --depth 8 --chipset aga --best
+
+# 18) libimagequant 256 colours head-to-head with d=8.
+if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
+    echo "==> [pngquant] 256 colours + floyd"
+    time_to "$OUT/libimagequant-256.time" \
+      "$PNGQUANT" --speed 1 --strip --output "$OUT/libimagequant-256.png" \
+        --force 256 "$TARGET"
+fi
+
 # --- Step 3: PSNR table ----------------------------------------------------
 echo
 echo "==> Computing PSNR..."

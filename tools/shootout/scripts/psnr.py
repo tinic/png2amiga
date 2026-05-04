@@ -93,6 +93,12 @@ LABELS = {
     'p2a-lores-d5-best':     'png2amiga lores d=5 + best (FS)',
     'hc-lores-d5':           'ham_convert ocs32 (dither_fs)',
     'libimagequant-32':      'libimagequant 32 (FS)',
+    # 256-colour AGA lores head-to-head with libimagequant. Tests the
+    # quantizer in the high-colour regime where the OCS-12-bit
+    # constraint is gone (chipset=aga = continuous 24-bit palette).
+    'p2a-lores-d8':          'png2amiga lores d=8 AGA (FS)',
+    'p2a-lores-d8-best':     'png2amiga lores d=8 AGA + best (FS)',
+    'libimagequant-256':     'libimagequant 256 (FS)',
 }
 
 def read_time(stem: str) -> float | None:
