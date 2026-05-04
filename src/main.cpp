@@ -22,7 +22,6 @@
 #include "palette_locks.hpp"
 #include "pipeline.hpp"
 #include "png_io.hpp"
-#include "gif.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
 #include "scale.hpp"
@@ -545,10 +544,6 @@ struct Config {
     // we can compare our quantizer head-to-head against pngquant et al.
     // Set by `--mode png`. Bypasses the entire Amiga dispatch in main().
     bool png_benchmark = false;
-    // Same as png_benchmark but writes single-frame GIF89a (LZW-coded
-    // 8-bit indices). For comparing our quantizer + dither against
-    // gifsicle / ImageMagick.
-    bool gif_benchmark = false;
 
     // Score-only mode: load <input> + this reference image, print PSNR / S2,
     // exit. Used by the pngquant comparison harness so distorted images
@@ -1513,12 +1508,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     // head-to-head against pngquant. config.mode is left
                     // at its default; main() short-circuits on this flag.
                     config.png_benchmark = true;
-                }
-                else if (v == "gif") {
-                    // Same as png mode but emits single-frame GIF89a
-                    // (LZW + global colour table). For benchmarking
-                    // against gifsicle / ImageMagick.
-                    config.gif_benchmark = true;
                 }
                 else return std::unexpected{Error{ErrorCode::unsupported_mode,
                     "Unknown mode: " + v}};
@@ -4810,108 +4799,6 @@ int main(int argc, char* argv[]) {
         return exit_code::ok;
     }
 
-    // --- `--mode gif` benchmark path ---
-    // Single-frame GIF89a (LZW + global colour table). Same quantizer +
-    // dither pipeline as `--mode png`; only the file format differs.
-    if (config->gif_benchmark) {
-        if (config->input_path.empty() || config->output_path.empty()) {
-            std::println(stderr,
-                "Error: --mode gif requires <input> <output.gif>");
-            return exit_code::usage;
-        }
-        if (config->depth < 1 || config->depth > 8) {
-            std::println(stderr,
-                "Error: --mode gif needs --depth 1..8 (2..256 colours)");
-            return exit_code::usage;
-        }
-
-        auto loaded = png_io::load(config->input_path);
-        if (!loaded) {
-            std::println(stderr, "Load error: {}", loaded.error().message);
-            return 1;
-        }
-        Image img = *std::move(loaded);
-
-        std::size_t tw = config->width.value_or(img.width());
-        std::size_t th = config->height.value_or(img.height());
-        if (tw != img.width() || th != img.height()) {
-            auto scaled = scale::resample(img, tw, th);
-            if (!scaled) {
-                std::println(stderr, "Scale error: {}", scaled.error().message);
-                return 1;
-            }
-            img = *std::move(scaled);
-        }
-
-        preprocess::apply(img, config->preprocess);
-
-        auto max_colors = std::size_t{1} << config->depth;
-        auto quantized = quantize::quantize(img, max_colors,
-                                            quantize::Algorithm::median_cut,
-                                            config->palette_diversity);
-        if (!quantized) {
-            std::println(stderr, "Quantize error: {}",
-                         quantized.error().message);
-            return 1;
-        }
-
-        auto tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = amiga::Mode::lores,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = false,
-            .scap    = false,
-            .copper  = false,
-            .chipset = amiga::Chipset::aga,
-            .method  = config->dither_method,
-        });
-        dither::Settings dith;
-        dith.method = config->dither_method;
-        dith.strength = config->dither_strength_explicit
-            ? config->dither_strength : tune.strength;
-        dith.error_clamp = config->error_clamp_explicit
-            ? config->error_clamp : tune.error_clamp;
-
-        if (config->refine_iterations > 0 &&
-            dith.method != dither::Method::none) {
-            auto refined = quantize::refine_with_dither(
-                img, *quantized, dith,
-                amiga::Chipset::aga, amiga::Mode::lores,
-                static_cast<std::size_t>(config->refine_iterations));
-            if (refined) quantized->colors = std::move(refined->colors);
-        }
-
-        auto dith_result = dither::apply(img, quantized->colors, dith);
-
-        auto w = img.width(), h = img.height();
-        Image rendered(w, h);
-        for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
-            rendered.pixels()[i] = quantized->colors[dith_result.indices[i]];
-
-        auto saved = gif::save_palettized(config->output_path,
-                                          dith_result.indices,
-                                          quantized->colors, w, h);
-        if (!saved) {
-            std::println(stderr, "Save error: {}", saved.error().message);
-            return 1;
-        }
-
-        cli_print_input(img.width(), img.height());
-        cli_print_target(w, h, static_cast<int>(config->depth));
-        cli_print_palette(std::format("{} colours, GIF89a (benchmark)",
-                                      quantized->colors.size()));
-        cli_print_dither(dith.method, dith.strength);
-
-        float psnr = color_space::compute_psnr_blurred(
-            img.pixels(), rendered.pixels(), w, h);
-        float s2 = ssimulacra2::compute(
-            img.pixels(), rendered.pixels(), w, h);
-        cli_print_encoded_other(
-            "GIF89a (benchmark)",
-            quantized->colors.size(),
-            static_cast<double>(dith_result.total_error),
-            psnr, s2);
-        return exit_code::ok;
-    }
 
     // --- strips calibration probe path ---
     // Synthesize the probe image + per-line copper ops directly and emit a

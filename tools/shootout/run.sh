@@ -229,51 +229,6 @@ if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
         --force 32 "$TARGET"
 fi
 
-# 16) png2amiga GIF mode: same quantizer + dither pipeline as lores d=5,
-#     wrapped in single-frame GIF89a. Lets us put png2amiga on the same
-#     PSNR/S2 leaderboard as gifsicle / ImageMagick at 256 colours so
-#     the comparison isn't apples-to-pears against pure-pngquant.
-echo "==> [png2amiga] gif d=8 + floyd"
-time_to "$OUT/p2a-gif-d8.time" \
-  "$PNG2AMIGA" --quiet --dither floyd-steinberg --mode gif --depth 8 \
-    "$TARGET" -o "$OUT/p2a-gif-d8.gif"
-
-# 17) ImageMagick (`magick` or `convert`) → 256-colour GIF.
-#     Honest-best knobs picked via the /tmp/gif_honest_best.sh probe:
-#     `-quantize Lab -dither None` averaged S2 79.00 across electrichues
-#     / asterix / fantasy at 320×213, beating every dither + colourspace
-#     permutation (FS+RGB default = 77.77, FS+Lab = 73.07, etc). Lab
-#     quantize without dither produces a slightly posterised look that
-#     SSIMULACRA2 rewards more than dither noise.
-MAGICK="${MAGICK:-$(command -v magick || command -v convert || true)}"
-if [ -n "$MAGICK" ] && [ -x "$MAGICK" ]; then
-    echo "==> [imagemagick] gif 256 (-quantize Lab -dither None, honest peak)"
-    time_to "$OUT/imagemagick-gif.time" \
-      "$MAGICK" "$TARGET" -quantize Lab -dither None -colors 256 \
-        "$OUT/imagemagick-gif.gif"
-else
-    echo "WARNING: ImageMagick (magick / convert) not found — skipping" >&2
-    echo "         GIF comparison entry. brew install imagemagick" >&2
-fi
-
-# 18) gifski: pngquant-based GIF encoder by Kornel Lesiński, advertised
-#     as "highest quality." A 9-combo probe vs ImageMagick / gifsicle
-#     showed gifski outranks both on SSIMULACRA2, so it's our headline
-#     "best-in-class FOSS GIF encoder" comparator. gifski refuses
-#     single-frame input — workaround: feed the same PNG twice and read
-#     frame 0; the duplicate-frame trick is purely to satisfy gifski's
-#     animation requirement, not part of the quality measurement.
-#     `-Q 100 --extra` is its honest peak (highest quality + slow mode).
-GIFSKI="${GIFSKI:-$(command -v gifski || true)}"
-if [ -n "$GIFSKI" ] && [ -x "$GIFSKI" ]; then
-    echo "==> [gifski] -Q 100 --extra (single-frame, duplicate trick)"
-    time_to "$OUT/gifski.time" \
-      "$GIFSKI" -Q 100 --extra --repeat -1 -o "$OUT/gifski.gif" \
-        "$TARGET" "$TARGET"
-else
-    echo "WARNING: gifski not found — skipping. brew install gifski" >&2
-fi
-
 # --- Step 3: PSNR table ----------------------------------------------------
 echo
 echo "==> Computing PSNR..."

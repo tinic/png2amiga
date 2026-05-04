@@ -50,7 +50,6 @@ add_subdirectory(third_party)
 # Core library (shared between CLI and WASM)
 set(PNG2AMIGA_CORE_SOURCES
     src/png_io.cpp
-    src/gif.cpp
     src/scale.cpp
     src/preprocess.cpp
     src/quantize.cpp
