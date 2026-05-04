@@ -598,19 +598,42 @@ function setSizePreset(scale: number) {
 // fires on blur or Enter — not per-keystroke — so the user sees stable
 // intermediate values while typing.
 const aspectLocked = ref(true)
+// cga-text snapshot: when the lock toggles ON for cga-text80x100, we
+// freeze the current (options.width, options.height) ratio. Subsequent
+// commits use that ratio rather than the source PNG aspect — lets the
+// user unlock, type a custom 400×400, lock again, and have edits
+// preserve THAT 1:1 instead of snapping back to source aspect. Other
+// modes keep the simple source-aspect rule.
+const cgaTextLockedAspect = ref<number>(0)
+watch([aspectLocked, () => options.mode], ([locked, mode]) => {
+  cgaTextLockedAspect.value = (locked && mode === 'cga-text80x100' &&
+                               options.width > 0 && options.height > 0)
+    ? options.height / options.width
+    : 0
+})
+
+function widthHeightRatio(): number {
+  if (options.mode === 'cga-text80x100' && cgaTextLockedAspect.value > 0) {
+    return cgaTextLockedAspect.value
+  }
+  if (!imageWidth.value || !imageHeight.value) return 0
+  return imageHeight.value / imageWidth.value
+}
 
 function onWidthCommit() {
   if (!aspectLocked.value) return
-  if (!imageWidth.value || !imageHeight.value || !options.width) return
-  const aspect = imageHeight.value / imageWidth.value
-  options.height = Math.max(2, Math.round(options.width * aspect))
+  if (!options.width) return
+  const r = widthHeightRatio()
+  if (!r) return
+  options.height = Math.max(2, Math.round(options.width * r))
 }
 
 function onHeightCommit() {
   if (!aspectLocked.value) return
-  if (!imageWidth.value || !imageHeight.value || !options.height) return
-  const aspect = imageWidth.value / imageHeight.value
-  options.width = Math.max(16, Math.round(options.height * aspect / 16) * 16)
+  if (!options.height) return
+  const r = widthHeightRatio()
+  if (!r) return
+  options.width = Math.max(16, Math.round(options.height / r / 16) * 16)
 }
 
 // Build the options object to pass to WASM (matches wasm_bindings.cpp field names)
