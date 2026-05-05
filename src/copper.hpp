@@ -136,14 +136,14 @@ constexpr std::size_t moves_for_line(
     std::size_t banks_hi = 0;
     for (auto& ch : changes) {
         if (ch.skip_hi) continue;
-        int b = static_cast<int>(ch.reg / 32);
+        int b = ch.reg / 32;
         if (b != prev_bank_hi) { ++banks_hi; prev_bank_hi = b; }
     }
     int prev_bank_lo = -1;
     std::size_t banks_lo = 0;
     for (auto& ch : changes) {
         if (ch.skip_lo) continue;
-        int b = static_cast<int>(ch.reg / 32);
+        int b = ch.reg / 32;
         if (b != prev_bank_lo) { ++banks_lo; prev_bank_lo = b; }
     }
     return banks_hi + k_hi + banks_lo + k_lo;

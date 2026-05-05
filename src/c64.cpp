@@ -309,10 +309,11 @@ inline float score_cell(
     // Phase 1: per-pixel nearest-of-N in sRGB MSE.
     std::array<std::uint8_t, Px> idx{};
     std::array<Color3f, Px> rendered{};
+    static_assert(N <= 16, "score_cell candidate count fits in uint8_t");
     for (std::size_t p = 0; p < Px; ++p) {
         float best = std::numeric_limits<float>::infinity();
         std::uint8_t best_q = 0;
-        for (std::uint8_t q = 0; q < N; ++q) {
+        for (std::uint8_t q = 0; q < static_cast<std::uint8_t>(N); ++q) {
             float dr = raw[p].r - cand[q].r;
             float dg = raw[p].g - cand[q].g;
             float db = raw[p].b - cand[q].b;

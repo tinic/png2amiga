@@ -374,18 +374,18 @@ ScaleScores compute_one_scale(const std::vector<float>& X1,
     ScaleScores out{};
     std::array<const std::vector<float>*, 3> p1{&X1, &Y1, &B1};
     std::array<const std::vector<float>*, 3> p2{&X2, &Y2, &B2};
-    std::vector<float> mu1, mu2, s11, s22, s12, mul;
+    std::vector<float> mu1, mu2, s11, s22, s12, prod;
     for (std::size_t c = 0; c < 3; ++c) {
         auto& a = *p1[c];
         auto& b = *p2[c];
         gaussian_blur(a, mu1, w, h);
         gaussian_blur(b, mu2, w, h);
-        multiply(a, a, mul);
-        gaussian_blur(mul, s11, w, h);
-        multiply(b, b, mul);
-        gaussian_blur(mul, s22, w, h);
-        multiply(a, b, mul);
-        gaussian_blur(mul, s12, w, h);
+        multiply(a, a, prod);
+        gaussian_blur(prod, s11, w, h);
+        multiply(b, b, prod);
+        gaussian_blur(prod, s22, w, h);
+        multiply(a, b, prod);
+        gaussian_blur(prod, s12, w, h);
         auto ssim = ssim_plane(mu1, mu2, s11, s22, s12, w, h);
         out.ssim_pair[c * 2 + 0] = ssim.mean1;
         out.ssim_pair[c * 2 + 1] = ssim.mean4;

@@ -3320,7 +3320,8 @@ FadeJointResult fade_joint_kmeans(const Image& source,
     // Slot 0 (when reserved) initialises to all-zeros so OKLab→linear
     // round-trips to black on every axis.
     std::vector<float> centroids(k_palette * n_dim, 0.0f);
-    std::mt19937 rng(42);
+    // Deterministic seed: identical inputs must produce byte-identical output.
+    std::mt19937 rng(42);  // NOLINT(cert-msc51-cpp,bugprone-random-generator-seed)
     std::uniform_int_distribution<std::size_t> pick(0, npix - 1);
     std::vector<std::size_t> picked;
     picked.reserve(k_palette);
@@ -3501,7 +3502,8 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
 
     // Forgy init in linear RGB. Slot 0 (when reserved) stays at black.
     std::vector<Color3f> centroids(k_base * n_axes, Color3f{0, 0, 0});
-    std::mt19937 rng(42);
+    // Deterministic seed: identical inputs must produce byte-identical output.
+    std::mt19937 rng(42);  // NOLINT(cert-msc51-cpp,bugprone-random-generator-seed)
     std::uniform_int_distribution<std::size_t> pick(0, npix - 1);
     std::vector<std::size_t> picked;
     picked.reserve(k_base);
@@ -3827,9 +3829,9 @@ std::vector<std::vector<Color3f>> fade_postprocess(
     // 2. Joint k-means (EHB or non-EHB) — produces the palette set.
     auto k_pal = std::size_t{1} << depth;
     FadeJointResult joint = is_ehb
-        ? fade_joint_kmeans_ehb(source, targets, /*iter=*/12, chipset,
+        ? fade_joint_kmeans_ehb(source, targets, /*iterations=*/12, chipset,
                                 reserve_slot0)
-        : fade_joint_kmeans(source, targets, k_pal, /*iter=*/12,
+        : fade_joint_kmeans(source, targets, k_pal, /*iterations=*/12,
                             chipset, mode, reserve_slot0);
 
     // 3. Joint dither using the joint palette set. Source-axis ED
@@ -4508,8 +4510,8 @@ int run_batch(const Config& cfg) {
     // for one full image; we ask it for both halves so per-frame
     // doesn't pretend to include the shared overhead.
     int sliced_entries = st.scanline_changes.empty() ? 0
-        : static_cast<int>(static_cast<int>(frame_h) *
-                           static_cast<int>(st.changes_per_line));
+        : (static_cast<int>(frame_h) *
+           static_cast<int>(st.changes_per_line));
     // Skip all-zero planes in disk accounting. DPF uses two playfields'
     // worth of bitplanes (e.g. depth=3 + dpf → 6 total), but if one
     // playfield is unused (e.g. PF1 transparent for video frames) those
@@ -5908,13 +5910,13 @@ int run_main(int argc, char* argv[]) {
             return exit_code::internal;
         }
         auto& st = enc.state;
-        const char* mode_label = "";
+        const char* mode_label = nullptr;
         switch (config->mode) {
         case amiga::Mode::genesis_h32:    mode_label = "H32 256-wide"; break;
         case amiga::Mode::genesis_h40:    mode_label = "H40 320-wide"; break;
         case amiga::Mode::genesis_h32_sh: mode_label = "H32 + Shadow"; break;
         case amiga::Mode::genesis_h40_sh: mode_label = "H40 + Shadow"; break;
-        default: mode_label = "Genesis"; break;
+        default:                          mode_label = "Genesis"; break;
         }
         cli_print_mode(std::format(
             "Sega Genesis ({}), {}x{} @ 4bpp tiles, 4 palettes x 16 BGR333",
@@ -6286,8 +6288,7 @@ int run_main(int argc, char* argv[]) {
         // implicit default to atkinson, so config->dither_method is
         // guaranteed safe for HAM here. Just trust it.
         auto ham_dither = config->dither_method;
-        auto ham_data_bits = static_cast<std::size_t>(
-            ham_params.bitplane_depth - 2);
+        auto ham_data_bits = ham_params.bitplane_depth - 2;
         std::size_t ham_base_colors = std::size_t{1} << ham_data_bits;
         if (config->scap && config->mode == amiga::Mode::ham6) {
             cli_print_mode(std::format("HAM6 + Strips (beam: {})",
@@ -6354,7 +6355,7 @@ int run_main(int argc, char* argv[]) {
                 static_cast<int>(st.planes.total_bytes()),
                 static_cast<int>(st.palette.size()),
                 chipset == amiga::Chipset::aga,
-                ham_cap_entries, /*scap=*/0,
+                ham_cap_entries, /*strips_op_count=*/0,
                 static_cast<int>(st.planes.height),
                 static_cast<int>(st.changes_per_line),
                 ham_unique,
@@ -6366,7 +6367,7 @@ int run_main(int argc, char* argv[]) {
                 static_cast<int>(st.planes.total_bytes()),
                 static_cast<int>(st.palette.size()),
                 chipset == amiga::Chipset::aga,
-                /*cap=*/0, /*scap=*/0,
+                /*sliced_grid_entries=*/0, /*strips_op_count=*/0,
                 static_cast<int>(st.planes.height),
                 /*max_moves=*/0,
                 ham_unique, std::nullopt,
@@ -6576,8 +6577,7 @@ int run_main(int argc, char* argv[]) {
                     nullptr, true, ehb_cap_locked, diversity,
                     skip_initial, config->interlace, /*is_ehb=*/true,
                     report_progress
-                        ? std::function<void(float, std::string_view)>(
-                              make_cli_progress_reporter())
+                        ? make_cli_progress_reporter()
                         : std::function<void(float, std::string_view)>{},
                     // Sentinel → encode_copper picks depth-aware default.
                     config->sliced_spread_radius >= 0
@@ -6723,7 +6723,7 @@ int run_main(int argc, char* argv[]) {
                         return t.rendered;
                     },
                     progress_fn,
-                    /*jitter_amp=*/1.0f,
+                    /*jitter_amplitude=*/1.0f,
                     sliced_metric);
             }
             if (!winner.has_value()) {
@@ -6779,10 +6779,10 @@ int run_main(int argc, char* argv[]) {
                 static_cast<int>(planes->total_bytes()),
                 static_cast<int>(copper_result->base_palette.size()),
                 /*aga=*/false,
-                ehb_cap_entries, /*scap=*/0,
+                ehb_cap_entries, /*strips_op_count=*/0,
                 static_cast<int>(h),
                 static_cast<int>(copper_result->max_moves_per_line),
-                static_cast<int>(count_unique_colors(rendered)),
+                count_unique_colors(rendered),
                 std::optional<float>{copper_result->avg_changes_per_line},
                 static_cast<double>(total_error), ehb_psnr, ehb_s2);
 
@@ -6969,9 +6969,9 @@ int run_main(int argc, char* argv[]) {
             static_cast<int>(st.planes.total_bytes()),
             static_cast<int>(st.palette.size()),
             /*aga=*/false,
-            /*cap=*/0, /*scap=*/0,
+            /*sliced_grid_entries=*/0, /*strips_op_count=*/0,
             static_cast<int>(st.planes.height), /*max_moves=*/0,
-            static_cast<int>(count_unique_colors(st.rendered)),
+            count_unique_colors(st.rendered),
             std::nullopt,
             static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
 
@@ -7351,10 +7351,10 @@ int run_main(int argc, char* argv[]) {
             static_cast<int>(copper_result->planes.total_bytes()),
             static_cast<int>(copper_result->base_palette.size()),
             chipset == amiga::Chipset::aga,
-            cop_cap_entries, /*scap=*/0,
+            cop_cap_entries, /*strips_op_count=*/0,
             static_cast<int>(copper_result->planes.height),
             static_cast<int>(copper_result->max_moves_per_line),
-            static_cast<int>(count_unique_colors(*preview)),
+            count_unique_colors(*preview),
             std::optional<float>{copper_result->avg_changes_per_line},
             static_cast<double>(copper_result->total_error), cop_psnr, cop_s2);
 
@@ -7566,7 +7566,7 @@ int run_main(int argc, char* argv[]) {
             strips_ops,
             static_cast<int>(st.rendered.height()),
             static_cast<int>(st.max_moves_per_line),
-            static_cast<int>(count_unique_colors(st.rendered)),
+            count_unique_colors(st.rendered),
             std::optional<float>{st.copper_changes},
             static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
 
@@ -7763,7 +7763,6 @@ int run_main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
         pal.colors = st.palette;
-        pal_size = st.palette.size();
         used_palette = st.palette;
         dither_result.indices = st.indices;
         dither_result.total_error = static_cast<float>(st.quant_error);
@@ -8145,9 +8144,9 @@ int run_main(int argc, char* argv[]) {
         static_cast<int>(planes->total_bytes()),
         static_cast<int>(pal.size()),
         chipset == amiga::Chipset::aga,
-        /*cap=*/0, /*scap=*/0,
+        /*sliced_grid_entries=*/0, /*strips_op_count=*/0,
         static_cast<int>(planes->height), /*max_moves=*/0,
-        static_cast<int>(count_unique_colors(*preview)),
+        count_unique_colors(*preview),
         std::nullopt,
         static_cast<double>(dither_result.total_error), std_psnr, std_s2);
 

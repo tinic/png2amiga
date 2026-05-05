@@ -2,6 +2,9 @@ build/
 build-wasm/
 build-asan/
 build-tsan/
+build-lint/
+build-rel/
+build-rwdi/
 service/toolchain/dos/djgpp/
 .cache/
 .claude/

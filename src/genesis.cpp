@@ -188,7 +188,8 @@ void build_palette_line(
     }
     if (pixels.empty()) return;
 
-    Image cluster_img(pixels.size(), 1, std::move(pixels));
+    const std::size_t n_pixels = pixels.size();
+    Image cluster_img(n_pixels, 1, std::move(pixels));
     auto pal = quantize::quantize(cluster_img, kColorsPerPalette - 1,
                                    quantize::Algorithm::median_cut,
                                    static_cast<int>(palette_diversity));

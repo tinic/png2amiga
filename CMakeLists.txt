@@ -972,3 +972,16 @@ else()
     endforeach()
 
 endif() # NOT EMSCRIPTEN
+
+# Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.
+# Configures a separate build-lint/ with homebrew clang on first run so the
+# lint compile-DB stays consistent regardless of what compiler the main build
+# uses. Requires `brew install llvm cppcheck`.
+if(NOT EMSCRIPTEN AND APPLE)
+    add_custom_target(lint
+        COMMAND ${CMAKE_SOURCE_DIR}/tools/lint.sh
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        VERBATIM
+        USES_TERMINAL
+    )
+endif()

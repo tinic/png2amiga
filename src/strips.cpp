@@ -558,7 +558,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 return encode_strips_dpf_ocs(
                     jittered_in, width_arg, height_arg, lock_color0,
                     d, debug_overlay, copper_changes_override, div,
-                    /*on_progress=*/{}, /*best=*/false, "psnr",
+                    /*on_progress=*/{}, /*enable_best=*/false, "psnr",
                     sliced_spread_radius, sliced_spread_decay,
                     external_palette);
             },
@@ -799,8 +799,8 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
             for (auto& v : line_moves) v.clear();
             // err_buf is owned by dither::diffuse_raw_buffer (allocated
             // fresh each pass-2 call), so no manual reset is needed.
-            total_moves = 0;
-            total_error = 0.0;
+            // total_moves / total_error are re-derived from the atomics
+            // and dither return value below; no scalar reset needed.
             total_moves_atomic.store(0);
             total_error_atomic.store(0.0);
             rows_done.store(0);
@@ -1256,7 +1256,6 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
     // palettes. Driver owns ED scaffolding (kernel, serpentine, bias
     // map, Riemersma queue scaling, ordered offsets);
     // picker resolves x_strip[x] → row's strip palette.
-    total_error = 0.0;
     {
         float te = dither::diffuse_raw_buffer(
             src, dither_settings,
@@ -1609,7 +1608,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 return encode_strips_ehb_ocs(
                     jittered_in, width_arg, height_arg, lock_color0,
                     d, copper_changes_override, div, debug_overlay,
-                    /*on_progress=*/{}, /*best=*/false, "psnr",
+                    /*on_progress=*/{}, /*enable_best=*/false, "psnr",
                     sliced_spread_radius, sliced_spread_decay,
                     external_palette, reserved_slots);
             },
@@ -1870,8 +1869,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             for (auto& v : line_moves) v.clear();
             // err_buf is owned by dither::diffuse_raw_buffer (allocated
             // fresh each pass-2 call), so no manual reset is needed.
-            total_moves = 0;
-            total_error = 0.0;
+            // total_moves / total_error get re-derived per pass below.
         }
     for (std::size_t y = 0; y < height; ++y) {
         int abs_vpos = static_cast<int>(y) + kVStart;
@@ -2416,7 +2414,6 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
     // (kernel, serpentine, structure bias, Riemersma,
     // ordered offsets); picker resolves x_strip[x] → row's strip
     // palette, then yliluoma family or nearest pair pick.
-    total_error = 0.0;
     {
         // When --reserve-range is active, filter each per-strip palette
         // to remove reserved/half-brite slots. The picker then operates
@@ -2675,7 +2672,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                     d, copper_changes_override, div,
                     /*on_progress=*/{},
                     sliced_spread_radius, sliced_spread_decay,
-                    /*best=*/false, "psnr",
+                    /*enable_best=*/false, "psnr",
                     external_palette, ham_metric);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
@@ -3393,7 +3390,7 @@ Result<ScapResult> make_scap_probe_a_dpf_ocs(int width, int height) {
 
         // 1. Reset COLOR09 to black at top-of-line.
         ops.push_back(make_wait(0x00, vp));
-        ops.push_back(make_move(/*reg=*/9, /*rgb=*/0x0000));
+        ops.push_back(make_move(/*reg=*/9, /*rgb_ocs=*/0x0000));
 
         // 2. Anchor WAIT — deterministic phase reference.
         ops.push_back(make_wait(
@@ -3402,7 +3399,7 @@ Result<ScapResult> make_scap_probe_a_dpf_ocs(int width, int height) {
         // 3. Probe WAIT at swept HPOS, then MOVE white into COLOR09.
         ops.push_back(make_wait(static_cast<std::uint8_t>(hp_for_y(y, height)),
                                 vp, /*slot_index=*/0));
-        ops.push_back(make_move(/*reg=*/9, /*rgb=*/0x0FFF, /*slot_index=*/0));
+        ops.push_back(make_move(/*reg=*/9, /*rgb_ocs=*/0x0FFF, /*slot_index=*/0));
     }
 
     return res;

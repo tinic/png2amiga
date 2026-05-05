@@ -267,8 +267,8 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     else                                use_pnn = (chipset == amiga::Chipset::aga);
 
     auto pal = use_pnn
-        ? quantize::pnn_quantize(image.pixels(), reserve, /*diversity=*/0)
-        : quantize::median_cut(image.pixels(), reserve, /*diversity=*/0);
+        ? quantize::pnn_quantize(image.pixels(), reserve, /*palette_diversity=*/0)
+        : quantize::median_cut(image.pixels(), reserve, /*palette_diversity=*/0);
 
     bool is_ocs = (chipset != amiga::Chipset::aga);
     if (is_ocs) {
@@ -2118,7 +2118,7 @@ Result<HamResult> encode_ham_copper_generic(
     // can ask for a wider DP beam than the initial encode. Wider beam
     // = higher PSNR per row at proportional CPU cost — exactly the
     // tradeoff best trades on.
-    auto run_passes = [&](std::vector<Color3f> initial_base,
+    auto run_passes = [&](const std::vector<Color3f>& initial_base,
                           std::string_view stage,
                           std::size_t beam_width) -> PassResult {
         PassResult out;
@@ -2175,6 +2175,7 @@ Result<HamResult> encode_ham_copper_generic(
                                         opts.best,
                                         rows_view, weights_view);
             std::vector<copper::CopperChange> line_changes;
+            line_changes.reserve(swaps.size());
             for (auto& [slot, color] : swaps) {
                 line_changes.push_back({
                     static_cast<std::uint8_t>(slot), color});
@@ -2379,7 +2380,7 @@ Result<HamResult> encode_ham_copper_generic(
             // centroid (consolidate after the perturbation).
             if (iter & 1)
                 jitter(refined, static_cast<std::uint32_t>(iter + 1));
-            auto retry = run_passes(std::move(refined), "refining",
+            auto retry = run_passes(refined, "refining",
                                     refine_beam);
             if (retry.total_error < best.total_error) {
                 best = retry;  // copy: still need retry as next `latest`

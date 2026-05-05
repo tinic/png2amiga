@@ -1490,9 +1490,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::size_t cell = ty * tiles_x + tx;
                 std::uint8_t pal = tile_pal[cell];
                 bool shadowed = sh_mode && tile_shadow[cell] != 0;
-                auto& pl = shadowed ? shadow_lab[pal] : palette_lab[pal];
-                std::span<const color_space::OKLab> pl_span(pl.data(),
-                                                             pl.size());
+                auto& pal_lab_ref = shadowed ? shadow_lab[pal]
+                                              : palette_lab[pal];
+                std::span<const color_space::OKLab> pl_span(pal_lab_ref.data(),
+                                                             pal_lab_ref.size());
                 std::fill(block_idx.begin(), block_idx.end(), 0);
                 te += dither::diffuse_raw_buffer(
                     block, dith,
@@ -1989,7 +1990,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         return t.rendered;
                     },
                     options.on_progress,
-                    /*jitter_amp=*/1.0f,
+                    /*jitter_amplitude=*/1.0f,
                     sliced_metric);
             }
             if (!winner.has_value()) {
@@ -2105,17 +2106,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
                 auto ehbp = palette::make_ehb_palette(bp.colors);
                 auto dr = dither::apply(img, ehbp.colors, d);
-                auto pl = bitplane::encode(dr.indices,
-                                            img.width(), img.height(), 6);
-                if (!pl) return std::unexpected{pl.error()};
+                auto bp_res = bitplane::encode(dr.indices,
+                                                img.width(), img.height(), 6);
+                if (!bp_res) return std::unexpected{bp_res.error()};
                 std::vector<Color3f> full_pal(ehbp.colors.begin(),
                                               ehbp.colors.end());
                 auto pv = pipeline::render_preview(
-                    *pl, full_pal, /*is_ham=*/false,
+                    *bp_res, full_pal, /*is_ham=*/false,
                     options.interlace, chipset);
                 if (!pv) return std::unexpected{pv.error()};
                 return EhbPlainTrial{
-                    std::move(bp), std::move(ehbp), *std::move(pl),
+                    std::move(bp), std::move(ehbp), *std::move(bp_res),
                     std::move(dr.indices), *std::move(pv), dr.total_error,
                 };
             };
@@ -2157,16 +2158,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 dither::Settings post_dith = base_dith;
                 auto dr = dither::apply(*image, winner->ehb_pal.colors,
                                          post_dith);
-                auto pl = bitplane::encode(
+                auto bp_res = bitplane::encode(
                     dr.indices, image->width(), image->height(), 6);
-                if (pl) {
+                if (bp_res) {
                     auto pv = pipeline::render_preview(
-                        *pl, std::vector<Color3f>(
+                        *bp_res, std::vector<Color3f>(
                             winner->ehb_pal.colors.begin(),
                             winner->ehb_pal.colors.end()),
                         /*is_ham=*/false, options.interlace, chipset);
                     if (pv) {
-                        winner->planes = *std::move(pl);
+                        winner->planes = *std::move(bp_res);
                         winner->indices = std::move(dr.indices);
                         winner->rendered = *std::move(pv);
                         winner->total_error = dr.total_error;
@@ -2854,17 +2855,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
             std::span<const Color3f> pal_span_t{pal_t.colors.data(), pal_size_t};
             auto dr = dither::apply(img, pal_span_t, d);
-            auto pl = bitplane::encode(dr.indices, img.width(), img.height(),
-                                       depth);
-            if (!pl) return std::unexpected{pl.error()};
-            auto pv = pipeline::render_preview(*pl, std::vector<Color3f>(
+            auto bp_res = bitplane::encode(dr.indices, img.width(),
+                                           img.height(), depth);
+            if (!bp_res) return std::unexpected{bp_res.error()};
+            auto pv = pipeline::render_preview(*bp_res, std::vector<Color3f>(
                                                 pal_span_t.begin(),
                                                 pal_span_t.end()),
                                                 /*is_ham=*/false,
                                                 options.interlace, chipset);
             if (!pv) return std::unexpected{pv.error()};
             return LoresTrial{
-                std::move(pal_t), std::move(dr.indices), *std::move(pl),
+                std::move(pal_t), std::move(dr.indices), *std::move(bp_res),
                 *std::move(pv), dr.total_error,
             };
         };
@@ -2968,10 +2969,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (std::size_t x = 0; x < image->width(); ++x) {
                     auto lab = color_space::linear_to_oklab((*image)[x, y]);
                     float d_best = std::numeric_limits<float>::infinity();
-                    for (auto& pl : pal_lab) {
-                        float dL = lab.L - pl.L;
-                        float da = lab.a - pl.a;
-                        float db = lab.b - pl.b;
+                    for (auto& entry : pal_lab) {
+                        float dL = lab.L - entry.L;
+                        float da = lab.a - entry.a;
+                        float db = lab.b - entry.b;
                         float d = color_space::fma_dist_sq(dL, da, db);
                         if (d < d_best) d_best = d;
                     }

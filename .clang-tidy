@@ -1,0 +1,41 @@
+# clang-tidy config for png2amiga.
+# Curated check set: real bugs + perf wins, no style/modernize churn.
+# Compile-DB lives in build-lint/ (configured with clang so flags match).
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  clang-analyzer-*,
+  cert-*,
+  misc-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-incorrect-roundings,
+  -bugprone-branch-clone,
+  -bugprone-exception-escape,
+  -bugprone-throwing-static-initialization,
+  -bugprone-misplaced-widening-cast,
+  -bugprone-switch-missing-default-case,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-unchecked-string-to-number-conversion,
+  -portability-avoid-pragma-once,
+  -performance-enum-size,
+  -performance-avoid-endl,
+  -clang-analyzer-optin.performance.Padding,
+  -cert-dcl21-cpp,
+  -cert-err33-c,
+  -cert-err34-c,
+  -cert-err58-cpp,
+  -cert-msc32-c,
+  -cert-msc51-cpp,
+  -misc-no-recursion,
+  -misc-non-private-member-variables-in-classes,
+  -misc-include-cleaner,
+  -misc-use-anonymous-namespace,
+  -misc-const-correctness,
+  -misc-use-internal-linkage
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^.*/src/.*\.(hpp|h)$'
+FormatStyle: none

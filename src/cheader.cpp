@@ -1075,7 +1075,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // AGA >32: double writes (LOCT high + low) + BPLCON3 per bank + reset
         auto num_banks = (pal_count + 31) / 32;
         cop_size += pal_count * 4;  // double the color writes (LOCT=1 pass)
-        cop_size += static_cast<std::size_t>((num_banks * 2 + 1) * 4);  // BPLCON3 switches
+        cop_size += (num_banks * 2 + 1) * 4;  // BPLCON3 switches
     } else if (options.aga) {
         // AGA <=32: LOCT=1 pass + BPLCON3 switches (2 for LOCT on/off)
         cop_size += pal_count * 4 + 8;

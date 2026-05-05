@@ -651,7 +651,8 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             displayed.reserve(num_tiles * 64);
             for (auto byte : tiles) displayed.push_back(out.palette[byte]);
 
-            Image disp_img(displayed.size(), 1, std::move(displayed));
+            const std::size_t disp_count = displayed.size();
+            Image disp_img(disp_count, 1, std::move(displayed));
             auto new_pal = quantize::quantize(
                 disp_img, 256, quantize::Algorithm::median_cut,
                 palette_diversity);

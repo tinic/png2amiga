@@ -10,6 +10,19 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## Lint (clang-tidy + cppcheck)
+
+```bash
+tools/lint.sh                 # direct
+cmake --build build --target lint   # via cmake
+```
+
+- Mac-only (uses `/opt/homebrew/opt/llvm` clang-tidy + `cppcheck`). Install via `brew install llvm cppcheck`.
+- First run configures `build-lint/` with homebrew clang so the compile-DB has clang-compatible flags (the main GCC build keeps GCC-only `-W` flags via `if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")` in `cmake/CompilerWarnings.cmake`).
+- Curated check set in `.clang-tidy` (bugprone/performance/portability/clang-analyzer/cert/misc; noisy checks like `cert-err33-c`, `bugprone-narrowing-conversions`, `*-pragma-once` disabled).
+- cppcheck runs at `--enable=warning,performance,portability` with a small list of file-level suppressions for known false positives (uninitMemberVar on the trivially-default-constructible `SRGBColor`, embind-required pass-by-value, etc.).
+- Returns non-zero on any finding — wire into your pre-commit / pre-push hook locally.
+
 - Requires GCC 15 (`g++-15`, installed via Homebrew at `/opt/homebrew/bin/g++-15`)
 - Uses `-std=c++2c` (C++26 draft), strict warnings-as-errors
 - Warning flags in `cmake/CompilerWarnings.cmake`
