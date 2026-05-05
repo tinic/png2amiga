@@ -303,13 +303,12 @@ encode(const Image& image, amiga::Mode mode,
     std::array<std::array<float, 16>, 16> pal_dot{};
     std::array<float, 16> pal_norm{};
     for (std::size_t i = 0; i < 16; ++i) {
-        pal_norm[i] = pal.lab[i].L * pal.lab[i].L
-                    + pal.lab[i].a * pal.lab[i].a
-                    + pal.lab[i].b * pal.lab[i].b;
+        const auto& pi = pal.lab[i];
+        pal_norm[i] = color_space::fma_dist_sq(pi.L, pi.a, pi.b);
         for (std::size_t j = 0; j < 16; ++j) {
-            pal_dot[i][j] = pal.lab[i].L * pal.lab[j].L
-                          + pal.lab[i].a * pal.lab[j].a
-                          + pal.lab[i].b * pal.lab[j].b;
+            const auto& pj = pal.lab[j];
+            pal_dot[i][j] = color_space::fma_dot3(
+                pi.L, pj.L, pi.a, pj.a, pi.b, pj.b);
         }
     }
 
@@ -385,7 +384,7 @@ encode(const Image& image, amiga::Mode mode,
                 b.b += tap.w * v.b;
             }
             blurred[p] = b;
-            K0 += b.L * b.L + b.a * b.a + b.b * b.b;
+            K0 += color_space::fma_dist_sq(b.L, b.a, b.b);
         }
         CellPick best{0, 15, 0, 0, std::numeric_limits<float>::infinity()};
         for (auto& cand : candidates) {
@@ -412,8 +411,10 @@ encode(const Image& image, amiga::Mode mode,
             std::array<float, 16> dot_K1, dot_K2;
             for (std::size_t c = 0; c < 16; ++c) {
                 auto& pl = pal.lab[c];
-                dot_K1[c] = K1.L * pl.L + K1.a * pl.a + K1.b * pl.b;
-                dot_K2[c] = K2.L * pl.L + K2.a * pl.a + K2.b * pl.b;
+                dot_K1[c] = color_space::fma_dot3(
+                    K1.L, pl.L, K1.a, pl.a, K1.b, pl.b);
+                dot_K2[c] = color_space::fma_dot3(
+                    K2.L, pl.L, K2.a, pl.a, K2.b, pl.b);
             }
             // Hoist (fg, bg) pair-search invariants. Original inner did
             // ~11 FLOPs per pair (256 pairs × 2.8k ops); the form below
