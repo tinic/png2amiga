@@ -2,6 +2,7 @@
 #include "color_space.hpp"
 #include "palette.hpp"
 #include "pipeline.hpp"
+#include "quantize_metal.hpp"
 
 namespace {
 using OKLab = png2amiga::color_space::OKLab;
@@ -1266,6 +1267,21 @@ Result<Palette> quantize(const Image& image, std::size_t max_colors,
         // caller selects snap via the helper overload. Default: continuous.
         return pnn_quantize(image.pixels(), max_colors, palette_diversity,
                             /*snap_to_ocs=*/false);
+    case Algorithm::gpu_restart:
+        // Lloyd k-means in OKLab + parallel restarts on Apple GPU.
+        // Falls through to median_cut at runtime when Metal is
+        // unavailable (no Apple GPU, or built without Xcode).
+        if (auto r = gpu_restart_quantize(image, max_colors); r) {
+            // Apply the existing palette diversity pass post-hoc so
+            // gpu_restart honours --palette-diversity like the other
+            // quantizers do.
+            if (palette_diversity > 0) {
+                diversify_palette(*r, image.pixels(), palette_diversity,
+                                  /*snap_to_ocs=*/false);
+            }
+            return r;
+        }
+        return median_cut(image.pixels(), max_colors, palette_diversity);
     }
 
     return median_cut(image.pixels(), max_colors, palette_diversity);

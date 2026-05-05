@@ -25,6 +25,7 @@
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
+#include "quantize_metal.hpp"
 #include "scale.hpp"
 #include "types.hpp"
 
@@ -120,11 +121,19 @@ quantize::Algorithm quantize_algo(amiga::Chipset chipset, amiga::Mode mode = ami
     // (EGA-64, VGA 18-bit, or fixed CGA palette). EGA gets a dedicated
     // histogram path in run_pipeline; the median-cut choice here is a
     // fallback and matches how the CLI path in main.cpp handles VGA.
-    if (amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_cga(mode))
+    if (amiga::is_ega(mode) || amiga::is_cga(mode))
         return quantize::Algorithm::median_cut;
-    return chipset == amiga::Chipset::aga
-        ? quantize::Algorithm::median_cut
-        : quantize::Algorithm::ocs_bruteforce;
+    // VGA + AGA: continuous-RGB quantize then snap. GPU-accelerated
+    // Lloyd in OKLab beats median_cut by mean ΔS2 +2.6..+3.4 across
+    // K ∈ {8..256} on DIV2K-100+Kodak-24 vs pngquant; default to
+    // gpu_restart when Metal is available, fall back to median_cut
+    // at runtime if not.
+    if (amiga::is_vga(mode) || chipset == amiga::Chipset::aga) {
+        return quantize::metal_available()
+            ? quantize::Algorithm::gpu_restart
+            : quantize::Algorithm::median_cut;
+    }
+    return quantize::Algorithm::ocs_bruteforce;
 }
 
 void snap_to_chipset(Palette& pal, amiga::Chipset chipset, amiga::Mode mode = amiga::Mode::lores) {

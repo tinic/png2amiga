@@ -53,6 +53,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/scale.cpp
     src/preprocess.cpp
     src/quantize.cpp
+    src/quantize_metal_wrap.cpp
     src/dither.cpp
     src/bitplane.cpp
     src/degas.cpp
@@ -179,6 +180,115 @@ else()
         # target_link_libraries (not CMAKE_EXE_LINKER_FLAGS, which is positioned
         # before objects and won't pull any symbols from a static archive).
         target_link_libraries(png2amiga PRIVATE -lstdc++exp)
+    endif()
+
+    # ------------------------------------------------------------------
+    # Optional Metal acceleration (gpu_restart quantizer).
+    # macOS-only, requires the full Xcode metal/metallib toolchain
+    # (CommandLineTools is not enough). Auto-detected; if missing, the
+    # gpu_restart quantizer falls back to median_cut at runtime.
+    # ------------------------------------------------------------------
+    set(PNG2AMIGA_HAVE_METAL OFF)
+    if(APPLE)
+        execute_process(COMMAND xcrun -f metal
+            RESULT_VARIABLE _metal_rc
+            OUTPUT_VARIABLE PNG2AMIGA_METAL_EXE
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        execute_process(COMMAND xcrun -f metallib
+            RESULT_VARIABLE _metallib_rc
+            OUTPUT_VARIABLE PNG2AMIGA_METALLIB_EXE
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(_metal_rc EQUAL 0 AND _metallib_rc EQUAL 0
+                AND PNG2AMIGA_METAL_EXE AND PNG2AMIGA_METALLIB_EXE)
+            set(PNG2AMIGA_HAVE_METAL ON)
+            message(STATUS "Metal toolchain found — gpu_restart quantizer enabled")
+        else()
+            message(STATUS "Metal toolchain not found — gpu_restart disabled "
+                "(install full Xcode to enable; CommandLineTools alone is not enough)")
+        endif()
+    endif()
+
+    if(PNG2AMIGA_HAVE_METAL)
+        # Compile the .metal source to a .metallib at build time, then
+        # bake the bytes into a header so the binary is self-contained.
+        set(_metal_src ${CMAKE_SOURCE_DIR}/src/quantize_metal_kernels.metal)
+        set(_metal_air ${CMAKE_BINARY_DIR}/generated/quantize_metal_kernels.air)
+        set(_metal_lib ${CMAKE_BINARY_DIR}/generated/quantize_metal_kernels.metallib)
+        set(_metal_hdr ${CMAKE_BINARY_DIR}/generated/quantize_metal_metallib.h)
+
+        add_custom_command(
+            OUTPUT  ${_metal_air}
+            COMMAND ${PNG2AMIGA_METAL_EXE} -O3 -ffast-math -c ${_metal_src} -o ${_metal_air}
+            DEPENDS ${_metal_src}
+            COMMENT "MSL → AIR (quantize_metal_kernels)"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT  ${_metal_lib}
+            COMMAND ${PNG2AMIGA_METALLIB_EXE} ${_metal_air} -o ${_metal_lib}
+            DEPENDS ${_metal_air}
+            COMMENT "AIR → metallib"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT  ${_metal_hdr}
+            COMMAND ${CMAKE_COMMAND}
+                -DINPUT=${_metal_lib}
+                -DOUTPUT=${_metal_hdr}
+                -DSYMBOL=quantize_metal_metallib_data
+                -P ${CMAKE_SOURCE_DIR}/cmake/EmbedBinary.cmake
+            DEPENDS ${_metal_lib} ${CMAKE_SOURCE_DIR}/cmake/EmbedBinary.cmake
+            COMMENT "Embed metallib into header"
+            VERBATIM)
+        add_custom_target(quantize_metal_kernels DEPENDS ${_metal_hdr})
+        add_dependencies(png2amiga quantize_metal_kernels)
+
+        target_compile_definitions(png2amiga PRIVATE PNG2AMIGA_HAVE_METAL=1)
+        target_link_libraries(png2amiga PRIVATE
+            "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+
+        # quantize_metal.cpp pulls in metal-cpp, which uses Apple-clang-only
+        # extensions (ObjC blocks in NSNotification / NSProcessInfo). gcc-15
+        # cannot parse those headers. Compile this single TU with apple-clang
+        # via a custom command and link the resulting object file into
+        # png2amiga. The boundary in quantize_metal.hpp is strict C — only
+        # PODs cross — so libc++ (apple-clang) and libstdc++ (gcc-15) STL
+        # ABIs never meet across object files. quantize_metal_wrap.cpp on
+        # the gcc side does the libstdc++ marshalling.
+        execute_process(COMMAND xcrun --sdk macosx --show-sdk-path
+            OUTPUT_VARIABLE PNG2AMIGA_MACOS_SDK
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        execute_process(COMMAND xcrun -f clang++
+            OUTPUT_VARIABLE PNG2AMIGA_APPLE_CLANGXX
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        set(_metal_cpp_obj ${CMAKE_BINARY_DIR}/quantize_metal.cpp.o)
+        add_custom_command(
+            OUTPUT  ${_metal_cpp_obj}
+            COMMAND ${PNG2AMIGA_APPLE_CLANGXX}
+                -std=c++23 -O2 -fno-objc-arc -fPIC
+                -DPNG2AMIGA_HAVE_METAL=1
+                -isysroot ${PNG2AMIGA_MACOS_SDK}
+                -I${CMAKE_SOURCE_DIR}/src
+                -I${CMAKE_SOURCE_DIR}/third_party
+                -I${CMAKE_SOURCE_DIR}/third_party/metal-cpp
+                -I${CMAKE_BINARY_DIR}/generated
+                -c ${CMAKE_SOURCE_DIR}/src/quantize_metal.cpp
+                -o ${_metal_cpp_obj}
+            DEPENDS ${CMAKE_SOURCE_DIR}/src/quantize_metal.cpp
+                    ${CMAKE_SOURCE_DIR}/src/quantize_metal.hpp
+                    ${_metal_hdr}
+            COMMENT "Compiling quantize_metal.cpp with apple-clang"
+            VERBATIM)
+        add_custom_target(quantize_metal_obj DEPENDS ${_metal_cpp_obj})
+        add_dependencies(png2amiga quantize_metal_obj)
+        target_link_libraries(png2amiga PRIVATE ${_metal_cpp_obj})
+        # The apple-clang object uses libc++ symbols (std::__1::*).
+        # Link libc++ alongside the gcc libstdc++ — they don't overlap
+        # since the boundary in quantize_metal.hpp is strict C, so no
+        # std type from one stdlib reaches the other in this binary.
+        target_link_libraries(png2amiga PRIVATE -lc++ -lc++abi)
     endif()
 
     enable_testing()

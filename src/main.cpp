@@ -24,6 +24,7 @@
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
+#include "quantize_metal.hpp"
 #include "scale.hpp"
 #include "types.hpp"
 #include "version.hpp"
@@ -755,7 +756,7 @@ void print_usage() {
         "\n"
         "Palette:\n"
         "  --palette <file>                Load palette (.gpl, IFF, hex text)\n"
-        "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn\n"
+        "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn | gpu-restart\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
         "  --no-lock-color0                Allow palette index 0 to be image colour\n"
         "\n"
@@ -1591,10 +1592,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 if (config.quantizer != "" && config.quantizer != "auto" &&
                     config.quantizer != "median-cut" &&
                     config.quantizer != "ocs-bruteforce" &&
-                    config.quantizer != "pnn") {
+                    config.quantizer != "pnn" &&
+                    config.quantizer != "gpu-restart") {
                     return std::unexpected{Error{ErrorCode::invalid_dimensions,
                         "Unknown quantizer: " + config.quantizer +
-                        " (use auto, median-cut, ocs-bruteforce, pnn)"}};
+                        " (use auto, median-cut, ocs-bruteforce, pnn, gpu-restart)"}};
                 }
             }
             else if (arg == "--slice-changes") {
@@ -2585,16 +2587,26 @@ Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
         algo = quantize::Algorithm::median_cut;
     } else if (quantizer == "ocs-bruteforce") {
         algo = quantize::Algorithm::ocs_bruteforce;
+    } else if (quantizer == "gpu-restart") {
+        algo = quantize::Algorithm::gpu_restart;
     } else {
-        // Auto: OCS brute-force is tuned for the 4096-color OCS gamut;
-        // EGA/VGA have different gamuts and benefit from median-cut's
-        // gamut-agnostic clustering. AGA has continuous color so median-cut too.
-        bool use_median = chipset == amiga::Chipset::aga ||
-                          amiga::is_ega(mode) ||
+        // Auto: OCS brute-force is tuned for the 4096-color OCS gamut.
+        // AGA + VGA: continuous-RGB Lloyd in OKLab on Apple GPU
+        // (gpu_restart) wins by mean ΔS2 +2.6..+3.4 across K ∈ {8..256}
+        // vs pngquant on 124-image DIV2K+Kodak; falls back to median-cut
+        // when Metal isn't available (non-Apple, no Xcode, no GPU).
+        // EGA: dedicated 16-of-64 histogram path is handled above.
+        bool aga_or_vga = chipset == amiga::Chipset::aga ||
                           amiga::is_vga(mode);
-        algo = use_median
-            ? quantize::Algorithm::median_cut
-            : quantize::Algorithm::ocs_bruteforce;
+        if (aga_or_vga) {
+            algo = quantize::metal_available()
+                ? quantize::Algorithm::gpu_restart
+                : quantize::Algorithm::median_cut;
+        } else if (amiga::is_ega(mode)) {
+            algo = quantize::Algorithm::median_cut;
+        } else {
+            algo = quantize::Algorithm::ocs_bruteforce;
+        }
     }
     return quantize::quantize(image, max_colors, algo, palette_diversity);
 }
@@ -4754,8 +4766,25 @@ int run_main(int argc, char* argv[]) {
         preprocess::apply(img, config->preprocess);
 
         auto max_colors = std::size_t{1} << config->depth;
-        auto quantized = quantize::quantize(img, max_colors,
-                                            quantize::Algorithm::median_cut,
+
+        // Pick quantizer: respect --quantizer if set, else default to
+        // gpu_restart on macOS-with-Metal (mean ΔS2 +2.6..+3.4 vs
+        // pngquant on DIV2K-100+Kodak-24, K ∈ {8..256}).
+        quantize::Algorithm png_algo = quantize::Algorithm::median_cut;
+        if (config->quantizer == "median-cut") {
+            png_algo = quantize::Algorithm::median_cut;
+        } else if (config->quantizer == "ocs-bruteforce") {
+            png_algo = quantize::Algorithm::ocs_bruteforce;
+        } else if (config->quantizer == "pnn") {
+            png_algo = quantize::Algorithm::pnn;
+        } else if (config->quantizer == "gpu-restart") {
+            png_algo = quantize::Algorithm::gpu_restart;
+        } else if (quantize::metal_available()) {
+            // auto / unset → prefer GPU
+            png_algo = quantize::Algorithm::gpu_restart;
+        }
+
+        auto quantized = quantize::quantize(img, max_colors, png_algo,
                                             config->palette_diversity);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}",

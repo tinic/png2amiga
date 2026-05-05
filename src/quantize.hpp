@@ -23,6 +23,10 @@ enum class Algorithm : unsigned char {
     median_cut,     // Median-cut: fast, good general quality
     ocs_bruteforce, // OCS: histogram + k-means over all 4096 OCS colors
     pnn,            // Pairwise Nearest Neighbor (agglomerative, OKLab)
+    gpu_restart,    // Lloyd k-means in OKLab + parallel restarts on Apple
+                    // GPU. Wins over median_cut by mean ΔS2 ~+3 across
+                    // K ∈ {8..256}; falls back to median_cut at runtime
+                    // when Metal is unavailable. macOS-only build path.
 };
 
 // ---------------------------------------------------------------------------
