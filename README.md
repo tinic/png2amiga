@@ -50,18 +50,25 @@ colors) / 80×100 text-mode glyph matching, EGA 320×200 / 640×200 /
 4096 OCS colors), PNN agglomerative (auto-selected for HAM8 / AGA), and
 median-cut + k-means refinement in OKLab.
 
-**Dithering**: 58 methods spanning ordered (Bayer 2×2…8×8 plus 3×3 /
-5×5 / 6×6 / 7×7 dispersed-dot, non-square Bayer, halftone, hatching,
-hexagonal, Aseprite/libcaca/Pegasus hand-tuned matrices, Cranley–
-Patterson rotated Bayer, Niklasson 16×16 self-nested fractal,
-quasicrystal, Truchet), aperiodic (Ulichney
-void-and-cluster, cluster-noise, blue-noise, IGN ± triangle remap,
-R2 ± triangle remap, value-noise, white-noise), error-diffusion
-(Floyd–Steinberg, Atkinson, Sierra-Lite, Stucki, Jarvis,
-Ostromoukhov variable-coefficient, Riemersma Hilbert-curve, Gilbert
-space-filling-curve), structure-aware variants
-(structure-FS / contrast-FS / Zhou–Fang), and palette-aware pattern
-(Yliluoma method 1 + 2).    
+**Dithering**: 58 methods, all in OKLab, in five families:
+
+- **Ordered** (fixed threshold matrix, repeats per cell) — Bayer
+  2×2 / 4×4 / 8×8, dispersed-dot 3×3 / 5×5 / 6×6 / 7×7, halftone,
+  hatching, hexagonal, plus the matrices Aseprite / libcaca /
+  Pegasus shipped, Cranley–Patterson rotated Bayer, Niklasson
+  16×16 self-nested fractal, quasicrystal, Truchet.
+- **Aperiodic noise** (non-repeating threshold field) — Ulichney
+  void-and-cluster, blue-noise, cluster-noise, IGN and R2 (with
+  optional triangle remap), value-noise, white-noise.
+- **Error diffusion** (propagate quantization error forward) —
+  Floyd–Steinberg, Atkinson, Sierra-Lite, Stucki, Jarvis,
+  Ostromoukhov (variable-coefficient), Riemersma (Hilbert curve),
+  Gilbert (space-filling curve).
+- **Structure-aware** (modulate ED by local image structure) —
+  structure-FS, contrast-FS, Zhou–Fang.
+- **Palette-aware pattern** (find a colour pair / quad that
+  averages to the target under the eye's pooling) — Yliluoma
+  method 1 + 2.
 
 **HAM encoding**: DP beam search with a triple-pixel refinement pass
 (default on) that catches the fringe-lag artifacts 1-pixel DP misses.
