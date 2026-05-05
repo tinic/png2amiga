@@ -66,6 +66,21 @@ constexpr bool is_excluded_glyph(amiga::Mode mode, std::uint8_t ch) noexcept {
     }
 }
 
+// Map a CGA color index (0..15) to its sRGB-normalised RGB triple.
+// Source of truth is palette::kCgaHw (IBM CGA IRGB master palette).
+// Returned Color3f channels are sRGB / 255 — NOT linearised. Useful
+// in substitute_cell() rules that want to reason about the picked
+// fg/bg colours without going through the encoder's linear/OKLab
+// pipeline.
+inline Color3f cga_index_to_srgb(std::uint8_t idx) noexcept {
+    auto hex = palette::kCgaHw[idx & 0x0F];
+    return Color3f{
+        static_cast<float>((hex >> 16) & 0xFF) / 255.0f,
+        static_cast<float>((hex >>  8) & 0xFF) / 255.0f,
+        static_cast<float>( hex        & 0xFF) / 255.0f,
+    };
+}
+
 // Per-cell post-process substitution.
 //
 // Runs once on every cell of the final encoded buffer for every
