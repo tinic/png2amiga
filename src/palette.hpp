@@ -368,13 +368,18 @@ constexpr std::uint8_t ega_to_hw(std::uint8_t rrggbb) noexcept {
     auto r2 = static_cast<std::uint8_t>((rrggbb >> 4) & 0x3);
     auto g2 = static_cast<std::uint8_t>((rrggbb >> 2) & 0x3);
     auto b2 = static_cast<std::uint8_t>(rrggbb & 0x3);
-    auto map = [](std::uint8_t v) -> std::pair<std::uint8_t, std::uint8_t> {
-        // Returns {primary_bit, secondary_bit}
+    using PB = std::pair<std::uint8_t, std::uint8_t>;
+    auto map = [](std::uint8_t v) -> PB {
+        // Returns {primary_bit, secondary_bit}.
+        // Brace-init the uint8_ts explicitly so MSVC's pair ctor doesn't
+        // narrow int -> uint8_t internally and trip /w14242.
+        constexpr std::uint8_t k0 = 0;
+        constexpr std::uint8_t k1 = 1;
         switch (v) {
-        case 0:  return {0, 0};  // 0x00
-        case 1:  return {0, 1};  // 0x55
-        case 2:  return {1, 0};  // 0xAA
-        default: return {1, 1};  // 0xFF
+        case 0:  return PB{k0, k0};  // 0x00
+        case 1:  return PB{k0, k1};  // 0x55
+        case 2:  return PB{k1, k0};  // 0xAA
+        default: return PB{k1, k1};  // 0xFF
         }
     };
     auto [rp, rs] = map(r2);
