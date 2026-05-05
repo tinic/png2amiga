@@ -2,6 +2,9 @@
 
 #include "palette.hpp"
 #include "petscii_rom.hpp"
+#include "pipeline.hpp"
+
+#include <atomic>
 
 #include <array>
 #include <bit>
@@ -2034,13 +2037,12 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
     std::array<std::array<float, 16>, 16> pal_dot{};
     std::array<float, 16> pal_norm{};
     for (std::size_t i = 0; i < 16; ++i) {
-        pal_norm[i] = pal_s[i].L * pal_s[i].L
-                    + pal_s[i].a * pal_s[i].a
-                    + pal_s[i].b * pal_s[i].b;
+        const auto& pi = pal_s[i];
+        pal_norm[i] = color_space::fma_dist_sq(pi.L, pi.a, pi.b);
         for (std::size_t j = 0; j < 16; ++j) {
-            pal_dot[i][j] = pal_s[i].L * pal_s[j].L
-                          + pal_s[i].a * pal_s[j].a
-                          + pal_s[i].b * pal_s[j].b;
+            const auto& pj = pal_s[j];
+            pal_dot[i][j] = color_space::fma_dot3(
+                pi.L, pj.L, pi.a, pj.a, pi.b, pj.b);
         }
     }
 
@@ -2093,7 +2095,7 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
                     b.b += t.w * v.b;
                 }
                 blurred[p] = b;
-                K0 += b.L * b.L + b.a * b.a + b.b * b.b;
+                K0 += color_space::fma_dist_sq(b.L, b.a, b.b);
             }
             cell_raw[cy * kPetCols + cx]  = raw;
             cell_blur[cy * kPetCols + cx] = blurred;
@@ -2101,81 +2103,144 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
         }
     }
 
-    auto score_pair_blur = [&](float K0,
-                                const std::array<color_space::OKLab, kPetCellN>& blurred,
-                                const GlyphPre& gp,
-                                std::uint8_t fg, std::uint8_t bg) {
-        color_space::OKLab K1{0, 0, 0};
-        color_space::OKLab K2{0, 0, 0};
-        for (std::size_t p = 0; p < kPetCellN; ++p) {
-            float a = gp.a[p];
-            float ma = 1.0f - a;
-            K1.L += blurred[p].L * a;
-            K1.a += blurred[p].a * a;
-            K1.b += blurred[p].b * a;
-            K2.L += blurred[p].L * ma;
-            K2.a += blurred[p].a * ma;
-            K2.b += blurred[p].b * ma;
-        }
-        const auto& pf = pal_s[fg];
-        const auto& pb = pal_s[bg];
-        float dot_K1 = K1.L * pf.L + K1.a * pf.a + K1.b * pf.b;
-        float dot_K2 = K2.L * pb.L + K2.a * pb.a + K2.b * pb.b;
-        return K0
-            - 2.0f * dot_K1 - 2.0f * dot_K2
-            + 2.0f * gp.K3 * pal_dot[fg][bg]
-            + gp.K4 * pal_norm[fg]
-            + gp.K5 * pal_norm[bg];
-    };
+    // Pre-compute (K1, K2) per (cell, glyph), once. They depend only
+    // on blurred[cell] and gp.a[glyph] — neither changes with bg/fg.
+    // Without this hoist they're rebuilt 16 (bg) × 16 (fg) = 256
+    // times per cell-glyph; AMDuProf showed score_pair_blur at 96 %
+    // of c64-petscii CPU. Memory: ncells × 256 × 2 OKLab × 12 B ≈
+    // 6 MB for a 1000-cell screen — fits in L2.
+    constexpr std::size_t kNumGlyphs = 256;
+    const std::size_t ncells = kPetCols * kPetRows;
+    std::vector<std::array<color_space::OKLab, kNumGlyphs>>
+        K1_cg(ncells);
+    std::vector<std::array<color_space::OKLab, kNumGlyphs>>
+        K2_cg(ncells);
+    if (metric == Metric::blur) {
+        // Parallelise the per-cell K1/K2 build — each cell is
+        // independent.
+        pipeline::parallel_for(ncells, [&](std::size_t cell_idx) {
+            const auto& blurred = cell_blur[cell_idx];
+            for (std::size_t g = 0; g < kNumGlyphs; ++g) {
+                if (graphics_only && !petscii::is_graphic_char(
+                        static_cast<std::uint8_t>(g))) continue;
+                const auto& gp = glyph[g];
+                color_space::OKLab K1{0, 0, 0};
+                color_space::OKLab K2{0, 0, 0};
+                for (std::size_t p = 0; p < kPetCellN; ++p) {
+                    const float a = gp.a[p];
+                    const float ma = 1.0f - a;
+                    K1.L = std::fma(blurred[p].L, a, K1.L);
+                    K1.a = std::fma(blurred[p].a, a, K1.a);
+                    K1.b = std::fma(blurred[p].b, a, K1.b);
+                    K2.L = std::fma(blurred[p].L, ma, K2.L);
+                    K2.a = std::fma(blurred[p].a, ma, K2.a);
+                    K2.b = std::fma(blurred[p].b, ma, K2.b);
+                }
+                K1_cg[cell_idx][g] = K1;
+                K2_cg[cell_idx][g] = K2;
+            }
+        });
+    }
 
-    auto score_pair_mse = [&](const std::array<color_space::OKLab, kPetCellN>& raw,
-                              const GlyphPre& gp,
-                              std::uint8_t fg, std::uint8_t bg) {
-        const auto& pf = pal_s[fg];
-        const auto& pb = pal_s[bg];
-        float err = 0.0f;
-        for (std::size_t p = 0; p < kPetCellN; ++p) {
-            const auto& c = ((gp.fg_mask >> p) & 1ULL) ? pf : pb;
-            float dL = raw[p].L - c.L;
-            float da = raw[p].a - c.a;
-            float db = raw[p].b - c.b;
-            err += color_space::fma_dist_sq(dL, da, db);
-        }
-        return err;
-    };
+    // mse path: per-pair score still computes per pixel via fg_mask
+    // bit-test; we precompute fg-area and bg-area pixel-error sums
+    // per (cell, glyph, palette colour) so the inner (g, fg, bg)
+    // call is a 32-table lookup instead of 64 per-pixel adds.
+    // For each (cell, glyph, c=0..15): fg_sum[c][cell][g]  =
+    //   Σ_{p: fg_mask bit set} ‖raw[p] - pal_s[c]‖²
+    // and bg_sum[c][cell][g] = Σ_{p: !set} ‖raw[p] - pal_s[c]‖².
+    // Total sum over a pixel for any colour c is invariant of which
+    // it lands in, so pix_err[c][cell][p] precomputed then split by
+    // mask. Memory: 16 colours × ncells × 256 glyphs × 4 B = 4 MB
+    // per side (8 MB total), still L2-friendly for typical sizes.
+    std::vector<std::array<std::array<float, kNumGlyphs>, 16>>
+        mse_fg_sum;  // [c][cell][g]
+    std::vector<std::array<std::array<float, kNumGlyphs>, 16>>
+        mse_bg_sum;
+    if (metric == Metric::mse) {
+        mse_fg_sum.resize(ncells);
+        mse_bg_sum.resize(ncells);
+        // Per (cell, c): pre-compute the 64 per-pixel ‖raw[p] -
+        // pal_s[c]‖² values once. Then for each glyph just split by
+        // fg_mask (popcount-based scan).
+        pipeline::parallel_for(ncells, [&](std::size_t cell_idx) {
+            const auto& raw = cell_raw[cell_idx];
+            std::array<std::array<float, kPetCellN>, 16> pix_err{};
+            for (std::uint8_t c = 0; c < 16; ++c) {
+                const auto& pc = pal_s[c];
+                for (std::size_t p = 0; p < kPetCellN; ++p) {
+                    pix_err[c][p] = color_space::fma_dist_sq(
+                        raw[p].L - pc.L,
+                        raw[p].a - pc.a,
+                        raw[p].b - pc.b);
+                }
+            }
+            for (std::size_t g = 0; g < kNumGlyphs; ++g) {
+                if (graphics_only && !petscii::is_graphic_char(
+                        static_cast<std::uint8_t>(g))) continue;
+                const std::uint64_t fg_mask = glyph[g].fg_mask;
+                for (std::uint8_t c = 0; c < 16; ++c) {
+                    float fg_s = 0, bg_s = 0;
+                    for (std::size_t p = 0; p < kPetCellN; ++p) {
+                        if ((fg_mask >> p) & 1ULL) fg_s += pix_err[c][p];
+                        else                      bg_s += pix_err[c][p];
+                    }
+                    mse_fg_sum[cell_idx][c][g] = fg_s;
+                    mse_bg_sum[cell_idx][c][g] = bg_s;
+                }
+            }
+        });
+    }
 
     if (on_progress) on_progress(0.0f, "petscii");
-    for (std::uint8_t bg = 0; bg < 16; ++bg) {
-        if (on_progress) {
-            on_progress(static_cast<float>(bg) / 16.0f, "petscii");
-        }
+    // Per-bg trial state (collected by parallel_for, then merged).
+    std::vector<float> per_bg_total(16,
+        std::numeric_limits<float>::infinity());
+    std::vector<std::array<std::uint8_t, kPetCols * kPetRows>>
+        per_bg_chars(16);
+    std::vector<std::array<std::uint8_t, kPetCols * kPetRows>>
+        per_bg_fgs(16);
+    std::atomic<std::size_t> bg_done{0};
+
+    pipeline::parallel_for(16, [&](std::size_t bg_idx) {
+        const std::uint8_t bg = static_cast<std::uint8_t>(bg_idx);
         float total = 0.0f;
         std::array<std::uint8_t, kPetCols * kPetRows> chars{};
         std::array<std::uint8_t, kPetCols * kPetRows> fgs{};
-        for (std::size_t cy = 0; cy < kPetRows; ++cy) {
-            for (std::size_t cx = 0; cx < kPetCols; ++cx) {
-                std::size_t cell_idx = cy * kPetCols + cx;
-                const auto& raw     = cell_raw[cell_idx];
-                const auto& blurred = cell_blur[cell_idx];
-                float K0 = cell_K0[cell_idx];
+        for (std::size_t cell_idx = 0; cell_idx < ncells; ++cell_idx) {
+            float K0 = cell_K0[cell_idx];
 
-                float best_err = std::numeric_limits<float>::infinity();
-                std::uint8_t best_ch = 0;
-                std::uint8_t best_fg = bg;
+            float best_err = std::numeric_limits<float>::infinity();
+            std::uint8_t best_ch = 0;
+            std::uint8_t best_fg = bg;
 
-                for (std::size_t g = 0; g < 256; ++g) {
+            if (metric == Metric::blur) {
+                const auto& K1_g = K1_cg[cell_idx];
+                const auto& K2_g = K2_cg[cell_idx];
+                for (std::size_t g = 0; g < kNumGlyphs; ++g) {
                     if (graphics_only && !petscii::is_graphic_char(
                             static_cast<std::uint8_t>(g))) continue;
                     const auto& gp = glyph[g];
+                    const auto& K1 = K1_g[g];
+                    const auto& K2 = K2_g[g];
+                    // dot_K2_bg only depends on bg + glyph — hoist
+                    // outside the fg loop.
+                    const auto& pb = pal_s[bg];
+                    const float dot_K2_bg = color_space::fma_dot3(
+                        K2.L, pb.L, K2.a, pb.a, K2.b, pb.b);
+                    const float K0_minus_2dotK2_bg =
+                        K0 - 2.0f * dot_K2_bg
+                        + gp.K5 * pal_norm[bg];
+                    const float K3_x2 = 2.0f * gp.K3;
                     for (std::uint8_t fg = 0; fg < 16; ++fg) {
                         if (fg == bg) continue;
-                        float err = 0.0f;
-                        switch (metric) {
-                        case Metric::blur:
-                            err = score_pair_blur(K0, blurred, gp, fg, bg); break;
-                        case Metric::mse:
-                            err = score_pair_mse(raw, gp, fg, bg); break;
-                        }
+                        const auto& pf = pal_s[fg];
+                        const float dot_K1 = color_space::fma_dot3(
+                            K1.L, pf.L, K1.a, pf.a, K1.b, pf.b);
+                        const float err = K0_minus_2dotK2_bg
+                            - 2.0f * dot_K1
+                            + K3_x2 * pal_dot[fg][bg]
+                            + gp.K4 * pal_norm[fg];
                         if (err < best_err) {
                             best_err = err;
                             best_ch = static_cast<std::uint8_t>(g);
@@ -2183,16 +2248,45 @@ Result<EncodeResult> encode_petscii(const Image& image, Palette pal,
                         }
                     }
                 }
-                total += best_err;
-                chars[cell_idx] = best_ch;
-                fgs[cell_idx]   = best_fg;
+            } else {
+                // mse: use the precomputed fg-area / bg-area sums.
+                // err(g, fg, bg) = mse_fg_sum[cell][fg][g] +
+                //                  mse_bg_sum[cell][bg][g]
+                for (std::size_t g = 0; g < kNumGlyphs; ++g) {
+                    if (graphics_only && !petscii::is_graphic_char(
+                            static_cast<std::uint8_t>(g))) continue;
+                    const float bg_s = mse_bg_sum[cell_idx][bg][g];
+                    for (std::uint8_t fg = 0; fg < 16; ++fg) {
+                        if (fg == bg) continue;
+                        const float err = mse_fg_sum[cell_idx][fg][g] + bg_s;
+                        if (err < best_err) {
+                            best_err = err;
+                            best_ch = static_cast<std::uint8_t>(g);
+                            best_fg = fg;
+                        }
+                    }
+                }
             }
+            total += best_err;
+            chars[cell_idx] = best_ch;
+            fgs[cell_idx]   = best_fg;
         }
-        if (total < best_total) {
-            best_total = total;
+        per_bg_total[bg_idx] = total;
+        per_bg_chars[bg_idx] = chars;
+        per_bg_fgs[bg_idx]   = fgs;
+
+        if (on_progress) {
+            auto done = bg_done.fetch_add(1) + 1;
+            on_progress(static_cast<float>(done) / 16.0f, "petscii");
+        }
+    });
+
+    for (std::uint8_t bg = 0; bg < 16; ++bg) {
+        if (per_bg_total[bg] < best_total) {
+            best_total = per_bg_total[bg];
             best_bg    = bg;
-            best_chars = chars;
-            best_fgs   = fgs;
+            best_chars = per_bg_chars[bg];
+            best_fgs   = per_bg_fgs[bg];
         }
     }
 
