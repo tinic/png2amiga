@@ -15,11 +15,12 @@ if(MSVC)
         /we4289  # for-loop control variable used outside loop (force error)
         /w14296  # expression is always true/false
         /w14311  # pointer truncation
-        /w14545  # comma evaluates to function w/ missing arg list
-        /w14546  # function call before comma missing arg list
-        /w14547  # operator before comma has no effect; expected side effect
-        /w14549  # operator before comma; did you mean other operator?
-        /w14555  # expression has no effect
+        # /w14545..14549 / /w14555 (comma-related warnings) intentionally
+        # NOT enabled — MSVC's parser doesn't distinguish the comma
+        # operator from C++23's multidim subscript `a[x, y]`, which
+        # this codebase uses heavily on Image / atlas types. They
+        # would fire on every multidim subscript as
+        # "operator before comma has no effect".
         /w14619  # pragma warning unknown number
         /w14640  # thread-unsafe static member init
         /w14826  # sign-extended conversion
