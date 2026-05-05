@@ -5,6 +5,9 @@ build-tsan/
 build-lint/
 build-rel/
 build-rwdi/
+experiments/gpu_quantize/quant
+experiments/gpu_quantize/quant.air
+experiments/gpu_quantize/quant.metallib
 service/toolchain/dos/djgpp/
 .cache/
 .claude/
