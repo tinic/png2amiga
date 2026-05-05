@@ -541,6 +541,13 @@ struct EncodeState {
     std::vector<std::uint8_t>  genesis_tile_bytes;
     std::vector<std::uint16_t> genesis_tilemap_cells;
     std::vector<std::uint16_t> genesis_palette_words;
+
+    // Algorithm name from the Palette generated for `palette` (and
+    // for HAM/EHB/copper variants, the base palette before per-line
+    // evolution). "median-cut" / "pnn" / "ocs-optimal" / "gpu-restart"
+    // / "ega" / "user" / "" if not applicable. Surfaces in the
+    // status line as "(quantizer)".
+    std::string base_palette_quantizer;
 };
 
 // Run the encoder pipeline and return its full intermediate state. Same

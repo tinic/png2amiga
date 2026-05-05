@@ -80,8 +80,15 @@ set(PNG2AMIGA_CORE_SOURCES
 
 if(EMSCRIPTEN)
     # --- WASM library build ---
+    # Include quantize_metal.cpp without PNG2AMIGA_HAVE_METAL — it
+    # compiles to lightweight stubs (false / std::unexpected) that
+    # quantize_metal_wrap.cpp links against. Same TU on native builds
+    # without Metal (Linux / Windows). On macOS-with-Metal the file
+    # is compiled separately with apple-clang via a custom command
+    # (see below) so the symbols come from there instead.
     add_executable(png2amiga_wasm
         ${PNG2AMIGA_CORE_SOURCES}
+        src/quantize_metal.cpp
         src/wasm_bindings.cpp
     )
     target_include_directories(png2amiga_wasm PRIVATE
@@ -124,6 +131,10 @@ else()
         src/main.cpp
         ${PNG2AMIGA_CORE_SOURCES}
     )
+    # Include quantize_metal.cpp here too when there's no Metal —
+    # it provides the C-stub symbols (false / std::unexpected) that
+    # quantize_metal_wrap.cpp links against. The Metal-enabled
+    # branch below replaces this TU with an apple-clang .o file.
     target_include_directories(png2amiga PRIVATE
         src
         ${CMAKE_SOURCE_DIR}/third_party
@@ -208,6 +219,14 @@ else()
             message(STATUS "Metal toolchain not found — gpu_restart disabled "
                 "(install full Xcode to enable; CommandLineTools alone is not enough)")
         endif()
+    endif()
+
+    if(NOT PNG2AMIGA_HAVE_METAL)
+        # No Metal toolchain available (Linux / Windows / macOS without
+        # full Xcode): compile quantize_metal.cpp here as the gcc/clang
+        # TU. With PNG2AMIGA_HAVE_METAL undefined the file collapses to
+        # bool/int stubs that quantize_metal_wrap.cpp links against.
+        target_sources(png2amiga PRIVATE src/quantize_metal.cpp)
     endif()
 
     if(PNG2AMIGA_HAVE_METAL)
