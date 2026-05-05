@@ -50,7 +50,7 @@ colors) / 80×100 text-mode glyph matching, EGA 320×200 / 640×200 /
 4096 OCS colors), PNN agglomerative (auto-selected for HAM8 / AGA), and
 median-cut + k-means refinement in OKLab.
 
-**Dithering**: 64 methods, all in OKLab, grouped as in the web UI:
+**Dithering**: 64 methods.
 
 - **Error Diffusion** (19) — Floyd–Steinberg, Sierra-Lite, Atkinson,
   Jarvis, Stucki, Gilbert, Riemersma, DBS (slow); palette-aware
