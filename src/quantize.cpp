@@ -496,7 +496,7 @@ Palette median_cut(std::span<const Color3f> colors,
     auto n_colors = mc_result.size();
 
     Palette result;
-    result.name = "quantized";
+    result.name = "median-cut";
     result.colors = mc_result;
 
     constexpr int kmeans_max_iter = 40;
