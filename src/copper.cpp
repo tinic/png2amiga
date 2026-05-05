@@ -455,18 +455,12 @@ Result<CopperResult> encode_copper(const Image& image,
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
         base_pal_name = "user-supplied";
     } else {
-        // Quantizer choice: caller override wins; otherwise pick the
-        // chipset-aware default. AGA prefers gpu-restart (mean ΔS2
-        // +2.6..+3.4 vs median-cut baseline) — falls back to median-
-        // cut at runtime when Metal is unavailable. OCS keeps its
-        // 4096-color brute-force.
+        // Quantizer: caller override wins; otherwise the centralised
+        // resolver picks the AGA / OCS default. The resolver mirrors
+        // every other dispatch site — single source of truth.
         auto algo = quantizer_override.has_value()
             ? *quantizer_override
-            : ((chipset == amiga::Chipset::aga)
-                ? (quantize::metal_available()
-                    ? quantize::Algorithm::gpu_restart
-                    : quantize::Algorithm::median_cut)
-                : quantize::Algorithm::ocs_bruteforce);
+            : quantize::resolve_algorithm(amiga::Mode::lores, chipset, "");
         auto reserve = lock_color0
             ? ((num_colors > 1) ? num_colors - 1 : std::size_t{1})
             : num_colors;

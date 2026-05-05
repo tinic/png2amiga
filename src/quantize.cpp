@@ -4,6 +4,45 @@
 #include "pipeline.hpp"
 #include "quantize_metal.hpp"
 
+namespace png2amiga::quantize {
+
+Algorithm resolve_algorithm(amiga::Mode mode, amiga::Chipset chipset,
+                            std::string_view user) noexcept {
+    // 1. Explicit user choice — name_of() is the inverse mapping.
+    if (user == "median-cut")     return Algorithm::median_cut;
+    if (user == "ocs-bruteforce") return Algorithm::ocs_bruteforce;
+    if (user == "pnn")            return Algorithm::pnn;
+    if (user == "gpu-restart") {
+        return metal_available() ? Algorithm::gpu_restart
+                                  : Algorithm::median_cut;
+    }
+    if (user == "fast") return Algorithm::median_cut;  // legacy alias
+
+    // 2. Auto-select. Per-mode defaults reflect the bench results in
+    // experiments/gpu_quantize/FINDINGS.md:
+    //   - AGA / VGA continuous gamuts: gpu-restart wins +2.6..+3.4 ΔS2
+    //   - OCS 12-bit discrete gamut: gpu-restart loses -6.36 ΔS2
+    //   - HAM AGA: PNN wins ~10-13% over median-cut (Ward's anchors)
+    //   - HAM OCS: median-cut (PNN regresses on OCS-snapped HAM6)
+    //   - SNES Mode 7 256: median-cut (Lloyd retraining absorbs gains)
+    //   - Atari STF/STE: brute-force over the 9-bit/12-bit gamut
+    //   - EGA/CGA: median-cut (gamut-snap fixes the rest)
+    if (amiga::is_atari(mode))    return Algorithm::ocs_bruteforce;
+    if (amiga::is_ega(mode))      return Algorithm::median_cut;
+    if (amiga::is_cga(mode))      return Algorithm::median_cut;
+    if (amiga::is_ham(mode)) {
+        return (chipset == amiga::Chipset::aga) ? Algorithm::pnn
+                                                 : Algorithm::median_cut;
+    }
+    if (amiga::is_vga(mode) || chipset == amiga::Chipset::aga) {
+        return metal_available() ? Algorithm::gpu_restart
+                                  : Algorithm::median_cut;
+    }
+    return Algorithm::ocs_bruteforce;  // OCS lores/hires/EHB
+}
+
+} // namespace png2amiga::quantize
+
 namespace {
 using OKLab = png2amiga::color_space::OKLab;
 

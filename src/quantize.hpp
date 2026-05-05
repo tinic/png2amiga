@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::quantize {
@@ -28,6 +29,33 @@ enum class Algorithm : unsigned char {
                     // K ∈ {8..256}; falls back to median_cut at runtime
                     // when Metal is unavailable. macOS-only build path.
 };
+
+// String name for an Algorithm — matches the CLI --quantizer values
+// 1:1 so callers can print it directly in status lines.
+inline std::string_view name_of(Algorithm a) noexcept {
+    switch (a) {
+    case Algorithm::median_cut:     return "median-cut";
+    case Algorithm::ocs_bruteforce: return "ocs-bruteforce";
+    case Algorithm::pnn:            return "pnn";
+    case Algorithm::gpu_restart:    return "gpu-restart";
+    }
+    return "unknown";
+}
+
+// One-stop resolver. Maps (mode, chipset, --quantizer string) to the
+// Algorithm that will actually run. All dispatch sites — api.cpp,
+// main.cpp, ham.cpp, copper.cpp, status-line printers — call this so
+// the choice is made in exactly one place.
+//
+// Precedence:
+//   1. Explicit user choice ("median-cut" / "ocs-bruteforce" / "pnn" /
+//      "gpu-restart"). gpu-restart silently falls back to median-cut
+//      when the runtime Metal device probe fails (non-Apple / no GPU).
+//   2. CLI legacy alias "fast" = median-cut.
+//   3. Auto ("" / "auto"): chipset- and mode-aware defaults
+//      (see body for the table).
+Algorithm resolve_algorithm(amiga::Mode mode, amiga::Chipset chipset,
+                            std::string_view user_choice) noexcept;
 
 // ---------------------------------------------------------------------------
 // Generate an optimal N-color palette from an image.

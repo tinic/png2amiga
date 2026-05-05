@@ -2582,32 +2582,7 @@ Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
                                           /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
         return pal;
     }
-    quantize::Algorithm algo;
-    if (quantizer == "median-cut") {
-        algo = quantize::Algorithm::median_cut;
-    } else if (quantizer == "ocs-bruteforce") {
-        algo = quantize::Algorithm::ocs_bruteforce;
-    } else if (quantizer == "gpu-restart") {
-        algo = quantize::Algorithm::gpu_restart;
-    } else {
-        // Auto: OCS brute-force is tuned for the 4096-color OCS gamut.
-        // AGA + VGA: continuous-RGB Lloyd in OKLab on Apple GPU
-        // (gpu_restart) wins by mean ΔS2 +2.6..+3.4 across K ∈ {8..256}
-        // vs pngquant on 124-image DIV2K+Kodak; falls back to median-cut
-        // when Metal isn't available (non-Apple, no Xcode, no GPU).
-        // EGA: dedicated 16-of-64 histogram path is handled above.
-        bool aga_or_vga = chipset == amiga::Chipset::aga ||
-                          amiga::is_vga(mode);
-        if (aga_or_vga) {
-            algo = quantize::metal_available()
-                ? quantize::Algorithm::gpu_restart
-                : quantize::Algorithm::median_cut;
-        } else if (amiga::is_ega(mode)) {
-            algo = quantize::Algorithm::median_cut;
-        } else {
-            algo = quantize::Algorithm::ocs_bruteforce;
-        }
-    }
+    auto algo = quantize::resolve_algorithm(mode, chipset, quantizer);
     return quantize::quantize(image, max_colors, algo, palette_diversity);
 }
 
@@ -2622,6 +2597,16 @@ parse_quantizer_override(std::string_view name) {
     if (name == "pnn")            return quantize::Algorithm::pnn;
     if (name == "gpu-restart")    return quantize::Algorithm::gpu_restart;
     return std::nullopt;
+}
+
+// Display name for the algorithm that will run for a (mode, chipset,
+// --quantizer) triple. Thin wrapper over the centralised resolver
+// in quantize::resolve_algorithm; the dispatch logic lives there.
+inline std::string resolve_quantizer_name(amiga::Mode mode,
+                                          amiga::Chipset chipset,
+                                          std::string_view user) {
+    return std::string{quantize::name_of(
+        quantize::resolve_algorithm(mode, chipset, user))};
 }
 
 // Snap palette to chipset/mode precision
@@ -4854,8 +4839,9 @@ int run_main(int argc, char* argv[]) {
 
         cli_print_input(img.width(), img.height());
         cli_print_target(w, h, static_cast<int>(config->depth));
-        cli_print_palette(std::format("{} colours, indexed PNG-8 (benchmark)",
-                                      quantized->colors.size()));
+        cli_print_palette(std::format(
+            "{} colours, indexed PNG-8 (benchmark, {})",
+            quantized->colors.size(), quantized->name));
         cli_print_dither(dith.method, dith.strength);
 
         float psnr = color_space::compute_psnr_blurred(
@@ -6341,7 +6327,8 @@ int run_main(int argc, char* argv[]) {
                                         config->ham_beam));
         }
         cli_print_palette(std::format(
-            "{} base colors, {}-bit MODIFY", ham_base_colors, ham_data_bits));
+            "{} base colors, {}-bit MODIFY ({})", ham_base_colors, ham_data_bits,
+            resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         // Print the strength the encoder will actually use, not the raw
         // CLI default — make_api_options consults dither_tuning, so the
         // log line should reflect that. Builds aopts early just to read
@@ -6788,10 +6775,11 @@ int run_main(int argc, char* argv[]) {
                 copper_result_obj.changes_per_line,
                 copper_result_obj.max_moves_per_line));
             cli_print_palette(std::format(
-                "{} base + {} half-brite = {} colors",
+                "{} base + {} half-brite = {} colors ({})",
                 copper_result_obj.base_palette.size(),
                 copper_result_obj.base_palette.size(),
-                copper_result_obj.base_palette.size() * 2));
+                copper_result_obj.base_palette.size() * 2,
+                copper_result_obj.base_palette_quantizer));
             cli_print_dither(dith.method, dith.strength);
 
             auto& all_indices = winner->indices;
@@ -7005,7 +6993,9 @@ int run_main(int argc, char* argv[]) {
         // inconsistency is the reason this branch can't reuse the
         // same `palette.size() / size()*2` formula. EHB is always
         // 32 + 32 = 64 by definition; print the invariant.
-        cli_print_palette("32 base + 32 half-brite = 64 colors");
+        cli_print_palette(std::format(
+            "32 base + 32 half-brite = 64 colors ({})",
+            resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         cli_print_dither(config->dither_method, aopts.dither_strength);
         cli_print_encoded(
             static_cast<int>(st.planes.depth),
@@ -7580,8 +7570,9 @@ int run_main(int argc, char* argv[]) {
         if (strips_ehb) {
             // EHB strips: st.palette holds 32 base; halfbrites are derived.
             cli_print_palette(std::format(
-                "{} base + {} half-brite = {} colors",
-                st.palette.size(), st.palette.size(), st.palette.size() * 2));
+                "{} base + {} half-brite = {} colors ({})",
+                st.palette.size(), st.palette.size(), st.palette.size() * 2,
+                resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         } else {
             // DPF strips: st.palette is the 16-entry COLOR00..15 register
             // layout (output_palette in scap.cpp); only 8 of those slots
@@ -7589,7 +7580,8 @@ int run_main(int argc, char* argv[]) {
             // Report the visible-colour count, not the register count.
             std::size_t pf2_colors = std::size_t{1} << 3;  // OCS DPF lores
             cli_print_palette(std::format(
-                "{} colors (PF2 3bpl)", pf2_colors));
+                "{} colors (PF2 3bpl, {})", pf2_colors,
+                resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         }
         cli_print_dither(config->dither_method,
                          make_api_options(*config).dither_strength);

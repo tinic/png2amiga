@@ -261,36 +261,40 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     //   - empty / auto: PNN for AGA (HAM8), median-cut otherwise.
     //     Benchmarks showed PNN wins ~10-13% on HAM8 across fantasy/photo/
     //     space3 but regresses on HAM6 OCS, so only opt in for AGA.
-    // Pick base-palette quantizer. HAM's base is different from
-    // regular palette quantization: pixels are reached via SET +
-    // MODIFY ops, so the base just needs well-distributed anchors,
-    // not a covering palette. PNN's Ward's-linkage merges produce
-    // those anchors better than k-means' MSE-min, especially on
-    // AGA HAM8 (~10-13% wins on fantasy/photo/space3 benchmarks).
+    // Pick base-palette quantizer via the central resolver. HAM's
+    // base is unusual: pixels are reached via SET + MODIFY ops, so
+    // the base just needs well-distributed anchors, not a covering
+    // palette. resolve_algorithm() returns PNN for AGA HAM and
+    // median-cut for OCS HAM by default; user can override via
+    // --quantizer.
     Palette pal;
-    if (quantizer == "gpu-restart" && chipset == amiga::Chipset::aga
-            && quantize::metal_available()) {
-        // Same generic Lloyd-in-OKLab + parallel-restarts that wins
-        // for plain AGA palette quantization. May or may not beat
-        // PNN here — HAM's anchor objective is different from MSE.
-        auto r = quantize::gpu_restart_quantize(
-            image, reserve, /*restarts=*/32, /*iterations=*/20);
+    auto ham_mode = (chipset == amiga::Chipset::aga)
+        ? amiga::Mode::ham8 : amiga::Mode::ham6;
+    auto algo = quantize::resolve_algorithm(ham_mode, chipset, quantizer);
+    switch (algo) {
+    case quantize::Algorithm::pnn:
+        pal = quantize::pnn_quantize(image.pixels(), reserve,
+                                      /*palette_diversity=*/0);
+        break;
+    case quantize::Algorithm::gpu_restart: {
+        auto r = quantize::gpu_restart_quantize(image, reserve,
+                                                 /*restarts=*/32,
+                                                 /*iterations=*/20);
         if (r) {
             pal = std::move(*r);
         } else {
-            // Fall back to PNN if Metal failed mid-call.
+            // Metal probe lied / runtime failure — fall back.
             pal = quantize::pnn_quantize(image.pixels(), reserve,
                                           /*palette_diversity=*/0);
         }
-    } else {
-        bool use_pnn;
-        if (quantizer == "pnn")             use_pnn = true;
-        else if (quantizer == "median-cut") use_pnn = false;
-        else if (quantizer == "fast")       use_pnn = false;
-        else                                use_pnn = (chipset == amiga::Chipset::aga);
-        pal = use_pnn
-            ? quantize::pnn_quantize(image.pixels(), reserve, /*palette_diversity=*/0)
-            : quantize::median_cut(image.pixels(), reserve, /*palette_diversity=*/0);
+        break;
+    }
+    case quantize::Algorithm::ocs_bruteforce:
+    case quantize::Algorithm::median_cut:
+    default:
+        pal = quantize::median_cut(image.pixels(), reserve,
+                                    /*palette_diversity=*/0);
+        break;
     }
 
     bool is_ocs = (chipset != amiga::Chipset::aga);
@@ -1711,6 +1715,7 @@ Result<HamResult> encode_ham_generic(
     auto planes = bitplane::encode(ham_values, w, h, num_bitplanes);
     if (!planes) return std::unexpected{planes.error()};
 
+    std::string base_pal_name = std::move(base_pal.name);
     return HamResult{
         *std::move(planes),
         std::move(base_pal.colors),
@@ -1718,6 +1723,7 @@ Result<HamResult> encode_ham_generic(
         {},  // no scanline_palettes
         {},  // no copper_changes
         0,   // changes_per_line
+        std::move(base_pal_name),
     };
 }
 
@@ -2423,6 +2429,7 @@ Result<HamResult> encode_ham_copper_generic(
         std::move(best.scanline_palettes),
         std::move(best.all_changes),
         changes_per_line,
+        std::move(base_pal.name),
     };
 }
 

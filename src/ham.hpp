@@ -275,6 +275,11 @@ struct HamResult {
     std::vector<std::vector<Color3f>> scanline_palettes;         // effective palette per line
     std::vector<std::vector<copper::CopperChange>> copper_changes;  // register changes per line
     std::size_t changes_per_line{};
+
+    // Algorithm name from the Palette generated for base_palette
+    // ("pnn" / "median-cut" / "gpu-restart"). Surfaces in the
+    // CLI's "Palette: …" line; never duplicated from dispatch logic.
+    std::string base_palette_quantizer;
 };
 
 // ---------------------------------------------------------------------------
