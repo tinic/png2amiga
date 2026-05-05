@@ -657,7 +657,7 @@ struct Config {
     // CGA-specific options
     int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
     std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
-    std::string c64_metric  = "mse";      // mse (OKLab²), blur (PN-sRGB), ssim (sRGB)
+    std::string c64_metric  = "blur";     // blur (PN, default), mse (OKLab²)
     bool c64_petscii_graphics_only = false;
     // Tile-based modes (c64 charset; SNES / Genesis / future Amiga 16x16
     // / PS1 64x64). 0 = mode default. >0 sets a custom dedup budget so
@@ -780,7 +780,7 @@ void print_usage() {
         "  --mask <file>                   Export transparency mask\n"
         "  --mask-invert                   Invert mask polarity\n"
         "\n"
-        "Sliced palette (Amiga, per-line swaps):\n"
+        "Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):\n"
         "  --sliced                        Per-scanline palette swaps\n"
         "  --slice-changes <0-16>          Swaps per line (0 = auto)\n"
         "  --best                          Multi-restart search (~20–30× slower)\n"
@@ -815,7 +815,7 @@ void print_usage() {
         "  --cga-text-metric <m>           blur (default) | mse\n"
         "  --c64-palette <p>               pepto | vice | colodore (default) |\n"
         "                                  deekay | godot | c64wiki | levy\n"
-        "  --c64-metric <m>                mse (default) | blur\n"
+        "  --c64-metric <m>                blur (default) | mse\n"
         "  --c64-petscii-graphics          Restrict PETSCII to graphics glyphs\n"
         "\n"
         "Palette index pinning (lores/hires/EHB/Atari):\n"

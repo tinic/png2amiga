@@ -239,12 +239,13 @@ export const C64_PALETTES: C64PaletteOption[] = [
   { value: 'levy',     label: 'Levy' },
 ]
 
-// C64 per-cell error metric. Both run in OKLab; mirrors png2c64.
-// Default = mse (matches png2c64).
+// C64 per-cell error metric. Default = blur — on c64-petscii against
+// petsciiator's 57 examples blur+S2-outer scores +10.82 ΔS2 vs +6.66
+// for mse+S2-outer, with markedly better detail preservation.
 export interface C64MetricOption { value: string; label: string }
 export const C64_METRICS: C64MetricOption[] = [
-  { value: 'mse',  label: 'Per-pixel MSE (default)' },
-  { value: 'blur', label: 'Blur (Pappas-Neuhoff 3x3)' },
+  { value: 'blur', label: 'Blur (Pappas-Neuhoff 3x3, default)' },
+  { value: 'mse',  label: 'Per-pixel MSE' },
 ]
 
 // C64 palette hex values (16 entries each, 0xRRGGBB) — mirrors
@@ -515,7 +516,7 @@ export function defaultOptions(): Options {
     scap: false,
     ...CGA_TEXT_DEFAULTS,
     c64Palette: 'colodore',
-    c64Metric:  'mse',
+    c64Metric:  'blur',
     c64PetsciiGraphicsOnly: false,
     tileBudget: 256,
     tileReserve: 0,

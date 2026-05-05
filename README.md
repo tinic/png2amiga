@@ -234,8 +234,11 @@ against the source row.
 This is the same technique that's been used in Amiga demos and HAM
 converters since the late 1980s — the [Wikipedia article on
 HAM](https://en.wikipedia.org/wiki/Hold-And-Modify#Sliced_HAM) covers
-the lineage as "Sliced HAM" / SHAM / dynamic HAM. The reference HAM
-encoder [ham_convert](http://mrsebe.bplaced.net/blog/wordpress/?page_id=374)
+the lineage as "Sliced HAM" / SHAM / dynamic HAM. On hires the same
+trick is known as **Dynamic HiRes (DHIRES)** — copper-driven 16-color
+palette swaps per scanline; `--mode hires --sliced` is png2amiga's
+DHIRES path. The reference HAM encoder
+[ham_convert](http://mrsebe.bplaced.net/blog/wordpress/?page_id=374)
 and Leonard's [Brute Force Colors](https://arnaud-carre.github.io/2022-12-30-amiga-ham/)
 both implement the per-line variant. png2amiga aims at the same target
 with a perceptual error metric and applies the technique to indexed

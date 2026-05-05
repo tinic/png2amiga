@@ -291,7 +291,7 @@ struct Options {
     //   "mse" (default): per-pixel nearest-distance squared sum.
     //   "blur": Pappas-Neuhoff 3×3 binomial blur of source vs
     //          rendered cell — models eye-on-CRT averaging.
-    std::string c64_metric = "mse";
+    std::string c64_metric = "blur";
 
     // PETSCII only: when true, restrict the candidate glyph set to
     // PETSCII semi-graphics, blocks, and the reverse-video graphics
