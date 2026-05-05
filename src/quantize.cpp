@@ -853,15 +853,44 @@ float palette_total_sse(
     std::span<const color_space::OKLab> samples_lab,
     std::span<const color_space::OKLab> pal_lab) {
 
-    float total = 0.0f;
-    for (auto& s : samples_lab) {
-        float best = std::numeric_limits<float>::max();
-        for (auto& pc : pal_lab) {
-            float d = oklab_dist_sq(s, pc);
-            if (d < best) best = d;
+    const std::size_t n = samples_lab.size();
+    // Small inputs: skip threading overhead.
+    if (n < 4096) {
+        float total = 0.0f;
+        for (auto& s : samples_lab) {
+            float best = std::numeric_limits<float>::max();
+            for (auto& pc : pal_lab) {
+                float d = oklab_dist_sq(s, pc);
+                if (d < best) best = d;
+            }
+            total += best;
         }
-        total += best;
+        return total;
     }
+#ifdef __EMSCRIPTEN__
+    constexpr unsigned nchunks = 1;
+#else
+    const unsigned nchunks = std::max<unsigned>(
+        1, std::thread::hardware_concurrency());
+#endif
+    const std::size_t step = (n + nchunks - 1) / nchunks;
+    std::vector<float> chunk_totals(nchunks, 0.0f);
+    pipeline::parallel_for(nchunks, [&](std::size_t t) {
+        const std::size_t lo = t * step;
+        const std::size_t hi = std::min(lo + step, n);
+        float local = 0.0f;
+        for (std::size_t i = lo; i < hi; ++i) {
+            float best = std::numeric_limits<float>::max();
+            for (auto& pc : pal_lab) {
+                float d = oklab_dist_sq(samples_lab[i], pc);
+                if (d < best) best = d;
+            }
+            local += best;
+        }
+        chunk_totals[t] = local;
+    });
+    float total = 0.0f;
+    for (float t : chunk_totals) total += t;
     return total;
 }
 
@@ -872,26 +901,54 @@ std::vector<color_space::OKLab> kmeans_refine(
     std::vector<color_space::OKLab> centroids,
     int iterations) {
 
-    auto n = centroids.size();
-    std::vector<std::size_t> assignments(samples_lab.size());
+    const std::size_t n = centroids.size();
+    const std::size_t ns = samples_lab.size();
+    struct Acc { double L{}, a{}, b{}; std::size_t n{}; };
+
+#ifdef __EMSCRIPTEN__
+    constexpr unsigned nchunks = 1;
+#else
+    const unsigned nchunks = (ns < 4096)
+        ? 1u
+        : std::max<unsigned>(1, std::thread::hardware_concurrency());
+#endif
+    const std::size_t step = (ns + nchunks - 1) / nchunks;
+    std::vector<std::vector<Acc>> chunk_accs(nchunks);
+
     for (int iter = 0; iter < iterations; ++iter) {
-        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
-            float best = std::numeric_limits<float>::max();
-            std::size_t bk = 0;
-            for (std::size_t k = 0; k < n; ++k) {
-                float d = oklab_dist_sq(samples_lab[i], centroids[k]);
-                if (d < best) { best = d; bk = k; }
-            }
-            assignments[i] = bk;
+        for (auto& ca : chunk_accs) {
+            ca.assign(n, Acc{});
         }
-        struct Acc { double L{}, a{}, b{}; std::size_t n{}; };
+        // Fused per-sample assignment + per-chunk accumulation. We
+        // skip the explicit assignments[] vector since the body
+        // computes the cluster index and immediately accumulates.
+        pipeline::parallel_for(nchunks, [&](std::size_t t) {
+            auto& chunk = chunk_accs[t];
+            const std::size_t lo = t * step;
+            const std::size_t hi = std::min(lo + step, ns);
+            for (std::size_t i = lo; i < hi; ++i) {
+                float best = std::numeric_limits<float>::max();
+                std::size_t bk = 0;
+                for (std::size_t k = 0; k < n; ++k) {
+                    float d = oklab_dist_sq(samples_lab[i], centroids[k]);
+                    if (d < best) { best = d; bk = k; }
+                }
+                auto& A = chunk[bk];
+                A.L += static_cast<double>(samples_lab[i].L);
+                A.a += static_cast<double>(samples_lab[i].a);
+                A.b += static_cast<double>(samples_lab[i].b);
+                ++A.n;
+            }
+        });
+        // Reduce chunk accumulators.
         std::vector<Acc> acc(n);
-        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
-            auto& A = acc[assignments[i]];
-            A.L += static_cast<double>(samples_lab[i].L);
-            A.a += static_cast<double>(samples_lab[i].a);
-            A.b += static_cast<double>(samples_lab[i].b);
-            ++A.n;
+        for (auto& ca : chunk_accs) {
+            for (std::size_t k = 0; k < n; ++k) {
+                acc[k].L += ca[k].L;
+                acc[k].a += ca[k].a;
+                acc[k].b += ca[k].b;
+                acc[k].n += ca[k].n;
+            }
         }
         bool changed = false;
         for (std::size_t k = 0; k < n; ++k) {
@@ -948,19 +1005,48 @@ void apply_palette_diversity(Palette& palette,
     // total SSE — that's where we should reseed a centroid.
     auto find_worst_cluster_centroid = [&](std::vector<color_space::OKLab>& out_centroid) -> bool {
         struct Acc { double L{}, a{}, b{}, err{}; std::size_t n{}; };
-        std::vector<Acc> acc(pal_lab.size());
-        for (auto& s : samples_lab) {
-            float best = std::numeric_limits<float>::max();
-            std::size_t bk = 0;
-            for (std::size_t k = 0; k < pal_lab.size(); ++k) {
-                float d = oklab_dist_sq(s, pal_lab[k]);
-                if (d < best) { best = d; bk = k; }
+        const std::size_t ns = samples_lab.size();
+#ifdef __EMSCRIPTEN__
+        constexpr unsigned nchunks = 1;
+#else
+        const unsigned nchunks = (ns < 4096)
+            ? 1u
+            : std::max<unsigned>(1, std::thread::hardware_concurrency());
+#endif
+        const std::size_t step = (ns + nchunks - 1) / nchunks;
+        // Phase 1: parallel per-sample assignment + per-chunk
+        // accumulation (L, a, b, err, count).
+        std::vector<std::vector<Acc>> chunk_accs(nchunks);
+        for (auto& ca : chunk_accs) ca.assign(pal_lab.size(), Acc{});
+        pipeline::parallel_for(nchunks, [&](std::size_t t) {
+            auto& chunk = chunk_accs[t];
+            const std::size_t lo = t * step;
+            const std::size_t hi = std::min(lo + step, ns);
+            for (std::size_t i = lo; i < hi; ++i) {
+                const auto& s = samples_lab[i];
+                float best = std::numeric_limits<float>::max();
+                std::size_t bk = 0;
+                for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                    float d = oklab_dist_sq(s, pal_lab[k]);
+                    if (d < best) { best = d; bk = k; }
+                }
+                auto& A = chunk[bk];
+                A.L += static_cast<double>(s.L);
+                A.a += static_cast<double>(s.a);
+                A.b += static_cast<double>(s.b);
+                A.err += static_cast<double>(best);
+                ++A.n;
             }
-            acc[bk].L += static_cast<double>(s.L);
-            acc[bk].a += static_cast<double>(s.a);
-            acc[bk].b += static_cast<double>(s.b);
-            acc[bk].err += static_cast<double>(best);
-            ++acc[bk].n;
+        });
+        std::vector<Acc> acc(pal_lab.size());
+        for (auto& ca : chunk_accs) {
+            for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                acc[k].L += ca[k].L;
+                acc[k].a += ca[k].a;
+                acc[k].b += ca[k].b;
+                acc[k].err += ca[k].err;
+                acc[k].n += ca[k].n;
+            }
         }
         // Pick cluster with largest total error, then split it: new centroid
         // at the pixel farthest from the cluster's current centroid.
@@ -969,18 +1055,31 @@ void apply_palette_diversity(Palette& palette,
             if (acc[k].err > worst_err) { worst_err = acc[k].err; worst_k = k; }
         }
         if (acc[worst_k].n < 2) return false;
-        // Find farthest sample assigned to worst_k
-        float fd = -1.0f; std::size_t fi = 0;
-        for (std::size_t i = 0; i < samples_lab.size(); ++i) {
-            // Recompute assignment (cheap enough for a single pass)
-            float bd = std::numeric_limits<float>::max();
-            std::size_t bk = 0;
-            for (std::size_t k = 0; k < pal_lab.size(); ++k) {
-                float d = oklab_dist_sq(samples_lab[i], pal_lab[k]);
-                if (d < bd) { bd = d; bk = k; }
+        // Phase 2: parallel scan for the farthest sample in worst_k.
+        // Each chunk tracks (best_dist, best_idx); reduce to global.
+        struct FarHit { float fd; std::size_t fi; };
+        std::vector<FarHit> chunk_hits(nchunks,
+            FarHit{-1.0f, 0});
+        pipeline::parallel_for(nchunks, [&](std::size_t t) {
+            const std::size_t lo = t * step;
+            const std::size_t hi = std::min(lo + step, ns);
+            float fd = -1.0f; std::size_t fi = 0;
+            for (std::size_t i = lo; i < hi; ++i) {
+                float bd = std::numeric_limits<float>::max();
+                std::size_t bk = 0;
+                for (std::size_t k = 0; k < pal_lab.size(); ++k) {
+                    float d = oklab_dist_sq(samples_lab[i], pal_lab[k]);
+                    if (d < bd) { bd = d; bk = k; }
+                }
+                if (bk == worst_k && bd > fd) { fd = bd; fi = i; }
             }
-            if (bk == worst_k && bd > fd) { fd = bd; fi = i; }
+            chunk_hits[t] = {fd, fi};
+        });
+        float fd = -1.0f; std::size_t fi = 0;
+        for (auto& h : chunk_hits) {
+            if (h.fd > fd) { fd = h.fd; fi = h.fi; }
         }
+        if (fd < 0.0f) return false;
         out_centroid.clear();
         out_centroid.push_back(samples_lab[fi]);
         return true;
