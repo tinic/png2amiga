@@ -65,6 +65,45 @@ constexpr bool is_excluded_glyph(amiga::Mode mode, std::uint8_t ch) noexcept {
         return false;  // not a cga-text mode; encode() rejects upstream
     }
 }
+
+// Per-cell post-process substitution.
+//
+// Runs once on every cell of the final encoded buffer for every
+// cga-text mode. Identity by default — add per-mode/per-glyph rules
+// here to break up periodic visual artifacts the picker can't see
+// (it scores cells independently, so cross-cell regularities like
+// vertical stripes are invisible to the cost function).
+//
+// Performance is not a concern: this runs once over the cell grid
+// after the parallel picker has finished. Add as many rules as
+// needed.
+//
+// Return value: possibly-modified (ch, fg, bg). The picker's per-
+// cell error stays as-is; substitutions are expected to be
+// visually neutral (same colour mass per cell) and just rearrange
+// pixels so adjacent cells de-correlate.
+struct CellSubst { std::uint8_t ch, fg, bg; };
+inline CellSubst substitute_cell(amiga::Mode mode,
+                                  std::size_t col, std::size_t row,
+                                  std::uint8_t ch,
+                                  std::uint8_t fg, std::uint8_t bg) noexcept {
+    // ---- Rule 1: 0xB1 (medium-shade ▒) phase inversion in 1-scan
+    // modes. Each cell shows only row 0 of the glyph (0x55 =
+    // ABABABAB). With the same (fg, bg) on vertically adjacent rows
+    // the same phase repeats → vertical stripes. Swap fg/bg on
+    // every other row so the phase inverts, producing a 1×1 checker.
+    // 0xB1 is fg/bg-symmetric (50% mix either way) so the per-cell
+    // error metric is preserved.
+    if (ch == 0xB1 &&
+        (mode == amiga::Mode::cga_text80x200 ||
+         mode == amiga::Mode::cga_text40x200) &&
+        (row & 1u)) {
+        std::swap(fg, bg);
+    }
+
+    (void)col;
+    return {ch, fg, bg};
+}
 // ---------------------------------------------------------------------------
 
 // Per-cell metric vectors for each of the 16 CGA master colors. The
@@ -527,29 +566,24 @@ encode(const Image& image, amiga::Mode mode,
     }
     }  // end scanline-offset loop
 
-    // 1-scan-line modes (80x200 / 40x200): each cell shows ONLY row 0
-    // of its glyph. The 50%-checker glyph 0xB1 is a frequent picker
-    // win because its row 0 (`0x55` = 0,1,0,1,0,1,0,1 fg/bg pattern)
-    // gives a clean 50/50 mix. With the same fg/bg on vertically
-    // adjacent cells, every line shows the same phase → vertical
-    // stripes instead of a checker. Swap fg/bg on every other cell
-    // row so the phase inverts row-to-row, turning the stripes into
-    // a true 1×1 checkerboard. Visually-neutral: 0xB1 is symmetric
-    // (50% A + 50% B regardless of which colour is fg or bg), so the
-    // per-cell error metric value the picker chose is preserved.
-    if (mode == amiga::Mode::cga_text80x200 ||
-        mode == amiga::Mode::cga_text40x200) {
+    // Per-cell substitution post-pass. Runs unconditionally for all
+    // cga-text modes; substitute_cell() defaults to identity so modes
+    // without rules pay only the loop cost. New rules go in there,
+    // not here.
+    {
         const std::size_t bcols = best_result.cols;
         const std::size_t brows = best_result.rows;
-        for (std::size_t r = 1; r < brows; r += 2) {
+        for (std::size_t r = 0; r < brows; ++r) {
             for (std::size_t c = 0; c < bcols; ++c) {
                 std::size_t off = (r * bcols + c) * 2;
-                if (best_result.data[off] != 0xB1) continue;
-                std::uint8_t attr = best_result.data[off + 1];
-                std::uint8_t fg = attr & 0x0F;
-                std::uint8_t bg = (attr >> 4) & 0x0F;
+                std::uint8_t ch    = best_result.data[off];
+                std::uint8_t attr  = best_result.data[off + 1];
+                std::uint8_t fg    = attr & 0x0F;
+                std::uint8_t bg    = (attr >> 4) & 0x0F;
+                auto sub = substitute_cell(mode, c, r, ch, fg, bg);
+                best_result.data[off]     = sub.ch;
                 best_result.data[off + 1] =
-                    static_cast<std::uint8_t>((fg << 4) | bg);
+                    static_cast<std::uint8_t>((sub.bg << 4) | sub.fg);
             }
         }
     }
