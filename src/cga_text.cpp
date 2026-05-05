@@ -415,14 +415,23 @@ encode(const Image& image, amiga::Mode mode,
                 dot_K1[c] = K1.L * pl.L + K1.a * pl.a + K1.b * pl.b;
                 dot_K2[c] = K2.L * pl.L + K2.a * pl.a + K2.b * pl.b;
             }
+            // Hoist (fg, bg) pair-search invariants. Original inner did
+            // ~11 FLOPs per pair (256 pairs × 2.8k ops); the form below
+            // pre-builds A[bg] = -2·dot_K2[bg] + K5·pal_norm[bg] (16
+            // entries) and C[fg] = K0 - 2·dot_K1[fg] + K4·pal_norm[fg]
+            // outside the bg loop, leaving 1 FMA + 2 adds inside.
+            // AMDuProf showed this lambda at 95 % of cga-text80x100 CPU.
+            std::array<float, 16> A;
+            for (std::size_t c = 0; c < 16; ++c)
+                A[c] = std::fma(K5, pal_norm[c], -2.0f * dot_K2[c]);
+            const float K3_x2 = 2.0f * K3;
             for (std::uint8_t fg = 0; fg < 16; ++fg) {
+                const float C_fg = std::fma(K4, pal_norm[fg],
+                                            K0 - 2.0f * dot_K1[fg]);
+                const auto& pal_dot_fg = pal_dot[fg];
                 for (std::uint8_t bg = 0; bg < 16; ++bg) {
-                    float err = K0
-                              - 2.0f * dot_K1[fg]
-                              - 2.0f * dot_K2[bg]
-                              + 2.0f * K3 * pal_dot[fg][bg]
-                              + K4 * pal_norm[fg]
-                              + K5 * pal_norm[bg];
+                    const float err =
+                        std::fma(K3_x2, pal_dot_fg[bg], C_fg + A[bg]);
                     if (err < best.err) {
                         best.err = err;
                         best.ch = cand.ch;
