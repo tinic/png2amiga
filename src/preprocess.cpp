@@ -223,4 +223,118 @@ void match_palette_range(Image& image, const Palette& palette,
     }
 }
 
+// Hue-preserving chroma compression onto a palette's 3D gamut hull.
+// Computes c_max(L, h) — max chroma reachable by the palette's convex
+// hull at lightness L and hue h — into a 64×64 LUT, then per pixel:
+//   • decompose to (L, c, h)
+//   • if c > c_max(L, h): scale (a, b) by c_max/c (preserves hue and L)
+//   • else: pass through.
+//
+// LUT build: for each L bin, intersect every palette segment (i, j)
+// with the L-isosurface to collect (a, b) candidate points at that L.
+// For each h bin, the max chroma in direction (cos h, sin h) is the
+// max projection of any candidate onto that direction. This is a max
+// of a linear function over a convex set, so the convex hull of
+// candidates is implicit — taking max over all candidates (whether or
+// not they're hull vertices) yields the same value.
+void gamut_map(Image& image, const Palette& palette) {
+    if (palette.colors.size() < 2) return;
+    auto pixel_count = image.width() * image.height();
+    if (pixel_count == 0) return;
+
+    std::vector<color_space::OKLab> pal_lab(palette.colors.size());
+    for (std::size_t i = 0; i < palette.colors.size(); ++i)
+        pal_lab[i] = color_space::linear_to_oklab(palette.colors[i]);
+
+    constexpr int kL = 64;
+    constexpr int kH = 64;
+    constexpr float kPi = std::numbers::pi_v<float>;
+    std::array<std::array<float, kH>, kL> c_max{};
+
+    for (int Lb = 0; Lb < kL; ++Lb) {
+        const float Lt = static_cast<float>(Lb)
+                       / static_cast<float>(kL - 1);
+        std::vector<std::pair<float, float>> cand;
+        cand.reserve(pal_lab.size() * pal_lab.size() / 2 + pal_lab.size());
+        // Palette points whose L is in this bin's bucket count
+        // directly — without this, a palette point at L=0.5 and a bin
+        // at L=0.5 would otherwise need a degenerate i==j segment.
+        for (auto& p : pal_lab) {
+            if (std::abs(p.L - Lt) < 1.0f / static_cast<float>(kL)) {
+                cand.emplace_back(p.a, p.b);
+            }
+        }
+        for (std::size_t i = 0; i < pal_lab.size(); ++i) {
+            for (std::size_t j = i + 1; j < pal_lab.size(); ++j) {
+                const float Li = pal_lab[i].L;
+                const float Lj = pal_lab[j].L;
+                if ((Li - Lt) * (Lj - Lt) > 0) continue;  // both same side
+                const float dL = Lj - Li;
+                if (std::abs(dL) < 1e-6f) continue;
+                const float t = (Lt - Li) / dL;
+                const float a = pal_lab[i].a
+                              + t * (pal_lab[j].a - pal_lab[i].a);
+                const float b = pal_lab[i].b
+                              + t * (pal_lab[j].b - pal_lab[i].b);
+                cand.emplace_back(a, b);
+            }
+        }
+        // Origin always reachable (gray scaled to L), so c_max ≥ 0.
+        cand.emplace_back(0.0f, 0.0f);
+
+        for (int Hb = 0; Hb < kH; ++Hb) {
+            const float h = (static_cast<float>(Hb)
+                          / static_cast<float>(kH)) * 2.0f * kPi;
+            const float ch = std::cos(h);
+            const float sh = std::sin(h);
+            float best = 0.0f;
+            for (auto& [a, b] : cand) {
+                const float p = a * ch + b * sh;
+                if (p > best) best = p;
+            }
+            c_max[static_cast<std::size_t>(Lb)]
+                 [static_cast<std::size_t>(Hb)] = best;
+        }
+    }
+
+    for (std::size_t y = 0; y < image.height(); ++y) {
+        for (std::size_t x = 0; x < image.width(); ++x) {
+            auto lab = color_space::linear_to_oklab(image[x, y]);
+            const float c = std::sqrt(lab.a * lab.a + lab.b * lab.b);
+            if (c < 1e-6f) continue;
+            float h = std::atan2(lab.b, lab.a);
+            if (h < 0) h += 2.0f * kPi;
+
+            const float Lf = std::clamp(lab.L, 0.0f, 1.0f)
+                           * static_cast<float>(kL - 1);
+            const float Hf = (h / (2.0f * kPi))
+                           * static_cast<float>(kH);
+            int L0 = std::clamp(static_cast<int>(Lf), 0, kL - 2);
+            int L1 = L0 + 1;
+            float Lt = Lf - static_cast<float>(L0);
+            int H0 = static_cast<int>(Hf) % kH;
+            int H1 = (H0 + 1) % kH;
+            float Ht = Hf - std::floor(Hf);
+            const float c00 = c_max[static_cast<std::size_t>(L0)]
+                                   [static_cast<std::size_t>(H0)];
+            const float c01 = c_max[static_cast<std::size_t>(L0)]
+                                   [static_cast<std::size_t>(H1)];
+            const float c10 = c_max[static_cast<std::size_t>(L1)]
+                                   [static_cast<std::size_t>(H0)];
+            const float c11 = c_max[static_cast<std::size_t>(L1)]
+                                   [static_cast<std::size_t>(H1)];
+            const float c_lim =
+                (1.0f - Lt) * ((1.0f - Ht) * c00 + Ht * c01)
+              +         Lt  * ((1.0f - Ht) * c10 + Ht * c11);
+
+            if (c > c_lim) {
+                const float scale = c_lim / c;
+                lab.a *= scale;
+                lab.b *= scale;
+                image[x, y] = color_space::oklab_to_linear(lab).clamped();
+            }
+        }
+    }
+}
+
 } // namespace png2amiga::preprocess

@@ -124,6 +124,7 @@ declare module '@wasm/png2amiga.js' {
     blackPoint?: number
     whitePoint?: number
     matchRange?: boolean
+    gamutMap?: boolean
 
     // Alpha / transparency
     alphaThreshold?: number

@@ -1974,6 +1974,21 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
+              <!-- C64 mode only: gamut-map (hue-preserving chroma
+                   compression onto the palette's actual 3D OKLab
+                   convex hull). Smarter than match-range — preserves
+                   hue + L, only compresses out-of-gamut chroma. -->
+              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Hue-preserving chroma compression: each pixel keeps its lightness and hue, but if its chroma exceeds what the VIC-II palette can reach at that (L, hue), it gets scaled down to the palette's hull. Smarter than match-range, which axis-aligned-stretches the OKLab bounding box.">
+                  Gamut map
+                </label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.gamutMap" />
+                  <span style="color: #888; font-size: 0.625rem;">compress out-of-gamut chroma to palette hull</span>
+                </div>
+              </div>
+
               <!-- PETSCII only: restrict candidate glyphs to graphics
                    subset (no letters / digits / punctuation). -->
               <div v-if="options.mode === 'c64-petscii'" class="grid align-items-center">

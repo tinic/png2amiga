@@ -21,4 +21,13 @@ void apply(Image& image, const Settings& settings);
 void match_palette_range(Image& image, const Palette& palette,
                          float percentile = 0.01f, float margin = 0.05f);
 
+// Hue-preserving chroma compression to fit the palette's actual 3D
+// gamut (convex hull) in OKLab. Cheaper to think of as a per-(L, h)
+// LUT of "max chroma reachable by the palette at that lightness +
+// hue"; pixels with chroma above the limit get scaled down (preserving
+// hue and luminance), pixels inside the gamut pass through. Strictly
+// smarter than match_palette_range, which axis-aligned-bounds the
+// palette and over-stretches diagonals.
+void gamut_map(Image& image, const Palette& palette);
+
 } // namespace png2amiga::preprocess

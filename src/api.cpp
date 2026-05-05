@@ -1244,12 +1244,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // standard-mode preprocessor — pulls highlights / shadows
         // into the palette's reachable range so quantisation has
         // headroom on both ends. Off by default.
-        if (options.match_range) {
+        if (options.match_range || options.gamut_map) {
             auto pal_span = c64::palette_colors(pal_choice);
             Palette c64_pal;
             c64_pal.name = "c64";
             c64_pal.colors.assign(pal_span.begin(), pal_span.end());
-            preprocess::match_palette_range(*image, c64_pal);
+            if (options.match_range)
+                preprocess::match_palette_range(*image, c64_pal);
+            if (options.gamut_map)
+                preprocess::gamut_map(*image, c64_pal);
         }
         dither::Settings dith;
         dith.method      = parse_dither(options.dither);

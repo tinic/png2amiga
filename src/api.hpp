@@ -122,6 +122,7 @@ struct Options {
     float black_point = 0.0f;
     float white_point = 0.0f;
     bool match_range = false;
+    bool gamut_map = false;
     int width = 0;                      // override output width (0 = mode default)
     int height = 0;                     // override output height (0 = mode default)
 

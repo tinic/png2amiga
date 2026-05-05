@@ -97,6 +97,7 @@ export interface Options {
   tileBudget: number
   tileReserve: number
   matchRange: boolean
+  gamutMap: boolean
   paletteData?: Uint8Array | null
   // Slider numeric fields (declared explicitly so options[s.key] is typed
   // as number rather than the index-signature wildcard).
@@ -521,6 +522,7 @@ export function defaultOptions(): Options {
     tileBudget: 256,
     tileReserve: 0,
     matchRange: false,
+    gamutMap: false,
     ...sliderDefaults(),
   }
   return opts
