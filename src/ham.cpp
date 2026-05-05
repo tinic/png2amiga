@@ -337,6 +337,29 @@ struct ErrIdxLess {
     }
 };
 
+// Replace heap[0] with `new_val` and restore the max-heap invariant
+// via a single sift-down. Replacing the prior `std::pop_heap +
+// std::push_heap` pair with one sift-down halves the comparator
+// calls and array writes — AMDuProf showed pop_heap alone at 21 %
+// of HAM6+strips CPU after the heap-of-K switch. log2(16) = 4
+// levels max, branchless inner step.
+[[gnu::always_inline]]
+inline void max_heap_replace_top(ErrIdx* heap, std::size_t n,
+                                 ErrIdx new_val) noexcept {
+    std::size_t i = 0;
+    for (;;) {
+        std::size_t left = 2 * i + 1;
+        if (left >= n) break;
+        std::size_t right = left + 1;
+        std::size_t larger =
+            (right < n && heap[right].err > heap[left].err) ? right : left;
+        if (!(new_val.err < heap[larger].err)) break;
+        heap[i] = heap[larger];
+        i = larger;
+    }
+    heap[i] = new_val;
+}
+
 struct HamScratch {
     // DP encoder per-row buffers
     std::vector<OKLab>                     row_lab;
@@ -715,14 +738,16 @@ void prune_beam(std::vector<BeamState>& candidates,
     }
     std::make_heap(scratch.begin(), scratch.end(), ErrIdxLess{});
     // Phase 2: stream remaining candidates; replace heap top when
-    // smaller. Comparing against scratch.front().err inline is the
-    // hot loop — keep it tight.
+    // smaller. One inlined sift-down replaces std::pop_heap +
+    // std::push_heap (which is what AMDuProf flagged at 21 % of CPU
+    // as `_Pop_heap_hole_by_index<ErrIdxLess>`). Comparing against
+    // scratch.front().err inline is the hot loop — keep it tight.
+    ErrIdx* heap_data = scratch.data();
     for (std::size_t i = beam_width; i < n; ++i) {
         const float ce = candidates[i].cumulative_error;
-        if (ce < scratch.front().err) {
-            std::pop_heap(scratch.begin(), scratch.end(), ErrIdxLess{});
-            scratch.back() = ErrIdx{ce, static_cast<std::uint32_t>(i)};
-            std::push_heap(scratch.begin(), scratch.end(), ErrIdxLess{});
+        if (ce < heap_data[0].err) {
+            max_heap_replace_top(heap_data, beam_width,
+                ErrIdx{ce, static_cast<std::uint32_t>(i)});
         }
     }
 
