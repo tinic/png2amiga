@@ -2500,7 +2500,7 @@ Result<Image> render_ham(const bitplane::BitplaneData& planes,
             auto raw = (*decoded)[y * w + x];
             auto [control, data_val] = split_ham_value(raw, data_bits);
 
-            SRGBColor pixel;
+            SRGBColor pixel{};
             switch (control) {
             case 0b00:  // SET palette color
                 if (data_val < base_srgb.size()) {
@@ -2563,7 +2563,7 @@ Result<Image> render_ham_copper(
             auto raw = (*decoded)[y * w + x];
             auto [control, data_val] = split_ham_value(raw, data_bits);
 
-            SRGBColor pixel;
+            SRGBColor pixel{};
             switch (control) {
             case 0b00:
                 pixel = (data_val < pal_srgb.size())

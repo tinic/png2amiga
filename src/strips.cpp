@@ -3274,7 +3274,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
             std::uint8_t v = sl.values[x];
             std::uint8_t ctrl = static_cast<std::uint8_t>(v >> 4);
             std::uint8_t data = static_cast<std::uint8_t>(v & 0xF);
-            ham::SRGBColor out;
+            ham::SRGBColor out{};
             if (ctrl == 0u) {
                 out = strip_srgbs[s][data];
             } else {
