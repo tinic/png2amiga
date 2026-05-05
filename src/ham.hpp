@@ -97,11 +97,25 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
 // to that single 4-byte mov. With explicit pad, the read of
 // base_srgb[i] and the write to out[oi].color are both single 4-byte
 // movs, so no round-trip via stack and no SLF stall.
+// Trivially-default-constructible by design (no in-class member
+// initializers, defaulted default ctor). Without this, BeamState
+// inherits non-triviality and `std::vector<BeamState>::resize(N)`
+// (called per pixel in expand_ham) value-initialises every slot —
+// wasted work since every slot is overwritten before use. AMDuProf
+// attributed ~4 % of HAM6+strips CPU to that zero-fill. The 3/4-arg
+// ctor lets existing `SRGBColor{r,g,b}` brace-init sites stay
+// untouched (4-arg ctor with defaulted pad). `SRGBColor{}` keeps
+// its zero-init behaviour because the defaulted default ctor is
+// not user-provided, so value-init zero-initialises first.
 struct SRGBColor {
-    std::uint8_t r{};
-    std::uint8_t g{};
-    std::uint8_t b{};
-    std::uint8_t _pad{};
+    std::uint8_t r;
+    std::uint8_t g;
+    std::uint8_t b;
+    std::uint8_t _pad;
+    constexpr SRGBColor() noexcept = default;
+    constexpr SRGBColor(std::uint8_t r_, std::uint8_t g_,
+                        std::uint8_t b_, std::uint8_t pad_ = 0) noexcept
+        : r{r_}, g{g_}, b{b_}, _pad{pad_} {}
     bool operator==(const SRGBColor& other) const noexcept {
         return r == other.r && g == other.g && b == other.b;
     }

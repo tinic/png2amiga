@@ -325,6 +325,18 @@ struct ErrIdx {
     std::uint32_t idx;
 };
 
+// Named comparator for nth_element / heap ops. A free struct with
+// operator() is more reliably inlined by MSVC than an inline lambda
+// passed by template arg — AMDuProf showed the lambda's call site
+// taking 48 % of HAM6+strips CPU as `_Partition_by_pivot_unchecked
+// <…lambda_1>`; named struct lets the compiler see the comparator
+// is pure.
+struct ErrIdxLess {
+    bool operator()(const ErrIdx& a, const ErrIdx& b) const noexcept {
+        return a.err < b.err;
+    }
+};
+
 struct HamScratch {
     // DP encoder per-row buffers
     std::vector<OKLab>                     row_lab;
@@ -682,25 +694,37 @@ void prune_beam(std::vector<BeamState>& candidates,
         return;
     }
 
-    scratch.resize(candidates.size());
-    for (std::size_t i = 0; i < candidates.size(); ++i) {
-        scratch[i].err = candidates[i].cumulative_error;
-        scratch[i].idx = static_cast<std::uint32_t>(i);
+    // Top-K selection via a max-heap of size beam_width. Beam search
+    // keeps top-K unordered — every downstream consumer scans the
+    // beam linearly for the min, so order-within-K isn't observed.
+    //
+    // AMDuProf (HAM6+strips on AMD EPYC, MSVC) showed nth_element's
+    // partition kernel consuming 48 % of total CPU. Heap-of-K is
+    // typically O(N) in our regime: the first K candidates fill the
+    // heap in O(K), each remaining candidate does one compare against
+    // heap.top() and only does the O(log K) sift on a hit. With N≈500
+    // candidates and K=16, most candidates fail the compare → no
+    // sift, so total work is dominated by the linear scan.
+    scratch.clear();
+    scratch.reserve(beam_width);
+    const std::size_t n = candidates.size();
+    // Phase 1: seed heap with first K candidates.
+    for (std::size_t i = 0; i < beam_width; ++i) {
+        scratch.push_back(ErrIdx{candidates[i].cumulative_error,
+                                 static_cast<std::uint32_t>(i)});
     }
-
-    // nth_element vs partial_sort: AMDuProf showed the comparator
-    // lambda (heap-pop + partial_sort combined) consuming ~34 % of
-    // total CPU on HAM6+strips. Beam search keeps the top-K
-    // unordered — every downstream consumer scans the beam linearly
-    // for the min (see `min_element` at the end of encode_scanline_dp_t
-    // and the `last[j].cumulative_error` linear scan in refine_triple),
-    // so order-within-K isn't observed. nth_element is O(n) avg vs
-    // partial_sort's O(n log K).
-    std::nth_element(
-        scratch.begin(),
-        scratch.begin() + static_cast<std::ptrdiff_t>(beam_width),
-        scratch.end(),
-        [](const ErrIdx& a, const ErrIdx& b) { return a.err < b.err; });
+    std::make_heap(scratch.begin(), scratch.end(), ErrIdxLess{});
+    // Phase 2: stream remaining candidates; replace heap top when
+    // smaller. Comparing against scratch.front().err inline is the
+    // hot loop — keep it tight.
+    for (std::size_t i = beam_width; i < n; ++i) {
+        const float ce = candidates[i].cumulative_error;
+        if (ce < scratch.front().err) {
+            std::pop_heap(scratch.begin(), scratch.end(), ErrIdxLess{});
+            scratch.back() = ErrIdx{ce, static_cast<std::uint32_t>(i)};
+            std::push_heap(scratch.begin(), scratch.end(), ErrIdxLess{});
+        }
+    }
 
     beam.resize(beam_width);
     for (std::size_t i = 0; i < beam_width; ++i) {
