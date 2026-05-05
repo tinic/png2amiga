@@ -557,7 +557,6 @@ struct Config {
     std::optional<std::size_t> width;
     std::optional<std::size_t> height;
     bool match_range = false;
-    bool gamut_map   = false;
 
     // HAM encoding
     std::size_t ham_beam = 16;
@@ -771,8 +770,7 @@ void print_usage() {
         "  --sharpen <float>               -1.0..2.0 (default: 0.0)\n"
         "  --black-point <float>           0.0..0.5 (default: 0.0)\n"
         "  --white-point <float>           0.0..0.5 (default: 0.0)\n"
-        "  --match-range                   Stretch image range to palette extent\n"
-        "  --gamut-map                     Compress out-of-gamut chroma to palette hull\n"
+        "  --match-range                   Stretch source chroma per-(L, hue) onto palette gamut\n"
         "  --crop <x,y,w,h>                Manual crop region (pixels)\n"
         "  --crop-auto                     Auto-crop to mode aspect ratio\n"
         "\n"
@@ -947,11 +945,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--match-range") {
             config.match_range = true;
-            continue;
-        }
-
-        if (arg == "--gamut-map") {
-            config.gamut_map = true;
             continue;
         }
 
@@ -2320,7 +2313,6 @@ void neutralize_preprocess(api::Options& opts) {
     opts.black_point = 0.0f;
     opts.white_point = 0.0f;
     opts.match_range = false;
-    opts.gamut_map   = false;
 }
 
 api::Options make_api_options(const Config& cfg) {
@@ -2339,7 +2331,6 @@ api::Options make_api_options(const Config& cfg) {
     opts.black_point = cfg.preprocess.black_point;
     opts.white_point = cfg.preprocess.white_point;
     opts.match_range = cfg.match_range;
-    opts.gamut_map   = cfg.gamut_map;
     opts.dither = std::string{dither_to_options_string(cfg.dither_method)};
     // Per-mode dither auto-tuning. Inline Amiga branches (HAM, EHB,
     // plain sliced, plain Amiga fallback) all call dither_tuning::defaults_for
@@ -5420,16 +5411,13 @@ int run_main(int argc, char* argv[]) {
         // Palette-aware preprocess for c64. The api side has matching
         // hooks but `neutralize_preprocess()` below wipes the flags
         // before the api sees them, so apply locally here.
-        if (config->match_range || config->gamut_map) {
+        if (config->match_range) {
             auto pal_choice = c64::parse_palette(config->c64_palette);
             auto pal_span   = c64::palette_colors(pal_choice);
             Palette c64_pal;
             c64_pal.name = "c64";
             c64_pal.colors.assign(pal_span.begin(), pal_span.end());
-            if (config->match_range)
-                preprocess::match_palette_range(*image, c64_pal);
-            if (config->gamut_map)
-                preprocess::gamut_map(*image, c64_pal);
+            preprocess::match_palette_range(*image, c64_pal);
         }
         auto src_png = png_io::encode(*image);
         if (!src_png) {

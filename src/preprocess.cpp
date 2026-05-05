@@ -133,111 +133,27 @@ void apply(Image& image, const Settings& s) {
     }
 }
 
-void match_palette_range(Image& image, const Palette& palette,
-                         float percentile, float margin) {
-    auto pixel_count = image.width() * image.height();
-    if (pixel_count == 0 || palette.colors.empty()) return;
-
-    float pal_L_min = 1e9f, pal_L_max = -1e9f;
-    float pal_a_min = 1e9f, pal_a_max = -1e9f;
-    float pal_b_min = 1e9f, pal_b_max = -1e9f;
-
-    for (auto& c : palette.colors) {
-        auto lab = color_space::linear_to_oklab(c);
-        pal_L_min = std::min(pal_L_min, lab.L);
-        pal_L_max = std::max(pal_L_max, lab.L);
-        pal_a_min = std::min(pal_a_min, lab.a);
-        pal_a_max = std::max(pal_a_max, lab.a);
-        pal_b_min = std::min(pal_b_min, lab.b);
-        pal_b_max = std::max(pal_b_max, lab.b);
-    }
-
-    auto apply_margin_fn = [margin](float lo, float hi) {
-        float span = hi - lo;
-        return std::pair{lo + span * margin, hi - span * margin};
-    };
-
-    auto [tgt_L_min, tgt_L_max] = apply_margin_fn(pal_L_min, pal_L_max);
-    auto [tgt_a_min, tgt_a_max] = apply_margin_fn(pal_a_min, pal_a_max);
-    auto [tgt_b_min, tgt_b_max] = apply_margin_fn(pal_b_min, pal_b_max);
-
-    std::vector<color_space::OKLab> image_lab(pixel_count);
-    std::vector<float> Ls(pixel_count), As(pixel_count), Bs(pixel_count);
-
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-        auto y = i / image.width();
-        auto x = i % image.width();
-        image_lab[i] = color_space::linear_to_oklab(image[x, y]);
-        Ls[i] = image_lab[i].L;
-        As[i] = image_lab[i].a;
-        Bs[i] = image_lab[i].b;
-    }
-
-    auto percentile_range = [percentile](std::vector<float>& vals) {
-        std::ranges::sort(vals);
-        auto n = vals.size();
-        auto lo_idx = static_cast<std::size_t>(
-            static_cast<float>(n) * percentile);
-        auto hi_idx = static_cast<std::size_t>(
-            static_cast<float>(n) * (1.0f - percentile));
-        lo_idx = std::min(lo_idx, n - 1);
-        hi_idx = std::min(hi_idx, n - 1);
-        return std::pair{vals[lo_idx], vals[hi_idx]};
-    };
-
-    auto [src_L_min, src_L_max] = percentile_range(Ls);
-    auto [src_a_min, src_a_max] = percentile_range(As);
-    auto [src_b_min, src_b_max] = percentile_range(Bs);
-
-    auto remap = [](float val, float src_lo, float src_hi,
-                    float dst_lo, float dst_hi) -> float {
-        float src_span = src_hi - src_lo;
-        if (src_span < 1e-6f) {
-            return (dst_lo + dst_hi) * 0.5f;
-        }
-        float t = (val - src_lo) / src_span;
-        return dst_lo + t * (dst_hi - dst_lo);
-    };
-
-    auto scale_around_zero = [](float val, float src_lo, float src_hi,
-                                float dst_lo, float dst_hi) -> float {
-        if (val >= 0.0f) {
-            float s = (src_hi > 1e-6f) ? dst_hi / src_hi : 1.0f;
-            return val * s;
-        }
-        float s = (src_lo < -1e-6f) ? dst_lo / src_lo : 1.0f;
-        return val * s;
-    };
-
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-        auto& lab = image_lab[i];
-        lab.L = remap(lab.L, src_L_min, src_L_max, tgt_L_min, tgt_L_max);
-        lab.a = scale_around_zero(lab.a, src_a_min, src_a_max,
-                                  tgt_a_min, tgt_a_max);
-        lab.b = scale_around_zero(lab.b, src_b_min, src_b_max,
-                                  tgt_b_min, tgt_b_max);
-
-        auto y = i / image.width();
-        auto x = i % image.width();
-        image[x, y] = color_space::oklab_to_linear(lab).clamped();
-    }
-}
-
-// Hue-preserving chroma compression onto a palette's 3D gamut hull.
-// Computes c_max(L, h) — max chroma reachable by the palette's convex
-// hull at lightness L and hue h — into a 64×64 LUT, then per pixel:
-//   • decompose to (L, c, h)
-//   • if c > c_max(L, h): scale (a, b) by c_max/c (preserves hue and L)
-//   • else: pass through.
+// Hue-preserving chroma stretch onto a palette's 3D gamut hull.
 //
-// LUT build: for each L bin, intersect every palette segment (i, j)
-// with the L-isosurface to collect (a, b) candidate points at that L.
-// For each h bin, the max chroma in direction (cos h, sin h) is the
-// max projection of any candidate onto that direction. This is a max
-// of a linear function over a convex set, so the convex hull of
-// candidates is implicit — taking max over all candidates (whether or
-// not they're hull vertices) yields the same value.
-void gamut_map(Image& image, const Palette& palette) {
+// Two LUTs over (L_bin, h_bin), 64 × 64:
+//   c_pal(L, h)  — max chroma reachable by the palette's convex hull
+//                  at that lightness and hue.
+//   c_src(L, h)  — 95th-percentile chroma seen in the source image at
+//                  that (L, h) bin, then box-diffused so under-sampled
+//                  bins still get a sensible scale.
+//
+// Per pixel: scale (a, b) by c_pal/c_src so the source's chroma range
+// at every (L, h) slice fills the palette's reachable extent. Clip
+// out-of-gamut pixels to c_pal afterwards. Hue and L are preserved.
+//
+// Replaces the old axis-aligned OKLab-bounding-box stretch (which
+// over-stretched diagonals and rotated hues away from palette
+// reachable colours). The `percentile` and `margin` params are kept
+// in the signature for ABI compatibility but are unused — both
+// concepts are subsumed by the per-(L, h) 95th-percentile binning
+// and the palette-hull intersection respectively.
+void match_palette_range(Image& image, const Palette& palette,
+                         float /*percentile*/, float /*margin*/) {
     if (palette.colors.size() < 2) return;
     auto pixel_count = image.width() * image.height();
     if (pixel_count == 0) return;
@@ -249,16 +165,15 @@ void gamut_map(Image& image, const Palette& palette) {
     constexpr int kL = 64;
     constexpr int kH = 64;
     constexpr float kPi = std::numbers::pi_v<float>;
-    std::array<std::array<float, kH>, kL> c_max{};
+    using Grid = std::array<std::array<float, kH>, kL>;
+    Grid c_pal{};
 
+    // Palette LUT.
     for (int Lb = 0; Lb < kL; ++Lb) {
         const float Lt = static_cast<float>(Lb)
                        / static_cast<float>(kL - 1);
         std::vector<std::pair<float, float>> cand;
         cand.reserve(pal_lab.size() * pal_lab.size() / 2 + pal_lab.size());
-        // Palette points whose L is in this bin's bucket count
-        // directly — without this, a palette point at L=0.5 and a bin
-        // at L=0.5 would otherwise need a degenerate i==j segment.
         for (auto& p : pal_lab) {
             if (std::abs(p.L - Lt) < 1.0f / static_cast<float>(kL)) {
                 cand.emplace_back(p.a, p.b);
@@ -268,7 +183,7 @@ void gamut_map(Image& image, const Palette& palette) {
             for (std::size_t j = i + 1; j < pal_lab.size(); ++j) {
                 const float Li = pal_lab[i].L;
                 const float Lj = pal_lab[j].L;
-                if ((Li - Lt) * (Lj - Lt) > 0) continue;  // both same side
+                if ((Li - Lt) * (Lj - Lt) > 0) continue;
                 const float dL = Lj - Li;
                 if (std::abs(dL) < 1e-6f) continue;
                 const float t = (Lt - Li) / dL;
@@ -279,9 +194,7 @@ void gamut_map(Image& image, const Palette& palette) {
                 cand.emplace_back(a, b);
             }
         }
-        // Origin always reachable (gray scaled to L), so c_max ≥ 0.
         cand.emplace_back(0.0f, 0.0f);
-
         for (int Hb = 0; Hb < kH; ++Hb) {
             const float h = (static_cast<float>(Hb)
                           / static_cast<float>(kH)) * 2.0f * kPi;
@@ -292,14 +205,98 @@ void gamut_map(Image& image, const Palette& palette) {
                 const float p = a * ch + b * sh;
                 if (p > best) best = p;
             }
-            c_max[static_cast<std::size_t>(Lb)]
+            c_pal[static_cast<std::size_t>(Lb)]
                  [static_cast<std::size_t>(Hb)] = best;
         }
     }
 
+    // Source per-(L, h) chroma bins. Collect chromas, then take the
+    // 95th percentile per bin so single-pixel outliers don't blow the
+    // scale factor up.
+    std::vector<std::vector<std::vector<float>>>
+        bins(kL, std::vector<std::vector<float>>(kH));
+    std::vector<color_space::OKLab> img_lab(pixel_count);
     for (std::size_t y = 0; y < image.height(); ++y) {
         for (std::size_t x = 0; x < image.width(); ++x) {
             auto lab = color_space::linear_to_oklab(image[x, y]);
+            img_lab[y * image.width() + x] = lab;
+            const float c = std::sqrt(lab.a * lab.a + lab.b * lab.b);
+            if (c < 1e-6f) continue;
+            float h = std::atan2(lab.b, lab.a);
+            if (h < 0) h += 2.0f * kPi;
+            int Lb = std::clamp(static_cast<int>(
+                std::clamp(lab.L, 0.0f, 1.0f)
+                * static_cast<float>(kL - 1)), 0, kL - 1);
+            int Hb = static_cast<int>((h / (2.0f * kPi))
+                                    * static_cast<float>(kH)) % kH;
+            bins[static_cast<std::size_t>(Lb)]
+                [static_cast<std::size_t>(Hb)].push_back(c);
+        }
+    }
+    Grid c_src{};
+    for (int Lb = 0; Lb < kL; ++Lb) {
+        for (int Hb = 0; Hb < kH; ++Hb) {
+            auto& v = bins[static_cast<std::size_t>(Lb)]
+                          [static_cast<std::size_t>(Hb)];
+            if (v.empty()) continue;
+            auto idx = static_cast<std::size_t>(
+                static_cast<float>(v.size()) * 0.95f);
+            if (idx >= v.size()) idx = v.size() - 1;
+            std::nth_element(v.begin(), v.begin()
+                             + static_cast<std::ptrdiff_t>(idx), v.end());
+            c_src[static_cast<std::size_t>(Lb)]
+                 [static_cast<std::size_t>(Hb)] = v[idx];
+        }
+    }
+    // Diffuse the c_src grid — bins the source under-sampled (e.g. a
+    // hue+lightness combination present in only a few pixels) would
+    // otherwise have c_src = 0 and stretch by infinity. A 3-tap box
+    // blur on each axis spreads neighbouring info into empty cells.
+    auto diffuse = [&]() {
+        Grid tmp{};
+        for (int Lb = 0; Lb < kL; ++Lb) {
+            for (int Hb = 0; Hb < kH; ++Hb) {
+                float s = 0; int n = 0;
+                for (int dh = -1; dh <= 1; ++dh) {
+                    int Hn = (Hb + dh + kH) % kH;
+                    float v = c_src[static_cast<std::size_t>(Lb)]
+                                   [static_cast<std::size_t>(Hn)];
+                    if (v > 0) { s += v; ++n; }
+                }
+                tmp[static_cast<std::size_t>(Lb)]
+                   [static_cast<std::size_t>(Hb)] =
+                       n > 0 ? s / static_cast<float>(n)
+                             : c_src[static_cast<std::size_t>(Lb)]
+                                    [static_cast<std::size_t>(Hb)];
+            }
+        }
+        c_src = tmp;
+        Grid tmp2{};
+        for (int Lb = 0; Lb < kL; ++Lb) {
+            for (int Hb = 0; Hb < kH; ++Hb) {
+                float s = 0; int n = 0;
+                for (int dl = -1; dl <= 1; ++dl) {
+                    int Ln = std::clamp(Lb + dl, 0, kL - 1);
+                    float v = c_src[static_cast<std::size_t>(Ln)]
+                                   [static_cast<std::size_t>(Hb)];
+                    if (v > 0) { s += v; ++n; }
+                }
+                tmp2[static_cast<std::size_t>(Lb)]
+                    [static_cast<std::size_t>(Hb)] =
+                        n > 0 ? s / static_cast<float>(n)
+                              : c_src[static_cast<std::size_t>(Lb)]
+                                     [static_cast<std::size_t>(Hb)];
+            }
+        }
+        c_src = tmp2;
+    };
+    diffuse();
+    diffuse();
+
+    // Apply the per-(L, h) stretch.
+    for (std::size_t y = 0; y < image.height(); ++y) {
+        for (std::size_t x = 0; x < image.width(); ++x) {
+            auto lab = img_lab[y * image.width() + x];
             const float c = std::sqrt(lab.a * lab.a + lab.b * lab.b);
             if (c < 1e-6f) continue;
             float h = std::atan2(lab.b, lab.a);
@@ -315,24 +312,29 @@ void gamut_map(Image& image, const Palette& palette) {
             int H0 = static_cast<int>(Hf) % kH;
             int H1 = (H0 + 1) % kH;
             float Ht = Hf - std::floor(Hf);
-            const float c00 = c_max[static_cast<std::size_t>(L0)]
-                                   [static_cast<std::size_t>(H0)];
-            const float c01 = c_max[static_cast<std::size_t>(L0)]
-                                   [static_cast<std::size_t>(H1)];
-            const float c10 = c_max[static_cast<std::size_t>(L1)]
-                                   [static_cast<std::size_t>(H0)];
-            const float c11 = c_max[static_cast<std::size_t>(L1)]
-                                   [static_cast<std::size_t>(H1)];
-            const float c_lim =
-                (1.0f - Lt) * ((1.0f - Ht) * c00 + Ht * c01)
-              +         Lt  * ((1.0f - Ht) * c10 + Ht * c11);
 
-            if (c > c_lim) {
-                const float scale = c_lim / c;
-                lab.a *= scale;
-                lab.b *= scale;
-                image[x, y] = color_space::oklab_to_linear(lab).clamped();
-            }
+            auto interp = [&](const Grid& g) {
+                const float v00 = g[static_cast<std::size_t>(L0)]
+                                   [static_cast<std::size_t>(H0)];
+                const float v01 = g[static_cast<std::size_t>(L0)]
+                                   [static_cast<std::size_t>(H1)];
+                const float v10 = g[static_cast<std::size_t>(L1)]
+                                   [static_cast<std::size_t>(H0)];
+                const float v11 = g[static_cast<std::size_t>(L1)]
+                                   [static_cast<std::size_t>(H1)];
+                return (1.0f - Lt) * ((1.0f - Ht) * v00 + Ht * v01)
+                     +         Lt  * ((1.0f - Ht) * v10 + Ht * v11);
+            };
+            const float c_p = interp(c_pal);
+            const float c_s = interp(c_src);
+            if (c_s < 1e-4f || c_p < 1e-6f) continue;
+            const float scale = c_p / c_s;
+            float new_c = c * scale;
+            if (new_c > c_p) new_c = c_p;
+            const float k = new_c / c;
+            lab.a *= k;
+            lab.b *= k;
+            image[x, y] = color_space::oklab_to_linear(lab).clamped();
         }
     }
 }

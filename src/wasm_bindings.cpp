@@ -81,8 +81,6 @@ Options parse_js_options(val js_opts) {
         opts.white_point = js_opts["whitePoint"].as<float>();
     if (js_opts.hasOwnProperty("matchRange"))
         opts.match_range = js_opts["matchRange"].as<bool>();
-    if (js_opts.hasOwnProperty("gamutMap"))
-        opts.gamut_map = js_opts["gamutMap"].as<bool>();
     if (js_opts.hasOwnProperty("width"))
         opts.width = js_opts["width"].as<int>();
     if (js_opts.hasOwnProperty("height"))

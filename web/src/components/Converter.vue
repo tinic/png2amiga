@@ -1965,27 +1965,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    highlights / shadows. Mirrors png2c64. -->
               <div v-if="options.chipset === 'c64'" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold"
-                  title="Match the source's OKLab tonal range to the VIC-II palette's reachable extent before encoding. Pulls highlights and shadows into the palette's range so quantisation has headroom on both ends. Mirrors png2c64's behaviour.">
+                  title="Stretch the source's chroma at every (lightness, hue) slice onto the VIC-II palette's reachable gamut. Hue and luminance preserved, chroma scaled per-hue so the source uses the full palette extent. Replaces the old axis-aligned bounding-box stretch.">
                   Match range
                 </label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.matchRange" />
-                  <span style="color: #888; font-size: 0.625rem;">remap source range to palette extent</span>
-                </div>
-              </div>
-
-              <!-- C64 mode only: gamut-map (hue-preserving chroma
-                   compression onto the palette's actual 3D OKLab
-                   convex hull). Smarter than match-range — preserves
-                   hue + L, only compresses out-of-gamut chroma. -->
-              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold"
-                  title="Hue-preserving chroma compression: each pixel keeps its lightness and hue, but if its chroma exceeds what the VIC-II palette can reach at that (L, hue), it gets scaled down to the palette's hull. Smarter than match-range, which axis-aligned-stretches the OKLab bounding box.">
-                  Gamut map
-                </label>
-                <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.gamutMap" />
-                  <span style="color: #888; font-size: 0.625rem;">compress out-of-gamut chroma to palette hull</span>
+                  <span style="color: #888; font-size: 0.625rem;">stretch source chroma per-(L, hue) onto palette gamut</span>
                 </div>
               </div>
 

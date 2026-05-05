@@ -17,17 +17,14 @@ struct Settings {
 
 void apply(Image& image, const Settings& settings);
 
-// Remap the image's OKLab extent to fit a palette's OKLab extent.
+// Hue-preserving chroma stretch onto the palette's 3D OKLab convex
+// hull: every pixel gets scaled per-(L, hue) so the source's chroma
+// range at each hue slice fills the palette's reachable extent. Hue
+// and luminance preserved; out-of-gamut excess clipped. The old
+// axis-aligned bounding-box version that this replaced rotated hues
+// and over-stretched diagonals — `percentile` and `margin` are
+// retained for ABI but unused.
 void match_palette_range(Image& image, const Palette& palette,
                          float percentile = 0.01f, float margin = 0.05f);
-
-// Hue-preserving chroma compression to fit the palette's actual 3D
-// gamut (convex hull) in OKLab. Cheaper to think of as a per-(L, h)
-// LUT of "max chroma reachable by the palette at that lightness +
-// hue"; pixels with chroma above the limit get scaled down (preserving
-// hue and luminance), pixels inside the gamut pass through. Strictly
-// smarter than match_palette_range, which axis-aligned-bounds the
-// palette and over-stretches diagonals.
-void gamut_map(Image& image, const Palette& palette);
 
 } // namespace png2amiga::preprocess
