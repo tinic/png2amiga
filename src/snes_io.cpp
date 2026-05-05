@@ -399,7 +399,14 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     // division (r3/7, g3/7, b2/3) drifts from the quantiser by ~2 sRGB
     // units per channel and is what made the dither distance metric
     // disagree with the actual displayed colour.
-    auto unpack_direct = [](std::uint8_t b) -> color_space::OKLab {
+    // Direct-colour byte (BBGGGRRR) → OKLab cache. Only 256 possible
+    // byte values, but unpack_direct gets called per-pixel-per-tile-
+    // pair inside distance_fn (called O(N²) by pack_snes_mode7_frame's
+    // greedy merger). AMDuProf showed linear_to_oklab at 33 % of CPU
+    // for snes-mode7-direct, dominated by these per-call cbrt+pow
+    // calls — the LUT collapses that to a 256-entry array load.
+    std::array<color_space::OKLab, 256> direct_lab_lut{};
+    for (int b = 0; b < 256; ++b) {
         int r3 = (b >> 0) & 0x07;
         int g3 = (b >> 3) & 0x07;
         int b2 = (b >> 6) & 0x03;
@@ -411,8 +418,12 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             console_color::quantise_srgb_to_bits(
                 static_cast<float>(b2) / 3.0f, 2),
         };
-        return color_space::linear_to_oklab(
-            color_space::srgb_to_linear(srgb));
+        direct_lab_lut[static_cast<std::size_t>(b)] =
+            color_space::linear_to_oklab(
+                color_space::srgb_to_linear(srgb));
+    }
+    auto unpack_direct = [&](std::uint8_t b) -> color_space::OKLab {
+        return direct_lab_lut[b];
     };
     // Distance metric: per-pixel OKLab² is correct in the limit but
     // perceptually weak for textured 8×8 patches — two tiles whose
