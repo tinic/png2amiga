@@ -190,6 +190,14 @@ else()
     # exercise the same source image.
     set(PNG2AMIGA_TEST_INPUT "${CMAKE_SOURCE_DIR}/examples/lovers.jpg")
 
+    # Many ctest cases shell out to python3 -c '...' for cross-platform
+    # post-conditions (file size, palette count, image dims). Resolve
+    # the real interpreter via find_package so Windows can't fall through
+    # to the Microsoft Store python3.exe shim that prints "Python was not
+    # found" and exits non-zero.
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(PNG2AMIGA_PYTHON "${Python3_EXECUTABLE}")
+
     # Basic build test: verify the binary runs and shows help
     add_test(
         NAME "help"
@@ -205,7 +213,7 @@ else()
     # and reports SKIP when recoil2png is absent, exit code 77).
     # Artifacts land in build/recoil_check/<combo>/ for inspection.
     add_custom_target(recoil_check
-        COMMAND python3
+        COMMAND ${PNG2AMIGA_PYTHON}
                 ${CMAKE_SOURCE_DIR}/tools/recoil_roundtrip.py
                 --build ${CMAKE_BINARY_DIR}/recoil_check
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -229,7 +237,7 @@ else()
     if(PNG2AMIGA_ENABLE_RECOIL_TEST)
         add_test(
             NAME "recoil-roundtrip"
-            COMMAND python3
+            COMMAND ${PNG2AMIGA_PYTHON}
                     ${CMAKE_SOURCE_DIR}/tools/recoil_roundtrip.py
                     --build ${CMAKE_BINARY_DIR}/recoil_check
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -506,7 +514,7 @@ else()
     )
     add_test(
         NAME "smoke-ham6-strips-h-content"
-        COMMAND python3 -c
+        COMMAND ${PNG2AMIGA_PYTHON} -c
             "content = open('${CMAKE_BINARY_DIR}/ham6-strips.h').read(); \
             assert 'strips_ham6_ocs' in content, 'strips_ham6_ocs label missing'; \
             assert 'h6strips_strips_copper_list' in content, \
@@ -527,7 +535,7 @@ else()
     )
     add_test(
         NAME "smoke-tile-lores-h-dims"
-        COMMAND python3 -c
+        COMMAND ${PNG2AMIGA_PYTHON} -c
             "content = open('${CMAKE_BINARY_DIR}/tile-smoke.h').read(); \
             import re; \
             w = int(re.search(r'TILE_SMOKE_WIDTH\\s+(\\d+)', content).group(1)); \
@@ -788,7 +796,7 @@ else()
         # to the identical post-quantization value).
         add_test(
             NAME "reserve-${mname}-count"
-            COMMAND python3 -c
+            COMMAND ${PNG2AMIGA_PYTHON} -c
                 "import re,sys; \
                 content = open('${CMAKE_BINARY_DIR}/reserve-${mname}.h').read(); \
                 m = re.search(r'_palette\\[\\] = \\{([^}]+)\\}', content); \
@@ -825,7 +833,7 @@ else()
         )
         add_test(
             NAME "reserve-${mname}-excl"
-            COMMAND python3 -c
+            COMMAND ${PNG2AMIGA_PYTHON} -c
                 "from PIL import Image; \
                 img = Image.open('${CMAKE_BINARY_DIR}/reserve-${mname}.png').convert('RGB'); \
                 colors = set(img.getdata()); \
