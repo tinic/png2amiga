@@ -1,6 +1,7 @@
 #include "quantize.hpp"
 #include "color_space.hpp"
 #include "palette.hpp"
+#include "pipeline.hpp"
 
 namespace {
 using OKLab = png2amiga::color_space::OKLab;
@@ -160,6 +161,26 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
         return r == g && g == b;
     };
 
+    // Number of parallel chunks for the 4096-candidate sweep below.
+    // AMDuProf showed ocs_bruteforce_quantize as the largest single
+    // function in lores+copper (34 % of CPU, single-threaded). The
+    // candidate scan over all 4096 OCS codes is the hot inner loop;
+    // each candidate's total-error compute is independent, so we
+    // chunk the candidate range across hardware threads. Each chunk
+    // tracks its own (best_total, best_ocs, best_is_gray) and we
+    // reduce after the parallel_for completes.
+    struct LocalBest {
+        float best_total;
+        std::uint16_t best_ocs;
+        bool best_is_gray;
+    };
+    const unsigned nchunks = std::max<unsigned>(
+        1, std::thread::hardware_concurrency());
+    const std::uint16_t step = static_cast<std::uint16_t>(
+        (4096u + nchunks - 1u) / nchunks);
+    std::vector<LocalBest> locals(nchunks);
+    constexpr float kTieEps = 1e-6f;
+
     for (std::size_t k = 0; k < max_colors; ++k) {
         // Try all unpicked 4096 OCS colors. Tie-break: when two
         // candidates yield equal total error, prefer the gray-axis
@@ -168,31 +189,59 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
         // chromatic codes like 0x001 = (0,0,17) ahead of grays — the
         // pixels aren't tinted but the palette becomes a striped
         // mess of one-nibble-off grays.
+        for (auto& lb : locals) {
+            lb.best_total = std::numeric_limits<float>::max();
+            lb.best_ocs = 0;
+            lb.best_is_gray = false;
+        }
+        pipeline::parallel_for(nchunks, [&](std::size_t t) {
+            LocalBest& lb = locals[t];
+            const std::uint16_t lo =
+                static_cast<std::uint16_t>(t * step);
+            const std::uint16_t hi =
+                static_cast<std::uint16_t>(std::min<std::size_t>(
+                    static_cast<std::size_t>(lo) + step, 4096u));
+            for (std::uint16_t candidate = lo;
+                 candidate < hi; ++candidate) {
+                if (picked[candidate]) continue;
+                auto cand_lab = lut.oklab[candidate];
+                float total = 0.0f;
+                for (std::size_t i = 0; i < entries.size(); ++i) {
+                    float d = oklab_dist_sq(
+                        lut.oklab[entries[i].ocs_index], cand_lab);
+                    float effective = std::min(d, best_dist[i]);
+                    total += effective *
+                        static_cast<float>(entries[i].weight);
+                }
+                bool cand_gray = is_gray_code(candidate);
+                bool strictly_better =
+                    total < lb.best_total - kTieEps;
+                bool tied_and_gray = !strictly_better &&
+                    total < lb.best_total + kTieEps &&
+                    cand_gray && !lb.best_is_gray;
+                if (strictly_better || tied_and_gray) {
+                    lb.best_total = total;
+                    lb.best_ocs = candidate;
+                    lb.best_is_gray = cand_gray;
+                }
+            }
+        });
+        // Reduce local bests with the same gray-tiebreak rule, in
+        // ascending chunk index order (so ties resolve to the same
+        // candidate the serial sweep would have picked).
         float best_total = std::numeric_limits<float>::max();
         std::uint16_t best_ocs = 0;
         bool best_is_gray = false;
-
-        for (std::uint16_t candidate = 0; candidate < 4096; ++candidate) {
-            if (picked[candidate]) continue;
-            auto cand_lab = lut.oklab[candidate];
-            float total = 0.0f;
-
-            for (std::size_t i = 0; i < entries.size(); ++i) {
-                float d = oklab_dist_sq(lut.oklab[entries[i].ocs_index], cand_lab);
-                float effective = std::min(d, best_dist[i]);
-                total += effective * static_cast<float>(entries[i].weight);
-            }
-
-            bool cand_gray = is_gray_code(candidate);
-            constexpr float kTieEps = 1e-6f;
-            bool strictly_better = total < best_total - kTieEps;
+        for (auto& lb : locals) {
+            bool strictly_better =
+                lb.best_total < best_total - kTieEps;
             bool tied_and_gray = !strictly_better &&
-                                 total < best_total + kTieEps &&
-                                 cand_gray && !best_is_gray;
+                lb.best_total < best_total + kTieEps &&
+                lb.best_is_gray && !best_is_gray;
             if (strictly_better || tied_and_gray) {
-                best_total = total;
-                best_ocs = candidate;
-                best_is_gray = cand_gray;
+                best_total = lb.best_total;
+                best_ocs = lb.best_ocs;
+                best_is_gray = lb.best_is_gray;
             }
         }
 
