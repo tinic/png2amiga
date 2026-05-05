@@ -7,9 +7,11 @@
 // chunky output is exposed because it doesn't load on real hardware
 // without a separate packing step.
 
+#include "color_space.hpp"
 #include "dither.hpp"
 #include "types.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -86,11 +88,31 @@ struct Mode7PackResult {
     std::size_t merges_done;
 };
 
+// Per-slot OKLab + blurred OKLab. The SNES merger calls a per-pair
+// distance() O(N²) times; without caching, each pair recomputes the
+// 64 lab decodes + 64 blur taps for both tiles. Caching collapses
+// that to one prepare() per alive slot. Layout chosen so both arrays
+// stay on a single cache line per row when the metric stride-loads.
+struct SlotPre {
+    std::array<color_space::OKLab, 64> lab;
+    std::array<color_space::OKLab, 64> blur;
+};
+
+// Optional per-slot prepare + cached pair score. When `prepare` is set
+// pack_snes_mode7_frame builds a SlotPre per alive slot and uses
+// `score` for the O(N²) pair loop. Falls back to `distance` if
+// `prepare` is null.
+struct CachedDistance {
+    std::function<SlotPre(std::span<const std::uint8_t> pattern)> prepare;
+    std::function<float(const SlotPre& a, const SlotPre& b)> score;
+};
+
 Result<Mode7PackResult> pack_snes_mode7_frame(
     std::span<const std::uint8_t> pixels,
     std::size_t width, std::size_t height,
     std::function<float(std::span<const std::uint8_t> a,
                         std::span<const std::uint8_t> b)> distance,
+    CachedDistance cached_distance = {},
     ProgressCb on_progress = nullptr,
     float progress_lo = 0.0f, float progress_hi = 1.0f);
 

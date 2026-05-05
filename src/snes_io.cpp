@@ -50,6 +50,7 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
     std::size_t width, std::size_t height,
     std::function<float(std::span<const std::uint8_t> a,
                         std::span<const std::uint8_t> b)> distance,
+    CachedDistance cached_distance,
     ProgressCb on_progress,
     float progress_lo, float progress_hi) {
 
@@ -124,19 +125,41 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
         // Pairwise distance is the dominant cost when content has many
         // unique tiles (O(n² × 64)). Each pair is independent, so we
         // chunk by outer row i and pre-index the output slot. Triangular
-        // load (row 0 has Na-1 pairs, last row has 0) — pipeline::
-        // parallel_for's fetch_add work-stealing balances this naturally
-        // across threads. AMDuProf showed the distance lambda at the
-        // top of snes-mode7-256 CPU.
+        // load — pipeline::parallel_for's fetch_add work-stealing
+        // balances this naturally across threads.
+        //
+        // If the caller supplied cached_distance.prepare, we build a
+        // SlotPre (e.g. OKLab + blurred-OKLab) once per alive slot and
+        // call score(SlotPre&, SlotPre&) inside the pair loop. That
+        // collapses N(N-1) per-pair lab+blur computes to N once.
+        const bool use_cache = static_cast<bool>(cached_distance.prepare);
+        std::vector<SlotPre> slot_pre;
+        if (use_cache) {
+            slot_pre.resize(Na);
+            pipeline::parallel_for(Na, [&](std::size_t i) {
+                slot_pre[i] = cached_distance.prepare(
+                    slots[alive[i]].pattern);
+            });
+        }
         report(0.0f, "merging tiles");
-        pipeline::parallel_for(Na, [&](std::size_t i) {
-            const std::size_t base = i * (2 * Na - i - 1) / 2;
-            for (std::size_t j = i + 1; j < Na; ++j) {
-                pairs[base + (j - i - 1)] = {alive[i], alive[j],
-                    distance(slots[alive[i]].pattern,
-                              slots[alive[j]].pattern)};
-            }
-        });
+        if (use_cache) {
+            pipeline::parallel_for(Na, [&](std::size_t i) {
+                const std::size_t base = i * (2 * Na - i - 1) / 2;
+                for (std::size_t j = i + 1; j < Na; ++j) {
+                    pairs[base + (j - i - 1)] = {alive[i], alive[j],
+                        cached_distance.score(slot_pre[i], slot_pre[j])};
+                }
+            });
+        } else {
+            pipeline::parallel_for(Na, [&](std::size_t i) {
+                const std::size_t base = i * (2 * Na - i - 1) / 2;
+                for (std::size_t j = i + 1; j < Na; ++j) {
+                    pairs[base + (j - i - 1)] = {alive[i], alive[j],
+                        distance(slots[alive[i]].pattern,
+                                  slots[alive[j]].pattern)};
+                }
+            });
+        }
         report(0.95f, "sorting pairs");
         report(0.96f, "sorting pairs");
         std::ranges::sort(pairs, {}, &Pair::distance);
@@ -501,7 +524,40 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         // empirically to land roughly midway on photo content.
         return 0.6f * per_pixel + 0.4f * coarse;
     };
+    // Build a CachedDistance pair: prepare() does the per-pattern
+    // OKLab decode + 3×3 blur once per alive slot; score() consumes
+    // those cached arrays and runs only the per-pixel and coarse
+    // diff sums (128 fma_dist_sq calls). Without this, the merger's
+    // O(N²) loop redoes the lab+blur work per pair.
+    CachedDistance cached;
+    cached.prepare = [&](std::span<const std::uint8_t> pat) -> SlotPre {
+        SlotPre sp;
+        for (std::size_t i = 0; i < 64; ++i) {
+            sp.lab[i] = direct_color ? unpack_direct(pat[i])
+                                      : pal_lab[pat[i]];
+        }
+        blur_3x3(sp.lab, sp.blur);
+        return sp;
+    };
+    cached.score = [](const SlotPre& a, const SlotPre& b) -> float {
+        float per_pixel = 0.0f;
+        for (std::size_t i = 0; i < 64; ++i) {
+            per_pixel += color_space::fma_dist_sq(
+                a.lab[i].L - b.lab[i].L,
+                a.lab[i].a - b.lab[i].a,
+                a.lab[i].b - b.lab[i].b);
+        }
+        float coarse = 0.0f;
+        for (std::size_t i = 0; i < 64; ++i) {
+            coarse += color_space::fma_dist_sq(
+                a.blur[i].L - b.blur[i].L,
+                a.blur[i].a - b.blur[i].a,
+                a.blur[i].b - b.blur[i].b);
+        }
+        return 0.6f * per_pixel + 0.4f * coarse;
+    };
     auto packed = pack_snes_mode7_frame(chunky, w, h, distance_fn,
+        std::move(cached),
         on_progress, kStageQuant, kStageQuant + kStagePack);
     if (!packed) return std::unexpected{packed.error()};
     report(kStageQuant + kStagePack, "merged");
