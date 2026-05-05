@@ -18,10 +18,11 @@ METALLIB="$(xcrun -f metallib)"
 SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 
 echo "=== Compile MSL → AIR ==="
-"$METAL" -O3 -ffast-math -c quant.metal -o quant.air
+"$METAL" -O3 -ffast-math -c quant.metal   -o quant.air
+"$METAL" -O3 -ffast-math -c scolorq.metal -o scolorq.air
 
 echo "=== Link AIR → metallib ==="
-"$METALLIB" quant.air -o quant.metallib
+"$METALLIB" quant.air scolorq.air -o quant.metallib
 
 echo "=== Compile + link C++ host ==="
 "$CLANG" -std=c++20 -O2 -fno-objc-arc \

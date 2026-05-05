@@ -33,6 +33,7 @@ for f in $(find "$INPUT_DIR" -name '*.png' | sort | head -n "$N"); do
     # Our quantizer.
     "$QUANT" "$f" "$OUT/${base}_us.png" \
         --colors "$COLORS" --restarts "$RESTARTS" --iters "$ITERS" \
+        ${SCOLORQ:+--scolorq "$SCOLORQ"} \
         > /dev/null 2>&1
     # pngquant (no FS dither for quantizer-only A/B).
     "$PNGQUANT" --speed 1 --nofs --output "$OUT/${base}_pq.png" \

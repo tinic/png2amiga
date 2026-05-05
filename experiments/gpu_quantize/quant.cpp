@@ -45,7 +45,10 @@ struct Args {
     std::string out_path;
     int colors = 256;
     int restarts = 32;
-    int iters = 20;
+    int iters = 20;           // Lloyd iters
+    int scolorq_iters = 0;    // 0 = pure-Lloyd (Stage A); >0 = Stage B
+    int width = 0;            // overridden after image load
+    int height = 0;
     std::uint32_t seed = 0xC0FFEEu;
 };
 
@@ -62,6 +65,7 @@ struct Args {
         if (s == "--colors")        next(a.colors);
         else if (s == "--restarts") next(a.restarts);
         else if (s == "--iters")    next(a.iters);
+        else if (s == "--scolorq")  next(a.scolorq_iters);
         else if (s == "--seed") {
             if (i + 1 >= argc) std::exit(2);
             a.seed = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 0));
@@ -126,6 +130,8 @@ std::vector<expq::OKLab> kmeanspp_init(
         return 1;
     }
     const std::size_t N = std::size_t(w) * std::size_t(h);
+    const_cast<Args&>(args).width  = w;
+    const_cast<Args&>(args).height = h;
 
     // float4 (xyz=L,a,b; w=pad) for GPU buffer alignment
     std::vector<expq::OKLab> oklab(N);
@@ -151,11 +157,17 @@ std::vector<expq::OKLab> kmeanspp_init(
     }
     auto fn1_name = NS::String::string("assign_and_accumulate", NS::UTF8StringEncoding);
     auto fn2_name = NS::String::string("finalize_centroids", NS::UTF8StringEncoding);
+    auto fn3_name = NS::String::string("scolorq_assign", NS::UTF8StringEncoding);
+    auto fn4_name = NS::String::string("scolorq_palette_update", NS::UTF8StringEncoding);
     MTL::ComputePipelineState* pso_assign =
         device->newComputePipelineState(lib->newFunction(fn1_name), &err);
     MTL::ComputePipelineState* pso_finalize =
         device->newComputePipelineState(lib->newFunction(fn2_name), &err);
-    if (!pso_assign || !pso_finalize) {
+    MTL::ComputePipelineState* pso_sc_assign =
+        device->newComputePipelineState(lib->newFunction(fn3_name), &err);
+    MTL::ComputePipelineState* pso_sc_finalize =
+        device->newComputePipelineState(lib->newFunction(fn4_name), &err);
+    if (!pso_assign || !pso_finalize || !pso_sc_assign || !pso_sc_finalize) {
         std::fprintf(stderr, "PSO build failed: %s\n",
                      err ? err->localizedDescription()->utf8String() : "?");
         return 1;
@@ -186,6 +198,12 @@ std::vector<expq::OKLab> kmeanspp_init(
     auto* sse_buf    = device->newBuffer(R * sizeof(float),
                                           MTL::ResourceStorageModeShared);
     auto* idx_buf    = device->newBuffer(R * N * sizeof(unsigned),
+                                          MTL::ResourceStorageModeShared);
+    // Second index buffer for ICM ping-pong: scolorq reads from
+    // indices_in (the previous iteration's assignment) and writes
+    // to indices_out so neighbour lookups don't see partial updates
+    // mid-pass. Same memory shape as idx_buf.
+    auto* idx_buf2   = device->newBuffer(R * N * sizeof(unsigned),
                                           MTL::ResourceStorageModeShared);
 
     // Zero atomic accumulators (host-visible shared memory).
@@ -266,6 +284,82 @@ std::vector<expq::OKLab> kmeanspp_init(
     std::printf("Lloyd (GPU, %d restarts × %d iters × %zu px × %d K): %.1f ms\n",
                 R, args.iters, N, K,
                 std::chrono::duration<double, std::milli>(t_loop1 - t_loop0).count());
+
+    // -------- Stage B: scolorq joint optimization ----------
+    // Index buffer at this point holds the last Lloyd assignment;
+    // copy it into the ping-pong companion so the first scolorq
+    // pass has a valid neighbourhood to read from.
+    if (args.scolorq_iters > 0) {
+        std::memcpy(idx_buf2->contents(), idx_buf->contents(),
+                    R * N * sizeof(unsigned));
+
+        struct ScolorqParams {
+            unsigned width, height, K, R;
+            float center_weight, neighbor_weight;
+        };
+
+        // Soft k-means annealing schedule. T_start = 0.1 is roughly
+        // the typical inter-centroid OKLab squared distance — soft
+        // assignment is meaningfully diffuse there. Cooling factor
+        // 0.7 means after 30 iters T_end ≈ 0.1·0.7^30 ≈ 2e-6, which
+        // is effectively hard k-means.
+        const float kT0 = 0.1f;
+        const float kCool = 0.7f;
+
+        auto t_sc0 = std::chrono::steady_clock::now();
+        for (int r = 0; r < R; ++r) {
+            float T = kT0;
+            for (int it = 0; it < args.scolorq_iters; ++it) {
+                ScolorqParams sp{
+                    unsigned(args.width), unsigned(args.height),
+                    unsigned(K), unsigned(R),
+                    T,         // soft-kmeans temperature
+                    0.0f,
+                };
+                static_cast<float*>(sse_buf->contents())[r] = 0.0f;
+                MTL::CommandBuffer* cmd = queue->commandBuffer();
+                {
+                    auto* enc = cmd->computeCommandEncoder();
+                    enc->setComputePipelineState(pso_sc_assign);
+                    enc->setBuffer(pixel_buf,  0, 0);
+                    enc->setBuffer(idx_buf,    0, 1);  // unused under soft-kmeans
+                    enc->setBuffer(idx_buf,    0, 2);  // hard idx out
+                    enc->setBuffer(cent_buf,   0, 3);
+                    enc->setBuffer(sums_buf,   0, 4);
+                    enc->setBuffer(counts_buf, 0, 5);
+                    enc->setBuffer(sse_buf,    0, 6);
+                    enc->setBytes(&sp, sizeof(sp), 7);
+                    unsigned restart_u = unsigned(r);
+                    enc->setBytes(&restart_u, sizeof(unsigned), 8);
+                    enc->dispatchThreads(
+                        MTL::Size(args.width, args.height, 1),
+                        MTL::Size(16, 16, 1));
+                    enc->endEncoding();
+                }
+                {
+                    auto* enc = cmd->computeCommandEncoder();
+                    enc->setComputePipelineState(pso_sc_finalize);
+                    enc->setBuffer(cent_buf,   0, 0);
+                    enc->setBuffer(sums_buf,   0, 1);
+                    enc->setBuffer(counts_buf, 0, 2);
+                    enc->setBytes(&sp, sizeof(sp), 3);
+                    unsigned restart_u = unsigned(r);
+                    enc->setBytes(&restart_u, sizeof(unsigned), 4);
+                    enc->dispatchThreads(MTL::Size(K, 1, 1),
+                                          MTL::Size(K, 1, 1));
+                    enc->endEncoding();
+                }
+                cmd->commit();
+                cmd->waitUntilCompleted();
+                T *= kCool;
+            }
+        }
+        auto t_sc1 = std::chrono::steady_clock::now();
+        std::printf("soft-kmeans (GPU, %d restarts × %d iters,"
+                    " T0=%.3g cool=%.2f): %.1f ms\n",
+                    R, args.scolorq_iters, kT0, kCool,
+                    std::chrono::duration<double, std::milli>(t_sc1 - t_sc0).count());
+    }
 
     // -------- Pick best restart ----------
     // Re-run one final assign pass per restart to get fresh SSE
