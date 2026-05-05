@@ -4,6 +4,7 @@
 #include "palette.hpp"
 #include "pipeline.hpp"
 #include "quantize.hpp"
+#include "quantize_metal.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -260,15 +261,37 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     //   - empty / auto: PNN for AGA (HAM8), median-cut otherwise.
     //     Benchmarks showed PNN wins ~10-13% on HAM8 across fantasy/photo/
     //     space3 but regresses on HAM6 OCS, so only opt in for AGA.
-    bool use_pnn;
-    if (quantizer == "pnn")             use_pnn = true;
-    else if (quantizer == "median-cut") use_pnn = false;
-    else if (quantizer == "fast")       use_pnn = false;
-    else                                use_pnn = (chipset == amiga::Chipset::aga);
-
-    auto pal = use_pnn
-        ? quantize::pnn_quantize(image.pixels(), reserve, /*palette_diversity=*/0)
-        : quantize::median_cut(image.pixels(), reserve, /*palette_diversity=*/0);
+    // Pick base-palette quantizer. HAM's base is different from
+    // regular palette quantization: pixels are reached via SET +
+    // MODIFY ops, so the base just needs well-distributed anchors,
+    // not a covering palette. PNN's Ward's-linkage merges produce
+    // those anchors better than k-means' MSE-min, especially on
+    // AGA HAM8 (~10-13% wins on fantasy/photo/space3 benchmarks).
+    Palette pal;
+    if (quantizer == "gpu-restart" && chipset == amiga::Chipset::aga
+            && quantize::metal_available()) {
+        // Same generic Lloyd-in-OKLab + parallel-restarts that wins
+        // for plain AGA palette quantization. May or may not beat
+        // PNN here — HAM's anchor objective is different from MSE.
+        auto r = quantize::gpu_restart_quantize(
+            image, reserve, /*restarts=*/32, /*iterations=*/20);
+        if (r) {
+            pal = std::move(*r);
+        } else {
+            // Fall back to PNN if Metal failed mid-call.
+            pal = quantize::pnn_quantize(image.pixels(), reserve,
+                                          /*palette_diversity=*/0);
+        }
+    } else {
+        bool use_pnn;
+        if (quantizer == "pnn")             use_pnn = true;
+        else if (quantizer == "median-cut") use_pnn = false;
+        else if (quantizer == "fast")       use_pnn = false;
+        else                                use_pnn = (chipset == amiga::Chipset::aga);
+        pal = use_pnn
+            ? quantize::pnn_quantize(image.pixels(), reserve, /*palette_diversity=*/0)
+            : quantize::median_cut(image.pixels(), reserve, /*palette_diversity=*/0);
+    }
 
     bool is_ocs = (chipset != amiga::Chipset::aga);
     if (is_ocs) {

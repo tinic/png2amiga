@@ -262,6 +262,25 @@ Note for any future revisit: a "gamut-aware" gpu-restart variant
 at K=32 the search space is small enough that exhaustive ocs-
 bruteforce is already near-optimal.
 
+## HAM8 AGA (tested, confirmed: wash)
+
+20-image DIV2K sample, `--mode ham8 --chipset aga`:
+
+|             | ΔPSNR (gpu − pnn) | ΔS2     | wins  |
+|-------------|------------------:|--------:|------:|
+| mean        |           -0.33 dB |   -0.02 | 11/20 |
+| median      |           -0.29 dB |   +0.01 |       |
+| range       |   -1.11 .. +0.12   |  -0.59 .. +0.42 ||
+
+ΔS2 is squarely noise; PSNR drops slightly (OKLab-vs-MSE).
+HAM's MODIFY ops absorb base-palette differences: pixels are
+reached via SET-anchor + 1-2 MODIFYs from any nearby anchor, so
+whether the anchors come from PNN's Ward's-linkage or k-means'
+MSE-min mostly doesn't matter. PNN remains the HAM8 default
+(memory cites ~10-13% wins over median-cut on its own
+benchmarks). gpu-restart is wired in HAM as an explicit option
+when `--quantizer gpu-restart` is passed; never the default.
+
 ## What was NOT tried (saved for revisit)
 
 - **Random pixel order ICM** (would produce blue-noise dither;
