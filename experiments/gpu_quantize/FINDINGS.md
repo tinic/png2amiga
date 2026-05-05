@@ -225,6 +225,43 @@ If shipping Stage A into png2amiga:
    tracking from
    `project_png2amiga_pngquant_bench.md` is the regression gate.
 
+## OCS 12-bit (tested, confirmed: gpu-restart does NOT help)
+
+Direct A/B at K=32 on OCS gamut (`--mode lores --depth 5
+--chipset ocs`), 20-image DIV2K sample:
+
+|             | ΔPSNR (gpu − ocs-brute) | ΔS2     | wins |
+|-------------|------------------------:|--------:|-----:|
+| mean        |                  -1.58 dB |  -6.36 | 2/20 |
+| median      |                  -1.43 dB |  -3.68 |      |
+| worst image |                  -6.80 dB | -28.06 |      |
+
+Why it fails on the discrete gamut:
+
+- OCS 12-bit has 4096 valid colors total (4 bits per channel).
+  `ocs_bruteforce` enumerates them exhaustively as candidate
+  centroids, then runs k-means within the discrete set.
+- gpu-restart runs Lloyd in continuous OKLab; the post-pass
+  `quantize_to_ocs()` snap rounds each centroid to its nearest
+  4-bit-per-channel point. Two close centroids can snap to the
+  **same** OCS point → effective palette < K → big quality loss.
+  Worst-case images (0241: -24, 0321: -28) are exactly the
+  pattern: many centroids cluster in a saturated region and
+  collapse on snap.
+- ocs_bruteforce avoids that by constraining the search space
+  to OCS-valid points from the start.
+
+**Decision: keep `ocs_bruteforce` for OCS, including EHB base
+palette generation.** The current dispatch in api.cpp's
+`quantize_algo()` does this — gpu-restart only kicks in when
+chipset == aga or for VGA (continuous gamuts where OKLab Lloyd
++ parallel restarts compound cleanly).
+
+Note for any future revisit: a "gamut-aware" gpu-restart variant
+(snap centroids to OCS at every Lloyd step) might compete, but
+at K=32 the search space is small enough that exhaustive ocs-
+bruteforce is already near-optimal.
+
 ## What was NOT tried (saved for revisit)
 
 - **Random pixel order ICM** (would produce blue-noise dither;
