@@ -526,6 +526,34 @@ encode(const Image& image, amiga::Mode mode,
         best_result = std::move(result);
     }
     }  // end scanline-offset loop
+
+    // 1-scan-line modes (80x200 / 40x200): each cell shows ONLY row 0
+    // of its glyph. The 50%-checker glyph 0xB1 is a frequent picker
+    // win because its row 0 (`0x55` = 0,1,0,1,0,1,0,1 fg/bg pattern)
+    // gives a clean 50/50 mix. With the same fg/bg on vertically
+    // adjacent cells, every line shows the same phase → vertical
+    // stripes instead of a checker. Swap fg/bg on every other cell
+    // row so the phase inverts row-to-row, turning the stripes into
+    // a true 1×1 checkerboard. Visually-neutral: 0xB1 is symmetric
+    // (50% A + 50% B regardless of which colour is fg or bg), so the
+    // per-cell error metric value the picker chose is preserved.
+    if (mode == amiga::Mode::cga_text80x200 ||
+        mode == amiga::Mode::cga_text40x200) {
+        const std::size_t bcols = best_result.cols;
+        const std::size_t brows = best_result.rows;
+        for (std::size_t r = 1; r < brows; r += 2) {
+            for (std::size_t c = 0; c < bcols; ++c) {
+                std::size_t off = (r * bcols + c) * 2;
+                if (best_result.data[off] != 0xB1) continue;
+                std::uint8_t attr = best_result.data[off + 1];
+                std::uint8_t fg = attr & 0x0F;
+                std::uint8_t bg = (attr >> 4) & 0x0F;
+                best_result.data[off + 1] =
+                    static_cast<std::uint8_t>((fg << 4) | bg);
+            }
+        }
+    }
+
     if (on_progress) on_progress(1.0f, "done");
     return best_result;
 }
