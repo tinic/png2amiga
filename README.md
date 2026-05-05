@@ -291,26 +291,34 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
-| **png2amiga** | **lores d=8 AGA + best**      | 35.34     | **83.45**   |    21.82 |
-| png2amiga   | lores d=8 AGA                     | 35.39     | 83.18       |     0.90 |
+| **png2amiga** | **lores d=8 AGA**             | 36.74     | **86.35**   |     1.05 |
+| png2amiga   | lores d=8 AGA + best              | 36.73     | 86.32       |    25.10 |
 | pngquant    | libimagequant 256 (`--speed 1`)   | 37.50     | 82.09       |     0.05 |
-| png2amiga   | EHB + strips + best               | 30.63     | 70.95       |    17.37 |
-| png2amiga   | HAM6 + sliced + best              | 30.90     | 69.21       |    13.88 |
-| png2amiga   | HAM6 + sliced                     | 30.32     | 65.07       |     0.25 |
-| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |    16.15 |
-| png2amiga   | HAM6 + best (no copper)           | 29.79     | 62.51       |     8.30 |
-| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |    68.67 |
-| png2amiga   | HAM6 (no copper)                  | 29.97     | 62.13       |     0.20 |
-| png2amiga   | EHB + best (no copper)            | 29.81     | 61.12       |     4.15 |
-| ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.67     | 57.91       |     4.05 |
+| png2amiga   | EHB + strips + best               | 30.63     | 70.95       |    17.70 |
+| png2amiga   | HAM6 + sliced + best              | 30.90     | 69.24       |    13.27 |
+| png2amiga   | HAM6 + sliced                     | 30.33     | 65.11       |     0.28 |
+| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.18     | 64.81       |    16.19 |
+| png2amiga   | HAM6 + best (no copper)           | 29.80     | 62.50       |     9.00 |
+| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 29.92     | 62.37       |    66.65 |
+| png2amiga   | HAM6 (no copper)                  | 29.97     | 62.19       |     0.24 |
+| png2amiga   | EHB + best (no copper)            | 29.81     | 61.12       |     5.33 |
+| ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.67     | 57.91       |     4.07 |
 | ham_convert | EHB (`dither_fs`)                 | 30.18     | 57.78       |     4.05 |
 | png2amiga   | EHB (no copper)                   | 29.03     | 52.57       |     0.12 |
-| png2amiga   | lores d=5 + best                  | 28.35     | 51.70       |     1.35 |
-| abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |     0.67 |
+| png2amiga   | lores d=5 + best                  | 28.35     | 51.70       |     3.06 |
+| abc         | HAM6 (`-floyd`)                   | 29.02     | 49.86       |     0.72 |
 | png2amiga   | lores d=5                         | 28.34     | 47.79       |     0.11 |
 | pngquant    | libimagequant 32 (`--speed 1`)    | 30.74     | 46.20       |     0.05 |
-| abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.19 |
+| abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.22 |
 | ham_convert | ocs32 (`dither_fs`)               | 24.72     | 31.28       |     4.06 |
+
+The lores d=8 AGA path now uses the GPU-accelerated `gpu-restart`
+quantizer (parallel-restart Lloyd k-means in OKLab on Apple GPU,
+mean ΔS2 +2.6..+3.4 vs pngquant on DIV2K-100+Kodak-24, see
+[experiments/gpu_quantize/FINDINGS.md](experiments/gpu_quantize/FINDINGS.md)).
+Auto-detected at build time via `xcrun metal`; falls back to
+median-cut at runtime when Metal is unavailable. Pass
+`--quantizer median-cut` to force the CPU path.
 
 The harness lives at `tools/shootout/`:
 
