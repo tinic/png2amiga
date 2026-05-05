@@ -1440,7 +1440,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
             std::array<color_space::OKLab, 2> cp{
                 pal_lab[pair[0]], pal_lab[pair[1]],
             };
-            std::fill(block_idx.begin(), block_idx.end(), 0);
+            std::fill(block_idx.begin(), block_idx.end(), std::uint8_t{0});
             auto pick = [&](const color_space::OKLab& target,
                             std::size_t bx, std::size_t by) -> dither::PickResult {
                 std::size_t chosen_index = 0;
@@ -1767,7 +1767,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
             std::array<color_space::OKLab, 4> cp{
                 pal_lab[bg], pal_lab[best_mc1], pal_lab[best_mc2], pal_lab[fg],
             };
-            std::fill(block_idx.begin(), block_idx.end(), 0);
+            std::fill(block_idx.begin(), block_idx.end(), std::uint8_t{0});
             auto pick = [&](const color_space::OKLab& target,
                             std::size_t bx, std::size_t by) -> dither::PickResult {
                 std::size_t chosen_index = 0;

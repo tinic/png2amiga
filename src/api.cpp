@@ -1494,7 +1494,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                               : palette_lab[pal];
                 std::span<const color_space::OKLab> pl_span(pal_lab_ref.data(),
                                                              pal_lab_ref.size());
-                std::fill(block_idx.begin(), block_idx.end(), 0);
+                std::fill(block_idx.begin(), block_idx.end(), std::uint8_t{0});
                 te += dither::diffuse_raw_buffer(
                     block, dith,
                     [&](const color_space::OKLab& target,
