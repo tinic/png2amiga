@@ -363,7 +363,7 @@ The harness lives at `tools/shootout/`:
 ```bash
 cd tools/shootout
 ./setup.sh   # downloads ham_convert.jar, clones + builds abc on macOS
-./run.sh     # encodes examples/electrichues02.jpg (or pass your own)
+./run.sh     # encodes examples/makena.jpg (or pass your own)
 ```
 
 `tools/shootout/README.md` has the full method, the rationale for the

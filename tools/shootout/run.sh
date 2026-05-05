@@ -24,7 +24,7 @@ VENDOR="$SCRIPT_DIR/vendor"
 OUT="$SCRIPT_DIR/output"
 mkdir -p "$OUT"
 
-SRC="${1:-$REPO_ROOT/examples/electrichues02.jpg}"
+SRC="${1:-$REPO_ROOT/examples/makena.jpg}"
 if [ ! -f "$SRC" ]; then
   echo "ERROR: source image not found: $SRC" >&2
   exit 1
