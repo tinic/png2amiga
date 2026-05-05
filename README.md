@@ -61,7 +61,7 @@ R2 ± triangle remap, value-noise, white-noise), error-diffusion
 Ostromoukhov variable-coefficient, Riemersma Hilbert-curve, Gilbert
 space-filling-curve), structure-aware variants
 (structure-FS / contrast-FS / Zhou–Fang), and palette-aware pattern
-(Yliluoma method 1 + 2). All operate in OKLab.
+(Yliluoma method 1 + 2).    
 
 **HAM encoding**: DP beam search with a triple-pixel refinement pass
 (default on) that catches the fringe-lag artifacts 1-pixel DP misses.
