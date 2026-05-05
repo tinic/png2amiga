@@ -281,6 +281,33 @@ MSE-min mostly doesn't matter. PNN remains the HAM8 default
 benchmarks). gpu-restart is wired in HAM as an explicit option
 when `--quantizer gpu-restart` is passed; never the default.
 
+## SNES Mode 7 256-color (tested, confirmed: noise / slight loss)
+
+20-image DIV2K sample, `--mode snes-mode7-256 --width 256`,
+direct A/B with two binaries built from the same source plus a
+1-line dispatch swap:
+
+|             | ΔPSNR (gpu − mc) | ΔS2     | wins |
+|-------------|-----------------:|--------:|-----:|
+| mean        |          -0.14 dB |   -1.17 | 8/20 |
+| median      |          -0.07 dB |   -0.46 |      |
+| worst image |          -1.51 dB |  -19.00 |      |
+
+ΔS2 is in the noise band but slightly negative; one image (0481)
+lost 19 S2 points. Two compounding factors likely:
+
+- **BGR555 snap**: 5 bits/channel = 32K-color gamut, denser than
+  OCS 4096 but still coarse enough that occasional centroid
+  collapse is a real risk at K=256.
+- **Downstream Lloyd retraining**: snes_io.cpp re-runs
+  quantize::quantize on the *displayed* colours after tile
+  assignment to keep the palette anchored where it's actually
+  used. This iterative retraining homogenises away whatever
+  basin-quality advantage gpu-restart had on the initial
+  quantization.
+
+Decision: keep `median_cut` for SNES Mode 7 256.
+
 ## What was NOT tried (saved for revisit)
 
 - **Random pixel order ICM** (would produce blue-noise dither;

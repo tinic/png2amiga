@@ -286,6 +286,13 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     (void)fill_mirror_block;  // inlined per-cell below for clarity
 
     if (!direct_color) {
+        // SNES Mode 7 256-color: continuous-RGB quantization, then
+        // snap each centroid to BGR555 (5 bits/channel, 32K-color
+        // gamut). gpu-restart was tested and did NOT beat median-
+        // cut here (mean ΔS2 -1.17 over 20 DIV2K, worst -19 on
+        // image 0481) — likely a combination of BGR555 snap and
+        // the downstream Lloyd retraining at line ~660 absorbing
+        // any base-palette quality differences.
         auto quantized = quantize::quantize(
             source, 256, quantize::Algorithm::median_cut, palette_diversity);
         if (!quantized) return std::unexpected{quantized.error()};
