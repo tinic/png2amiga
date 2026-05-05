@@ -46,3 +46,4 @@ test.cpp
 /docs/*_research.md
 .!*
 /examples/tile/out/
+tools/mode_survey.txt
