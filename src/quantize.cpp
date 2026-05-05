@@ -189,6 +189,25 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
     std::vector<LocalBest> locals(nchunks);
     constexpr float kTieEps = 1e-6f;
 
+    // Pre-extract entries' OKLab into a contiguous SoA-ish layout
+    // and pre-multiply by the per-channel WEIGHT so the inner
+    // distance becomes a plain (eLw-cLw)² + (eaw-caw)² + (ebw-cbw)²
+    // — auto-vectorisable. AMDuProf showed the inner loop
+    // (oklab_dist_sq + min + weighted accumulate) at the top of
+    // ocs_bruteforce_quantize CPU.
+    struct WLab { float L, a, b; };
+    std::vector<WLab> entries_w(entries.size());
+    std::vector<float> entries_weight(entries.size());
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const auto e = lut.oklab[entries[i].ocs_index];
+        entries_w[i] = WLab{
+            e.L * png2amiga::color_space::WEIGHT_L,
+            e.a * png2amiga::color_space::WEIGHT_A,
+            e.b * png2amiga::color_space::WEIGHT_B,
+        };
+        entries_weight[i] = static_cast<float>(entries[i].weight);
+    }
+
     for (std::size_t k = 0; k < max_colors; ++k) {
         // Try all unpicked 4096 OCS colors. Tie-break: when two
         // candidates yield equal total error, prefer the gray-axis
@@ -213,13 +232,24 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
                  candidate < hi; ++candidate) {
                 if (picked[candidate]) continue;
                 auto cand_lab = lut.oklab[candidate];
+                // Pre-weight cand once per candidate so the inner is
+                // pure (sub, fma_dist_sq, min, fma).
+                const float cLw = cand_lab.L *
+                    png2amiga::color_space::WEIGHT_L;
+                const float caw = cand_lab.a *
+                    png2amiga::color_space::WEIGHT_A;
+                const float cbw = cand_lab.b *
+                    png2amiga::color_space::WEIGHT_B;
                 float total = 0.0f;
-                for (std::size_t i = 0; i < entries.size(); ++i) {
-                    float d = oklab_dist_sq(
-                        lut.oklab[entries[i].ocs_index], cand_lab);
-                    float effective = std::min(d, best_dist[i]);
-                    total += effective *
-                        static_cast<float>(entries[i].weight);
+                const std::size_t ne = entries_w.size();
+                for (std::size_t i = 0; i < ne; ++i) {
+                    const float dL = entries_w[i].L - cLw;
+                    const float da = entries_w[i].a - caw;
+                    const float db = entries_w[i].b - cbw;
+                    const float d =
+                        png2amiga::color_space::fma_dist_sq(dL, da, db);
+                    const float effective = std::min(d, best_dist[i]);
+                    total = std::fma(effective, entries_weight[i], total);
                 }
                 bool cand_gray = is_gray_code(candidate);
                 bool strictly_better =
@@ -271,10 +301,19 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
         palette_ocs[k] = best_ocs;
         picked[best_ocs] = true;
 
-        // Update per-entry best distances with the newly added color
+        // Update per-entry best distances with the newly added color.
+        // Same pre-weighted form as the inner sweep so distances
+        // stay comparable.
         auto new_lab = lut.oklab[best_ocs];
+        const float nLw = new_lab.L * png2amiga::color_space::WEIGHT_L;
+        const float naw = new_lab.a * png2amiga::color_space::WEIGHT_A;
+        const float nbw = new_lab.b * png2amiga::color_space::WEIGHT_B;
         for (std::size_t i = 0; i < entries.size(); ++i) {
-            float d = oklab_dist_sq(lut.oklab[entries[i].ocs_index], new_lab);
+            const float dL = entries_w[i].L - nLw;
+            const float da = entries_w[i].a - naw;
+            const float db = entries_w[i].b - nbw;
+            const float d =
+                png2amiga::color_space::fma_dist_sq(dL, da, db);
             best_dist[i] = std::min(best_dist[i], d);
         }
     }
