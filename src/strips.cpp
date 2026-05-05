@@ -2582,63 +2582,6 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
 // ---------------------------------------------------------------------------
 namespace {
 
-// [v0 inline HAM picker — superseded by ham::encode_ham_pixel which is
-//  the same DP beam search used by the HAM6+sliced path. Kept commented
-//  for reference; was 0.6 dB weaker than the production picker.]
-#if 0
-struct HamPickResult {
-    std::uint8_t value;
-    Color3f      out_lin;
-    float        error;
-};
-HamPickResult pick_ham6_op(
-    Color3f prev_lin,
-    const color_space::OKLab& target_lab,
-    std::span<const Color3f> base_pal,
-    std::span<const color_space::OKLab> base_pal_lab) {
-    HamPickResult best{0, prev_lin, std::numeric_limits<float>::max()};
-    auto score = [&](const color_space::OKLab& lab) {
-        float dL = target_lab.L - lab.L;
-        float da = target_lab.a - lab.a;
-        float db = target_lab.b - lab.b;
-        return color_space::fma_dist_sq(dL, da, db);
-    };
-    // SET ops (control=00).
-    for (std::size_t k = 0; k < base_pal.size() && k < 16; ++k) {
-        float e = score(base_pal_lab[k]);
-        if (e < best.error) {
-            best = {static_cast<std::uint8_t>((0u << 4) | k),
-                    base_pal[k], e};
-        }
-    }
-    // MODIFY ops (control=01 blue, 10 red, 11 green).
-    auto modify = [&](std::uint8_t ctrl, int channel) {
-        for (int n = 0; n < 16; ++n) {
-            float v = static_cast<float>(n * 17) / 255.0f;  // nibble→sRGB
-            // Linearise the new channel; keep the other two from prev_lin.
-            // Prev is already linear RGB; we need to re-quantise the
-            // modified channel through sRGB → linear so the value
-            // matches what the chip emits.
-            Color3f new_lin = prev_lin;
-            float v_lin = color_space::srgb_to_linear(v);
-            if (channel == 0) new_lin.r = v_lin;
-            else if (channel == 1) new_lin.g = v_lin;
-            else                   new_lin.b = v_lin;
-            auto new_lab = color_space::linear_to_oklab(new_lin);
-            float e = score(new_lab);
-            if (e < best.error) {
-                best = {static_cast<std::uint8_t>((ctrl << 4) | n),
-                        new_lin, e};
-            }
-        }
-    };
-    modify(0b01, 2);  // 01 = MODIFY blue
-    modify(0b10, 0);  // 10 = MODIFY red
-    modify(0b11, 1);  // 11 = MODIFY green
-    return best;
-}
-
-#endif
 
 }  // namespace
 
