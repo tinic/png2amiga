@@ -174,8 +174,16 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
         std::uint16_t best_ocs;
         bool best_is_gray;
     };
+    // Under Emscripten we deliberately don't include <thread> (the
+    // WASM pthread shim is gated separately) and parallel_for runs
+    // serially anyway, so a single-chunk sweep matches the original
+    // serial behaviour on the web.
+#ifdef __EMSCRIPTEN__
+    constexpr unsigned nchunks = 1;
+#else
     const unsigned nchunks = std::max<unsigned>(
         1, std::thread::hardware_concurrency());
+#endif
     const std::uint16_t step = static_cast<std::uint16_t>(
         (4096u + nchunks - 1u) / nchunks);
     std::vector<LocalBest> locals(nchunks);
