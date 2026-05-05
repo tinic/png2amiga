@@ -111,9 +111,30 @@ inline CellSubst substitute_cell(amiga::Mode mode,
     // error metric is preserved.
     if (ch == 0xB1 &&
         (mode == amiga::Mode::cga_text80x200 ||
-         mode == amiga::Mode::cga_text40x200) &&
-        (row & 1u)) {
-        std::swap(fg, bg);
+         mode == amiga::Mode::cga_text40x200)) {
+        Color3f fgCol = cga_index_to_srgb(fg);
+        Color3f bgCol = cga_index_to_srgb(bg);
+        float fgD = color_space::fma_dist_sq(fgCol.r, fgCol.g, fgCol.b);
+        float bgD = color_space::fma_dist_sq(bgCol.r, bgCol.g, bgCol.b);
+        if (fgD > bgD) {
+            std::swap(fg, bg);
+        }
+        if ((row&1)==0) {
+            std::swap(fg, bg);
+        }
+    }
+    if (ch == 0xB1 &&
+        (mode == amiga::Mode::cga_text80x100 ||
+         mode == amiga::Mode::cga_text40x100 ||
+         mode == amiga::Mode::cga_text80x50 ||
+         mode == amiga::Mode::cga_text80x25 )) {
+        Color3f fgCol = cga_index_to_srgb(fg);
+        Color3f bgCol = cga_index_to_srgb(bg);
+        float fgD = color_space::fma_dist_sq(fgCol.r, fgCol.g, fgCol.b);
+        float bgD = color_space::fma_dist_sq(bgCol.r, bgCol.g, bgCol.b);
+        if (fgD > bgD) {
+            std::swap(fg, bg);
+        }
     }
 
     (void)col;
