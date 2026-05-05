@@ -13,7 +13,7 @@ test('default example loads and renders to canvas', async ({ page }) => {
 
   // The default example loader fires once WASM is ready and seeds the
   // image-name display.
-  await expect(page.getByText(/electrichues/)).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/makena/)).toBeVisible({ timeout: 15_000 })
 
   // Preview canvas exists and has non-trivial dimensions (lores 320×… px
   // at 2× scale ≈ 640+).
