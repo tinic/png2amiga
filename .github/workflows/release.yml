@@ -27,7 +27,8 @@ jobs:
 
       - name: Install build deps
         # gcc-15 / g++-15 are already in the gcc:15 image (as the
-        # default `gcc` / `g++`); only need cmake + ninja + Pillow.
+        # default `gcc` / `g++` — no `-15` suffix); only need
+        # cmake + ninja + Pillow.
         run: |
           apt-get update
           apt-get install -y cmake ninja-build python3-pil
@@ -36,8 +37,8 @@ jobs:
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-15 \
-            -DCMAKE_CXX_COMPILER=g++-15
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++
 
       - name: Build
         run: cmake --build build --parallel
