@@ -50,25 +50,27 @@ colors) / 80×100 text-mode glyph matching, EGA 320×200 / 640×200 /
 4096 OCS colors), PNN agglomerative (auto-selected for HAM8 / AGA), and
 median-cut + k-means refinement in OKLab.
 
-**Dithering**: 58 methods, all in OKLab, in five families:
+**Dithering**: 64 methods, all in OKLab, grouped as in the web UI:
 
-- **Ordered** (fixed threshold matrix, repeats per cell) — Bayer
-  2×2 / 4×4 / 8×8, dispersed-dot 3×3 / 5×5 / 6×6 / 7×7, halftone,
-  hatching, hexagonal, plus the matrices Aseprite / libcaca /
-  Pegasus shipped, Cranley–Patterson rotated Bayer, Niklasson
-  16×16 self-nested fractal, quasicrystal, Truchet.
-- **Aperiodic noise** (non-repeating threshold field) — Ulichney
-  void-and-cluster, blue-noise, cluster-noise, IGN and R2 (with
-  optional triangle remap), value-noise, white-noise.
-- **Error diffusion** (propagate quantization error forward) —
-  Floyd–Steinberg, Atkinson, Sierra-Lite, Stucki, Jarvis,
-  Ostromoukhov (variable-coefficient), Riemersma (Hilbert curve),
-  Gilbert (space-filling curve).
-- **Structure-aware** (modulate ED by local image structure) —
-  structure-FS, contrast-FS, Zhou–Fang.
-- **Palette-aware pattern** (find a colour pair / quad that
-  averages to the target under the eye's pooling) — Yliluoma
-  method 1 + 2.
+- **Error Diffusion** (19) — Floyd–Steinberg, Sierra-Lite, Atkinson,
+  Jarvis, Stucki, Gilbert, Riemersma, DBS (slow); palette-aware
+  planning: Optimal Checker, Optimal Line, Optimal Line-Checker,
+  Tri-tone, Knoll, Yliluoma 1 (exhaustive) and Yliluoma 2 (greedy +
+  luma-weighted variant); structure-aware: Structure-FS,
+  Contrast-FS, Zhou–Fang.
+- **Bayer** (14) — Bayer 2×2 / 4×4 / 8×8 / 3×3 / 5×5 / 6×6 / 7×7,
+  non-square Bayer 4×2 and 2×4, plus the matrices Aseprite (old
+  4×4), libcaca (3×3 and 6×6), Pegasus 8×8 shipped, and
+  Cranley–Patterson rotated Bayer.
+- **Halftone** (4) — Halftone 8×8, Diagonal Newspaper, Spiral 5×5,
+  Clustered Dot.
+- **Hatching** (9) — horizontal Lines 2 / 4 / 8 + Line Checker,
+  vertical VLines 2 / 4 / 8 + VLine Checker, Crosshatch.
+- **Pattern** (8) — Checker, Wide 2×4, Tall 4×2, Hexagonal 8×8 and
+  5×5, Radial, Quasicrystal, Truchet.
+- **Noise** (10) — Blue Noise, Void & Cluster, Cluster Noise,
+  Niklasson 16×16 Fractal, IGN and IGN-triangle, R2 and
+  R2-triangle, Value Noise, White Noise.
 
 **HAM encoding**: DP beam search with a triple-pixel refinement pass
 (default on) that catches the fringe-lag artifacts 1-pixel DP misses.
