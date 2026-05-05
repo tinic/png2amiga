@@ -2611,6 +2611,19 @@ Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
     return quantize::quantize(image, max_colors, algo, palette_diversity);
 }
 
+// Map the CLI --quantizer string to an explicit Algorithm. Returns
+// nullopt for "auto" / "" so callers fall through to the
+// chipset-aware default. Centralised so encode_copper / strips /
+// HAM / etc. callers all do the same string→enum mapping.
+inline std::optional<quantize::Algorithm>
+parse_quantizer_override(std::string_view name) {
+    if (name == "median-cut")     return quantize::Algorithm::median_cut;
+    if (name == "ocs-bruteforce") return quantize::Algorithm::ocs_bruteforce;
+    if (name == "pnn")            return quantize::Algorithm::pnn;
+    if (name == "gpu-restart")    return quantize::Algorithm::gpu_restart;
+    return std::nullopt;
+}
+
 // Snap palette to chipset/mode precision
 void snap_palette(Palette& pal, amiga::Chipset chipset, amiga::Mode mode) {
     if (amiga::is_stf(mode)) {
@@ -6614,7 +6627,8 @@ int run_main(int argc, char* argv[]) {
                         : std::numeric_limits<std::size_t>::max(),
                     config->sliced_spread_decay >= 0.0f
                         ? config->sliced_spread_decay : -1.0f,
-                    ehb_cap_excluded);
+                    ehb_cap_excluded,
+                    parse_quantizer_override(config->quantizer));
                 if (!cr) return std::unexpected{cr.error()};
 
                 // For reserved base slots, also exclude their half-brite
@@ -7235,7 +7249,8 @@ int run_main(int argc, char* argv[]) {
                     : std::numeric_limits<std::size_t>::max(),
                 config->sliced_spread_decay >= 0.0f
                     ? config->sliced_spread_decay : -1.0f,
-                sliced_excluded);
+                sliced_excluded,
+                parse_quantizer_override(config->quantizer));
         };
 
         Result<copper::CopperResult> copper_result;
@@ -7298,7 +7313,9 @@ int run_main(int argc, char* argv[]) {
             copper_result->changes_per_line,
             copper_result->max_moves_per_line));
         cli_print_palette(std::format(
-            "{} colors", copper_result->base_palette.size()));
+            "{} colors ({})",
+            copper_result->base_palette.size(),
+            copper_result->base_palette_quantizer));
         cli_print_dither(dith.method, dith.strength);
 
         // Apply transparency mask: transparent pixels → index 0

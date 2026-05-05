@@ -3,12 +3,14 @@
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "dither.hpp"
+#include "quantize.hpp"
 #include "types.hpp"
 
 #include <cstddef>
 #include <limits>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -75,6 +77,12 @@ struct CopperResult {
     // Worst-case copper MOVE instructions emitted per scanline (post-clustering).
     // Used by callers to budget-check against max_moves_budget().
     std::size_t max_moves_per_line{};
+
+    // Name of the quantizer that produced base_palette. Set by
+    // encode_copper from Palette::name (median-cut / gpu-restart /
+    // ocs-optimal / pnn / loaded-from-file etc.). Surfaces in the
+    // CLI's "Palette: …" line; never duplicated from dispatch logic.
+    std::string base_palette_quantizer;
 };
 
 // ---------------------------------------------------------------------------
@@ -246,7 +254,15 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // hold a fixed user colour (also locked
                                    // via `locked`), and image content must
                                    // route around them across all scanlines.
-                                   const std::vector<std::size_t>& dither_excluded = {});
+                                   const std::vector<std::size_t>& dither_excluded = {},
+                                   // Quantizer choice for the auto-built
+                                   // base palette. nullopt = chipset-aware
+                                   // default (gpu_restart for AGA when
+                                   // Metal is up, median_cut otherwise;
+                                   // ocs_bruteforce for OCS). Ignored
+                                   // when user_palette is supplied.
+                                   std::optional<quantize::Algorithm>
+                                       quantizer_override = std::nullopt);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.

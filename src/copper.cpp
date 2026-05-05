@@ -4,6 +4,7 @@
 #include "dither.hpp"
 #include "palette.hpp"
 #include "quantize.hpp"
+#include "quantize_metal.hpp"
 #include "types.hpp"
 
 #include <algorithm>
@@ -383,7 +384,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                        on_progress,
                                    std::size_t neighbor_radius,
                                    float neighbor_decay,
-                                   const std::vector<std::size_t>& dither_excluded) {
+                                   const std::vector<std::size_t>& dither_excluded,
+                                   std::optional<quantize::Algorithm> quantizer_override) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -443,6 +445,7 @@ Result<CopperResult> encode_copper(const Image& image,
 
     // Step 1: Base palette — user-provided or auto-quantized
     std::vector<Color3f> base_pal;
+    std::string base_pal_name;
     if (user_palette && !user_palette->empty()) {
         // Use user palette as-is (already snapped to chipset by caller)
         base_pal = *user_palette;
@@ -450,15 +453,26 @@ Result<CopperResult> encode_copper(const Image& image,
             base_pal.resize(num_colors);
         while (base_pal.size() < num_colors)
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
+        base_pal_name = "user-supplied";
     } else {
-        auto algo = (chipset == amiga::Chipset::aga)
-            ? quantize::Algorithm::median_cut
-            : quantize::Algorithm::ocs_bruteforce;
+        // Quantizer choice: caller override wins; otherwise pick the
+        // chipset-aware default. AGA prefers gpu-restart (mean ΔS2
+        // +2.6..+3.4 vs median-cut baseline) — falls back to median-
+        // cut at runtime when Metal is unavailable. OCS keeps its
+        // 4096-color brute-force.
+        auto algo = quantizer_override.has_value()
+            ? *quantizer_override
+            : ((chipset == amiga::Chipset::aga)
+                ? (quantize::metal_available()
+                    ? quantize::Algorithm::gpu_restart
+                    : quantize::Algorithm::median_cut)
+                : quantize::Algorithm::ocs_bruteforce);
         auto reserve = lock_color0
             ? ((num_colors > 1) ? num_colors - 1 : std::size_t{1})
             : num_colors;
         auto base_result = quantize::quantize(image, reserve, algo);
         if (!base_result) return std::unexpected{base_result.error()};
+        base_pal_name = std::move(base_result->name);
         base_pal = std::move(base_result->colors);
         if (chipset != amiga::Chipset::aga) {
             for (auto& c : base_pal) c = palette::quantize_to_ocs(c);
@@ -1125,6 +1139,7 @@ Result<CopperResult> encode_copper(const Image& image,
         avg_changes,
         total_error,
         max_moves,
+        std::move(base_pal_name),
     };
 }
 
