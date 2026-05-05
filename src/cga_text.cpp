@@ -220,15 +220,17 @@ encode(const Image& image, amiga::Mode mode,
         chars.assign(restrict_chars.begin(), restrict_chars.end());
     }
 
-    // The Pappas-Neuhoff blur metric runs in sRGB (gamma-encoded)
-    // space, not OKLab. Rationale: PN was designed for the
-    // gamma-encoded signal a CRT actually emits, and the eye's
-    // post-blur perception of a CGA-text cell averaging fg/bg via
-    // checker patterns matches sRGB-domain blur much better than
-    // OKLab on chroma-rich content. A/B on electrichues02 showed
-    // sRGB +2.14 SSIMULACRA2 with markedly better foreground-vs-
-    // background separation in dark midtones (reds and market
-    // detail register; OKLab was dominated by blue noise).
+    // Cell metric runs in LINEAR RGB. This is the physically correct
+    // space for averaging cell pixels: a CRT or LCD emits photons
+    // proportional to linear RGB, so a 50% checker between black and
+    // white emits 0.5 linear photons, displays at ~73% sRGB
+    // brightness, and the encoder must score it that way.
+    //
+    // The previous version averaged in sRGB (gamma-encoded), which
+    // gave avg(0, 1) = 0.5 sRGB → encoder thought a 50% checker
+    // matched 50% sRGB-gray source pixels, so it picked checkers
+    // that displayed at +30 % brightness. Required manual
+    // brightness/gamma correction on most photographic input.
     //
     // The metric structure (pair dot products, squared norms,
     // closed-form expansion) is space-agnostic — we just keep palette
@@ -236,8 +238,7 @@ encode(const Image& image, amiga::Mode mode,
     // still named .lab for historical reasons; treat it as "metric
     // 3-vector".
     auto to_metric_space = [](const Color3f& c_lin) -> color_space::OKLab {
-        auto s = color_space::linear_to_srgb(c_lin).clamped();
-        return color_space::OKLab{s.r, s.g, s.b};
+        return color_space::OKLab{c_lin.r, c_lin.g, c_lin.b};
     };
 
     CgaPaletteLab pal_local;
