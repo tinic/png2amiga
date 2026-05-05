@@ -214,16 +214,16 @@ export function modesForChipset(chipset: Chipset): ModeOption[] {
 export const MODES: ModeOption[] = ALL_MODES
 
 export const CHIPSETS: ChipsetOption[] = [
-  { value: 'ocs',  label: 'Amiga OCS (12-bit)' },
-  { value: 'aga',  label: 'Amiga AGA (24-bit)' },
-  { value: 'stf',  label: 'Atari STF (9-bit)' },
-  { value: 'ste',  label: 'Atari STE (12-bit)' },
-  { value: 'vga',  label: 'IBM PC VGA (18-bit DAC)' },
-  { value: 'ega',  label: 'IBM PC EGA (6-bit IrgbIRGB)' },
-  { value: 'cga',  label: 'IBM PC CGA (fixed palette)' },
-  { value: 'snes', label: 'SNES Mode 7' },
+  { value: 'ocs',     label: 'Amiga OCS (12-bit)' },
+  { value: 'aga',     label: 'Amiga AGA (24-bit)' },
+  { value: 'c64',     label: 'Commodore 64 / VIC-II' },
+  { value: 'stf',     label: 'Atari STF (9-bit)' },
+  { value: 'ste',     label: 'Atari STE (12-bit)' },
+  { value: 'vga',     label: 'IBM PC VGA (18-bit DAC)' },
+  { value: 'ega',     label: 'IBM PC EGA (6-bit IrgbIRGB)' },
+  { value: 'cga',     label: 'IBM PC CGA (fixed palette)' },
+  { value: 'snes',    label: 'SNES Mode 7' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
-  { value: 'c64',  label: 'Commodore 64 / VIC-II' },
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
