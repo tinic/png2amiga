@@ -1,110 +1,331 @@
-// GPU palette-quantization experiment — Metal scaffolding probe.
+// GPU palette-quantization experiment — Stage A.
 //
-// Stage 0 (this file): proves the metal-cpp toolchain end-to-end on
-// this machine — allocates a buffer, dispatches add_one.metal, reads
-// back, asserts result. If this prints "OK", the scaffolding is good
-// and we move on to the actual parallel-Lloyd kernel.
+// Loads an RGB PNG, converts to OKLab on CPU, runs R parallel-restart
+// Lloyd k-means runs on Apple GPU (one restart per dispatch loop, max
+// kIters iterations each), picks the restart with lowest OKLab SSE,
+// converts the winning palette back to sRGB, writes a quantized RGB
+// PNG (rendered = palette[indices], not indexed-PNG — the bench
+// scores quality via png2amiga --score-vs which doesn't care about
+// the PNG storage format).
 //
-// Build via experiments/gpu_quantize/build.sh.
+// Usage:
+//   ./quant <input.png> <output.png> [--colors 256] [--restarts 32]
+//                                    [--iters 20]
+//
+// Build: ./build.sh
 
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
 #define CA_PRIVATE_IMPLEMENTATION
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
 #include <Foundation/Foundation.hpp>
 #include <Metal/Metal.hpp>
 
+#include "../../third_party/stb_image.h"
+#include "../../third_party/stb_image_write.h"
+
+#include "colorspace.hpp"
+
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <random>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace {
 
-constexpr std::size_t kN = 1024;
+struct Args {
+    std::string in_path;
+    std::string out_path;
+    int colors = 256;
+    int restarts = 32;
+    int iters = 20;
+    std::uint32_t seed = 0xC0FFEEu;
+};
 
-[[nodiscard]] int run() {
-    NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+[[nodiscard]] bool parse_args(int argc, char** argv, Args& a) {
+    if (argc < 3) return false;
+    a.in_path  = argv[1];
+    a.out_path = argv[2];
+    for (int i = 3; i < argc; ++i) {
+        std::string s = argv[i];
+        auto next = [&](int& dst) {
+            if (i + 1 >= argc) { std::fprintf(stderr, "%s needs value\n", s.c_str()); std::exit(2); }
+            dst = std::atoi(argv[++i]);
+        };
+        if (s == "--colors")        next(a.colors);
+        else if (s == "--restarts") next(a.restarts);
+        else if (s == "--iters")    next(a.iters);
+        else if (s == "--seed") {
+            if (i + 1 >= argc) std::exit(2);
+            a.seed = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 0));
+        } else {
+            std::fprintf(stderr, "unknown arg: %s\n", s.c_str());
+            return false;
+        }
+    }
+    return true;
+}
 
-    MTL::Device* device = MTL::CreateSystemDefaultDevice();
-    if (!device) {
-        std::fprintf(stderr, "no Metal device\n");
+// k-means++ initial seeding: pick first centroid uniformly at random,
+// each subsequent one with probability proportional to its squared
+// distance from the nearest already-chosen centroid.
+//
+// Runs on a uniform random subsample (~kSampleSize pixels) — full
+// image isn't needed and the O(K * N) loop dominates init time at
+// 1.5 MP × 256 K. The downstream Lloyd loop then refines on the
+// full image, so the only cost of subsampling is in the seed quality.
+constexpr std::size_t kInitSampleSize = 8192;
+
+std::vector<expq::OKLab> kmeanspp_init(
+    std::span<const expq::OKLab> pixels, int K, std::mt19937& rng)
+{
+    std::vector<expq::OKLab> sample;
+    if (pixels.size() <= kInitSampleSize) {
+        sample.assign(pixels.begin(), pixels.end());
+    } else {
+        sample.reserve(kInitSampleSize);
+        std::uniform_int_distribution<std::size_t> pick(0, pixels.size() - 1);
+        for (std::size_t i = 0; i < kInitSampleSize; ++i)
+            sample.push_back(pixels[pick(rng)]);
+    }
+
+    std::vector<expq::OKLab> out;
+    out.reserve(K);
+
+    std::uniform_int_distribution<std::size_t> first(0, sample.size() - 1);
+    out.push_back(sample[first(rng)]);
+
+    std::vector<float> nearest_d2(sample.size(), 1e30f);
+
+    while (int(out.size()) < K) {
+        const auto& last = out.back();
+        for (std::size_t i = 0; i < sample.size(); ++i) {
+            float d = expq::dist_sq(sample[i], last);
+            if (d < nearest_d2[i]) nearest_d2[i] = d;
+        }
+        std::discrete_distribution<std::size_t> pick(
+            nearest_d2.begin(), nearest_d2.end());
+        out.push_back(sample[pick(rng)]);
+    }
+    return out;
+}
+
+[[nodiscard]] int run(const Args& args) {
+    // -------- Load PNG (RGB f32) ----------
+    int w = 0, h = 0, nch = 0;
+    unsigned char* raw = stbi_load(args.in_path.c_str(), &w, &h, &nch, 3);
+    if (!raw) {
+        std::fprintf(stderr, "stbi_load failed: %s\n", args.in_path.c_str());
         return 1;
     }
-    std::printf("Device: %s\n", device->name()->utf8String());
+    const std::size_t N = std::size_t(w) * std::size_t(h);
+
+    // float4 (xyz=L,a,b; w=pad) for GPU buffer alignment
+    std::vector<expq::OKLab> oklab(N);
+    for (std::size_t i = 0; i < N; ++i) {
+        auto rgb = expq::srgb_u8_to_linear(raw[i*3+0], raw[i*3+1], raw[i*3+2]);
+        oklab[i] = expq::linear_to_oklab(rgb);
+    }
+
+    // -------- Metal init ----------
+    NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+    MTL::Device* device = MTL::CreateSystemDefaultDevice();
+    if (!device) { std::fprintf(stderr, "no Metal device\n"); return 1; }
+    std::printf("device: %s\n", device->name()->utf8String());
 
     NS::Error* err = nullptr;
     auto path = NS::String::string(
-        "experiments/gpu_quantize/quant.metallib",
-        NS::UTF8StringEncoding);
+        "experiments/gpu_quantize/quant.metallib", NS::UTF8StringEncoding);
     MTL::Library* lib = device->newLibrary(path, &err);
     if (!lib) {
-        std::fprintf(stderr, "newLibrary failed: %s\n",
-                     err ? err->localizedDescription()->utf8String()
-                         : "(null)");
+        std::fprintf(stderr, "newLibrary: %s\n",
+                     err ? err->localizedDescription()->utf8String() : "?");
         return 1;
     }
-
-    auto fn_name = NS::String::string("add_one", NS::UTF8StringEncoding);
-    MTL::Function* fn = lib->newFunction(fn_name);
-    if (!fn) {
-        std::fprintf(stderr, "newFunction(add_one) failed\n");
+    auto fn1_name = NS::String::string("assign_and_accumulate", NS::UTF8StringEncoding);
+    auto fn2_name = NS::String::string("finalize_centroids", NS::UTF8StringEncoding);
+    MTL::ComputePipelineState* pso_assign =
+        device->newComputePipelineState(lib->newFunction(fn1_name), &err);
+    MTL::ComputePipelineState* pso_finalize =
+        device->newComputePipelineState(lib->newFunction(fn2_name), &err);
+    if (!pso_assign || !pso_finalize) {
+        std::fprintf(stderr, "PSO build failed: %s\n",
+                     err ? err->localizedDescription()->utf8String() : "?");
         return 1;
     }
-
-    MTL::ComputePipelineState* pso =
-        device->newComputePipelineState(fn, &err);
-    if (!pso) {
-        std::fprintf(stderr, "newComputePipelineState failed: %s\n",
-                     err ? err->localizedDescription()->utf8String()
-                         : "(null)");
-        return 1;
-    }
-
     MTL::CommandQueue* queue = device->newCommandQueue();
 
-    const std::size_t bytes = kN * sizeof(float);
-    MTL::Buffer* in_buf  = device->newBuffer(bytes, MTL::ResourceStorageModeShared);
-    MTL::Buffer* out_buf = device->newBuffer(bytes, MTL::ResourceStorageModeShared);
+    const int K = args.colors;
+    const int R = args.restarts;
 
-    auto* in_data = static_cast<float*>(in_buf->contents());
-    for (std::size_t i = 0; i < kN; ++i) in_data[i] = static_cast<float>(i);
+    // -------- GPU buffers ----------
+    // pixels: float4 per pixel
+    auto* pixel_buf = device->newBuffer(N * 4 * sizeof(float),
+                                         MTL::ResourceStorageModeShared);
+    auto* px = static_cast<float*>(pixel_buf->contents());
+    for (std::size_t i = 0; i < N; ++i) {
+        px[i*4+0] = oklab[i].L;
+        px[i*4+1] = oklab[i].a;
+        px[i*4+2] = oklab[i].b;
+        px[i*4+3] = 0.0f;
+    }
 
-    MTL::CommandBuffer* cmd = queue->commandBuffer();
-    MTL::ComputeCommandEncoder* enc = cmd->computeCommandEncoder();
-    enc->setComputePipelineState(pso);
-    enc->setBuffer(in_buf,  0, 0);
-    enc->setBuffer(out_buf, 0, 1);
+    auto* cent_buf   = device->newBuffer(R * K * 4 * sizeof(float),
+                                          MTL::ResourceStorageModeShared);
+    auto* sums_buf   = device->newBuffer(R * K * 3 * sizeof(float),
+                                          MTL::ResourceStorageModeShared);
+    auto* counts_buf = device->newBuffer(R * K * sizeof(unsigned),
+                                          MTL::ResourceStorageModeShared);
+    auto* sse_buf    = device->newBuffer(R * sizeof(float),
+                                          MTL::ResourceStorageModeShared);
+    auto* idx_buf    = device->newBuffer(R * N * sizeof(unsigned),
+                                          MTL::ResourceStorageModeShared);
 
-    NS::UInteger tg_size = pso->maxTotalThreadsPerThreadgroup();
-    if (tg_size > kN) tg_size = kN;
-    enc->dispatchThreads(MTL::Size(kN, 1, 1), MTL::Size(tg_size, 1, 1));
-    enc->endEncoding();
-    cmd->commit();
-    cmd->waitUntilCompleted();
+    // Zero atomic accumulators (host-visible shared memory).
+    std::memset(sums_buf->contents(),   0, R * K * 3 * sizeof(float));
+    std::memset(counts_buf->contents(), 0, R * K * sizeof(unsigned));
+    std::memset(sse_buf->contents(),    0, R * sizeof(float));
 
-    auto* out_data = static_cast<const float*>(out_buf->contents());
-    int errors = 0;
-    for (std::size_t i = 0; i < kN; ++i) {
-        const float expect = static_cast<float>(i) + 1.0f;
-        if (out_data[i] != expect) {
-            if (errors < 5) {
-                std::fprintf(stderr, "  [%zu] got %g expected %g\n",
-                             i, out_data[i], expect);
-            }
-            ++errors;
+    struct Params {
+        unsigned num_pixels, num_centroids, num_restarts, pixels_stride;
+    } params{ unsigned(N), unsigned(K), unsigned(R), unsigned(N) };
+
+    // -------- k-means++ init for each restart on CPU ----------
+    std::mt19937 master_rng(args.seed);
+    auto* cent = static_cast<float*>(cent_buf->contents());
+    auto t_init0 = std::chrono::steady_clock::now();
+    for (int r = 0; r < R; ++r) {
+        std::mt19937 rng(master_rng());
+        auto seeds = kmeanspp_init(oklab, K, rng);
+        for (int k = 0; k < K; ++k) {
+            cent[r*K*4 + k*4 + 0] = seeds[k].L;
+            cent[r*K*4 + k*4 + 1] = seeds[k].a;
+            cent[r*K*4 + k*4 + 2] = seeds[k].b;
+            cent[r*K*4 + k*4 + 3] = 0.0f;
         }
     }
+    auto t_init1 = std::chrono::steady_clock::now();
+    std::printf("kmeans++ init (CPU, %d restarts × %d centroids): %.1f ms\n",
+                R, K, std::chrono::duration<double, std::milli>(
+                    t_init1 - t_init0).count());
 
-    pool->release();
+    // -------- Lloyd loop on GPU ----------
+    auto t_loop0 = std::chrono::steady_clock::now();
+    for (int r = 0; r < R; ++r) {
+        for (int it = 0; it < args.iters; ++it) {
+            // Reset SSE counter for this restart.
+            auto* sse_host = static_cast<float*>(sse_buf->contents());
+            sse_host[r] = 0.0f;
 
-    if (errors) {
-        std::fprintf(stderr, "FAIL: %d mismatches\n", errors);
+            MTL::CommandBuffer* cmd = queue->commandBuffer();
+
+            // Pass 1: assign + accumulate.
+            {
+                auto* enc = cmd->computeCommandEncoder();
+                enc->setComputePipelineState(pso_assign);
+                enc->setBuffer(pixel_buf,  0, 0);
+                enc->setBuffer(cent_buf,   0, 1);
+                enc->setBuffer(sums_buf,   0, 2);
+                enc->setBuffer(counts_buf, 0, 3);
+                enc->setBuffer(sse_buf,    0, 4);
+                enc->setBuffer(idx_buf,    0, 5);
+                enc->setBytes(&params, sizeof(params), 6);
+                unsigned restart_u = unsigned(r);
+                enc->setBytes(&restart_u, sizeof(unsigned), 7);
+                NS::UInteger tg = pso_assign->maxTotalThreadsPerThreadgroup();
+                if (tg > 256) tg = 256;
+                enc->dispatchThreads(MTL::Size(N, 1, 1), MTL::Size(tg, 1, 1));
+                enc->endEncoding();
+            }
+            // Pass 2: finalize.
+            {
+                auto* enc = cmd->computeCommandEncoder();
+                enc->setComputePipelineState(pso_finalize);
+                enc->setBuffer(cent_buf,   0, 0);
+                enc->setBuffer(sums_buf,   0, 1);
+                enc->setBuffer(counts_buf, 0, 2);
+                enc->setBytes(&params, sizeof(params), 3);
+                unsigned restart_u = unsigned(r);
+                enc->setBytes(&restart_u, sizeof(unsigned), 4);
+                enc->dispatchThreads(MTL::Size(K, 1, 1), MTL::Size(K, 1, 1));
+                enc->endEncoding();
+            }
+
+            cmd->commit();
+            cmd->waitUntilCompleted();
+        }
+    }
+    auto t_loop1 = std::chrono::steady_clock::now();
+    std::printf("Lloyd (GPU, %d restarts × %d iters × %zu px × %d K): %.1f ms\n",
+                R, args.iters, N, K,
+                std::chrono::duration<double, std::milli>(t_loop1 - t_loop0).count());
+
+    // -------- Pick best restart ----------
+    // Re-run one final assign pass per restart to get fresh SSE
+    // (the last update changed centroids; the SSE we accumulated
+    // was against the centroids of the iteration BEFORE the last
+    // finalize). For Stage A simplicity we just re-score on CPU —
+    // it's a one-time cost.
+    int best_r = 0;
+    double best_sse = 1e30;
+    auto* idx = static_cast<const unsigned*>(idx_buf->contents());
+    auto* cent_final = static_cast<const float*>(cent_buf->contents());
+    for (int r = 0; r < R; ++r) {
+        double sse = 0;
+        for (std::size_t i = 0; i < N; ++i) {
+            unsigned k = idx[r * N + i];
+            float dL = oklab[i].L - cent_final[r*K*4 + k*4 + 0];
+            float da = oklab[i].a - cent_final[r*K*4 + k*4 + 1];
+            float db = oklab[i].b - cent_final[r*K*4 + k*4 + 2];
+            sse += dL*dL + da*da + db*db;
+        }
+        if (sse < best_sse) { best_sse = sse; best_r = r; }
+    }
+    std::printf("best restart: %d   sse=%.4f\n", best_r, best_sse);
+
+    // -------- Build palette + render output ----------
+    std::vector<unsigned char> rgb_out(N * 3);
+    for (std::size_t i = 0; i < N; ++i) {
+        unsigned k = idx[best_r * N + i];
+        expq::OKLab lab{
+            cent_final[best_r*K*4 + k*4 + 0],
+            cent_final[best_r*K*4 + k*4 + 1],
+            cent_final[best_r*K*4 + k*4 + 2],
+        };
+        auto lin = expq::oklab_to_linear(lab);
+        rgb_out[i*3+0] = expq::linear_to_srgb_u8(lin.r);
+        rgb_out[i*3+1] = expq::linear_to_srgb_u8(lin.g);
+        rgb_out[i*3+2] = expq::linear_to_srgb_u8(lin.b);
+    }
+    if (!stbi_write_png(args.out_path.c_str(), w, h, 3,
+                         rgb_out.data(), w * 3)) {
+        std::fprintf(stderr, "stbi_write_png failed\n");
         return 1;
     }
-    std::printf("OK: %zu elements processed on GPU\n", kN);
+    stbi_image_free(raw);
+
+    pool->release();
+    std::printf("wrote: %s (%dx%d, %d colors)\n",
+                args.out_path.c_str(), w, h, K);
     return 0;
 }
 
 } // namespace
 
-int main() { return run(); }
+int main(int argc, char** argv) {
+    Args a;
+    if (!parse_args(argc, argv, a)) {
+        std::fprintf(stderr,
+            "usage: quant <input.png> <output.png>"
+            " [--colors N] [--restarts N] [--iters N] [--seed N]\n");
+        return 2;
+    }
+    return run(a);
+}
