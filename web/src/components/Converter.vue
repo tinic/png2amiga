@@ -1406,6 +1406,17 @@ async function runConvert(srcBytes: Uint8Array): Promise<void> {
 
 function doConvert() {
   if (debounceTimer) clearTimeout(debounceTimer)
+  // If a convert is already running in the WASM worker, abort it so
+  // the new settings take effect immediately. Without this, slow
+  // encodes (--best, HAM6 sliced, etc.) make the UI feel laggy: the
+  // user changes a slider, then watches the previous-settings encode
+  // finish before their change kicks in. Bumping convertGen drops the
+  // in-flight runConvert's result on completion (myGen != convertGen).
+  if (converting.value) {
+    abortWasm()
+    convertGen++
+    committedGen = convertGen
+  }
   // Capture bytes at FIRE time, not schedule time — the active image
   // can change during the 150 ms debounce window (drag-drop while a
   // slow encode is still queued) and we want the encode to use the
