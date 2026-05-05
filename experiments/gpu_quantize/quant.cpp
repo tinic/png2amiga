@@ -157,17 +157,24 @@ std::vector<expq::OKLab> kmeanspp_init(
     }
     auto fn1_name = NS::String::string("assign_and_accumulate", NS::UTF8StringEncoding);
     auto fn2_name = NS::String::string("finalize_centroids", NS::UTF8StringEncoding);
-    auto fn3_name = NS::String::string("scolorq_assign", NS::UTF8StringEncoding);
-    auto fn4_name = NS::String::string("scolorq_palette_update", NS::UTF8StringEncoding);
+    auto fn3_name = NS::String::string("scolorq_filtered_output", NS::UTF8StringEncoding);
+    auto fn4_name = NS::String::string("scolorq_compute_g", NS::UTF8StringEncoding);
+    auto fn5_name = NS::String::string("scolorq_assign_only", NS::UTF8StringEncoding);
+    auto fn6_name = NS::String::string("scolorq_build_Mb", NS::UTF8StringEncoding);
     MTL::ComputePipelineState* pso_assign =
         device->newComputePipelineState(lib->newFunction(fn1_name), &err);
     MTL::ComputePipelineState* pso_finalize =
         device->newComputePipelineState(lib->newFunction(fn2_name), &err);
-    MTL::ComputePipelineState* pso_sc_assign =
+    MTL::ComputePipelineState* pso_sc_filt =
         device->newComputePipelineState(lib->newFunction(fn3_name), &err);
-    MTL::ComputePipelineState* pso_sc_finalize =
+    MTL::ComputePipelineState* pso_sc_g =
         device->newComputePipelineState(lib->newFunction(fn4_name), &err);
-    if (!pso_assign || !pso_finalize || !pso_sc_assign || !pso_sc_finalize) {
+    MTL::ComputePipelineState* pso_sc_assign =
+        device->newComputePipelineState(lib->newFunction(fn5_name), &err);
+    MTL::ComputePipelineState* pso_sc_build =
+        device->newComputePipelineState(lib->newFunction(fn6_name), &err);
+    if (!pso_assign || !pso_finalize || !pso_sc_filt
+        || !pso_sc_g || !pso_sc_assign || !pso_sc_build) {
         std::fprintf(stderr, "PSO build failed: %s\n",
                      err ? err->localizedDescription()->utf8String() : "?");
         return 1;
@@ -285,80 +292,193 @@ std::vector<expq::OKLab> kmeanspp_init(
                 R, args.iters, N, K,
                 std::chrono::duration<double, std::milli>(t_loop1 - t_loop0).count());
 
-    // -------- Stage B: scolorq joint optimization ----------
-    // Index buffer at this point holds the last Lloyd assignment;
-    // copy it into the ping-pong companion so the first scolorq
-    // pass has a valid neighbourhood to read from.
+    // -------- Stage C: real scolorq joint optimization ----------
+    // Lloyd seed sits in idx_buf. Allocate scratch for filtered
+    // output, g(x), and the per-restart (M, b) linear-system pair.
+    // CPU does the K×K Gauss-Seidel solve each iteration; GPU does
+    // the per-pixel kernels.
     if (args.scolorq_iters > 0) {
-        std::memcpy(idx_buf2->contents(), idx_buf->contents(),
-                    R * N * sizeof(unsigned));
+        auto* out_buf = device->newBuffer(R * N * 4 * sizeof(float),
+                                            MTL::ResourceStorageModeShared);
+        auto* g_buf   = device->newBuffer(R * N * 4 * sizeof(float),
+                                            MTL::ResourceStorageModeShared);
+        auto* M_buf   = device->newBuffer(R * K * K * sizeof(float),
+                                            MTL::ResourceStorageModeShared);
+        auto* b_buf   = device->newBuffer(R * K * 3 * sizeof(float),
+                                            MTL::ResourceStorageModeShared);
 
         struct ScolorqParams {
             unsigned width, height, K, R;
             float center_weight, neighbor_weight;
+        } sp{
+            unsigned(args.width), unsigned(args.height),
+            unsigned(K), unsigned(R), 0.0f, 0.0f,
         };
-
-        // Soft k-means annealing schedule. T_start = 0.1 is roughly
-        // the typical inter-centroid OKLab squared distance — soft
-        // assignment is meaningfully diffuse there. Cooling factor
-        // 0.7 means after 30 iters T_end ≈ 0.1·0.7^30 ≈ 2e-6, which
-        // is effectively hard k-means.
-        const float kT0 = 0.1f;
-        const float kCool = 0.7f;
 
         auto t_sc0 = std::chrono::steady_clock::now();
         for (int r = 0; r < R; ++r) {
-            float T = kT0;
+            // Ping-pong index buffers: read from idx_buf, write to idx_buf2.
+            std::memcpy(static_cast<unsigned*>(idx_buf2->contents()) + r * N,
+                        static_cast<unsigned*>(idx_buf->contents())  + r * N,
+                        N * sizeof(unsigned));
+
+            auto* idx_in  = idx_buf;
+            auto* idx_out = idx_buf2;
+
             for (int it = 0; it < args.scolorq_iters; ++it) {
-                ScolorqParams sp{
-                    unsigned(args.width), unsigned(args.height),
-                    unsigned(K), unsigned(R),
-                    T,         // soft-kmeans temperature
-                    0.0f,
-                };
+                // Reset M, b, sse for this restart.
+                std::memset(static_cast<float*>(M_buf->contents()) + r*K*K,
+                            0, K * K * sizeof(float));
+                std::memset(static_cast<float*>(b_buf->contents()) + r*K*3,
+                            0, K * 3 * sizeof(float));
                 static_cast<float*>(sse_buf->contents())[r] = 0.0f;
+
                 MTL::CommandBuffer* cmd = queue->commandBuffer();
+                unsigned restart_u = unsigned(r);
+
+                // Pass 1: out(x) = F · p[a](x).
                 {
                     auto* enc = cmd->computeCommandEncoder();
-                    enc->setComputePipelineState(pso_sc_assign);
-                    enc->setBuffer(pixel_buf,  0, 0);
-                    enc->setBuffer(idx_buf,    0, 1);  // unused under soft-kmeans
-                    enc->setBuffer(idx_buf,    0, 2);  // hard idx out
-                    enc->setBuffer(cent_buf,   0, 3);
-                    enc->setBuffer(sums_buf,   0, 4);
-                    enc->setBuffer(counts_buf, 0, 5);
-                    enc->setBuffer(sse_buf,    0, 6);
-                    enc->setBytes(&sp, sizeof(sp), 7);
-                    unsigned restart_u = unsigned(r);
-                    enc->setBytes(&restart_u, sizeof(unsigned), 8);
+                    enc->setComputePipelineState(pso_sc_filt);
+                    enc->setBuffer(out_buf,   0, 0);
+                    enc->setBuffer(cent_buf,  0, 1);
+                    enc->setBuffer(idx_in,    0, 2);
+                    enc->setBytes(&sp, sizeof(sp), 3);
+                    enc->setBytes(&restart_u, sizeof(unsigned), 4);
                     enc->dispatchThreads(
                         MTL::Size(args.width, args.height, 1),
                         MTL::Size(16, 16, 1));
                     enc->endEncoding();
                 }
+                // Pass 2: g(x) = F · (I - out)(x).
                 {
                     auto* enc = cmd->computeCommandEncoder();
-                    enc->setComputePipelineState(pso_sc_finalize);
-                    enc->setBuffer(cent_buf,   0, 0);
-                    enc->setBuffer(sums_buf,   0, 1);
-                    enc->setBuffer(counts_buf, 0, 2);
+                    enc->setComputePipelineState(pso_sc_g);
+                    enc->setBuffer(g_buf,     0, 0);
+                    enc->setBuffer(pixel_buf, 0, 1);
+                    enc->setBuffer(out_buf,   0, 2);
                     enc->setBytes(&sp, sizeof(sp), 3);
-                    unsigned restart_u = unsigned(r);
                     enc->setBytes(&restart_u, sizeof(unsigned), 4);
-                    enc->dispatchThreads(MTL::Size(K, 1, 1),
-                                          MTL::Size(K, 1, 1));
+                    enc->dispatchThreads(
+                        MTL::Size(args.width, args.height, 1),
+                        MTL::Size(16, 16, 1));
+                    enc->endEncoding();
+                }
+                // Pass 3a: assign only (writes idx_out from idx_in,
+                // current palette, and g).
+                {
+                    auto* enc = cmd->computeCommandEncoder();
+                    enc->setComputePipelineState(pso_sc_assign);
+                    enc->setBuffer(idx_out,   0, 0);
+                    enc->setBuffer(idx_in,    0, 1);
+                    enc->setBuffer(cent_buf,  0, 2);
+                    enc->setBuffer(g_buf,     0, 3);
+                    enc->setBytes(&sp, sizeof(sp), 4);
+                    enc->setBytes(&restart_u, sizeof(unsigned), 5);
+                    enc->dispatchThreads(
+                        MTL::Size(args.width, args.height, 1),
+                        MTL::Size(16, 16, 1));
+                    enc->endEncoding();
+                }
+                // Pass 3b: build M, b using the JUST-WRITTEN
+                // assignments (idx_out is the current state).
+                {
+                    auto* enc = cmd->computeCommandEncoder();
+                    enc->setComputePipelineState(pso_sc_build);
+                    enc->setBuffer(idx_out,   0, 0);
+                    enc->setBuffer(pixel_buf, 0, 1);
+                    enc->setBuffer(M_buf,     0, 2);
+                    enc->setBuffer(b_buf,     0, 3);
+                    enc->setBytes(&sp, sizeof(sp), 4);
+                    enc->setBytes(&restart_u, sizeof(unsigned), 5);
+                    enc->dispatchThreads(
+                        MTL::Size(args.width, args.height, 1),
+                        MTL::Size(16, 16, 1));
                     enc->endEncoding();
                 }
                 cmd->commit();
                 cmd->waitUntilCompleted();
-                T *= kCool;
+
+                // CPU: solve K×K linear system M · p = b. The
+                // proper scolorq palette update is the unique p
+                // satisfying M·p = b — direct Cholesky/LDLT on a
+                // 32×32 PSD matrix is trivial (~5K ops). Earlier
+                // Gauss-Seidel diverged on poorly-conditioned M.
+                auto* M_in = static_cast<const float*>(M_buf->contents()) + r*K*K;
+                auto* b_in = static_cast<const float*>(b_buf->contents()) + r*K*3;
+                auto* P    = static_cast<float*>(cent_buf->contents()) + r*K*4;
+                constexpr float kRegEps = 1e-4f;  // PSD ridge
+
+                // Copy M (with ridge) and rhs into local working buffers.
+                std::vector<float> A(K * K);
+                std::vector<float> rhs(K * 3);
+                for (int i = 0; i < K; ++i) {
+                    for (int j = 0; j < K; ++j) A[i*K+j] = M_in[i*K+j];
+                    A[i*K+i] += kRegEps;
+                    rhs[i*3+0] = b_in[i*3+0];
+                    rhs[i*3+1] = b_in[i*3+1];
+                    rhs[i*3+2] = b_in[i*3+2];
+                }
+
+                // LDLT (no pivoting) — A is symmetric PSD by
+                // construction so this is stable up to the ridge.
+                std::vector<float> L(K * K, 0.0f);
+                std::vector<float> D(K, 0.0f);
+                bool solver_ok = true;
+                for (int j = 0; j < K; ++j) {
+                    float d = A[j*K+j];
+                    for (int p = 0; p < j; ++p)
+                        d -= L[j*K+p] * L[j*K+p] * D[p];
+                    D[j] = d;
+                    L[j*K+j] = 1.0f;
+                    if (std::abs(d) < 1e-12f) { solver_ok = false; break; }
+                    for (int i = j+1; i < K; ++i) {
+                        float s = A[i*K+j];
+                        for (int p = 0; p < j; ++p)
+                            s -= L[i*K+p] * L[j*K+p] * D[p];
+                        L[i*K+j] = s / d;
+                    }
+                }
+                if (solver_ok) {
+                    // Solve L · y = b (forward), D · z = y (diag),
+                    // L^T · x = z (back) for each of 3 RHS columns.
+                    for (int ch = 0; ch < 3; ++ch) {
+                        std::vector<float> y(K), z(K), x(K);
+                        for (int i = 0; i < K; ++i) {
+                            float s = rhs[i*3+ch];
+                            for (int p = 0; p < i; ++p) s -= L[i*K+p] * y[p];
+                            y[i] = s;
+                        }
+                        for (int i = 0; i < K; ++i) z[i] = y[i] / D[i];
+                        for (int i = K-1; i >= 0; --i) {
+                            float s = z[i];
+                            for (int p = i+1; p < K; ++p) s -= L[p*K+i] * x[p];
+                            x[i] = s;
+                        }
+                        for (int i = 0; i < K; ++i) P[i*4+ch] = x[i];
+                    }
+                }
+
+                std::swap(idx_in, idx_out);
+            }
+            // Final assignment lives in idx_in (after the swap).
+            // Make sure idx_buf is the "current" copy for downstream
+            // rendering.
+            if (idx_in != idx_buf) {
+                std::memcpy(static_cast<unsigned*>(idx_buf->contents()) + r * N,
+                            static_cast<const unsigned*>(idx_in->contents()) + r * N,
+                            N * sizeof(unsigned));
             }
         }
         auto t_sc1 = std::chrono::steady_clock::now();
-        std::printf("soft-kmeans (GPU, %d restarts × %d iters,"
-                    " T0=%.3g cool=%.2f): %.1f ms\n",
-                    R, args.scolorq_iters, kT0, kCool,
+        std::printf("scolorq (GPU+CPU solve, %d restarts × %d iters): %.1f ms\n",
+                    R, args.scolorq_iters,
                     std::chrono::duration<double, std::milli>(t_sc1 - t_sc0).count());
+
+        out_buf->release();
+        g_buf->release();
+        M_buf->release();
+        b_buf->release();
     }
 
     // -------- Pick best restart ----------
