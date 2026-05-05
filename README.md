@@ -5,11 +5,13 @@
 [![GitHub](https://img.shields.io/github/stars/tinic/png2amiga?style=social)](https://github.com/tinic/png2amiga)
 [![C++26](https://img.shields.io/badge/C%2B%2B-26-blue.svg)](https://en.cppreference.com/w/cpp/26)
 
-**Open-source** PNG/JPEG/WebP → Commodore Amiga, Atari ST/STE, and
-IBM PC (CGA / EGA / VGA) image converter. Supports OCS/AGA bitplane,
-HAM6/HAM8, EHB, and **sliced-HAM (SHAM) via copper palettes** with
-perceptual OKLab color matching. Writes IFF ILBM, Degas `.PI1`/`.PI2`,
-C headers, raw bitplanes, and standalone AmigaOS viewer `.cpp` source.
+**Open-source** PNG/JPEG/WebP → Commodore Amiga, Atari ST/STE,
+IBM PC (CGA / EGA / VGA), Commodore 64, Sega Genesis, and SNES Mode 7
+image converter. Supports OCS/AGA bitplane, HAM6/HAM8, EHB, and
+**sliced-HAM (SHAM) via copper palettes** with perceptual OKLab color
+matching. Writes IFF ILBM, Degas `.PI1`/`.PI2`/`.PI3`, C64 `.prg` /
+`.koa` / `.hir`, Genesis SGDK headers, SNES tile/tilemap `.bin`, C
+headers, raw bitplanes, and standalone AmigaOS viewer `.cpp` source.
 The bundled `build-amiga.sh` wrapper runs the included
 `m68k-amiga-elf-gcc` + `exe2adf` toolchain to turn the `.cpp` into a
 runnable `.exe` and bootable `.adf`. DOS-mode `.c` output compiles
@@ -28,9 +30,9 @@ space. Sister project to [png2c64](https://github.com/tinic/png2c64).
 ## Features
 
 **Amiga modes**: Lores / Hires (+ interlace), HAM6 (OCS) + HAM8 (AGA)
-with hires and/or interlace variants, EHB. 1–8 bitplanes per chipset
-limits. Optional **sliced palette** (per-line copper swaps — the same
-technique behind [Sliced HAM / SHAM](https://en.wikipedia.org/wiki/Hold-And-Modify#Sliced_HAM),
+with hires and/or interlace variants, EHB. 1–8 bitplanes within
+chipset limits. Optional **sliced palette** (per-line copper swaps —
+the same technique behind [Sliced HAM / SHAM](https://en.wikipedia.org/wiki/Hold-And-Modify#Sliced_HAM),
 in use since 1989) and **strip palette** (additional mid-line swaps in
 the active scanline, used in demoscene productions like Desire's
 *Shuffling Around the Christmas Tree*).
@@ -40,15 +42,35 @@ on STF, 12-bit on STE; ST-Hi is hardware-locked monochrome). Degas
 Elite `.PI1`/`.PI2`/`.PI3` output.
 
 **IBM PC modes**: CGA 320×200 / 640×200 / composite (NTSC artifact
-colors) / 80×100 text-mode glyph matching, EGA 320×200 / 640×200 /
-640×350 (16 of the 64-color IrgbIRGB gamut), VGA Mode 13h (320×200,
-256-color chunky), Mode 10h (640×350, 16-color planar), Mode 12h
-(640×480, 16-color planar). 16-bit DOS viewer `.c` output for
-`ia16-elf-gcc` compilation.
+colors), CGA text-mode glyph matching at 80x{200,100,50,25} and
+40x{200,100} cell grids, EGA 320×200 / 640×200 / 640×350 (16 of the
+64-color IrgbIRGB gamut), VGA Mode 13h (320×200, 256-color chunky),
+Mode 10h (640×350, 16-color planar), Mode 12h (640×480, 16-color
+planar). 16-bit DOS viewer `.c` output for `ia16-elf-gcc` compilation.
 
-**Palette quantizers**: OCS brute-force (histogram + greedy over all
-4096 OCS colors), PNN agglomerative (auto-selected for HAM8 / AGA), and
-median-cut + k-means refinement in OKLab.
+**Commodore 64**: VIC-II hires (320×200, 2 colors per 8×8 cell),
+multicolor (160×200, 4 per 4×8), FLI / AFLI (per-row screen-RAM
+swaps for more colors per cell), PETSCII (40×25 text-mode glyph
+matching against the C64 character ROM), and custom-charset modes
+(hires + multicolor) that build a per-image 256-glyph charset with
+Hamming-distance pair merging when content overflows. Outputs
+`.prg` / `.koa` / `.hir` for direct loading on real hardware.
+
+**Sega Genesis / Mega Drive**: H32 (256×224) and H40 (320×224) with
+optional Shadow/Highlight extension. 4 palette lines × 16 BGR333,
+8×8 4bpp tiles + tilemap. SGDK `.h` / `.bin` output.
+
+**SNES Mode 7**: 256-color BGR555-palette and 2048-color Direct
+Color (BBGGGRRR) variants. Affine-transformable 8bpp BG1, ≤256
+unique 8×8 tiles via greedy distance-merging when content overflows.
+
+**Palette quantizers**: GPU-accelerated parallel-restart Lloyd
+k-means in OKLab on Apple GPU (default for AGA / VGA when Xcode's
+Metal toolchain is available; mean ΔS2 +2.6..+3.4 vs pngquant on
+DIV2K-100+Kodak-24 across K=8..256), OCS brute-force (histogram +
+k-means over all 4096 OCS colors), PNN agglomerative (Ward's
+linkage in OKLab — default for HAM AGA), and median-cut + k-means
+refinement in OKLab (CPU fallback when Metal isn't available).
 
 **Dithering**: 64 methods.
 
@@ -77,10 +99,12 @@ median-cut + k-means refinement in OKLab.
 `--ham-fast` switches to the greedy encoder (~15× faster, ~0.04 dB
 quality cost) for live preview or batch video processing.
 
-**Output**: `.png` preview, `.iff` ILBM, `.h` C header, `.cpp`
-standalone viewer source (Amiga) or `.c` (DOS), `.pi1`/`.pi2`/`.pi3`
-Degas, `.raw` + `.pal` raw bitplanes with palette. The `build-amiga.sh`
-helper compiles `.cpp` → `.exe` → `.adf` via the bundled toolchain.
+**Output**: `.png` preview, `.iff` ILBM (Amiga), `.pi1`/`.pi2`/`.pi3`
+Degas (Atari ST/STE), `.prg`/`.koa`/`.hir` (C64), `.bin` + `.h` (SNES
+tile/tilemap, Genesis SGDK), `.h` C header, `.cpp` standalone viewer
+source (Amiga) or `.c` (DOS, ia16-elf-gcc), `.raw` + `.pal` raw
+bitplanes with palette. The `build-amiga.sh` helper compiles
+`.cpp` → `.exe` → `.adf` via the bundled toolchain.
 
 ## Build
 
@@ -147,6 +171,16 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 ./build/png2amiga --mode ega-320 input.png viewer.c          # 16-bit DOS viewer
 ./build/png2amiga --mode cga-320 --cga-palette p1-high \
     input.png output.png
+
+# Commodore 64
+./build/png2amiga --mode c64-multicolor input.png output.prg    # bootable .prg
+./build/png2amiga --mode c64-petscii input.png output.png       # text-mode preview
+
+# Sega Genesis (H40 + Shadow/Highlight, SGDK header)
+./build/png2amiga --mode genesis-h40-sh input.png output.h
+
+# SNES Mode 7 (256-color palette + tilemap + tile data)
+./build/png2amiga --mode snes-mode7-256 input.png output.bin
 ```
 
 Run `./build/png2amiga --help` for the full flag reference.
@@ -180,7 +214,7 @@ Run `./build/png2amiga --help` for the full flag reference.
 | `cga-320` | 320×200 | 4 | Fixed palettes (`--cga-palette p0-low/p0-high/p1-low/p1-high`) |
 | `cga-640` | 640×200 | 2 | Monochrome |
 | `cga-composite` | 160×200 effective | 16 | NTSC artifact colors from 320×200 2bpp |
-| `cga-text80x100` | 80×100 cells | 16 fg × 16 bg | Glyph + attribute matching against the IBM CGA 8×8 font |
+| `cga-text80x{200,100,50,25}` / `cga-text40x{200,100}` | 80×N or 40×N cells | 16 fg × 16 bg | Glyph + attribute matching against the IBM CGA 8×8 font; all variants except 80×200 fit in 16 KB CGA VRAM |
 | `ega-320` / `ega-640` / `ega-hi` | 320×200 / 640×200 / 640×350 | 16 of 64 | 4-plane IrgbIRGB gamut |
 | `vga-13h` | 320×200 | 256 | 8bpp chunky, 18-bit DAC |
 | `vga-10h` | 640×350 | 16 | 4-plane planar, 18-bit DAC |
@@ -300,7 +334,7 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
-| **png2amiga** | **lores d=8 AGA (gpu_restart)** | 36.74     | **86.35**   |     1.05 |
+| **png2amiga** | **lores d=8 AGA**             | 36.74     | **86.35**   |     1.05 |
 | png2amiga   | lores d=8 AGA + best              | 36.73     | 86.32       |    25.10 |
 | pngquant    | libimagequant 256 (`--speed 1`)   | 37.50     | 82.09       |     0.05 |
 | png2amiga   | EHB + strips + best               | 30.63     | 70.95       |    17.70 |
