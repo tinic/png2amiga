@@ -128,6 +128,25 @@ const ALL_MODES: ModeOption[] = [
   { value: 'hires-lace',       label: 'Hires Interlace',              chipset: 'ocs' },
   { value: 'ham6-hires-lace',  label: 'HAM6 Hires Interlace',         chipset: 'aga' },
   { value: 'ham8-hires-lace',  label: 'HAM8 Hires Interlace',         chipset: 'aga' },
+  // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
+  // constraints. Multicolor first / default; sprite / charset modes
+  // follow on the merge branch.
+  { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
+                             chipset: 'c64' },
+  { value: 'c64-hires',      label: 'Hires (320x200, 2/cell)',
+                             chipset: 'c64' },
+  { value: 'c64-fli',        label: 'FLI (multicolor + per-row screen)',
+                             chipset: 'c64' },
+  { value: 'c64-afli',       label: 'AFLI (hires + per-row screen)',
+                             chipset: 'c64' },
+  { value: 'c64-petscii',    label: 'PETSCII (40x25 text-mode glyphs)',
+                             chipset: 'c64' },
+  { value: 'c64-charset-hires',
+                             label: 'Charset Hires (custom 256-glyph charset)',
+                             chipset: 'c64' },
+  { value: 'c64-charset-multicolor',
+                             label: 'Charset Multicolor (shared mc + per-cell fg)',
+                             chipset: 'c64' },
   { value: 'stf-low',          label: 'ST Low (320x200, 16 colors)',   chipset: 'stf' },
   { value: 'stf-med',          label: 'ST Medium (640x200, 4 colors)', chipset: 'stf' },
   { value: 'stf-hi',           label: 'ST High (640x400, mono)',       chipset: 'stf' },
@@ -165,25 +184,6 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h40',    label: 'H40 (320x224)',    chipset: 'genesis' },
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
-  // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
-  // constraints. Multicolor first / default; sprite / charset modes
-  // follow on the merge branch.
-  { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
-                             chipset: 'c64' },
-  { value: 'c64-hires',      label: 'Hires (320x200, 2/cell)',
-                             chipset: 'c64' },
-  { value: 'c64-fli',        label: 'FLI (multicolor + per-row screen)',
-                             chipset: 'c64' },
-  { value: 'c64-afli',       label: 'AFLI (hires + per-row screen)',
-                             chipset: 'c64' },
-  { value: 'c64-petscii',    label: 'PETSCII (40x25 text-mode glyphs)',
-                             chipset: 'c64' },
-  { value: 'c64-charset-hires',
-                             label: 'Charset Hires (custom 256-glyph charset)',
-                             chipset: 'c64' },
-  { value: 'c64-charset-multicolor',
-                             label: 'Charset Multicolor (shared mc + per-cell fg)',
-                             chipset: 'c64' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
