@@ -1489,6 +1489,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::cga_text80x25;
                 else if (v == "cga-text80x200" || v == "cga-80x200")
                     config.mode = amiga::Mode::cga_text80x200;
+                else if (v == "cga-text40x200" || v == "cga-40x200")
+                    config.mode = amiga::Mode::cga_text40x200;
+                else if (v == "cga-text40x100" || v == "cga-40x100")
+                    config.mode = amiga::Mode::cga_text40x100;
                 else if (v == "snes-mode7-256" || v == "snes-256")
                     config.mode = amiga::Mode::snes_mode7_256;
                 else if (v == "snes-mode7-direct" || v == "snes-direct" ||
@@ -2189,6 +2193,8 @@ std::string_view mode_to_options_string(amiga::Mode m) {
     case amiga::Mode::cga_text80x50:    return "cga-text80x50";
     case amiga::Mode::cga_text80x25:    return "cga-text80x25";
     case amiga::Mode::cga_text80x200:   return "cga-text80x200";
+    case amiga::Mode::cga_text40x200:   return "cga-text40x200";
+    case amiga::Mode::cga_text40x100:   return "cga-text40x100";
     case amiga::Mode::snes_mode7_256:   return "snes-mode7-256";
     case amiga::Mode::snes_mode7_direct:return "snes-mode7-direct";
     case amiga::Mode::genesis_h32:      return "genesis-h32";
@@ -3042,6 +3048,8 @@ preview_display_dims(std::size_t w, std::size_t h, amiga::Mode mode,
         case amiga::Mode::cga_text80x50:
         case amiga::Mode::cga_text80x25:
         case amiga::Mode::cga_text80x200:
+        case amiga::Mode::cga_text40x200:
+        case amiga::Mode::cga_text40x100:
             sx = 1; sy = 2; break;
         case amiga::Mode::vga_12h:
         case amiga::Mode::vga_10h:
@@ -4636,6 +4644,7 @@ int run_main(int argc, char* argv[]) {
                 "cga-320", "cga-640", "cga-composite",
                 "cga-text80x100", "cga-text80x50", "cga-text80x25",
                 "cga-text80x200",
+                "cga-text40x200", "cga-text40x100",
                 "snes-mode7-256", "snes-mode7-direct",
                 "genesis-h32", "genesis-h40",
                 "genesis-h32-sh", "genesis-h40-sh",
@@ -6074,9 +6083,10 @@ int run_main(int argc, char* argv[]) {
             }
             *image = std::move(halved);
         }
-        // Pad to encoder's 8×2 cell grid (always 8×2 — single mode).
+        // Pad to the encoder's cell grid. cell_w is always 8 (the IBM
+        // CGA 8x8 font); cell_h is mode-dependent (1 / 2 / 4 / 8).
         constexpr std::size_t ct_cw = 8;
-        constexpr std::size_t ct_ch = 2;
+        const std::size_t ct_ch = amiga::cga_text_cell_height(config->mode);
         std::size_t ct_pw = ((image->width()  + ct_cw - 1) / ct_cw) * ct_cw;
         std::size_t ct_ph = ((image->height() + ct_ch - 1) / ct_ch) * ct_ch;
         if (ct_pw != image->width() || ct_ph != image->height()) {
@@ -6089,7 +6099,8 @@ int run_main(int argc, char* argv[]) {
             *image = std::move(padded);
         }
         cli_print_mode(std::format(
-            "CGA text 80x{} ({}x{}, IBM 8x8 ROM glyphs, 16 fg x 16 bg attr)",
+            "CGA text {}x{} ({}x{}, IBM 8x8 ROM glyphs, 16 fg x 16 bg attr)",
+            amiga::cga_text_cols(config->mode),
             amiga::cga_text_rows(config->mode),
             image->width(), image->height()));
         // Force transparent source pixels to black before glyph matching,

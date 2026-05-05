@@ -52,8 +52,10 @@ namespace {
 constexpr bool is_excluded_glyph(amiga::Mode mode, std::uint8_t ch) noexcept {
     switch (mode) {
     case amiga::Mode::cga_text80x200:
+    case amiga::Mode::cga_text40x200:
         return false;
     case amiga::Mode::cga_text80x100:
+    case amiga::Mode::cga_text40x100:
         return false;
     case amiga::Mode::cga_text80x50:
         return ch >= 0xB3;

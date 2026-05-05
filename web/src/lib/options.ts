@@ -146,10 +146,12 @@ const ALL_MODES: ModeOption[] = [
   { value: 'cga-320',          label: 'CGA 320x200 (4 colors)',        chipset: 'cga' },
   { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
   { value: 'cga-composite',    label: 'CGA Composite (160x200)',       chipset: 'cga' },
-  { value: 'cga-text80x200',   label: 'CGA Text 80x200',  chipset: 'cga' },
-  { value: 'cga-text80x100',   label: 'CGA Text 80x100',  chipset: 'cga' },
-  { value: 'cga-text80x50',    label: 'CGA Text 80x50',   chipset: 'cga' },
-  { value: 'cga-text80x25',    label: 'CGA Text 80x25',   chipset: 'cga' },
+  { value: 'cga-text80x200',   label: 'CGA Text 80x200 (32KB)', chipset: 'cga' },
+  { value: 'cga-text80x100',   label: 'CGA Text 80x100 (16KB)', chipset: 'cga' },
+  { value: 'cga-text80x50',    label: 'CGA Text 80x50 (8KB)',   chipset: 'cga' },
+  { value: 'cga-text80x25',    label: 'CGA Text 80x25 (4KB)',   chipset: 'cga' },
+  { value: 'cga-text40x200',   label: 'CGA Text 40x200 (16KB)', chipset: 'cga' },
+  { value: 'cga-text40x100',   label: 'CGA Text 40x100 (8KB)',  chipset: 'cga' },
   // SNES Mode 7 — packed tile + tilemap output, ≤ 256 unique tiles via
   // greedy distance-merging when content has more.
   { value: 'snes-mode7-256',    label: 'Mode 7 (256 BGR555 palette)',
@@ -581,6 +583,7 @@ export function isC64CharsetMode(mode: string): boolean {
 export function isCgaText(mode: string): boolean {
   return mode === 'cga-text80x200' || mode === 'cga-text80x100'
       || mode === 'cga-text80x50'  || mode === 'cga-text80x25'
+      || mode === 'cga-text40x200' || mode === 'cga-text40x100'
 }
 // per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
 // At freeform mode the Native PAR / fixed-buffer behaviour is replaced
@@ -628,6 +631,8 @@ const MODE_PAR: Record<string, number> = {
   'cga-text80x100': 0.417,
   'cga-text80x50':  0.417,
   'cga-text80x25':  0.417,
+  'cga-text40x200': 0.833,
+  'cga-text40x100': 0.833,
   // SNES Mode 7 — 256×224 → 4:3 ⇒ PAR ≈ 1.167 (slightly wide pixels).
   'snes-mode7-256':    1.167,
   'snes-mode7-direct': 1.167,
@@ -692,6 +697,8 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'cga-text80x100':  { sx: 1, sy: 2 },
   'cga-text80x50':   { sx: 1, sy: 2 },
   'cga-text80x25':   { sx: 1, sy: 2 },
+  'cga-text40x200':  { sx: 2, sy: 1 },  // 40-col: hardware doubles horizontally
+  'cga-text40x100':  { sx: 2, sy: 2 },
   // C64 modes: backing-canvas scale before PAR-aware CSS stretch.
   //   hires / AFLI: encoder is 320×200 native; 2×2 → 640×400 backing.
   //   multicolor / FLI: encoder is 160×200 logical; 4×2 → 640×400

@@ -246,6 +246,7 @@ namespace {
 // snow and incomplete-latch artifacts); 0x09 = video ON + 80-col +
 // blink OFF (attr bit 7 becomes bg intensity → 16 bg colors available).
 std::string generate_cga_text(std::span<const std::uint8_t> char_attr,
+                              std::size_t cols,
                               std::size_t rows,
                               std::string_view sym) {
     const std::size_t cell_h = 200 / rows;
@@ -254,13 +255,29 @@ std::string generate_cga_text(std::span<const std::uint8_t> char_attr,
     const unsigned v_sync_pos  = static_cast<unsigned>(224u / cell_h);
     const unsigned max_scan    = static_cast<unsigned>(cell_h - 1) & 0xFFu;
 
+    // 6845 horizontal regs differ between 80-col and 40-col CRTC modes
+    // (BIOS-init values for modes 03h vs 01h).
+    const bool is_40col = (cols == 40);
+    const unsigned h_total      = is_40col ? 0x38u : 0x71u;
+    const unsigned h_displayed  = is_40col ? 0x28u : 0x50u;
+    const unsigned h_sync_pos   = is_40col ? 0x2Du : 0x59u;
+    const unsigned h_sync_width = is_40col ? 0x0Au : 0x0Fu;
+    // 0x3D8 mode-control bits:
+    //   bit 0 (0x01): 80-col high-res; clear = 40-col
+    //   bit 3 (0x08): video output enable
+    // Reprogram phase: video off + correct column width.
+    const unsigned mode_off = is_40col ? 0x00u : 0x01u;
+    const unsigned mode_on  = is_40col ? 0x08u : 0x09u;
+    // BIOS mode 0x01 = 40x25 color text; 0x03 = 80x25 color text.
+    const unsigned bios_mode = is_40col ? 0x01u : 0x03u;
+
     std::string out;
     out.reserve(char_attr.size() * 6 + 2048);
     out += std::format(
-        "/* Mode: cga-text80x{} (8x{} cells, 80x{} effective)\n"
+        "/* Mode: cga-text{}x{} (8x{} cells, {}x{} effective)\n"
         " * Symbol: {}\n"
         " */\n",
-        rows, cell_h, rows, sym);
+        cols, rows, cell_h, cols, rows, sym);
     out += kPreamble;
     out += std::format(
         "\n/* Char+attr pairs: byte 0 = char at (0,0), byte 1 = attr at (0,0), ... */\n"
@@ -269,25 +286,31 @@ std::string generate_cga_text(std::span<const std::uint8_t> char_attr,
     out += emit_byte_array(char_attr);
     out += "};\n\n";
     out += std::format(
-        "/* Full 14-register 6845 CRTC init for 80x{} text ({}-scan cells). */\n"
+        "/* Full 14-register 6845 CRTC init for {}x{} text ({}-scan cells). */\n"
         "static const unsigned char crtc_init[14] = {{\n"
-        "    0x71, 0x50, 0x59, 0x0F, 0x{:02X}, 0x06, 0x{:02X}, 0x{:02X},\n"
+        "    0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X}, 0x06, 0x{:02X}, 0x{:02X},\n"
         "    0x02, 0x{:02X}, 0x20, 0x00, 0x00, 0x00\n"
         "}};\n\n"
         "int main(void) {{\n"
-        "    set_mode(0x03);               /* BIOS 80x25 color text */\n"
-        "    outb(0x3D8, 0x01);            /* video OFF, 80-col */\n"
+        "    set_mode(0x{:02X});               /* BIOS {}x25 color text */\n"
+        "    outb(0x3D8, 0x{:02X});            /* video OFF, {}-col */\n"
         "    for (unsigned i = 0; i < 14; ++i) {{\n"
         "        outb(0x3D4, (unsigned char)i);\n"
         "        outb(0x3D5, crtc_init[i]);\n"
         "    }}\n"
         "    blit_b800({}_data, sizeof({}_data));\n"
-        "    outb(0x3D8, 0x09);            /* video ON + blink OFF */\n"
+        "    outb(0x3D8, 0x{:02X});            /* video ON + blink OFF */\n"
         "    (void)wait_key();\n"
         "    set_mode(0x03);               /* BIOS mode-set restores 6845 */\n"
         "    return 0;\n"
         "}}\n",
-        rows, cell_h, v_total, v_displayed, v_sync_pos, max_scan, sym, sym);
+        cols, rows, cell_h,
+        h_total, h_displayed, h_sync_pos, h_sync_width,
+        v_total, v_displayed, v_sync_pos, max_scan,
+        bios_mode, cols,
+        mode_off, cols,
+        sym, sym,
+        mode_on);
     return out;
 }
 
@@ -618,30 +641,30 @@ generate(amiga::Mode mode,
     auto sym = sanitize_symbol(options.symbol_name);
 
     if (is_cga_text(mode)) {
+        std::size_t expected_cols = cga_text_cols(mode);
         std::size_t expected_rows = cga_text_rows(mode);
-        std::size_t expected_bytes = 80 * expected_rows * 2;
-        // 80x200 (32 KB) overflows the 16 KB CGA video RAM — there's no
-        // way to load it on real hardware, so refuse to emit a viewer
-        // that would be silently broken (would only display the first
-        // 16 KB and read garbage off the second half from BIOS data).
+        std::size_t expected_bytes = expected_cols * expected_rows * 2;
+        // 80x200 (32 KB) overflows the 16 KB CGA video RAM — refuse to
+        // emit a viewer that would be silently broken (would display
+        // the first 16 KB and read garbage from BIOS data after).
+        // Every other variant (including the new 40x200 / 40x100) fits.
         if (!cga_text_fits_vram(mode)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                std::format("cheader_dos_c: cga-text80x{} buffer ({} bytes) "
+                std::format("cheader_dos_c: cga-text{}x{} buffer ({} bytes) "
                             "overflows the 16384-byte CGA video RAM. Use "
-                            "this mode only for png/preview analysis; pick "
-                            "cga-text80x{{100,50,25}} for a runnable viewer.",
-                            expected_rows, expected_bytes)}};
+                            "this mode only for png/preview analysis.",
+                            expected_cols, expected_rows, expected_bytes)}};
         }
         if (raw_frame.size() != expected_bytes) {
             return std::unexpected{Error{
                 ErrorCode::invalid_dimensions,
-                std::format("cheader_dos_c: cga-text80x{} expects {} "
+                std::format("cheader_dos_c: cga-text{}x{} expects {} "
                             "char+attr bytes, got {}",
-                            expected_rows, expected_bytes,
+                            expected_cols, expected_rows, expected_bytes,
                             raw_frame.size())}};
         }
-        return generate_cga_text(raw_frame, expected_rows, sym);
+        return generate_cga_text(raw_frame, expected_cols, expected_rows, sym);
     }
     if (mode == Mode::vga_13h) {
         if (raw_frame.size() != 64000) {
