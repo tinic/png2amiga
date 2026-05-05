@@ -291,7 +291,7 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
-| **png2amiga** | **lores d=8 AGA**             | 36.74     | **86.35**   |     1.05 |
+| **png2amiga** | **lores d=8 AGA (gpu_restart)** | 36.74     | **86.35**   |     1.05 |
 | png2amiga   | lores d=8 AGA + best              | 36.73     | 86.32       |    25.10 |
 | pngquant    | libimagequant 256 (`--speed 1`)   | 37.50     | 82.09       |     0.05 |
 | png2amiga   | EHB + strips + best               | 30.63     | 70.95       |    17.70 |
