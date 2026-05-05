@@ -1,5 +1,6 @@
 #include "snes_io.hpp"
 #include "color_space.hpp"
+#include "pipeline.hpp"
 #include "console_color.hpp"
 #include "dither.hpp"
 #include "quantize.hpp"
@@ -117,26 +118,26 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
         auto merges_needed = alive.size() - kMaxTiles;
 
         struct Pair { std::size_t a, b; float distance; };
-        auto num_pairs = alive.size() * (alive.size() - 1) / 2;
-        std::vector<Pair> pairs;
-        pairs.reserve(num_pairs);
+        const std::size_t Na = alive.size();
+        const auto num_pairs = Na * (Na - 1) / 2;
+        std::vector<Pair> pairs(num_pairs);
         // Pairwise distance is the dominant cost when content has many
-        // unique tiles (O(n² × 64)). Report every ~32 outer rows so the
-        // bar moves smoothly without burning syscall overhead.
+        // unique tiles (O(n² × 64)). Each pair is independent, so we
+        // chunk by outer row i and pre-index the output slot. Triangular
+        // load (row 0 has Na-1 pairs, last row has 0) — pipeline::
+        // parallel_for's fetch_add work-stealing balances this naturally
+        // across threads. AMDuProf showed the distance lambda at the
+        // top of snes-mode7-256 CPU.
         report(0.0f, "merging tiles");
-        for (std::size_t i = 0; i < alive.size(); ++i) {
-            for (std::size_t j = i + 1; j < alive.size(); ++j) {
-                pairs.push_back({alive[i], alive[j],
+        pipeline::parallel_for(Na, [&](std::size_t i) {
+            const std::size_t base = i * (2 * Na - i - 1) / 2;
+            for (std::size_t j = i + 1; j < Na; ++j) {
+                pairs[base + (j - i - 1)] = {alive[i], alive[j],
                     distance(slots[alive[i]].pattern,
-                              slots[alive[j]].pattern)});
+                              slots[alive[j]].pattern)};
             }
-            if (alive.size() > 0 && (i & 31) == 31) {
-                // Distance pass progresses ~95% to sort+merge ~5%.
-                report(0.95f * static_cast<float>(i + 1) /
-                       static_cast<float>(alive.size()),
-                       "merging tiles");
-            }
-        }
+        });
+        report(0.95f, "sorting pairs");
         report(0.96f, "sorting pairs");
         std::ranges::sort(pairs, {}, &Pair::distance);
         report(0.98f, "merging tiles");
