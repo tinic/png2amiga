@@ -94,6 +94,8 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "cga-text80x50")   return amiga::Mode::cga_text80x50;
     if (s == "cga-text80x25")   return amiga::Mode::cga_text80x25;
     if (s == "cga-text80x200")  return amiga::Mode::cga_text80x200;
+    if (s == "cga-text40x200")  return amiga::Mode::cga_text40x200;
+    if (s == "cga-text40x100")  return amiga::Mode::cga_text40x100;
     if (s == "snes-mode7-256")    return amiga::Mode::snes_mode7_256;
     if (s == "snes-mode7-direct") return amiga::Mode::snes_mode7_direct;
     if (s == "genesis-h32")       return amiga::Mode::genesis_h32;

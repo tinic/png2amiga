@@ -697,7 +697,7 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'cga-text80x100':  { sx: 1, sy: 2 },
   'cga-text80x50':   { sx: 1, sy: 2 },
   'cga-text80x25':   { sx: 1, sy: 2 },
-  'cga-text40x200':  { sx: 2, sy: 1 },  // 40-col: hardware doubles horizontally
+  'cga-text40x200':  { sx: 2, sy: 2 },  // 40-col: same 320×200 source as cga-320
   'cga-text40x100':  { sx: 2, sy: 2 },
   // C64 modes: backing-canvas scale before PAR-aware CSS stretch.
   //   hires / AFLI: encoder is 320×200 native; 2×2 → 640×400 backing.

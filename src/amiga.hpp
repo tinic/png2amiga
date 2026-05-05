@@ -289,11 +289,12 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     case Mode::cga_text80x200:
         return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
     // 40-column variants. Hardware pixel-doubles each glyph horizontally
-    // (40×16 = 640 hw px); the encoder works at 320×200 source.
+    // (40×16 = 640 hw px); the encoder works at 320×200 source. PAR /
+    // preview-scale match cga-320 (same 320×200-on-4:3 geometry).
     // 40x200 = 8000 cells (16 KB), 40x100 = 4000 cells (8 KB), both fit.
     case Mode::cga_text40x200:
     case Mode::cga_text40x100:
-        return {320, 200, 4, 16, false, false, true, false, 1, 2, 0.833f};
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 0.833f};
     // SNES Mode 7 — 256×224 native, 8bpp chunky pixels. Display PAR is
     // (4/3)÷(256/224) = 896/768 ≈ 1.167 — pixels render slightly wider
     // than tall on a 4:3 CRT. Same auto-native-par opt-in plumbing as

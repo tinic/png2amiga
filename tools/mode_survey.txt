@@ -1,0 +1,421 @@
+png2amiga mode survey — Sun May  3 15:44:09 PDT 2026
+Source: examples/fantasy.png
+Binary: /Users/turo/png2amiga/build/png2amiga
+
+=== lores ===
+### lores / plain
+```
+$ png2amiga --preview --mode lores
+Input:    1536x1024
+Target:   320x213 @ 5 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     lores (5bpp)
+Palette:  32 colors (auto, OCS brute-force)
+Dither:   floyd-steinberg (strength: 0.72)
+Encoded:  5 bitplanes, disk: 41.7 K, chip: 41.8 K, 32 colors, error: 267.9735, PSNR: 31.72 dB, S2: 55.26
+```
+
+### lores / best
+```
+$ png2amiga --preview --mode lores --best
+Input:    1536x1024
+Target:   320x213 @ 5 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     lores (5bpp)
+Encoded:  5 bitplanes, disk: 41.7 K, chip: 41.8 K, 32 colors, error: 200.7393, PSNR: 32.31 dB, S2: 57.41
+```
+
+### lores / sliced
+```
+$ png2amiga --preview --mode lores --sliced
+Input:    1536x1024
+Target:   320x213 @ 5 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     Sliced (14 changes/line, max 14 MOVEs/line)
+Palette:  32 colors
+Dither:   floyd-steinberg (strength: 1.00)
+Encoded:  5 bitplanes, disk: 53.3 K, chip: 54.3 K, 315 colors, 11.4 avg swaps/line, error: 108.8476, PSNR: 34.39 dB, S2: 60.77
+```
+
+### lores / sliced-best
+```
+$ png2amiga --preview --mode lores --sliced --best
+Input:    1536x1024
+Target:   320x213 @ 5 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     Sliced (14 changes/line, max 14 MOVEs/line)
+Palette:  32 colors
+Dither:   floyd-steinberg (strength: 1.00)
+Encoded:  5 bitplanes, disk: 53.3 K, chip: 54.3 K, 314 colors, 11.4 avg swaps/line, error: 83.6212, PSNR: 34.58 dB, S2: 64.24
+```
+
+### lores / strips
+```
+$ png2amiga --preview --mode lores --strips
+Input:    1536x1024
+Target:   320x213 @ 5 bitplanes
+Chipset:  OCS (12-bit)
+```
+
+### lores / strips-best
+```
+$ png2amiga --preview --mode lores --strips --best
+Input:    1536x1024
+Target:   320x213 @ 5 bitplanes
+Chipset:  OCS (12-bit)
+```
+
+### lores / dpf
+```
+$ png2amiga --preview --mode lores --dpf
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     DPF + lores (6bpp)
+Palette:  8 colors (auto, OCS brute-force)
+Dither:   floyd-steinberg (strength: 0.72)
+Encoded:  6 bitplanes, disk: 49.9 K, chip: 50.1 K, 8 colors, error: 1101.8890, PSNR: 25.18 dB, S2: 17.12
+```
+
+### lores / scap
+```
+$ png2amiga --preview --mode lores --scap
+```
+
+### lores / copper
+```
+$ png2amiga --preview --mode lores --copper
+Input:    1536x1024
+Target:   320x213 @ 5 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     Sliced (14 changes/line, max 14 MOVEs/line)
+Palette:  32 colors
+Dither:   floyd-steinberg (strength: 1.00)
+Encoded:  5 bitplanes, disk: 53.3 K, chip: 54.3 K, 315 colors, 11.4 avg swaps/line, error: 108.8476, PSNR: 34.39 dB, S2: 60.77
+```
+
+### lores / interlace
+```
+$ png2amiga --preview --mode lores --interlace
+```
+
+
+=== hires ===
+### hires / plain
+```
+$ png2amiga --preview --mode hires
+Input:    1536x1024
+Target:   640x213 @ 4 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     hires (4bpp)
+Palette:  16 colors (auto, OCS brute-force)
+Dither:   floyd-steinberg (strength: 0.76)
+Encoded:  4 bitplanes, disk: 66.6 K, chip: 66.7 K, 16 colors, error: 1401.6467, PSNR: 28.45 dB, S2: 29.61
+```
+
+### hires / best
+```
+$ png2amiga --preview --mode hires --best
+Input:    1536x1024
+Target:   640x213 @ 4 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     hires (4bpp)
+Encoded:  4 bitplanes, disk: 66.6 K, chip: 66.7 K, 16 colors, error: 615.8086, PSNR: 28.70 dB, S2: 33.52
+```
+
+### hires / sliced
+```
+$ png2amiga --preview --mode hires --sliced
+Input:    1536x1024
+Target:   640x213 @ 4 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     Sliced (14 changes/line, max 14 MOVEs/line)
+Palette:  16 colors
+Dither:   floyd-steinberg (strength: 1.00)
+Encoded:  4 bitplanes, disk: 78.2 K, chip: 79.2 K, 168 colors, 12.3 avg swaps/line, error: 396.5322, PSNR: 29.05 dB, S2: 31.02
+```
+
+### hires / sliced-best
+```
+$ png2amiga --preview --mode hires --sliced --best
+Input:    1536x1024
+Target:   640x213 @ 4 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     Sliced (14 changes/line, max 14 MOVEs/line)
+Palette:  16 colors
+Dither:   floyd-steinberg (strength: 1.00)
+Encoded:  4 bitplanes, disk: 78.2 K, chip: 79.2 K, 157 colors, 11.5 avg swaps/line, error: 288.1090, PSNR: 29.85 dB, S2: 39.88
+```
+
+### hires / strips
+```
+$ png2amiga --preview --mode hires --strips
+Input:    1536x1024
+Target:   640x213 @ 4 bitplanes
+Chipset:  OCS (12-bit)
+```
+
+### hires / strips-best
+```
+$ png2amiga --preview --mode hires --strips --best
+Input:    1536x1024
+Target:   640x213 @ 4 bitplanes
+Chipset:  OCS (12-bit)
+```
+
+### hires / copper
+```
+$ png2amiga --preview --mode hires --copper
+Input:    1536x1024
+Target:   640x213 @ 4 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     Sliced (14 changes/line, max 14 MOVEs/line)
+Palette:  16 colors
+Dither:   floyd-steinberg (strength: 1.00)
+Encoded:  4 bitplanes, disk: 78.2 K, chip: 79.2 K, 168 colors, 12.3 avg swaps/line, error: 396.5322, PSNR: 29.05 dB, S2: 31.02
+```
+
+### hires / interlace
+```
+$ png2amiga --preview --mode hires --interlace
+```
+
+
+=== ham4 ===
+### ham4 / plain
+```
+$ png2amiga --preview --mode ham4
+```
+
+### ham4 / best
+```
+$ png2amiga --preview --mode ham4 --best
+```
+
+### ham4 / interlace
+```
+$ png2amiga --preview --mode ham4 --interlace
+```
+
+
+=== ham5 ===
+### ham5 / plain
+```
+$ png2amiga --preview --mode ham5
+```
+
+### ham5 / best
+```
+$ png2amiga --preview --mode ham5 --best
+```
+
+### ham5 / interlace
+```
+$ png2amiga --preview --mode ham5 --interlace
+```
+
+
+=== ham6 ===
+### ham6 / plain
+```
+$ png2amiga --preview --mode ham6
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     HAM6 (beam: 16)
+Palette:  16 base colors, 4-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.80)
+Encoded:  6 bitplanes, disk: 50.0 K, chip: 50.1 K, 1303 colors, error: 59.4056, PSNR: 39.00 dB, S2: 74.23
+```
+
+### ham6 / best
+```
+$ png2amiga --preview --mode ham6 --best
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     HAM6 (beam: 16)
+Palette:  16 base colors, 4-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.80)
+Encoded:  6 bitplanes, disk: 50.0 K, chip: 50.1 K, 1308 colors, error: 60.2989, PSNR: 38.98 dB, S2: 74.38
+```
+
+### ham6 / sliced
+```
+$ png2amiga --preview --mode ham6 --sliced
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     HAM6 (beam: 16)
+Palette:  16 base colors, 4-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.82)
+Encoded:  6 bitplanes, disk: 61.6 K, chip: 62.6 K, 1262 colors, 2.2 avg swaps/line, error: 54.4219, PSNR: 40.35 dB, S2: 75.59
+```
+
+### ham6 / sliced-best
+```
+$ png2amiga --preview --mode ham6 --sliced --best
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     HAM6 (beam: 16)
+Palette:  16 base colors, 4-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.82)
+Encoded:  6 bitplanes, disk: 61.6 K, chip: 62.6 K, 1236 colors, 7.4 avg swaps/line, error: 46.3285, PSNR: 41.35 dB, S2: 76.94
+```
+
+### ham6 / strips
+```
+$ png2amiga --preview --mode ham6 --strips
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     HAM6 + Strips (beam: 16)
+Palette:  16 base colors, 4-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.80)
+Encoded:  6 bitplanes, disk: 50.0 K, chip: 50.1 K, 1275 colors, error: 41.2325, PSNR: 41.41 dB, S2: 77.54
+```
+
+### ham6 / strips-best
+```
+$ png2amiga --preview --mode ham6 --strips --best
+```
+```
+
+
+### ham6 / copper
+### ham6 / copper
+```
+```
+$ png2amiga --preview --mode ham6$ png2amiga --preview --mode ham6 --copper --copper
+
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     HAM6 (beam: 16)
+Palette:  16 base colors, 4-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.82)
+Encoded:  6 bitplanes, disk: 61.6 K, chip: 62.6 K, 1262 colors, 2.2 avg swaps/line, error: 54.4219, PSNR: 40.35 dB, S2: 75.59
+```
+
+### ham6 / interlace
+```
+$ png2amiga --preview --mode ham6 --interlace
+Input:    1536x1024
+Target:   320x213 @ 6 bitplanes
+Chipset:  OCS (12-bit)
+Mode:     HAM6 (beam: 16)
+Palette:  16 base colors, 4-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.82)
+Encoded:  6 bitplanes, disk: 61.6 K, chip: 62.6 K, 1262 colors, 2.2 avg swaps/line, error: 54.4219, PSNR: 40.35 dB, S2: 75.59
+```
+
+### ham6 / interlace
+```
+$ png2amiga --preview --mode ham6 --interlace
+```
+
+
+=== ham7 ===
+### ham7 / plain
+```
+$ png2amiga --preview --mode ham7
+```
+
+
+=== ham7 ===
+### ham7 / plain
+```
+$ png2amiga --preview --mode ham7
+```
+
+### ham7 / best
+```
+$ png2amiga --preview --mode ham7 --best
+```
+
+### ham7 / best
+```
+$ png2amiga --preview --mode ham7 --best
+```
+
+### ham7 / interlace
+```
+$ png2amiga --preview --mode ham7 --interlace
+```
+
+### ham7 / interlace
+```
+$ png2amiga --preview --mode ham7 --interlace
+```
+
+
+=== ham8 ===
+### ham8 / plain
+```
+$ png2amiga --preview --mode ham8
+```
+
+
+=== ham8 ===
+### ham8 / plain
+```
+$ png2amiga --preview --mode ham8
+Input:    1536x1024
+Target:   320x213 @ 8 bitplanes
+Chipset:  AGA (24-bit)
+Mode:     HAM8 (beam: 16)
+Palette:  64 base colors, 6-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.82)
+Encoded:  8 bitplanes, disk: 66.8 K, chip: 67.2 K, 21160 colors, error: 26.2690, PSNR: 41.02 dB, S2: 82.05
+```
+
+### ham8 / best
+```
+$ png2amiga --preview --mode ham8 --best
+Input:    1536x1024
+Target:   320x213 @ 8 bitplanes
+Chipset:  AGA (24-bit)
+Mode:     HAM8 (beam: 16)
+Palette:  64 base colors, 6-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.82)
+Encoded:  8 bitplanes, disk: 66.8 K, chip: 67.2 K, 21160 colors, error: 26.2690, PSNR: 41.02 dB, S2: 82.05
+```
+
+### ham8 / best
+```
+$ png2amiga --preview --mode ham8 --best
+```
+```
+
+
+### ham8 / sliced
+### ham8 / sliced
+```
+```
+$ png2amiga --preview --mode ham8$ png2amiga --preview --mode ham8 --sliced --sliced
+
+Input:    1536x1024
+Target:   320x213 @ 8 bitplanes
+Chipset:  AGA (24-bit)
+Mode:     HAM8 (beam: 16)
+Palette:  64 base colors, 6-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.70)
+Encoded:  8 bitplanes, disk: 71.8 K, chip: 70.5 K, 22774 colors, 3.0 avg swaps/line, error: 25.5153, PSNR: 44.23 dB, S2: 84.18
+```
+
+### ham8 / sliced-best
+```
+$ png2amiga --preview --mode ham8 --sliced --best
+Input:    1536x1024
+Target:   320x213 @ 8 bitplanes
+Chipset:  AGA (24-bit)
+Mode:     HAM8 (beam: 16)
+Palette:  64 base colors, 6-bit MODIFY
+Dither:   floyd-steinberg (strength: 0.70)
+Encoded:  8 bitplanes, disk: 71.8 K, chip: 70.5 K, 22774 colors, 3.0 avg swaps/line, error: 25.5153, PSNR: 44.23 dB, S2: 84.18
+```
+
+### ham8 / sliced-best
+```
+$ png2amiga --preview --mode ham8 --sliced --best

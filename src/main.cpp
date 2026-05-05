@@ -3048,9 +3048,13 @@ preview_display_dims(std::size_t w, std::size_t h, amiga::Mode mode,
         case amiga::Mode::cga_text80x50:
         case amiga::Mode::cga_text80x25:
         case amiga::Mode::cga_text80x200:
+            sx = 1; sy = 2; break;
+        // 40-column cga-text variants: source is 320 wide, like cga-320.
+        // Use the default sx=2 sy=2 so the preview comes out 640×400
+        // backing then gets PAR-corrected to 640×480 (4:3).
         case amiga::Mode::cga_text40x200:
         case amiga::Mode::cga_text40x100:
-            sx = 1; sy = 2; break;
+            sx = 2; sy = 2; break;
         case amiga::Mode::vga_12h:
         case amiga::Mode::vga_10h:
         case amiga::Mode::ega_hi:
