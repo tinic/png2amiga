@@ -161,6 +161,7 @@ std::vector<expq::OKLab> kmeanspp_init(
     auto fn4_name = NS::String::string("scolorq_compute_g", NS::UTF8StringEncoding);
     auto fn5_name = NS::String::string("scolorq_assign_only", NS::UTF8StringEncoding);
     auto fn6_name = NS::String::string("scolorq_build_Mb", NS::UTF8StringEncoding);
+    auto fn7_name = NS::String::string("scolorq_assign_subgrid", NS::UTF8StringEncoding);
     MTL::ComputePipelineState* pso_assign =
         device->newComputePipelineState(lib->newFunction(fn1_name), &err);
     MTL::ComputePipelineState* pso_finalize =
@@ -173,8 +174,11 @@ std::vector<expq::OKLab> kmeanspp_init(
         device->newComputePipelineState(lib->newFunction(fn5_name), &err);
     MTL::ComputePipelineState* pso_sc_build =
         device->newComputePipelineState(lib->newFunction(fn6_name), &err);
+    MTL::ComputePipelineState* pso_sc_subgrid =
+        device->newComputePipelineState(lib->newFunction(fn7_name), &err);
     if (!pso_assign || !pso_finalize || !pso_sc_filt
-        || !pso_sc_g || !pso_sc_assign || !pso_sc_build) {
+        || !pso_sc_g || !pso_sc_assign || !pso_sc_build
+        || !pso_sc_subgrid) {
         std::fprintf(stderr, "PSO build failed: %s\n",
                      err ? err->localizedDescription()->utf8String() : "?");
         return 1;
@@ -333,59 +337,73 @@ std::vector<expq::OKLab> kmeanspp_init(
                             0, K * 3 * sizeof(float));
                 static_cast<float*>(sse_buf->contents())[r] = 0.0f;
 
-                MTL::CommandBuffer* cmd = queue->commandBuffer();
                 unsigned restart_u = unsigned(r);
 
-                // Pass 1: out(x) = F · p[a](x).
-                {
-                    auto* enc = cmd->computeCommandEncoder();
-                    enc->setComputePipelineState(pso_sc_filt);
-                    enc->setBuffer(out_buf,   0, 0);
-                    enc->setBuffer(cent_buf,  0, 1);
-                    enc->setBuffer(idx_in,    0, 2);
-                    enc->setBytes(&sp, sizeof(sp), 3);
-                    enc->setBytes(&restart_u, sizeof(unsigned), 4);
-                    enc->dispatchThreads(
-                        MTL::Size(args.width, args.height, 1),
-                        MTL::Size(16, 16, 1));
-                    enc->endEncoding();
+                // Graph-coloured ICM: 9 sub-grid passes per iter.
+                // Recompute filtered output + g BEFORE each sub-grid
+                // so the gradient reflects the post-prior-sub-grid
+                // state — required for monotone descent (stale g
+                // was the previous attempt's failure mode).
+                for (unsigned ox = 0; ox < 3; ++ox) {
+                    for (unsigned oy = 0; oy < 3; ++oy) {
+                        MTL::CommandBuffer* cmd = queue->commandBuffer();
+                        // Pass 1: out(x) = F · p[a](x).
+                        {
+                            auto* enc = cmd->computeCommandEncoder();
+                            enc->setComputePipelineState(pso_sc_filt);
+                            enc->setBuffer(out_buf,   0, 0);
+                            enc->setBuffer(cent_buf,  0, 1);
+                            enc->setBuffer(idx_in,    0, 2);
+                            enc->setBytes(&sp, sizeof(sp), 3);
+                            enc->setBytes(&restart_u, sizeof(unsigned), 4);
+                            enc->dispatchThreads(
+                                MTL::Size(args.width, args.height, 1),
+                                MTL::Size(16, 16, 1));
+                            enc->endEncoding();
+                        }
+                        // Pass 2: g(x) = F · (I - out)(x).
+                        {
+                            auto* enc = cmd->computeCommandEncoder();
+                            enc->setComputePipelineState(pso_sc_g);
+                            enc->setBuffer(g_buf,     0, 0);
+                            enc->setBuffer(pixel_buf, 0, 1);
+                            enc->setBuffer(out_buf,   0, 2);
+                            enc->setBytes(&sp, sizeof(sp), 3);
+                            enc->setBytes(&restart_u, sizeof(unsigned), 4);
+                            enc->dispatchThreads(
+                                MTL::Size(args.width, args.height, 1),
+                                MTL::Size(16, 16, 1));
+                            enc->endEncoding();
+                        }
+                        // Pass 3: assign sub-grid (ox, oy).
+                        {
+                            auto* enc = cmd->computeCommandEncoder();
+                            enc->setComputePipelineState(pso_sc_subgrid);
+                            enc->setBuffer(idx_in,    0, 0);
+                            enc->setBuffer(cent_buf,  0, 1);
+                            enc->setBuffer(g_buf,     0, 2);
+                            enc->setBytes(&sp, sizeof(sp), 3);
+                            enc->setBytes(&restart_u, sizeof(unsigned), 4);
+                            unsigned off[2] = {ox, oy};
+                            enc->setBytes(off, sizeof(off), 5);
+                            unsigned sub_w = (args.width  - ox + 2) / 3;
+                            unsigned sub_h = (args.height - oy + 2) / 3;
+                            enc->dispatchThreads(
+                                MTL::Size(sub_w, sub_h, 1),
+                                MTL::Size(16, 16, 1));
+                            enc->endEncoding();
+                        }
+                        cmd->commit();
+                        cmd->waitUntilCompleted();
+                    }
                 }
-                // Pass 2: g(x) = F · (I - out)(x).
-                {
-                    auto* enc = cmd->computeCommandEncoder();
-                    enc->setComputePipelineState(pso_sc_g);
-                    enc->setBuffer(g_buf,     0, 0);
-                    enc->setBuffer(pixel_buf, 0, 1);
-                    enc->setBuffer(out_buf,   0, 2);
-                    enc->setBytes(&sp, sizeof(sp), 3);
-                    enc->setBytes(&restart_u, sizeof(unsigned), 4);
-                    enc->dispatchThreads(
-                        MTL::Size(args.width, args.height, 1),
-                        MTL::Size(16, 16, 1));
-                    enc->endEncoding();
-                }
-                // Pass 3a: assign only (writes idx_out from idx_in,
-                // current palette, and g).
-                {
-                    auto* enc = cmd->computeCommandEncoder();
-                    enc->setComputePipelineState(pso_sc_assign);
-                    enc->setBuffer(idx_out,   0, 0);
-                    enc->setBuffer(idx_in,    0, 1);
-                    enc->setBuffer(cent_buf,  0, 2);
-                    enc->setBuffer(g_buf,     0, 3);
-                    enc->setBytes(&sp, sizeof(sp), 4);
-                    enc->setBytes(&restart_u, sizeof(unsigned), 5);
-                    enc->dispatchThreads(
-                        MTL::Size(args.width, args.height, 1),
-                        MTL::Size(16, 16, 1));
-                    enc->endEncoding();
-                }
-                // Pass 3b: build M, b using the JUST-WRITTEN
-                // assignments (idx_out is the current state).
+                MTL::CommandBuffer* cmd = queue->commandBuffer();
+                // Pass 3b: build M, b using the just-written
+                // assignments (in-place idx_in is the current state).
                 {
                     auto* enc = cmd->computeCommandEncoder();
                     enc->setComputePipelineState(pso_sc_build);
-                    enc->setBuffer(idx_out,   0, 0);
+                    enc->setBuffer(idx_in,    0, 0);
                     enc->setBuffer(pixel_buf, 0, 1);
                     enc->setBuffer(M_buf,     0, 2);
                     enc->setBuffer(b_buf,     0, 3);
@@ -459,16 +477,9 @@ std::vector<expq::OKLab> kmeanspp_init(
                     }
                 }
 
-                std::swap(idx_in, idx_out);
+                // No swap — sub-grid kernel updates in place.
             }
-            // Final assignment lives in idx_in (after the swap).
-            // Make sure idx_buf is the "current" copy for downstream
-            // rendering.
-            if (idx_in != idx_buf) {
-                std::memcpy(static_cast<unsigned*>(idx_buf->contents()) + r * N,
-                            static_cast<const unsigned*>(idx_in->contents()) + r * N,
-                            N * sizeof(unsigned));
-            }
+            // Final assignment is in idx_in == idx_buf already.
         }
         auto t_sc1 = std::chrono::steady_clock::now();
         std::printf("scolorq (GPU+CPU solve, %d restarts × %d iters): %.1f ms\n",

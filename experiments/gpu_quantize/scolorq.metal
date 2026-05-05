@@ -126,8 +126,63 @@ kernel void scolorq_compute_g(
 }
 
 // -----------------------------------------------------------------
-// Kernel 3a: assign only. target(x) = p[a_old(x)] + g(x)/||F||².
-// Writes indices_out; does NOT touch M/b.
+// Kernel 3a-graph-coloured: in-place assignment update on one
+// sub-grid of pixels separated by stride 3 (so no two threads in
+// the same dispatch can be filter neighbours).
+//
+// Caller dispatches 9 times per scolorq iteration with offsets
+// (ox, oy) ∈ {0,1,2}². Each thread updates a single pixel at
+// (ox + 3·sub_x, oy + 3·sub_y); reads neighbours from the same
+// indices buffer. After all 9 sub-grids run, every pixel has had
+// exactly one assignment update for the iteration.
+//
+// This implements proper sequential ICM up to a "stale g" caveat:
+// g(x) is computed once before the 9 sub-grid passes and shared
+// across them. A neighbour assignment that moved in an earlier
+// sub-grid contributes its NEW a (via the in-place indices read)
+// but its OLD g. This is a fixed-point iteration — should still
+// converge; if it doesn't, recompute g between sub-grids.
+// -----------------------------------------------------------------
+kernel void scolorq_assign_subgrid(
+    device       uint*    indices      [[ buffer(0) ]],   // R*W*H, in-place
+    device const float4*  centroids    [[ buffer(1) ]],   // R*K
+    device const float4*  g_buf        [[ buffer(2) ]],   // R*W*H
+    constant ScolorqParams& params     [[ buffer(3) ]],
+    constant uint&        restart      [[ buffer(4) ]],
+    constant uint2&       subgrid_off  [[ buffer(5) ]],   // (ox, oy) ∈ 0..2
+    uint2                 sub_pos      [[ thread_position_in_grid ]])
+{
+    uint x = sub_pos.x * 3 + subgrid_off.x;
+    uint y = sub_pos.y * 3 + subgrid_off.y;
+    if (x >= params.width || y >= params.height) return;
+
+    const uint W = params.width, K = params.num_centroids;
+    const uint pi = y * W + x;
+    const uint ibase = restart * params.width * params.height;
+    const uint cbase = restart * K;
+
+    const uint a_old = indices[ibase + pi];
+    const float4 p_old = centroids[cbase + a_old];
+    const float4 g = g_buf[ibase + pi];
+
+    float4 target = p_old + g / kFNormSq;
+    target.w = 0.0f;
+
+    float best_d = INFINITY;
+    uint  best_k = 0;
+    for (uint k = 0; k < K; ++k) {
+        float4 c = centroids[cbase + k];
+        float dL = target.x - c.x;
+        float da = target.y - c.y;
+        float db = target.z - c.z;
+        float d  = dL * dL + da * da + db * db;
+        if (d < best_d) { best_d = d; best_k = k; }
+    }
+    indices[ibase + pi] = best_k;
+}
+
+// -----------------------------------------------------------------
+// Kernel 3a (parallel, all-pixels): kept for ABI compat / debugging.
 // -----------------------------------------------------------------
 kernel void scolorq_assign_only(
     device       uint*    indices_out  [[ buffer(0) ]],   // R*W*H
