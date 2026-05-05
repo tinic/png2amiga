@@ -14,22 +14,23 @@ jobs:
   build-linux:
     name: Build Linux (x86_64)
     runs-on: ubuntu-24.04
+    # Run inside the official gcc:15 Docker image (Debian trixie base).
+    # Sidesteps Ubuntu's launchpad PPA flakes that the
+    # ubuntu-toolchain-r/test pull was hitting — gcc-15 ships in the
+    # image, no third-party APT source needed.
+    container: gcc:15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
 
-      - name: Install GCC 15 and CMake
+      - name: Install build deps
+        # gcc-15 / g++-15 are already in the gcc:15 image (as the
+        # default `gcc` / `g++`); only need cmake + ninja + Pillow.
         run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          # ppa:ubuntu-toolchain-r/test's CDN has been timing out
-          # intermittently; retry update + install up to 3 times.
-          for i in 1 2 3; do sudo apt-get update && break; sleep 15; done
-          for i in 1 2 3; do
-            sudo apt-get install -y gcc-15 g++-15 cmake ninja-build python3-pil && break
-            sleep 30
-          done
+          apt-get update
+          apt-get install -y cmake ninja-build python3-pil
 
       - name: Configure
         run: |
