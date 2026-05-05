@@ -7956,12 +7956,20 @@ int run_main(int argc, char* argv[]) {
                 std_locked[i] = true;
             }
         }
-        cli_status("Palette:  {} colors (auto, {})",
-                     pal.size(),
-                     amiga::is_stf(config->mode) ? "STF 9-bit" :
-                     amiga::is_vga(config->mode) ? "VGA 18-bit" :
-                     amiga::is_ega(config->mode) ? "EGA 6-bit (2bpc)" :
-                     chipset == amiga::Chipset::aga ? "median-cut" : "OCS brute-force");
+        // Pick a label that matches what `quantize_palette` actually
+        // dispatched to. AGA / VGA default to gpu_restart on macOS-
+        // with-Metal, fall back to median-cut otherwise.
+        const char* quantizer_label =
+            amiga::is_stf(config->mode) ? "STF 9-bit" :
+            amiga::is_vga(config->mode)
+                ? (quantize::metal_available() ? "VGA 18-bit (gpu-restart)"
+                                                : "VGA 18-bit") :
+            amiga::is_ega(config->mode) ? "EGA 6-bit (2bpc)" :
+            chipset == amiga::Chipset::aga
+                ? (quantize::metal_available() ? "gpu-restart" : "median-cut")
+                : "OCS brute-force";
+        cli_status("Palette:  {} colors (auto, {})", pal.size(),
+                     quantizer_label);
     }
 
     if (config->match_range) {
