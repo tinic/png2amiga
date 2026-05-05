@@ -557,7 +557,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         return 0.6f * per_pixel + 0.4f * coarse;
     };
     auto packed = pack_snes_mode7_frame(chunky, w, h, distance_fn,
-        std::move(cached),
+        cached,  // copy — Lloyd refinement below also uses cached
         on_progress, kStageQuant, kStageQuant + kStagePack);
     if (!packed) return std::unexpected{packed.error()};
     report(kStageQuant + kStagePack, "merged");
@@ -741,40 +741,56 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         // ---- 2b.b: reassign each cell to nearest centroid.
         // ---- 2b.b: reassign cells to nearest centroid + track per-cell
         //   error so we can split overloaded clusters in step 2b.c.
-        bool changed = false;
-        std::array<std::uint8_t, 64> cell_pat{};
-        // Parallel arrays indexed by (ty * tiles_x + tx) — the live area.
-        std::vector<float> cell_error(tiles_y * tiles_x, 0.0f);
-        std::vector<std::size_t> cell_assignment(tiles_y * tiles_x, 0);
-        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-                for (std::size_t row = 0; row < kTile; ++row) {
-                    for (std::size_t col = 0; col < kTile; ++col) {
-                        auto px = tx * kTile + col;
-                        auto py = ty * kTile + row;
-                        cell_pat[row * kTile + col] =
-                            (px < w && py < h) ? chunky[py * w + px] : 0;
-                    }
-                }
-                std::size_t best = 0;
-                float best_d = std::numeric_limits<float>::max();
-                std::span<const std::uint8_t> cell_span(cell_pat);
-                for (std::size_t t = 0; t < num_tiles; ++t) {
-                    std::span<const std::uint8_t> tile_span(
-                        tiles.data() + t * 64, 64);
-                    float d = distance_fn(cell_span, tile_span);
-                    if (d < best_d) { best_d = d; best = t; }
-                }
-                auto cell_lin = ty * tiles_x + tx;
-                cell_error[cell_lin] = best_d;
-                cell_assignment[cell_lin] = best;
-                auto& cell = tilemap[ty * kVirtualSide + tx];
-                if (cell != best) {
-                    cell = static_cast<std::uint8_t>(best);
-                    changed = true;
+        // Pre-compute SlotPre for tiles (rebuilt this iter) and for all
+        // cells (cells don't change between iterations — could be
+        // hoisted outside the iter loop, but doing it per-iter keeps
+        // the change minimal). Cell loop is then parallel.
+        const std::size_t live_cells = tiles_y * tiles_x;
+        std::vector<SlotPre> tile_pre(num_tiles);
+        pipeline::parallel_for(num_tiles, [&](std::size_t t) {
+            std::span<const std::uint8_t> tile_span(
+                tiles.data() + t * 64, 64);
+            tile_pre[t] = cached.prepare(tile_span);
+        });
+        std::vector<SlotPre> cell_pre(live_cells);
+        std::vector<std::array<std::uint8_t, 64>> cell_pats(live_cells);
+        pipeline::parallel_for(live_cells, [&](std::size_t lin) {
+            const std::size_t ty = lin / tiles_x;
+            const std::size_t tx = lin % tiles_x;
+            auto& cp = cell_pats[lin];
+            for (std::size_t row = 0; row < kTile; ++row) {
+                for (std::size_t col = 0; col < kTile; ++col) {
+                    auto px = tx * kTile + col;
+                    auto py = ty * kTile + row;
+                    cp[row * kTile + col] =
+                        (px < w && py < h) ? chunky[py * w + px] : 0;
                 }
             }
-        }
+            cell_pre[lin] = cached.prepare(std::span<const std::uint8_t>(cp));
+        });
+
+        bool changed = false;
+        std::vector<float> cell_error(live_cells, 0.0f);
+        std::vector<std::size_t> cell_assignment(live_cells, 0);
+        std::atomic<bool> changed_atomic{false};
+        pipeline::parallel_for(live_cells, [&](std::size_t lin) {
+            std::size_t best = 0;
+            float best_d = std::numeric_limits<float>::max();
+            for (std::size_t t = 0; t < num_tiles; ++t) {
+                float d = cached.score(cell_pre[lin], tile_pre[t]);
+                if (d < best_d) { best_d = d; best = t; }
+            }
+            cell_error[lin] = best_d;
+            cell_assignment[lin] = best;
+            const std::size_t ty = lin / tiles_x;
+            const std::size_t tx = lin % tiles_x;
+            auto& cell = tilemap[ty * kVirtualSide + tx];
+            if (cell != best) {
+                cell = static_cast<std::uint8_t>(best);
+                changed_atomic.store(true, std::memory_order_relaxed);
+            }
+        });
+        changed = changed_atomic.load();
 
         // ---- 2b.c: empty-cluster splitting (PG-k-means / ISODATA).
         //   When reassignment orphans a tile slot (no cells map to it),
