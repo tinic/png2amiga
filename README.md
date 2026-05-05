@@ -312,14 +312,6 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 | abc         | SHAM6 (`-floyd`)                  | 26.40     | 42.50       |     1.22 |
 | ham_convert | ocs32 (`dither_fs`)               | 24.72     | 31.28       |     4.06 |
 
-The lores d=8 AGA path now uses the GPU-accelerated `gpu-restart`
-quantizer (parallel-restart Lloyd k-means in OKLab on Apple GPU,
-mean ΔS2 +2.6..+3.4 vs pngquant on DIV2K-100+Kodak-24, see
-[experiments/gpu_quantize/FINDINGS.md](experiments/gpu_quantize/FINDINGS.md)).
-Auto-detected at build time via `xcrun metal`; falls back to
-median-cut at runtime when Metal is unavailable. Pass
-`--quantizer median-cut` to force the CPU path.
-
 The harness lives at `tools/shootout/`:
 
 ```bash
