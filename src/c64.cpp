@@ -2022,14 +2022,15 @@ Result<EncodeResult> encode_petscii(const Image& image_in, Palette pal,
     }
 
     // ---- PETSCII-specific source preprocessing -------------------
-    // Wide-radius unsharp mask on OKLab L. amount=0.25 was tuned on
-    // petsciiator's 57 examples — bumps mean ΔPSNR from +1.62 to
-    // +1.74, holds mean ΔS2 at +10.72 (vs +10.82 unprocessed), and
-    // flips the one remaining S2-loss (`total.jpg`) to a win for a
-    // clean 57 / 0 / 0 sweep. Bilateral denoise was tested too;
-    // monotonic regression at every σ_r — dropped.
+    // Wide-radius unsharp mask on OKLab L. amount=0.15 was tuned by
+    // a fine sweep over [0..0.5] on petsciiator's 57 examples —
+    // unimodal peak: mean ΔS2 +11.29 (vs +10.82 unprocessed,
+    // +10.72 at 0.25), mean ΔPSNR +1.83, clean 57 / 0 / 0 sweep
+    // (the lone S2-loss `total.jpg` flips to a win). Bilateral
+    // denoise was tested too — monotonic regression at every σ_r,
+    // dropped.
     Image image = image_in;
-    constexpr float kLocalContrast = 0.25f;
+    constexpr float kLocalContrast = 0.15f;
     {
         // Unsharp mask: separable 1D Gaussian low-pass (σ=8 px, half-
         // width=24) on OKLab L, then add amount × (L − L_blur) back.
