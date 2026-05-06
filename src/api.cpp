@@ -775,7 +775,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // over the API default of 4. Mean S2 sweep over the photo example set:
     // d=2 +0.99, d=4 +0.62, d=3 flat. Lores buckets all prefer ≤ 4, so the
     // bump is hires-only. Triggered when the caller left the API default 4
-    // (the CLI sets diversity explicitly when --palette-diversity is given).
+    // (the CLI sets diversity explicitly when --palette-diversity is given;
+    // tools/api_pipeline_smoke applies the same mirror in --apply-tuning so
+    // api-equiv-* tests stay byte-identical). The web frontend benefits
+    // here too — Vue defaults Options.palette_diversity to 4 unconditionally.
     if (options.palette_diversity == 4 &&
         (mode == amiga::Mode::hires || mode == amiga::Mode::hires_interlace)) {
         options.palette_diversity = 5;

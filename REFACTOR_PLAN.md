@@ -98,12 +98,17 @@ correct (was broken before — would have padded 64×64 → 320×64 had
 those modes ever supported tile, which they don't). Verified by the
 pre-existing `smoke-tile-lores-h-dims` ctest.
 
-### DPF reserves
+### DPF reserves — landed v1.67.0
 
-Currently rejected at the gate ("two split palettes; specify which
-playfield is needed"). If DPF reserves become a feature request,
-the gate becomes `--reserve-pf1` / `--reserve-pf2` and the encoder
-splits the carve-out across the two palette banks. Not in v1.66.0.
+PF1 is zeroed in the current DPF implementation (`expand_to_dpf_pf2`),
+so a reserve on the depth-3/4 base palette IS a PF2 reserve with no
+playfield ambiguity. Both gates dropped (api.cpp + main.cpp); 4 ctests
+pin behaviour: `api-equiv-dpf`, `api-equiv-dpf-reserve`,
+`reserve-indep-lores-dpf`, `reserve-render-dpf-magenta-not-leaked`.
+
+(If PF1 ever becomes user-controllable — e.g. for runtime tilemap or
+sprite content — `--reserve-pf1` / `--reserve-pf2` flags would split
+the carve-out across the two banks.)
 
 ## Reserve-handling primitives
 
@@ -122,7 +127,7 @@ These were extended in this round to properly support locked slots:
   loop all skip `reserved_mask_ehb` slots. The seed-palette refine receives a
   locked mask covering lock_zero + reserves.
 
-## The merge
+## The merge — landed (Phases A-E + output dispatch)
 
 ### Goal
 
@@ -130,52 +135,22 @@ These were extended in this round to properly support locked slots:
 builds an `api::Options`, and calls `api::run_pipeline`. The same call is what
 the web makes. One code path → no silent divergence.
 
-### Modes already through `api::run_pipeline`
+### Status
 
-`main.cpp` already routes these through `api::run_pipeline` /
-`api::encode_state`:
+All amiga modes route through `api::encode_state_image` for the
+ENCODER (HAM, EHB plain, EHB+sliced, strips DPF/EHB/HAM6, c64, snes,
+genesis, cga-text, atari, ega, vga). Output dispatch is consolidated
+through `write_amiga_output(AmigaOutputBundle&)` (v1.68.0).
 
-- VGA / EGA / CGA / Atari ST / SNES / C64 (most non-amiga modes)
-- Tile mode
-- DOS viewer (`.c` output)
-
-### Modes still implementing their own pipeline in `main.cpp`
-
-- **lores / lores+sliced** (~7100–7280 + 7700–7950)
-- **hires / hires+sliced** (same blocks)
-- **ehb plain** (separate block, ~6900)
-- **ehb+sliced** (~6500–6700)
-- **strips dpf / ehb / ham6** (~6300–6500)
-- **HAM 4/5/6/7/8** (~6700–6900)
-
-For each: `main.cpp` builds its own locked/excluded lists, calls the
-underlying encoder, formats CLI status output, writes outputs (PNG / IFF /
-.h / .raw / .pal / .cpp viewer). The api.cpp counterparts already produce
-the encoded planes + palette + scanline_palettes; main.cpp just needs to
-consume `PipelineResult` and format outputs.
-
-### Phased migration
-
-Each phase is self-contained — can ship and ctest independently.
-
-1. **Phase A — strips (EHB / DPF / HAM6)**: thinnest pipelines, easiest to
-   replace. Move main.cpp's ~6300–6500 to call `api::run_pipeline` with the
-   strips options set. Delete the duplicate strips encoder dispatch in
-   main.cpp. ctest the existing reserve cases.
-
-2. **Phase B — EHB plain + EHB+sliced**: replace ~6500–6900 with
-   `api::run_pipeline`. The api.cpp branch already does the per-line refine
-   + 64-color dither correctly; main.cpp adds nothing the api doesn't.
-
-3. **Phase C — lores / hires / lores+sliced / hires+sliced**: replace
-   ~7100–7950. The biggest block.
-
-4. **Phase D — HAM 4..8**: HAM has its own dispatch (greedy / DP beam) that
-   main.cpp invokes via api today for some paths but not all.
-
-5. **Phase E — output formatting**: once main.cpp consumes `PipelineResult`
-   uniformly, the IFF / .h / .raw / .pal / preview-viewer writers can live
-   in one shared site instead of being scattered.
+The lores/hires+sliced inline `copper::encode_copper` lambda
+(main.cpp ~7060–7130) is the one remaining inline encoder. It produces
+byte-identical output to api.cpp's sliced branch for non-`--best`
+runs (pinned by 9 `api-equiv-lores-sliced-*` ctests). Migration to
+`api::encode_state_image` deferred — the inline path uses
+`pipeline::best_sweep<CapTrial>` for `--best` and there is no
+`api-equiv-lores-sliced-best` test pinning byte-equivalence under
+that flag, so the migration carries unverified `--best` regression
+risk. Add the equiv test first, then migrate.
 
 ### Invariants the merge MUST preserve
 

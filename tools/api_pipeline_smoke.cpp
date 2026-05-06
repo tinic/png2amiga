@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
     bool error_clamp_set = false;
     bool refine_set = false;
     bool depth_set = false;
+    bool diversity_set = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view a = argv[i];
@@ -112,7 +113,10 @@ int main(int argc, char** argv) {
             opts.refine_iterations = std::atoi(std::string(next(a)).c_str());
             refine_set = true;
         }
-        else if (a == "--palette-diversity") opts.palette_diversity = std::atoi(std::string(next(a)).c_str());
+        else if (a == "--palette-diversity") {
+            opts.palette_diversity = std::atoi(std::string(next(a)).c_str());
+            diversity_set = true;
+        }
         else if (a == "--quantizer") opts.quantizer = std::string(next(a));
         else if (a == "--reserve-range") {
             auto range = next(a);
@@ -210,6 +214,13 @@ int main(int argc, char** argv) {
         // CLI's Config::refine_iterations default is 8 (set in main.cpp).
         // api::Options::refine_iterations default is 4.
         if (!refine_set) opts.refine_iterations = 8;
+        // Hires plain modes: CLI bumps palette_diversity 4 → 5 when the
+        // user didn't pass --palette-diversity (main.cpp L5166-5170).
+        // Mirror it here so the api-equiv tests stay byte-identical.
+        if (!diversity_set &&
+            (opts.mode == "hires" || opts.mode == "hires-lace")) {
+            opts.palette_diversity = 5;
+        }
     }
 
     auto bytes = read_file(in_path);
