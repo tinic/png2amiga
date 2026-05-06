@@ -14,7 +14,7 @@ import Panel from 'primevue/panel'
 import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
-  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
+  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
   isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaText, isTileFreeformMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
@@ -1928,6 +1928,23 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </label>
                 <div class="col-8">
                   <Select v-model="options.cgaTextMetric" :options="CGA_TEXT_METRICS"
+                    optionLabel="label" optionValue="value" class="w-full" />
+                </div>
+              </div>
+
+              <!-- CGA-text mode only, blur-metric only: blur kernel
+                   shape. Auto picks per-mode default (aniso53 for 8×1
+                   cells, wide55 for 8×2, wide77 for 8×4 / 8×8) — tuned
+                   on examples/{makena, lovers, fantasy, asterix, jungle,
+                   photo, maui, electrichues02} via SSIMULACRA2. -->
+              <div v-if="isCgaText(options.mode) && options.cgaTextMetric === 'blur'"
+                   class="grid align-items-center">
+                <label class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Pappas-Neuhoff blur-kernel shape. The kernel must match the cell aspect: tall-cell modes (8×1, 8×2) want horizontal-favouring kernels, square-cell modes (8×4, 8×8) want symmetric. Auto selects bench-tuned per-mode defaults; manual override for A/B.">
+                  Kernel
+                </label>
+                <div class="col-8">
+                  <Select v-model="options.cgaTextKernel" :options="CGA_TEXT_KERNELS"
                     optionLabel="label" optionValue="value" class="w-full" />
                 </div>
               </div>

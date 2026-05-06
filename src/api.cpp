@@ -1017,6 +1017,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto cga_metric =
             options.cga_text_metric == "mse" ? cga_text::Metric::mse
                                              : cga_text::Metric::blur;
+        auto cga_kernel = cga_text::parse_kernel(options.cga_text_kernel);
         auto dith_method = parse_dither(options.dither);
         Image dithered(image->width(), image->height());
         if (cga_metric != cga_text::Metric::mse ||
@@ -1036,7 +1037,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     dithered[x, y] = text_pal[dith_result.indices[y * image->width() + x]];
         }
         auto res = cga_text::encode(dithered, mode, {}, text_pal, -1,
-                                    cga_metric, options.on_progress);
+                                    cga_metric, cga_kernel,
+                                    options.on_progress);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
         // No post-double here: result.rendered stays at hardware-pixel

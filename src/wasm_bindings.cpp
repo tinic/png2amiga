@@ -124,6 +124,8 @@ Options parse_js_options(val js_opts) {
         opts.native_par = js_opts["nativePar"].as<bool>();
     if (js_opts.hasOwnProperty("cgaTextMetric"))
         opts.cga_text_metric = js_opts["cgaTextMetric"].as<std::string>();
+    if (js_opts.hasOwnProperty("cgaTextKernel"))
+        opts.cga_text_kernel = js_opts["cgaTextKernel"].as<std::string>();
     if (js_opts.hasOwnProperty("c64Palette"))
         opts.c64_palette = js_opts["c64Palette"].as<std::string>();
     if (js_opts.hasOwnProperty("c64Metric"))

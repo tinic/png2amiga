@@ -277,6 +277,11 @@ struct Options {
     // blur metric expects a continuous source — pipeline ignores any
     // pre-dither stage when blur is selected.
     std::string cga_text_metric = "blur";
+    // cga-text blur-kernel shape: "auto" (per-mode default; tuned via
+    // SSIMULACRA2 — aniso53 for 8×1 cells, wide55 for 8×2, wide77 for
+    // 8×4 / 8×8) | "binomial" | "aniso53" | "aniso73" | "wide55" |
+    // "wide77". Only consumed by the blur metric.
+    std::string cga_text_kernel = "auto";
 
     // C64 / VIC-II palette selector. One of: pepto, vice, colodore
     // (default), deekay, godot, c64wiki, levy. Only affects c64-* modes;

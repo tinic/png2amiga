@@ -607,6 +607,7 @@ struct Config {
     float dither_strength = 1.0f;
     float error_clamp = 0.35f;
     std::string cga_text_metric = "blur";
+    std::string cga_text_kernel = "auto";
 
     // Chipset
     std::optional<amiga::Chipset> chipset;  // empty = auto-detect from mode
@@ -814,6 +815,8 @@ void print_usage() {
         "  --cga-palette <p>               p0-low | p0-high | p1-low | p1-high\n"
         "  --cga-bg <0..15>                CGA background colour\n"
         "  --cga-text-metric <m>           blur (default) | mse\n"
+        "  --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |\n"
+        "                                  aniso73 | aniso35 | aniso37 | wide55 | wide77\n"
         "  --c64-palette <p>               pepto | vice | colodore (default) |\n"
         "                                  deekay | godot | c64wiki | levy\n"
         "  --c64-metric <m>                blur (default) | mse\n"
@@ -1639,6 +1642,19 @@ Result<Config> parse_args(int argc, char* argv[]) {
             else if (arg == "--cga-text-metric") {
                 config.cga_text_metric = std::string(val);
             }
+            else if (arg == "--cga-text-kernel") {
+                if (val != "auto" && val != "binomial"
+                    && val != "aniso53" && val != "aniso73"
+                    && val != "aniso35" && val != "aniso37"
+                    && val != "wide55" && val != "wide77") {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                        std::format("Unknown CGA-text kernel: {} "
+                                    "(expected auto/binomial/aniso53/"
+                                    "aniso73/aniso35/aniso37/wide55/wide77)",
+                                    val)}};
+                }
+                config.cga_text_kernel = std::string(val);
+            }
             else if (arg == "--refine") {
                 config.refine_iterations = std::stoi(std::string(val));
             }
@@ -2385,6 +2401,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.crop_auto = cfg.crop_auto;
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
+    opts.cga_text_kernel = cfg.cga_text_kernel;
     opts.c64_palette = cfg.c64_palette;
     opts.c64_metric = cfg.c64_metric;
     opts.c64_petscii_graphics_only = cfg.c64_petscii_graphics_only;
@@ -6069,8 +6086,9 @@ int run_main(int argc, char* argv[]) {
         // shifts cell content by sub-pixel amounts that the cell-mean
         // metric absorbs; measured 0.16% error reduction at 30s cost.
         // Skip the sweep for this mode and use the single-pass encode.
+        auto cga_kernel = cga_text::parse_kernel(config->cga_text_kernel);
         auto res = cga_text::encode(dithered, config->mode, {}, text_pal,
-                                    fixed_offset, cga_metric,
+                                    fixed_offset, cga_metric, cga_kernel,
                                     make_cli_progress_reporter());
         if (!res) {
             std::println(stderr, "CGA text encode error: {}",

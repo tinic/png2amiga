@@ -89,6 +89,7 @@ export interface Options {
   dualPlayfield: boolean
   scap: boolean
   cgaTextMetric: string
+  cgaTextKernel: string
   c64Palette: string
   c64Metric: string
   c64PetsciiGraphicsOnly: boolean
@@ -448,8 +449,23 @@ export const CGA_TEXT_METRICS: NamedItem[] = [
   { value: 'blur', label: 'Pappas-Neuhoff' },
   { value: 'mse',  label: 'Per-pixel MSE' },
 ]
+// Blur-kernel shape — only visible when metric = blur. `auto` resolves
+// per cga-text mode using bench-tuned defaults: aniso53 (8×1 cells),
+// wide55 (8×2), wide77 (8×4 / 8×8). Manual override exposed for users
+// who want to A/B.
+export const CGA_TEXT_KERNELS: NamedItem[] = [
+  { value: 'auto',     label: 'Auto' },
+  { value: 'binomial', label: '3×3 binomial' },
+  { value: 'wide55',   label: '5×5 wider Gaussian' },
+  { value: 'wide77',   label: '7×7 wider Gaussian' },
+  { value: 'aniso53',  label: '5×3 anisotropic horizontal' },
+  { value: 'aniso73',  label: '7×3 anisotropic horizontal' },
+  { value: 'aniso35',  label: '3×5 anisotropic vertical' },
+  { value: 'aniso37',  label: '3×7 anisotropic vertical' },
+]
 export const CGA_TEXT_DEFAULTS = {
   cgaTextMetric: 'blur',
+  cgaTextKernel: 'auto',
 }
 
 export const EXAMPLES: Example[] = [

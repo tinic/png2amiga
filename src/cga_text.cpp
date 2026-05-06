@@ -152,12 +152,52 @@ struct CgaPaletteLab {
 
 }  // namespace
 
+Kernel parse_kernel(std::string_view s) noexcept {
+    if (s == "auto" || s == "auto_per_mode" || s.empty())
+        return Kernel::auto_per_mode;
+    if (s == "binomial") return Kernel::binomial;
+    if (s == "aniso53")  return Kernel::aniso53;
+    if (s == "aniso73")  return Kernel::aniso73;
+    if (s == "aniso35")  return Kernel::aniso35;
+    if (s == "aniso37")  return Kernel::aniso37;
+    if (s == "wide55")   return Kernel::wide55;
+    if (s == "wide77")   return Kernel::wide77;
+    return Kernel::auto_per_mode;
+}
+
+std::string_view kernel_name(Kernel k) noexcept {
+    switch (k) {
+    case Kernel::auto_per_mode: return "auto";
+    case Kernel::binomial:      return "binomial";
+    case Kernel::aniso53:       return "aniso53";
+    case Kernel::aniso73:       return "aniso73";
+    case Kernel::aniso35:       return "aniso35";
+    case Kernel::aniso37:       return "aniso37";
+    case Kernel::wide55:        return "wide55";
+    case Kernel::wide77:        return "wide77";
+    }
+    return "auto";
+}
+
+Kernel resolve_kernel(Kernel k, amiga::Mode /*mode*/) noexcept {
+    if (k != Kernel::auto_per_mode) return k;
+    // Default kept as 3×3 binomial across all cga-text modes by user
+    // request. Per-mode bench (2026-05-05) showed wider / anisotropic
+    // kernels score higher on SSIMULACRA2 (aniso53 +6.73 on 8×1,
+    // wide55 +4.71 on 8×2, wide77 +6.51 on 8×4 / +2.23 on 8×8), but
+    // the wider kernels can over-soften high-frequency detail. The
+    // CLI / web "Kernel" selector exposes the alternatives for users
+    // who want them.
+    return Kernel::binomial;
+}
+
 Result<CgaTextResult>
 encode(const Image& image, amiga::Mode mode,
        std::span<const std::uint8_t> restrict_chars,
        std::span<const Color3f> palette16,
        int fixed_offset,
        Metric metric,
+       Kernel kernel,
        ProgressCb on_progress) {
 
     if (!amiga::is_cga_text(mode)) {
@@ -346,31 +386,100 @@ encode(const Image& image, amiga::Mode mode,
     //
     // Kernel: 3×3 binomial (≈ Gaussian σ=0.85), separable [1,2,1]/4 ⊗ [1,2,1]/4,
     // with replicate padding at cell edges.
-    constexpr std::array<std::array<float, 3>, 3> kBlurKernel = {{
-        {1.0f/16, 2.0f/16, 1.0f/16},
-        {2.0f/16, 4.0f/16, 2.0f/16},
-        {1.0f/16, 2.0f/16, 1.0f/16},
-    }};
+    //
+    // Resolve auto_per_mode → concrete kernel choice.
+    const Kernel kRes = resolve_kernel(kernel, mode);
+    constexpr int kKR = 3;                  // half-width supports up to 7×7
+    constexpr int kKD = 2 * kKR + 1;        // 7
+    std::array<std::array<float, kKD>, kKD> kBlurKernel{};
+    auto fill_kernel = [&]() {
+        for (auto& row : kBlurKernel) row.fill(0.0f);
+        // Helper: emit a 1D Gaussian of size `n` (must be ≤ kKD), σ.
+        auto gauss1d = [&](int n, float sigma, std::array<float, kKD>& out) {
+            std::array<float, kKD> raw{};
+            int half = n / 2;
+            float sum = 0;
+            for (int i = 0; i < n; ++i) {
+                float x = static_cast<float>(i - half);
+                raw[static_cast<std::size_t>(i)] =
+                    std::exp(-0.5f * x * x / (sigma * sigma));
+                sum += raw[static_cast<std::size_t>(i)];
+            }
+            for (int i = 0; i < n; ++i)
+                raw[static_cast<std::size_t>(i)] /= sum;
+            // Centre into kKD slot at offset (kKR - half).
+            int off = kKR - half;
+            for (auto& v : out) v = 0.0f;
+            for (int i = 0; i < n; ++i)
+                out[static_cast<std::size_t>(off + i)] =
+                    raw[static_cast<std::size_t>(i)];
+        };
+        // Build separable kernel kBlurKernel[r][c] = ky[r] * kx[c].
+        auto sep_outer = [&](const std::array<float, kKD>& ky,
+                             const std::array<float, kKD>& kx) {
+            for (std::size_t r = 0; r < kKD; ++r)
+                for (std::size_t c = 0; c < kKD; ++c)
+                    kBlurKernel[r][c] = ky[r] * kx[c];
+        };
+        std::array<float, kKD> ky{}, kx{};
+        // Centre the 1D weights into the 7-slot array at offset kKR -
+        // half. Used by the binomial branch where we want the exact
+        // [1,2,1]/4 weights (Gaussian approximation drifts from the
+        // historical default).
+        auto place3 = [&](std::array<float, kKD>& dst,
+                          float a, float b, float c) {
+            for (auto& v : dst) v = 0.0f;
+            dst[static_cast<std::size_t>(kKR - 1)] = a;
+            dst[static_cast<std::size_t>(kKR    )] = b;
+            dst[static_cast<std::size_t>(kKR + 1)] = c;
+        };
+        switch (kRes) {
+        case Kernel::aniso53:
+            place3(ky, 0.25f, 0.5f, 0.25f); gauss1d(5, 1.2f, kx); break;
+        case Kernel::aniso73:
+            place3(ky, 0.25f, 0.5f, 0.25f); gauss1d(7, 1.6f, kx); break;
+        case Kernel::aniso35:
+            gauss1d(5, 1.2f, ky); place3(kx, 0.25f, 0.5f, 0.25f); break;
+        case Kernel::aniso37:
+            gauss1d(7, 1.6f, ky); place3(kx, 0.25f, 0.5f, 0.25f); break;
+        case Kernel::wide55:
+            gauss1d(5, 1.0f, ky); gauss1d(5, 1.0f, kx); break;
+        case Kernel::wide77:
+            gauss1d(7, 1.5f, ky); gauss1d(7, 1.5f, kx); break;
+        case Kernel::binomial:
+        case Kernel::auto_per_mode:  // resolved above; fallback for safety
+        default:
+            // Exact [1,2,1]/4 ⊗ [1,2,1]/4 → 3×3 binomial as in the
+            // original encoder. Reproduces the historical defaults
+            // bit-for-bit.
+            place3(ky, 0.25f, 0.5f, 0.25f);
+            place3(kx, 0.25f, 0.5f, 0.25f);
+            break;
+        }
+        sep_outer(ky, kx);
+    };
+    fill_kernel();
 
     // Per output pixel position, list of (source-pixel-index, weight) taps
-    // — 9 entries each, with replicate padding folding edge taps onto
+    // — 25 entries each, with replicate padding folding edge taps onto
     // boundary pixels (so taps may share q values; that's fine).
     struct Tap { std::uint8_t q; float w; };
+    constexpr std::size_t kKernTapN = static_cast<std::size_t>(kKD * kKD); // 25
     const std::size_t cell_n = 8 * cell_h;
-    std::vector<std::array<Tap, 9>> kernel_taps(cell_n);
+    std::vector<std::array<Tap, kKernTapN>> kernel_taps(cell_n);
     for (std::size_t py = 0; py < cell_h; ++py) {
         for (std::size_t px = 0; px < 8; ++px) {
             std::size_t p_out = py * 8 + px;
             std::size_t k = 0;
-            for (int dy = -1; dy <= 1; ++dy) {
+            for (int dy = -kKR; dy <= kKR; ++dy) {
                 int ny = std::clamp(static_cast<int>(py) + dy, 0,
                                     static_cast<int>(cell_h) - 1);
-                for (int dx = -1; dx <= 1; ++dx) {
+                for (int dx = -kKR; dx <= kKR; ++dx) {
                     int nx = std::clamp(static_cast<int>(px) + dx, 0, 7);
                     kernel_taps[p_out][k++] = {
                         static_cast<std::uint8_t>(ny * 8 + nx),
-                        kBlurKernel[static_cast<std::size_t>(dy + 1)]
-                                   [static_cast<std::size_t>(dx + 1)]};
+                        kBlurKernel[static_cast<std::size_t>(dy + kKR)]
+                                   [static_cast<std::size_t>(dx + kKR)]};
                 }
             }
         }

@@ -38,6 +38,32 @@ using ProgressCb =
 //
 enum class Metric : std::uint8_t { mse, blur };
 
+// Blur-kernel shape for the Pappas-Neuhoff metric. The kernel is the
+// HVS-approximating low-pass that's MSE-compared between source and
+// rendered cell. `auto_per_mode` resolves at encode time and currently
+// returns binomial for every cga-text mode (kept conservative by user
+// request). Wider / anisotropic kernels score higher on SSIMULACRA2
+// per-mode but soften high-frequency detail; exposed for opt-in A/B.
+//
+//   binomial    — 3×3 (≈ Gaussian σ=0.85), conservative default.
+//   aniso53     — 5×3 horizontal-favouring Gaussian (best on 8×1, 8×2
+//                 cells if you want max SSIMULACRA2).
+//   aniso73     — 7×3 horizontal-favouring Gaussian.
+//   aniso35     — 3×5 vertical-favouring Gaussian (taller cell modes).
+//   aniso37     — 3×7 vertical-favouring Gaussian.
+//   wide55      — 5×5 broader symmetric Gaussian σ≈1.0.
+//   wide77      — 7×7 wider symmetric Gaussian σ≈1.5 (best on 8×4 /
+//                 8×8 cells if you want max SSIMULACRA2).
+enum class Kernel : std::uint8_t {
+    auto_per_mode, binomial, aniso53, aniso73, aniso35, aniso37,
+    wide55, wide77,
+};
+Kernel parse_kernel(std::string_view s) noexcept;
+std::string_view kernel_name(Kernel k) noexcept;
+// Resolves Kernel::auto_per_mode to the per-mode default; returns
+// `k` unchanged otherwise.
+Kernel resolve_kernel(Kernel k, amiga::Mode mode) noexcept;
+
 // Glyph-matched text-mode encoding result.
 // For cga_text80x100: 80 cols × 100 rows → 16000 bytes in video RAM layout.
 // For cga_text80x200: 80 cols × 200 rows → 32000 bytes (exceeds standard
@@ -89,6 +115,7 @@ encode(const Image& image, amiga::Mode mode,
                                      //       e.g. CGA, which has no custom-font
                                      //       slot like EGA/VGA).
        Metric metric = Metric::blur, // see Metric enum above.
+       Kernel kernel = Kernel::auto_per_mode,  // see Kernel enum above.
        ProgressCb on_progress = nullptr);
 
 // Render a CgaTextResult back to an RGB image for preview.
