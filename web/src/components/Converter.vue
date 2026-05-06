@@ -460,23 +460,63 @@ function isReserved(idx: number): boolean {
   return reservedIndexSet.value.has(idx)
 }
 function toggleReserve(idx: number) {
+  if (isReserved(idx)) clearReserve(idx)
+  else setReserve(idx)
+}
+// Add a reserve at idx (no-op if already reserved). Used by the
+// drag-paint set mode + keyboard toggle.
+function setReserve(idx: number) {
   const bytes = lastPaletteBytes.value
   if (!bytes || idx * 3 + 2 >= bytes.length) return
-  const cur = options.reserves.findIndex(r => r.index === idx)
-  if (cur === -1) {
-    options.reserves.push({
-      index: idx,
-      r: bytes[idx * 3 + 0] ?? 0,
-      g: bytes[idx * 3 + 1] ?? 0,
-      b: bytes[idx * 3 + 2] ?? 0,
-    })
-  } else {
-    options.reserves.splice(cur, 1)
-  }
+  if (options.reserves.some(r => r.index === idx)) return
+  options.reserves.push({
+    index: idx,
+    r: bytes[idx * 3 + 0] ?? 0,
+    g: bytes[idx * 3 + 1] ?? 0,
+    b: bytes[idx * 3 + 2] ?? 0,
+  })
   if (paletteViewActive.value) {
     void nextTick(() => { drawPalette(bytes) })
   }
 }
+// Remove the reserve at idx (no-op if not reserved). Used by the
+// drag-paint clear mode + keyboard toggle.
+function clearReserve(idx: number) {
+  const cur = options.reserves.findIndex(r => r.index === idx)
+  if (cur === -1) return
+  options.reserves.splice(cur, 1)
+  const bytes = lastPaletteBytes.value
+  if (paletteViewActive.value && bytes) {
+    void nextTick(() => { drawPalette(bytes) })
+  }
+}
+
+// Drag-to-paint reserve toggling. Mousedown picks a paint mode
+// based on the starting cell's current state (set if it was
+// unreserved, clear if it was reserved); mouseenter on subsequent
+// cells applies that mode. Window-level mouseup ends the drag.
+const reserveDragMode = ref<'set' | 'clear' | null>(null)
+function reserveCellDown(idx: number, ev: MouseEvent) {
+  // Only left button, and avoid text selection during drag.
+  if (ev.button !== 0) return
+  ev.preventDefault()
+  if (isReserved(idx)) {
+    reserveDragMode.value = 'clear'
+    clearReserve(idx)
+  } else {
+    reserveDragMode.value = 'set'
+    setReserve(idx)
+  }
+}
+function reserveCellEnter(idx: number) {
+  if (reserveDragMode.value === 'set') setReserve(idx)
+  else if (reserveDragMode.value === 'clear') clearReserve(idx)
+}
+function endReserveDrag() { reserveDragMode.value = null }
+globalThis.addEventListener('mouseup', endReserveDrag)
+onBeforeUnmount(() => {
+  globalThis.removeEventListener('mouseup', endReserveDrag)
+})
 // CSS background fill for one reserve-grid cell — reads the palette
 // byte triple. Returns transparent for indices beyond the palette.
 function reserveCellBg(idx: number): string {
@@ -2685,7 +2725,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                          :aria-pressed="isReserved(item.idx)"
                          :aria-label="`Reserve palette index ${item.idx}`"
                          :style="{ background: isReserved(item.idx) ? 'transparent' : reserveCellBg(item.idx) }"
-                         @click="toggleReserve(item.idx)"
+                         @mousedown="reserveCellDown(item.idx, $event)"
+                         @mouseenter="reserveCellEnter(item.idx)"
+                         @focus="reserveCellEnter(item.idx)"
                          @keydown.enter.prevent="toggleReserve(item.idx)"
                          @keydown.space.prevent="toggleReserve(item.idx)">
                       <svg v-if="isReserved(item.idx)"
