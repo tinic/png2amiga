@@ -16,7 +16,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaText, isTileFreeformMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -429,8 +429,23 @@ const reservablePaletteSize = computed(() => {
   const total = Math.floor((lastPaletteBytes.value?.length ?? 0) / 3)
   return isEhbMode(options.mode) ? Math.min(total, 32) : total
 })
-const numReserveRows = computed(() =>
-    Math.max(0, Math.ceil(reservablePaletteSize.value / 16)))
+// Reserves are unsupported in modes where the encoder rejects the
+// option (HAM dynamic palette, DPF split, multi-palette tile modes,
+// fixed hardware-palette modes). Hide the panel in those cases —
+// surfacing it would just cause the convert call to error.
+const reservesSupported = computed(() => {
+  const m = options.mode
+  if (isHamMode(m)) return false
+  if (options.dualPlayfield) return false
+  if (isGenesisMode(m) || isSnesMode(m)) return false
+  if (isC64Mode(m)) return false
+  if (isCgaMode(m) || isCgaText(m)) return false
+  return true
+})
+const numReserveRows = computed(() => {
+  if (!reservesSupported.value) return 0
+  return Math.max(0, Math.ceil(reservablePaletteSize.value / 16))
+})
 
 // Flat grid items so we can drive the whole 16×N grid with a single
 // v-for. The earlier nested template + nested v-for shape produced
