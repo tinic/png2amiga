@@ -1712,6 +1712,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 std::span<Color3f>(seed_pal.colors.data(), 32),
                 src.pixels(),
                 /*snap_to_ocs=*/true);
+            if (lock_color0)
+                seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
             if (enable_best) {
                 palette::extra_ehb_optimization(
                     std::span<Color3f>(seed_pal.colors.data(), 32),
@@ -1723,6 +1725,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                         pipeline::parallel_for(n, std::move(f));
                     },
                     on_progress);
+                if (lock_color0)
+                    seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
             }
             ehb_user_pal = std::move(seed_pal.colors);
         }

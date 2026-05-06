@@ -1855,6 +1855,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         std::span<Color3f>(seed_pal.colors.data(), 32),
                         img.pixels(),
                         /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                    if (options.lock_color0)
+                        seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                     if (options.best) {
                         // Silence per-trial progress: best_sweep parallelises
                         // trials, and N workers all firing options.on_progress
@@ -1870,6 +1872,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                 pipeline::parallel_for(n, std::move(f));
                             },
                             /*on_progress=*/{});
+                        if (options.lock_color0)
+                            seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                     }
                 }
                 auto cr = copper::encode_copper(
@@ -1909,6 +1913,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             img.pixels().data() + y * w, w),
                         /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
                         /*max_iters=*/4);
+                    if (options.lock_color0)
+                        base32[0] = Color3f{0.0f, 0.0f, 0.0f};
                     Palette bp;
                     bp.colors.assign(base32.begin(), base32.end());
                     auto ehb64 = palette::make_ehb_palette(bp.colors);
@@ -2118,6 +2124,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     std::span<Color3f>(bp.colors.data(), 32),
                     img.pixels(),
                     /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                if (options.lock_color0)
+                    bp.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                 auto ehbp = palette::make_ehb_palette(bp.colors);
                 auto dr = dither::apply(img, ehbp.colors, d);
                 auto bp_res = bitplane::encode(dr.indices,
@@ -2164,6 +2172,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         pipeline::parallel_for(n, std::move(f));
                     },
                     options.on_progress);
+                if (options.lock_color0)
+                    base32[0] = Color3f{0.0f, 0.0f, 0.0f};
                 winner->base_pal.colors = std::move(base32);
                 winner->ehb_pal = palette::make_ehb_palette(
                     winner->base_pal.colors);
@@ -2210,7 +2220,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // With custom palette: use as-is (32 colors expected).
         // Without: reserve index 0 for transparency when needed.
         bool user_pal_ehb = has_user_palette(options);
-        bool lock_zero_ehb = !user_pal_ehb && has_transparency;
+        bool lock_zero_ehb = !user_pal_ehb
+            && (has_transparency || options.lock_color0);
         Palette base_pal;
         std::vector<bool> base_locked(32, false);
         if (user_pal_ehb) {
@@ -2265,16 +2276,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         // Pair-aware refinement: jointly optimise the 32 base colours
         // under the hardware-tied half-brite pairing. Skipped when the
-        // user supplied an external palette or any base slots are
-        // locked — the refinement isn't lock-aware yet.
-        bool any_locked = false;
-        for (auto v : base_locked) any_locked = any_locked || v;
-        if (!user_pal_ehb && !any_locked && !has_transparency
+        // user supplied an external palette or has user-defined locks
+        // beyond slot-0 — the refinement isn't lock-aware yet. The
+        // common slot-0=black lock from --lock-color0 is allowed: we
+        // run refine over all 32 entries and re-zero slot 0 after, so
+        // the constraint holds.
+        bool any_user_lock = false;
+        for (std::size_t i = 1; i < base_locked.size(); ++i)
+            any_user_lock = any_user_lock || base_locked[i];
+        if (!user_pal_ehb && !any_user_lock
                 && base_pal.colors.size() >= 32) {
             palette::refine_ehb_base_palette(
                 std::span<Color3f>(base_pal.colors.data(), 32),
                 image->pixels(),
                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+            if (lock_zero_ehb)
+                base_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
         }
         // 1-opt local search is --best-only; plain EHB stays at
         // PNN + pair-refine for the fast (~0.1s) baseline path.
