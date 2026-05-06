@@ -3264,10 +3264,24 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.height = static_cast<int>(p.rendered.height());
     r.depth = static_cast<int>(p.planes.depth);
     r.colors = static_cast<int>(p.palette.size());
+    // EHB sliced/strips: report 64 (matching plain EHB) since the
+    // hardware always doubles to 64 effective colours per line.
+    if (p.mode == amiga::Mode::ehb && r.colors == 32) r.colors = 64;
     // Pack the final palette as sRGB bytes (3 per entry) for the web
     // tool's palette swatch view. Empty when palette is empty.
-    r.paletteBytes.reserve(p.palette.size() * 3);
-    for (auto& c : p.palette) {
+    //
+    // EHB sliced/strips store only the 32 base colours per scanline
+    // (the line-0 base is what gets exposed via p.palette); plain EHB
+    // already stores 64 (32 base + 32 hardware half-brite). Extend the
+    // sliced/strips case to 64 so the swatch view is consistent across
+    // all EHB variants.
+    std::vector<Color3f> swatch_pal = p.palette;
+    if (p.mode == amiga::Mode::ehb && swatch_pal.size() == 32) {
+        auto ehb = palette::make_ehb_palette(swatch_pal);
+        swatch_pal = std::move(ehb.colors);
+    }
+    r.paletteBytes.reserve(swatch_pal.size() * 3);
+    for (auto& c : swatch_pal) {
         auto s = color_space::linear_to_srgb(c).clamped();
         r.paletteBytes.push_back(static_cast<std::uint8_t>(
             std::round(s.r * 255.0f)));
