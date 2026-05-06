@@ -155,11 +155,12 @@ declare module '@wasm/png2amiga.js' {
     scap?: boolean
     scapDebug?: boolean
     lockColor0?: boolean
-    // Per-slot palette locks. Each entry pins palette[index] to the
-    // given sRGB colour; the quantizer fills the remaining slots
-    // around the locked positions. Wired by the Lock palette panel
-    // in Advanced settings.
-    locks?: { index: number; r: number; g: number; b: number }[]
+    // Per-slot palette reserves. Each entry removes the slot from the
+    // dither candidate set — the encoder never routes image pixels
+    // through it, but the slot keeps its colour for display (CMAP,
+    // runtime needs). Wired by the Reserve palette panel in Advanced
+    // settings.
+    reserves?: { index: number; r: number; g: number; b: number }[]
     paletteData?: Uint8Array
     paletteFile?: string
 

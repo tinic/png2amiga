@@ -100,23 +100,23 @@ Options parse_js_options(val js_opts) {
         opts.copper_changes = js_opts["copperChanges"].as<int>();
     if (js_opts.hasOwnProperty("lockColor0"))
         opts.lock_color0 = js_opts["lockColor0"].as<bool>();
-    // locks: array of { index, r, g, b } objects pinning specific palette
-    // slots to a fixed sRGB colour. The web Lock-palette panel posts one
-    // entry per swatch the user toggled on. C++ side stores in opts.locks
-    // and palette_locks::assemble_locked_palette places them at their
-    // requested indices, filling the rest with quantizer output.
-    if (js_opts.hasOwnProperty("locks")) {
-        val arr = js_opts["locks"];
+    // reserves: array of { index, r, g, b } objects removing those slots
+    // from the dither candidate set. The web Reserve-palette panel posts
+    // one entry per swatch the user toggled on. The slot keeps its
+    // colour for display (CMAP / runtime needs) but the encoder never
+    // routes image pixels there.
+    if (js_opts.hasOwnProperty("reserves")) {
+        val arr = js_opts["reserves"];
         auto n = arr["length"].as<unsigned>();
-        opts.locks.reserve(n);
+        opts.reserves.reserve(n);
         for (unsigned i = 0; i < n; ++i) {
             val e = arr[i];
-            png2amiga::api::LockSpec lk{};
-            lk.index = e["index"].as<int>();
-            lk.r = e["r"].as<int>();
-            lk.g = e["g"].as<int>();
-            lk.b = e["b"].as<int>();
-            opts.locks.push_back(lk);
+            png2amiga::api::ReserveSpec rs{};
+            rs.index = e["index"].as<int>();
+            rs.r = e["r"].as<int>();
+            rs.g = e["g"].as<int>();
+            rs.b = e["b"].as<int>();
+            opts.reserves.push_back(rs);
         }
     }
     if (js_opts.hasOwnProperty("cropX"))

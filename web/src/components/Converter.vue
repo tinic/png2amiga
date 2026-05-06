@@ -218,7 +218,7 @@ function drawPalette(bytes: Uint8Array) {
   if (!ctx) return
   ctx.imageSmoothingEnabled = false
   ctx.clearRect(0, 0, w, h)
-  const locks = lockedIndexSet.value
+  const reserved = reservedIndexSet.value
   for (let i = 0; i < n; ++i) {
     const r = bytes[i * 3]
     const g = bytes[i * 3 + 1]
@@ -227,7 +227,7 @@ function drawPalette(bytes: Uint8Array) {
     const cy = Math.floor(i / kPalettePerRow) * kPaletteSwatchPx
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
     ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
-    if (locks.has(i)) {
+    if (reserved.has(i)) {
       // Red X with black outline. Two-pass stroke: black underlay
       // (thicker), red on top.
       const x0 = cx + 1, y0 = cy + 1
@@ -402,36 +402,35 @@ watch(paletteViewActive, (on) => {
   if (cached) void nextTick(() => { drawPalette(cached) })
 })
 
-// Lock-palette panel. The 16×N grid renders one swatch per LOCKABLE
+// Reserve-palette panel. The 16×N grid renders one swatch per RESERVABLE
 // palette slot. EHB carves out the halfbrite section (slots 32..63
-// are hardware-derived from the base 32; the encoder errors on
-// --lock-index >= 32 in EHB), so for EHB we only show the base.
-// Other modes use the full emitted palette.
-const lockablePaletteSize = computed(() => {
+// are hardware-derived from the base 32 — the encoder operates on the
+// base palette only), so for EHB we only show the base. Other modes
+// use the full emitted palette.
+const reservablePaletteSize = computed(() => {
   const total = Math.floor((lastPaletteBytes.value?.length ?? 0) / 3)
   return isEhbMode(options.mode) ? Math.min(total, 32) : total
 })
-const numLockRows = computed(() =>
-    Math.max(0, Math.ceil(lockablePaletteSize.value / 16)))
+const numReserveRows = computed(() =>
+    Math.max(0, Math.ceil(reservablePaletteSize.value / 16)))
 
 // Flat grid items so we can drive the whole 16×N grid with a single
-// v-for. The earlier nested `<template v-for>` + `<div v-for>` shape
-// produced an off-by-one click target on some renders (the row-label
-// element shifted swatches by one column when keys got reused). One
-// flat list with stable keys eliminates the issue.
-type LockGridItem =
+// v-for. The earlier nested template + nested v-for shape produced
+// an off-by-one click target when Vue's keyed reconciliation reused
+// nodes between rows. One flat list with stable keys eliminates it.
+type ReserveGridItem =
   | { kind: 'corner'; key: string }
   | { kind: 'col-label'; key: string; text: string }
   | { kind: 'row-label'; key: string; text: string }
   | { kind: 'swatch';   key: string; idx: number }
-const lockGridItems = computed<LockGridItem[]>(() => {
-  const items: LockGridItem[] = []
+const reserveGridItems = computed<ReserveGridItem[]>(() => {
+  const items: ReserveGridItem[] = []
   items.push({ kind: 'corner', key: 'corner' })
   for (let c = 0; c < 16; c++) {
     items.push({ kind: 'col-label', key: `hc${c}`, text: HEX_DIGITS.charAt(c) })
   }
-  const rows = numLockRows.value
-  const cap = lockablePaletteSize.value
+  const rows = numReserveRows.value
+  const cap = reservablePaletteSize.value
   for (let r = 0; r < rows; r++) {
     items.push({ kind: 'row-label', key: `rl${r}`, text: HEX_DIGITS.charAt(r) })
     for (let c = 0; c < 16; c++) {
@@ -445,44 +444,44 @@ const lockGridItems = computed<LockGridItem[]>(() => {
   }
   return items
 })
-const lockedIndexSet = computed(() =>
-    new Set(options.locks.map(l => l.index)))
-function isLocked(idx: number): boolean {
-  return lockedIndexSet.value.has(idx)
+const reservedIndexSet = computed(() =>
+    new Set(options.reserves.map(r => r.index)))
+function isReserved(idx: number): boolean {
+  return reservedIndexSet.value.has(idx)
 }
-function toggleLock(idx: number) {
+function toggleReserve(idx: number) {
   const bytes = lastPaletteBytes.value
   if (!bytes || idx * 3 + 2 >= bytes.length) return
-  const cur = options.locks.findIndex(l => l.index === idx)
+  const cur = options.reserves.findIndex(r => r.index === idx)
   if (cur === -1) {
-    options.locks.push({
+    options.reserves.push({
       index: idx,
       r: bytes[idx * 3 + 0] ?? 0,
       g: bytes[idx * 3 + 1] ?? 0,
       b: bytes[idx * 3 + 2] ?? 0,
     })
   } else {
-    options.locks.splice(cur, 1)
+    options.reserves.splice(cur, 1)
   }
   if (paletteViewActive.value) {
     void nextTick(() => { drawPalette(bytes) })
   }
 }
-// CSS background fill for one lock-grid cell — reads the palette
+// CSS background fill for one reserve-grid cell — reads the palette
 // byte triple. Returns transparent for indices beyond the palette.
-function lockCellBg(idx: number): string {
+function reserveCellBg(idx: number): string {
   const bytes = lastPaletteBytes.value
   if (!bytes || idx * 3 + 2 >= bytes.length) return 'transparent'
   return `rgb(${bytes[idx*3]},${bytes[idx*3+1]},${bytes[idx*3+2]})`
 }
 const HEX_DIGITS = '0123456789ABCDEF'
 
-// Clear stale locks when the palette structure changes — a lock at
-// idx 63 from EHB doesn't make sense after switching to lores d=4
+// Clear stale reserves when the palette structure changes — a reserve
+// at idx 63 from EHB doesn't make sense after switching to lores d=4
 // (16 slots). Mode / depth / chipset changes are the obvious palette-
 // size triggers.
 watch(() => [options.mode, options.depth, options.chipset], () => {
-  if (options.locks.length > 0) options.locks = []
+  if (options.reserves.length > 0) options.reserves = []
 })
 function loupePointerDown(e: PointerEvent) {
   if (!loupeActive.value) return
@@ -944,16 +943,16 @@ function buildWasmOptions(): WasmOptions {
   // | undefined`) and translate alphaDither's 'none' UI sentinel to the
   // empty-string the C++ side expects. Conditional spread on paletteData so
   // we don't write `paletteData: undefined` under exactOptionalPropertyTypes.
-  // Deep-copy the locks array — Vue's reactive() wraps nested objects in
-  // Proxies and Web Workers reject those via structured-clone with
-  // "[object Array] could not be cloned." A plain-object map is safe to
-  // postMessage.
-  const { paletteData, alphaDither, locks, ...rest } = options
+  // Deep-copy the reserves array — Vue's reactive() wraps nested
+  // objects in Proxies and Web Workers reject those via structured-
+  // clone with "[object Array] could not be cloned." A plain-object
+  // map is safe to postMessage.
+  const { paletteData, alphaDither, reserves, ...rest } = options
   return {
     ...rest,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
-    locks: locks.map(l => ({
-      index: l.index, r: l.r, g: l.g, b: l.b,
+    reserves: reserves.map(r => ({
+      index: r.index, r: r.r, g: r.g, b: r.b,
     })),
     ...(paletteData ? { paletteData } : {}),
   }
@@ -2643,16 +2642,18 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- Lock palette: 16xN grid; click to lock/unlock individual
-                   slots. Locked slots stay at their current colour across
-                   re-encodes; the quantizer fills the rest around them.
-                   Visible only when the encoder emitted a global swatch
-                   palette (HAM / sliced / strips have none). -->
-              <div v-if="numLockRows > 0" class="pt-3 mt-3 border-top-1 surface-border">
+              <!-- Reserve palette: 16xN grid; click to reserve/unreserve
+                   individual slots. Reserved slots are removed from the
+                   dither candidate set — the encoder never routes image
+                   pixels through them, but the slot keeps its colour for
+                   display (CMAP / runtime). Visible only when the encoder
+                   emits a global swatch palette (HAM / sliced / strips
+                   have none). -->
+              <div v-if="numReserveRows > 0" class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1"
-                       title="Click a swatch to lock that palette slot to its current colour. Locked slots stay constant across re-encodes; the quantizer fills the rest around them. Click again to unlock.">Lock palette</label>
-                <div class="lock-grid" :style="{ gridTemplateRows: `1rem repeat(${numLockRows}, 0.94rem)` }">
-                  <template v-for="item in lockGridItems" :key="item.key">
+                       title="Click a swatch to reserve that palette slot. Reserved slots stay in the palette but the encoder won't dither image pixels into them — useful for sprite colours, runtime palette regions, EHB upper-bank carve-outs, etc. Click again to unreserve.">Reserve palette</label>
+                <div class="lock-grid" :style="{ gridTemplateRows: `1rem repeat(${numReserveRows}, 0.94rem)` }">
+                  <template v-for="item in reserveGridItems" :key="item.key">
                     <div v-if="item.kind === 'corner'"></div>
                     <div v-else-if="item.kind === 'col-label'" class="lock-axis">{{ item.text }}</div>
                     <div v-else-if="item.kind === 'row-label'" class="lock-axis lock-axis-left">{{ item.text }}</div>
@@ -2660,13 +2661,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                          class="lock-cell"
                          role="button"
                          tabindex="0"
-                         :aria-pressed="isLocked(item.idx)"
-                         :aria-label="`Lock palette index ${item.idx}`"
-                         :style="{ background: lockCellBg(item.idx) }"
-                         @click="toggleLock(item.idx)"
-                         @keydown.enter.prevent="toggleLock(item.idx)"
-                         @keydown.space.prevent="toggleLock(item.idx)">
-                      <svg v-if="isLocked(item.idx)"
+                         :aria-pressed="isReserved(item.idx)"
+                         :aria-label="`Reserve palette index ${item.idx}`"
+                         :style="{ background: reserveCellBg(item.idx) }"
+                         @click="toggleReserve(item.idx)"
+                         @keydown.enter.prevent="toggleReserve(item.idx)"
+                         @keydown.space.prevent="toggleReserve(item.idx)">
+                      <svg v-if="isReserved(item.idx)"
                            viewBox="0 0 10 10" class="lock-x">
                         <line x1="1.5" y1="1.5" x2="8.5" y2="8.5"
                               stroke="#000" stroke-width="3" stroke-linecap="round" />
