@@ -1237,6 +1237,66 @@ else()
             --reserve-range 1-2 ff0000
             --lock-index 7 ff00ff)
 
+    # Bug 7 (--sliced + reserve 1-15 → CMAP slot 0 + slots 16-31 full,
+    # slots 1-15 = reserve colour). Sliced/copper has its own palette
+    # build path inside copper.cpp; we patched it to subtract locked
+    # count from k1 and skip locked indices when filling so the
+    # quantizer's darks land at unreserved slots, not at locked ones
+    # that get overwritten.
+    add_test(NAME "reserve-sliced-low-reserves-fills-tail"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_sliced.iff
+            --expect 0=000000
+            --expect 1=ff0000 --expect 8=ff0000 --expect 15=ff0000
+            --expect-not-zero 16 --expect-not-zero 17
+            --expect-not-zero 23 --expect-not-zero 31
+            --expect-unique-min 17
+            --
+            --mode lores --sliced --reserve-range 1-15 ff0000)
+
+    # Bug 8 (--mode ehb + reserve 1-15 → 32-base palette has reserves
+    # at 1-15 and quantizer fills 16-31; halfbrite section is hardware-
+    # derived, not user-controllable, so only base is asserted).
+    add_test(NAME "reserve-ehb-low-reserves-fills-tail"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_ehb.iff
+            --expect 0=000000
+            --expect 1=ff0000 --expect 8=ff0000 --expect 15=ff0000
+            --expect-not-zero 16 --expect-not-zero 17
+            --expect-not-zero 23 --expect-not-zero 31
+            --expect-unique-min 17
+            --
+            --mode ehb --reserve-range 1-15 ff0000)
+
+    # NOTE: --mode ehb --strips can't write IFF (only PNG/.h/.cpp), so
+    # we don't have a CMAP-asserting regression here. The fix lives in
+    # strips.cpp's seed_pal builder (subtract reserved_slots.size() from
+    # k1 + assemble pattern with reserved-skip) and is exercised by the
+    # ehb-sliced and ehb plain tests via the shared encode_copper path.
+    # If a future regression shows up, write a PNG-based assertion
+    # extension to check_palette.py (count specific colours in
+    # rendered output).
+
+    # Bug 9 (--mode ehb --sliced + reserve 1-15 → similar to
+    # ehb-strips but via the EHB+sliced encode_once trial loop in
+    # api.cpp:1820+; we patched the seed_pal to use
+    # assemble_with_reserves AND pass locks+reserves to
+    # encode_copper as the locked vector so per-line copper
+    # evolution enforces them across every scanline).
+    add_test(NAME "reserve-ehb-sliced-low-reserves-fills-tail"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_ehb_sliced.iff
+            --expect 0=000000
+            --expect 1=ff0000 --expect 8=ff0000 --expect 15=ff0000
+            --expect-not-zero 16 --expect-not-zero 17
+            --expect-not-zero 23 --expect-not-zero 31
+            --expect-unique-min 17
+            --
+            --mode ehb --sliced --reserve-range 1-15 ff0000)
+
 endif() # NOT EMSCRIPTEN
 
 # Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.

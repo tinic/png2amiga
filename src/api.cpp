@@ -1844,13 +1844,23 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         snap_to_chipset(p, chipset, mode);
                         return p;
                     };
-                    std::size_t kfirst = options.lock_color0 ? 31 : 32;
+                    // Subtract locks + reserves: same fix as plain EHB
+                    // and copper sliced. Without this, the quantizer
+                    // outputs more colours than the unlocked-and-
+                    // unreserved tail can hold; the locked overlay
+                    // overwrites darks/mids and the dither's candidate
+                    // set ends up bright-only.
+                    auto qc = palette_locks::quant_counts_for_assemble(
+                        32, options.locks, options.reserves.size(),
+                        options.lock_color0);
                     auto sr = palette_locks::two_pass_quantize(
-                        qfn, kfirst, 32, options.lock_color0);
+                        qfn, qc.qcount, qc.kfallback, options.lock_color0);
                     if (!sr) return std::unexpected{sr.error()};
-                    seed_pal = std::move(*sr);
-                    palette_locks::finalize_palette(seed_pal.colors, 32,
-                                                    options.lock_color0);
+                    auto assembled = palette_locks::assemble_with_reserves(
+                        *sr, options.locks, options.reserves,
+                        32, options.lock_color0, chipset, mode);
+                    seed_pal.colors = std::move(assembled.palette.colors);
+                    seed_pal.name = sr->name;
                     palette::refine_ehb_base_palette(
                         std::span<Color3f>(seed_pal.colors.data(), 32),
                         img.pixels(),
@@ -1876,11 +1886,28 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                     }
                 }
+                // Forward locks + reserves so encode_copper enforces
+                // them across every per-line palette evolution. Without
+                // this the seed_pal pins the colours at line 0 only;
+                // copper's MOVE planner is free to swap them out on
+                // subsequent lines.
+                std::vector<std::pair<std::size_t, Color3f>>
+                    ehb_sliced_locked;
+                for (auto& l : options.locks) {
+                    ehb_sliced_locked.emplace_back(l.index,
+                        palette_locks::to_color(l, chipset, mode));
+                }
+                for (auto& r : options.reserves) {
+                    ehb_sliced_locked.emplace_back(r.index,
+                        palette_locks::to_color(
+                            LockSpec{r.index, r.r, r.g, r.b},
+                            chipset, mode));
+                }
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
                     static_cast<std::size_t>(options.copper_changes),
                     &seed_pal.colors, options.lock_color0,
-                    {}, diversity,
+                    ehb_sliced_locked, diversity,
                     skip_initial, options.interlace,
                     /*is_ehb=*/true,
                     /*on_progress=*/{},
@@ -2245,33 +2272,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (!reserves_in_pal_ehb)
                 return std::unexpected{reserves_in_pal_ehb.error()};
             std::size_t reserves_ehb = *reserves_in_pal_ehb;
-            auto qcount = palette_locks::quant_count(32, options.locks, lock_zero_ehb);
-            if (qcount > reserves_ehb) qcount -= reserves_ehb;
-            else                       qcount = 1;
-            // Two-pass: K-1 first (preserves PNN's partition), K only
-            // if K-1 hit pure black so assemble's dedupe has a spare.
-            std::size_t kfb = std::min<std::size_t>(32,
-                qcount + (lock_zero_ehb ? std::size_t{1} : std::size_t{0}));
+            auto qc = palette_locks::quant_counts_for_assemble(
+                32, options.locks, reserves_ehb, lock_zero_ehb);
             auto quantized = palette_locks::two_pass_quantize(
                 [&](std::size_t k) -> Result<Palette> {
                     return quantize::quantize(*image, k,
                                               quantize::Algorithm::pnn,
                                               options.palette_diversity);
                 },
-                qcount, kfb, lock_zero_ehb);
+                qc.qcount, qc.kfallback, lock_zero_ehb);
             if (!quantized) return std::unexpected{quantized.error()};
-            auto assembled = palette_locks::assemble_locked_palette(
-                *quantized, options.locks, 32, lock_zero_ehb, chipset, mode);
+            auto assembled = palette_locks::assemble_with_reserves(
+                *quantized, options.locks, options.reserves,
+                32, lock_zero_ehb, chipset, mode);
             base_pal = std::move(assembled.palette);
             base_locked = std::move(assembled.locked);
-            for (auto& r : options.reserves) {
-                auto i = static_cast<std::size_t>(r.index);
-                if (r.index >= 0 && i < 32) {
-                    base_pal.colors[i] = palette_locks::to_color(
-                        LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
-                    base_locked[i] = true;
-                }
-            }
         }
 
         // Pair-aware refinement: jointly optimise the 32 base colours

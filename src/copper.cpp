@@ -448,12 +448,18 @@ Result<CopperResult> encode_copper(const Image& image,
     std::vector<Color3f> base_pal;
     std::string base_pal_name;
     if (user_palette && !user_palette->empty()) {
-        // Use user palette as-is (already snapped to chipset by caller)
+        // Use user palette as-is (already snapped to chipset by caller).
+        // Locks overlay on top — user-palette case preserves its own
+        // colour set; locks are point fixes from --lock-index /
+        // --reserve-range.
         base_pal = *user_palette;
         if (base_pal.size() > num_colors)
             base_pal.resize(num_colors);
         while (base_pal.size() < num_colors)
             base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
+        for (auto& [idx, color] : locked) {
+            if (idx < base_pal.size()) base_pal[idx] = color;
+        }
         base_pal_name = "user-supplied";
     } else {
         // Quantizer: caller override wins; otherwise the centralised
@@ -476,21 +482,49 @@ Result<CopperResult> encode_copper(const Image& image,
             }
             return p;
         };
-        auto k1 = lock_color0 && num_colors > 1
-                ? num_colors - 1 : num_colors;
+        // Subtract locked.size() from k1 so the quantizer optimises for
+        // the slots it'll actually fill (= unlocked + non-zero count).
+        // Without this, the quantizer's "first num_colors-1" output
+        // includes colours that land at locked indices and get
+        // overwritten below, displacing those colours entirely. For
+        // 5bpp + 15 reserves at slots 1-15: quantizer at K=31 puts the
+        // dark tones at slots 1-15 (sorted by L), the locked overlay
+        // overwrites them with reserve colours, and the dither's
+        // candidate set ends up with only the bright tail (slots
+        // 16-31) plus slot 0 — image renders with no dark/mid colours.
+        // Floor at 1.
+        std::size_t k1 = num_colors;
+        if (lock_color0 && k1 > 1) --k1;
+        if (k1 > locked.size()) k1 -= locked.size();
+        else                     k1 = 1;
+        auto kfallback = std::min(num_colors,
+            k1 + (lock_color0 ? std::size_t{1} : std::size_t{0}));
         auto pr = palette_locks::two_pass_quantize(
-            qfn, k1, num_colors, lock_color0);
+            qfn, k1, kfallback, lock_color0);
         if (!pr) return std::unexpected{pr.error()};
         base_pal_name = std::move(pr->name);
-        base_pal = std::move(pr->colors);
-        palette_locks::finalize_palette(base_pal, num_colors, lock_color0);
-
-    }
-
-    // Apply locked palette slots (e.g., for blitter objects)
-    for (auto& [idx, color] : locked) {
-        if (idx < base_pal.size())
-            base_pal[idx] = color;
+        // Fill base_pal: lock_zero at slot 0 (if requested), locks at
+        // their indices, quantized in the remaining unlocked slots in
+        // order. Skipping locked indices when filling means the
+        // quantizer's colours land specifically where the dither will
+        // actually be able to use them.
+        base_pal.assign(num_colors, Color3f{0.0f, 0.0f, 0.0f});
+        std::vector<bool> base_locked(num_colors, false);
+        if (lock_color0) {
+            base_pal[0] = Color3f{0.0f, 0.0f, 0.0f};
+            base_locked[0] = true;
+        }
+        for (auto& [idx, color] : locked) {
+            if (idx < num_colors) {
+                base_pal[idx] = color;
+                base_locked[idx] = true;
+            }
+        }
+        std::size_t qi = 0;
+        for (std::size_t i = 0; i < num_colors; ++i) {
+            if (base_locked[i]) continue;
+            if (qi < pr->colors.size()) base_pal[i] = pr->colors[qi++];
+        }
     }
 
     // Step 2: Iterative two-pass predict+dither loop.

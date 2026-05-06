@@ -1702,12 +1702,41 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             for (auto& c : p.colors) c = palette::quantize_to_ocs(c);
             return p;
         };
+        // Subtract reserves from k1: without this, the quantizer fills
+        // 31 slots and reserves overlay slots 1-15 (or wherever),
+        // displacing the darks/mids the dither needs. Same bug as
+        // copper.cpp and api.cpp std-lores; the fix mirrors them.
         std::size_t k1 = lock_color0 ? 31 : 32;
-        auto qr = palette_locks::two_pass_quantize(qfn, k1, 32, lock_color0);
+        if (k1 > reserved_slots.size()) k1 -= reserved_slots.size();
+        else                            k1 = 1;
+        std::size_t kfb = std::min<std::size_t>(32,
+            k1 + (lock_color0 ? std::size_t{1} : std::size_t{0}));
+        auto qr = palette_locks::two_pass_quantize(qfn, k1, kfb, lock_color0);
         if (qr) {
             Palette seed_pal = std::move(*qr);
-            palette_locks::finalize_palette(seed_pal.colors, 32,
-                                             lock_color0);
+            // Build the 32-slot seed: lock_zero at 0, reserves at their
+            // indices, quantizer colours at the remaining unlocked slots
+            // (skipping reserved indices when filling so reserves don't
+            // displace anything).
+            std::vector<Color3f> placed(32, Color3f{0.0f, 0.0f, 0.0f});
+            std::vector<bool> placed_locked(32, false);
+            if (lock_color0) {
+                placed[0] = Color3f{0.0f, 0.0f, 0.0f};
+                placed_locked[0] = true;
+            }
+            for (auto& [idx, color] : reserved_slots) {
+                if (idx < 32) {
+                    placed[idx] = color;
+                    placed_locked[idx] = true;
+                }
+            }
+            std::size_t qi = 0;
+            for (std::size_t i = 0; i < 32; ++i) {
+                if (placed_locked[i]) continue;
+                if (qi < seed_pal.colors.size())
+                    placed[i] = seed_pal.colors[qi++];
+            }
+            seed_pal.colors = std::move(placed);
             palette::refine_ehb_base_palette(
                 std::span<Color3f>(seed_pal.colors.data(), 32),
                 src.pixels(),
