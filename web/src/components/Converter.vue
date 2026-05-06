@@ -909,10 +909,17 @@ function buildWasmOptions(): WasmOptions {
   // | undefined`) and translate alphaDither's 'none' UI sentinel to the
   // empty-string the C++ side expects. Conditional spread on paletteData so
   // we don't write `paletteData: undefined` under exactOptionalPropertyTypes.
-  const { paletteData, alphaDither, ...rest } = options
+  // Deep-copy the locks array — Vue's reactive() wraps nested objects in
+  // Proxies and Web Workers reject those via structured-clone with
+  // "[object Array] could not be cloned." A plain-object map is safe to
+  // postMessage.
+  const { paletteData, alphaDither, locks, ...rest } = options
   return {
     ...rest,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
+    locks: locks.map(l => ({
+      index: l.index, r: l.r, g: l.g, b: l.b,
+    })),
     ...(paletteData ? { paletteData } : {}),
   }
 }
@@ -2652,15 +2659,6 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   </div>
                 </div>
               </template>
-
-              <!-- Palette diversity (experimental) -->
-              <div class="pt-3 mt-3 border-top-1 surface-border">
-                <label class="block text-xs text-color-secondary font-semibold mb-3" title="Experimental. Removes near-duplicate palette entries and re-seeds them from poorly-served image regions. 0 = off, 1 = conservative, 9 = aggressive. Results plateau around 5.">
-                  Palette Diversity
-                  <span class="text-color-secondary font-normal">({{ options.paletteDiversity }})</span>
-                </label>
-                <Slider v-model="options.paletteDiversity" :min="0" :max="9" :step="1" class="w-full" />
-              </div>
 
               <!-- sliced changes override -->
               <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">

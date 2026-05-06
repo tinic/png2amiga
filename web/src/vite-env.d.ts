@@ -160,7 +160,6 @@ declare module '@wasm/png2amiga.js' {
     // around the locked positions. Wired by the Lock palette panel
     // in Advanced settings.
     locks?: { index: number; r: number; g: number; b: number }[]
-    paletteDiversity?: number
     paletteData?: Uint8Array
     paletteFile?: string
 

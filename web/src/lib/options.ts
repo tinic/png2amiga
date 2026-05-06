@@ -86,7 +86,6 @@ export interface Options {
   nativePar: boolean
   lockColor0: boolean
   locks: { index: number; r: number; g: number; b: number }[]
-  paletteDiversity: number
   dualPlayfield: boolean
   scap: boolean
   cgaTextMetric: string
@@ -524,7 +523,6 @@ export function defaultOptions(): Options {
     // Advanced
     lockColor0: true,
     locks: [],
-    paletteDiversity: 4,
     // Dual playfield: encode image into PF2 (upper color regs 8-15 OCS /
     // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3
     // (OCS) or 4 (AGA). CAMG DBLPF flag set.

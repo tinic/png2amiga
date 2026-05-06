@@ -119,8 +119,6 @@ Options parse_js_options(val js_opts) {
             opts.locks.push_back(lk);
         }
     }
-    if (js_opts.hasOwnProperty("paletteDiversity"))
-        opts.palette_diversity = js_opts["paletteDiversity"].as<int>();
     if (js_opts.hasOwnProperty("cropX"))
         opts.crop_x = js_opts["cropX"].as<int>();
     if (js_opts.hasOwnProperty("cropY"))
