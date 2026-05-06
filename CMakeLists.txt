@@ -245,6 +245,7 @@ else()
         # TU. With PNG2AMIGA_HAVE_METAL undefined the file collapses to
         # bool/int stubs that quantize_metal_wrap.cpp links against.
         target_sources(png2amiga PRIVATE src/quantize_metal.cpp)
+        target_sources(api_pipeline_smoke PRIVATE src/quantize_metal.cpp)
     endif()
 
     if(PNG2AMIGA_HAVE_METAL)
