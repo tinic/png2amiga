@@ -1881,7 +1881,13 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             for (auto& v : line_moves) v.clear();
             // err_buf is owned by dither::diffuse_raw_buffer (allocated
             // fresh each pass-2 call), so no manual reset is needed.
-            // total_moves / total_error get re-derived per pass below.
+            // total_moves accumulates inside the per-line emit at line
+            // ~2325; without an explicit reset it would carry pass-0..N-1
+            // into pass-N and inflate avg_changes_per_line by ~6× (6
+            // passes default). Reset alongside line_moves so the final
+            // counter reflects only the last pass's MOVEs.
+            total_moves = 0;
+            total_error = 0.0;
         }
     for (std::size_t y = 0; y < height; ++y) {
         int abs_vpos = static_cast<int>(y) + kVStart;
