@@ -771,6 +771,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
          orig_options.mode.starts_with("ehb")) &&
         orig_options.mode.find("hires") != std::string::npos;
 
+    // Hires plain modes prefer one extra reseed pass (palette_diversity=5)
+    // over the API default of 4. Mean S2 sweep over the photo example set:
+    // d=2 +0.99, d=4 +0.62, d=3 flat. Lores buckets all prefer ≤ 4, so the
+    // bump is hires-only. Triggered when the caller left the API default 4
+    // (the CLI sets diversity explicitly when --palette-diversity is given).
+    if (options.palette_diversity == 4 &&
+        (mode == amiga::Mode::hires || mode == amiga::Mode::hires_interlace)) {
+        options.palette_diversity = 5;
+    }
+
     // Reject dither methods that don't apply to the chosen mode rather
     // than silently fall through to a degraded encode. HAM has no
     // discrete palette per pixel — the encoder picks SET/MODIFY ops
