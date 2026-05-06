@@ -3110,23 +3110,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Snap palette to discrete gamut where applicable (STF/EGA/VGA).
         if (amiga::is_stf(mode) || amiga::is_vga(mode))
             snap_to_chipset(*quantized, chipset, mode);
+        // Merge reserves into the fixed-slot list before assemble. Without
+        // this, assemble fills unlocked slots with quantized colours
+        // FIRST (slots 1, 2, 3, ...), then the post-assemble reserve
+        // overlay overwrites them — leaving the actually-usable
+        // (non-reserved, non-locked) tail slots filled with default
+        // (0,0,0). For 3bpp + reserve 1-4: quantized fills 1,2,3 then
+        // reserves overwrite 1-4, leaving 5,6,7 black → all-black
+        // image after dither (only black is in the candidate set).
+        // Treating reserves as locks for placement makes assemble skip
+        // their indices and put quantized into the correct positions.
+        std::vector<LockSpec> fixed_slots = options.locks;
+        for (auto& r : options.reserves) {
+            fixed_slots.push_back(LockSpec{r.index, r.r, r.g, r.b});
+        }
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, options.locks, max_colors, lock_zero, chipset, mode);
+            *quantized, fixed_slots, max_colors, lock_zero, chipset, mode);
         pal = std::move(assembled.palette);
         locked_mask = std::move(assembled.locked);
-        // Overlay reserved slots: snap each user-supplied colour to the
-        // chipset/mode precision and drop it into the slot. Mark in
-        // locked_mask so refine treats them as fixed; reserved_mask is
-        // separate (refine doesn't see it — refine only operates on
-        // unlocked slots and reserved slots are already locked).
-        for (auto& r : options.reserves) {
-            auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < max_colors) {
-                pal.colors[i] = palette_locks::to_color(
-                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
-                locked_mask[i] = true;
-            }
-        }
     }
 
     if (options.match_range)

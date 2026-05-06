@@ -7872,21 +7872,20 @@ int run_main(int argc, char* argv[]) {
         if (amiga::is_stf(config->mode) || amiga::is_vga(config->mode) ||
             amiga::is_ega(config->mode))
             snap_palette(*quantized, chipset, config->mode);
+        // Merge --reserve-range into the fixed-slot list before assemble.
+        // See api.cpp's run_pipeline for the why: assemble fills unlocked
+        // slots from the front; without merging, quantized colours land
+        // at slots 1..N before reserves overwrite them, leaving the
+        // tail unfilled (3bpp + reserve 1-4 → all-black tail).
+        std::vector<api::LockSpec> fixed_slots = config->locks;
+        for (auto& r : config->reserves) {
+            fixed_slots.push_back(api::LockSpec{r.index, r.r, r.g, r.b});
+        }
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, config->locks, max_colors, lock_zero_std,
+            *quantized, fixed_slots, max_colors, lock_zero_std,
             chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
-        // Overlay --reserve-range: snap user RGB to chipset, drop into
-        // its slot, mark locked so refine treats as fixed.
-        for (auto& r : config->reserves) {
-            auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < max_colors) {
-                pal.colors[i] = palette_locks::to_color(
-                    api::LockSpec{r.index, r.r, r.g, r.b}, chipset, config->mode);
-                std_locked[i] = true;
-            }
-        }
         // Use the palette's own .name — set by whichever algorithm
         // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
         // ega). Mode-specific precision is already on the Mode: line
