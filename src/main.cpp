@@ -7878,8 +7878,12 @@ int run_main(int argc, char* argv[]) {
         cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
     } else {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, lock_zero_std);
-        if (qcount > reserve_count_std) qcount -= reserve_count_std;
-        else                            qcount = 1;
+        // Don't subtract reserve_count from qcount — we overlay reserves
+        // on top of assemble's output, so we want the quantizer to give
+        // us as many candidates as possible. The dedupe in assemble
+        // would otherwise drop quantizer entries that bit-match
+        // user-supplied reserves (very common — reserves often come
+        // from the user's previous palette), leaving the tail empty.
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.
@@ -7915,20 +7919,26 @@ int run_main(int argc, char* argv[]) {
         if (amiga::is_stf(config->mode) || amiga::is_vga(config->mode) ||
             amiga::is_ega(config->mode))
             snap_palette(*quantized, chipset, config->mode);
-        // Merge --reserve-range into the fixed-slot list before assemble.
-        // See api.cpp's run_pipeline for the why: assemble fills unlocked
-        // slots from the front; without merging, quantized colours land
-        // at slots 1..N before reserves overwrite them, leaving the
-        // tail unfilled (3bpp + reserve 1-4 → all-black tail).
-        std::vector<api::LockSpec> fixed_slots = config->locks;
-        for (auto& r : config->reserves) {
-            fixed_slots.push_back(api::LockSpec{r.index, r.r, r.g, r.b});
-        }
+        // Assemble with locks only; overlay reserves after. See
+        // api.cpp's run_pipeline for why — when the user's reserve
+        // colours match quantizer picks exactly (very common: they
+        // often come from the user's prior palette), merging reserves
+        // into the fixed-slot list causes assemble's dedupe pass to
+        // drop the quantizer entries and leave the palette tail empty.
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, fixed_slots, max_colors, lock_zero_std,
+            *quantized, config->locks, max_colors, lock_zero_std,
             chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
+        for (auto& r : config->reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) {
+                pal.colors[i] = palette_locks::to_color(
+                    api::LockSpec{r.index, r.r, r.g, r.b},
+                    chipset, config->mode);
+                std_locked[i] = true;
+            }
+        }
         // Use the palette's own .name — set by whichever algorithm
         // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
         // ega). Mode-specific precision is already on the Mode: line

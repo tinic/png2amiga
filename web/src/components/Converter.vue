@@ -1319,8 +1319,25 @@ function updateLastResultRefs(result: ConvertResult): void {
   lastAga.value = Boolean(result.aga)
   imageHasAlpha.value = Boolean(result.hasTransparency)
   lastPaletteBytes.value = result.paletteBytes ?? null
+  logWasmPalette(lastPaletteBytes.value)
   redrawPaletteIfActive()
   maybeSeedSizes(result)
+}
+
+// Log the palette WASM just handed back, formatted as `idx: #rrggbb`
+// per slot. Pairs with the [wasm-opts] dump in buildWasmOptions so
+// a user can match a web run to a CLI repro.
+function logWasmPalette(pal: Uint8Array | null): void {
+  if (!pal) return
+  const lines: string[] = []
+  const hx = (v: number) => v.toString(16).padStart(2, '0')
+  for (let i = 0; i * 3 + 2 < pal.length; ++i) {
+    const r = pal[i * 3]     ?? 0
+    const g = pal[i * 3 + 1] ?? 0
+    const b = pal[i * 3 + 2] ?? 0
+    lines.push(`${i.toString().padStart(3)}: #${hx(r)}${hx(g)}${hx(b)}`)
+  }
+  console.warn(`[wasm-pal] ${pal.length / 3} entries\n${lines.join('\n')}`)
 }
 
 // Repaint the palette swatch grid if the user has the palette view
