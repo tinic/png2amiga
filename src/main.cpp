@@ -253,15 +253,16 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
         for (auto& r : cfg.reserves) if (r.index == idx) return true;
         return false;
     };
-    std::println(stderr, "Palette dump: {} entries", colors.size());
+    std::println(stderr, "Palette dump: {} entries  🔒 = locked, 🔖 = reserved",
+                 colors.size());
     for (std::size_t k = 0; k < colors.size(); ++k) {
         auto srgb = color_space::linear_to_srgb(colors[k]).clamped();
         auto r = static_cast<int>(std::round(srgb.r * 255.0f));
         auto g = static_cast<int>(std::round(srgb.g * 255.0f));
         auto b = static_cast<int>(std::round(srgb.b * 255.0f));
         std::string_view tag = "";
-        if (is_reserved(static_cast<int>(k)))    tag = " (reserved)";
-        else if (is_locked(static_cast<int>(k))) tag = " (locked)";
+        if      (is_reserved(static_cast<int>(k))) tag = " 🔖";
+        else if (is_locked(static_cast<int>(k)))   tag = " 🔒";
         std::println(stderr, "  {:3}: #{:02x}{:02x}{:02x}{}",
                      k, r, g, b, tag);
     }
@@ -629,6 +630,7 @@ struct Config {
     // aggressive removal of near-duplicate palette entries, re-seeded from
     // poorly-served image regions.
     int palette_diversity = 4;
+    bool palette_diversity_explicit = false;  // true if user passed --palette-diversity
 
     // Quantizer selection (empty = auto: OCS brute-force for OCS, median-cut
     // for AGA). "pnn" uses Pairwise Nearest Neighbor (experimental).
@@ -1644,6 +1646,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
                 if (config.palette_diversity < 0) config.palette_diversity = 0;
                 if (config.palette_diversity > 9) config.palette_diversity = 9;
+                config.palette_diversity_explicit = true;
             }
             else if (arg == "--quantizer") {
                 config.quantizer = std::string(val);
@@ -4970,6 +4973,7 @@ int run_main(int argc, char* argv[]) {
         cli_print_palette(std::format(
             "{} colours, indexed PNG-8 (benchmark, {})",
             quantized->colors.size(), quantized->name));
+        cli_dump_palette(std::span<const Color3f>(quantized->colors), *config);
         cli_print_dither(dith.method, dith.strength);
 
         float psnr = color_space::compute_psnr_blurred(
@@ -5155,6 +5159,16 @@ int run_main(int argc, char* argv[]) {
                 config->depth = 4;
             }
             // OCS lores keeps the global default 5.
+        }
+
+        // Hires plain modes prefer one extra reseed pass (palette_diversity=5)
+        // over the global default of 4. Mean S2 sweep over the photo example
+        // set: d=2 +0.99, d=4 +0.62, d=3 flat (kept the default win at 4).
+        // Lores buckets all prefer ≤ 4, so the override is hires-only.
+        if (!config->palette_diversity_explicit &&
+            (config->mode == amiga::Mode::hires ||
+             config->mode == amiga::Mode::hires_interlace)) {
+            config->palette_diversity = 5;
         }
 
         // Check depth against mode+chipset limits
@@ -5747,6 +5761,11 @@ int run_main(int argc, char* argv[]) {
                        "{}×{} cells, 4 colours/cell)",
                        _rw, _rh, _cols, _rows); break;
         }
+        // C64 fixed VIC-II palette — st.palette holds whichever VIC-II
+        // colour table the user picked via --c64-palette.
+        if (!st.palette.empty())
+            cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+
         // Glyph-occupancy line for charset / PETSCII modes (web has the
         // same field). c64_unique_glyphs is reused for charset modes;
         // PETSCII reports the count of unique character codes used (max
@@ -5938,6 +5957,10 @@ int run_main(int argc, char* argv[]) {
                  ? "256-palette BGR555"
                  : "Direct Color BBGGGRRR"),
             st.rendered.width(), st.rendered.height()));
+        // SNES Mode 7: 256-palette path has st.palette; Direct Color
+        // (BBGGGRRR pixel bytes) carries colour inline → palette empty.
+        if (!st.palette.empty())
+            cli_dump_palette(std::span<const Color3f>(st.palette), *config);
         cli_print_dither(config->dither_method,
                          make_api_options(*config).dither_strength);
         cli_print_encoded_other(
@@ -6083,6 +6106,30 @@ int run_main(int argc, char* argv[]) {
         cli_print_mode(std::format(
             "Sega Genesis ({}), {}x{} @ 4bpp tiles, 4 palettes x 16 BGR333",
             mode_label, st.rendered.width(), st.rendered.height()));
+        // Genesis: 4 banks × 16 BGR333 colours. genesis_palette_words is
+        // the raw CRAM (uint16 0BBB0GGG0RRR0000); decode back to Color3f
+        // for the dump so the per-bank colours are visible. Skip empty
+        // banks (encoder only fills what it uses).
+        if (g_print_palette && !st.genesis_palette_words.empty()) {
+            std::println(stderr,
+                "Palette dump: 4 × 16 BGR333 banks  (Genesis CRAM)");
+            for (std::size_t bank = 0; bank < 4; ++bank) {
+                std::println(stderr, "  Bank {}:", bank);
+                for (std::size_t i = 0; i < 16; ++i) {
+                    auto idx = bank * 16 + i;
+                    if (idx >= st.genesis_palette_words.size()) break;
+                    auto w = st.genesis_palette_words[idx];
+                    int r3 = (w >> 1) & 0x7;
+                    int g3 = (w >> 5) & 0x7;
+                    int b3 = (w >> 9) & 0x7;
+                    int r8 = (r3 << 5) | (r3 << 2) | (r3 >> 1);
+                    int g8 = (g3 << 5) | (g3 << 2) | (g3 >> 1);
+                    int b8 = (b3 << 5) | (b3 << 2) | (b3 >> 1);
+                    std::println(stderr, "    {:2}: #{:02x}{:02x}{:02x}",
+                                 i, r8, g8, b8);
+                }
+            }
+        }
         cli_print_dither(genesis_dither,
                          make_api_options(*config).dither_strength);
         // Tile-dedup stats. The "after dedup" tile count maps directly to
@@ -6249,6 +6296,8 @@ int run_main(int argc, char* argv[]) {
             text_pal.push_back(
                 color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
         }
+        cli_status("Palette:  16 colors (kCgaHw, CGA text-mode IRGB)");
+        cli_dump_palette(std::span<const Color3f>(text_pal), *config);
         // Resolve metric and decide whether to pre-dither. Default for
         // cga-text is `--dither none` regardless of metric: a 5-image
         // sweep showed `blur+none` beats every `blur+ED` combo on average
@@ -6532,6 +6581,11 @@ int run_main(int argc, char* argv[]) {
                 static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
         }
 
+        // HAM: dump the (resolved) base palette only after encode finishes
+        // — cli_print_palette above prints the base-colour count BEFORE
+        // encode (dither_tuning + DP search shape it).
+        cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
                                   config->hires, config->interlace);
@@ -6705,6 +6759,8 @@ int run_main(int argc, char* argv[]) {
                 copper_result_obj.base_palette.size(),
                 copper_result_obj.base_palette.size() * 2,
                 copper_result_obj.base_palette_quantizer));
+            cli_dump_palette(std::span<const Color3f>(
+                copper_result_obj.base_palette), *config);
             cli_print_dither(dith.method, dith.strength);
 
             auto& all_indices = winner->indices;
@@ -6848,6 +6904,7 @@ int run_main(int argc, char* argv[]) {
         cli_print_palette(std::format(
             "32 base + 32 half-brite = 64 colors ({})",
             resolve_quantizer_name(config->mode, chipset, config->quantizer)));
+        cli_dump_palette(std::span<const Color3f>(st.palette), *config);
         cli_print_dither(config->dither_method, aopts.dither_strength);
         cli_print_encoded(
             static_cast<int>(st.planes.depth),
@@ -7086,6 +7143,8 @@ int run_main(int argc, char* argv[]) {
             "{} colors ({})",
             copper_result->base_palette.size(),
             copper_result->base_palette_quantizer));
+        cli_dump_palette(std::span<const Color3f>(
+            copper_result->base_palette), *config);
         cli_print_dither(dith.method, dith.strength);
 
         // Apply transparency mask: transparent pixels → index 0
@@ -7278,6 +7337,7 @@ int run_main(int argc, char* argv[]) {
                 "{} colors (PF2 3bpl, {})", pf2_colors,
                 resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         }
+        cli_dump_palette(std::span<const Color3f>(st.palette), *config);
         cli_print_dither(config->dither_method,
                          make_api_options(*config).dither_strength);
         cli_status("Copper:   hblank avg {:.1f} (max {}), visible avg "
@@ -7494,6 +7554,7 @@ int run_main(int argc, char* argv[]) {
             auto pal16 = palette::cga_composite_palette();
             pal.colors.assign(pal16.begin(), pal16.end());
             cli_status("Palette:  CGA composite, 16 colors (NTSC artifact, old CGA)");
+            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
         } else if (config->mode == amiga::Mode::cga_320) {
             palette::CgaPalette best = palette::CgaPalette::p1_high;
             if (config->cga_auto_palette) {
@@ -7538,6 +7599,7 @@ int run_main(int argc, char* argv[]) {
                          names[static_cast<int>(best)],
                          config->cga_bg & 0xF,
                          config->cga_auto_palette ? " (auto)" : "");
+            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
         } else {
             // cga_640: 2 colors = bg + white
             pal.colors = {
@@ -7547,6 +7609,7 @@ int run_main(int argc, char* argv[]) {
             };
             cli_status("Palette:  CGA mono, 2 colors (bg=0x{:X}, fg=white)",
                          config->cga_bg & 0xF);
+            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
         }
     } else if (user_pal_std) {
         auto loaded = palette_io::load_palette(config->palette_file);
@@ -7573,6 +7636,7 @@ int run_main(int argc, char* argv[]) {
         // Monochrome: fixed white + black palette
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
         cli_status("Palette:  2 colors (monochrome)");
+        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
     } else if (config->mode == amiga::Mode::ega_320 ||
                config->mode == amiga::Mode::ega_640) {
         // EGA 200-line CGA-compat: palette order must be kCgaHw exactly.
@@ -7585,6 +7649,7 @@ int run_main(int argc, char* argv[]) {
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
         cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
+        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
     } else {
         // Slot-budget for the quantizer. See palette_locks::QuantCounts
         // — subtracts lock_zero + locks + reserves so the quantizer
