@@ -219,21 +219,15 @@ function drawPalette(bytes: Uint8Array) {
   ctx.imageSmoothingEnabled = false
   ctx.clearRect(0, 0, w, h)
   const reserved = reservedIndexSet.value
-  // EHB halfbrite section (slots 32..63): hardware-derived from the
-  // base 32, not user-controllable. Render transparent here so the
-  // canvas matches the reserve-panel grid's dashed-border carve-out
-  // for those slots.
-  const ehbCarve = isEhbMode(options.mode)
   for (let i = 0; i < n; ++i) {
     const r = bytes[i * 3]
     const g = bytes[i * 3 + 1]
     const b = bytes[i * 3 + 2]
     const cx = (i % kPalettePerRow) * kPaletteSwatchPx
     const cy = Math.floor(i / kPalettePerRow) * kPaletteSwatchPx
-    // Skip the colour fill on reserved slots (X overlay reads cleanly)
-    // and on EHB halfbrite slots (carved out, not user-controllable).
-    const skipFill = reserved.has(i) || (ehbCarve && i >= 32)
-    if (!skipFill) {
+    // Reserved slots: leave the swatch transparent so the X overlay
+    // reads cleanly without the slot's old colour showing through.
+    if (!reserved.has(i)) {
       ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
       ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
     }
