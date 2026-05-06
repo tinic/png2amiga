@@ -104,6 +104,10 @@ const progressStage = ref('')
 // across re-renders. Only torn down on unmount.
 let crtRenderer: CrtRenderer | null = null
 let lastRgba: Uint8Array | null = null   // cached source RGBA so a CRT toggle
+let lastIndices: Uint8Array | null = null // cached per-pixel palette indices for
+                                          // hover-isolate (non-HAM modes only;
+                                          // null otherwise → fall back to RGB
+                                          // matching).
 let lastSrc = { w: 0, h: 0 }             // change can re-render without re-encoding
 let lastDst = { w: 0, h: 0 }
 async function ensureCrtRenderer(): Promise<CrtRenderer | null> {
@@ -270,10 +274,22 @@ function paletteHitAt(clientX: number, clientY: number): PaletteHit | null {
     b: bytes[idx * 3 + 2] ?? 0,
   }
 }
+// When a palette swatch is hovered, the preview canvas is repainted
+// with all pixels NOT matching the swatch hidden (alpha=0). When the
+// encoder emits a per-pixel index map (lastIndices, non-HAM modes)
+// the filter uses index equality — distinguishes slots that resolve
+// to the same RGB (e.g. EHB's slot 0 black-base vs slot 32 black-
+// halfbrite). For HAM and other modes without indices we fall back
+// to RGB-equality. Cleared on mouseleave.
+const hoveredPaletteHit = ref<PaletteHit | null>(null)
 function paletteHover(ev: MouseEvent) {
   const hit = paletteHitAt(ev.clientX, ev.clientY)
   if (!hit) {
     paletteTooltip.visible = false
+    if (hoveredPaletteHit.value !== null) {
+      hoveredPaletteHit.value = null
+      repaintMaskedPreview()
+    }
     return
   }
   const hex = '#' + [hit.r, hit.g, hit.b]
@@ -284,9 +300,79 @@ function paletteHover(ev: MouseEvent) {
   paletteTooltip.x = ev.clientX + 12
   paletteTooltip.y = ev.clientY + 12
   paletteTooltip.visible = true
+  if (hoveredPaletteHit.value?.idx !== hit.idx) {
+    hoveredPaletteHit.value = hit
+    repaintMaskedPreview()
+  }
 }
 function paletteHoverLeave() {
   paletteTooltip.visible = false
+  if (hoveredPaletteHit.value !== null) {
+    hoveredPaletteHit.value = null
+    repaintMaskedPreview()
+  }
+}
+
+// Build a copy of lastRgba where pixels NOT matching `target` are
+// turned transparent (alpha=0). When lastIndices is available we use
+// per-pixel INDEX equality (so two slots with the same RGB still
+// distinguish — EHB slot 0 vs 32 are both black but different idx).
+// When indices are absent (HAM / sliced / strips / tile modes) we
+// fall back to RGB equality. Returns rgba unchanged when target=null.
+function maskByIndex(rgba: Uint8Array, indices: Uint8Array,
+                     targetIdx: number, n: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(n * 4)
+  for (let i = 0; i < n; ++i) {
+    out[i * 4 + 0] = rgba[i * 4 + 0] ?? 0
+    out[i * 4 + 1] = rgba[i * 4 + 1] ?? 0
+    out[i * 4 + 2] = rgba[i * 4 + 2] ?? 0
+    out[i * 4 + 3] = (indices[i] === targetIdx) ? 255 : 0
+  }
+  return out
+}
+function maskByRgb(rgba: Uint8Array,
+                   tr: number, tg: number, tb: number,
+                   n: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(n * 4)
+  for (let i = 0; i < n; ++i) {
+    const r = rgba[i * 4 + 0] ?? 0
+    const g = rgba[i * 4 + 1] ?? 0
+    const b = rgba[i * 4 + 2] ?? 0
+    out[i * 4 + 0] = r
+    out[i * 4 + 1] = g
+    out[i * 4 + 2] = b
+    out[i * 4 + 3] = (r === tr && g === tg && b === tb) ? 255 : 0
+  }
+  return out
+}
+function buildMaskedRgba(target: PaletteHit | null,
+                         w: number, h: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(w * h * 4)
+  if (!lastRgba) return out
+  if (!target) { out.set(lastRgba); return out }
+  const n = w * h
+  const idx = lastIndices
+  if (idx?.length === n) return maskByIndex(lastRgba, idx, target.idx, n)
+  return maskByRgb(lastRgba, target.r, target.g, target.b, n)
+}
+
+// Repaint the preview canvas honouring the current hover mask.
+// Page-CSS checkerboard shows through alpha=0 pixels.
+function repaintMaskedPreview() {
+  const canvas = canvasRef.value
+  if (!canvas || !lastRgba || lastSrc.w === 0) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const w = lastSrc.w, h = lastSrc.h
+  const out = buildMaskedRgba(hoveredPaletteHit.value, w, h)
+  const tmp = document.createElement('canvas')
+  tmp.width = w; tmp.height = h
+  const tmpCtx = tmp.getContext('2d')
+  if (!tmpCtx) return
+  tmpCtx.putImageData(new ImageData(new Uint8ClampedArray(out), w, h), 0, 0)
+  ctx.imageSmoothingEnabled = false
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height)
 }
 const lastPaletteBytes = ref<Uint8Array | null>(null)
 watch(paletteViewActive, (on) => {
@@ -1444,6 +1530,7 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   const { cssW, cssH } = painted
   // Cache source for CRT re-render on toggle without re-encoding.
   lastRgba = new Uint8Array(result.rgba)
+  lastIndices = result.indices ? new Uint8Array(result.indices) : null
   lastSrc = { w: result.width, h: result.height }
   lastDst = { w: cssW, h: cssH }
   if (crtEnabled.value) {
@@ -2111,7 +2198,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.matchRange" />
-                  <span style="color: #888; font-size: 0.625rem;">stretch source chroma per-(L, hue) onto palette gamut</span>
+                  <span style="color: #888; font-size: 0.625rem;">fit chroma to palette gamut</span>
                 </div>
               </div>
 

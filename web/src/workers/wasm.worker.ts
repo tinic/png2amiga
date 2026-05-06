@@ -46,6 +46,7 @@ interface ReplyEnvelope {
   snesTilemapBytes?: ArrayBuffer
   snesPaletteBytes?: ArrayBuffer
   paletteBytes?: ArrayBuffer
+  indices?: ArrayBuffer
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -158,7 +159,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
       src: Uint8Array | ArrayBuffer | undefined,
       dst: 'c64CharsetData' | 'genesisTileBytes' | 'genesisTilemapBytes'
         | 'genesisPaletteBytes' | 'snesTileBytes' | 'snesTilemapBytes'
-        | 'snesPaletteBytes' | 'paletteBytes'
+        | 'snesPaletteBytes' | 'paletteBytes' | 'indices'
   ): void => {
     if (!src) return
     const arr = new Uint8Array(src as ArrayBuffer)
@@ -174,6 +175,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
   forwardArrayBuffer(result.snesTilemapBytes, 'snesTilemapBytes')
   forwardArrayBuffer(result.snesPaletteBytes, 'snesPaletteBytes')
   forwardArrayBuffer(result.paletteBytes, 'paletteBytes')
+  forwardArrayBuffer(result.indices, 'indices')
 
   if (result.rgba) {
     const arr = new Uint8Array(result.rgba)

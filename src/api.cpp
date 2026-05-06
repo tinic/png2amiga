@@ -3344,6 +3344,14 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         r.paletteBytes.push_back(static_cast<std::uint8_t>(
             std::round(s.b * 255.0f)));
     }
+    // Per-pixel palette indices for the web swatch hover-isolate
+    // feature. Only forwarded when the mode emits a true 1:1 grid
+    // (i.e. p.indices.size() == width × height) — sliced / strips
+    // / HAM / tile modes leave it empty.
+    auto expected_n = p.rendered.width() * p.rendered.height();
+    if (p.indices.size() == expected_n) {
+        r.indices = p.indices;
+    }
     r.copperChanges = p.copper_changes;
     r.totalColors = count_unique_colors(p.rendered);
     r.planeBytes = static_cast<int>(p.planes.total_bytes());

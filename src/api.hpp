@@ -363,6 +363,12 @@ struct ConvertResult {
     // line / 256-mode palette fields above).
     std::vector<std::uint8_t> paletteBytes;
 
+    // Per-pixel palette index map for non-HAM, non-sliced/strips modes.
+    // Layout: width × height bytes, idx = pixel's slot in paletteBytes.
+    // Empty when the encoder doesn't emit a single 1:1 index grid
+    // (HAM ops / per-line sliced palette / per-tile palette).
+    std::vector<std::uint8_t> indices;
+
     // c64 charset modes — copy of the encoder's raw_frame so the web
     // frontend can render a charset diagnostic (the actual generated
     // glyphs, coloured by their first-occurrence cell). Layout:
