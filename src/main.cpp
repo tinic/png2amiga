@@ -3107,6 +3107,190 @@ void show_terminal_preview(const Image& preview, amiga::Mode mode,
     iterm2_display(scale_for_display(preview, mode, hires, interlace));
 }
 
+// ---------------------------------------------------------------------------
+// AmigaOutputBundle — single-call output dispatch for amiga bitplane modes
+// (lores / hires / EHB / HAM / sliced / strips). Replaces the 5 near-
+// duplicate `if (ends_with(output_path, ".X")) ...` blocks that lived
+// inline in each mode branch (HAM @6357, EHB+sliced @6633, EHB plain
+// @6852, lores+hires+sliced @7206, strips @7411).
+//
+// The mode-specific quirks each old block carried — HAM passing
+// strips_line_moves with the right slot table, EHB+sliced wiring up
+// copper_scanline_palettes, lores+sliced setting dpf, fade_in for lores
+// plain — all become field assignments on this struct.
+//
+// `cmap_palette` is whatever the writer should treat as the palette:
+//   - non-EHB modes: the encoder's full palette
+//   - EHB+sliced:   the 32-entry base palette (encoder's `base_palette`).
+//                   IFF writer trims to 32 internally; both paths converge.
+//   - EHB plain:    the 64-entry full palette. IFF writer trims to 32;
+//                   both .raw and .pal write all 64 (matches pre-merge).
+// Caller decides which palette to pass — same call shape per format.
+// ---------------------------------------------------------------------------
+struct AmigaOutputBundle {
+    bitplane::BitplaneData planes;
+    std::vector<Color3f>   cmap_palette;
+    Image                  rendered;
+    amiga::Mode            mode = amiga::Mode::lores;
+    amiga::Chipset         chipset = amiga::Chipset::ocs;
+    bool                   hires = false;
+    bool                   interlace = false;
+    bool                   dpf = false;
+    bool                   has_transparency = false;
+    std::vector<bool>      transparency_mask;
+    std::string            output_path;
+    std::string            symbol_override;
+
+    // Optional sliced/strips data — set when the encoder produced it.
+    const std::vector<std::vector<copper::CopperChange>>* scanline_changes = nullptr;
+    const std::vector<std::vector<Color3f>>*              scanline_palettes = nullptr;
+    const std::vector<std::vector<strips::ScapMove>>*     strips_line_moves = nullptr;
+    std::size_t   changes_per_line = 0;
+    std::string   strips_label;
+    int           strips_anchor_hpos = 0;
+    int           strips_total_planes = 0;
+
+    // Fade-to (CLI cross-fade): pre-computed per-frame palette MOVEs
+    // for the .cpp/.c viewer to animate at runtime.
+    bool fade_in = false;
+    std::vector<std::vector<std::uint16_t>> fade_per_frame_values;
+    bool fade_ping_pong = false;
+
+    // Format gating — set false on modes that don't support an
+    // extension. Hits emit a usage error instead of silent wrong output.
+    bool allow_iff = true;
+    bool allow_raw = true;
+    bool allow_pal = true;
+    std::string disallow_message;  // shown when a disallowed branch is hit
+};
+
+// Returns 0 on success, exit_code::* on failure (cant_create / usage).
+int write_amiga_output(AmigaOutputBundle& out) {
+    auto& path = out.output_path;
+    auto aga = (out.chipset == amiga::Chipset::aga);
+
+    auto build_ch_opts = [&]() {
+        auto ch = pipeline::make_ch_opts({
+            .output_path = path,
+            .symbol_override = out.symbol_override,
+            .hires = out.hires,
+            .interlace = out.interlace,
+            .aga = aga,
+            .fade_in = out.fade_in,
+            .dpf = out.dpf,
+            .total_unique_colors = static_cast<std::size_t>(
+                count_unique_colors(out.rendered)),
+        });
+        if (out.scanline_changes && !out.scanline_changes->empty()) {
+            ch.copper_changes = out.scanline_changes;
+            ch.copper_changes_per_line = out.changes_per_line;
+            if (out.scanline_palettes && !out.scanline_palettes->empty())
+                ch.copper_scanline_palettes = out.scanline_palettes;
+        }
+        if (out.strips_line_moves && !out.strips_line_moves->empty()) {
+            ch.strips_line_moves = out.strips_line_moves;
+            ch.strips_label = out.strips_label;
+            ch.strips_anchor_hpos = out.strips_anchor_hpos;
+            ch.strips_total_planes = out.strips_total_planes;
+            ch.fade_in = false;  // strips owns the per-line stream itself
+        }
+        if (!out.fade_per_frame_values.empty()) {
+            ch.fade_per_frame_values = out.fade_per_frame_values;
+            ch.fade_ping_pong = out.fade_ping_pong;
+        }
+        return ch;
+    };
+
+    auto disallow = [&](std::string_view fmt) -> int {
+        if (!out.disallow_message.empty()) {
+            std::println(stderr, "{}", out.disallow_message);
+        } else {
+            std::println(stderr, "Output: {} not supported for this mode", fmt);
+        }
+        return exit_code::usage;
+    };
+
+    if (ends_with(path, ".iff") || ends_with(path, ".ilbm")) {
+        if (!out.allow_iff) return disallow(".iff/.ilbm");
+        iff::IffOptions iff_opts;
+        iff_opts.hires = out.hires;
+        iff_opts.interlace = out.interlace;
+        iff_opts.has_transparency = out.has_transparency;
+        iff_opts.dpf = out.dpf;
+        if (out.scanline_palettes && !out.scanline_palettes->empty())
+            iff_opts.scanline_palettes = out.scanline_palettes;
+        auto r = iff::save_ilbm(path, out.planes, out.cmap_palette,
+                                out.mode, iff_opts);
+        if (!r) {
+            std::println(stderr, "IFF write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("IFF:    {} ({} bytes)", path, out.planes.total_bytes());
+        return 0;
+    }
+
+    if (ends_with(path, ".h")) {
+        auto ch = build_ch_opts();
+        // .h: don't pad. Tile mode produces planes at the centre-crop width
+        // (e.g. 64×64) and the .h header must report those dims rather than
+        // the mode default (e.g. 320). Sliced / strips paths are gated
+        // against tile, so their planes.width already matches display_w
+        // and the previously-present pad call was a no-op.
+        auto r = cheader::save(path, out.planes, out.cmap_palette,
+                               out.mode, ch);
+        if (!r) {
+            std::println(stderr, "C header write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("Header:   {}", path);
+        return 0;
+    }
+
+    if (ends_with(path, ".cpp") || ends_with(path, ".c")) {
+        auto ch = build_ch_opts();
+        pad_planes_to_mode(out.planes, out.mode, out.hires);
+        auto r = cheader::save_viewer(path, out.planes, out.cmap_palette,
+                                      out.mode, ch);
+        if (!r) {
+            std::println(stderr, "Viewer write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("Viewer:   {}", path);
+        return 0;
+    }
+
+    if (ends_with(path, ".raw")) {
+        if (!out.allow_raw) return disallow(".raw");
+        save_raw(path, out.planes, out.cmap_palette, out.chipset,
+                 out.scanline_changes, out.changes_per_line);
+        return 0;
+    }
+
+    if (ends_with(path, ".pal")) {
+        if (!out.allow_pal) return disallow(".pal");
+        auto r = palette_io::save_ocs_palette(path, out.cmap_palette);
+        if (!r) {
+            std::println(stderr, "Palette write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("Pal:      {} ({} colors, {} bytes)",
+                   path, out.cmap_palette.size(),
+                   out.cmap_palette.size() * 2);
+        return 0;
+    }
+
+    // Default: PNG preview.
+    auto r = save_preview(path, out.rendered,
+                          out.has_transparency, out.transparency_mask,
+                          out.mode, out.hires, out.interlace);
+    if (!r) {
+        std::println(stderr, "PNG write error: {}", r.error().message);
+        return exit_code::cant_create;
+    }
+    cli_status("PNG:      {}", path);
+    return 0;
+}
+
 // Forward decl — the canonical CLI progress callback is defined further
 // below; best_via_encode_state needs it to emit a single sweep-level
 // progress line instead of letting per-trial callbacks race onto stdout.
@@ -6354,104 +6538,40 @@ int run_main(int argc, char* argv[]) {
 
         // Output
         if (!config->output_path.empty()) {
-            if (ends_with(config->output_path, ".iff") ||
-                ends_with(config->output_path, ".ilbm")) {
-                iff::IffOptions iff_opts;
-                iff_opts.hires = config->hires;
-                iff_opts.interlace = config->interlace;
-                iff_opts.has_transparency = has_transparency;
-                if (!st.scanline_palettes.empty()) {
-                    iff_opts.scanline_palettes = &st.scanline_palettes;
-                }
-
-                auto result = iff::save_ilbm(
-                    config->output_path, st.planes,
-                    st.palette, config->mode, iff_opts);
-                if (!result) {
-                    std::println(stderr, "IFF write error: {}", result.error().message);
-                    return 1;
-                }
-                cli_status("IFF:    {}", config->output_path);
-            } else if (ends_with(config->output_path, ".h") ||
-                       ends_with(config->output_path, ".cpp") ||
-                       ends_with(config->output_path, ".c")) {
-                bool is_h = ends_with(config->output_path, ".h");
-                auto ch_opts = pipeline::make_ch_opts({
-                    .output_path = config->output_path,
-                    .symbol_override = config->symbol_name,
-                    .hires = config->hires,
-                    .interlace = config->interlace,
-                    .aga = (chipset == amiga::Chipset::aga),
-                    .fade_in = config->fade_in,
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
-                });
-                if (!st.scanline_changes.empty()) {
-                    ch_opts.copper_changes = &st.scanline_changes;
-                    ch_opts.copper_changes_per_line = st.changes_per_line;
-                    if (!st.scanline_palettes.empty())
-                        ch_opts.copper_scanline_palettes = &st.scanline_palettes;
-                }
-                // HAM6+strips: emit the strips mid-line MOVE table the same
-                // way EHB+strips and DPF+strips do. HAM6 shares the EHB slot
-                // table (6-plane DMA, 19 mid-line slots — see scap.cpp
-                // 2176). Without this the .h / .cpp drops the per-line
-                // copper list and the rendered output decodes as plain
-                // HAM6 against the base 16-colour palette.
-                if (config->scap && !st.strips_line_moves.empty()) {
-                    ch_opts.strips_line_moves = &st.strips_line_moves;
-                    bool strips_ham6 = config->mode == amiga::Mode::ham6;
-                    auto& table = strips_ham6 ? strips::kStrips6bplHam6
-                                            : strips::kStrips6bplOcs;
-                    ch_opts.strips_label = strips_ham6 ? "strips_ham6_ocs"
-                                                   : "strips_dpf_ocs";
-                    ch_opts.strips_anchor_hpos = table.line_gate_hpos;
-                    ch_opts.strips_total_planes = table.total_planes;
-                    ch_opts.fade_in = false;
-                }
-                if (!is_h) pad_planes_to_mode(st.planes, config->mode,
-                                              config->hires);
-                auto result = is_h
-                    ? cheader::save(config->output_path, st.planes,
-                                    st.palette, config->mode, ch_opts)
-                    : cheader::save_viewer(config->output_path, st.planes,
-                                           st.palette, config->mode, ch_opts);
-                if (!result) {
-                    std::println(stderr, "{} write error: {}",
-                                 is_h ? "C header" : "Viewer",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("{}: {}", is_h ? "Header" : "Viewer",
-                           config->output_path);
-            } else if (ends_with(config->output_path, ".raw")) {
-                save_raw(config->output_path, st.planes,
-                         st.palette, chipset,
-                         config->copper && !st.scanline_changes.empty()
-                             ? &st.scanline_changes : nullptr,
-                         st.changes_per_line);
-            } else if (ends_with(config->output_path, ".pal")) {
-                auto result = palette_io::save_ocs_palette(
-                    config->output_path, st.palette);
-                if (!result) {
-                    std::println(stderr, "Palette write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("Pal:      {} ({} colors, {} bytes)",
-                             config->output_path,
-                             st.palette.size(),
-                             st.palette.size() * 2);
-            } else {
-                auto result = save_preview(config->output_path, st.rendered,
-                                           has_transparency, transparency_mask,
-                                           config->mode, config->hires, config->interlace);
-                if (!result) {
-                    std::println(stderr, "PNG write error: {}", result.error().message);
-                    return 1;
-                }
-                cli_status("PNG:      {}", config->output_path);
+            AmigaOutputBundle out;
+            out.planes = st.planes;
+            out.cmap_palette = st.palette;
+            out.rendered = st.rendered;
+            out.mode = config->mode;
+            out.chipset = chipset;
+            out.hires = config->hires;
+            out.interlace = config->interlace;
+            out.has_transparency = has_transparency;
+            out.transparency_mask = transparency_mask;
+            out.output_path = config->output_path;
+            out.symbol_override = config->symbol_name;
+            out.fade_in = config->fade_in;
+            // HAM+sliced: per-line palette evolution attached to IFF/cheader.
+            if (!st.scanline_palettes.empty())
+                out.scanline_palettes = &st.scanline_palettes;
+            if (!st.scanline_changes.empty()) {
+                out.scanline_changes = &st.scanline_changes;
+                out.changes_per_line = st.changes_per_line;
             }
+            // HAM+strips: 6-plane mid-line MOVE table. HAM6 has its own slot
+            // table (kStrips6bplHam6); HAM other depths reuse the OCS table.
+            if (config->scap && !st.strips_line_moves.empty()) {
+                out.strips_line_moves = &st.strips_line_moves;
+                bool strips_ham6 = config->mode == amiga::Mode::ham6;
+                auto& table = strips_ham6 ? strips::kStrips6bplHam6
+                                          : strips::kStrips6bplOcs;
+                out.strips_label = strips_ham6 ? "strips_ham6_ocs"
+                                               : "strips_dpf_ocs";
+                out.strips_anchor_hpos = table.line_gate_hpos;
+                out.strips_total_planes = table.total_planes;
+            }
+            int rc = write_amiga_output(out);
+            if (rc != 0) return rc;
         }
 
         // Mask export (HAM mode)
@@ -6630,99 +6750,28 @@ int run_main(int argc, char* argv[]) {
             std::vector<Color3f> cmap_palette = copper_result->base_palette;
 
             if (!config->output_path.empty()) {
-                if (ends_with(config->output_path, ".png")) {
-                    auto result = save_preview(config->output_path, rendered,
-                                               has_transparency, transparency_mask,
-                                               config->mode, config->hires, config->interlace);
-                    if (!result) {
-                        std::println(stderr, "PNG write error: {}", result.error().message);
-                        return 1;
-                    }
-                    cli_status("PNG:      {}", config->output_path);
-                } else if (ends_with(config->output_path, ".cpp") ||
-                           ends_with(config->output_path, ".c")) {
-                    auto ch_opts = pipeline::make_ch_opts({
-                        .output_path = config->output_path,
-                        .symbol_override = config->symbol_name,
-                        .hires = config->hires,
-                        .interlace = config->interlace,
-                        .fade_in = config->fade_in,
-                        .total_unique_colors =
-                            static_cast<std::size_t>(count_unique_colors(rendered)),
-                    });
-                    ch_opts.copper_changes = &copper_result->scanline_changes;
-                    ch_opts.copper_changes_per_line = copper_result->changes_per_line;
-                    ch_opts.copper_scanline_palettes = &copper_result->scanline_palettes;
-
-                    pad_planes_to_mode(planes.value(), config->mode, config->hires);
-                    auto result = cheader::save_viewer(
-                        config->output_path, planes.value(),
-                        cmap_palette, config->mode, ch_opts);
-                    if (!result) {
-                        std::println(stderr, "Viewer write error: {}", result.error().message);
-                        return 1;
-                    }
-                    cli_status("Viewer:   {}", config->output_path);
-                } else if (ends_with(config->output_path, ".iff") ||
-                           ends_with(config->output_path, ".ilbm")) {
-                    // EHB+sliced IFF: emit 6-plane bitplane data + CMAP
-                    // (32 base colours; EHB hardware derives the
-                    // half-brites at display time) + CAMG with EHB
-                    // flag set + PCHG with the per-line base palette
-                    // evolution. RECOIL / DPaint / ViewTek read this
-                    // as a normal EHB ILBM and apply the per-line
-                    // changes themselves.
-                    iff::IffOptions iff_opts;
-                    iff_opts.hires = config->hires;
-                    iff_opts.interlace = config->interlace;
-                    iff_opts.has_transparency = has_transparency;
-                    if (!copper_result->scanline_palettes.empty()) {
-                        iff_opts.scanline_palettes =
-                            &copper_result->scanline_palettes;
-                    }
-                    auto result = iff::save_ilbm(
-                        config->output_path, planes.value(),
-                        cmap_palette, config->mode, iff_opts);
-                    if (!result) {
-                        std::println(stderr, "IFF write error: {}",
-                                     result.error().message);
-                        return exit_code::cant_create;
-                    }
-                    cli_status("IFF:    {} ({} bytes)",
-                                 config->output_path,
-                                 planes->total_bytes());
-                } else if (ends_with(config->output_path, ".h")) {
-                    // .h header for EHB+sliced: bitplanes + base CMAP +
-                    // copper change data, no viewer init code.
-                    auto ch_opts = pipeline::make_ch_opts({
-                        .output_path = config->output_path,
-                        .symbol_override = config->symbol_name,
-                        .hires = config->hires,
-                        .interlace = config->interlace,
-                        .total_unique_colors =
-                            static_cast<std::size_t>(count_unique_colors(rendered)),
-                    });
-                    ch_opts.copper_changes = &copper_result->scanline_changes;
-                    ch_opts.copper_changes_per_line =
-                        copper_result->changes_per_line;
-                    ch_opts.copper_scanline_palettes =
-                        &copper_result->scanline_palettes;
-                    pad_planes_to_mode(planes.value(), config->mode,
-                                       config->hires);
-                    auto result = cheader::save(
-                        config->output_path, planes.value(),
-                        cmap_palette, config->mode, ch_opts);
-                    if (!result) {
-                        std::println(stderr, "Header write error: {}",
-                                     result.error().message);
-                        return exit_code::cant_create;
-                    }
-                    cli_status("Header:   {}", config->output_path);
-                } else {
-                    std::println(stderr, "EHB copper: only .png, .iff, "
-                                         ".h, and .cpp/.c output supported");
-                    return exit_code::usage;
-                }
+                AmigaOutputBundle out;
+                out.planes = planes.value();
+                out.cmap_palette = cmap_palette;
+                out.rendered = rendered;
+                out.mode = config->mode;
+                out.chipset = chipset;
+                out.hires = config->hires;
+                out.interlace = config->interlace;
+                out.has_transparency = has_transparency;
+                out.transparency_mask = transparency_mask;
+                out.output_path = config->output_path;
+                out.symbol_override = config->symbol_name;
+                out.fade_in = config->fade_in;
+                out.scanline_changes = &copper_result->scanline_changes;
+                out.scanline_palettes = &copper_result->scanline_palettes;
+                out.changes_per_line = copper_result->changes_per_line;
+                out.allow_raw = false;
+                out.allow_pal = false;
+                out.disallow_message =
+                    "EHB copper: only .png, .iff, .h, and .cpp/.c output supported";
+                int rc = write_amiga_output(out);
+                if (rc != 0) return rc;
             }
 
             // Mask export (EHB copper mode)
@@ -6849,101 +6898,28 @@ int run_main(int argc, char* argv[]) {
 
         // Output
         if (!config->output_path.empty()) {
-            if (ends_with(config->output_path, ".iff") ||
-                ends_with(config->output_path, ".ilbm")) {
-                iff::IffOptions iff_opts;
-                iff_opts.hires = config->hires;
-                iff_opts.interlace = config->interlace;
-
-                // IFF writer will trim palette to 32 base colors for EHB
-                auto result = iff::save_ilbm(
-                    config->output_path, st.planes, full_palette,
-                    config->mode, iff_opts);
-                if (!result) {
-                    std::println(stderr, "IFF write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("IFF:    {} ({} bytes)",
-                             config->output_path, st.planes.total_bytes());
-            } else if (ends_with(config->output_path, ".h")) {
-                auto ch_opts = pipeline::make_ch_opts({
-                    .output_path = config->output_path,
-                    .symbol_override = config->symbol_name,
-                    .hires = config->hires,
-                    .interlace = config->interlace,
-                    .aga = (chipset == amiga::Chipset::aga),
-                    .fade_in = config->fade_in,
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
-                });
-
-                auto result = cheader::save(
-                    config->output_path, st.planes, full_palette,
-                    config->mode, ch_opts);
-                if (!result) {
-                    std::println(stderr, "C header write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("Header:   {}", config->output_path);
-            } else if (ends_with(config->output_path, ".cpp") ||
-                       ends_with(config->output_path, ".c")) {
-                auto ch_opts2 = pipeline::make_ch_opts({
-                    .output_path = config->output_path,
-                    .symbol_override = config->symbol_name,
-                    .hires = config->hires,
-                    .interlace = config->interlace,
-                    .aga = (chipset == amiga::Chipset::aga),
-                    .fade_in = config->fade_in,
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
-                });
-                if (!fade_sequence.empty() && !config->interlace) {
-                    // EHB cop list writes only the 32 base slots
-                    // (OCS-format $0RGB; halve is hardware-derived).
-                    ch_opts2.fade_per_frame_values =
-                        fade_compute_viewer_values_global(
-                            fade_sequence, /*slot_count=*/32,
-                            config->lock_color0, /*aga=*/false);
-                    ch_opts2.fade_ping_pong = !config->fade_loop;
-                }
-
-                pad_planes_to_mode(st.planes, config->mode, config->hires);
-                auto result2 = cheader::save_viewer(
-                    config->output_path, st.planes, full_palette,
-                    config->mode, ch_opts2);
-                if (!result2) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result2.error().message);
-                    return 1;
-                }
-                cli_status("Viewer:   {}", config->output_path);
-            } else if (ends_with(config->output_path, ".raw")) {
-                save_raw(config->output_path, st.planes,
-                         full_palette, chipset);
-            } else if (ends_with(config->output_path, ".pal")) {
-                auto result = palette_io::save_ocs_palette(
-                    config->output_path, full_palette);
-                if (!result) {
-                    std::println(stderr, "Palette write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("Pal:      {} ({} colors, {} bytes)",
-                             config->output_path, full_palette.size(),
-                             full_palette.size() * 2);
-            } else {
-                auto result = save_preview(config->output_path, st.rendered,
-                                           has_transparency, transparency_mask,
-                                           config->mode, config->hires, config->interlace);
-                if (!result) {
-                    std::println(stderr, "PNG write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("PNG:      {}", config->output_path);
+            AmigaOutputBundle out;
+            out.planes = st.planes;
+            out.cmap_palette = full_palette;
+            out.rendered = st.rendered;
+            out.mode = config->mode;
+            out.chipset = chipset;
+            out.hires = config->hires;
+            out.interlace = config->interlace;
+            out.has_transparency = has_transparency;
+            out.transparency_mask = transparency_mask;
+            out.output_path = config->output_path;
+            out.symbol_override = config->symbol_name;
+            out.fade_in = config->fade_in;
+            // EHB --fade-to: 32-slot per-frame palette MOVEs for viewer.
+            if (!fade_sequence.empty() && !config->interlace) {
+                out.fade_per_frame_values = fade_compute_viewer_values_global(
+                    fade_sequence, /*slot_count=*/32,
+                    config->lock_color0, /*aga=*/false);
+                out.fade_ping_pong = !config->fade_loop;
             }
+            int rc = write_amiga_output(out);
+            if (rc != 0) return rc;
         }
 
         // Mask export (EHB mode)
@@ -7203,101 +7179,25 @@ int run_main(int argc, char* argv[]) {
 
         // Output
         if (!config->output_path.empty()) {
-            if (ends_with(config->output_path, ".iff") ||
-                ends_with(config->output_path, ".ilbm")) {
-                iff::IffOptions iff_opts;
-                iff_opts.hires = config->hires;
-                iff_opts.interlace = config->interlace;
-                iff_opts.has_transparency = has_transparency;
-                iff_opts.scanline_palettes = &copper_result->scanline_palettes;
-                iff_opts.dpf = use_dpf_std;
-
-                auto result = iff::save_ilbm(
-                    config->output_path, copper_result->planes,
-                    cmap_palette, config->mode, iff_opts);
-                if (!result) {
-                    std::println(stderr, "IFF write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("IFF:    {} ({} bytes)",
-                             config->output_path,
-                             copper_result->planes.total_bytes());
-            } else if (ends_with(config->output_path, ".h")) {
-                auto ch_opts = pipeline::make_ch_opts({
-                    .output_path = config->output_path,
-                    .symbol_override = config->symbol_name,
-                    .hires = config->hires,
-                    .interlace = config->interlace,
-                    .aga = (chipset == amiga::Chipset::aga),
-                    .fade_in = config->fade_in,
-                    .dpf = use_dpf_std,
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(*preview)),
-                });
-                ch_opts.copper_changes = &copper_result->scanline_changes;
-                ch_opts.copper_changes_per_line = copper_result->changes_per_line;
-                // Pass scanline_palettes so cheader's lace_rebuild can
-                // recompute per-field same-row diffs in interlace; without
-                // it the emitted .h carries the encoder's progressive
-                // per-row list (which is wrong for lace, where field 1
-                // walks 0,2,4,... and field 2 walks 1,3,5,...).
-                ch_opts.copper_scanline_palettes = &copper_result->scanline_palettes;
-
-                auto result = cheader::save(
-                    config->output_path, copper_result->planes,
-                    cmap_palette, config->mode, ch_opts);
-                if (!result) {
-                    std::println(stderr, "C header write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("Header:   {}", config->output_path);
-            } else if (ends_with(config->output_path, ".cpp") ||
-                       ends_with(config->output_path, ".c")) {
-                auto ch_opts2 = pipeline::make_ch_opts({
-                    .output_path = config->output_path,
-                    .symbol_override = config->symbol_name,
-                    .hires = config->hires,
-                    .interlace = config->interlace,
-                    .aga = (chipset == amiga::Chipset::aga),
-                    .fade_in = config->fade_in,
-                    .dpf = use_dpf_std,
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(*preview)),
-                });
-                ch_opts2.copper_changes = &copper_result->scanline_changes;
-                ch_opts2.copper_changes_per_line = copper_result->changes_per_line;
-                // Pass scanline_palettes so cheader's lace_rebuild can
-                // recompute per-field same-row diffs (see .h branch above).
-                ch_opts2.copper_scanline_palettes = &copper_result->scanline_palettes;
-
-                pad_planes_to_mode(copper_result->planes, config->mode, config->hires);
-                auto result2 = cheader::save_viewer(
-                    config->output_path, copper_result->planes,
-                    cmap_palette, config->mode, ch_opts2);
-                if (!result2) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result2.error().message);
-                    return 1;
-                }
-                cli_status("Viewer:   {}", config->output_path);
-            } else if (ends_with(config->output_path, ".raw")) {
-                save_raw(config->output_path, copper_result->planes,
-                         cmap_palette, chipset,
-                         &copper_result->scanline_changes,
-                         copper_result->changes_per_line);
-            } else {
-                auto result = save_preview(config->output_path, *preview,
-                                           has_transparency, transparency_mask,
-                                           config->mode, config->hires, config->interlace);
-                if (!result) {
-                    std::println(stderr, "PNG write error: {}",
-                                 result.error().message);
-                    return 1;
-                }
-                cli_status("PNG:      {}", config->output_path);
-            }
+            AmigaOutputBundle out;
+            out.planes = copper_result->planes;
+            out.cmap_palette = cmap_palette;
+            out.rendered = *preview;
+            out.mode = config->mode;
+            out.chipset = chipset;
+            out.hires = config->hires;
+            out.interlace = config->interlace;
+            out.dpf = use_dpf_std;
+            out.has_transparency = has_transparency;
+            out.transparency_mask = transparency_mask;
+            out.output_path = config->output_path;
+            out.symbol_override = config->symbol_name;
+            out.fade_in = config->fade_in;
+            out.scanline_changes = &copper_result->scanline_changes;
+            out.scanline_palettes = &copper_result->scanline_palettes;
+            out.changes_per_line = copper_result->changes_per_line;
+            int rc = write_amiga_output(out);
+            if (rc != 0) return rc;
         }
 
         // Mask export (copper mode)
@@ -7408,59 +7308,32 @@ int run_main(int argc, char* argv[]) {
                                   config->hires, config->interlace);
 
         if (!config->output_path.empty()) {
-            if (ends_with(config->output_path, ".png")) {
-                auto r = save_preview(config->output_path,
-                                      st.rendered,
-                                      has_transparency, transparency_mask,
-                                      config->mode, config->hires,
-                                      config->interlace);
-                if (!r) {
-                    std::println(stderr, "PNG write error: {}",
-                                 r.error().message);
-                    return 1;
-                }
-                cli_status("PNG:      {}", config->output_path);
-            } else if (ends_with(config->output_path, ".cpp") ||
-                       ends_with(config->output_path, ".c") ||
-                       ends_with(config->output_path, ".h")) {
-                auto ch_opts = pipeline::make_ch_opts({
-                    .output_path = config->output_path,
-                    .symbol_override = config->symbol_name,
-                    .dpf = strips_dpf,        // false for EHB strips
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(st.rendered)),
-                });
-                ch_opts.strips_line_moves = &st.strips_line_moves;
-                ch_opts.strips_label = strips_ehb ? "strips_ehb_ocs"
-                                              : "strips_dpf_ocs";
-                // Use the static slot tables (same shape encode_state
-                // ran against); matches api.cpp::convert_viewer.
-                auto& table = strips_ehb ? strips::kStrips6bplEhb
-                                       : strips::kStrips6bplOcs;
-                ch_opts.strips_anchor_hpos = table.line_gate_hpos;
-                ch_opts.strips_total_planes = table.total_planes;
-                pad_planes_to_mode(st.planes, config->mode, config->hires);
-                bool is_h = ends_with(config->output_path, ".h");
-                auto r = is_h
-                    ? cheader::save(
-                        config->output_path, st.planes,
-                        st.palette, config->mode, ch_opts)
-                    : cheader::save_viewer(
-                        config->output_path, st.planes,
-                        st.palette, config->mode, ch_opts);
-                if (!r) {
-                    std::println(stderr, "{} write error: {}",
-                                 is_h ? "Header" : "Viewer",
-                                 r.error().message);
-                    return exit_code::cant_create;
-                }
-                cli_status("{}: {}", is_h ? "Header" : "Viewer",
-                           config->output_path);
-            } else {
-                std::println(stderr,
-                    "Strips output: only .png, .h, and .cpp/.c supported");
-                return exit_code::usage;
-            }
+            AmigaOutputBundle out;
+            out.planes = st.planes;
+            out.cmap_palette = st.palette;
+            out.rendered = st.rendered;
+            out.mode = config->mode;
+            out.chipset = chipset;
+            out.hires = config->hires;
+            out.interlace = config->interlace;
+            out.dpf = strips_dpf;
+            out.has_transparency = has_transparency;
+            out.transparency_mask = transparency_mask;
+            out.output_path = config->output_path;
+            out.symbol_override = config->symbol_name;
+            out.strips_line_moves = &st.strips_line_moves;
+            out.strips_label = strips_ehb ? "strips_ehb_ocs" : "strips_dpf_ocs";
+            auto& table = strips_ehb ? strips::kStrips6bplEhb
+                                     : strips::kStrips6bplOcs;
+            out.strips_anchor_hpos = table.line_gate_hpos;
+            out.strips_total_planes = table.total_planes;
+            out.allow_iff = false;
+            out.allow_raw = false;
+            out.allow_pal = false;
+            out.disallow_message =
+                "Strips output: only .png, .h, and .cpp/.c supported";
+            int rc = write_amiga_output(out);
+            if (rc != 0) return rc;
         }
         return 0;
     }
@@ -8058,7 +7931,40 @@ int run_main(int argc, char* argv[]) {
 
     // Output
     if (!config->output_path.empty()) {
-        if (ends_with(config->output_path, ".pi1") ||
+        // Amiga path (lores / hires / DPF / EHB plain — non-DOS, non-Atari)
+        // routes through the unified write_amiga_output helper. DOS / Atari
+        // modes have per-format dispatch below (Degas .pi*, cheader_dos_c
+        // 16-bit C viewers, mode-specific .raw writers).
+        bool dos_or_atari = amiga::is_atari(config->mode)
+                         || amiga::is_cga(config->mode)
+                         || amiga::is_ega(config->mode)
+                         || amiga::is_vga(config->mode);
+        if (!dos_or_atari) {
+            AmigaOutputBundle out;
+            out.planes = planes.value();
+            out.cmap_palette = used_palette;
+            out.rendered = *preview;
+            out.mode = config->mode;
+            out.chipset = chipset;
+            out.hires = config->hires;
+            out.interlace = config->interlace;
+            out.dpf = use_dpf_std;
+            out.has_transparency = has_transparency;
+            out.transparency_mask = transparency_mask;
+            out.output_path = config->output_path;
+            out.symbol_override = config->symbol_name;
+            out.fade_in = config->fade_in;
+            // --fade-to: per-frame palette MOVEs for the .cpp/.c viewer.
+            if (!fade_sequence.empty() && !config->interlace) {
+                out.fade_per_frame_values = fade_compute_viewer_values_global(
+                    fade_sequence, used_palette.size(),
+                    config->lock_color0,
+                    chipset == amiga::Chipset::aga);
+                out.fade_ping_pong = !config->fade_loop;
+            }
+            int rc = write_amiga_output(out);
+            if (rc != 0) return rc;
+        } else if (ends_with(config->output_path, ".pi1") ||
             ends_with(config->output_path, ".pi2") ||
             ends_with(config->output_path, ".pi3")) {
             if (!amiga::is_atari(config->mode)) {
