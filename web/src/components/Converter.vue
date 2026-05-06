@@ -225,8 +225,12 @@ function drawPalette(bytes: Uint8Array) {
     const b = bytes[i * 3 + 2]
     const cx = (i % kPalettePerRow) * kPaletteSwatchPx
     const cy = Math.floor(i / kPalettePerRow) * kPaletteSwatchPx
-    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
-    ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
+    // Reserved slots: leave the swatch transparent so the X overlay
+    // reads cleanly without the slot's old colour showing through.
+    if (!reserved.has(i)) {
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
+      ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
+    }
     if (reserved.has(i)) {
       // Red X with black outline. Two-pass stroke: black underlay
       // (thicker), red on top.
@@ -2680,7 +2684,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                          tabindex="0"
                          :aria-pressed="isReserved(item.idx)"
                          :aria-label="`Reserve palette index ${item.idx}`"
-                         :style="{ background: reserveCellBg(item.idx) }"
+                         :style="{ background: isReserved(item.idx) ? 'transparent' : reserveCellBg(item.idx) }"
                          @click="toggleReserve(item.idx)"
                          @keydown.enter.prevent="toggleReserve(item.idx)"
                          @keydown.space.prevent="toggleReserve(item.idx)">
