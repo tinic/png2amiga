@@ -94,7 +94,17 @@ AssembledPalette assemble_locked_palette(
     std::size_t max_colors,
     bool lock_zero_black,
     amiga::Chipset chipset,
-    amiga::Mode mode);
+    amiga::Mode mode,
+    // Indices to SKIP when filling unlocked slots with quantized
+    // colours. Use this to make the fill avoid landing in slots that
+    // will be overwritten by a post-assemble reserve overlay — without
+    // it, fill puts quantized colours at the front-of-unlocked, the
+    // reserve overlay displaces them, and the unreserved tail goes
+    // unfilled (3bpp + reserve 1-4 → slots 5-7 black). Reserves are
+    // NOT placed by assemble; the caller overlays them and they're
+    // not in the dedupe set so quantizer entries that bit-match
+    // reserves don't get dropped.
+    const std::vector<bool>& reserved_skip = {});
 
 // ---------------------------------------------------------------------------
 // Finalize a quantizer-built palette for a slot count when slot 0 is

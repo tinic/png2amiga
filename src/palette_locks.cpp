@@ -209,7 +209,8 @@ AssembledPalette assemble_locked_palette(
     std::size_t max_colors,
     bool lock_zero_black,
     amiga::Chipset chipset,
-    amiga::Mode mode) {
+    amiga::Mode mode,
+    const std::vector<bool>& reserved_skip) {
 
     AssembledPalette out;
     out.palette.name = quantized.name;
@@ -282,6 +283,8 @@ AssembledPalette assemble_locked_palette(
     std::size_t qi = 0;
     for (std::size_t i = 0; i < max_colors; ++i) {
         if (out.locked[i]) continue;
+        // Skip indices the caller will overlay with reserves.
+        if (i < reserved_skip.size() && reserved_skip[i]) continue;
         while (qi < quantized.colors.size()
                && is_locked_dup(quantized.colors[qi])) {
             ++qi;

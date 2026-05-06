@@ -7920,21 +7920,27 @@ int run_main(int argc, char* argv[]) {
         if (amiga::is_stf(config->mode) || amiga::is_vga(config->mode) ||
             amiga::is_ega(config->mode))
             snap_palette(*quantized, chipset, config->mode);
-        // Merge reserves into the lock list. With dedupe-only-against-
-        // lock-zero in palette_locks.cpp, user reserves don't cause
-        // dedupe to drop matching quantizer entries; assemble places
-        // the reserves at their indices and skips them when filling
-        // unlocked slots, so quantized colours land at the unreserved
-        // tail where the dither actually uses them.
-        std::vector<api::LockSpec> fixed_slots = config->locks;
+        // Build a reserve-skip mask so assemble's fill avoids the slots
+        // the post-assemble reserve overlay will overwrite.
+        std::vector<bool> reserve_skip_mask(max_colors, false);
         for (auto& r : config->reserves) {
-            fixed_slots.push_back(api::LockSpec{r.index, r.r, r.g, r.b});
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) reserve_skip_mask[i] = true;
         }
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, fixed_slots, max_colors, lock_zero_std,
-            chipset, config->mode);
+            *quantized, config->locks, max_colors, lock_zero_std,
+            chipset, config->mode, reserve_skip_mask);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
+        for (auto& r : config->reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) {
+                pal.colors[i] = palette_locks::to_color(
+                    api::LockSpec{r.index, r.r, r.g, r.b},
+                    chipset, config->mode);
+                std_locked[i] = true;
+            }
+        }
         // Use the palette's own .name — set by whichever algorithm
         // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
         // ega). Mode-specific precision is already on the Mode: line
