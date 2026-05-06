@@ -1031,7 +1031,7 @@ function buildWasmOptions(): WasmOptions {
   // lockColor0 back on.
   const cleanReserves = reserves.filter(r =>
     !(r.index === 0 && options.lockColor0))
-  return {
+  const out: WasmOptions = {
     ...rest,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
     reserves: cleanReserves.map(r => ({
@@ -1039,6 +1039,14 @@ function buildWasmOptions(): WasmOptions {
     })),
     ...(paletteData ? { paletteData } : {}),
   }
+  // Dump every options object actually sent to WASM. Useful for
+  // matching CLI repros against what the page actually requested.
+  // structuredClone strips paletteData (Uint8Array) just fine and
+  // the snapshot survives later mutations of `out`.
+  const snap = structuredClone(out)
+  if ('paletteData' in snap) delete snap.paletteData  // binary blob, omit
+  console.warn('[wasm-opts]', snap)
+  return out
 }
 
 // Track dither changes
