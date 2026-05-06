@@ -402,13 +402,48 @@ watch(paletteViewActive, (on) => {
   if (cached) void nextTick(() => { drawPalette(cached) })
 })
 
-// Lock-palette panel. The 16×N grid renders one swatch per byte triple
-// in lastPaletteBytes; clicking toggles the slot's entry in options.locks.
-// numLockRows derives from the actual emitted palette size — 32 for
-// EHB / DPF, 64 for EHB swatch-with-halfbrites, 256 for AGA d=8, etc.
-const numLockRows = computed(() => {
-  const n = Math.floor((lastPaletteBytes.value?.length ?? 0) / 3)
-  return Math.max(0, Math.ceil(n / 16))
+// Lock-palette panel. The 16×N grid renders one swatch per LOCKABLE
+// palette slot. EHB carves out the halfbrite section (slots 32..63
+// are hardware-derived from the base 32; the encoder errors on
+// --lock-index >= 32 in EHB), so for EHB we only show the base.
+// Other modes use the full emitted palette.
+const lockablePaletteSize = computed(() => {
+  const total = Math.floor((lastPaletteBytes.value?.length ?? 0) / 3)
+  return isEhbMode(options.mode) ? Math.min(total, 32) : total
+})
+const numLockRows = computed(() =>
+    Math.max(0, Math.ceil(lockablePaletteSize.value / 16)))
+
+// Flat grid items so we can drive the whole 16×N grid with a single
+// v-for. The earlier nested `<template v-for>` + `<div v-for>` shape
+// produced an off-by-one click target on some renders (the row-label
+// element shifted swatches by one column when keys got reused). One
+// flat list with stable keys eliminates the issue.
+type LockGridItem =
+  | { kind: 'corner'; key: string }
+  | { kind: 'col-label'; key: string; text: string }
+  | { kind: 'row-label'; key: string; text: string }
+  | { kind: 'swatch';   key: string; idx: number }
+const lockGridItems = computed<LockGridItem[]>(() => {
+  const items: LockGridItem[] = []
+  items.push({ kind: 'corner', key: 'corner' })
+  for (let c = 0; c < 16; c++) {
+    items.push({ kind: 'col-label', key: `hc${c}`, text: HEX_DIGITS.charAt(c) })
+  }
+  const rows = numLockRows.value
+  const cap = lockablePaletteSize.value
+  for (let r = 0; r < rows; r++) {
+    items.push({ kind: 'row-label', key: `rl${r}`, text: HEX_DIGITS.charAt(r) })
+    for (let c = 0; c < 16; c++) {
+      const idx = r * 16 + c
+      items.push({
+        kind: 'swatch',
+        key: `sw${idx}`,
+        idx: idx < cap ? idx : -1,
+      })
+    }
+  }
+  return items
 })
 const lockedIndexSet = computed(() =>
     new Set(options.locks.map(l => l.index)))
@@ -2616,23 +2651,22 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="numLockRows > 0" class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1"
                        title="Click a swatch to lock that palette slot to its current colour. Locked slots stay constant across re-encodes; the quantizer fills the rest around them. Click again to unlock.">Lock palette</label>
-                <div class="lock-grid" :style="{ gridTemplateRows: `1.0rem repeat(${numLockRows}, 0.85rem)` }">
-                  <div></div>
-                  <div v-for="c in 16" :key="`hc${c}`" class="lock-axis">{{ HEX_DIGITS[c-1] }}</div>
-                  <template v-for="row in numLockRows" :key="`lr${row}`">
-                    <div class="lock-axis lock-axis-left">{{ HEX_DIGITS[row-1] }}</div>
-                    <div v-for="col in 16"
-                         :key="`lc${row}_${col}`"
+                <div class="lock-grid" :style="{ gridTemplateRows: `1rem repeat(${numLockRows}, 0.94rem)` }">
+                  <template v-for="item in lockGridItems" :key="item.key">
+                    <div v-if="item.kind === 'corner'"></div>
+                    <div v-else-if="item.kind === 'col-label'" class="lock-axis">{{ item.text }}</div>
+                    <div v-else-if="item.kind === 'row-label'" class="lock-axis lock-axis-left">{{ item.text }}</div>
+                    <div v-else-if="item.idx >= 0"
                          class="lock-cell"
                          role="button"
                          tabindex="0"
-                         :aria-pressed="isLocked((row-1)*16 + (col-1))"
-                         :aria-label="`Lock palette index ${(row-1)*16 + (col-1)}`"
-                         :style="{ background: lockCellBg((row-1)*16 + (col-1)) }"
-                         @click="toggleLock((row-1)*16 + (col-1))"
-                         @keydown.enter.prevent="toggleLock((row-1)*16 + (col-1))"
-                         @keydown.space.prevent="toggleLock((row-1)*16 + (col-1))">
-                      <svg v-if="isLocked((row-1)*16 + (col-1))"
+                         :aria-pressed="isLocked(item.idx)"
+                         :aria-label="`Lock palette index ${item.idx}`"
+                         :style="{ background: lockCellBg(item.idx) }"
+                         @click="toggleLock(item.idx)"
+                         @keydown.enter.prevent="toggleLock(item.idx)"
+                         @keydown.space.prevent="toggleLock(item.idx)">
+                      <svg v-if="isLocked(item.idx)"
                            viewBox="0 0 10 10" class="lock-x">
                         <line x1="1.5" y1="1.5" x2="8.5" y2="8.5"
                               stroke="#000" stroke-width="3" stroke-linecap="round" />
@@ -2644,6 +2678,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                               stroke="#e22" stroke-width="1.5" stroke-linecap="round" />
                       </svg>
                     </div>
+                    <div v-else class="lock-cell lock-cell-disabled"></div>
                   </template>
                 </div>
               </div>
@@ -3114,10 +3149,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
 .lock-grid {
   display: grid;
-  grid-template-columns: 0.9rem repeat(16, 0.85rem);
+  grid-template-columns: 1rem repeat(16, 0.94rem);
   gap: 1px;
   font-family: ui-monospace, monospace;
-  font-size: 0.55rem;
+  font-size: 0.6rem;
   line-height: 1;
   user-select: none;
 }
@@ -3129,13 +3164,18 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 .lock-axis-left { text-align: right; padding-right: 2px; }
 .lock-cell {
   position: relative;
-  width: 0.85rem;
-  height: 0.85rem;
+  width: 0.94rem;
+  height: 0.94rem;
   border: 1px solid rgba(0, 0, 0, 0.25);
   cursor: pointer;
   box-sizing: border-box;
 }
 .lock-cell:hover { outline: 1px solid #fff; }
+.lock-cell-disabled {
+  background: transparent !important;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  cursor: default;
+}
 .lock-x {
   position: absolute;
   inset: 0;
