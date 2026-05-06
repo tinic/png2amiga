@@ -3,6 +3,7 @@
 #include "color_space.hpp"
 #include "dither.hpp"
 #include "palette.hpp"
+#include "palette_locks.hpp"
 #include "quantize.hpp"
 #include "quantize_metal.hpp"
 #include "types.hpp"
@@ -461,10 +462,10 @@ Result<CopperResult> encode_copper(const Image& image,
         auto algo = quantizer_override.has_value()
             ? *quantizer_override
             : quantize::resolve_algorithm(amiga::Mode::lores, chipset, "");
-        auto reserve = lock_color0
-            ? ((num_colors > 1) ? num_colors - 1 : std::size_t{1})
-            : num_colors;
-        auto base_result = quantize::quantize(image, reserve, algo);
+        // Ask the quantizer for the full num_colors so the dedupe in
+        // palette_locks::finalize_palette has a spare to substitute
+        // if it picks black naturally.
+        auto base_result = quantize::quantize(image, num_colors, algo);
         if (!base_result) return std::unexpected{base_result.error()};
         base_pal_name = std::move(base_result->name);
         base_pal = std::move(base_result->colors);
@@ -479,10 +480,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                         chipset != amiga::Chipset::aga);
             base_pal = std::move(tmp.colors);
         }
-        if (lock_color0)
-            base_pal.insert(base_pal.begin(), Color3f{0.0f, 0.0f, 0.0f});
-        while (base_pal.size() < num_colors)
-            base_pal.push_back(Color3f{0.0f, 0.0f, 0.0f});
+        palette_locks::finalize_palette(base_pal, num_colors, lock_color0);
 
     }
 

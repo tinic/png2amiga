@@ -158,6 +158,26 @@ std::size_t quant_count(std::size_t max_colors,
     return max_colors - used;
 }
 
+void finalize_palette(std::vector<Color3f>& colors,
+                      std::size_t num_colors,
+                      bool lock_color0) {
+    if (lock_color0) {
+        constexpr float eps = 1e-6f;
+        auto is_black = [](const Color3f& c) {
+            return std::abs(c.r) < eps
+                && std::abs(c.g) < eps
+                && std::abs(c.b) < eps;
+        };
+        for (auto it = colors.begin(); it != colors.end(); ++it) {
+            if (is_black(*it)) { colors.erase(it); break; }
+        }
+        colors.insert(colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
+    }
+    if (colors.size() > num_colors) colors.resize(num_colors);
+    while (colors.size() < num_colors)
+        colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
+}
+
 AssembledPalette assemble_locked_palette(
     const Palette& quantized,
     const std::vector<LockSpec>& locks,

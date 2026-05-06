@@ -95,6 +95,36 @@ AssembledPalette assemble_locked_palette(
     amiga::Mode mode);
 
 // ---------------------------------------------------------------------------
+// Finalize a quantizer-built palette for a slot count when slot 0 is
+// optionally reserved for black. Used by every code path that calls
+// quantize directly + insert/prepend (0,0,0) at slot 0:
+//
+//   • copper::encode_copper auto-quantize path
+//   • ham::choose_ham_palette
+//   • api.cpp's EHB / sliced+EHB / strips+EHB seed_pal builders
+//   • strips.cpp's seed_pal builder
+//
+// Without this dedupe these paths can emit two slots both showing
+// #000000 (the locked-black at slot 0 and the quantizer's natural
+// black at slot 1) — a wasted palette entry. The helper:
+//
+//   1. If lock_color0 and the input contains a bit-exact-black entry,
+//      drop the FIRST such occurrence (so the prepend doesn't dup).
+//      Continuous near-black floats are NOT dropped — they stay in
+//      the palette even if their byte-display is #000000, because
+//      they carry distinct centroid information.
+//   2. If lock_color0, prepend (0,0,0) at slot 0.
+//   3. Pad with (0,0,0) if size < num_colors.
+//   4. Trim if size > num_colors.
+//
+// Caller is expected to ask the quantizer for at least num_colors
+// candidates so the dedupe in (1) has a spare to substitute.
+// ---------------------------------------------------------------------------
+void finalize_palette(std::vector<Color3f>& colors,
+                      std::size_t num_colors,
+                      bool lock_color0);
+
+// ---------------------------------------------------------------------------
 // Apply pin-index swaps after dithering. Mutates the palette colors,
 // the index map, and the `locked` mask (pin targets become locked too,
 // so subsequent pins can't stomp them).

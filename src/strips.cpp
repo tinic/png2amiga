@@ -7,6 +7,7 @@
 #include "dither.hpp"
 #include "ham.hpp"
 #include "palette.hpp"
+#include "palette_locks.hpp"
 #include "pipeline.hpp"
 #include "quantize.hpp"
 #include "types.hpp"
@@ -1698,8 +1699,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
         if (q) {
             Palette seed_pal = std::move(*q);
             for (auto& c : seed_pal.colors) c = palette::quantize_to_ocs(c);
-            while (seed_pal.colors.size() < 32)
-                seed_pal.colors.emplace_back(0.0f, 0.0f, 0.0f);
+            palette_locks::finalize_palette(seed_pal.colors, 32,
+                                             lock_color0);
             palette::refine_ehb_base_palette(
                 std::span<Color3f>(seed_pal.colors.data(), 32),
                 src.pixels(),

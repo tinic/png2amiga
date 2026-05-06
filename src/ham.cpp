@@ -2,6 +2,7 @@
 #include "color_space.hpp"
 #include "dither.hpp"
 #include "palette.hpp"
+#include "palette_locks.hpp"
 #include "pipeline.hpp"
 #include "quantize.hpp"
 #include "quantize_metal.hpp"
@@ -249,11 +250,13 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
                            amiga::Chipset chipset,
                            int palette_diversity,
                            std::string_view quantizer) {
-    // Quantize N-1 colors, reserve index 0 for black (border/HAM start).
-    // Diversity is applied AFTER OCS snap so the SSE objective reflects the
-    // actual discrete palette HAM6 will use. (Running it inside median_cut
-    // would evaluate against the continuous palette that HAM never sees.)
-    auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
+    // Ask the quantizer for the FULL num_colors so we have a spare to
+    // drop in case it naturally picks black as one of its anchors —
+    // otherwise slots 0 and 1 of the assembled palette both end up
+    // #000000 (the prepended border-black at slot 0 + quantizer's
+    // black at slot 1). Diversity is applied AFTER OCS snap so the
+    // SSE objective reflects the actual discrete palette HAM will use.
+    auto reserve = num_colors;
 
     // Quantizer selection:
     //   - explicit "pnn": PNN agglomerative in OKLab
@@ -309,9 +312,8 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
                                     palette_diversity, is_ocs);
     }
 
-    // Prepend black at index 0
-    pal.colors.insert(pal.colors.begin(), Color3f{0.0f, 0.0f, 0.0f});
-
+    palette_locks::finalize_palette(pal.colors, num_colors,
+                                    /*lock_color0=*/true);
     return pal;
 }
 

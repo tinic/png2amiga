@@ -1841,8 +1841,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     if (!q) return std::unexpected{q.error()};
                     seed_pal = std::move(*q);
                     snap_to_chipset(seed_pal, chipset, mode);
-                    while (seed_pal.colors.size() < 32)
-                        seed_pal.colors.emplace_back(0.0f, 0.0f, 0.0f);
+                    palette_locks::finalize_palette(seed_pal.colors, 32,
+                                                    options.lock_color0);
                     palette::refine_ehb_base_palette(
                         std::span<Color3f>(seed_pal.colors.data(), 32),
                         img.pixels(),
@@ -2094,9 +2094,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (!quantized) return std::unexpected{quantized.error()};
                 Palette bp = std::move(*quantized);
                 snap_to_chipset(bp, chipset, mode);
+                palette_locks::finalize_palette(bp.colors, 32,
+                                                 options.lock_color0);
                 // Pair-aware refinement: jointly optimise the 32 base
                 // colours under the hardware-tied half-brite pairing.
-                while (bp.colors.size() < 32) bp.colors.emplace_back(0.0f, 0.0f, 0.0f);
                 palette::refine_ehb_base_palette(
                     std::span<Color3f>(bp.colors.data(), 32),
                     img.pixels(),
@@ -2220,6 +2221,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto qcount = palette_locks::quant_count(32, options.locks, lock_zero_ehb);
             if (qcount > reserves_ehb) qcount -= reserves_ehb;
             else                       qcount = 1;
+            // Bump qcount to the full 32 when lock_zero is on so the
+            // dedupe pass has a spare to drop if PNN naturally picked
+            // black (otherwise slots 0+1 both end up #000000).
+            if (lock_zero_ehb && qcount < 32) qcount = 32;
             auto quantized = quantize::quantize(*image, qcount,
                                                 quantize::Algorithm::pnn,
                                                 options.palette_diversity);
