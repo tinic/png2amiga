@@ -218,6 +218,7 @@ function drawPalette(bytes: Uint8Array) {
   if (!ctx) return
   ctx.imageSmoothingEnabled = false
   ctx.clearRect(0, 0, w, h)
+  const locks = lockedIndexSet.value
   for (let i = 0; i < n; ++i) {
     const r = bytes[i * 3]
     const g = bytes[i * 3 + 1]
@@ -226,6 +227,26 @@ function drawPalette(bytes: Uint8Array) {
     const cy = Math.floor(i / kPalettePerRow) * kPaletteSwatchPx
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
     ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
+    if (locks.has(i)) {
+      // Red X with black outline. Two-pass stroke: black underlay
+      // (thicker), red on top.
+      const x0 = cx + 1, y0 = cy + 1
+      const x1 = cx + kPaletteSwatchPx - 1
+      const y1 = cy + kPaletteSwatchPx - 1
+      ctx.lineCap = 'round'
+      ctx.strokeStyle = '#000'
+      ctx.lineWidth = 2.5
+      ctx.beginPath()
+      ctx.moveTo(x0, y0); ctx.lineTo(x1, y1)
+      ctx.moveTo(x1, y0); ctx.lineTo(x0, y1)
+      ctx.stroke()
+      ctx.strokeStyle = '#e22'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(x0, y0); ctx.lineTo(x1, y1)
+      ctx.moveTo(x1, y0); ctx.lineTo(x0, y1)
+      ctx.stroke()
+    }
   }
 }
 
@@ -379,6 +400,54 @@ watch(paletteViewActive, (on) => {
   if (!on) return
   const cached = lastPaletteBytes.value
   if (cached) void nextTick(() => { drawPalette(cached) })
+})
+
+// Lock-palette panel. The 16×N grid renders one swatch per byte triple
+// in lastPaletteBytes; clicking toggles the slot's entry in options.locks.
+// numLockRows derives from the actual emitted palette size — 32 for
+// EHB / DPF, 64 for EHB swatch-with-halfbrites, 256 for AGA d=8, etc.
+const numLockRows = computed(() => {
+  const n = Math.floor((lastPaletteBytes.value?.length ?? 0) / 3)
+  return Math.max(0, Math.ceil(n / 16))
+})
+const lockedIndexSet = computed(() =>
+    new Set(options.locks.map(l => l.index)))
+function isLocked(idx: number): boolean {
+  return lockedIndexSet.value.has(idx)
+}
+function toggleLock(idx: number) {
+  const bytes = lastPaletteBytes.value
+  if (!bytes || idx * 3 + 2 >= bytes.length) return
+  const cur = options.locks.findIndex(l => l.index === idx)
+  if (cur === -1) {
+    options.locks.push({
+      index: idx,
+      r: bytes[idx * 3 + 0] ?? 0,
+      g: bytes[idx * 3 + 1] ?? 0,
+      b: bytes[idx * 3 + 2] ?? 0,
+    })
+  } else {
+    options.locks.splice(cur, 1)
+  }
+  if (paletteViewActive.value) {
+    void nextTick(() => { drawPalette(bytes) })
+  }
+}
+// CSS background fill for one lock-grid cell — reads the palette
+// byte triple. Returns transparent for indices beyond the palette.
+function lockCellBg(idx: number): string {
+  const bytes = lastPaletteBytes.value
+  if (!bytes || idx * 3 + 2 >= bytes.length) return 'transparent'
+  return `rgb(${bytes[idx*3]},${bytes[idx*3+1]},${bytes[idx*3+2]})`
+}
+const HEX_DIGITS = '0123456789ABCDEF'
+
+// Clear stale locks when the palette structure changes — a lock at
+// idx 63 from EHB doesn't make sense after switching to lores d=4
+// (16 slots). Mode / depth / chipset changes are the obvious palette-
+// size triggers.
+watch(() => [options.mode, options.depth, options.chipset], () => {
+  if (options.locks.length > 0) options.locks = []
 })
 function loupePointerDown(e: PointerEvent) {
   if (!loupeActive.value) return
@@ -2532,6 +2601,46 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
+              <!-- Lock palette: 16xN grid; click to lock/unlock individual
+                   slots. Locked slots stay at their current colour across
+                   re-encodes; the quantizer fills the rest around them.
+                   Visible only when the encoder emitted a global swatch
+                   palette (HAM / sliced / strips have none). -->
+              <div v-if="numLockRows > 0" class="pt-3 mt-3 border-top-1 surface-border">
+                <label class="block text-xs text-color-secondary font-semibold mb-1"
+                       title="Click a swatch to lock that palette slot to its current colour. Locked slots stay constant across re-encodes; the quantizer fills the rest around them. Click again to unlock.">Lock palette</label>
+                <div class="lock-grid" :style="{ gridTemplateRows: `1.0rem repeat(${numLockRows}, 0.85rem)` }">
+                  <div></div>
+                  <div v-for="c in 16" :key="`hc${c}`" class="lock-axis">{{ HEX_DIGITS[c-1] }}</div>
+                  <template v-for="row in numLockRows" :key="`lr${row}`">
+                    <div class="lock-axis lock-axis-left">{{ HEX_DIGITS[row-1] }}</div>
+                    <div v-for="col in 16"
+                         :key="`lc${row}_${col}`"
+                         class="lock-cell"
+                         role="button"
+                         tabindex="0"
+                         :aria-pressed="isLocked((row-1)*16 + (col-1))"
+                         :aria-label="`Lock palette index ${(row-1)*16 + (col-1)}`"
+                         :style="{ background: lockCellBg((row-1)*16 + (col-1)) }"
+                         @click="toggleLock((row-1)*16 + (col-1))"
+                         @keydown.enter.prevent="toggleLock((row-1)*16 + (col-1))"
+                         @keydown.space.prevent="toggleLock((row-1)*16 + (col-1))">
+                      <svg v-if="isLocked((row-1)*16 + (col-1))"
+                           viewBox="0 0 10 10" class="lock-x">
+                        <line x1="1.5" y1="1.5" x2="8.5" y2="8.5"
+                              stroke="#000" stroke-width="3" stroke-linecap="round" />
+                        <line x1="8.5" y1="1.5" x2="1.5" y2="8.5"
+                              stroke="#000" stroke-width="3" stroke-linecap="round" />
+                        <line x1="1.5" y1="1.5" x2="8.5" y2="8.5"
+                              stroke="#e22" stroke-width="1.5" stroke-linecap="round" />
+                        <line x1="8.5" y1="1.5" x2="1.5" y2="8.5"
+                              stroke="#e22" stroke-width="1.5" stroke-linecap="round" />
+                      </svg>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
               <!-- HAM beam width (DP search) — advanced: quality plateaus
                    quickly past ~8, default 16 is fine for almost any image. -->
               <template v-if="showHamControls">
@@ -3003,6 +3112,38 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 }
 .stop-btn:hover {
   background: rgba(200, 30, 30, 1);
+}
+
+.lock-grid {
+  display: grid;
+  grid-template-columns: 0.9rem repeat(16, 0.85rem);
+  gap: 1px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.55rem;
+  line-height: 1;
+  user-select: none;
+}
+.lock-axis {
+  color: #888;
+  text-align: center;
+  align-self: center;
+}
+.lock-axis-left { text-align: right; padding-right: 2px; }
+.lock-cell {
+  position: relative;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.lock-cell:hover { outline: 1px solid #fff; }
+.lock-x {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .preview-canvas {
