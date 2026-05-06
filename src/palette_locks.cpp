@@ -201,8 +201,17 @@ AssembledPalette assemble_locked_palette(
     // fix there is a gamut-aware quantizer; for now we accept the
     // residual duplication and only catch the lock-vs-quantizer
     // case which is what users notice on lores / hires / HAM / EHB.
+    // Bit-exact equality. OCS / STF / VGA quantizers all produce
+    // grid-snapped output where the locked color (also grid-snapped
+    // via to_color) lands on the same exact float value when they
+    // collide → tight eps catches the user-reported makena lores-d=5
+    // dup-black case. AGA / median-cut produces continuous-space
+    // centroids where near-black float values aren't bit-equal to
+    // (0,0,0), so we don't drop them — they fill all 256 slots
+    // (visually some may byte-display as #000000 due to median-cut +
+    // 8-bit DAC rounding, but no slot is left empty by the dedupe).
+    constexpr float eps = 1e-6f;
     auto eq = [](const Color3f& a, const Color3f& b) {
-        constexpr float eps = 0.5f / 255.0f;
         return std::abs(a.r - b.r) < eps
             && std::abs(a.g - b.g) < eps
             && std::abs(a.b - b.b) < eps;
