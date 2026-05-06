@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <vector>
 
 namespace png2amiga::palette_locks {
@@ -167,5 +168,25 @@ Result<void> apply_pins(Palette& palette,
                         const std::vector<PinSpec>& pins,
                         std::size_t image_w,
                         std::size_t image_h);
+
+// ---------------------------------------------------------------------------
+// Sort an indexed palette's unlocked entries by perceptual brightness
+// (OKLab L) and remap the dithered indices so the rendered image is
+// unchanged. Locked slots stay at their original positions; unlocked
+// slots fill the remaining indices in ascending-L order.
+//
+// `sort_n` bounds the sort range to the first N palette entries — for
+// EHB this is 32 (the base section); the half-brite section follows
+// the base order automatically and is handled by `hb_mirror=true`,
+// which also remaps any 32..63 indices via base_perm.
+//
+// Not safe for HAM modes (the index encodes hardware operations, not
+// palette positions).
+// ---------------------------------------------------------------------------
+void sort_by_brightness(std::vector<Color3f>& palette,
+                        const std::vector<bool>& locked,
+                        std::vector<std::uint8_t>& indices,
+                        std::size_t sort_n,
+                        bool hb_mirror = false);
 
 } // namespace png2amiga::palette_locks

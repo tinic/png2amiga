@@ -2454,6 +2454,23 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             ehb_pal = palette::make_ehb_palette(base_pal.colors);
         }
 
+        // Sort the BASE 32 by perceptual brightness, keeping locked
+        // slots fixed and remapping dither indices (both base 0..31
+        // and half-brite 32..63 columns) to match. The half-brite
+        // mirror is rebuilt inside sort_by_brightness from the
+        // reordered base.
+        {
+            std::vector<Color3f> ehb64 = ehb_pal.colors;
+            palette_locks::sort_by_brightness(
+                ehb64, base_locked, dither_result.indices,
+                /*sort_n=*/32, /*hb_mirror=*/true);
+            ehb_pal.colors = std::move(ehb64);
+            // Sync base_pal too so any downstream consumers see the
+            // same ordering.
+            base_pal.colors.assign(ehb_pal.colors.begin(),
+                                    ehb_pal.colors.begin() + 32);
+        }
+
         // Encode to 6 bitplanes
         auto planes = bitplane::encode(dither_result.indices,
                                        image->width(), image->height(),
@@ -3188,6 +3205,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             image->width(), image->height());
         if (!pin_result) return std::unexpected{pin_result.error()};
         // pal_span/pal_size still valid (palette length unchanged).
+    }
+
+    // Sort the visible palette by perceptual brightness (OKLab L), keeping
+    // locked slots in place and remapping the dither indices to match.
+    // HAM is excluded — its index encodes hardware operations, not slots.
+    // DPF is also skipped here because the expansion below shifts the
+    // palette into the upper registers; sorting first then expanding
+    // would mis-align lock indices vs the shifted palette layout.
+    if (!amiga::is_ham(mode) && !use_dpf) {
+        palette_locks::sort_by_brightness(pal.colors, locked_mask,
+                                          dither_result.indices,
+                                          pal.colors.size());
+        pal_span = std::span<const Color3f>(pal.colors);
     }
 
     // Encode to bitplanes (Atari uses word-interleaved layout)

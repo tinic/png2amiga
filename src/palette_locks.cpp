@@ -349,4 +349,68 @@ Result<void> apply_pins(Palette& palette,
     return {};
 }
 
+void sort_by_brightness(std::vector<Color3f>& palette,
+                        const std::vector<bool>& locked,
+                        std::vector<std::uint8_t>& indices,
+                        std::size_t sort_n,
+                        bool hb_mirror) {
+    if (sort_n > palette.size()) sort_n = palette.size();
+    if (sort_n < 2) return;
+
+    auto is_locked = [&](std::size_t i) -> bool {
+        return i < locked.size() && locked[i];
+    };
+
+    // Collect unlocked indices and sort them by their colour's OKLab L.
+    std::vector<std::size_t> unlocked_src;
+    unlocked_src.reserve(sort_n);
+    std::vector<std::size_t> unlocked_dst;
+    unlocked_dst.reserve(sort_n);
+    for (std::size_t i = 0; i < sort_n; ++i) {
+        if (is_locked(i)) continue;
+        unlocked_src.push_back(i);
+        unlocked_dst.push_back(i);
+    }
+    std::sort(unlocked_src.begin(), unlocked_src.end(),
+        [&](std::size_t a, std::size_t b) {
+            auto la = color_space::linear_to_oklab(palette[a]).L;
+            auto lb = color_space::linear_to_oklab(palette[b]).L;
+            return la < lb;
+        });
+
+    // perm[old_base_idx] = new_base_idx for indices in [0, sort_n).
+    // Locked slots map to themselves; unlocked source k maps to
+    // unlocked destination k (the k-th remaining slot in palette order).
+    std::vector<std::uint8_t> perm(sort_n);
+    for (std::size_t i = 0; i < sort_n; ++i) perm[i] = static_cast<std::uint8_t>(i);
+    for (std::size_t k = 0; k < unlocked_src.size(); ++k) {
+        perm[unlocked_src[k]] = static_cast<std::uint8_t>(unlocked_dst[k]);
+    }
+
+    // Apply the permutation by writing into a fresh array (the cycle-
+    // aware in-place version is fiddly and the palettes are tiny).
+    std::vector<Color3f> reordered = palette;
+    for (std::size_t i = 0; i < sort_n; ++i) {
+        reordered[perm[i]] = palette[i];
+    }
+
+    // For EHB: rebuild the half-brite section from the reordered base.
+    // The HB indices [32, 64) track base via index = base_perm[base] + 32.
+    if (hb_mirror && palette.size() >= 64 && sort_n == 32) {
+        for (std::size_t i = 0; i < 32; ++i) {
+            reordered[32 + i] = palette::half_brite(reordered[i]);
+        }
+    }
+    palette = std::move(reordered);
+
+    // Remap dither indices.
+    for (auto& idx : indices) {
+        if (idx < sort_n) {
+            idx = perm[idx];
+        } else if (hb_mirror && idx >= 32 && idx < 32 + sort_n) {
+            idx = static_cast<std::uint8_t>(perm[idx - 32] + 32);
+        }
+    }
+}
+
 } // namespace png2amiga::palette_locks
