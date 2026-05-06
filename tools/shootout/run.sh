@@ -124,8 +124,10 @@ run_ham_convert() {
   local hc_t0
   hc_t0=$(python3 -c 'import time; print(time.time())')
   ( cd "$tmp"
+    # black_bkd forces palette[0] = black, matching png2amiga's
+    # --lock-color0 default. Apples-to-apples comparison.
     nohup "$JAVA" -Xms500m -Xmx2g -jar "$HAM_CONVERT_JAR" \
-      in.png "$mode" dither_fs propagation_85 color_lab_cie94 \
+      in.png "$mode" dither_fs propagation_85 color_lab_cie94 black_bkd \
       > "$tmp/hc.log" 2>&1 &
     pid=$!
     # The CLI prints "Writing iff: ..." once the IFF is on disk and
