@@ -186,12 +186,21 @@ AssembledPalette assemble_locked_palette(
     }
 
     // Fill remaining slots from quantized palette in order, skipping
-    // any quantizer entry that exactly matches a locked colour (e.g.
-    // when lock_zero=true and the quantizer naturally picked black as
-    // one of its slots — without dedupe we'd waste an entire palette
-    // entry on a duplicate of slot 0). Caller is expected to pass at
-    // least `max_colors` candidates (asking for max_colors directly is
-    // fine — we just stop filling when the slots run out).
+    // any quantizer entry that exactly matches a *locked* slot (e.g.
+    // when lock_zero=true and the quantizer naturally picked black,
+    // both ending up at index 0 and 1 → wasted entry). Caller asks
+    // the quantizer for at least `max_colors` candidates so the
+    // dedupe pass has a spare to drop.
+    //
+    // Note: we don't dedupe against already-placed *quantizer* slots
+    // because median-cut + post-snap can collapse multiple centroids
+    // onto the same gamut grid point (most common in VGA-13h's 18-bit
+    // and STF's 9-bit). Filtering those out leaves trailing slots at
+    // default (0,0,0), which renders as duplicate blacks — visually
+    // worse than the original snap-collision duplicate. The proper
+    // fix there is a gamut-aware quantizer; for now we accept the
+    // residual duplication and only catch the lock-vs-quantizer
+    // case which is what users notice on lores / hires / HAM / EHB.
     auto eq = [](const Color3f& a, const Color3f& b) {
         constexpr float eps = 0.5f / 255.0f;
         return std::abs(a.r - b.r) < eps
