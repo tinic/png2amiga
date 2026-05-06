@@ -249,6 +249,15 @@ Result<CopperResult> encode_copper(const Image& image,
                                    std::size_t neighbor_radius =
                                        std::numeric_limits<std::size_t>::max(),
                                    float neighbor_decay = -1.0f,
+                                   // Per-register vertical palette dithering:
+                                   // 1-D Bayer alternation in the per-line
+                                   // palette evolution that spreads copper
+                                   // transitions across N rows to mitigate
+                                   // visible horizontal bands at low depth.
+                                   // Off by default (better S2/PSNR); opt in
+                                   // via --sliced-vertical-dither when CRT
+                                   // banding artefacts are visible.
+                                   bool vertical_dither = false,
                                    // Slots the dither pass must never pick.
                                    // Used by --reserve-range: those slots
                                    // hold a fixed user colour (also locked

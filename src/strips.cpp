@@ -539,6 +539,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        std::string_view best_metric,
                                        int sliced_spread_radius,
                                        float sliced_spread_decay,
+                                       bool sliced_vertical_dither,
                                        std::span<const Color3f>
                                            external_palette) {
     // --best: multi-restart with varied palette_diversity + dither
@@ -561,7 +562,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                     d, debug_overlay, copper_changes_override, div,
                     /*on_progress=*/{}, /*enable_best=*/false, "psnr",
                     sliced_spread_radius, sliced_spread_decay,
-                    external_palette);
+                    sliced_vertical_dither, external_palette);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -679,7 +680,8 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         sliced_spread_radius >= 0
             ? static_cast<std::size_t>(sliced_spread_radius)
             : std::numeric_limits<std::size_t>::max(),
-        sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f);
+        sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f,
+        sliced_vertical_dither);
     if (!copper_result) return std::unexpected{copper_result.error()};
     auto& sliced_palettes = copper_result->scanline_palettes;
     auto& base_palette_vec = copper_result->base_palette;
@@ -1593,6 +1595,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                        std::string_view best_metric,
                                        int sliced_spread_radius,
                                        float sliced_spread_decay,
+                                       bool sliced_vertical_dither,
                                        std::span<const Color3f>
                                            external_palette,
                                        const std::vector<std::pair<std::size_t, Color3f>>&
@@ -1611,7 +1614,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                     d, copper_changes_override, div, debug_overlay,
                     /*on_progress=*/{}, /*enable_best=*/false, "psnr",
                     sliced_spread_radius, sliced_spread_decay,
-                    external_palette, reserved_slots);
+                    sliced_vertical_dither, external_palette, reserved_slots);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -1737,10 +1740,21 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                     placed[i] = seed_pal.colors[qi++];
             }
             seed_pal.colors = std::move(placed);
+            // Build refine's locked mask: lock_color0 + reserved slots are
+            // held fixed during refine so its iterative convergence is
+            // not biased by the reserve colour (and the unlocked slots'
+            // colours stay deterministic across reserve-colour choices).
+            std::array<bool, 32> refine_locked{};
+            if (lock_color0) refine_locked[0] = true;
+            for (auto& [idx, _] : reserved_slots) {
+                if (idx < refine_locked.size()) refine_locked[idx] = true;
+            }
             palette::refine_ehb_base_palette(
                 std::span<Color3f>(seed_pal.colors.data(), 32),
                 src.pixels(),
-                /*snap_to_ocs=*/true);
+                /*snap_to_ocs=*/true,
+                /*max_iters=*/8,
+                std::span<const bool>(refine_locked));
             if (lock_color0)
                 seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
             if (enable_best) {
@@ -1756,6 +1770,12 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                     on_progress);
                 if (lock_color0)
                     seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+                // extra_ehb_optimization isn't lock-aware — re-stamp
+                // reserves after it runs. (--best path only.)
+                for (auto& [idx, color] : reserved_slots) {
+                    if (idx < seed_pal.colors.size())
+                        seed_pal.colors[idx] = color;
+                }
             }
             ehb_user_pal = std::move(seed_pal.colors);
         }
@@ -1782,6 +1802,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             ? static_cast<std::size_t>(sliced_spread_radius)
             : std::numeric_limits<std::size_t>::max(),
         sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f,
+        sliced_vertical_dither,
         ehb_dither_excluded);
     if (!copper_result) return std::unexpected{copper_result.error()};
     // Copies (not refs) so the joint-refinement pass below can reassign
@@ -1944,6 +1965,13 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             std::size_t best_k = 0;
             float best_d = std::numeric_limits<float>::max();
             for (std::size_t k = 0; k < kEffective; ++k) {
+                // Skip reserved base slots AND their half-brite siblings —
+                // the encoder must never bind a pixel to a reserved index,
+                // else cluster centroids and per-strip dither score against
+                // the reserve colour and the planner's swap choices become
+                // colour-dependent.
+                std::size_t base_k = k & (kBaseColors - 1);
+                if (reserved_mask_ehb[base_k]) continue;
                 float dL = tgt.L - P_eff_lab[k].L;
                 float da = tgt.a - P_eff_lab[k].a;
                 float db = tgt.b - P_eff_lab[k].b;
@@ -2130,6 +2158,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 if (soa.valid_n == 0) return 0.0;
                 reset_pixel_min(tl_pixel_min, soa);
                 for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    if (reserved_mask_ehb[k]) continue;
                     min_dist_update(soa, Plb[k].L, Plb[k].a, Plb[k].b,
                                     tl_pixel_min.data());
                     min_dist_update(soa, Plh[k].L, Plh[k].a, Plh[k].b,
@@ -2247,6 +2276,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                     reset_pixel_min(tl_pixel_min, soa_pixels);
                     for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
                         if (k2 == k) continue;
+                        if (reserved_mask_ehb[k2]) continue;
                         min_dist_update(soa_pixels,
                             state.P_lab_b[k2].L, state.P_lab_b[k2].a,
                             state.P_lab_b[k2].b, tl_pixel_min.data());
@@ -2395,6 +2425,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 auto& src_lab = img_lab[py * width + px];
                 float best_d = std::numeric_limits<float>::max();
                 for (std::size_t k = k_min; k < kEffective; ++k) {
+                    std::size_t base_k = k & (kBaseColors - 1);
+                    if (reserved_mask_ehb[base_k]) continue;
                     float dL = src_lab.L - pal_lab[k].L;
                     float da = src_lab.a - pal_lab[k].a;
                     float db = src_lab.b - pal_lab[k].b;
@@ -2643,6 +2675,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                                             on_progress,
                                         int sliced_spread_radius,
                                         float sliced_spread_decay,
+                                        bool sliced_vertical_dither,
                                         bool enable_best,
                                         std::string_view best_metric,
                                         std::span<const Color3f>
@@ -2662,6 +2695,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                     d, copper_changes_override, div,
                     /*on_progress=*/{},
                     sliced_spread_radius, sliced_spread_decay,
+                    sliced_vertical_dither,
                     /*enable_best=*/false, "psnr",
                     external_palette, ham_metric);
             },
@@ -2778,6 +2812,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
     auto base_palette = ham_cap_result->base_palette;
     (void)sliced_spread_radius;
     (void)sliced_spread_decay;
+    (void)sliced_vertical_dither;
 
     // Strip layout helpers (same shape as EHB strips).
     std::size_t num_strips = table.slots.size() + 1;

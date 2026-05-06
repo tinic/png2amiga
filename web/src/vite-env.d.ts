@@ -150,6 +150,7 @@ declare module '@wasm/png2amiga.js' {
     // Copper / palette extras
     copper?: boolean
     copperChanges?: number
+    slicedVerticalDither?: boolean
     dualPlayfield?: boolean
     scap?: boolean
     scapDebug?: boolean

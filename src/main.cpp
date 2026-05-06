@@ -673,6 +673,9 @@ struct Config {
     int copper_changes = 0;            // 0 = auto (based on chipset/depth)
     int sliced_spread_radius = -1;        // -1 = use encode_copper default (4)
     float sliced_spread_decay = -1.0f;    // -1 = use encode_copper default (0.85)
+    bool sliced_vertical_dither = false;  // 1-D Bayer alternation between old/new
+                                          // palette colors per scanline; off by
+                                          // default (better S2/PSNR)
     bool fade_in = false;              // 16-step fade-in from black
 
     // Cross-fade: encode the bitmap once, animate the palette through one
@@ -821,6 +824,7 @@ void print_usage() {
         "Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):\n"
         "  --sliced                        Per-scanline palette swaps\n"
         "  --slice-changes <0-16>          Swaps per line (0 = auto)\n"
+        "  --sliced-vertical-dither        Spread copper transitions across rows\n"
         "  --best                          Multi-restart search (~20–30× slower)\n"
         "  --best-metric <m>               ssimulacra2 (default) | msssim | psnr\n"
         "\n"
@@ -1051,6 +1055,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (arg == "--sliced" || arg == "--copper") {
             // --copper kept as legacy alias for --sliced.
             config.copper = true;
+            continue;
+        }
+
+        if (arg == "--sliced-vertical-dither") {
+            config.sliced_vertical_dither = true;
             continue;
         }
 
@@ -2423,6 +2432,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.copper = cfg.copper;
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
     opts.sliced_spread_radius = cfg.sliced_spread_radius;
+    opts.sliced_vertical_dither = cfg.sliced_vertical_dither;
     opts.sliced_spread_decay = cfg.sliced_spread_decay;
     opts.lock_color0 = cfg.lock_color0;
     opts.dual_playfield = cfg.dual_playfield;
@@ -3136,13 +3146,13 @@ api::EncodeStateOrError best_via_encode_state(
     auto encode_once = [&](const Image& img,
                            const dither::Settings& d,
                            int diversity) -> Result<Trial> {
-        auto src_png = png_io::encode(img);
-        if (!src_png) return std::unexpected{src_png.error()};
         api::Options trial_opts = aopts;
         trial_opts.dither_strength = d.strength;
         trial_opts.error_clamp = d.error_clamp;
         trial_opts.palette_diversity = diversity;
-        auto enc = api::encode_state(src_png->data(), src_png->size(), trial_opts);
+        // Float-input route — eliminates the 8-bit PNG round-trip
+        // png_io::encode + encode_state(bytes) imposed.
+        auto enc = api::encode_state_image(img, trial_opts);
         if (!enc.ok()) {
             return std::unexpected{Error{
                 ErrorCode::write_failed, std::string{enc.error_msg}}};
@@ -3163,14 +3173,8 @@ api::EncodeStateOrError best_via_encode_state(
         make_cli_progress_reporter(),  // sweep-level: 1 line, "best"
         jitter_amplitude, bm);
     if (winner) return std::move(winner->enc);
-    // Fall back to single-pass on sweep failure.
-    auto src_png = png_io::encode(src);
-    if (!src_png) {
-        api::EncodeStateOrError e;
-        e.error_msg = src_png.error().message;
-        return e;
-    }
-    return api::encode_state(src_png->data(), src_png->size(), aopts);
+    // Fall back to single-pass on sweep failure. Same float-input route.
+    return api::encode_state_image(src, aopts);
 }
 
 // --tile preview helper: replicate the centre tile into a 3x3 grid so the
@@ -5478,12 +5482,6 @@ int run_main(int argc, char* argv[]) {
             c64_pal.colors.assign(pal_span.begin(), pal_span.end());
             preprocess::match_palette_range(*image, c64_pal);
         }
-        auto src_png = png_io::encode(*image);
-        if (!src_png) {
-            std::println(stderr, "C64: source re-encode failed: {}",
-                         src_png.error().message);
-            return exit_code::internal;
-        }
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
         aopts.mode = [&] -> const char* {
@@ -5517,7 +5515,8 @@ int run_main(int argc, char* argv[]) {
             aopts.height = 0;
         }
         aopts.on_progress = make_cli_progress_reporter();
-        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        // Float-input route — avoids the 8-bit PNG round-trip.
+        auto enc = api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "C64 encode error: {}", enc.error_msg);
             return exit_code::internal;
@@ -5716,8 +5715,10 @@ int run_main(int argc, char* argv[]) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
-        // we can hand it to api::encode_state as bytes.
+        // PNG-encoded source bytes still needed downstream by
+        // api::convert_cheader (which only takes bytes input). The
+        // ENCODE itself goes through encode_state_image (no round-trip);
+        // src_png is just for the header writer.
         auto src_png = png_io::encode(*image);
         if (!src_png) {
             std::println(stderr, "SNES: source re-encode failed: {}",
@@ -5726,9 +5727,6 @@ int run_main(int argc, char* argv[]) {
         }
 
         auto aopts = make_api_options(*config);
-        // *image already went through preprocess::apply above; src_png
-        // re-encodes that processed Image. Stop run_pipeline from
-        // preprocessing again on top.
         neutralize_preprocess(aopts);
         aopts.mode = (config->mode == amiga::Mode::snes_mode7_256)
             ? "snes-mode7-256" : "snes-mode7-direct";
@@ -5744,7 +5742,7 @@ int run_main(int argc, char* argv[]) {
             config->mode == amiga::Mode::snes_mode7_256;
         auto enc = snes_best
             ? best_via_encode_state(*image, aopts, *config)
-            : api::encode_state(src_png->data(), src_png->size(), aopts);
+            : api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "SNES encode error: {}", enc.error_msg);
             return exit_code::internal;
@@ -5867,8 +5865,6 @@ int run_main(int argc, char* argv[]) {
             ? config->dither_method : dither::Method::opt_checker;
 
         auto aopts = make_api_options(*config);
-        // *image already preprocessed; the PNG-encoded src bytes feed
-        // run_pipeline which would otherwise re-apply preprocess.
         neutralize_preprocess(aopts);
         switch (config->mode) {
         case amiga::Mode::genesis_h32:    aopts.mode = "genesis-h32";    break;
@@ -5881,9 +5877,12 @@ int run_main(int argc, char* argv[]) {
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
 
+        // Float-input route — avoids the 8-bit PNG round-trip.
+        // best_via_encode_state still uses the bytes path (it re-encodes
+        // each jittered trial); only single-pass migrates here.
         auto enc = config->best
             ? best_via_encode_state(*image, aopts, *config)
-            : api::encode_state(src_png->data(), src_png->size(), aopts);
+            : api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "Genesis encode error: {}", enc.error_msg);
             return exit_code::internal;
@@ -6299,18 +6298,10 @@ int run_main(int argc, char* argv[]) {
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
 
-        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
-        // we can route through api::encode_state — same shape as
-        // SNES/Genesis/strips. Auto-tuning lives in make_api_options now;
-        // dither method already includes the HAM-specific override
-        // applied above (ham_dither). neutralize_preprocess prevents
-        // run_pipeline's own preprocess from double-applying.
-        auto src_png = png_io::encode(*image);
-        if (!src_png) {
-            std::println(stderr, "HAM: source re-encode failed: {}",
-                         src_png.error().message);
-            return exit_code::internal;
-        }
+        // Float-input route — bypasses the 8-bit PNG round-trip
+        // png_io::encode + encode_state(bytes,...) imposes. Auto-tuning
+        // lives in make_api_options; dither method already carries the
+        // HAM-specific override applied above (ham_dither).
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
         aopts.dither = std::string{dither_to_options_string(ham_dither)};
@@ -6318,7 +6309,7 @@ int run_main(int argc, char* argv[]) {
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
 
-        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        auto enc = api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "HAM encode error: {}", enc.error_msg);
             return 1;
@@ -6493,26 +6484,17 @@ int run_main(int argc, char* argv[]) {
             }
 
             // --reserve-range support for EHB+sliced: validate against the
-            // 32-base palette (half-brite copies are derived). Build the
-            // locked + dither_excluded vectors that flow into encode_copper
-            // and the per-row dither below.
+            // 32-base palette (half-brite copies are derived). The api path
+            // builds its own locked / dither_excluded lists from
+            // options.reserves; we only validate up-front so the user
+            // gets the same clear error main.cpp's inline path used to
+            // emit before the migration.
             auto reserves_in_ehb_cap = palette_locks::validate_reserves(
                 config->reserves, config->locks, /*max_colors=*/32,
                 config->lock_color0);
             if (!reserves_in_ehb_cap) {
                 std::println(stderr, "{}", reserves_in_ehb_cap.error().message);
                 return 1;
-            }
-            std::vector<std::pair<std::size_t, Color3f>> ehb_cap_locked;
-            std::vector<std::size_t> ehb_cap_excluded;
-            for (auto& r : config->reserves) {
-                auto i = static_cast<std::size_t>(r.index);
-                if (r.index >= 0 && i < 32) {
-                    ehb_cap_locked.emplace_back(i, palette_locks::to_color(
-                        api::LockSpec{r.index, r.r, r.g, r.b},
-                        chipset, config->mode));
-                    ehb_cap_excluded.push_back(i);
-                }
             }
 
             dither::Settings dith;
@@ -6534,192 +6516,61 @@ int run_main(int argc, char* argv[]) {
             // Dither: line is now emitted AFTER Mode/Palette below for
             // consistent header-block ordering.
 
-            // Copper encoder optimizes 32 base colors per scanline (depth=5)
-            // Interlace: skip swaps on rows 0 and 1 (each field's first
-            // displayed line must show base palette only).
-            std::size_t skip_initial = config->interlace ? 2 : 0;
             auto w = image->width();
             auto h = image->height();
 
-            // Single-pass EHB+sliced encode. Body factored so best
-            // below can replay it under a parallel jitter sweep without
-            // duplicating the (copper → re-dither → render) flow.
+            // EHB+sliced encode: route through api::encode_state_image so
+            // CLI and web share the canonical EHB+sliced pipeline (api.cpp's
+            // EHB+sliced branch — same one --best, the wasm bindings, and
+            // the strips-EHB encoder all use). Pre-migration the inline path
+            // here used a different palette generation chain (no
+            // refine_ehb_base_palette + extra_ehb_optimization seed pass)
+            // and produced 60 % pixel-different output for identical input.
+            // Migration aligns CLI with web (slightly higher PSNR) and adds
+            // EHB+sliced to the api-equiv ctest invariant.
+            auto aopts = make_api_options(*config);
+            neutralize_preprocess(aopts);
+            aopts.copper = true;
+            aopts.width = static_cast<int>(image->width());
+            aopts.height = static_cast<int>(image->height());
+            aopts.on_progress = make_cli_progress_reporter();
+            auto enc = api::encode_state_image(*image, aopts);
+            if (!enc.ok()) {
+                std::println(stderr, "EHB+sliced encode error: {}",
+                             enc.error_msg);
+                return 1;
+            }
+            // Adapt EncodeState into the EhbSlicedTrial shape the existing
+            // output-formatting block (below) reads via `winner->...`.
+            // base_palette_quantizer is recomputed via resolve_quantizer_name
+            // since EncodeState doesn't carry the per-trial quantizer label.
             struct EhbSlicedTrial {
                 copper::CopperResult copper_result;
                 std::vector<std::uint8_t> indices;
                 Image rendered;
                 float total_error;
             };
-            auto encode_once = [&](const Image& img,
-                                   const dither::Settings& d,
-                                   int diversity,
-                                   bool report_progress) -> Result<EhbSlicedTrial> {
-                auto cr = copper::encode_copper(
-                    img, 5, d, chipset,
-                    static_cast<std::size_t>(config->copper_changes),
-                    nullptr, true, ehb_cap_locked, diversity,
-                    skip_initial, config->interlace, /*is_ehb=*/true,
-                    report_progress
-                        ? make_cli_progress_reporter()
-                        : std::function<void(float, std::string_view)>{},
-                    // Sentinel → encode_copper picks depth-aware default.
-                    config->sliced_spread_radius >= 0
-                        ? static_cast<std::size_t>(config->sliced_spread_radius)
-                        : std::numeric_limits<std::size_t>::max(),
-                    config->sliced_spread_decay >= 0.0f
-                        ? config->sliced_spread_decay : -1.0f,
-                    ehb_cap_excluded,
-                    parse_quantizer_override(config->quantizer));
-                if (!cr) return std::unexpected{cr.error()};
-
-                // For reserved base slots, also exclude their half-brite
-                // copies (idx + 32) from the per-row 64-color dither
-                // candidate set. cand_to_full[y] maps filtered index back
-                // to the actual 0..63 EHB slot.
-                std::vector<bool> ehb_blocked(64, false);
-                for (auto i : ehb_cap_excluded) {
-                    if (i < 32) {
-                        ehb_blocked[i] = true;
-                        ehb_blocked[i + 32] = true;
-                    }
-                }
-                std::vector<std::uint8_t> indices(w * h);
-                std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
-                std::vector<std::vector<std::uint8_t>> cand_to_full_per_row;
-                if (!ehb_cap_excluded.empty()) cand_to_full_per_row.resize(h);
-                for (std::size_t y = 0; y < h; ++y) {
-                    auto& base32 = cr->scanline_palettes[y];
-                    Palette bp;
-                    bp.colors.assign(base32.begin(), base32.end());
-                    auto ehb64 = palette::make_ehb_palette(bp.colors);
-                    if (ehb_cap_excluded.empty()) {
-                        pal_lab_per_row[y].resize(ehb64.colors.size());
-                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                            pal_lab_per_row[y][i] =
-                                color_space::linear_to_oklab(ehb64.colors[i]);
-                    } else {
-                        pal_lab_per_row[y].reserve(64);
-                        cand_to_full_per_row[y].reserve(64);
-                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i) {
-                            if (ehb_blocked[i]) continue;
-                            pal_lab_per_row[y].push_back(
-                                color_space::linear_to_oklab(ehb64.colors[i]));
-                            cand_to_full_per_row[y].push_back(
-                                static_cast<std::uint8_t>(i));
-                        }
-                    }
-                }
-
-                float total_err = dither::diffuse_raw_buffer(
-                    img, d,
-                    [&](const color_space::OKLab& target,
-                        std::size_t x, std::size_t y) -> dither::PickResult {
-                        auto& pal_lab = pal_lab_per_row[y];
-                        std::size_t k = 0;
-                        color_space::OKLab chosen{};
-                        float thr = dither::pick_palette_index_with_ostro(
-                            d.method, target, pal_lab, x, y,
-                            d.strength, /*k_min=*/0, k, chosen);
-                        indices[y * w + x] = ehb_cap_excluded.empty()
-                            ? static_cast<std::uint8_t>(k)
-                            : cand_to_full_per_row[y][k];
-                        return {chosen, thr};
-                    });
-
-                if (d.method == dither::Method::dbs) {
-                    if (ehb_cap_excluded.empty()) {
-                        dither::apply_dbs_post_pass(
-                            img, indices,
-                            [&](std::size_t /*x*/, std::size_t y)
-                                -> std::span<const color_space::OKLab> {
-                                return pal_lab_per_row[y];
-                            });
-                    } else {
-                        std::vector<std::vector<std::uint8_t>>
-                            full_to_cand_per_row(h);
-                        for (std::size_t y = 0; y < h; ++y) {
-                            full_to_cand_per_row[y].assign(64, 255);
-                            auto& cand = cand_to_full_per_row[y];
-                            for (std::size_t k = 0; k < cand.size(); ++k)
-                                full_to_cand_per_row[y][cand[k]] =
-                                    static_cast<std::uint8_t>(k);
-                        }
-                        std::vector<std::uint8_t> cand_indices(indices.size());
-                        for (std::size_t i = 0; i < indices.size(); ++i)
-                            cand_indices[i] =
-                                full_to_cand_per_row[i / w][indices[i]];
-                        dither::apply_dbs_post_pass(
-                            img, cand_indices,
-                            [&](std::size_t /*x*/, std::size_t y)
-                                -> std::span<const color_space::OKLab> {
-                                return pal_lab_per_row[y];
-                            });
-                        for (std::size_t i = 0; i < cand_indices.size(); ++i)
-                            indices[i] =
-                                cand_to_full_per_row[i / w][cand_indices[i]];
-                    }
-                }
-
-                if (has_transparency) {
-                    for (std::size_t i = 0; i < transparency_mask.size() && i < indices.size(); ++i)
-                        if (transparency_mask[i]) indices[i] = 0;
-                }
-
-                Image rendered(w, h);
-                for (std::size_t y = 0; y < h; ++y) {
-                    auto& base32 = cr->scanline_palettes[y];
-                    Palette bp;
-                    bp.colors.assign(base32.begin(), base32.end());
-                    auto ehb64 = palette::make_ehb_palette(bp.colors);
-                    for (std::size_t x = 0; x < w; ++x) {
-                        auto idx = indices[y * w + x];
-                        if (idx < ehb64.colors.size())
-                            rendered[x, y] = ehb64.colors[idx];
-                    }
-                }
-
-                return EhbSlicedTrial{
-                    *std::move(cr),
-                    std::move(indices),
-                    std::move(rendered),
-                    total_err,
-                };
-            };
-
             std::optional<EhbSlicedTrial> winner;
-            if (config->best) {
-                // Same sweep shape as plain sliced and strips EHB: 8 jitter
-                // seeds × 5 strengths × 4 diversities + 1 baseline.
-                // 32-colour base palette (depth=5 copper); EHB is
-                // OCS-bound so amplitude=1.0 (no AGA shimmer concern).
-                auto sliced_metric = pipeline::parse_best_metric(config->best_metric);
-                auto progress_fn = make_cli_progress_reporter();
-                winner = pipeline::best_sweep<EhbSlicedTrial>(
-                    *image, dith, config->palette_diversity,
-                    /*jitter_count=*/8,
-                    [&](const Image& jittered_in,
-                        const dither::Settings& d, int div)
-                            -> Result<EhbSlicedTrial> {
-                        return encode_once(jittered_in, d, div,
-                                           /*report_progress=*/false);
-                    },
-                    [](const EhbSlicedTrial& t) -> const Image& {
-                        return t.rendered;
-                    },
-                    progress_fn,
-                    /*jitter_amplitude=*/1.0f,
-                    sliced_metric);
-            }
-            if (!winner.has_value()) {
-                auto r = encode_once(*image, dith,
-                                     config->palette_diversity,
-                                     /*report_progress=*/true);
-                if (!r) {
-                    std::println(stderr, "Copper encode error: {}",
-                                 r.error().message);
-                    return 1;
-                }
-                winner = std::move(*r);
+            {
+                copper::CopperResult cr;
+                cr.planes = std::move(enc.state.planes);
+                cr.base_palette = enc.state.palette;
+                cr.scanline_changes = std::move(enc.state.scanline_changes);
+                cr.scanline_palettes = std::move(enc.state.scanline_palettes);
+                cr.num_colors = enc.state.copper_num_colors;
+                cr.changes_per_line = enc.state.changes_per_line;
+                cr.avg_changes_per_line = enc.state.copper_changes;
+                cr.max_moves_per_line = enc.state.max_moves_per_line;
+                cr.total_error = enc.state.quant_error;
+                cr.base_palette_quantizer =
+                    resolve_quantizer_name(config->mode, chipset,
+                                            config->quantizer);
+                winner = EhbSlicedTrial{
+                    std::move(cr),
+                    std::move(enc.state.indices),
+                    std::move(enc.state.rendered),
+                    enc.state.quant_error,
+                };
             }
 
 
@@ -6893,24 +6744,22 @@ int run_main(int argc, char* argv[]) {
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
 
-        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
-        // we can route through api::encode_state. EHB's full palette
-        // logic (64-color base+half-brite, locks, pins, user palette,
-        // make_ehb_palette) lives in api::run_pipeline's EHB branch and
-        // runs the same code path the web frontend uses.
-        auto src_png = png_io::encode(*image);
-        if (!src_png) {
-            std::println(stderr, "EHB: source re-encode failed: {}",
-                         src_png.error().message);
-            return exit_code::internal;
-        }
+        // Hand the float Image straight into api::encode_state_image.
+        // The bytes-input encode_state would force a png_io::encode +
+        // api decode round-trip that quantizes to 8-bit sRGB and back,
+        // costing precision the encoder didn't need to lose. This entry
+        // point bypasses load_and_preprocess so the floats reach the
+        // EHB encoder unchanged. EHB's full palette logic (64-color
+        // base + half-brite, locks, pins, user palette, make_ehb_palette)
+        // lives in api::run_pipeline's EHB branch and runs the same code
+        // path the web frontend uses.
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
 
-        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        auto enc = api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "EHB encode error: {}", enc.error_msg);
             return 1;
@@ -7193,6 +7042,7 @@ int run_main(int argc, char* argv[]) {
                     : std::numeric_limits<std::size_t>::max(),
                 config->sliced_spread_decay >= 0.0f
                     ? config->sliced_spread_decay : -1.0f,
+                config->sliced_vertical_dither,
                 sliced_excluded,
                 parse_quantizer_override(config->quantizer));
         };
@@ -7482,21 +7332,12 @@ int run_main(int argc, char* argv[]) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        // Re-encode the (preprocessed, scaled, cropped) image as PNG so
-        // we can hand it to api::encode_state — same shape as the
-        // SNES/Genesis paths. encode_state runs the canonical strips
-        // pipeline (strips::encode_scap_*_ocs internally) and populates
-        // st.strips_* + the per-line move-budget breakdown the printer
-        // below consumes.
-        auto src_png = png_io::encode(*image);
-        if (!src_png) {
-            std::println(stderr, "Strips: source re-encode failed: {}",
-                         src_png.error().message);
-            return exit_code::internal;
-        }
+        // Float-input entry — bypasses the 8-bit PNG round-trip the
+        // bytes-only encode_state(bytes,...) imposes. Same canonical
+        // strips pipeline (strips::encode_scap_*_ocs internally), same
+        // st.strips_* fields the printer below consumes, but no
+        // precision loss between main.cpp's float Image and the encoder.
         auto sopts = make_api_options(*config);
-        // *image already preprocessed; stop run_pipeline preprocessing
-        // these bytes a second time.
         neutralize_preprocess(sopts);
         sopts.scap = true;
         sopts.strips_debug = config->strips_debug;
@@ -7508,7 +7349,7 @@ int run_main(int argc, char* argv[]) {
         // what the inline path computed.
         sopts.copper = true;
 
-        auto enc = api::encode_state(src_png->data(), src_png->size(), sopts);
+        auto enc = api::encode_state_image(*image, sopts);
         if (!enc.ok()) {
             std::println(stderr, "Strips encode error: {}", enc.error_msg);
             return 1;
@@ -7735,19 +7576,14 @@ int run_main(int argc, char* argv[]) {
         config->locks.empty() && config->reserves.empty() &&
         config->pins.empty();
     if (plain_best_eligible) {
-        auto src_png = png_io::encode(*image);
-        if (!src_png) {
-            std::println(stderr,
-                         "lores --best: source re-encode failed: {}",
-                         src_png.error().message);
-            return 1;
-        }
+        // Float-input — skip the 8-bit PNG round-trip. Same as EHB /
+        // strips paths after the encode_state_image migration.
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
-        auto enc = api::encode_state(src_png->data(), src_png->size(), aopts);
+        auto enc = api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "lores --best encode error: {}",
                          enc.error_msg);
@@ -7896,11 +7732,23 @@ int run_main(int argc, char* argv[]) {
                     (*snapped)[x, y] = palette::quantize_to_ega((*image)[x, y]);
             quant_src = &*snapped;
         }
+        // Force CPU median-cut for chunky VGA + reserves: gpu_restart
+        // (Metal-backed) is non-deterministic across runs, and combined
+        // with reserves the user expects byte-stable output. The Metal
+        // path stays for non-reserved chunky VGA where gpu_restart's
+        // higher-quality sampling is the win and run-to-run jitter is
+        // tolerable. Outside this case `auto_quantize` resolves the
+        // chipset-aware default normally.
+        std::string_view quantizer_for_call = config->quantizer;
+        if (amiga::is_chunky(config->mode) && !config->reserves.empty()
+            && quantizer_for_call.empty()) {
+            quantizer_for_call = "median-cut";
+        }
         auto quantized = palette_locks::two_pass_quantize(
             [&](std::size_t k) -> Result<Palette> {
                 return auto_quantize(*quant_src, k, chipset,
                                      config->palette_diversity,
-                                     config->quantizer, config->mode);
+                                     quantizer_for_call, config->mode);
             },
             qc.qcount, qc.kfallback, lock_zero_std);
         if (!quantized) {

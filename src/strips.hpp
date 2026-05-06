@@ -280,6 +280,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                            "msssim",
                                        int sliced_spread_radius = -1,
                                        float sliced_spread_decay = -1.0f,
+                                       bool sliced_vertical_dither = false,
                                        std::span<const Color3f>
                                            external_palette = {});
 
@@ -314,6 +315,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                            "msssim",
                                        int sliced_spread_radius = -1,
                                        float sliced_spread_decay = -1.0f,
+                                       bool sliced_vertical_dither = false,
                                        std::span<const Color3f>
                                            external_palette = {},
                                        // --reserve-range: base-palette slots
@@ -354,6 +356,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                                             on_progress = {},
                                         int sliced_spread_radius = -1,
                                         float sliced_spread_decay = -1.0f,
+                                        bool sliced_vertical_dither = false,
                                         bool enable_best = false,
                                         std::string_view best_metric =
                                             "msssim",

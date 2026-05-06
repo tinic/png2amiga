@@ -195,6 +195,12 @@ struct Options {
     // tooling (--slice-spread-radius / --slice-spread-decay on the CLI).
     int sliced_spread_radius = -1;
     float sliced_spread_decay = -1.0f;
+    // Per-register vertical palette dithering inside the sliced encoder
+    // (1-D Bayer alternation between old/new palette entries to spread
+    // copper transitions across rows). Off by default — better S2/PSNR;
+    // opt in via --sliced-vertical-dither when CRT row-band artefacts
+    // are visible.
+    bool sliced_vertical_dither = false;
 
     // Transparency
     float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)
@@ -587,5 +593,18 @@ struct EncodeStateOrError {
 EncodeStateOrError encode_state(const std::uint8_t* input_data,
                                 std::size_t input_size,
                                 const Options& options);
+
+// Float-pixel sibling of encode_state: takes a pre-decoded Image at the
+// mode's target dimensions (already preprocessed, scaled, cropped, etc.)
+// and runs the same downstream encode path. Lets CLI sites avoid the
+// 8-bit PNG round-trip png_io::encode + encode_state(bytes,...) imposes
+// — the round-trip quantizes float pixels to 8-bit sRGB and back, costing
+// precision the encoder didn't have to lose.
+//
+// width/height options are ignored; the image's actual dimensions are
+// used as the target. Crop / scale / preprocess options are ignored too;
+// the caller has already applied them.
+EncodeStateOrError encode_state_image(const Image& image,
+                                       const Options& options);
 
 } // namespace png2amiga::api

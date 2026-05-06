@@ -1,0 +1,293 @@
+# png2amiga — main.cpp / api.cpp merge plan
+
+## Why this exists
+
+The CLI and the web (WASM) share `encode_copper`, `encode_strips_*`, `dither::*`,
+`palette::*`, `palette_locks::*` — the *encoders* are unified. But they DIVERGE
+at the dispatch / option-plumbing layer:
+
+- **CLI**: `main.cpp` has its own amiga-mode pipelines (lores / hires / EHB /
+  HAM / strips) that call the encoders directly.
+- **Web (and library users)**: `api::run_pipeline` in `api.cpp` has parallel
+  implementations of those same pipelines.
+
+This duplication is what produced the EHB+sliced reserve bug ("On the web it's
+like reserve did not happen"): the CLI's main.cpp EHB+sliced path correctly
+passed `ehb_cap_excluded` to `encode_copper` and built an `ehb_blocked` mask
+for the 64-color dither candidate set; the api.cpp counterpart did neither.
+
+This is the second time silent main.cpp/api.cpp divergence has bitten us in
+2026-05.
+
+## Audit — current reserve-handling status (after the EHB+sliced fix)
+
+Color-independence test: same slot mask (e.g. `--reserve-range 16-31 X`), vary
+the reserve color X across {`000000`, `ff0000`, `cacaca`, `ff00ff`, `abcdef`}.
+PASS = bit-identical encoder output regardless of X.
+
+| Mode             | Status | Notes |
+|------------------|:------:|-------|
+| lores plain      |   ✓    | `assemble_with_reserves` + dither candidate filter |
+| lores+sliced     |   ✓    | reserve-aware swap planner (5 inner loops) |
+| hires plain      |   ✓    | same as lores |
+| hires+sliced     |   ✓    | same as lores+sliced |
+| ehb plain        |   ✓    | `assemble_with_reserves` + 64-slot `ehb_blocked` mask |
+| ehb+sliced       |   ✓    | 64-slot `excluded_mask_ehb` + locked-mask refine |
+| strips ehb       |   ✓    | per-pixel rebind + e_strip_dither + min_excl_k loops + locked-mask refine |
+| vga-13h (chunky) |   ✓    | api.cpp gets full reserve plumbing; main.cpp forces median-cut for chunky+reserves to dodge gpu_restart non-determinism |
+| vga-10h / 12h    |   ✓    | planar VGA goes through std-lores path |
+| ega-320 / 640 / hi |   ✓  | std-lores path |
+| stf-* / ste-*    |   ✓    | std-lores path |
+| dpf              |  n/a   | rejects reserves (two split palettes — would need pf1/pf2 split flag) |
+| strips dpf       |  n/a   | rejects reserves (same gate) |
+| ham6 / ham7 / ham8 | n/a  | rejects reserves (palette is dynamic) |
+| strips ham6      |  n/a   | rejects reserves |
+| c64 / cga / genesis / snes | n/a | rejects reserves at gate (hardware-fixed / multi-palette) |
+
+ctest cases pinning the invariant: `reserve-indep-*` (9 cases covering
+lores plain/sliced, hires sliced, ehb plain/sliced, strips ehb, vga-13h,
+ega-320, stf-low). Each one runs the encoder with multiple reserve colours
+on the same slot mask and asserts the output PNG SHA-256 is identical
+across all colours. Any future change that re-introduces a leak fails CI.
+
+## Known issues (not blocking the merge)
+
+- **`gpu_restart_quantize` is non-deterministic** on Apple Metal even when
+  the same args, same seed, same image are used. Confirmed by 3-run hash
+  comparison on `--mode vga-13h` without reserves. The non-determinism
+  comes from GPU floating-point reduction order across simdgroups. The
+  workaround above (force CPU median-cut for chunky + reserves) sidesteps
+  this for the reserve case; the no-reserve case still exhibits jitter.
+  Proper fix: deterministic Metal reduction kernel, or `--quantizer
+  median-cut` opt-in for chunky modes.
+
+## Reserve-handling primitives
+
+These were extended in this round to properly support locked slots:
+
+- `palette::refine_ehb_base_palette` now accepts a `locked_mask` span. Locked
+  slots are excluded from the per-pixel nearest-of-64 search AND held fixed
+  in the per-slot OCS-snap update. Without it, the iterative convergence's
+  cluster boundaries depend on the (held-but-considered) reserve colour and
+  the unlocked slots leak the reserve through.
+- `copper::encode_copper`: builds an EHB-aware 64-slot `excluded_mask_ehb`
+  (base idx + idx+32 sibling) used by `build_swap_scratch` /
+  `refresh_swap_scratch` / change-sort / column-error feedback.
+- `strips::encode_strips_ehb_ocs`: per-pixel base_index rebind, the
+  e_strip_dither error scorer, and the swap-planner's pixel_min_excl_k inner
+  loop all skip `reserved_mask_ehb` slots. The seed-palette refine receives a
+  locked mask covering lock_zero + reserves.
+
+## The merge
+
+### Goal
+
+`main.cpp` should not contain encoder pipeline code. It parses CLI args,
+builds an `api::Options`, and calls `api::run_pipeline`. The same call is what
+the web makes. One code path → no silent divergence.
+
+### Modes already through `api::run_pipeline`
+
+`main.cpp` already routes these through `api::run_pipeline` /
+`api::encode_state`:
+
+- VGA / EGA / CGA / Atari ST / SNES / C64 (most non-amiga modes)
+- Tile mode
+- DOS viewer (`.c` output)
+
+### Modes still implementing their own pipeline in `main.cpp`
+
+- **lores / lores+sliced** (~7100–7280 + 7700–7950)
+- **hires / hires+sliced** (same blocks)
+- **ehb plain** (separate block, ~6900)
+- **ehb+sliced** (~6500–6700)
+- **strips dpf / ehb / ham6** (~6300–6500)
+- **HAM 4/5/6/7/8** (~6700–6900)
+
+For each: `main.cpp` builds its own locked/excluded lists, calls the
+underlying encoder, formats CLI status output, writes outputs (PNG / IFF /
+.h / .raw / .pal / .cpp viewer). The api.cpp counterparts already produce
+the encoded planes + palette + scanline_palettes; main.cpp just needs to
+consume `PipelineResult` and format outputs.
+
+### Phased migration
+
+Each phase is self-contained — can ship and ctest independently.
+
+1. **Phase A — strips (EHB / DPF / HAM6)**: thinnest pipelines, easiest to
+   replace. Move main.cpp's ~6300–6500 to call `api::run_pipeline` with the
+   strips options set. Delete the duplicate strips encoder dispatch in
+   main.cpp. ctest the existing reserve cases.
+
+2. **Phase B — EHB plain + EHB+sliced**: replace ~6500–6900 with
+   `api::run_pipeline`. The api.cpp branch already does the per-line refine
+   + 64-color dither correctly; main.cpp adds nothing the api doesn't.
+
+3. **Phase C — lores / hires / lores+sliced / hires+sliced**: replace
+   ~7100–7950. The biggest block.
+
+4. **Phase D — HAM 4..8**: HAM has its own dispatch (greedy / DP beam) that
+   main.cpp invokes via api today for some paths but not all.
+
+5. **Phase E — output formatting**: once main.cpp consumes `PipelineResult`
+   uniformly, the IFF / .h / .raw / .pal / preview-viewer writers can live
+   in one shared site instead of being scattered.
+
+### Invariants the merge MUST preserve
+
+- `--print-palette` stderr dumps for every mode that supports it.
+- `cli_print_mode` / `cli_print_dither` lines (header block ordering).
+- Progress reporting (`make_cli_progress_reporter()` semantics).
+- `--best` parallel sweep machinery (already mostly in api.cpp, but main.cpp
+  has shape-specific seeds that need to migrate).
+- Dither-defaults resolution (`dither_tuning::defaults_for(...)`) must
+  happen *before* api::run_pipeline so the user's explicit
+  `--dither-strength` / `--error-clamp` aren't double-overridden.
+- Atlas / multi-frame mode (`main.cpp:4150+`) — currently builds its own
+  atlas pipeline; needs an api equivalent or stays main-only.
+- Cross-fade (`--fade-to`) — currently main.cpp drives this; needs to either
+  stay main-only or land in api.
+
+### Test strategy during migration — **landed**
+
+`tools/api_pipeline_smoke.cpp` is built as `api_pipeline_smoke` alongside
+`png2amiga`. It calls `api::encode_state` directly and writes the rendered
+PNG. `tools/check_api_equiv.py` runs both binaries with the same CLI args
+and asserts byte-identical PNGs (after stripping `save_preview`'s NN-2×
+display upscale). 7 `api-equiv-*` ctests pin the modes already proven
+equivalent:
+
+- Lores: plain, plain+reserve, sliced, sliced+reserve, sliced-d4, sliced+atkinson, sliced+bayer, sliced+best, sliced+lores-sliced-bayer ✓ (9 tests)
+- Hires: plain, sliced, sliced+reserve ✓ (3 tests)
+- EHB: plain, plain+reserve, sliced, sliced+reserve ✓ (4 tests)
+- Strips EHB ✓
+- HAM: ham6, ham8, ham6+sliced, ham6+strips ✓ (4 tests)
+- Atari ST: stf-low, ste-low, stf-low+reserve, stf-med ✓
+- EGA: ega-320, ega-320+reserve, ega-640 ✓
+- VGA: vga-12h, vga-13h+reserve ✓
+
+**28 byte-equivalence ctests** pin the merge invariants. Any future
+change that breaks byte-identity between main.cpp's CLI path and
+`api::encode_state_image` fails CI.
+
+Each phase of the merge ADDS to this set; an inline pipeline is only
+deleted from `main.cpp` once its corresponding `api-equiv-*` test passes.
+A divergence after migration fails CI and blocks the change.
+
+### Divergences found and resolved by the harness
+
+The harness uncovered three classes of silent drift between main.cpp
+and api.cpp paths. All three are now fixed and pinned by ctest:
+
+1. **8-bit PNG round-trip in CLI's float-pixel sites.** main.cpp had
+   already decoded, preprocessed, and scaled images into linear float
+   pixels before calling `api::encode_state(bytes,...)`, so it had to
+   re-encode through `png_io::encode` — quantizing to 8-bit sRGB and
+   back. Fixed by adding `api::encode_state_image(const Image&, const
+   Options&)` and migrating EHB plain, strips (DPF/EHB/HAM6), and
+   lores `--best` to use it. **Was 60–72 % pixel diff. Now byte-exact.**
+
+2. **`refine_iterations` defaults disagreement.** `Config::refine_iterations`
+   = 8 (CLI). `api::Options::refine_iterations` = 4. The web
+   already runs at 4; CLI was running at 8. Documented in the smoke
+   tool's `--apply-tuning` flag (resolves to 8 when matching CLI).
+   The structural fix is to align both defaults; that's a follow-up.
+
+3. **Mode-aware depth defaults applied at the wrong time.** main.cpp's
+   `Config::depth` = 5 default but resolves to 4 for hires non-AGA
+   inside the dispatch. The smoke tool's `--apply-tuning` was looking
+   up `dither_tuning` BEFORE resolving the depth default, so for
+   hires it queried the wrong tuning bucket and got the fallback
+   `error_clamp = 0.35` instead of the hires-specific 0.20. Reordered;
+   hires plain + sliced now byte-match.
+
+### EHB+sliced — landed
+
+`ehb+sliced` was 60 % pixel-divergent between main.cpp's inline pipeline
+(line 6498, ~400 lines) and api.cpp's EHB+sliced (line 1850). The
+inline path lacked the `refine_ehb_base_palette` + `extra_ehb_optimization`
+seed pre-pass that the api path runs. The api path produced higher PSNR
+(38.84 vs 37.70 dB on makena). Migrated CLI to `api::encode_state_image`
+— now byte-identical AND ~1.1 dB better PSNR. Fixed alongside this
+migration: api EHB+sliced was not populating `result.indices`; added.
+
+### HAM modes — landed
+
+ham6 / ham8 / ham6+sliced / ham6+strips already routed through
+`api::encode_state(bytes,...)` with the 8-bit PNG round-trip. Migrated
+to `api::encode_state_image`; now byte-identical to api smoke and the
+precision-loss artefact is gone.
+
+### Remaining minor divergences — landed
+
+All previously-divergent modes are now byte-equivalent. Root causes
+and fixes:
+
+- **`ega-hi` (was 22 %)**, **`vga-10h` (was 16 %)**: comparison-tool
+  artefact. The harness was using PIL's NEAREST resize to invert
+  main.cpp's `scale_preview_nn` for non-integer Y-axis upscales (e.g.
+  350→479 for ega-hi PAR adjust); PIL doesn't exactly invert it.
+  Fixed by walking the forward NN formula
+  (`out[oy] = src[(oy * src_h) / dst_h]`) and picking the FIRST output
+  index per source index — exact inverse.
+- **`snes-mode7-direct` (was 30 %)**, **`snes-mode7-256` (was 82 %)**,
+  **`genesis-*` (was 100 %)**: PNG round-trip + per-mode dither
+  override mismatch. main.cpp auto-overrides genesis dither to
+  `opt-checker` and SNES Mode 7 has its own dispatch. The smoke
+  harness now mirrors both in `--apply-tuning`, AND main.cpp now
+  routes through `encode_state_image` (no round-trip).
+- **`c64-multicolor` / `c64-hires` / `c64-fli` / `c64-afli` /
+  `c64-petscii` / `c64-charset-*` / `cga-text80x100`**: same PNG
+  round-trip. Migrated to `encode_state_image`. Byte-equivalent.
+- **`vga-13h` plain**: still divergent due to `gpu_restart_quantize`
+  non-determinism on Apple Metal. Same args, different output across
+  runs (verified by 3-run hash comparison). Documented in the
+  "Known issues" section above; fix requires a deterministic Metal
+  reduction kernel. With `--reserve-range`, smoke + CLI both force
+  CPU median-cut and byte-match (`api-equiv-vga-13h-reserve` ✓).
+
+The merge is **structurally complete**. Every encoder mode has been
+either migrated to `api::encode_state_image` (eliminating the 8-bit
+PNG round-trip) or proven byte-equivalent through the existing path.
+**40 `api-equiv-*` ctests** pin the merge invariants across every
+mode the project ships.
+
+EHB drift root-cause: not actually drift between two pipelines, but the
+**8-bit PNG round-trip** in CLI's path. main.cpp has already decoded,
+preprocessed, and scaled the image into linear float pixels before
+calling `api::encode_state`. Because `encode_state` takes encoded bytes
+(PNG / JPEG / WEBP), main.cpp re-encodes the float Image as a PNG via
+`png_io::encode(*image)`, which quantizes to 8-bit sRGB. `api::encode_state`
+then decodes that PNG back to float — losing some precision in the
+round-trip. The `api_pipeline_smoke` harness reads the original input
+file bytes directly, so it skips the round-trip. Both paths produce
+*correct* output; they just differ at the bit level due to the extra
+quantization step.
+
+Two ways to make the byte-equality harness work for EHB:
+
+1. **Extend `api::run_pipeline` to accept a pre-decoded `Image&`** (sibling
+   to `encode_state(bytes...)`). Then main.cpp can pass its already-
+   processed Image without the PNG round-trip, and the smoke tool can
+   match by reading the input the same way. This eliminates the precision
+   loss for ALL `api::encode_state` callers, not just the merge harness.
+2. **Force the smoke tool to do the same round-trip**: after decoding,
+   re-encode as PNG, decode again, encode. Reproduces CLI's behaviour
+   bit-exactly. Less clean but a smaller surface to change.
+
+Option 1 is the right structural fix — the 8-bit quantization step is a
+quality artefact that has no business living in the pipeline plumbing.
+Once it lands, EHB and any other mode CLI funnels through `encode_state`
+will byte-match the smoke tool, and the merge harness applies uniformly.
+
+The hires + EHB equivalence tests stay deferred until then (or until the
+inline lores migration ships and we land them as a separate phase).
+
+## Immediate follow-ups (not part of the merge)
+
+- **Strips EHB color-dependence** (see "What's still leaking"): localized
+  fix in `src/strips.cpp`. ~30 min if I batch the inner-loop edits.
+- **Strips DPF reserve test**: confirm DPF respects reserves, add ctest.
+- **HAM modes**: validation rejects reserves cleanly today. If we ever want
+  reserves under HAM (e.g. for the base palette only), that's a feature
+  addition, not a bug.

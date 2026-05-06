@@ -96,6 +96,8 @@ Options parse_js_options(val js_opts) {
         opts.symbol_name = js_opts["symbolName"].as<std::string>();
     if (js_opts.hasOwnProperty("copperChanges"))
         opts.copper_changes = js_opts["copperChanges"].as<int>();
+    if (js_opts.hasOwnProperty("slicedVerticalDither"))
+        opts.sliced_vertical_dither = js_opts["slicedVerticalDither"].as<bool>();
     if (js_opts.hasOwnProperty("lockColor0"))
         opts.lock_color0 = js_opts["lockColor0"].as<bool>();
     // reserves: array of { index, r, g, b } objects removing those slots

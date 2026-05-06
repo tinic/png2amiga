@@ -234,7 +234,21 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                                    const Options& options,
                                    std::size_t target_w,
                                    std::size_t target_h,
-                                   std::vector<bool>* out_tmask = nullptr) {
+                                   std::vector<bool>* out_tmask = nullptr,
+                                   // When non-null, skip decode + crop + scale +
+                                   // preprocess. Caller has already produced an
+                                   // image at target size with all preprocessing
+                                   // applied. tmask, if needed, must be supplied
+                                   // separately by the caller (out_tmask is left
+                                   // untouched). Used by run_pipeline_image() to
+                                   // bypass the 8-bit PNG round-trip CLI sites
+                                   // had to do to feed pre-decoded float pixels
+                                   // through the bytes-only entry point.
+                                   const Image* prepared_image = nullptr) {
+    if (prepared_image) {
+        if (out_tmask) out_tmask->clear();
+        return *prepared_image;
+    }
     int w{}, h{};
     // Detect WebP (RIFF...WEBP) and dispatch to libwebp; else use stb_image.
     bool is_webp_img = input_size >= 12 &&
@@ -736,7 +750,18 @@ static Result<void> tile_crop_result(PipelineResult& r,
 
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     std::size_t input_size,
-                                    const Options& orig_options) {
+                                    const Options& orig_options,
+                                    // When set, bypass decode + scale +
+                                    // preprocess. The image must already be at
+                                    // the target dimensions for the mode (i.e.
+                                    // whatever compute_target_dims would
+                                    // produce); the rest of the pipeline runs
+                                    // exactly as on the bytes-input path. Lets
+                                    // CLI sites that already have a float
+                                    // Image hand it in directly without the
+                                    // 8-bit PNG round-trip png_io::encode
+                                    // would impose.
+                                    const Image* prepared_image = nullptr) {
     auto options = decompose_mode_options(orig_options);
     auto mode = parse_mode(options.mode);
     bool compound_hires =
@@ -813,16 +838,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // We need source dimensions to compute the target size.
     // Peek at the source image dimensions first.
     int peek_w{}, peek_h{};
-    bool peek_is_webp = input_size >= 12 &&
-        std::memcmp(input_data, "RIFF", 4) == 0 &&
-        std::memcmp(input_data + 8, "WEBP", 4) == 0;
-    bool peek_ok = peek_is_webp
-        ? (WebPGetInfo(input_data, input_size, &peek_w, &peek_h) != 0)
-        : (stbi_info_from_memory(input_data, static_cast<int>(input_size),
-                                 &peek_w, &peek_h, nullptr) != 0);
-    if (!peek_ok) {
-        return std::unexpected{Error{ErrorCode::invalid_png,
-            "Failed to read image dimensions"}};
+    if (prepared_image) {
+        peek_w = static_cast<int>(prepared_image->width());
+        peek_h = static_cast<int>(prepared_image->height());
+    } else {
+        bool peek_is_webp = input_size >= 12 &&
+            std::memcmp(input_data, "RIFF", 4) == 0 &&
+            std::memcmp(input_data + 8, "WEBP", 4) == 0;
+        bool peek_ok = peek_is_webp
+            ? (WebPGetInfo(input_data, input_size, &peek_w, &peek_h) != 0)
+            : (stbi_info_from_memory(input_data, static_cast<int>(input_size),
+                                     &peek_w, &peek_h, nullptr) != 0);
+        if (!peek_ok) {
+            return std::unexpected{Error{ErrorCode::invalid_png,
+                "Failed to read image dimensions"}};
+        }
     }
 
     auto [target_w, target_h] = compute_target_dims(
@@ -889,7 +919,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     std::vector<bool> tmask;
     auto image = load_and_preprocess(input_data, input_size, options,
-                                      target_w, target_h, &tmask);
+                                      target_w, target_h, &tmask,
+                                      prepared_image);
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
 
@@ -1138,16 +1169,68 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
         auto max_colors = std::size_t{1} << depth;  // 256 for chunky VGA
-        auto quantized = quantize::quantize(*image, max_colors,
-                                             quantize::Algorithm::median_cut,
-                                             options.palette_diversity);
-        if (!quantized) return std::unexpected{quantized.error()};
-        for (auto& c : quantized->colors) c = palette::quantize_to_vga(c);
+        // Reserve / lock plumbing — mirror the std-lores pattern
+        // (quant_counts_for_assemble + two_pass_quantize +
+        // assemble_with_reserves) so reserved DAC entries are pinned at
+        // user values, the quantizer fills only unreserved slots, and the
+        // dither candidate set excludes reserves. Without this the chunky
+        // VGA path silently ignored reserves and the rendered output
+        // depended on the reserve colour.
+        auto reserves_in_pal_vga = palette_locks::validate_reserves(
+            options.reserves, options.locks, max_colors,
+            options.lock_color0);
+        if (!reserves_in_pal_vga)
+            return std::unexpected{reserves_in_pal_vga.error()};
+        auto qc_vga = palette_locks::quant_counts_for_assemble(
+            max_colors, options.locks, *reserves_in_pal_vga,
+            options.lock_color0);
+        auto qfn = [&](std::size_t k) -> Result<Palette> {
+            return quantize::quantize(*image, k,
+                                       quantize::Algorithm::median_cut,
+                                       options.palette_diversity);
+        };
+        auto qr = palette_locks::two_pass_quantize(
+            qfn, qc_vga.qcount, qc_vga.kfallback, options.lock_color0);
+        if (!qr) return std::unexpected{qr.error()};
+        auto assembled = palette_locks::assemble_with_reserves(
+            *qr, options.locks, options.reserves,
+            max_colors, options.lock_color0, chipset, mode);
+        Palette pal = std::move(assembled.palette);
+        for (auto& c : pal.colors) c = palette::quantize_to_vga(c);
         dither::Settings dith;
         dith.method = parse_dither(options.dither);
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
-        auto dith_result = dither::apply(*image, quantized->colors, dith);
+        // Build dither candidate set excluding reserved slots; the
+        // map back to full-slot indices keeps the rendered preview /
+        // raw output consistent with the user-supplied palette.
+        std::vector<bool> reserved_mask_vga(max_colors, false);
+        for (auto& r : options.reserves) {
+            auto i = static_cast<std::size_t>(r.index);
+            if (r.index >= 0 && i < max_colors) reserved_mask_vga[i] = true;
+        }
+        bool any_excluded_vga = std::any_of(reserved_mask_vga.begin(),
+                                            reserved_mask_vga.end(),
+                                            [](bool b) { return b; });
+        dither::DitherResult dith_result;
+        if (any_excluded_vga) {
+            std::vector<Color3f> cand;
+            std::vector<std::uint8_t> cand_to_full;
+            cand.reserve(max_colors);
+            cand_to_full.reserve(max_colors);
+            for (std::size_t i = 0; i < pal.colors.size(); ++i) {
+                if (reserved_mask_vga[i]) continue;
+                cand.push_back(pal.colors[i]);
+                cand_to_full.push_back(static_cast<std::uint8_t>(i));
+            }
+            dith_result = dither::apply(*image, cand, dith);
+            for (auto& idx : dith_result.indices) idx = cand_to_full[idx];
+        } else {
+            dith_result = dither::apply(*image, pal.colors, dith);
+        }
+        // Reseat `quantized` so the rest of the block can keep using
+        // its name without further surgery.
+        auto quantized = std::make_optional(std::move(pal));
 
         auto w = image->width(), h = image->height();
         Image rendered(w, h);
@@ -1821,6 +1904,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             struct EhbSlicedTrial {
                 copper::CopperResult copper_result;
                 bitplane::BitplaneData planes;
+                std::vector<std::uint8_t> indices;
                 Image rendered;
                 float total_error;
             };
@@ -1861,10 +1945,23 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         32, options.lock_color0, chipset, mode);
                     seed_pal.colors = std::move(assembled.palette.colors);
                     seed_pal.name = sr->name;
+                    // Lock mask: lock_zero + reserves are held fixed during
+                    // refine so its iterative convergence isn't biased by
+                    // the reserve colour (without it the unlocked slots'
+                    // values depend on which reserve colour the user picked).
+                    std::array<bool, 32> ehb_seed_locked{};
+                    if (options.lock_color0) ehb_seed_locked[0] = true;
+                    for (auto& r : options.reserves) {
+                        auto i = static_cast<std::size_t>(r.index);
+                        if (r.index >= 0 && i < ehb_seed_locked.size())
+                            ehb_seed_locked[i] = true;
+                    }
                     palette::refine_ehb_base_palette(
                         std::span<Color3f>(seed_pal.colors.data(), 32),
                         img.pixels(),
-                        /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                        /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                        /*max_iters=*/8,
+                        std::span<const bool>(ehb_seed_locked));
                     if (options.lock_color0)
                         seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                     if (options.best) {
@@ -1893,15 +1990,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // subsequent lines.
                 std::vector<std::pair<std::size_t, Color3f>>
                     ehb_sliced_locked;
+                std::vector<std::size_t> ehb_cap_excluded;
                 for (auto& l : options.locks) {
                     ehb_sliced_locked.emplace_back(l.index,
                         palette_locks::to_color(l, chipset, mode));
                 }
                 for (auto& r : options.reserves) {
-                    ehb_sliced_locked.emplace_back(r.index,
-                        palette_locks::to_color(
-                            LockSpec{r.index, r.r, r.g, r.b},
-                            chipset, mode));
+                    auto i = static_cast<std::size_t>(r.index);
+                    if (r.index >= 0 && i < 32) {
+                        ehb_sliced_locked.emplace_back(i,
+                            palette_locks::to_color(
+                                LockSpec{r.index, r.r, r.g, r.b},
+                                chipset, mode));
+                        ehb_cap_excluded.push_back(i);
+                    }
                 }
                 auto cr = copper::encode_copper(
                     img, 5, d, chipset,
@@ -1917,14 +2019,43 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         ? static_cast<std::size_t>(options.sliced_spread_radius)
                         : std::numeric_limits<std::size_t>::max(),
                     options.sliced_spread_decay >= 0.0f
-                        ? options.sliced_spread_decay : -1.0f);
+                        ? options.sliced_spread_decay : -1.0f,
+                    options.sliced_vertical_dither,
+                    ehb_cap_excluded);
                 if (!cr) return std::unexpected{cr.error()};
+
+                // For each reserved base slot, also exclude its half-brite
+                // sibling (idx + 32) from the per-row 64-color dither
+                // candidate set — otherwise the dither could route image
+                // pixels through the half-brite of a reserved base, which
+                // would render as half(reserve_color) and visibly leak.
+                // cand_to_full[y] maps the filtered candidate index back
+                // to the actual 0..63 EHB slot for indexing into ehb64.
+                std::vector<bool> ehb_blocked(64, false);
+                for (auto i : ehb_cap_excluded) {
+                    if (i < 32) {
+                        ehb_blocked[i] = true;
+                        ehb_blocked[i + 32] = true;
+                    }
+                }
 
                 auto w = img.width();
                 auto h = img.height();
                 std::vector<std::uint8_t> all_indices(w * h);
 
                 std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(h);
+                std::vector<std::vector<std::uint8_t>> cand_to_full_per_row;
+                if (!ehb_cap_excluded.empty()) cand_to_full_per_row.resize(h);
+                // Lock mask for the per-row refine: lock_zero + reserves
+                // are held fixed so refine's iterative convergence stays
+                // colour-independent (without it, the refine path differs
+                // per reserve colour and unlocked slots drift accordingly).
+                std::array<bool, 32> ehb_per_row_locked{};
+                if (options.lock_color0) ehb_per_row_locked[0] = true;
+                for (auto i : ehb_cap_excluded) {
+                    if (i < ehb_per_row_locked.size())
+                        ehb_per_row_locked[i] = true;
+                }
                 for (std::size_t y = 0; y < h; ++y) {
                     auto& base32 = cr->scanline_palettes[y];
                     while (base32.size() < 32) base32.emplace_back(0.0f, 0.0f, 0.0f);
@@ -1939,7 +2070,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         std::span<const Color3f>(
                             img.pixels().data() + y * w, w),
                         /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
-                        /*max_iters=*/4);
+                        /*max_iters=*/4,
+                        std::span<const bool>(ehb_per_row_locked));
                     if (options.lock_color0)
                         base32[0] = Color3f{0.0f, 0.0f, 0.0f};
                     Palette bp;
@@ -1950,10 +2082,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     // refined values rather than the pre-refinement
                     // copy.
                     base32.assign(bp.colors.begin(), bp.colors.end());
-                    pal_lab_per_row[y].resize(ehb64.colors.size());
-                    for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                        pal_lab_per_row[y][i] =
-                            color_space::linear_to_oklab(ehb64.colors[i]);
+                    if (ehb_cap_excluded.empty()) {
+                        pal_lab_per_row[y].resize(ehb64.colors.size());
+                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
+                            pal_lab_per_row[y][i] =
+                                color_space::linear_to_oklab(ehb64.colors[i]);
+                    } else {
+                        pal_lab_per_row[y].reserve(64);
+                        cand_to_full_per_row[y].reserve(64);
+                        for (std::size_t i = 0; i < ehb64.colors.size(); ++i) {
+                            if (ehb_blocked[i]) continue;
+                            pal_lab_per_row[y].push_back(
+                                color_space::linear_to_oklab(ehb64.colors[i]));
+                            cand_to_full_per_row[y].push_back(
+                                static_cast<std::uint8_t>(i));
+                        }
+                    }
                 }
 
                 float total_err = dither::diffuse_raw_buffer(
@@ -1966,17 +2110,44 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         float thr = dither::pick_palette_index_with_ostro(
                             d.method, target, pal_lab, x, y,
                             d.strength, /*k_min=*/0, k, chosen);
-                        all_indices[y * w + x] = static_cast<std::uint8_t>(k);
+                        all_indices[y * w + x] = ehb_cap_excluded.empty()
+                            ? static_cast<std::uint8_t>(k)
+                            : cand_to_full_per_row[y][k];
                         return {chosen, thr};
                     });
 
                 if (d.method == dither::Method::dbs) {
-                    dither::apply_dbs_post_pass(
-                        img, all_indices,
-                        [&](std::size_t /*x*/, std::size_t y)
-                            -> std::span<const color_space::OKLab> {
-                            return pal_lab_per_row[y];
-                        });
+                    if (ehb_cap_excluded.empty()) {
+                        dither::apply_dbs_post_pass(
+                            img, all_indices,
+                            [&](std::size_t /*x*/, std::size_t y)
+                                -> std::span<const color_space::OKLab> {
+                                return pal_lab_per_row[y];
+                            });
+                    } else {
+                        std::vector<std::vector<std::uint8_t>>
+                            full_to_cand_per_row(h);
+                        for (std::size_t y = 0; y < h; ++y) {
+                            full_to_cand_per_row[y].assign(64, 255);
+                            auto& cand = cand_to_full_per_row[y];
+                            for (std::size_t k = 0; k < cand.size(); ++k)
+                                full_to_cand_per_row[y][cand[k]] =
+                                    static_cast<std::uint8_t>(k);
+                        }
+                        std::vector<std::uint8_t> cand_indices(all_indices.size());
+                        for (std::size_t i = 0; i < all_indices.size(); ++i)
+                            cand_indices[i] =
+                                full_to_cand_per_row[i / w][all_indices[i]];
+                        dither::apply_dbs_post_pass(
+                            img, cand_indices,
+                            [&](std::size_t /*x*/, std::size_t y)
+                                -> std::span<const color_space::OKLab> {
+                                return pal_lab_per_row[y];
+                            });
+                        for (std::size_t i = 0; i < cand_indices.size(); ++i)
+                            all_indices[i] =
+                                cand_to_full_per_row[i / w][cand_indices[i]];
+                    }
                 }
 
                 if (has_transparency) {
@@ -2003,6 +2174,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 return EhbSlicedTrial{
                     *std::move(cr),
                     *std::move(planes),
+                    std::move(all_indices),
                     std::move(rendered),
                     total_err,
                 };
@@ -2043,6 +2215,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             PipelineResult result;
             result.rendered = std::move(winner->rendered);
             result.planes = std::move(winner->planes);
+            result.indices = std::move(winner->indices);
             result.palette = std::vector<Color3f>(first_pal.begin(), first_pal.end());
             result.mode = mode;
             result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
@@ -2607,6 +2780,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 /*is_ehb=*/false,
                 /*on_progress=*/{},
                 spread_r, spread_d,
+                options.sliced_vertical_dither,
                 sliced_excluded);
         };
 
@@ -2773,6 +2947,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.on_progress,
                 options.sliced_spread_radius,
                 options.sliced_spread_decay,
+                options.sliced_vertical_dither,
                 options.best,
                 options.best_metric,
                 strips_user_pal_span,
@@ -2809,6 +2984,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     options.best_metric,
                     options.sliced_spread_radius,
                     options.sliced_spread_decay,
+                    options.sliced_vertical_dither,
                     strips_user_pal_span,
                     strips_ehb_reserves);
             }()
@@ -2826,6 +3002,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.best_metric,
                 options.sliced_spread_radius,
                 options.sliced_spread_decay,
+                options.sliced_vertical_dither,
                 strips_user_pal_span);
         if (!strips_res) return std::unexpected{strips_res.error()};
 
@@ -4206,16 +4383,12 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
 // PipelineResult fields out into the public EncodeState. Used by the
 // batch CLI handler so it can slice the atlas's bitplane data per-frame
 // after a single encode pass.
-EncodeStateOrError encode_state(const std::uint8_t* input_data,
-                                std::size_t input_size,
-                                const Options& options) {
-    EncodeStateOrError out;
-    auto r = run_pipeline(input_data, input_size, options);
-    if (!r) {
-        out.error_msg = r.error().message;
-        return out;
-    }
-    auto& p = *r;
+// Internal: copy a PipelineResult's fields into an EncodeState. Shared
+// between encode_state (bytes input) and encode_state_image (Image input)
+// so the public State stays in sync without duplicate field lists.
+namespace {
+void state_from_pipeline_result(EncodeStateOrError& out,
+                                pipeline::PipelineResult& p) {
     auto& s = out.state;
     s.rendered = std::move(p.rendered);
     s.planes = std::move(p.planes);
@@ -4259,6 +4432,48 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     s.genesis_tile_bytes = std::move(p.genesis_tile_bytes);
     s.genesis_tilemap_cells = std::move(p.genesis_tilemap_cells);
     s.genesis_palette_words = std::move(p.genesis_palette_words);
+}
+}  // anon namespace
+
+EncodeStateOrError encode_state(const std::uint8_t* input_data,
+                                std::size_t input_size,
+                                const Options& options) {
+    EncodeStateOrError out;
+    if (std::getenv("PNG2AMIGA_DEBUG_OPTS")) {
+        std::fprintf(stderr,
+            "[opts] mode=%s depth=%d dither=%s ds=%.4f ec=%.4f ri=%d "
+            "pd=%d q=%s chipset=%s nat_par=%d match=%d lock0=%d cop=%d scap=%d\n",
+            options.mode.c_str(), options.depth, options.dither.c_str(),
+            static_cast<double>(options.dither_strength),
+            static_cast<double>(options.error_clamp),
+            options.refine_iterations, options.palette_diversity,
+            options.quantizer.c_str(), options.chipset.c_str(),
+            options.native_par ? 1 : 0, options.match_range ? 1 : 0,
+            options.lock_color0 ? 1 : 0,
+            options.copper ? 1 : 0, options.scap ? 1 : 0);
+    }
+    auto r = run_pipeline(input_data, input_size, options);
+    if (!r) {
+        out.error_msg = r.error().message;
+        return out;
+    }
+    state_from_pipeline_result(out, *r);
+    return out;
+}
+
+EncodeStateOrError encode_state_image(const Image& image,
+                                       const Options& options) {
+    EncodeStateOrError out;
+    // Bytes input is unused on this path; pass empty + the prepared
+    // image. run_pipeline detects the prepared_image and skips
+    // load_and_preprocess (no decode, no scale, no preprocess) so the
+    // float pixels reach the encoder without an 8-bit PNG round-trip.
+    auto r = run_pipeline(nullptr, 0, options, &image);
+    if (!r) {
+        out.error_msg = r.error().message;
+        return out;
+    }
+    state_from_pipeline_result(out, *r);
     return out;
 }
 

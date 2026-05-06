@@ -62,7 +62,8 @@ void build_swap_scratch(
     std::span<const std::span<const color_space::OKLab>> rows_lab,
     std::span<const float> weights,
     std::size_t width,
-    std::span<const float> column_weights) {
+    std::span<const float> column_weights,
+    const std::vector<bool>& excluded = {}) {
 
     auto num_colors = current_lab.size();
     auto total_pixels = rows_lab.size() * width;
@@ -79,6 +80,7 @@ void build_swap_scratch(
             float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = 0;
             for (std::size_t k = 0; k < num_colors; ++k) {
+                if (!excluded.empty() && excluded[k]) continue;
                 float dL = rl[x].L - current_lab[k].L;
                 float da = rl[x].a - current_lab[k].a;
                 float db = rl[x].b - current_lab[k].b;
@@ -115,7 +117,8 @@ void refresh_swap_scratch(
     std::span<const color_space::OKLab> current_lab,
     std::span<const std::span<const color_space::OKLab>> rows_lab,
     std::size_t width,
-    std::uint8_t changed_slot) {
+    std::uint8_t changed_slot,
+    const std::vector<bool>& excluded = {}) {
 
     auto num_colors = current_lab.size();
     auto& new_lab = current_lab[changed_slot];
@@ -156,6 +159,7 @@ void refresh_swap_scratch(
             std::size_t best_k = 0;
             if (was_in_changed) {
                 for (std::size_t k = 0; k < num_colors; ++k) {
+                    if (!excluded.empty() && excluded[k]) continue;
                     float dL = rl[x].L - current_lab[k].L;
                     float da = rl[x].a - current_lab[k].a;
                     float db = rl[x].b - current_lab[k].b;
@@ -385,6 +389,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                        on_progress,
                                    std::size_t neighbor_radius,
                                    float neighbor_decay,
+                                   bool vertical_dither,
                                    const std::vector<std::size_t>& dither_excluded,
                                    std::optional<quantize::Algorithm> quantizer_override) {
     if (depth < 1 || depth > 8) {
@@ -434,7 +439,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                          locked, palette_diversity,
                                          skip_initial_swap_rows, is_lace, is_ehb,
                                          on_progress, neighbor_radius,
-                                         neighbor_decay, dither_excluded);
+                                         neighbor_decay, vertical_dither,
+                                         dither_excluded);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= move_budget) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
@@ -507,7 +513,11 @@ Result<CopperResult> encode_copper(const Image& image,
         // their indices, quantized in the remaining unlocked slots in
         // order. Skipping locked indices when filling means the
         // quantizer's colours land specifically where the dither will
-        // actually be able to use them.
+        // actually be able to use them. Note: the K=k1 quantizer doesn't
+        // see the reserve set, so an occasional pick may bit-match a
+        // reserve — find_best_swap below catches the per-line variant
+        // (the more common leak vector) by rejecting centroids that
+        // OCS-snap onto a reserved colour.
         base_pal.assign(num_colors, Color3f{0.0f, 0.0f, 0.0f});
         std::vector<bool> base_locked(num_colors, false);
         if (lock_color0) {
@@ -569,6 +579,39 @@ Result<CopperResult> encode_copper(const Image& image,
             all_lab[y][x] = color_space::linear_to_oklab(row[x]);
     }
 
+    // Reserve mask: slots the dither pass refuses to pick, AND that the
+    // swap planner must pretend don't exist when assigning pixels to
+    // clusters. Without skipping reserves in build_swap_scratch / anchor
+    // selection, pixels close to a reserve colour get assigned to that
+    // locked slot; find_best_swap then can't help that cluster, and pass
+    // 2 dither has to route those pixels to a worse slot. Net effect:
+    // reserve colour leaks into output quality even though the encoder
+    // never writes those slots.
+    std::vector<bool> excluded_mask;
+    if (!dither_excluded.empty()) {
+        excluded_mask.assign(num_colors, false);
+        for (auto i : dither_excluded)
+            if (i < num_colors) excluded_mask[i] = true;
+    }
+    // EHB-aware mask: pal_lab is sized 64 (32 base + 32 half-brite). When
+    // base slot k is reserved, its hardware-derived sibling k+32 = halve(k)
+    // ALSO holds a reserve-derived colour the encoder mustn't route pixels
+    // through. Build a 64-entry mask flagging both. Used by
+    // build_swap_scratch / refresh_swap_scratch / change-sort /
+    // column-error feedback under is_ehb=true so reserve colour can't
+    // bias EHB cluster stats either.
+    std::vector<bool> excluded_mask_ehb;
+    if (is_ehb && !excluded_mask.empty()) {
+        excluded_mask_ehb.assign(num_colors * 2, false);
+        for (std::size_t k = 0; k < num_colors; ++k) {
+            if (excluded_mask[k]) {
+                excluded_mask_ehb[k] = true;
+                excluded_mask_ehb[num_colors + k] = true;
+            }
+        }
+    }
+    auto& planner_excluded = is_ehb ? excluded_mask_ehb : excluded_mask;
+
     // [Top-N source colour histogram pool experiment: tested and
     //  rejected — snapping centroid to nearest source colour in a
     //  256-entry RGB444 histogram regressed lores+sliced by ~0.5 dB.
@@ -598,6 +641,7 @@ Result<CopperResult> encode_copper(const Image& image,
                 float best_d = std::numeric_limits<float>::max();
                 std::size_t best_k = 0;
                 for (std::size_t k = 0; k < num_colors; ++k) {
+                    if (!excluded_mask.empty() && excluded_mask[k]) continue;
                     float dL = rl[x].L - base_lab[k].L;
                     float da = rl[x].a - base_lab[k].a;
                     float db = rl[x].b - base_lab[k].b;
@@ -752,7 +796,8 @@ Result<CopperResult> encode_copper(const Image& image,
             }
         }
         SwapScratch sc;
-        build_swap_scratch(sc, pal_lab, rows_lab, weights, width, col_weights);
+        build_swap_scratch(sc, pal_lab, rows_lab, weights, width, col_weights,
+                           planner_excluded);
 
         // Skip swap-finding for initial rows (interlace: row 0 is field 1's
         // first displayed line and row 1 is field 2's — neither has a prior
@@ -817,11 +862,13 @@ Result<CopperResult> encode_copper(const Image& image,
                     color_space::linear_to_oklab(palette::half_brite(swap.new_color));
             }
             refresh_swap_scratch(sc, pal_lab, rows_lab, width,
-                                 static_cast<std::uint8_t>(swap.slot));
+                                 static_cast<std::uint8_t>(swap.slot),
+                                 planner_excluded);
             if (is_ehb) {
                 refresh_swap_scratch(sc, pal_lab, rows_lab, width,
                                      static_cast<std::uint8_t>(
-                                         num_colors + swap.slot));
+                                         num_colors + swap.slot),
+                                     planner_excluded);
             }
             changes.push_back(CopperChange{
                 static_cast<std::uint8_t>(swap.slot),
@@ -850,6 +897,7 @@ Result<CopperResult> encode_copper(const Image& image,
                     float best_d = std::numeric_limits<float>::max();
                     std::size_t best_k = 0;
                     for (std::size_t k = 0; k < num_colors; ++k) {
+                        if (!excluded_mask.empty() && excluded_mask[k]) continue;
                         float dL = all_lab[y][x].L - pal_lab_sort[k].L;
                         float da = all_lab[y][x].a - pal_lab_sort[k].a;
                         float db = all_lab[y][x].b - pal_lab_sort[k].b;
@@ -879,6 +927,7 @@ Result<CopperResult> encode_copper(const Image& image,
             auto pixel_lab = all_lab[y][x];
             float best_d = std::numeric_limits<float>::max();
             for (std::size_t k = 0; k < num_colors; ++k) {
+                if (!excluded_mask.empty() && excluded_mask[k]) continue;
                 float dL = pixel_lab.L - pal_lab[k].L;
                 float da = pixel_lab.a - pal_lab[k].a;
                 float db = pixel_lab.b - pal_lab[k].b;
@@ -904,7 +953,7 @@ Result<CopperResult> encode_copper(const Image& image,
     // The eye averages the alternating lines into a smooth gradient — using
     // only real palette colors, no intermediate blends that would hit OCS
     // 12-bit quantization artefacts.
-    if (depth <= 4 && chipset != amiga::Chipset::aga) {
+    if (vertical_dither && chipset != amiga::Chipset::aga) {
         // Golden ratio (R1) sequence: fract(y·φ + ½).  Never repeats,
         // optimal gap-filling at any prefix length — no periodicity
         // artefacts unlike Bayer-8 which tiles every 8 lines.
@@ -1027,15 +1076,10 @@ Result<CopperResult> encode_copper(const Image& image,
     // selects the per-row palette and yliluoma family / nearest-pair.
     // ===================================================================
 
-    // Pre-convert each row's sliced palette to OKLab once. When --reserve-range
-    // is active, drop excluded slots from the candidate set (cand_to_full[y]
-    // maps the filtered index back to the actual palette slot).
-    std::vector<bool> excluded_mask;
-    if (!dither_excluded.empty()) {
-        excluded_mask.assign(num_colors, false);
-        for (auto i : dither_excluded)
-            if (i < num_colors) excluded_mask[i] = true;
-    }
+    // Pre-convert each row's sliced palette to OKLab once. excluded_mask
+    // (built once at the top of encode_copper) flags slots the dither
+    // pass refuses to pick — same set the swap planner ignored, so pass
+    // 1 and pass 2 share a single coherent view of "usable slots."
     std::vector<std::vector<color_space::OKLab>> pal_lab_per_row(height);
     std::vector<std::vector<std::uint8_t>> cand_to_full_per_row;
     if (!excluded_mask.empty()) cand_to_full_per_row.resize(height);

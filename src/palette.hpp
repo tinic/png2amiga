@@ -702,7 +702,18 @@ inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
 inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
                                     std::span<const Color3f> image_pixels,
                                     bool snap_to_ocs = true,
-                                    int max_iters = 8) {
+                                    int max_iters = 8,
+                                    // Per-base-slot mask: true = slot is
+                                    // locked / reserved. Locked slots are
+                                    // EXCLUDED from the per-pixel nearest-of-64
+                                    // search (so reserve colour can't pull
+                                    // pixels into its cluster) AND held fixed
+                                    // in the per-slot update (so re-stamps
+                                    // aren't needed downstream). Without
+                                    // both, refine's iterative convergence
+                                    // depends on the reserve colour and the
+                                    // unlocked slots' colours leak through.
+                                    std::span<const bool> locked_mask = {}) {
     if (base_colors.size() < 32 || image_pixels.empty()) return;
     constexpr std::size_t kBaseN = 32;
 
@@ -759,6 +770,9 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
             std::size_t best = 0;
             float best_d = std::numeric_limits<float>::infinity();
             for (std::size_t k = 0; k < 64; ++k) {
+                std::size_t base_k = k & (kBaseN - 1);
+                if (!locked_mask.empty() && base_k < locked_mask.size()
+                    && locked_mask[base_k]) continue;
                 auto& e = full_oklab[k];
                 float dL = t.L - e.L, da = t.a - e.a, db = t.b - e.b;
                 float d  = color_space::fma_dist_sq(dL, da, db);
@@ -787,6 +801,8 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
 
         float drift = 0.0f;
         for (std::size_t k = 0; k < kBaseN; ++k) {
+            if (!locked_mask.empty() && k < locked_mask.size()
+                && locked_mask[k]) continue;
             if (cnt_B[k] + cnt_H[k] == 0) continue;
             Color3f new_lin{};
             if (snap_to_ocs) {

@@ -385,6 +385,14 @@ std::optional<T> best_sweep(
 // canonical surface.
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     std::size_t input_size,
-                                    const api::Options& options);
+                                    const api::Options& options,
+                                    // Optional pre-decoded image. When set,
+                                    // run_pipeline skips decode + scale +
+                                    // preprocess and uses the image directly
+                                    // (must already be at target dims for the
+                                    // mode). Lets CLI float-pixel callers
+                                    // avoid the 8-bit PNG round-trip the
+                                    // bytes-only path imposes.
+                                    const Image* prepared_image = nullptr);
 
 }  // namespace png2amiga::pipeline

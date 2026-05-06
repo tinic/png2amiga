@@ -2805,6 +2805,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   <InputNumber v-model="options.copperChanges" :min="0" :max="copperMax" class="flex-1 input-sm" placeholder="0 = auto" />
                   <span class="text-xs text-color-secondary">max: {{ copperMax }}</span>
                 </div>
+                <div class="flex align-items-center gap-2 mt-2">
+                  <input type="checkbox" v-model="options.slicedVerticalDither" id="slicedVerticalDither" />
+                  <label for="slicedVerticalDither" class="text-xs text-color-secondary" title="Spread copper transitions across rows via 1-D Bayer alternation between old/new palette colours. Smoother on a CRT, slightly worse S2/PSNR.">Vertical palette dither</label>
+                </div>
               </div>
 
               <!-- Mask export (only when source has transparency) -->

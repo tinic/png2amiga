@@ -21,7 +21,9 @@ namespace png2amiga::api {
 // reach it without pulling api-internal types into pipeline.hpp.
 Result<pipeline::PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                               std::size_t input_size,
-                                              const Options& options);
+                                              const Options& options,
+                                              const Image* prepared_image
+                                                  = nullptr);
 }  // namespace png2amiga::api
 
 namespace png2amiga::pipeline {
@@ -391,8 +393,9 @@ Result<Image> render_preview(
 
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     std::size_t input_size,
-                                    const api::Options& options) {
-    return api::run_pipeline(input_data, input_size, options);
+                                    const api::Options& options,
+                                    const Image* prepared_image) {
+    return api::run_pipeline(input_data, input_size, options, prepared_image);
 }
 
 cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base) {

@@ -131,6 +131,22 @@ else()
         src/main.cpp
         ${PNG2AMIGA_CORE_SOURCES}
     )
+
+    # api_pipeline_smoke: minimal CLI wrapper around api::encode_state,
+    # used by tools/check_api_equiv.py to A/B compare the api-only path
+    # against png2amiga's main.cpp inline pipelines. Built only on native
+    # (not WASM); shares the core sources so it tracks api.cpp changes
+    # automatically.
+    add_executable(api_pipeline_smoke
+        tools/api_pipeline_smoke.cpp
+        ${PNG2AMIGA_CORE_SOURCES}
+    )
+    target_include_directories(api_pipeline_smoke PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(api_pipeline_smoke PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
+    target_compile_options(api_pipeline_smoke PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
     # Include quantize_metal.cpp here too when there's no Metal —
     # it provides the C-stub symbols (false / std::unexpected) that
     # quantize_metal_wrap.cpp links against. The Metal-enabled
@@ -308,6 +324,14 @@ else()
         # since the boundary in quantize_metal.hpp is strict C, so no
         # std type from one stdlib reaches the other in this binary.
         target_link_libraries(png2amiga PRIVATE -lc++ -lc++abi)
+
+        # api_pipeline_smoke needs the same Metal hook-up.
+        target_compile_definitions(api_pipeline_smoke PRIVATE PNG2AMIGA_HAVE_METAL=1)
+        target_link_libraries(api_pipeline_smoke PRIVATE
+            "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+        add_dependencies(api_pipeline_smoke quantize_metal_obj)
+        target_link_libraries(api_pipeline_smoke PRIVATE ${_metal_cpp_obj})
+        target_link_libraries(api_pipeline_smoke PRIVATE -lc++ -lc++abi)
     endif()
 
     enable_testing()
@@ -1296,6 +1320,332 @@ else()
             --expect-unique-min 17
             --
             --mode ehb --sliced --reserve-range 1-15 ff0000)
+
+    # ----- Reserve colour-independence tests --------------------------
+    # "reserve = DO NOT USE IT": the encoder must produce byte-identical
+    # output regardless of which colour is stamped at the reserved slots,
+    # because reserved slots never contribute pixels to the rendered
+    # image. Past silent regressions:
+    #   * build_swap_scratch / refresh_swap_scratch / anchor / change-sort /
+    #     column-error feedback in copper.cpp all read locked palette state.
+    #   * refine_ehb_base_palette's iterative convergence saw the reserve
+    #     colour even when the caller re-stamped after — added a locked_mask
+    #     so refine itself is reserve-aware.
+    #   * strips planner: per-row base_index rebind, e_strip_dither scorer,
+    #     and the swap-eval pixel_min_excl_k inner loop all needed the same
+    #     mask.
+    # The harness runs the encoder twice with different reserve colours,
+    # SHA-256s the output PNG, asserts hashes match.
+    set(_indep_chk
+        "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_reserve_color_indep.py;--bin;$<TARGET_FILE:png2amiga>")
+
+    add_test(NAME "reserve-indep-lores-plain"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 16-31
+            --colors 000000 ff0000 cacaca
+            -- --mode lores)
+    add_test(NAME "reserve-indep-lores-sliced"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 16-31
+            --colors 000000 ff0000 cacaca ffffff
+            -- --mode lores --sliced)
+    add_test(NAME "reserve-indep-hires-sliced"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 8-15
+            --colors 000000 ff0000 cacaca
+            -- --mode hires --sliced)
+    add_test(NAME "reserve-indep-ehb-plain"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 16-31
+            --colors 000000 ff0000 cacaca ffffff
+            -- --mode ehb)
+    add_test(NAME "reserve-indep-ehb-sliced"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 16-31
+            --colors 000000 ff0000 cacaca ffffff
+            -- --mode ehb --sliced)
+    add_test(NAME "reserve-indep-strips-ehb"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 16-31
+            --colors 000000 ff0000 cacaca ffffff
+            -- --mode ehb --strips)
+    add_test(NAME "reserve-indep-vga-13h"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 250-255
+            --colors 000000 ff0000 cacaca ff00ff abcdef
+            -- --mode vga-13h)
+    add_test(NAME "reserve-indep-ega-320"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 12-15
+            --colors 000000 ff0000 cacaca ff00ff
+            -- --mode ega-320)
+    add_test(NAME "reserve-indep-stf-low"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 12-15
+            --colors 000000 ff0000 cacaca ff00ff
+            -- --mode stf-low)
+
+    # ---------------------------------------------------------------
+    # Reserve render-pixel invariants. Stronger than color-indep:
+    # these check that the rendered output meets specific per-pixel
+    # constraints. Captures bug shapes the user reported in May 2026.
+    # ---------------------------------------------------------------
+    set(_pixel_chk
+        "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_pixel_count.py;--bin;$<TARGET_FILE:png2amiga>")
+
+    # User-reported: EHB+sliced + reserve every non-zero base slot
+    # (1-31). With lock_color0 also locking slot 0, NO unlocked slot
+    # remains, so the dither has no candidates and the image must
+    # render entirely as black. Without the api.cpp EHB+sliced fix,
+    # the web silently ignored reserves and produced a normal-looking
+    # encode — caught here.
+    add_test(NAME "reserve-render-ehb-sliced-all-locked-is-black"
+        COMMAND ${_pixel_chk}
+            --in ${_pal_makena_in}
+            --expect-unique-colors 1
+            --expect-all-color 000000
+            -- --mode ehb --sliced --reserve-range 1-31 ff0000)
+
+    # Same for plain EHB (no sliced).
+    add_test(NAME "reserve-render-ehb-all-locked-is-black"
+        COMMAND ${_pixel_chk}
+            --in ${_pal_makena_in}
+            --expect-unique-colors 1
+            --expect-all-color 000000
+            -- --mode ehb --reserve-range 1-31 ff0000)
+
+    # Lores 5bpp: reserving 1-31 leaves only slot 0 (= black). Output
+    # must be all-black.
+    add_test(NAME "reserve-render-lores-all-locked-is-black"
+        COMMAND ${_pixel_chk}
+            --in ${_pal_makena_in}
+            --expect-unique-colors 1
+            --expect-all-color 000000
+            -- --mode lores --reserve-range 1-31 ff0000)
+
+    # Reserve a single slot to magenta (a colour very unlikely to be
+    # picked by the K=15 quantizer or as a swap centroid for makena).
+    # Assert magenta is NEVER routed through the reserved slot — i.e.
+    # no pixel in the output is magenta. Catches a leak where the
+    # reserve colour ends up at a different slot via the dither path.
+    add_test(NAME "reserve-render-lores-magenta-not-leaked"
+        COMMAND ${_pixel_chk}
+            --in ${_pal_makena_in}
+            --expect-no-color ff00ff
+            -- --mode lores --sliced --reserve-range 31 ff00ff)
+    add_test(NAME "reserve-render-ehb-magenta-not-leaked"
+        COMMAND ${_pixel_chk}
+            --in ${_pal_makena_in}
+            --expect-no-color ff00ff
+            -- --mode ehb --sliced --reserve-range 31 ff00ff)
+
+    # Color-indep also under non-FS dithers (ordered dithering reads
+    # palette OKLab via a different code path) and under --best
+    # (multi-restart parallel jitter sweep — would surface any
+    # reserve-color leak inside the sweep's per-trial encoder).
+    add_test(NAME "reserve-indep-lores-sliced-bayer"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 16-31
+            --colors 000000 ff0000 cacaca
+            -- --mode lores --sliced --dither bayer4x4)
+    add_test(NAME "reserve-indep-lores-sliced-best"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 16-31
+            --colors 000000 ff0000 cacaca
+            -- --mode lores --sliced --best)
+
+    # ---------------------------------------------------------------
+    # api-vs-CLI equivalence tests. The amiga modes that have already
+    # been fully migrated (or are byte-identical between api::encode_state
+    # and main.cpp's inline pipeline) are pinned here. Each phase of
+    # the main.cpp/api.cpp merge — see REFACTOR_PLAN.md — adds one or
+    # more entries to this set as inline pipelines are migrated.
+    #
+    # FAILS if the two paths diverge: catches the kind of silent drift
+    # that produced the EHB+sliced web reserve bug (May 2026) where
+    # api.cpp lacked plumbing main.cpp had.
+    #
+    # Uses tools/check_api_equiv.py + the api_pipeline_smoke binary,
+    # which exercises api::encode_state with a CLI-equivalent option
+    # set (--apply-tuning fills in dither_tuning defaults).
+    # ---------------------------------------------------------------
+    set(_equiv_chk
+        "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_api_equiv.py;--cli;$<TARGET_FILE:png2amiga>;--api;$<TARGET_FILE:api_pipeline_smoke>")
+
+    add_test(NAME "api-equiv-lores-plain"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores)
+    add_test(NAME "api-equiv-lores-sliced"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced)
+    add_test(NAME "api-equiv-lores-sliced-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --reserve-range 16-31 ff0000)
+    add_test(NAME "api-equiv-lores-sliced-d4"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --depth 4)
+    add_test(NAME "api-equiv-lores-sliced-atkinson"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --dither atkinson)
+    add_test(NAME "api-equiv-lores-sliced-bayer"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --dither bayer4x4)
+    add_test(NAME "api-equiv-lores-plain-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --reserve-range 16-31 ff0000)
+    # api::encode_state_image migration (the float-input overload that
+    # bypasses the 8-bit PNG round-trip). After the migration, EHB plain
+    # and strips EHB byte-match the api smoke. ehb+sliced + hires still
+    # use inline pipelines; their api-equiv tests land when those branches
+    # migrate too.
+    add_test(NAME "api-equiv-ehb-plain"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ehb)
+    add_test(NAME "api-equiv-ehb-plain-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ehb --reserve-range 16-31 ff0000)
+    add_test(NAME "api-equiv-strips-ehb"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ehb --strips)
+    # hires plain — main.cpp's std-lores path matches api once smoke
+    # resolves the per-mode depth default (hires non-AGA → 4, lores → 5).
+    add_test(NAME "api-equiv-hires-plain"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode hires)
+    add_test(NAME "api-equiv-hires-sliced"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode hires --sliced)
+    add_test(NAME "api-equiv-hires-sliced-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode hires --sliced --reserve-range 8-15 ff0000)
+    # Non-Amiga modes — these already routed through api::encode_state and
+    # don't have inline pipelines, so byte-equivalence is essentially a
+    # smoke test that the option translation between Config and Options
+    # is faithful.
+    add_test(NAME "api-equiv-stf-low"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode stf-low)
+    add_test(NAME "api-equiv-ste-low"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ste-low)
+    add_test(NAME "api-equiv-ega-320"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ega-320)
+    add_test(NAME "api-equiv-vga-12h"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode vga-12h)
+    add_test(NAME "api-equiv-stf-low-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode stf-low --reserve-range 12-15 ff0000)
+    add_test(NAME "api-equiv-ega-320-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ega-320 --reserve-range 12-15 ff0000)
+    add_test(NAME "api-equiv-vga-13h-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode vga-13h --reserve-range 250-255 ff0000)
+    # EHB+sliced — migrated from inline (main.cpp:6498) to api::encode_state_image.
+    # Pre-migration the inline path lacked refine_ehb_base_palette +
+    # extra_ehb_optimization seed pre-pass, producing 60% pixel-different
+    # output and lower PSNR vs the api path. Migration improves CLI quality
+    # (PSNR 37.70 → 38.84 dB on makena) AND aligns CLI with web byte-for-byte.
+    add_test(NAME "api-equiv-ehb-sliced"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ehb --sliced)
+    add_test(NAME "api-equiv-ehb-sliced-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ehb --sliced --reserve-range 16-31 ff0000)
+    # HAM modes — migrated from png_io::encode + encode_state(bytes) to
+    # encode_state_image, eliminating the 8-bit precision-loss round-trip.
+    add_test(NAME "api-equiv-ham6"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6)
+    add_test(NAME "api-equiv-ham8"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham8)
+    add_test(NAME "api-equiv-ham6-sliced"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --sliced)
+    add_test(NAME "api-equiv-ham6-strips"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --strips)
+    add_test(NAME "api-equiv-ega-640"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ega-640)
+    add_test(NAME "api-equiv-stf-med"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode stf-med)
+    # Remaining Atari ST/STE / EGA / VGA / CGA modes — byte-equivalent
+    # after the comparison harness's scale_preview_nn inverse fix.
+    add_test(NAME "api-equiv-stf-hi"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode stf-hi)
+    add_test(NAME "api-equiv-ste-med"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ste-med)
+    add_test(NAME "api-equiv-ste-hi"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ste-hi)
+    add_test(NAME "api-equiv-ega-hi"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ega-hi)
+    add_test(NAME "api-equiv-vga-10h"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode vga-10h)
+    add_test(NAME "api-equiv-cga-320"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-320)
+    add_test(NAME "api-equiv-cga-640"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-640)
+    add_test(NAME "api-equiv-cga-composite"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-composite)
+    # Tile / chunky modes — migrated from encode_state(bytes) to
+    # encode_state_image (eliminates 8-bit PNG round-trip).
+    add_test(NAME "api-equiv-genesis-h40"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode genesis-h40)
+    add_test(NAME "api-equiv-genesis-h32"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode genesis-h32)
+    add_test(NAME "api-equiv-snes-direct"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode snes-mode7-direct)
+    add_test(NAME "api-equiv-snes-256"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode snes-mode7-256)
+    add_test(NAME "api-equiv-c64-multicolor"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-multicolor)
+    add_test(NAME "api-equiv-c64-hires"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-hires)
+    add_test(NAME "api-equiv-c64-fli"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-fli)
+    add_test(NAME "api-equiv-c64-afli"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-afli)
+    add_test(NAME "api-equiv-c64-petscii"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-petscii)
+    add_test(NAME "api-equiv-c64-charset-hires"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-hires)
+    add_test(NAME "api-equiv-c64-charset-multicolor"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-multicolor)
+    add_test(NAME "api-equiv-cga-text80x100"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-text80x100)
 
 endif() # NOT EMSCRIPTEN
 

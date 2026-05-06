@@ -80,6 +80,7 @@ export interface Options {
   cropH: number
   cropAuto: boolean
   copperChanges: number
+  slicedVerticalDither: boolean
   symbolName: string
   maskInvert: boolean
   nativePar: boolean
@@ -510,6 +511,9 @@ export function defaultOptions(): Options {
     cropAuto: false,
     // Copper override (0 = auto)
     copperChanges: 0,
+    // Sliced 1-D Bayer alternation (spreads copper transitions across
+    // rows; better visual smoothness on CRT, slightly worse S2/PSNR).
+    slicedVerticalDither: false,
     // Symbol name for C header export (empty = auto from filename)
     symbolName: '',
     // Mask export
