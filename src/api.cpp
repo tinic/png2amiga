@@ -2292,6 +2292,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
             if (lock_zero_ehb)
                 base_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+            // Reclaim duplicate half-brite slots by doubling their
+            // base colour where possible. Doubles the effective
+            // colour count when the source has dark clusters that
+            // collapsed onto the same hb code.
+            palette::dedupe_ehb_halfbrite(
+                std::span<Color3f>(base_pal.colors.data(), 32),
+                /*preserve_slot0=*/lock_zero_ehb);
         }
         // 1-opt local search is --best-only; plain EHB stays at
         // PNN + pair-refine for the fast (~0.1s) baseline path.

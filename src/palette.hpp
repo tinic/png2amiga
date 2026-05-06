@@ -570,6 +570,90 @@ inline Color3f half_brite(const Color3f& c) {
     return ocs_to_linear(halved);
 }
 
+// Reclaim duplicate half-brite slots by doubling their base colour.
+//
+// The half-brite section (palette indices 32..63) is hardware-derived
+// as halve(base[i]) for each base slot, where halve is per-nibble
+// integer right-shift in OCS 4-bit space. When two base slots happen
+// to halve to the same code (e.g. two dark colours both >>1 to 0,
+// or two slots that differ only in the LSB of every nibble), the
+// half-brite half wastes one of the 64 effective colours.
+//
+// We can recover that slot when the base colour's components all sit
+// in the lower half of the OCS gamut (every nibble <= 7): doubling
+// the base shifts every nibble left by one, so halve(double(b)) = b.
+// The original (darker) colour migrates from the BASE slot into its
+// HALF-BRITE slot, and the BASE slot now holds a brighter colour.
+// Net effect: one previously-duplicate half-brite slot becomes a
+// new distinct colour.
+//
+// A small fixed-point iteration is enough: doubling slot j only
+// changes slot j's base + its half-brite, so each pass strictly
+// reduces the dup count or terminates.
+//
+// Slot 0 is left untouched (locked black or user-pinned). Snapping
+// is implicit: arithmetic happens in OCS 12-bit nibble space and
+// the result is materialised back to linear via ocs_to_linear.
+inline void dedupe_ehb_halfbrite(std::span<Color3f> base32,
+                                  bool preserve_slot0,
+                                  int max_iters = 4) {
+    if (base32.size() < 32) return;
+    constexpr std::size_t kBaseN = 32;
+
+    std::array<std::uint16_t, kBaseN> codes{};
+    for (std::size_t i = 0; i < kBaseN; ++i) codes[i] = linear_to_ocs(base32[i]);
+
+    auto halve_code = [](std::uint16_t c) -> std::uint16_t {
+        std::uint16_t r = (c >> 8) & 0xF;
+        std::uint16_t g = (c >> 4) & 0xF;
+        std::uint16_t b = c & 0xF;
+        return static_cast<std::uint16_t>(
+            ((r >> 1) << 8) | ((g >> 1) << 4) | (b >> 1));
+    };
+    auto can_double = [](std::uint16_t c) -> bool {
+        std::uint16_t r = (c >> 8) & 0xF;
+        std::uint16_t g = (c >> 4) & 0xF;
+        std::uint16_t b = c & 0xF;
+        return r <= 7 && g <= 7 && b <= 7;
+    };
+    auto double_code = [](std::uint16_t c) -> std::uint16_t {
+        std::uint16_t r = (c >> 8) & 0xF;
+        std::uint16_t g = (c >> 4) & 0xF;
+        std::uint16_t b = c & 0xF;
+        return static_cast<std::uint16_t>(
+            ((r << 1) << 8) | ((g << 1) << 4) | (b << 1));
+    };
+
+    for (int iter = 0; iter < max_iters; ++iter) {
+        bool changed = false;
+        // For each pair (i, j) with i < j and halve(codes[i])==halve(codes[j]):
+        // double j when doubleable. Skip if the doubled value would
+        // duplicate another BASE slot (strict regression). Slot 0 is
+        // never doubled.
+        for (std::size_t i = 0; i < kBaseN; ++i) {
+            auto hi = halve_code(codes[i]);
+            for (std::size_t j = i + 1; j < kBaseN; ++j) {
+                if (preserve_slot0 && j == 0) continue;
+                if (halve_code(codes[j]) != hi) continue;
+                if (!can_double(codes[j])) continue;
+                auto cand = double_code(codes[j]);
+                bool dup_in_base = false;
+                for (std::size_t k = 0; k < kBaseN; ++k) {
+                    if (k != j && codes[k] == cand) {
+                        dup_in_base = true; break;
+                    }
+                }
+                if (dup_in_base) continue;
+                codes[j] = cand;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+
+    for (std::size_t i = 0; i < kBaseN; ++i) base32[i] = ocs_to_linear(codes[i]);
+}
+
 inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
     Palette pal;
     pal.name = "ehb";
