@@ -249,22 +249,21 @@ function drawPalette(bytes: Uint8Array) {
   ctx.imageSmoothingEnabled = false
   ctx.clearRect(0, 0, w, h)
   const reserved = reservedIndexSet.value
-  const ehbCarve = isEhbMode(options.mode)
+  const ehbMode = isEhbMode(options.mode)
   for (let i = 0; i < n; ++i) {
     const cx = (i % kPalettePerRow) * kPaletteSwatchPx
     const cy = Math.floor(i / kPalettePerRow) * kPaletteSwatchPx
-    if (ehbCarve && i >= 32) {
+    // EHB halfbrite cells (32..63) cascade reservation: when
+    // base[i-32] is reserved, the halfbrite cell renders cleared
+    // too (the encoder won't dither into a reserved base or its
+    // hardware-derived halfbrite).
+    if (ehbMode && i >= 32 && reserved.has(i - 32)) {
       drawPaletteCarveCell(ctx, cx, cy)
-      continue
-    }
-    if (!reserved.has(i)) {
-      const r = bytes[i * 3]
-      const g = bytes[i * 3 + 1]
-      const b = bytes[i * 3 + 2]
-      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
-      ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
-    } else {
+    } else if (reserved.has(i)) {
       drawPaletteReserveX(ctx, cx, cy)
+    } else {
+      ctx.fillStyle = `rgb(${bytes[i*3]}, ${bytes[i*3+1]}, ${bytes[i*3+2]})`
+      ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
     }
   }
 }
