@@ -3074,14 +3074,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     } else {
         auto qcount = palette_locks::quant_count(max_colors, options.locks,
                                                  lock_zero);
-        // Don't subtract reserve_count from qcount — we'll overlay
-        // reserves on top after assemble, displacing whichever quantized
-        // colours landed at those indices. Asking for the full
-        // max_colors-lock_zero-locks count gives the assemble step
-        // enough quantized candidates to survive the dedupe pass when
-        // user-supplied reserve colours coincide with the quantizer's
-        // natural picks (very common — reserves are often the user's
-        // previous palette).
+        // Subtract reserves: the quantizer should produce a palette
+        // sized for the slots it'll actually fill. Asking for
+        // max_colors-lock_zero-locks ignores reserves and lets the
+        // quantizer's brightest tail land in the visible slots, which
+        // crashes the dither's dark gamut when the user reserves many
+        // dark slots. Floor at 1.
+        if (qcount > reserve_count) qcount -= reserve_count;
+        else                        qcount = 1;
         // Two-pass: ask the quantizer for qcount first (the K-1 number
         // — i.e., one slot reserved for locked-black). If that
         // partition already includes pure black, re-quantize at
@@ -3114,28 +3114,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Snap palette to discrete gamut where applicable (STF/EGA/VGA).
         if (amiga::is_stf(mode) || amiga::is_vga(mode))
             snap_to_chipset(*quantized, chipset, mode);
-        // Assemble with locks only (NOT reserves). Reserves are
-        // overlaid AFTER, displacing whichever quantized colours
-        // happened to land at the reserved indices. This avoids the
-        // dedupe-vs-reserves problem: if a reserve's colour matches a
-        // quantizer-produced colour bit-exactly, the assemble dedupe
-        // would drop the quantizer entry and leave the tail unfilled
-        // (manifested as 3 trailing black slots in 5bpp + 10 reserves
-        // matching the prior palette). Combined with the bumped qcount
-        // above (no reserve subtraction), the quantizer hands assemble
-        // enough colours that displacement is always survivable.
+        // Merge reserves into the lock list passed to assemble. With
+        // the dedupe-only-against-lock-zero pass in palette_locks.cpp,
+        // user-supplied reserves no longer cause the quantizer entries
+        // matching them to get dropped. assemble places the reserves
+        // at their indices and skips them when filling unlocked slots
+        // with quantized colours — so the quantizer's `qcount` colours
+        // land specifically at the unreserved tail, where they're
+        // actually used by the dither. Critical for the "reserve
+        // many dark slots" case: quantizer optimises for the smaller
+        // qcount and produces a balanced palette including darks.
+        std::vector<LockSpec> fixed_slots = options.locks;
+        for (auto& r : options.reserves) {
+            fixed_slots.push_back(LockSpec{r.index, r.r, r.g, r.b});
+        }
         auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, options.locks, max_colors, lock_zero, chipset, mode);
+            *quantized, fixed_slots, max_colors, lock_zero, chipset, mode);
         pal = std::move(assembled.palette);
         locked_mask = std::move(assembled.locked);
-        for (auto& r : options.reserves) {
-            auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < max_colors) {
-                pal.colors[i] = palette_locks::to_color(
-                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
-                locked_mask[i] = true;
-            }
-        }
     }
 
     if (options.match_range)
