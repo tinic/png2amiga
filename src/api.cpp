@@ -4439,19 +4439,6 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
                                 std::size_t input_size,
                                 const Options& options) {
     EncodeStateOrError out;
-    if (std::getenv("PNG2AMIGA_DEBUG_OPTS")) {
-        std::fprintf(stderr,
-            "[opts] mode=%s depth=%d dither=%s ds=%.4f ec=%.4f ri=%d "
-            "pd=%d q=%s chipset=%s nat_par=%d match=%d lock0=%d cop=%d scap=%d\n",
-            options.mode.c_str(), options.depth, options.dither.c_str(),
-            static_cast<double>(options.dither_strength),
-            static_cast<double>(options.error_clamp),
-            options.refine_iterations, options.palette_diversity,
-            options.quantizer.c_str(), options.chipset.c_str(),
-            options.native_par ? 1 : 0, options.match_range ? 1 : 0,
-            options.lock_color0 ? 1 : 0,
-            options.copper ? 1 : 0, options.scap ? 1 : 0);
-    }
     auto r = run_pipeline(input_data, input_size, options);
     if (!r) {
         out.error_msg = r.error().message;

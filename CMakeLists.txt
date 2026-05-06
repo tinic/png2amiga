@@ -167,6 +167,7 @@ else()
     # Haswell 2013+, AMD Zen 2017+); NEON is mandatory on AArch64.
     if(MSVC)
         target_compile_options(png2amiga PRIVATE /arch:AVX2)
+        target_compile_options(api_pipeline_smoke PRIVATE /arch:AVX2)
     else()
         # Probe for AVX2 — succeeds on x86_64, fails on ARM64 (Apple
         # Silicon, etc.) where NEON is the default ISA and no flag is
@@ -176,6 +177,7 @@ else()
         check_cxx_compiler_flag("-mavx2" PNG2AMIGA_HAS_MAVX2)
         if(PNG2AMIGA_HAS_MAVX2)
             target_compile_options(png2amiga PRIVATE -mavx2 -mfma)
+            target_compile_options(api_pipeline_smoke PRIVATE -mavx2 -mfma)
         endif()
     endif()
 
