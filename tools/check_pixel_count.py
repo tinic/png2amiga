@@ -61,7 +61,7 @@ def main() -> int:
                       f"{args.expect_unique_colors}")
                 ok = False
             else:
-                print(f"  ✓ unique colors = {n}")
+                print(f"  PASS unique colors = {n}")
 
         if args.expect_all_color is not None:
             target = parse_hex(args.expect_all_color)
@@ -72,7 +72,7 @@ def main() -> int:
                 print(f"FAIL: not all pixels {target} ({count} differ)")
                 ok = False
             else:
-                print(f"  ✓ all pixels = {target}")
+                print(f"  PASS all pixels = {target}")
 
         if args.expect_no_color is not None:
             target = parse_hex(args.expect_no_color)
@@ -82,7 +82,7 @@ def main() -> int:
                 print(f"FAIL: {count} pixels are {target} (should be 0)")
                 ok = False
             else:
-                print(f"  ✓ no pixel is {target}")
+                print(f"  PASS no pixel is {target}")
 
         return 0 if ok else 1
 
