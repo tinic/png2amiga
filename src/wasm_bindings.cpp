@@ -117,6 +117,27 @@ Options parse_js_options(val js_opts) {
             opts.reserves.push_back(rs);
         }
     }
+    // locks: array of { index, r, g, b } objects pinning palette slots
+    // to specific sRGB colours. Unlike reserves, locked slots stay in
+    // the dither candidate set (the encoder may still route image
+    // pixels to them). The web "Reserve palette" panel sends locks
+    // here even though the UI uses the word "reserve" — the user-
+    // facing meaning is "pin this colour across re-encodes," which
+    // is the LOCK semantic at the encoder level.
+    if (js_opts.hasOwnProperty("locks")) {
+        val arr = js_opts["locks"];
+        auto n = arr["length"].as<unsigned>();
+        opts.locks.reserve(n);
+        for (unsigned i = 0; i < n; ++i) {
+            val e = arr[i];
+            png2amiga::api::LockSpec lk{};
+            lk.index = e["index"].as<int>();
+            lk.r = e["r"].as<int>();
+            lk.g = e["g"].as<int>();
+            lk.b = e["b"].as<int>();
+            opts.locks.push_back(lk);
+        }
+    }
     if (js_opts.hasOwnProperty("cropX"))
         opts.crop_x = js_opts["cropX"].as<int>();
     if (js_opts.hasOwnProperty("cropY"))

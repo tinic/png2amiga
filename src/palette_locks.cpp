@@ -261,9 +261,22 @@ AssembledPalette assemble_locked_palette(
             && std::abs(a.g - b.g) < eps
             && std::abs(a.b - b.b) < eps;
     };
+    // Dedupe against locked slots ONLY when those slots are the implicit
+    // lock_zero black (slot 0) — that's the original purpose of this
+    // pass: avoid two #000000 slots when the source has dark pixels and
+    // the quantizer naturally picks black alongside the locked-black.
+    // User-supplied locks should NOT trigger dedupe: when the user pins
+    // 10+ slots to colours from the existing palette (very common on
+    // re-encodes), the quantizer's naturals coincide with those locks
+    // bit-exactly and we'd drop too many entries, leaving the palette
+    // tail at default (0,0,0) which renders as trailing black slots.
+    // The price: when a user lock and a quantizer pick happen to land
+    // on the same RGB, the palette has two slots with that colour —
+    // visually a duplicate but every slot is filled and the dither
+    // candidate set is full.
     auto is_locked_dup = [&](const Color3f& c) {
-        for (std::size_t i = 0; i < max_colors; ++i)
-            if (out.locked[i] && eq(c, out.palette.colors[i])) return true;
+        if (lock_zero_black && out.locked[0] && eq(c, out.palette.colors[0]))
+            return true;
         return false;
     };
     std::size_t qi = 0;

@@ -160,6 +160,12 @@ declare module '@wasm/png2amiga.js' {
     // runtime needs). Wired by the Reserve palette panel in Advanced
     // settings.
     reserves?: { index: number; r: number; g: number; b: number }[]
+    // Per-slot palette locks. Each entry pins palette[index] to the
+    // given sRGB colour but keeps the slot in the dither candidate
+    // set. The web "Reserve palette" panel sends its toggled slots
+    // through here (lock semantics — pin across re-encodes, dither
+    // still uses them) even though the UI label says "reserve".
+    locks?: { index: number; r: number; g: number; b: number }[]
     paletteData?: Uint8Array
     paletteFile?: string
 
