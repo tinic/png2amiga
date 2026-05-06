@@ -1024,21 +1024,17 @@ function buildWasmOptions(): WasmOptions {
   // clone with "[object Array] could not be cloned." A plain-object
   // map is safe to postMessage.
   const { paletteData, alphaDither, reserves, ...rest } = options
-  // The "Reserve palette" panel actually wants LOCK semantics: pin a
-  // slot to a colour but keep that slot in the dither candidate set
-  // (encoder may still route image pixels to it). True reserve
-  // semantics — slot carved out of the dither — empties the palette
-  // of dark/mid colours when the user pins many of them at once,
-  // crashing image quality. Send the panel's contents as `locks`
-  // (mapped via the same {index, r, g, b} shape) and leave the
-  // C++-side `reserves` array empty so the CLI carve-out semantic
-  // stays untouched for `--reserve-range`.
-  const cleanLocks = reserves.filter(r =>
+  // The "Reserve palette" panel uses RESERVE semantics: carved-out
+  // slots are removed from the dither candidate set. The encoder
+  // sizes the quantizer's palette for the unreserved slots only
+  // (subtract reserves from qcount in api.cpp), so the rendered
+  // image uses exactly max_colors - reserves unique colours.
+  const cleanReserves = reserves.filter(r =>
     !(r.index === 0 && options.lockColor0))
   const out: WasmOptions = {
     ...rest,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
-    locks: cleanLocks.map(r => ({
+    reserves: cleanReserves.map(r => ({
       index: r.index, r: r.r, g: r.g, b: r.b,
     })),
     ...(paletteData ? { paletteData } : {}),

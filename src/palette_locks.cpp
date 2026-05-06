@@ -261,22 +261,22 @@ AssembledPalette assemble_locked_palette(
             && std::abs(a.g - b.g) < eps
             && std::abs(a.b - b.b) < eps;
     };
-    // Dedupe against locked slots ONLY when those slots are the implicit
-    // lock_zero black (slot 0) — that's the original purpose of this
-    // pass: avoid two #000000 slots when the source has dark pixels and
-    // the quantizer naturally picks black alongside the locked-black.
-    // User-supplied locks should NOT trigger dedupe: when the user pins
-    // 10+ slots to colours from the existing palette (very common on
-    // re-encodes), the quantizer's naturals coincide with those locks
-    // bit-exactly and we'd drop too many entries, leaving the palette
-    // tail at default (0,0,0) which renders as trailing black slots.
-    // The price: when a user lock and a quantizer pick happen to land
-    // on the same RGB, the palette has two slots with that colour —
-    // visually a duplicate but every slot is filled and the dither
-    // candidate set is full.
+    // Dedupe against ALL locked slots (lock_zero, user --lock-index,
+    // --reserve-range). Critical when the user pins many slots to
+    // colours from the existing palette: the quantizer's naturals
+    // coincide bit-exactly with those locks, so without dedupe we'd
+    // place each colour twice (once at the locked slot, once at a
+    // quantizer-fill slot) and the palette would report fewer unique
+    // colours than max_colors (e.g. 31 of 32 with one such collision).
+    //
+    // The caller compensates by asking the quantizer for the FULL
+    // max_colors - lock_zero count — NOT max_colors - lock_zero -
+    // locks - reserves — so the dedupe always has enough surplus
+    // candidates to leave the unlocked tail filled, even when many
+    // quantizer entries get dropped.
     auto is_locked_dup = [&](const Color3f& c) {
-        if (lock_zero_black && out.locked[0] && eq(c, out.palette.colors[0]))
-            return true;
+        for (std::size_t i = 0; i < max_colors; ++i)
+            if (out.locked[i] && eq(c, out.palette.colors[i])) return true;
         return false;
     };
     std::size_t qi = 0;
