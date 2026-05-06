@@ -7732,23 +7732,17 @@ int run_main(int argc, char* argv[]) {
                     (*snapped)[x, y] = palette::quantize_to_ega((*image)[x, y]);
             quant_src = &*snapped;
         }
-        // Force CPU median-cut for chunky VGA + reserves: gpu_restart
-        // (Metal-backed) is non-deterministic across runs, and combined
-        // with reserves the user expects byte-stable output. The Metal
-        // path stays for non-reserved chunky VGA where gpu_restart's
-        // higher-quality sampling is the win and run-to-run jitter is
-        // tolerable. Outside this case `auto_quantize` resolves the
-        // chipset-aware default normally.
-        std::string_view quantizer_for_call = config->quantizer;
-        if (amiga::is_chunky(config->mode) && !config->reserves.empty()
-            && quantizer_for_call.empty()) {
-            quantizer_for_call = "median-cut";
-        }
+        // gpu_restart_quantize was made deterministic in v1.66.0 (the
+        // GPU does argmin-only and the per-cluster sums happen on the
+        // CPU in a fixed pixel-index order), so chunky VGA + reserves
+        // no longer needs to force median-cut for byte-stability.
+        // resolve_algorithm picks gpu-restart on Apple Metal,
+        // median-cut otherwise.
         auto quantized = palette_locks::two_pass_quantize(
             [&](std::size_t k) -> Result<Palette> {
                 return auto_quantize(*quant_src, k, chipset,
                                      config->palette_diversity,
-                                     quantizer_for_call, config->mode);
+                                     config->quantizer, config->mode);
             },
             qc.qcount, qc.kfallback, lock_zero_std);
         if (!quantized) {

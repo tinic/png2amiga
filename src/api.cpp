@@ -1184,9 +1184,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto qc_vga = palette_locks::quant_counts_for_assemble(
             max_colors, options.locks, *reserves_in_pal_vga,
             options.lock_color0);
+        // Match CLI's std-lores resolver: gpu-restart on Apple Metal,
+        // median-cut otherwise. The Metal kernel's atomic-float
+        // accumulation was the historical non-determinism source —
+        // since v1.66 the gpu_restart pipeline has been swapped to
+        // GPU-argmin + CPU-sum so it's reproducible and matches the
+        // CLI bit-for-bit.
         auto qfn = [&](std::size_t k) -> Result<Palette> {
-            return quantize::quantize(*image, k,
-                                       quantize::Algorithm::median_cut,
+            auto algo = quantize::resolve_algorithm(mode, chipset,
+                                                     options.quantizer);
+            return quantize::quantize(*image, k, algo,
                                        options.palette_diversity);
         };
         auto qr = palette_locks::two_pass_quantize(

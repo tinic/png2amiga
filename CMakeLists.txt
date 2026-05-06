@@ -1649,6 +1649,10 @@ else()
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-multicolor)
     add_test(NAME "api-equiv-cga-text80x100"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-text80x100)
+    # gpu_restart_quantize made deterministic in v1.66.0 (GPU argmin
+    # only; CPU sum in fixed pixel-index order). Now byte-equivalent.
+    add_test(NAME "api-equiv-vga-13h-plain"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode vga-13h)
 
 endif() # NOT EMSCRIPTEN
 

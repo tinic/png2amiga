@@ -143,8 +143,9 @@ public:
     bool ok() const noexcept { return ready_; }
     MTL::Device*               device()       const noexcept { return device_; }
     MTL::CommandQueue*         queue()        const noexcept { return queue_; }
-    MTL::ComputePipelineState* pso_assign()   const noexcept { return pso_assign_; }
-    MTL::ComputePipelineState* pso_finalize() const noexcept { return pso_finalize_; }
+    MTL::ComputePipelineState* pso_assign()       const noexcept { return pso_assign_; }
+    MTL::ComputePipelineState* pso_assign_only()  const noexcept { return pso_assign_only_; }
+    MTL::ComputePipelineState* pso_finalize()     const noexcept { return pso_finalize_; }
 private:
     MetalContext() noexcept {
         device_ = MTL::CreateSystemDefaultDevice();
@@ -171,9 +172,10 @@ private:
             f->release();
             return p;
         };
-        pso_assign_   = fn("assign_and_accumulate");
-        pso_finalize_ = fn("finalize_centroids");
-        if (!pso_assign_ || !pso_finalize_) return;
+        pso_assign_      = fn("assign_and_accumulate");
+        pso_assign_only_ = fn("assign_only");
+        pso_finalize_    = fn("finalize_centroids");
+        if (!pso_assign_ || !pso_assign_only_ || !pso_finalize_) return;
 
         queue_ = device_->newCommandQueue();
         if (!queue_) return;
@@ -182,11 +184,12 @@ private:
     MetalContext(const MetalContext&) = delete;
     MetalContext& operator=(const MetalContext&) = delete;
 
-    MTL::Device*                device_       = nullptr;
-    MTL::Library*               lib_          = nullptr;
-    MTL::CommandQueue*          queue_        = nullptr;
-    MTL::ComputePipelineState*  pso_assign_   = nullptr;
-    MTL::ComputePipelineState*  pso_finalize_ = nullptr;
+    MTL::Device*                device_           = nullptr;
+    MTL::Library*               lib_              = nullptr;
+    MTL::CommandQueue*          queue_            = nullptr;
+    MTL::ComputePipelineState*  pso_assign_       = nullptr;
+    MTL::ComputePipelineState*  pso_assign_only_  = nullptr;
+    MTL::ComputePipelineState*  pso_finalize_     = nullptr;
     bool ready_ = false;
 };
 
@@ -274,45 +277,79 @@ try {
     } params{ static_cast<unsigned>(n_pixels), static_cast<unsigned>(K),
               static_cast<unsigned>(R),       static_cast<unsigned>(n_pixels) };
 
-    // Lloyd loop on GPU. ~3 s for 32×20 at 1.5 MP.
+    // Lloyd loop — deterministic variant. The original kernel used
+    // atomic_float adds inside the GPU shader; the order in which
+    // threads land their contributions depends on GPU scheduling
+    // (varies across simdgroups + dispatch waves) so float
+    // accumulation is non-associative across runs and the centroid
+    // updates drift run-to-run. Splits into:
+    //   1. GPU `assign_only`: per-pixel argmin → indices buffer.
+    //   2. CPU sum: walks pixels in fixed order, sums into per-cluster
+    //      L,a,b accumulators + count. Bit-exact across runs.
+    //   3. CPU finalize: centroid = sum / count for each cluster.
+    // Cost vs the atomic-float kernel: one GPU↔CPU readback per Lloyd
+    // iteration, plus an O(N) sequential CPU pass. At 32 restarts ×
+    // 20 iters × ~2 MP, that's ~1.3 G float adds in CPU — ~600 ms,
+    // dominated by the GPU readback wait. Acceptable for the
+    // determinism win.
+    auto* cent_host = static_cast<float*>(cent_buf->contents());
+    auto* idx_host  = static_cast<unsigned*>(idx_buf->contents());
+    std::vector<double> sums_cpu(static_cast<std::size_t>(K) * 3, 0.0);
+    std::vector<std::uint32_t> counts_cpu(static_cast<std::size_t>(K), 0);
     for (int r = 0; r < R; ++r) {
         for (int it = 0; it < iterations; ++it) {
-            static_cast<float*>(sse_buf->contents())[r] = 0.0f;
             MTL::CommandBuffer* cmd = queue->commandBuffer();
             unsigned restart_u = static_cast<unsigned>(r);
             {
                 auto* enc = cmd->computeCommandEncoder();
-                enc->setComputePipelineState(ctx.pso_assign());
-                enc->setBuffer(pixel_buf,  0, 0);
-                enc->setBuffer(cent_buf,   0, 1);
-                enc->setBuffer(sums_buf,   0, 2);
-                enc->setBuffer(counts_buf, 0, 3);
-                enc->setBuffer(sse_buf,    0, 4);
-                enc->setBuffer(idx_buf,    0, 5);
-                enc->setBytes(&params, sizeof(params), 6);
-                enc->setBytes(&restart_u, sizeof(unsigned), 7);
-                NS::UInteger tg = ctx.pso_assign()->maxTotalThreadsPerThreadgroup();
+                enc->setComputePipelineState(ctx.pso_assign_only());
+                enc->setBuffer(pixel_buf, 0, 0);
+                enc->setBuffer(cent_buf,  0, 1);
+                enc->setBuffer(idx_buf,   0, 2);
+                enc->setBytes(&params, sizeof(params), 3);
+                enc->setBytes(&restart_u, sizeof(unsigned), 4);
+                NS::UInteger tg = ctx.pso_assign_only()->maxTotalThreadsPerThreadgroup();
                 if (tg > 256) tg = 256;
                 enc->dispatchThreads(MTL::Size(n_pixels, 1, 1),
                                       MTL::Size(tg, 1, 1));
                 enc->endEncoding();
             }
-            {
-                auto* enc = cmd->computeCommandEncoder();
-                enc->setComputePipelineState(ctx.pso_finalize());
-                enc->setBuffer(cent_buf,   0, 0);
-                enc->setBuffer(sums_buf,   0, 1);
-                enc->setBuffer(counts_buf, 0, 2);
-                enc->setBytes(&params, sizeof(params), 3);
-                enc->setBytes(&restart_u, sizeof(unsigned), 4);
-                enc->dispatchThreads(MTL::Size(static_cast<NS::UInteger>(K), 1, 1),
-                                      MTL::Size(static_cast<NS::UInteger>(K), 1, 1));
-                enc->endEncoding();
-            }
             cmd->commit();
             cmd->waitUntilCompleted();
+
+            // CPU sum in deterministic pixel-index order.
+            std::fill(sums_cpu.begin(), sums_cpu.end(), 0.0);
+            std::fill(counts_cpu.begin(), counts_cpu.end(), 0u);
+            const unsigned* row_idx =
+                idx_host + static_cast<std::size_t>(r) * n_pixels;
+            for (std::size_t i = 0; i < n_pixels; ++i) {
+                unsigned k = row_idx[i];
+                sums_cpu[k * 3 + 0] += static_cast<double>(oklab[i].L);
+                sums_cpu[k * 3 + 1] += static_cast<double>(oklab[i].a);
+                sums_cpu[k * 3 + 2] += static_cast<double>(oklab[i].b);
+                counts_cpu[k] += 1;
+            }
+            // Finalize centroids: divide sum by count; keep prior on
+            // empty clusters (rare for K << N).
+            for (int k = 0; k < K; ++k) {
+                if (counts_cpu[static_cast<std::size_t>(k)] == 0) continue;
+                double inv = 1.0 / static_cast<double>(
+                    counts_cpu[static_cast<std::size_t>(k)]);
+                cent_host[r*K*4 + k*4 + 0] =
+                    static_cast<float>(sums_cpu[k*3 + 0] * inv);
+                cent_host[r*K*4 + k*4 + 1] =
+                    static_cast<float>(sums_cpu[k*3 + 1] * inv);
+                cent_host[r*K*4 + k*4 + 2] =
+                    static_cast<float>(sums_cpu[k*3 + 2] * inv);
+                cent_host[r*K*4 + k*4 + 3] = 0.0f;
+            }
         }
     }
+    // Suppress unused warnings — these buffers are kept on the
+    // signature for compatibility with the legacy atomic-float
+    // kernel still living in the metallib (might be re-enabled
+    // behind a flag for the perf path).
+    (void)sums_buf; (void)counts_buf; (void)sse_buf;
 
     // CPU re-score per restart against the FINAL centroids; pick best.
     int best_r = 0;

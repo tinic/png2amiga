@@ -117,3 +117,45 @@ kernel void finalize_centroids(
     }
     // else: keep prior centroid; rare for K << N.
 }
+
+// -----------------------------------------------------------------
+// Kernel 3: assign_only — same argmin as assign_and_accumulate but
+// writes only the per-pixel cluster index. No atomic_float sums, so
+// the result is bit-deterministic across runs (atomic_float on Metal
+// is order-of-arrival-dependent, which depends on GPU thread
+// scheduling). Caller does the sum on CPU in a fixed sequential
+// order. Costs an extra GPU↔CPU readback per Lloyd iteration but
+// makes the whole gpu_restart_quantize pipeline reproducible —
+// required for byte-equality between repeated runs (e.g. between
+// CLI invocations under the api-equiv ctest harness).
+//
+// Grid: pixels    Threadgroup: 256
+// One restart per dispatch; caller sets restart_index in params.
+// -----------------------------------------------------------------
+kernel void assign_only(
+    device const float4*      pixels       [[ buffer(0) ]],
+    device const float4*      centroids    [[ buffer(1) ]],  // R*K
+    device uint*              indices      [[ buffer(2) ]],  // R*N
+    constant Params&          params       [[ buffer(3) ]],
+    constant uint&            restart      [[ buffer(4) ]],
+    uint                      gid          [[ thread_position_in_grid ]])
+{
+    if (gid >= params.num_pixels) return;
+
+    const float4 px = pixels[gid];
+    const uint K   = params.num_centroids;
+    const uint cbase = restart * K;
+
+    float best_d = INFINITY;
+    uint  best_k = 0;
+    for (uint k = 0; k < K; ++k) {
+        float4 c = centroids[cbase + k];
+        float dL = px.x - c.x;
+        float da = px.y - c.y;
+        float db = px.z - c.z;
+        float d  = dL * dL + da * da + db * db;
+        if (d < best_d) { best_d = d; best_k = k; }
+    }
+
+    indices[restart * params.num_pixels + gid] = best_k;
+}
