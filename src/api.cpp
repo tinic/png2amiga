@@ -1835,12 +1835,30 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // EHB-aware best palette we can build offline.
                 Palette seed_pal;
                 {
-                    auto q = quantize::quantize(img, 32,
+                    // Two-pass: ask for K-1 first (so prepend-black
+                    // fills exactly K slots without dropping a
+                    // quantizer pick); only re-quantize at K if the
+                    // K-1 result already contains pure black (rare;
+                    // would dup with the locked-black at slot 0).
+                    // Mirrors ham::choose_ham_palette so PNN's K-1
+                    // partition is preserved for the common case and
+                    // we don't perturb downstream quality.
+                    std::size_t kfirst = options.lock_color0 ? 31 : 32;
+                    auto q = quantize::quantize(img, kfirst,
                                                 quantize::Algorithm::pnn,
                                                 diversity);
                     if (!q) return std::unexpected{q.error()};
                     seed_pal = std::move(*q);
                     snap_to_chipset(seed_pal, chipset, mode);
+                    if (options.lock_color0
+                        && palette_locks::contains_locked_black(seed_pal)) {
+                        auto q2 = quantize::quantize(img, 32,
+                                                     quantize::Algorithm::pnn,
+                                                     diversity);
+                        if (!q2) return std::unexpected{q2.error()};
+                        seed_pal = std::move(*q2);
+                        snap_to_chipset(seed_pal, chipset, mode);
+                    }
                     palette_locks::finalize_palette(seed_pal.colors, 32,
                                                     options.lock_color0);
                     palette::refine_ehb_base_palette(
@@ -2089,11 +2107,25 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // better 32-base seed than median-cut / OCS-brute-
                 // force on most images — fewer wasted slots in the
                 // dominant cluster, cleaner spread across the gamut.
+                // Two-pass quantize-with-lock: K-1 first, K only if
+                // the K-1 partition already includes pure black. Same
+                // pattern as ham::choose_ham_palette / sliced+EHB
+                // seed_pal — preserves the K-1 partition for the
+                // common case so we don't perturb EHB+strips quality.
+                std::size_t k1 = options.lock_color0 ? 31 : 32;
                 auto quantized = quantize::quantize(
-                    enriched, 32, quantize::Algorithm::pnn, diversity);
+                    enriched, k1, quantize::Algorithm::pnn, diversity);
                 if (!quantized) return std::unexpected{quantized.error()};
                 Palette bp = std::move(*quantized);
                 snap_to_chipset(bp, chipset, mode);
+                if (options.lock_color0
+                    && palette_locks::contains_locked_black(bp)) {
+                    auto q2 = quantize::quantize(
+                        enriched, 32, quantize::Algorithm::pnn, diversity);
+                    if (!q2) return std::unexpected{q2.error()};
+                    bp = std::move(*q2);
+                    snap_to_chipset(bp, chipset, mode);
+                }
                 palette_locks::finalize_palette(bp.colors, 32,
                                                  options.lock_color0);
                 // Pair-aware refinement: jointly optimise the 32 base

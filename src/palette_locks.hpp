@@ -124,6 +124,14 @@ void finalize_palette(std::vector<Color3f>& colors,
                       std::size_t num_colors,
                       bool lock_color0);
 
+// True if the palette contains a bit-exact black entry. Used by the
+// two-pass quantize-with-lock pattern: ask the quantizer for K-1 (so
+// the prepended locked-black fills the last slot without dropping a
+// pick), then check via this helper whether the K-1 partition
+// happened to include pure black — in which case the caller should
+// re-quantize at K and let finalize_palette dedupe.
+bool contains_locked_black(const Palette& palette);
+
 // ---------------------------------------------------------------------------
 // Apply pin-index swaps after dithering. Mutates the palette colors,
 // the index map, and the `locked` mask (pin targets become locked too,

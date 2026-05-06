@@ -158,6 +158,15 @@ std::size_t quant_count(std::size_t max_colors,
     return max_colors - used;
 }
 
+bool contains_locked_black(const Palette& palette) {
+    constexpr float eps = 1e-6f;
+    for (auto& c : palette.colors) {
+        if (std::abs(c.r) < eps && std::abs(c.g) < eps
+            && std::abs(c.b) < eps) return true;
+    }
+    return false;
+}
+
 void finalize_palette(std::vector<Color3f>& colors,
                       std::size_t num_colors,
                       bool lock_color0) {

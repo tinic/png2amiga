@@ -462,23 +462,40 @@ Result<CopperResult> encode_copper(const Image& image,
         auto algo = quantizer_override.has_value()
             ? *quantizer_override
             : quantize::resolve_algorithm(amiga::Mode::lores, chipset, "");
-        // Ask the quantizer for the full num_colors so the dedupe in
-        // palette_locks::finalize_palette has a spare to substitute
-        // if it picks black naturally.
-        auto base_result = quantize::quantize(image, num_colors, algo);
+        // Two-pass: ask for num_colors-1 first; re-quantize at
+        // num_colors only if the K-1 partition includes pure black
+        // (would dup with the locked-black at slot 0). Preserves the
+        // original K-1 partition for the common case.
+        auto k1 = lock_color0 && num_colors > 1
+                ? num_colors - 1 : num_colors;
+        auto base_result = quantize::quantize(image, k1, algo);
         if (!base_result) return std::unexpected{base_result.error()};
         base_pal_name = std::move(base_result->name);
         base_pal = std::move(base_result->colors);
-        if (chipset != amiga::Chipset::aga) {
-            for (auto& c : base_pal) c = palette::quantize_to_ocs(c);
-        }
-        if (palette_diversity > 0) {
-            Palette tmp;
-            tmp.colors = base_pal;
-            quantize::diversify_palette(tmp, image.pixels(),
-                                        palette_diversity,
-                                        chipset != amiga::Chipset::aga);
-            base_pal = std::move(tmp.colors);
+        auto snap_and_diversify = [&]() {
+            if (chipset != amiga::Chipset::aga) {
+                for (auto& c : base_pal) c = palette::quantize_to_ocs(c);
+            }
+            if (palette_diversity > 0) {
+                Palette tmp;
+                tmp.colors = base_pal;
+                quantize::diversify_palette(tmp, image.pixels(),
+                                            palette_diversity,
+                                            chipset != amiga::Chipset::aga);
+                base_pal = std::move(tmp.colors);
+            }
+        };
+        snap_and_diversify();
+        if (lock_color0) {
+            Palette tmp_check;
+            tmp_check.colors = base_pal;
+            if (palette_locks::contains_locked_black(tmp_check)) {
+                auto r2 = quantize::quantize(image, num_colors, algo);
+                if (r2) {
+                    base_pal = std::move(r2->colors);
+                    snap_and_diversify();
+                }
+            }
         }
         palette_locks::finalize_palette(base_pal, num_colors, lock_color0);
 

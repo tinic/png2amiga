@@ -250,14 +250,6 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
                            amiga::Chipset chipset,
                            int palette_diversity,
                            std::string_view quantizer) {
-    // Ask the quantizer for the FULL num_colors so we have a spare to
-    // drop in case it naturally picks black as one of its anchors —
-    // otherwise slots 0 and 1 of the assembled palette both end up
-    // #000000 (the prepended border-black at slot 0 + quantizer's
-    // black at slot 1). Diversity is applied AFTER OCS snap so the
-    // SSE objective reflects the actual discrete palette HAM will use.
-    auto reserve = num_colors;
-
     // Quantizer selection:
     //   - explicit "pnn": PNN agglomerative in OKLab
     //   - explicit "median-cut" / "fast": median-cut + k-means
@@ -270,48 +262,56 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     // palette. resolve_algorithm() returns PNN for AGA HAM and
     // median-cut for OCS HAM by default; user can override via
     // --quantizer.
-    Palette pal;
     auto ham_mode = (chipset == amiga::Chipset::aga)
         ? amiga::Mode::ham8 : amiga::Mode::ham6;
     auto algo = quantize::resolve_algorithm(ham_mode, chipset, quantizer);
-    switch (algo) {
-    case quantize::Algorithm::pnn:
-        pal = quantize::pnn_quantize(image.pixels(), reserve,
-                                      /*palette_diversity=*/0);
-        break;
-    case quantize::Algorithm::gpu_restart: {
-        auto r = quantize::gpu_restart_quantize(image, reserve,
-                                                 /*restarts=*/32,
-                                                 /*iterations=*/20);
-        if (r) {
-            pal = std::move(*r);
-        } else {
-            // Metal probe lied / runtime failure — fall back.
-            pal = quantize::pnn_quantize(image.pixels(), reserve,
-                                          /*palette_diversity=*/0);
-        }
-        break;
-    }
-    case quantize::Algorithm::ocs_bruteforce:
-    case quantize::Algorithm::median_cut:
-    default:
-        pal = quantize::median_cut(image.pixels(), reserve,
-                                    /*palette_diversity=*/0);
-        break;
-    }
-
     bool is_ocs = (chipset != amiga::Chipset::aga);
-    if (is_ocs) {
-        for (auto& color : pal.colors) {
-            color = palette::quantize_to_ocs(color);
+
+    auto run_quantizer = [&](std::size_t k) -> Palette {
+        Palette p;
+        switch (algo) {
+        case quantize::Algorithm::pnn:
+            p = quantize::pnn_quantize(image.pixels(), k,
+                                       /*palette_diversity=*/0);
+            break;
+        case quantize::Algorithm::gpu_restart: {
+            auto r = quantize::gpu_restart_quantize(image, k,
+                                                    /*restarts=*/32,
+                                                    /*iterations=*/20);
+            if (r) p = std::move(*r);
+            else   p = quantize::pnn_quantize(image.pixels(), k,
+                                              /*palette_diversity=*/0);
+            break;
         }
-    }
+        case quantize::Algorithm::ocs_bruteforce:
+        case quantize::Algorithm::median_cut:
+        default:
+            p = quantize::median_cut(image.pixels(), k,
+                                     /*palette_diversity=*/0);
+            break;
+        }
+        if (is_ocs) {
+            for (auto& c : p.colors) c = palette::quantize_to_ocs(c);
+        }
+        if (palette_diversity > 0) {
+            quantize::diversify_palette(p, image.pixels(),
+                                        palette_diversity, is_ocs);
+        }
+        return p;
+    };
 
-    if (palette_diversity > 0) {
-        quantize::diversify_palette(pal, image.pixels(),
-                                    palette_diversity, is_ocs);
+    // Two-pass strategy: first ask the quantizer for K-1 colours (so
+    // the prepended-black at slot 0 fills exactly num_colors). Most
+    // images don't include pure black in their cluster centroids and
+    // this is enough — base palette ends up as the quantizer's K-1
+    // anchors + locked black at slot 0, no duplicates. When the
+    // source DOES drive the quantizer to pick black (e.g. significant
+    // pure-black regions), re-run at K so finalize_palette can dedupe.
+    auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
+    Palette pal = run_quantizer(reserve);
+    if (palette_locks::contains_locked_black(pal)) {
+        pal = run_quantizer(num_colors);
     }
-
     palette_locks::finalize_palette(pal.colors, num_colors,
                                     /*lock_color0=*/true);
     return pal;

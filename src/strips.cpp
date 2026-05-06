@@ -1693,12 +1693,26 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
         // then hand it to encode_copper. Same shape as the EHB+sliced
         // path in api.cpp — gives the strips planner a better seed
         // than encode_copper's internal histogram quantizer.
-        auto q = quantize::quantize(src, 32,
+        std::size_t k1 = lock_color0 ? 31 : 32;
+        auto q = quantize::quantize(src, k1,
                                     quantize::Algorithm::pnn,
                                     palette_diversity);
         if (q) {
             Palette seed_pal = std::move(*q);
             for (auto& c : seed_pal.colors) c = palette::quantize_to_ocs(c);
+            // Two-pass: re-quantize at 32 only if the K-1 partition
+            // included pure black (would dup with locked-black at slot 0).
+            if (lock_color0
+                && palette_locks::contains_locked_black(seed_pal)) {
+                auto q2 = quantize::quantize(src, 32,
+                                             quantize::Algorithm::pnn,
+                                             palette_diversity);
+                if (q2) {
+                    seed_pal = std::move(*q2);
+                    for (auto& c : seed_pal.colors)
+                        c = palette::quantize_to_ocs(c);
+                }
+            }
             palette_locks::finalize_palette(seed_pal.colors, 32,
                                              lock_color0);
             palette::refine_ehb_base_palette(
