@@ -202,6 +202,36 @@ function paletteToggle() {
 const kPaletteSwatchPx = 8
 const kPaletteCssScale = 2
 const kPalettePerRow = 32
+// Draw the EHB halfbrite carve-out: faint outline, no colour fill.
+function drawPaletteCarveCell(ctx: CanvasRenderingContext2D,
+                              cx: number, cy: number) {
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'
+  ctx.lineWidth = 1
+  ctx.strokeRect(cx + 0.5, cy + 0.5,
+                 kPaletteSwatchPx - 1, kPaletteSwatchPx - 1)
+}
+
+// Draw the red X with a black outline marking a reserved slot.
+function drawPaletteReserveX(ctx: CanvasRenderingContext2D,
+                             cx: number, cy: number) {
+  const x0 = cx + 1, y0 = cy + 1
+  const x1 = cx + kPaletteSwatchPx - 1
+  const y1 = cy + kPaletteSwatchPx - 1
+  ctx.lineCap = 'round'
+  ctx.strokeStyle = '#000'
+  ctx.lineWidth = 2.5
+  ctx.beginPath()
+  ctx.moveTo(x0, y0); ctx.lineTo(x1, y1)
+  ctx.moveTo(x1, y0); ctx.lineTo(x0, y1)
+  ctx.stroke()
+  ctx.strokeStyle = '#e22'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(x0, y0); ctx.lineTo(x1, y1)
+  ctx.moveTo(x1, y0); ctx.lineTo(x0, y1)
+  ctx.stroke()
+}
+
 function drawPalette(bytes: Uint8Array) {
   const canvas = paletteCanvasRef.value
   if (!canvas) return
@@ -219,51 +249,22 @@ function drawPalette(bytes: Uint8Array) {
   ctx.imageSmoothingEnabled = false
   ctx.clearRect(0, 0, w, h)
   const reserved = reservedIndexSet.value
-  // EHB halfbrite section (slots 32..63) is hardware-derived from
-  // the base 32 and not user-controllable. Render those cells as a
-  // faint outline (no colour fill) so the full grid structure is
-  // visible but it's clear they're carved out — matches the dashed-
-  // border placeholders in the reserve-panel grid.
   const ehbCarve = isEhbMode(options.mode)
   for (let i = 0; i < n; ++i) {
-    const r = bytes[i * 3]
-    const g = bytes[i * 3 + 1]
-    const b = bytes[i * 3 + 2]
     const cx = (i % kPalettePerRow) * kPaletteSwatchPx
     const cy = Math.floor(i / kPalettePerRow) * kPaletteSwatchPx
-    const isHalfbriteCarve = ehbCarve && i >= 32
-    if (isHalfbriteCarve) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.18)'
-      ctx.lineWidth = 1
-      ctx.strokeRect(cx + 0.5, cy + 0.5,
-                     kPaletteSwatchPx - 1, kPaletteSwatchPx - 1)
+    if (ehbCarve && i >= 32) {
+      drawPaletteCarveCell(ctx, cx, cy)
       continue
     }
-    // Reserved slots: leave the swatch transparent so the X overlay
-    // reads cleanly without the slot's old colour showing through.
     if (!reserved.has(i)) {
+      const r = bytes[i * 3]
+      const g = bytes[i * 3 + 1]
+      const b = bytes[i * 3 + 2]
       ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
       ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
-    }
-    if (reserved.has(i)) {
-      // Red X with black outline. Two-pass stroke: black underlay
-      // (thicker), red on top.
-      const x0 = cx + 1, y0 = cy + 1
-      const x1 = cx + kPaletteSwatchPx - 1
-      const y1 = cy + kPaletteSwatchPx - 1
-      ctx.lineCap = 'round'
-      ctx.strokeStyle = '#000'
-      ctx.lineWidth = 2.5
-      ctx.beginPath()
-      ctx.moveTo(x0, y0); ctx.lineTo(x1, y1)
-      ctx.moveTo(x1, y0); ctx.lineTo(x0, y1)
-      ctx.stroke()
-      ctx.strokeStyle = '#e22'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(x0, y0); ctx.lineTo(x1, y1)
-      ctx.moveTo(x1, y0); ctx.lineTo(x0, y1)
-      ctx.stroke()
+    } else {
+      drawPaletteReserveX(ctx, cx, cy)
     }
   }
 }
