@@ -14,8 +14,8 @@ import Panel from 'primevue/panel'
 import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
-  SLIDERS, DIFFUSION_SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
-  defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode, isErrorDiffusion,
+  SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
+  defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
   isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
@@ -1099,7 +1099,7 @@ watch(wasmLoading, (loading) => { if (!loading) void refreshDitherDefaults() })
 
 // Track slider tweaks (debounced)
 let tweakTimer: ReturnType<typeof setTimeout> | null = null
-for (const s of [...SLIDERS, ...DIFFUSION_SLIDERS]) {
+for (const s of SLIDERS) {
   watch(() => options[s.key], (val) => {
     if (tweakTimer) clearTimeout(tweakTimer)
     tweakTimer = setTimeout(() => { track('setting-tweak', { key: s.key, value: val }); }, 500)
@@ -2601,19 +2601,6 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                     :minFractionDigits="2" :maxFractionDigits="2" class="w-full input-sm" />
                 </div>
               </div>
-
-              <template v-if="isErrorDiffusion(options.dither)">
-                <div v-for="s in DIFFUSION_SLIDERS" :key="s.key" class="grid align-items-center">
-                  <label class="col-3 text-xs text-color-secondary font-semibold white-space-nowrap" :title="s.tip">{{ s.label }}</label>
-                  <div class="col-6">
-                    <Slider v-model="options[s.key]" :min="s.min" :max="s.max" :step="s.step" class="w-full" />
-                  </div>
-                  <div class="col-3">
-                    <InputNumber v-model="options[s.key]" :min="s.min" :max="s.max" :step="s.step"
-                      :minFractionDigits="2" :maxFractionDigits="2" class="w-full input-sm" />
-                  </div>
-                </div>
-              </template>
 
             </div>
           </Panel>
