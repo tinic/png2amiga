@@ -69,7 +69,6 @@ export interface Options {
   dither: string
   width: number
   height: number
-  hamBeam: number
   best: boolean
   bestMetric: string
   alphaThreshold: number
@@ -491,8 +490,6 @@ export function defaultOptions(): Options {
     dither: 'floyd-steinberg',
     width: 0,
     height: 0,
-    // HAM
-    hamBeam: 16,
     // sliced best-quality planner (multi-candidate slot search + joint
     // base-palette refinement). HAM6 + copper and HAM8 + copper only —
     // indexed copper modes ignore this flag (their planner is already

@@ -708,9 +708,6 @@ const rawTooltipHtml = computed(() => {
   return `<pre style="margin:0;font-size:0.7rem;line-height:1.3;white-space:pre">${lines.join('\n')}</pre>`
 })
 
-// Whether HAM controls should be shown
-const showHamControls = computed(() => isHamMode(options.mode))
-
 // "Effective" fixed-buffer state — tile-freeform modes (c64-charset,
 // Genesis, SNES) count as fixed-buffer when Resize is off (encoder
 // runs at the mode default), so Native PAR + PAR-aware preview
@@ -2775,18 +2772,6 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   </template>
                 </div>
               </div>
-
-              <!-- HAM beam width (DP search) — advanced: quality plateaus
-                   quickly past ~8, default 16 is fine for almost any image. -->
-              <template v-if="showHamControls">
-                <div class="pt-3 mt-3 border-top-1 surface-border">
-                  <label class="block text-xs text-color-secondary font-semibold mb-1" title="Beam width for DP search. Higher = marginally better quality, slower. Range 1-256 (default 16). In practice quality plateaus past ~8.">HAM Beam Width</label>
-                  <div class="flex gap-2 align-items-center">
-                    <Slider v-model="options.hamBeam" :min="1" :max="256" :step="1" class="flex-1" />
-                    <InputNumber v-model="options.hamBeam" :min="1" :max="256" :step="1" class="input-sm" style="width: 4rem" />
-                  </div>
-                </div>
-              </template>
 
               <!-- sliced changes override -->
               <div v-if="options.copper" class="pt-3 mt-3 border-top-1 surface-border">

@@ -116,7 +116,6 @@ declare module '@wasm/png2amiga.js' {
     errorClamp?: number
 
     // HAM
-    hamBeam?: number
     hamTriple?: number
     hamFast?: boolean
     quantizer?: string
