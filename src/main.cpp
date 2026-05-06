@@ -7877,14 +7877,11 @@ int run_main(int argc, char* argv[]) {
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
         cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
     } else {
-        auto qcount = palette_locks::quant_count(max_colors, config->locks, lock_zero_std);
-        // Subtract reserves: ask the quantizer for exactly the count
-        // it'll actually fill (= max_colors minus lock_zero, locks,
-        // reserves). assemble merges reserves into the lock list and
-        // skips reserved indices when filling, so quantized colours
-        // land at the unreserved tail. Floor at 1.
-        if (qcount > reserve_count_std) qcount -= reserve_count_std;
-        else                            qcount = 1;
+        // Slot-budget for the quantizer. See palette_locks::QuantCounts
+        // — subtracts lock_zero + locks + reserves so the quantizer
+        // optimises for exactly the slots it'll fill.
+        auto qc = palette_locks::quant_counts_for_assemble(
+            max_colors, config->locks, reserve_count_std, lock_zero_std);
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.
@@ -7899,19 +7896,13 @@ int run_main(int argc, char* argv[]) {
                     (*snapped)[x, y] = palette::quantize_to_ega((*image)[x, y]);
             quant_src = &*snapped;
         }
-        // Two-pass: ask for qcount (K-1 effective when lock_zero); if
-        // that result already includes pure black, re-quantize at
-        // qcount+1 so assemble_locked_palette's dedupe has a spare to
-        // substitute. Preserves the K-1 partition for the common case.
-        std::size_t kfallback = std::min(max_colors,
-            qcount + (lock_zero_std ? std::size_t{1} : std::size_t{0}));
         auto quantized = palette_locks::two_pass_quantize(
             [&](std::size_t k) -> Result<Palette> {
                 return auto_quantize(*quant_src, k, chipset,
                                      config->palette_diversity,
                                      config->quantizer, config->mode);
             },
-            qcount, kfallback, lock_zero_std);
+            qc.qcount, qc.kfallback, lock_zero_std);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;
@@ -7920,27 +7911,13 @@ int run_main(int argc, char* argv[]) {
         if (amiga::is_stf(config->mode) || amiga::is_vga(config->mode) ||
             amiga::is_ega(config->mode))
             snap_palette(*quantized, chipset, config->mode);
-        // Build a reserve-skip mask so assemble's fill avoids the slots
-        // the post-assemble reserve overlay will overwrite.
-        std::vector<bool> reserve_skip_mask(max_colors, false);
-        for (auto& r : config->reserves) {
-            auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < max_colors) reserve_skip_mask[i] = true;
-        }
-        auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, config->locks, max_colors, lock_zero_std,
-            chipset, config->mode, reserve_skip_mask);
+        // Single-call assemble + reserve overlay (matches api.cpp's
+        // run_pipeline path). All four reserve concerns baked in.
+        auto assembled = palette_locks::assemble_with_reserves(
+            *quantized, config->locks, config->reserves,
+            max_colors, lock_zero_std, chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
-        for (auto& r : config->reserves) {
-            auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < max_colors) {
-                pal.colors[i] = palette_locks::to_color(
-                    api::LockSpec{r.index, r.r, r.g, r.b},
-                    chipset, config->mode);
-                std_locked[i] = true;
-            }
-        }
         // Use the palette's own .name — set by whichever algorithm
         // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
         // ega). Mode-specific precision is already on the Mode: line

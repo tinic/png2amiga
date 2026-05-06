@@ -180,6 +180,64 @@ Result<void> apply_pins(Palette& palette,
                         std::size_t image_h);
 
 // ---------------------------------------------------------------------------
+// Slot-budget counts for the quantizer when locks + reserves + lock_zero
+// claim some of the palette. Used by api.cpp run_pipeline (web/library)
+// and main.cpp std-lores (CLI) — keep them in sync via this helper so
+// future consolidation lands without divergence.
+//
+//   qcount    = max - lock_zero - locks.size() - reserves.size()
+//               (floored at 1; the count we ask the quantizer to
+//                produce — exactly the unlocked-and-unreserved slot
+//                count, NOT the larger no-subtract count which would
+//                size the quantizer for the wrong gamut.)
+//   kfallback = min(max_colors, qcount + lock_zero)
+//               (handed to two_pass_quantize as the retry K when the
+//                first pass picks pure black; lock_zero needs one more
+//                so the dedupe pass has a spare to drop.)
+// ---------------------------------------------------------------------------
+struct QuantCounts {
+    std::size_t qcount;
+    std::size_t kfallback;
+};
+QuantCounts quant_counts_for_assemble(std::size_t max_colors,
+                                      const std::vector<LockSpec>& locks,
+                                      std::size_t reserve_count,
+                                      bool lock_zero_black);
+
+// ---------------------------------------------------------------------------
+// One-call assemble + reserve overlay. Both api.cpp and main.cpp's
+// std-lores branches went through three rewrites in May 2026 because
+// the assemble + reserve flow had four interlocking concerns:
+//
+//   • qcount must subtract reserves (else the quantizer optimises for
+//     the wrong slot count and the dither's gamut collapses).
+//   • assemble's fill must SKIP reserved indices (else reserves
+//     displace quantized colours, leaving the tail empty).
+//   • assemble's lock list must NOT include reserves (else dedupe
+//     drops every quantizer entry that bit-matches a reserve, leaving
+//     the tail empty for a different reason).
+//   • reserves get overlaid AFTER assemble at their requested indices.
+//
+// This helper bakes all four into one call so future maintainers
+// don't have to re-derive the right combination. Caller still owns
+// the qcount + two_pass_quantize step (the quantizer signature
+// differs slightly between paths — auto_quantize vs quantize::quantize
+// — and is left to the caller).
+//
+// Reserves are applied via the same chipset/mode snap that locks use
+// (palette_locks::to_color), so the placed colours match what the
+// hardware can actually display.
+// ---------------------------------------------------------------------------
+AssembledPalette assemble_with_reserves(
+    const Palette& quantized,
+    const std::vector<LockSpec>& locks,
+    const std::vector<ReserveSpec>& reserves,
+    std::size_t max_colors,
+    bool lock_zero_black,
+    amiga::Chipset chipset,
+    amiga::Mode mode);
+
+// ---------------------------------------------------------------------------
 // Sort an indexed palette's unlocked entries by perceptual brightness
 // (OKLab L) and remap the dithered indices so the rendered image is
 // unchanged. Locked slots stay at their original positions; unlocked

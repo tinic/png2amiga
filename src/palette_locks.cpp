@@ -365,6 +365,53 @@ Result<void> apply_pins(Palette& palette,
     return {};
 }
 
+QuantCounts quant_counts_for_assemble(std::size_t max_colors,
+                                      const std::vector<LockSpec>& locks,
+                                      std::size_t reserve_count,
+                                      bool lock_zero_black) {
+    QuantCounts out;
+    out.qcount = quant_count(max_colors, locks, lock_zero_black);
+    if (out.qcount > reserve_count) out.qcount -= reserve_count;
+    else                            out.qcount = 1;
+    out.kfallback = std::min(max_colors,
+        out.qcount + (lock_zero_black ? std::size_t{1} : std::size_t{0}));
+    return out;
+}
+
+AssembledPalette assemble_with_reserves(
+    const Palette& quantized,
+    const std::vector<LockSpec>& locks,
+    const std::vector<ReserveSpec>& reserves,
+    std::size_t max_colors,
+    bool lock_zero_black,
+    amiga::Chipset chipset,
+    amiga::Mode mode) {
+    // Reserves are NOT in assemble's lock list (so the dedupe pass
+    // doesn't drop quantizer entries that match reserve colours bit-
+    // exactly), but they ARE skipped during fill via the reserved-skip
+    // mask. After assemble, overlay each reserve at its index — the
+    // quantized colour that landed there is discarded, but the qcount
+    // subtraction in quant_counts_for_assemble already sized the
+    // quantizer for the unreserved-and-unlocked slot count.
+    std::vector<bool> reserve_skip(max_colors, false);
+    for (auto& r : reserves) {
+        auto i = static_cast<std::size_t>(r.index);
+        if (r.index >= 0 && i < max_colors) reserve_skip[i] = true;
+    }
+    auto out = assemble_locked_palette(quantized, locks, max_colors,
+                                       lock_zero_black, chipset, mode,
+                                       reserve_skip);
+    for (auto& r : reserves) {
+        auto i = static_cast<std::size_t>(r.index);
+        if (r.index >= 0 && i < max_colors) {
+            out.palette.colors[i] = to_color(
+                LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
+            out.locked[i] = true;
+        }
+    }
+    return out;
+}
+
 void sort_by_brightness(std::vector<Color3f>& palette,
                         const std::vector<bool>& locked,
                         std::vector<std::uint8_t>& indices,

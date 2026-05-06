@@ -3072,26 +3072,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
     } else {
-        auto qcount = palette_locks::quant_count(max_colors, options.locks,
-                                                 lock_zero);
-        // Subtract reserves: the quantizer should produce a palette
-        // sized for the slots it'll actually fill. Asking for
-        // max_colors-lock_zero-locks ignores reserves and lets the
-        // quantizer's brightest tail land in the visible slots, which
-        // crashes the dither's dark gamut when the user reserves many
-        // dark slots. Floor at 1.
-        if (qcount > reserve_count) qcount -= reserve_count;
-        else                        qcount = 1;
-        // Two-pass: ask the quantizer for qcount first (the K-1 number
-        // — i.e., one slot reserved for locked-black). If that
-        // partition already includes pure black, re-quantize at
-        // max_colors so assemble_locked_palette's dedupe has a spare
-        // to drop. Preserves the K-1 cluster partition for the common
-        // case (no perturbation of encoder quality vs the historical
-        // path) while still avoiding dup-blacks when the source
-        // drives the quantizer to pick black naturally.
-        std::size_t kfallback = std::min(max_colors,
-            qcount + (lock_zero ? std::size_t{1} : std::size_t{0}));
+        // Slot-budget for the quantizer. See palette_locks.hpp's
+        // QuantCounts comment — subtracts lock_zero + locks + reserves
+        // so the quantizer optimises for exactly the slots it'll fill.
+        auto qc = palette_locks::quant_counts_for_assemble(
+            max_colors, options.locks, reserve_count, lock_zero);
         Image ega_snapped;
         const bool is_ega_mode = amiga::is_ega(mode);
         if (is_ega_mode) {
@@ -3109,47 +3094,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                       options.palette_diversity);
         };
         auto quantized = palette_locks::two_pass_quantize(
-            qfn, qcount, kfallback, lock_zero);
+            qfn, qc.qcount, qc.kfallback, lock_zero);
         if (!quantized) return std::unexpected{quantized.error()};
-        // Snap palette to discrete gamut where applicable (STF/EGA/VGA).
+        // Snap palette to discrete gamut where applicable (STF/VGA).
         if (amiga::is_stf(mode) || amiga::is_vga(mode))
             snap_to_chipset(*quantized, chipset, mode);
-        // Pass only options.locks (NOT reserves) to assemble. Reserves
-        // get overlaid AFTER. Why not merge reserves into the lock list
-        // here: when the user's reserve colours match the quantizer's
-        // natural picks bit-exactly (the common case — they reserved
-        // colours from the existing palette), assemble's dedupe-against-
-        // locked pass drops those quantizer entries and the unlocked
-        // tail goes unfilled. The qcount subtraction above (= max -
-        // lock_zero - locks - reserves) already sized the quantizer's
-        // output for exactly the unlocked-and-unreserved slot count, so
-        // every quantizer colour DOES need to land. assemble fills the
-        // first qcount unlocked slots with quantized; the reserves overlay
-        // at their indices, displacing whatever quantized landed there
-        // (those displaced colours are lost — that's fine, the quantizer
-        // gave us exactly enough for the slots that survive).
-        // Build a reserve mask so assemble's fill loop skips the slots
-        // we'll overwrite below — without this, fill puts quantized at
-        // the front-of-unlocked, reserves displace them, and the tail
-        // ends up empty.
-        std::vector<bool> reserve_skip_mask(max_colors, false);
-        for (auto& r : options.reserves) {
-            auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < max_colors) reserve_skip_mask[i] = true;
-        }
-        auto assembled = palette_locks::assemble_locked_palette(
-            *quantized, options.locks, max_colors, lock_zero, chipset, mode,
-            reserve_skip_mask);
+        // Single-call assemble + reserve overlay. Bakes in all four
+        // concerns (qcount-aware fill, reserve-skip mask, dedupe
+        // against locks-only, post-assemble overlay).
+        auto assembled = palette_locks::assemble_with_reserves(
+            *quantized, options.locks, options.reserves,
+            max_colors, lock_zero, chipset, mode);
         pal = std::move(assembled.palette);
         locked_mask = std::move(assembled.locked);
-        for (auto& r : options.reserves) {
-            auto i = static_cast<std::size_t>(r.index);
-            if (r.index >= 0 && i < max_colors) {
-                pal.colors[i] = palette_locks::to_color(
-                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode);
-                locked_mask[i] = true;
-            }
-        }
     }
 
     if (options.match_range)

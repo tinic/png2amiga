@@ -1108,6 +1108,135 @@ else()
             PROPERTIES FAIL_REGULAR_EXPRESSION "PNG write error")
     endforeach()
 
+    # ----------------------------------------------------------------
+    # Reserve-palette + lock-index regression suite.
+    #
+    # These exercise the failure modes we hit during the May 2026
+    # reserve-handling rewrite. Each one corresponds to a specific
+    # bug we either fixed or nearly broke; without these, regressing
+    # the palette assembly logic is silent until a user notices.
+    #
+    # tools/check_palette.py runs the encoder with the given args,
+    # parses the IFF CMAP, and asserts:
+    #   --expect IDX=RRGGBB  exact slot colour
+    #   --expect-not-zero N  slot is NOT (0,0,0) — catches the
+    #                        "tail unfilled because reserves displaced
+    #                         quantizer entries" bug class.
+    #   --expect-unique-min  loose lower bound on distinct colours —
+    #                        catches "dedupe ate too many quantizer
+    #                         entries, palette collapsed".
+    set(_check_pal "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_palette.py;--bin;$<TARGET_FILE:png2amiga>")
+    set(_pal_test_in "${CMAKE_SOURCE_DIR}/examples/lovers.jpg")
+    set(_pal_makena_in "${CMAKE_SOURCE_DIR}/examples/makena.jpg")
+
+    # Bug 1 (3bpp + reserve 1-4 ff0000 → all-black image).
+    # The original report. Reserves at low indices used to displace
+    # the quantizer fill at slots 1-3, leaving slots 5-7 default-
+    # black, leaving the dither only black to choose from.
+    add_test(NAME "reserve-3bpp-low-reserves-fills-tail"
+        COMMAND ${_check_pal}
+            --in ${_pal_test_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_3bpp_low.iff
+            --expect 0=000000
+            --expect 1=ff0000 --expect 2=ff0000
+            --expect 3=ff0000 --expect 4=ff0000
+            --expect-not-zero 5 --expect-not-zero 6 --expect-not-zero 7
+            --expect-unique-min 4
+            --
+            --mode lores --depth 3 --reserve-range 1-4 ff0000)
+
+    # Bug 2 (5bpp + 26 reserves to white → 6 colours used, dither has
+    # access to a balanced gamut at slots 1-5).
+    add_test(NAME "reserve-5bpp-tail-reserves-white"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_5bpp_white.iff
+            --expect 0=000000
+            --expect 6=ffffff --expect 15=ffffff --expect 31=ffffff
+            --expect-not-zero 1 --expect-not-zero 2 --expect-not-zero 3
+            --expect-not-zero 4 --expect-not-zero 5
+            --expect-unique-min 7
+            --
+            --mode lores --reserve-range 6-31 FFFFFF)
+
+    # Bug 3 (5bpp + reserves at the natural bright tail — web's panel
+    # produces this when the user clicks slots 6-31 of an existing
+    # palette). Reserves bit-match quantizer naturals, so dedupe-
+    # against-locked used to drop them and the unreserved tail came
+    # back unfilled. With the reserve-skip mask in assemble, slots
+    # 1-5 fill with the natural dark/mid colours.
+    add_test(NAME "reserve-5bpp-natural-tail-fills"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_5bpp_natural.iff
+            --expect 0=000000
+            --expect 6=eebb88 --expect 7=aa8877 --expect 31=ffdd66
+            --expect-not-zero 1 --expect-not-zero 2 --expect-not-zero 3
+            --expect-not-zero 4 --expect-not-zero 5
+            --expect-unique-min 18
+            --
+            --mode lores
+            --reserve-range 6 eebb88 --reserve-range 7 aa8877
+            --reserve-range 8 77aacc --reserve-range 9 ddaa88
+            --reserve-range 10 ffcc77 --reserve-range 11 6688bb
+            --reserve-range 12 888888 --reserve-range 13 88aacc
+            --reserve-range 14 bbaaaa --reserve-range 15 eeccaa
+            --reserve-range 16 ffcc66 --reserve-range 17 bb8877
+            --reserve-range 18 bb9999 --reserve-range 19 dd9966
+            --reserve-range 20 aabbcc --reserve-range 21 ddbb99
+            --reserve-range 22 eeddaa --reserve-range 23 ffcc44
+            --reserve-range 24 99bbcc --reserve-range 25 ffaa33
+            --reserve-range 26 eeaa44 --reserve-range 27 99ccdd
+            --reserve-range 28 eebb99 --reserve-range 29 ffcc55
+            --reserve-range 30 eeddbb --reserve-range 31 ffdd66)
+
+    # Bug 4 (5bpp + reserve 1-15 to black — every "dark" slot pinned).
+    # Quantizer should produce a 16-color palette tuned for the
+    # unreserved-and-unlocked slots (16..31), giving the dither
+    # balanced coverage in those slots even though the user nuked
+    # the dark gamut.
+    add_test(NAME "reserve-5bpp-many-low-blacks-balanced-tail"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_5bpp_blacks.iff
+            --expect 0=000000
+            --expect 1=000000 --expect 8=000000 --expect 15=000000
+            --expect-not-zero 16 --expect-not-zero 17
+            --expect-not-zero 23 --expect-not-zero 31
+            --expect-unique-min 17
+            --
+            --mode lores --reserve-range 1-15 000000)
+
+    # Bug 5 (slot 0 implicitly locked to black via --lock-color0
+    # default; --no-lock-color0 should let the quantizer use slot 0).
+    add_test(NAME "reserve-no-lock-color0-allows-quantizer-at-zero"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_no_lock0.iff
+            --expect 7=ff00ff
+            --expect-not-zero 0 --expect-not-zero 1 --expect-not-zero 2
+            --expect-unique-min 8
+            --
+            --mode lores --depth 3 --no-lock-color0 --lock-index 7 ff00ff)
+
+    # Bug 6 (--lock-index works alongside reserves: lock at idx 7,
+    # reserves at 1-4, both should land at their requested colours,
+    # tail still filled).
+    add_test(NAME "reserve-with-lock-index-coexists"
+        COMMAND ${_check_pal}
+            --in ${_pal_test_in}
+            --out ${CMAKE_BINARY_DIR}/test_reserve_with_lock.iff
+            --expect 0=000000
+            --expect 1=ff0000 --expect 2=ff0000
+            --expect 7=ff00ff
+            --expect-not-zero 3 --expect-not-zero 4 --expect-not-zero 5
+            --expect-not-zero 6
+            --expect-unique-min 6
+            --
+            --mode lores --depth 3
+            --reserve-range 1-2 ff0000
+            --lock-index 7 ff00ff)
+
 endif() # NOT EMSCRIPTEN
 
 # Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.
