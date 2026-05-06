@@ -422,7 +422,7 @@ type ReserveGridItem =
   | { kind: 'corner'; key: string }
   | { kind: 'col-label'; key: string; text: string }
   | { kind: 'row-label'; key: string; text: string }
-  | { kind: 'swatch';   key: string; idx: number }
+  | { kind: 'swatch';   key: string; idx: number; readonly: boolean }
 const reserveGridItems = computed<ReserveGridItem[]>(() => {
   const items: ReserveGridItem[] = []
   items.push({ kind: 'corner', key: 'corner' })
@@ -435,10 +435,16 @@ const reserveGridItems = computed<ReserveGridItem[]>(() => {
     items.push({ kind: 'row-label', key: `rl${r}`, text: HEX_DIGITS.charAt(r) })
     for (let c = 0; c < 16; c++) {
       const idx = r * 16 + c
+      // Slot 0 is implicitly locked to black when "Reserve color 0 for
+      // black" is on, and the encoder rejects redundant reserves on it.
+      // Render the swatch read-only in that case so the user can see
+      // the colour but the click is inert.
+      const readonly = (idx === 0 && options.lockColor0)
       items.push({
         kind: 'swatch',
         key: `sw${idx}`,
         idx: idx < cap ? idx : -1,
+        readonly,
       })
     }
   }
@@ -948,10 +954,17 @@ function buildWasmOptions(): WasmOptions {
   // clone with "[object Array] could not be cloned." A plain-object
   // map is safe to postMessage.
   const { paletteData, alphaDither, reserves, ...rest } = options
+  // Drop a stale reserve at index 0 when "Reserve color 0 for black"
+  // is on — the encoder rejects "index 0 is already locked (via
+  // --lock-index or implicit black-zero)" and this avoids surfacing
+  // that error from a UI state the user may have set before toggling
+  // lockColor0 back on.
+  const cleanReserves = reserves.filter(r =>
+    !(r.index === 0 && options.lockColor0))
   return {
     ...rest,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
-    reserves: reserves.map(r => ({
+    reserves: cleanReserves.map(r => ({
       index: r.index, r: r.r, g: r.g, b: r.b,
     })),
     ...(paletteData ? { paletteData } : {}),
@@ -2657,7 +2670,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                     <div v-if="item.kind === 'corner'"></div>
                     <div v-else-if="item.kind === 'col-label'" class="lock-axis">{{ item.text }}</div>
                     <div v-else-if="item.kind === 'row-label'" class="lock-axis lock-axis-left">{{ item.text }}</div>
-                    <div v-else-if="item.idx >= 0"
+                    <div v-else-if="item.kind === 'swatch' && item.idx >= 0 && item.readonly"
+                         class="lock-cell lock-cell-readonly"
+                         :style="{ background: reserveCellBg(item.idx) }"
+                         :title="'Slot 0 is locked to black via &quot;Reserve color 0 for black&quot; — uncheck that to make slot 0 reservable.'"></div>
+                    <div v-else-if="item.kind === 'swatch' && item.idx >= 0"
                          class="lock-cell"
                          role="button"
                          tabindex="0"
@@ -3177,6 +3194,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   border: 1px dashed rgba(255, 255, 255, 0.1);
   cursor: default;
 }
+.lock-cell-readonly {
+  cursor: not-allowed;
+  border: 1px dashed rgba(255, 255, 255, 0.4);
+  opacity: 0.6;
+}
+.lock-cell-readonly:hover { outline: none; }
 .lock-x {
   position: absolute;
   inset: 0;
