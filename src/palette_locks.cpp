@@ -158,6 +158,22 @@ std::size_t quant_count(std::size_t max_colors,
     return max_colors - used;
 }
 
+Result<Palette> two_pass_quantize(
+    std::function<Result<Palette>(std::size_t)> quantize_fn,
+    std::size_t kfirst,
+    std::size_t kfallback,
+    bool lock_color0) {
+    auto first = quantize_fn(kfirst);
+    if (!first) return std::unexpected{first.error()};
+    if (!lock_color0 || kfirst == kfallback
+        || !contains_locked_black(*first)) {
+        return first;
+    }
+    auto second = quantize_fn(kfallback);
+    if (!second) return std::unexpected{second.error()};
+    return second;
+}
+
 bool contains_locked_black(const Palette& palette) {
     constexpr float eps = 1e-6f;
     for (auto& c : palette.colors) {

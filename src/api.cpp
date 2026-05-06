@@ -1835,30 +1835,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // EHB-aware best palette we can build offline.
                 Palette seed_pal;
                 {
-                    // Two-pass: ask for K-1 first (so prepend-black
-                    // fills exactly K slots without dropping a
-                    // quantizer pick); only re-quantize at K if the
-                    // K-1 result already contains pure black (rare;
-                    // would dup with the locked-black at slot 0).
-                    // Mirrors ham::choose_ham_palette so PNN's K-1
-                    // partition is preserved for the common case and
-                    // we don't perturb downstream quality.
+                    auto qfn = [&](std::size_t k) -> Result<Palette> {
+                        auto q = quantize::quantize(img, k,
+                                                    quantize::Algorithm::pnn,
+                                                    diversity);
+                        if (!q) return std::unexpected{q.error()};
+                        Palette p = std::move(*q);
+                        snap_to_chipset(p, chipset, mode);
+                        return p;
+                    };
                     std::size_t kfirst = options.lock_color0 ? 31 : 32;
-                    auto q = quantize::quantize(img, kfirst,
-                                                quantize::Algorithm::pnn,
-                                                diversity);
-                    if (!q) return std::unexpected{q.error()};
-                    seed_pal = std::move(*q);
-                    snap_to_chipset(seed_pal, chipset, mode);
-                    if (options.lock_color0
-                        && palette_locks::contains_locked_black(seed_pal)) {
-                        auto q2 = quantize::quantize(img, 32,
-                                                     quantize::Algorithm::pnn,
-                                                     diversity);
-                        if (!q2) return std::unexpected{q2.error()};
-                        seed_pal = std::move(*q2);
-                        snap_to_chipset(seed_pal, chipset, mode);
-                    }
+                    auto sr = palette_locks::two_pass_quantize(
+                        qfn, kfirst, 32, options.lock_color0);
+                    if (!sr) return std::unexpected{sr.error()};
+                    seed_pal = std::move(*sr);
                     palette_locks::finalize_palette(seed_pal.colors, 32,
                                                     options.lock_color0);
                     palette::refine_ehb_base_palette(
@@ -2107,25 +2097,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // better 32-base seed than median-cut / OCS-brute-
                 // force on most images — fewer wasted slots in the
                 // dominant cluster, cleaner spread across the gamut.
-                // Two-pass quantize-with-lock: K-1 first, K only if
-                // the K-1 partition already includes pure black. Same
-                // pattern as ham::choose_ham_palette / sliced+EHB
-                // seed_pal — preserves the K-1 partition for the
-                // common case so we don't perturb EHB+strips quality.
+                auto qfn = [&](std::size_t k) -> Result<Palette> {
+                    auto q = quantize::quantize(
+                        enriched, k, quantize::Algorithm::pnn, diversity);
+                    if (!q) return std::unexpected{q.error()};
+                    Palette p = std::move(*q);
+                    snap_to_chipset(p, chipset, mode);
+                    return p;
+                };
                 std::size_t k1 = options.lock_color0 ? 31 : 32;
-                auto quantized = quantize::quantize(
-                    enriched, k1, quantize::Algorithm::pnn, diversity);
-                if (!quantized) return std::unexpected{quantized.error()};
-                Palette bp = std::move(*quantized);
-                snap_to_chipset(bp, chipset, mode);
-                if (options.lock_color0
-                    && palette_locks::contains_locked_black(bp)) {
-                    auto q2 = quantize::quantize(
-                        enriched, 32, quantize::Algorithm::pnn, diversity);
-                    if (!q2) return std::unexpected{q2.error()};
-                    bp = std::move(*q2);
-                    snap_to_chipset(bp, chipset, mode);
-                }
+                auto qr = palette_locks::two_pass_quantize(
+                    qfn, k1, 32, options.lock_color0);
+                if (!qr) return std::unexpected{qr.error()};
+                Palette bp = std::move(*qr);
                 palette_locks::finalize_palette(bp.colors, 32,
                                                  options.lock_color0);
                 // Pair-aware refinement: jointly optimise the 32 base
@@ -2253,13 +2237,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto qcount = palette_locks::quant_count(32, options.locks, lock_zero_ehb);
             if (qcount > reserves_ehb) qcount -= reserves_ehb;
             else                       qcount = 1;
-            // Bump qcount to the full 32 when lock_zero is on so the
-            // dedupe pass has a spare to drop if PNN naturally picked
-            // black (otherwise slots 0+1 both end up #000000).
-            if (lock_zero_ehb && qcount < 32) qcount = 32;
-            auto quantized = quantize::quantize(*image, qcount,
-                                                quantize::Algorithm::pnn,
-                                                options.palette_diversity);
+            // Two-pass: K-1 first (preserves PNN's partition), K only
+            // if K-1 hit pure black so assemble's dedupe has a spare.
+            std::size_t kfb = std::min<std::size_t>(32,
+                qcount + (lock_zero_ehb ? std::size_t{1} : std::size_t{0}));
+            auto quantized = palette_locks::two_pass_quantize(
+                [&](std::size_t k) -> Result<Palette> {
+                    return quantize::quantize(*image, k,
+                                              quantize::Algorithm::pnn,
+                                              options.palette_diversity);
+                },
+                qcount, kfb, lock_zero_ehb);
             if (!quantized) return std::unexpected{quantized.error()};
             auto assembled = palette_locks::assemble_locked_palette(
                 *quantized, options.locks, 32, lock_zero_ehb, chipset, mode);
@@ -3049,32 +3037,34 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Floor at 1 — validate_reserves already rejected the all-reserved case.
         if (qcount > reserve_count) qcount -= reserve_count;
         else                        qcount = 1;
-        // Ask the quantizer for the full max_colors so the dedupe pass
-        // in assemble_locked_palette has at least one spare to drop in
-        // case the quantizer naturally picked a colour that matches a
-        // locked slot (most often: black being picked alongside
-        // lock_zero=true → both ending up at index 0 and 1). Reserves
-        // remain accounted for by the qcount math above.
-        if (lock_zero && qcount < max_colors) qcount = max_colors;
-        Result<Palette> quantized;
-        if (amiga::is_ega(mode)) {
-            // All EGA modes on a 5154 ECD support 16 of the 64-color
-            // IrgbIRGB gamut — the monitor reads all 6 signal pins at
-            // both 15.75 kHz (200-line) and 21.85 kHz (350-line) hsync
-            // rates. Dedicated histogram quantizer picks K distinct
-            // entries; continuous median-cut + post-snap collapses ~30%
-            // of slots on typical images. Pre-snap the image to the
-            // EGA gamut first so the quantizer is consistent with it.
-            Image snapped(image->width(), image->height());
+        // Two-pass: ask the quantizer for qcount first (the K-1 number
+        // — i.e., one slot reserved for locked-black). If that
+        // partition already includes pure black, re-quantize at
+        // max_colors so assemble_locked_palette's dedupe has a spare
+        // to drop. Preserves the K-1 cluster partition for the common
+        // case (no perturbation of encoder quality vs the historical
+        // path) while still avoiding dup-blacks when the source
+        // drives the quantizer to pick black naturally.
+        std::size_t kfallback = std::min(max_colors,
+            qcount + (lock_zero ? std::size_t{1} : std::size_t{0}));
+        Image ega_snapped;
+        const bool is_ega_mode = amiga::is_ega(mode);
+        if (is_ega_mode) {
+            // EGA: pre-snap the image to the 6-bit gamut once; the
+            // ega_histogram quantizer then picks distinct slots.
+            ega_snapped = Image(image->width(), image->height());
             for (std::size_t y = 0; y < image->height(); ++y)
                 for (std::size_t x = 0; x < image->width(); ++x)
-                    snapped[x, y] = palette::quantize_to_ega((*image)[x, y]);
-            quantized = quantize::ega_histogram(snapped, qcount);
-        } else {
-            quantized = quantize::quantize(*image, qcount,
-                                           quantize_algo(chipset, mode),
-                                           options.palette_diversity);
+                    ega_snapped[x, y] = palette::quantize_to_ega((*image)[x, y]);
         }
+        auto qfn = [&](std::size_t k) -> Result<Palette> {
+            if (is_ega_mode) return quantize::ega_histogram(ega_snapped, k);
+            return quantize::quantize(*image, k,
+                                      quantize_algo(chipset, mode),
+                                      options.palette_diversity);
+        };
+        auto quantized = palette_locks::two_pass_quantize(
+            qfn, qcount, kfallback, lock_zero);
         if (!quantized) return std::unexpected{quantized.error()};
         // Snap palette to discrete gamut where applicable (STF/EGA/VGA).
         if (amiga::is_stf(mode) || amiga::is_vga(mode))

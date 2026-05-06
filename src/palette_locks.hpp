@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace png2amiga::palette_locks {
@@ -124,13 +125,36 @@ void finalize_palette(std::vector<Color3f>& colors,
                       std::size_t num_colors,
                       bool lock_color0);
 
-// True if the palette contains a bit-exact black entry. Used by the
-// two-pass quantize-with-lock pattern: ask the quantizer for K-1 (so
-// the prepended locked-black fills the last slot without dropping a
-// pick), then check via this helper whether the K-1 partition
-// happened to include pure black — in which case the caller should
-// re-quantize at K and let finalize_palette dedupe.
+// True if the palette contains a bit-exact black entry. Used inside
+// two_pass_quantize() below; exposed because some sites need to peek
+// at intermediate quantizer output between snap and diversify.
 bool contains_locked_black(const Palette& palette);
+
+// Two-pass quantize-with-lock-color-0. Calls `quantize_fn(kfirst)`;
+// if `lock_color0` is set and the result contains pure black,
+// re-calls `quantize_fn(kfallback)` (typically kfirst+1) so the
+// downstream finalize_palette dedupe has a spare to drop.
+//
+// Why two passes: when slot 0 is reserved for black, the simplest
+// approach is to ask the quantizer for K-1 colours and prepend the
+// locked black. Most images don't drive the quantizer to pick black
+// in K-1 clusters, so the K-1 partition cleanly fills slots 1..K-1.
+// On dark sources the quantizer DOES pick black at K-1; in that
+// case we re-quantize at K so finalize_palette can dedupe without
+// leaving an empty slot. Asking for K up-front always (the naive
+// fix) shifts every cluster boundary and perturbs encoder quality.
+//
+// Caller is expected to pass a quantize_fn that:
+//   • takes the slot count K
+//   • returns a Result<Palette> of K colours, snapped to the target
+//     chipset/mode gamut and diversified (caller-side concern)
+// The returned Palette is then ready for `finalize_palette()` or
+// `assemble_locked_palette()` as appropriate.
+Result<Palette> two_pass_quantize(
+    std::function<Result<Palette>(std::size_t)> quantize_fn,
+    std::size_t kfirst,
+    std::size_t kfallback,
+    bool lock_color0);
 
 // ---------------------------------------------------------------------------
 // Apply pin-index swaps after dithering. Mutates the palette colors,

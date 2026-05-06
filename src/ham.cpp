@@ -267,7 +267,8 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     auto algo = quantize::resolve_algorithm(ham_mode, chipset, quantizer);
     bool is_ocs = (chipset != amiga::Chipset::aga);
 
-    auto run_quantizer = [&](std::size_t k) -> Palette {
+    auto run_quantizer =
+        [&](std::size_t k) -> Result<Palette> {
         Palette p;
         switch (algo) {
         case quantize::Algorithm::pnn:
@@ -299,19 +300,10 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
         }
         return p;
     };
-
-    // Two-pass strategy: first ask the quantizer for K-1 colours (so
-    // the prepended-black at slot 0 fills exactly num_colors). Most
-    // images don't include pure black in their cluster centroids and
-    // this is enough — base palette ends up as the quantizer's K-1
-    // anchors + locked black at slot 0, no duplicates. When the
-    // source DOES drive the quantizer to pick black (e.g. significant
-    // pure-black regions), re-run at K so finalize_palette can dedupe.
-    auto reserve = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
-    Palette pal = run_quantizer(reserve);
-    if (palette_locks::contains_locked_black(pal)) {
-        pal = run_quantizer(num_colors);
-    }
+    auto kfirst = (num_colors > 1) ? num_colors - 1 : std::size_t{1};
+    auto pal_r = palette_locks::two_pass_quantize(
+        run_quantizer, kfirst, num_colors, /*lock_color0=*/true);
+    Palette pal = pal_r ? std::move(*pal_r) : Palette{};
     palette_locks::finalize_palette(pal.colors, num_colors,
                                     /*lock_color0=*/true);
     return pal;

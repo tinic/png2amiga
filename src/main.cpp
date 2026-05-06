@@ -7837,13 +7837,6 @@ int run_main(int argc, char* argv[]) {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, lock_zero_std);
         if (qcount > reserve_count_std) qcount -= reserve_count_std;
         else                            qcount = 1;
-        // Ask the quantizer for the full max_colors so the dedupe pass
-        // in assemble_locked_palette has at least one spare to drop in
-        // case the quantizer naturally picked a colour that matches a
-        // locked slot (e.g. black being picked alongside lock_zero=true
-        // → we'd otherwise end up with two slots showing 0x000 and one
-        // wasted palette entry). Reserves are accounted for above.
-        if (lock_zero_std && qcount < max_colors) qcount = max_colors;
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.
@@ -7858,9 +7851,19 @@ int run_main(int argc, char* argv[]) {
                     (*snapped)[x, y] = palette::quantize_to_ega((*image)[x, y]);
             quant_src = &*snapped;
         }
-        auto quantized = auto_quantize(*quant_src, qcount, chipset,
-                                       config->palette_diversity,
-                                       config->quantizer, config->mode);
+        // Two-pass: ask for qcount (K-1 effective when lock_zero); if
+        // that result already includes pure black, re-quantize at
+        // qcount+1 so assemble_locked_palette's dedupe has a spare to
+        // substitute. Preserves the K-1 partition for the common case.
+        std::size_t kfallback = std::min(max_colors,
+            qcount + (lock_zero_std ? std::size_t{1} : std::size_t{0}));
+        auto quantized = palette_locks::two_pass_quantize(
+            [&](std::size_t k) -> Result<Palette> {
+                return auto_quantize(*quant_src, k, chipset,
+                                     config->palette_diversity,
+                                     config->quantizer, config->mode);
+            },
+            qcount, kfallback, lock_zero_std);
         if (!quantized) {
             std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;
