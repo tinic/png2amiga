@@ -73,6 +73,9 @@ declare module '@wasm/png2amiga.js' {
     snesTileBytes?: Uint8Array
     snesTilemapBytes?: Uint8Array
     snesPaletteBytes?: Uint8Array
+    // Final per-mode palette as sRGB bytes, 3 per entry. Empty if the
+    // mode emits per-line / per-tile palettes instead (genesis, snes).
+    paletteBytes?: Uint8Array
     error?: string
   }
 

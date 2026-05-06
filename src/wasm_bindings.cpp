@@ -264,6 +264,10 @@ val js_convert_rgba(val input_array, val js_opts) {
             obj.set("snesPaletteBytes",
                     make_uint8_array(result.snesPaletteBytes));
     }
+    if (!result.paletteBytes.empty()) {
+        obj.set("paletteBytes",
+                make_uint8_array(result.paletteBytes));
+    }
     obj.set("error", result.error);
 
     if (!result.data.empty())

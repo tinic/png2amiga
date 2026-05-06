@@ -7837,6 +7837,13 @@ int run_main(int argc, char* argv[]) {
         auto qcount = palette_locks::quant_count(max_colors, config->locks, lock_zero_std);
         if (qcount > reserve_count_std) qcount -= reserve_count_std;
         else                            qcount = 1;
+        // Ask the quantizer for the full max_colors so the dedupe pass
+        // in assemble_locked_palette has at least one spare to drop in
+        // case the quantizer naturally picked a colour that matches a
+        // locked slot (e.g. black being picked alongside lock_zero=true
+        // → we'd otherwise end up with two slots showing 0x000 and one
+        // wasted palette entry). Reserves are accounted for above.
+        if (lock_zero_std && qcount < max_colors) qcount = max_colors;
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.

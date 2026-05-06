@@ -3012,6 +3012,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Floor at 1 — validate_reserves already rejected the all-reserved case.
         if (qcount > reserve_count) qcount -= reserve_count;
         else                        qcount = 1;
+        // Ask the quantizer for the full max_colors so the dedupe pass
+        // in assemble_locked_palette has at least one spare to drop in
+        // case the quantizer naturally picked a colour that matches a
+        // locked slot (most often: black being picked alongside
+        // lock_zero=true → both ending up at index 0 and 1). Reserves
+        // remain accounted for by the qcount math above.
+        if (lock_zero && qcount < max_colors) qcount = max_colors;
         Result<Palette> quantized;
         if (amiga::is_ega(mode)) {
             // All EGA modes on a 5154 ECD support 16 of the 64-color
@@ -3230,6 +3237,18 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.height = static_cast<int>(p.rendered.height());
     r.depth = static_cast<int>(p.planes.depth);
     r.colors = static_cast<int>(p.palette.size());
+    // Pack the final palette as sRGB bytes (3 per entry) for the web
+    // tool's palette swatch view. Empty when palette is empty.
+    r.paletteBytes.reserve(p.palette.size() * 3);
+    for (auto& c : p.palette) {
+        auto s = color_space::linear_to_srgb(c).clamped();
+        r.paletteBytes.push_back(static_cast<std::uint8_t>(
+            std::round(s.r * 255.0f)));
+        r.paletteBytes.push_back(static_cast<std::uint8_t>(
+            std::round(s.g * 255.0f)));
+        r.paletteBytes.push_back(static_cast<std::uint8_t>(
+            std::round(s.b * 255.0f)));
+    }
     r.copperChanges = p.copper_changes;
     r.totalColors = count_unique_colors(p.rendered);
     r.planeBytes = static_cast<int>(p.planes.total_bytes());

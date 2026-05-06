@@ -173,6 +173,7 @@ let dragStart: DragStart | null = null    // { x, y, ox, oy } while dragging
 
 function loupeToggle() {
   loupeActive.value = !loupeActive.value
+  track('loupe-toggle', { enabled: loupeActive.value })
   loupeX.value = 0
   loupeY.value = 0
   if (loupeActive.value && previewColRef.value) {
@@ -182,6 +183,117 @@ function loupeToggle() {
     loupeHeight.value = null
   }
 }
+
+// Palette swatch viewer toggle. Renders the rendered image's final
+// palette as a grid of 8×8 swatches (≤ 64 per row). Available for any
+// mode whose result includes paletteBytes.
+const paletteViewActive = ref(false)
+const paletteCanvasRef = useTemplateRef<HTMLCanvasElement>('paletteCanvasRef')
+function paletteToggle() {
+  paletteViewActive.value = !paletteViewActive.value
+  track('palette-view-toggle', { enabled: paletteViewActive.value })
+}
+// CSS pixels per swatch (50% of the previous 32 px → 16 px on screen,
+// canvas backing 8 px = 1 swatch native).
+const kPaletteSwatchPx = 8
+const kPaletteCssScale = 2
+const kPalettePerRow = 32
+function drawPalette(bytes: Uint8Array) {
+  const canvas = paletteCanvasRef.value
+  if (!canvas) return
+  const n = bytes.length / 3
+  const cols = Math.min(kPalettePerRow, n)
+  const rows = Math.ceil(n / kPalettePerRow)
+  const w = cols * kPaletteSwatchPx
+  const h = rows * kPaletteSwatchPx
+  canvas.width = w
+  canvas.height = h
+  canvas.style.width = `${w * kPaletteCssScale}px`
+  canvas.style.height = `${h * kPaletteCssScale}px`
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.imageSmoothingEnabled = false
+  ctx.clearRect(0, 0, w, h)
+  for (let i = 0; i < n; ++i) {
+    const r = bytes[i * 3]
+    const g = bytes[i * 3 + 1]
+    const b = bytes[i * 3 + 2]
+    const cx = (i % kPalettePerRow) * kPaletteSwatchPx
+    const cy = Math.floor(i / kPalettePerRow) * kPaletteSwatchPx
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
+    ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
+  }
+}
+
+// Custom floating tooltip that tracks the cursor while it's over a
+// palette swatch. Native `title=` would only fire after a long pause,
+// and only on the swatch the cursor entered first — bad UX for a 32-
+// or 256-cell grid where you want to flick across colours and read
+// values fly-by. The tooltip shows index, #RRGGBB, and rgb(...).
+const paletteTooltip = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  text: '',
+  swatch: '#000',
+})
+interface PaletteHit { idx: number; r: number; g: number; b: number }
+// Pixel offset within the canvas (or null if the canvas isn't
+// visible). Split out to keep paletteHitAt under the eslint
+// complexity gate.
+function paletteCanvasOffset(clientX: number, clientY: number):
+    { x: number; y: number; w: number; h: number } | null {
+  const canvas = paletteCanvasRef.value
+  if (!canvas) return null
+  const rect = canvas.getBoundingClientRect()
+  const x = clientX - rect.left
+  const y = clientY - rect.top
+  if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null
+  return { x, y, w: rect.width, h: rect.height }
+}
+// Returns the palette swatch under (clientX, clientY) including its
+// RGB values, or null if the pointer is outside the canvas / past
+// the populated swatches.
+function paletteHitAt(clientX: number, clientY: number): PaletteHit | null {
+  const off = paletteCanvasOffset(clientX, clientY)
+  const bytes = lastPaletteBytes.value
+  if (!off || !bytes) return null
+  const cssPerSwatch = kPaletteSwatchPx * kPaletteCssScale
+  const col = Math.floor(off.x / cssPerSwatch)
+  const row = Math.floor(off.y / cssPerSwatch)
+  const idx = row * kPalettePerRow + col
+  if (idx < 0 || idx * 3 + 2 >= bytes.length) return null
+  return {
+    idx,
+    r: bytes[idx * 3] ?? 0,
+    g: bytes[idx * 3 + 1] ?? 0,
+    b: bytes[idx * 3 + 2] ?? 0,
+  }
+}
+function paletteHover(ev: MouseEvent) {
+  const hit = paletteHitAt(ev.clientX, ev.clientY)
+  if (!hit) {
+    paletteTooltip.visible = false
+    return
+  }
+  const hex = '#' + [hit.r, hit.g, hit.b]
+    .map(v => v.toString(16).padStart(2, '0')).join('')
+  paletteTooltip.text =
+    `idx ${hit.idx} · ${hex} · rgb(${hit.r}, ${hit.g}, ${hit.b})`
+  paletteTooltip.swatch = `rgb(${hit.r}, ${hit.g}, ${hit.b})`
+  paletteTooltip.x = ev.clientX + 12
+  paletteTooltip.y = ev.clientY + 12
+  paletteTooltip.visible = true
+}
+function paletteHoverLeave() {
+  paletteTooltip.visible = false
+}
+const lastPaletteBytes = ref<Uint8Array | null>(null)
+watch(paletteViewActive, (on) => {
+  if (!on) return
+  const cached = lastPaletteBytes.value
+  if (cached) void nextTick(() => { drawPalette(cached) })
+})
 function loupePointerDown(e: PointerEvent) {
   if (!loupeActive.value) return
   const target = e.target as HTMLElement | null
@@ -919,7 +1031,19 @@ function updateLastResultRefs(result: ConvertResult): void {
   lastMaxMovesPerLine.value = result.maxMovesPerLine ?? 0
   lastAga.value = Boolean(result.aga)
   imageHasAlpha.value = Boolean(result.hasTransparency)
+  lastPaletteBytes.value = result.paletteBytes ?? null
+  redrawPaletteIfActive()
   maybeSeedSizes(result)
+}
+
+// Repaint the palette swatch grid if the user has the palette view
+// open. Factored out so updateLastResultRefs stays under the eslint
+// complexity gate.
+function redrawPaletteIfActive(): void {
+  if (!paletteViewActive.value) return
+  const cached = lastPaletteBytes.value
+  if (!cached) return
+  void nextTick(() => { drawPalette(cached) })
 }
 
 function trackConvertSuccess(_result: ConvertResult, convertMs: number): void {
@@ -2409,6 +2533,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
               <i class="pi pi-search"></i>
             </button>
+            <button class="loupe-btn palette-btn"
+                    :class="{ active: paletteViewActive }"
+                    :disabled="!lastPaletteBytes"
+                    @click.stop="paletteToggle"
+                    title="Show the rendered image's palette as a swatch grid">
+              <i class="pi pi-palette"></i>
+            </button>
             <button class="loupe-btn crt-btn" :class="{ active: crtEnabled }" @click.stop="crtEnabled = !crtEnabled" title="CRT preview — Commodore 1084S RGB monitor simulation (slot mask, scanlines, bloom)">
               <i class="pi pi-desktop"></i>
             </button>
@@ -2419,6 +2550,26 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <span v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</span>
             </div>
           </div>
+          <!-- Palette swatch grid: 8×8 swatches at 50% scale (16 CSS
+               px per swatch), ≤ 32 per row, drawn from
+               result.paletteBytes for any mode whose result carries a
+               single global palette. Sits above the tile / charset
+               diagnostic cards so it's the first thing the user sees
+               when toggled on. Toggled by the palette button next to
+               zoom/CRT. Hover shows index, hex, and RGB. role=img
+               keeps the linter happy on the static canvas with an
+               interactive listener. -->
+          <!-- eslint-disable vuejs-accessibility/no-static-element-interactions, vuejs-accessibility/mouse-events-have-key-events -->
+          <div v-if="paletteViewActive && lastPaletteBytes"
+               class="surface-card border-round-lg p-2 palette-card"
+               @mousemove="paletteHover"
+               @mouseleave="paletteHoverLeave"
+               @blur="paletteHoverLeave">
+            <canvas ref="paletteCanvasRef" class="palette-canvas"
+                    role="img"
+                    aria-label="Palette swatches; hover for index and colour values" />
+          </div>
+          <!-- eslint-enable -->
           <!-- Charset diagnostic: actual generated glyphs, coloured by
                each glyph's first-occurrence cell. Only for c64-charset. -->
           <div v-if="isC64CharsetMode(options.mode)"
@@ -2432,6 +2583,17 @@ async function loadExample(example: typeof EXAMPLES[number]) {
           <div v-if="isSnesMode(options.mode)"
                class="surface-card border-round-lg p-2">
             <canvas ref="snesTilesCanvasRef" class="charset-canvas" />
+          </div>
+          <!-- Floating tooltip that tracks the cursor across palette
+               swatches. Fixed-position so it stays under the mouse
+               regardless of scroll. -->
+          <div v-if="paletteTooltip.visible"
+               class="palette-tooltip"
+               :style="{ left: paletteTooltip.x + 'px',
+                         top: paletteTooltip.y + 'px' }">
+            <span class="palette-tooltip-swatch"
+                  :style="{ background: paletteTooltip.swatch }" />
+            <span>{{ paletteTooltip.text }}</span>
           </div>
         </div>
       </div>
@@ -2686,9 +2848,45 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   background: var(--p-primary-color);
   color: #fff;
 }
-.loupe-btn.crt-btn {
+.loupe-btn.palette-btn {
   /* Sit immediately to the left of the loupe button. */
   right: 2.4rem;
+}
+.loupe-btn.crt-btn {
+  /* Sit two slots to the left of the loupe button (past the palette
+     button when present). */
+  right: 4.4rem;
+}
+.loupe-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.palette-canvas {
+  image-rendering: pixelated;
+  display: block;
+}
+.palette-tooltip {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.palette-tooltip-swatch {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 /* PrimeVue's Aura ProgressBar defaults to a 1s ease-in-out CSS

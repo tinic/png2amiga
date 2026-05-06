@@ -185,10 +185,31 @@ AssembledPalette assemble_locked_palette(
         out.locked[0] = true;
     }
 
-    // Fill remaining slots from quantized palette in order
+    // Fill remaining slots from quantized palette in order, skipping
+    // any quantizer entry that exactly matches a locked colour (e.g.
+    // when lock_zero=true and the quantizer naturally picked black as
+    // one of its slots — without dedupe we'd waste an entire palette
+    // entry on a duplicate of slot 0). Caller is expected to pass at
+    // least `max_colors` candidates (asking for max_colors directly is
+    // fine — we just stop filling when the slots run out).
+    auto eq = [](const Color3f& a, const Color3f& b) {
+        constexpr float eps = 0.5f / 255.0f;
+        return std::abs(a.r - b.r) < eps
+            && std::abs(a.g - b.g) < eps
+            && std::abs(a.b - b.b) < eps;
+    };
+    auto is_locked_dup = [&](const Color3f& c) {
+        for (std::size_t i = 0; i < max_colors; ++i)
+            if (out.locked[i] && eq(c, out.palette.colors[i])) return true;
+        return false;
+    };
     std::size_t qi = 0;
     for (std::size_t i = 0; i < max_colors; ++i) {
         if (out.locked[i]) continue;
+        while (qi < quantized.colors.size()
+               && is_locked_dup(quantized.colors[qi])) {
+            ++qi;
+        }
         if (qi < quantized.colors.size()) {
             out.palette.colors[i] = quantized.colors[qi++];
         }

@@ -357,6 +357,12 @@ struct ConvertResult {
     int tileDataBytes{};                 // Tiled modes: unique × bytes-per-tile (32 for Genesis 4bpp, 64 for SNES Mode 7 8bpp)
     bool hasTransparency{};             // source image had alpha channel
 
+    // Final per-palette-entry sRGB bytes (3 per entry). Used by the web
+    // tool to draw a palette swatch grid. Empty when the mode has no
+    // single global palette (e.g. genesis / snes have their own per-
+    // line / 256-mode palette fields above).
+    std::vector<std::uint8_t> paletteBytes;
+
     // c64 charset modes — copy of the encoder's raw_frame so the web
     // frontend can render a charset diagnostic (the actual generated
     // glyphs, coloured by their first-occurrence cell). Layout:

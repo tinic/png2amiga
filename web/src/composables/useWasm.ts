@@ -27,6 +27,7 @@ type BufferKey =
   | 'rgba' | 'data' | 'c64CharsetData'
   | 'genesisTileBytes' | 'genesisTilemapBytes' | 'genesisPaletteBytes'
   | 'snesTileBytes' | 'snesTilemapBytes' | 'snesPaletteBytes'
+  | 'paletteBytes'
 type ReplyEnvelope =
   Omit<ConvertResult, BufferKey>
   & Partial<Record<BufferKey, ArrayBuffer>>
@@ -58,6 +59,7 @@ function unwrapConvertEnvelope(raw: ReplyEnvelope): ConvertResult {
     rgba, data, c64CharsetData,
     genesisTileBytes, genesisTilemapBytes, genesisPaletteBytes,
     snesTileBytes, snesTilemapBytes, snesPaletteBytes,
+    paletteBytes,
     ...rest
   } = raw
   return {
@@ -71,6 +73,7 @@ function unwrapConvertEnvelope(raw: ReplyEnvelope): ConvertResult {
     ...spreadIf('snesTileBytes', snesTileBytes),
     ...spreadIf('snesTilemapBytes', snesTilemapBytes),
     ...spreadIf('snesPaletteBytes', snesPaletteBytes),
+    ...spreadIf('paletteBytes', paletteBytes),
   }
 }
 
