@@ -5001,9 +5001,9 @@ int run_main(int argc, char* argv[]) {
             std::println(stderr, "Error: --reserve-range: {}", why);
             return 1;
         };
-        if (config->dual_playfield)
-            return reject("not supported with --dpf (two split palettes; "
-                          "specify which playfield is needed)");
+        // DPF: see api.cpp — PF1 is zeroed in the current implementation
+        // (`expand_to_dpf_pf2`), so reserves on the depth-3/4 base
+        // palette ARE PF2 reserves. Allow them through.
         if (amiga::is_cga(config->mode) || amiga::is_cga_text(config->mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");

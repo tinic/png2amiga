@@ -50,16 +50,55 @@ ega-320, stf-low). Each one runs the encoder with multiple reserve colours
 on the same slot mask and asserts the output PNG SHA-256 is identical
 across all colours. Any future change that re-introduces a leak fails CI.
 
-## Known issues (not blocking the merge)
+## Known issues (not blocking the merge) — RESOLVED in v1.66.0
 
-- **`gpu_restart_quantize` is non-deterministic** on Apple Metal even when
-  the same args, same seed, same image are used. Confirmed by 3-run hash
-  comparison on `--mode vga-13h` without reserves. The non-determinism
-  comes from GPU floating-point reduction order across simdgroups. The
-  workaround above (force CPU median-cut for chunky + reserves) sidesteps
-  this for the reserve case; the no-reserve case still exhibits jitter.
-  Proper fix: deterministic Metal reduction kernel, or `--quantizer
-  median-cut` opt-in for chunky modes.
+- **`gpu_restart_quantize` non-determinism** — fixed. Lloyd loop now
+  splits into GPU `assign_only` (per-pixel argmin → indices buffer)
+  + CPU sum (fixed pixel-index order, double accumulation). Bit-exact
+  across runs. `api-equiv-vga-13h-plain` ctest landed.
+
+## Future cleanup (deferred)
+
+### Output-format consolidation (Phase E)
+
+main.cpp has ~63 `if (ends_with(config->output_path, ".X")) ...`
+dispatch sites scattered across the per-mode output blocks (lores,
+hires, ehb, ham, strips, c64, snes, genesis, …). Each block has the
+same skeleton (.png → save_preview, .iff → save_iff, .h/.cpp →
+cheader::save, .raw → save_raw, .pal → save_ocs_palette), with
+mode-specific quirks for the cheader call (HAM passes is_ham=true,
+EHB filters CMAP to 32 base colours, sliced builds a PCHG table,
+strips embeds a MOVE table per row, etc).
+
+A clean consolidation would extract `write_output_for_state(config,
+state, output_path)` that:
+1. Reads the path extension.
+2. Selects the right writer.
+3. Builds the per-writer arguments from the now-unified
+   `api::EncodeState` (since every mode routes through
+   `api::encode_state_image` after v1.66.0).
+4. Reports success/failure once.
+
+Estimated scope: ~1500 lines of main.cpp touched, every
+mode's output block converging to ~10 lines + the helper. Each
+mode's specific quirks need to land as fields on `EncodeState`
+(e.g. `state.is_ham`, `state.cmap_palette_size`,
+`state.strips_line_moves` — most already exist).
+
+Risk: mode-specific output writers have 8-year-old subtle behaviour
+(EHB CMAP filtering, IFF PCHG packing, strips MOVE embedding).
+Migration needs ctest coverage for each output format × each mode.
+
+Dropped for v1.66.0 — the merge work shipped without this is
+already correct; consolidation is structural cleanup that earns
+its keep on the next significant set of new modes.
+
+### DPF reserves
+
+Currently rejected at the gate ("two split palettes; specify which
+playfield is needed"). If DPF reserves become a feature request,
+the gate becomes `--reserve-pf1` / `--reserve-pf2` and the encoder
+splits the carve-out across the two palette banks. Not in v1.66.0.
 
 ## Reserve-handling primitives
 

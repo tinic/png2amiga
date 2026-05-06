@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.66.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.67.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -1653,6 +1653,25 @@ else()
     # only; CPU sum in fixed pixel-index order). Now byte-equivalent.
     add_test(NAME "api-equiv-vga-13h-plain"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode vga-13h)
+    # DPF + reserves: PF1 is zeroed in the current implementation, so a
+    # reserve on the depth-3/4 base palette IS a PF2 reserve.
+    add_test(NAME "api-equiv-dpf"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode lores --dpf)
+    add_test(NAME "api-equiv-dpf-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dpf --reserve-range 7 ff0000)
+    # Color-independence + render-pixel invariants for DPF reserves.
+    add_test(NAME "reserve-indep-lores-dpf"
+        COMMAND ${_indep_chk}
+            --in ${_pal_makena_in} --reserve-range 7
+            --colors 000000 ff0000 cacaca
+            -- --mode lores --dpf)
+    add_test(NAME "reserve-render-dpf-magenta-not-leaked"
+        COMMAND ${_pixel_chk}
+            --in ${_pal_makena_in}
+            --expect-no-color ff00ff
+            -- --mode lores --dpf --reserve-range 7 ff00ff)
 
 endif() # NOT EMSCRIPTEN
 

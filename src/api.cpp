@@ -817,9 +817,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             return reject("not supported in HAM modes (palette is dynamic — "
                           "the modify ops produce arbitrary colours, no "
                           "fixed slot to reserve)");
-        if (options.dual_playfield)
-            return reject("not supported with --dpf (two split palettes; "
-                          "specify which playfield is needed)");
+        // DPF: PF1 is zeroed in the current implementation
+        // (`expand_to_dpf_pf2` puts the encoded depth-3/4 image into PF2
+        // and leaves the upper-bank planes all-zero). So a reserve on
+        // the depth-3/4 base palette IS effectively a PF2 reserve, no
+        // ambiguity. Validate against the PF2 max colours (1<<depth)
+        // rather than the full 6/8-plane width.
+        // (PF1 reserves are out of scope; PF1 is all-zero today.)
         if (amiga::is_genesis(mode))
             return reject("not supported in Genesis modes (4 separate "
                           "16-colour palette lines; reserve target ambiguous)");

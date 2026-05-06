@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--sliced" || a == "--copper") opts.copper = true;
         else if (a == "--strips") opts.scap = true;
+        else if (a == "--dpf" || a == "--dual-playfield") opts.dual_playfield = true;
         else if (a == "--best") opts.best = true;
         else if (a == "--interlace") opts.interlace = true;
         else if (a == "--lock-color0") opts.lock_color0 = true;
