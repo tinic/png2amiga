@@ -231,6 +231,41 @@ inline void cli_print_mode(std::string_view mode_desc) {
 inline void cli_print_palette(std::string_view palette_desc) {
     cli_status("Palette:  {}", palette_desc);
 }
+
+// Global flag set from --print-palette. Picked up by cli_dump_palette
+// to avoid threading a flag through every encode-path callsite.
+inline bool g_print_palette = false;
+
+// Dump a colour list to stderr as `idx: #rrggbb [tag]` per slot, where
+// tag notes whether the slot is locked (--lock-index or implicit
+// slot-0 black) or reserved (--reserve-range). Each colour is snapped
+// to 8-bit sRGB. No-op when --print-palette is not set.
+template <typename Cfg>
+inline void cli_dump_palette(std::span<const Color3f> colors,
+                             const Cfg& cfg) {
+    if (!g_print_palette) return;
+    auto is_locked = [&](int idx) {
+        if (cfg.lock_color0 && idx == 0) return true;
+        for (auto& l : cfg.locks) if (l.index == idx) return true;
+        return false;
+    };
+    auto is_reserved = [&](int idx) {
+        for (auto& r : cfg.reserves) if (r.index == idx) return true;
+        return false;
+    };
+    std::println(stderr, "Palette dump: {} entries", colors.size());
+    for (std::size_t k = 0; k < colors.size(); ++k) {
+        auto srgb = color_space::linear_to_srgb(colors[k]).clamped();
+        auto r = static_cast<int>(std::round(srgb.r * 255.0f));
+        auto g = static_cast<int>(std::round(srgb.g * 255.0f));
+        auto b = static_cast<int>(std::round(srgb.b * 255.0f));
+        std::string_view tag = "";
+        if (is_reserved(static_cast<int>(k)))    tag = " (reserved)";
+        else if (is_locked(static_cast<int>(k))) tag = " (locked)";
+        std::println(stderr, "  {:3}: #{:02x}{:02x}{:02x}{}",
+                     k, r, g, b, tag);
+    }
+}
 inline void cli_print_dither(dither::Method method, float strength) {
     cli_status("Dither:   {} (strength: {:.2f})",
                dither_name(method), strength);
@@ -703,6 +738,7 @@ struct Config {
     bool crop_auto = false;            // auto-crop to mode aspect ratio
 
     // Output
+    bool print_palette = false;        // dump CMAP as idx=#rrggbb to stderr
     bool preview = false;              // show terminal image preview (iTerm2)
     int  preview_scale = 0;            // 0 = auto (2× on iTerm.app, 1× elsewhere);
                                        // any value 1..8 forces that integer scale.
@@ -836,6 +872,7 @@ void print_usage() {
         "                                  word-interleaved\n"
         "  --non-interleaved, --planar     Alias for --layout standard\n"
         "  --interleaved                   Alias for --layout interleaved\n"
+        "  --print-palette                 Dump final CMAP to stderr\n"
         "  --preview                       Show iTerm2 inline preview\n"
         "  --preview-scale <1-8>           Preview display scale\n"
         "  --preview-video                 Batch only: loop frames inline\n"
@@ -953,6 +990,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--preview") {
             config.preview = true;
+            continue;
+        }
+        if (arg == "--print-palette") {
+            config.print_palette = true;
             continue;
         }
 
@@ -4493,6 +4534,7 @@ int run_main(int argc, char* argv[]) {
         return exit_code::usage;
     }
     g_quiet = config->quiet;
+    g_print_palette = config->print_palette;
     g_json  = config->json;
     g_preview_scale = resolve_preview_scale(config->preview_scale);
 
@@ -7817,6 +7859,7 @@ int run_main(int argc, char* argv[]) {
         }
         cli_status("Palette:  {} colors (loaded from {})",
                      pal.size(), config->palette_file);
+        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
     } else if (amiga::is_atari_hi(config->mode)) {
         // Monochrome: fixed white + black palette
         pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
@@ -7891,6 +7934,7 @@ int run_main(int argc, char* argv[]) {
         // ega). Mode-specific precision is already on the Mode: line
         // above, so don't duplicate it here.
         cli_status("Palette:  {} colors (auto, {})", pal.size(), pal.name);
+        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
     }
 
     if (config->match_range) {
