@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <format>
 #include <fstream>
 #include <numeric>
 #include <print>
@@ -358,7 +359,7 @@ int main(int argc, char** argv) {
         auto gi = static_cast<int>(std::round(g * 255.0f));
         auto bi = static_cast<int>(std::round(b * 255.0f));
         std::println("  {:3}: #{:02x}{:02x}{:02x}", k, ri, gi, bi);
-        std::println(pal_f, "{:02x}{:02x}{:02x}", ri, gi, bi);
+        pal_f << std::format("{:02x}{:02x}{:02x}\n", ri, gi, bi);
     }
     std::println("\nPalette written to: {}", out_pal);
     std::println("Verify via: png2amiga --mode lores --depth {} --palette {} "
