@@ -373,9 +373,13 @@ void to_xyb_planes(const std::vector<Color3f>& src,
     float* pb = B.data();
     std::size_t i = 0;
 #if PNG2AMIGA_BACKEND_AVX2
-    // SoA load via gather: Color3f is 12 bytes (3 floats packed,
-    // no padding). Strides for r/g/b at offsets 0/4/8 across 12-byte
-    // elements. AVX2 has _mm256_i32gather_ps for indexed loads.
+    // SoA load: deinterleave Color3f's stride-3 (12-byte) layout into
+    // r/g/b lanes. We tried _mm256_i32gather_ps first (8.45s of 27.6s
+    // total CPU on EPYC); Zen 1's gather is implemented as 8 serial
+    // ports through the FPU, ~10× slower than equivalent scalar
+    // loads. _mm256_setr_ps with 8 scalar field reads compiles to 8
+    // movss + insertps which Zen 1 dispatches in parallel — much
+    // faster than gather for this access pattern.
     const __m256 v_kBias = _mm256_set1_ps(kBias);
     const __m256 v_kBiasCbrt = _mm256_set1_ps(kBiasCbrt);
     const __m256 c_L_r = _mm256_set1_ps(0.30f);
@@ -392,18 +396,17 @@ void to_xyb_planes(const std::vector<Color3f>& src,
     const __m256 v_14   = _mm256_set1_ps(14.0f);
     const __m256 v_42   = _mm256_set1_ps(0.42f);
     const __m256 v_01   = _mm256_set1_ps(0.01f);
-    // Stride indices: r at 3*j+0, g at 3*j+1, b at 3*j+2 across the
-    // float* view of Color3f.
-    const __m256i idx_r = _mm256_setr_epi32(0, 3, 6, 9, 12, 15, 18, 21);
-    const __m256i idx_g = _mm256_setr_epi32(1, 4, 7, 10, 13, 16, 19, 22);
-    const __m256i idx_b = _mm256_setr_epi32(2, 5, 8, 11, 14, 17, 20, 23);
-    const float* psf = reinterpret_cast<const float*>(ps);
     const std::size_t simd_end = n & ~7u;
     for (; i < simd_end; i += 8) {
-        const float* base = psf + i * 3;
-        __m256 r = _mm256_i32gather_ps(base, idx_r, 4);
-        __m256 g = _mm256_i32gather_ps(base, idx_g, 4);
-        __m256 b = _mm256_i32gather_ps(base, idx_b, 4);
+        __m256 r = _mm256_setr_ps(
+            ps[i+0].r, ps[i+1].r, ps[i+2].r, ps[i+3].r,
+            ps[i+4].r, ps[i+5].r, ps[i+6].r, ps[i+7].r);
+        __m256 g = _mm256_setr_ps(
+            ps[i+0].g, ps[i+1].g, ps[i+2].g, ps[i+3].g,
+            ps[i+4].g, ps[i+5].g, ps[i+6].g, ps[i+7].g);
+        __m256 b = _mm256_setr_ps(
+            ps[i+0].b, ps[i+1].b, ps[i+2].b, ps[i+3].b,
+            ps[i+4].b, ps[i+5].b, ps[i+6].b, ps[i+7].b);
         // L,M,S mix (libjxl OpsinAbsorbance).
         __m256 L = _mm256_fmadd_ps(c_L_b, b,
                    _mm256_fmadd_ps(c_L_g, g, _mm256_mul_ps(c_L_r, r)));
