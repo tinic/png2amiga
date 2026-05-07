@@ -28,6 +28,20 @@
 #define HAVE_AVX2 0
 #endif
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#define HAVE_NEON 1
+#else
+#define HAVE_NEON 0
+#endif
+
+#if defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#define HAVE_WASM_SIMD 1
+#else
+#define HAVE_WASM_SIMD 0
+#endif
+
 namespace {
 
 // --- scalar reference (matches color_space::srgb_to_linear) ---
@@ -319,7 +333,131 @@ __m256 pow24_poly_avx2_v(__m256 s) noexcept {
                                  _CMP_LE_OQ);
     return _mm256_blendv_ps(poly, lin, mask);
 }
-#endif
+#endif  // HAVE_AVX2
+
+#if HAVE_NEON
+// --- NEON 4-wide SLEEF port (Apple Silicon / ARM64 Linux) ---
+[[gnu::always_inline]]
+inline float32x4_t sleef_lnf_neon(float32x4_t d) noexcept {
+    float32x4_t d_scaled = vmulq_n_f32(d, 4.0f / 3.0f);
+    int32x4_t e_int = vsubq_s32(
+        vandq_s32(vshrq_n_s32(vreinterpretq_s32_f32(d_scaled), 23),
+                   vdupq_n_s32(0xFF)),
+        vdupq_n_s32(127));
+    float32x4_t e = vcvtq_f32_s32(e_int);
+    int32x4_t m_bits = vsubq_s32(vreinterpretq_s32_f32(d),
+                                   vshlq_n_s32(e_int, 23));
+    float32x4_t m = vreinterpretq_f32_s32(m_bits);
+    float32x4_t x  = vdivq_f32(vsubq_f32(m, vdupq_n_f32(1.0f)),
+                                 vaddq_f32(m, vdupq_n_f32(1.0f)));
+    float32x4_t x2 = vmulq_f32(x, x);
+    float32x4_t t = vdupq_n_f32(0.2392828464508056640625f);
+    t = vfmaq_f32(vdupq_n_f32(0.28518211841583251953125f), t, x2);
+    t = vfmaq_f32(vdupq_n_f32(0.400005877017974853515625f), t, x2);
+    t = vfmaq_f32(vdupq_n_f32(0.666666686534881591796875f), t, x2);
+    t = vfmaq_f32(vdupq_n_f32(2.0f), t, x2);
+    return vfmaq_f32(vmulq_f32(x, t), e,
+                      vdupq_n_f32(0.693147180559945286226764f));
+}
+
+[[gnu::always_inline]]
+inline float32x4_t sleef_expf_neon(float32x4_t d) noexcept {
+    float32x4_t q_f = vrndnq_f32(vmulq_n_f32(d, 1.4426950408889634f));
+    int32x4_t q = vcvtq_s32_f32(q_f);
+    float32x4_t s = vfmaq_f32(d, q_f, vdupq_n_f32(-0.693145751953125f));
+    s = vfmaq_f32(s, q_f, vdupq_n_f32(-1.4286067653e-06f));
+    float32x4_t u = vdupq_n_f32(0.000198527617612853646278381f);
+    u = vfmaq_f32(vdupq_n_f32(0.00139304355252534151077271f), u, s);
+    u = vfmaq_f32(vdupq_n_f32(0.00833336077630519866943359f), u, s);
+    u = vfmaq_f32(vdupq_n_f32(0.0416664853692054748535156f),  u, s);
+    u = vfmaq_f32(vdupq_n_f32(0.166666671633720397949219f),   u, s);
+    u = vfmaq_f32(vdupq_n_f32(0.5f),                          u, s);
+    u = vaddq_f32(vdupq_n_f32(1.0f),
+        vfmaq_f32(s, vmulq_f32(s, s), u));
+    int32x4_t shifted = vshlq_n_s32(vaddq_s32(q, vdupq_n_s32(127)), 23);
+    return vmulq_f32(u, vreinterpretq_f32_s32(shifted));
+}
+
+[[gnu::always_inline]]
+inline float32x4_t pow24_sleef_neon_v(float32x4_t s) noexcept {
+    float32x4_t lin  = vmulq_n_f32(s, 1.0f / 12.92f);
+    float32x4_t base = vmulq_n_f32(vaddq_f32(s, vdupq_n_f32(0.055f)),
+                                     1.0f / 1.055f);
+    float32x4_t ln_b = sleef_lnf_neon(base);
+    float32x4_t pw   = sleef_expf_neon(vmulq_n_f32(ln_b, 2.4f));
+    uint32x4_t  mask = vcleq_f32(s, vdupq_n_f32(0.04045f));
+    return vbslq_f32(mask, lin, pw);
+}
+#endif  // HAVE_NEON
+
+#if HAVE_WASM_SIMD
+// --- WASM SIMD 4-wide SLEEF port ---
+[[gnu::always_inline]]
+inline v128_t sleef_lnf_wasm(v128_t d) noexcept {
+    v128_t d_scaled = wasm_f32x4_mul(d,
+        wasm_f32x4_splat(4.0f / 3.0f));
+    v128_t e_int = wasm_i32x4_sub(
+        wasm_v128_and(wasm_u32x4_shr(d_scaled, 23),
+                       wasm_i32x4_splat(0xFF)),
+        wasm_i32x4_splat(127));
+    v128_t e = wasm_f32x4_convert_i32x4(e_int);
+    v128_t m_bits = wasm_i32x4_sub(d, wasm_i32x4_shl(e_int, 23));
+    v128_t m = m_bits;
+    v128_t x  = wasm_f32x4_div(wasm_f32x4_sub(m, wasm_f32x4_splat(1.0f)),
+                                 wasm_f32x4_add(m, wasm_f32x4_splat(1.0f)));
+    v128_t x2 = wasm_f32x4_mul(x, x);
+    v128_t t = wasm_f32x4_splat(0.2392828464508056640625f);
+    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2),
+        wasm_f32x4_splat(0.28518211841583251953125f));
+    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2),
+        wasm_f32x4_splat(0.400005877017974853515625f));
+    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2),
+        wasm_f32x4_splat(0.666666686534881591796875f));
+    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2), wasm_f32x4_splat(2.0f));
+    return wasm_f32x4_add(
+        wasm_f32x4_mul(e, wasm_f32x4_splat(0.693147180559945286226764f)),
+        wasm_f32x4_mul(x, t));
+}
+
+[[gnu::always_inline]]
+inline v128_t sleef_expf_wasm(v128_t d) noexcept {
+    v128_t q_f = wasm_f32x4_nearest(wasm_f32x4_mul(d,
+        wasm_f32x4_splat(1.4426950408889634f)));
+    v128_t q = wasm_i32x4_trunc_sat_f32x4(q_f);
+    v128_t s = wasm_f32x4_add(
+        wasm_f32x4_mul(q_f, wasm_f32x4_splat(-0.693145751953125f)), d);
+    s = wasm_f32x4_add(
+        wasm_f32x4_mul(q_f, wasm_f32x4_splat(-1.4286067653e-06f)), s);
+    v128_t u = wasm_f32x4_splat(0.000198527617612853646278381f);
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
+        wasm_f32x4_splat(0.00139304355252534151077271f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
+        wasm_f32x4_splat(0.00833336077630519866943359f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
+        wasm_f32x4_splat(0.0416664853692054748535156f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
+        wasm_f32x4_splat(0.166666671633720397949219f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s), wasm_f32x4_splat(0.5f));
+    u = wasm_f32x4_add(wasm_f32x4_splat(1.0f),
+        wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_mul(s, s), u), s));
+    v128_t shifted = wasm_i32x4_shl(
+        wasm_i32x4_add(q, wasm_i32x4_splat(127)), 23);
+    return wasm_f32x4_mul(u, shifted);
+}
+
+[[gnu::always_inline]]
+inline v128_t pow24_sleef_wasm_v(v128_t s) noexcept {
+    v128_t lin  = wasm_f32x4_mul(s, wasm_f32x4_splat(1.0f / 12.92f));
+    v128_t base = wasm_f32x4_mul(
+        wasm_f32x4_add(s, wasm_f32x4_splat(0.055f)),
+        wasm_f32x4_splat(1.0f / 1.055f));
+    v128_t ln_b = sleef_lnf_wasm(base);
+    v128_t pw   = sleef_expf_wasm(wasm_f32x4_mul(ln_b,
+        wasm_f32x4_splat(2.4f)));
+    v128_t mask = wasm_f32x4_le(s, wasm_f32x4_splat(0.04045f));
+    return wasm_v128_bitselect(lin, pw, mask);
+}
+#endif  // HAVE_WASM_SIMD
 
 double bench(const char* label,
              float (*fn)(float),
@@ -410,6 +548,48 @@ double bench_sleef_avx2(const std::vector<float>& xs) {
     double ns_per = ms * 1e6 / static_cast<double>(xs.size());
     std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
                 "pow24_sleef_avx2(x8)", ms, ns_per,
+                static_cast<double>(total));
+    return ns_per;
+}
+#endif  // HAVE_AVX2
+
+#if HAVE_NEON
+double bench_sleef_neon(const std::vector<float>& xs) {
+    auto t0 = std::chrono::steady_clock::now();
+    float32x4_t sink = vdupq_n_f32(0.0f);
+    for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+        float32x4_t v = vld1q_f32(&xs[i]);
+        sink = vaddq_f32(sink, pow24_sleef_neon_v(v));
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    alignas(16) float out[4];
+    vst1q_f32(out, sink);
+    float total = out[0] + out[1] + out[2] + out[3];
+    double ns_per = ms * 1e6 / static_cast<double>(xs.size());
+    std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
+                "pow24_sleef_neon(x4)", ms, ns_per,
+                static_cast<double>(total));
+    return ns_per;
+}
+#endif
+
+#if HAVE_WASM_SIMD
+double bench_sleef_wasm(const std::vector<float>& xs) {
+    auto t0 = std::chrono::steady_clock::now();
+    v128_t sink = wasm_f32x4_splat(0.0f);
+    for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+        v128_t v = wasm_v128_load(&xs[i]);
+        sink = wasm_f32x4_add(sink, pow24_sleef_wasm_v(v));
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    alignas(16) float out[4];
+    wasm_v128_store(out, sink);
+    float total = out[0] + out[1] + out[2] + out[3];
+    double ns_per = ms * 1e6 / static_cast<double>(xs.size());
+    std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
+                "pow24_sleef_wasm(x4)", ms, ns_per,
                 static_cast<double>(total));
     return ns_per;
 }
@@ -509,6 +689,40 @@ int main(int argc, char** argv) {
         std::printf("  sleef avx2  accuracy: max abs %.2e, max rel %.2e\n",
                     sleef_avx_abs, sleef_avx_rel);
 #endif
+#if HAVE_NEON
+        double sleef_neon_abs = 0, sleef_neon_rel = 0;
+        alignas(16) float lanes_n[4];
+        for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+            float32x4_t r4 = pow24_sleef_neon_v(vld1q_f32(&xs[i]));
+            vst1q_f32(lanes_n, r4);
+            for (int j = 0; j < 4; ++j) {
+                float r = pow24_libm(xs[i + static_cast<std::size_t>(j)]);
+                double e = std::fabs(static_cast<double>(lanes_n[j] - r));
+                sleef_neon_abs = std::max(sleef_neon_abs, e);
+                if (r > 1e-6f) sleef_neon_rel = std::max(sleef_neon_rel,
+                    e / static_cast<double>(r));
+            }
+        }
+        std::printf("  sleef neon  accuracy: max abs %.2e, max rel %.2e\n",
+                    sleef_neon_abs, sleef_neon_rel);
+#endif
+#if HAVE_WASM_SIMD
+        double sleef_w_abs = 0, sleef_w_rel = 0;
+        alignas(16) float lanes_w[4];
+        for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+            v128_t r4 = pow24_sleef_wasm_v(wasm_v128_load(&xs[i]));
+            wasm_v128_store(lanes_w, r4);
+            for (int j = 0; j < 4; ++j) {
+                float r = pow24_libm(xs[i + static_cast<std::size_t>(j)]);
+                double e = std::fabs(static_cast<double>(lanes_w[j] - r));
+                sleef_w_abs = std::max(sleef_w_abs, e);
+                if (r > 1e-6f) sleef_w_rel = std::max(sleef_w_rel,
+                    e / static_cast<double>(r));
+            }
+        }
+        std::printf("  sleef wasm  accuracy: max abs %.2e, max rel %.2e\n",
+                    sleef_w_abs, sleef_w_rel);
+#endif
     }
 
     std::printf("--- timing ---\n");
@@ -519,16 +733,26 @@ int main(int argc, char** argv) {
     double t_avx2 = bench_avx2(xs);
     double t_sleef_sse = bench_sleef_sse(xs);
     double t_sleef_avx = bench_sleef_avx2(xs);
+#endif
+#if HAVE_NEON
+    double t_sleef_neon = bench_sleef_neon(xs);
+#endif
+#if HAVE_WASM_SIMD
+    double t_sleef_wasm = bench_sleef_wasm(xs);
+#endif
     std::printf("--- speedups vs std::pow ---\n");
-    std::printf("  poly scalar  : %.2fx\n", t_libm / t_pol);
-    std::printf("  poly sse4x4  : %.2fx\n", t_libm / t_sse);
-    std::printf("  poly avx2x8  : %.2fx\n", t_libm / t_avx2);
-    std::printf("  sleef sse4x4 : %.2fx\n", t_libm / t_sleef_sse);
-    std::printf("  sleef avx2x8 : %.2fx\n", t_libm / t_sleef_avx);
-#else
-    std::printf("--- speedups vs std::pow ---\n");
-    std::printf("  poly scalar : %.2fx\n", t_libm / t_pol);
-    std::printf("  AVX2 path not built\n");
+    std::printf("  poly scalar   : %.2fx\n", t_libm / t_pol);
+#if HAVE_AVX2
+    std::printf("  poly sse4x4   : %.2fx\n", t_libm / t_sse);
+    std::printf("  poly avx2x8   : %.2fx\n", t_libm / t_avx2);
+    std::printf("  sleef sse4x4  : %.2fx\n", t_libm / t_sleef_sse);
+    std::printf("  sleef avx2x8  : %.2fx\n", t_libm / t_sleef_avx);
+#endif
+#if HAVE_NEON
+    std::printf("  sleef neonx4  : %.2fx\n", t_libm / t_sleef_neon);
+#endif
+#if HAVE_WASM_SIMD
+    std::printf("  sleef wasmx4  : %.2fx\n", t_libm / t_sleef_wasm);
 #endif
     return 0;
 }
