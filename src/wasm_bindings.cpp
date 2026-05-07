@@ -185,8 +185,6 @@ Options parse_js_options(val js_opts) {
         opts.strips_debug = js_opts["scapDebug"].as<bool>();
     if (js_opts.hasOwnProperty("best"))
         opts.best = js_opts["best"].as<bool>();
-    if (js_opts.hasOwnProperty("bestMetric"))
-        opts.best_metric = js_opts["bestMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("onProgress")) {
         // The encoder may call this from worker threads (parallel_for
         // bodies, HAM beam search, best_sweep trials). emscripten

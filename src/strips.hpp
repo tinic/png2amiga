@@ -276,8 +276,6 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        std::function<void(float, std::string_view)>
                                            on_progress = {},
                                        bool enable_best = false,
-                                       std::string_view best_metric =
-                                           "msssim",
                                        int sliced_spread_radius = -1,
                                        float sliced_spread_decay = -1.0f,
                                        bool sliced_vertical_dither = false,
@@ -311,8 +309,6 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                        std::function<void(float, std::string_view)>
                                            on_progress = {},
                                        bool enable_best = false,
-                                       std::string_view best_metric =
-                                           "msssim",
                                        int sliced_spread_radius = -1,
                                        float sliced_spread_decay = -1.0f,
                                        bool sliced_vertical_dither = false,
@@ -358,8 +354,6 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                                         float sliced_spread_decay = -1.0f,
                                         bool sliced_vertical_dither = false,
                                         bool enable_best = false,
-                                        std::string_view best_metric =
-                                            "msssim",
                                         std::span<const Color3f>
                                             external_palette = {},
                                         ham::HamMetric ham_metric =

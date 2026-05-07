@@ -536,7 +536,6 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
                                        bool enable_best,
-                                       std::string_view best_metric,
                                        int sliced_spread_radius,
                                        float sliced_spread_decay,
                                        bool sliced_vertical_dither,
@@ -552,7 +551,6 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         // sensitive to which colours win the median-cut, so heavy jitter
         // sampling buys more here than for wider palettes (EHB stays at
         // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
-        auto metric = pipeline::parse_best_metric(best_metric);
         auto best = pipeline::best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/24,
             [&](const Image& jittered_in,
@@ -560,14 +558,13 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 return encode_strips_dpf_ocs(
                     jittered_in, width_arg, height_arg, lock_color0,
                     d, debug_overlay, copper_changes_override, div,
-                    /*on_progress=*/{}, /*enable_best=*/false, "psnr",
+                    /*on_progress=*/{}, /*enable_best=*/false,
                     sliced_spread_radius, sliced_spread_decay,
                     sliced_vertical_dither, external_palette);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
-            /*jitter_amplitude=*/1.0f,
-            metric);
+            /*jitter_amplitude=*/1.0f);
         if (best.has_value()) return std::move(*best);
         // Fall through to the single-pass path if every restart failed
         // (shouldn't happen with valid input, but degrade gracefully).
@@ -1592,7 +1589,6 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                        std::function<void(float, std::string_view)>
                                            on_progress,
                                        bool enable_best,
-                                       std::string_view best_metric,
                                        int sliced_spread_radius,
                                        float sliced_spread_decay,
                                        bool sliced_vertical_dither,
@@ -1604,7 +1600,6 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
     // than DPF's 8-base, so heavy jitter sampling buys less here).
     // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
     if (enable_best) {
-        auto metric = pipeline::parse_best_metric(best_metric);
         auto best = pipeline::best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,
@@ -1612,14 +1607,13 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 return encode_strips_ehb_ocs(
                     jittered_in, width_arg, height_arg, lock_color0,
                     d, copper_changes_override, div, debug_overlay,
-                    /*on_progress=*/{}, /*enable_best=*/false, "psnr",
+                    /*on_progress=*/{}, /*enable_best=*/false,
                     sliced_spread_radius, sliced_spread_decay,
                     sliced_vertical_dither, external_palette, reserved_slots);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
-            /*jitter_amplitude=*/1.0f,
-            metric);
+            /*jitter_amplitude=*/1.0f);
         if (best.has_value()) return std::move(*best);
     }
     auto& table = kStrips6bplEhb;
@@ -2677,7 +2671,6 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                                         float sliced_spread_decay,
                                         bool sliced_vertical_dither,
                                         bool enable_best,
-                                        std::string_view best_metric,
                                         std::span<const Color3f>
                                             external_palette,
                                         ham::HamMetric ham_metric) {
@@ -2685,7 +2678,6 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
     // baseline = 161 trials. Same shape as EHB strips since HAM6's 16
     // base palette has comparable basin depth.
     if (enable_best) {
-        auto metric = pipeline::parse_best_metric(best_metric);
         auto best = pipeline::best_sweep<ScapResult>(
             image, dither_settings, palette_diversity, /*jitter_count=*/8,
             [&](const Image& jittered_in,
@@ -2696,13 +2688,12 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                     /*on_progress=*/{},
                     sliced_spread_radius, sliced_spread_decay,
                     sliced_vertical_dither,
-                    /*enable_best=*/false, "psnr",
+                    /*enable_best=*/false,
                     external_palette, ham_metric);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
-            /*jitter_amplitude=*/1.0f,
-            metric);
+            /*jitter_amplitude=*/1.0f);
         if (best.has_value()) return std::move(*best);
     }
     auto& table = kStrips6bplHam6;

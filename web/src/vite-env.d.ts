@@ -121,7 +121,6 @@ declare module '@wasm/png2amiga.js' {
     quantizer?: string
     refineIterations?: number
     best?: boolean
-    bestMetric?: string    // 'msssim' (default) | 'psnr'
 
     // Color adjustments (OKLab-space)
     gamma?: number

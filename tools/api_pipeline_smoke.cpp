@@ -123,7 +123,6 @@ int main(int argc, char** argv) {
         else if (a == "--ham-beam") opts.ham_beam = std::atoi(std::string(next(a)).c_str());
         else if (a == "--ham-triple") opts.ham_triple = std::atoi(std::string(next(a)).c_str());
         else if (a == "--ham-fast") opts.ham_fast = true;
-        else if (a == "--best-metric") opts.best_metric = std::string(next(a));
         else if (a == "--refine-iterations") {
             opts.refine_iterations = std::atoi(std::string(next(a)).c_str());
             refine_set = true;

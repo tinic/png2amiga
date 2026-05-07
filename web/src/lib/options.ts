@@ -75,7 +75,6 @@ export interface Options {
   width: number
   height: number
   best: boolean
-  bestMetric: string
   alphaThreshold: number
   alphaDither: string
   alphaDitherStrength: number
@@ -511,9 +510,6 @@ export function defaultOptions(): Options {
     // indexed copper modes ignore this flag (their planner is already
     // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
     best: false,
-    // Ranking metric for cap-best. 'msssim' (default) is a cleaner
-    // image and tracks SSIMULACRA2; 'psnr' keeps maximum fine detail.
-    bestMetric: 'ssimulacra2',
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',

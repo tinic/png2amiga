@@ -5,7 +5,6 @@ import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Slider from 'primevue/slider'
 import ToggleSwitch from 'primevue/toggleswitch'
-import SelectButton from 'primevue/selectbutton'
 import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 import ProgressBar from 'primevue/progressbar'
@@ -755,6 +754,23 @@ const scapAvailable = computed(() => {
   return false
 })
 
+// --best multi-restart sweep eligibility. Mirrors the C++ eligibility
+// gates in src/api.cpp: lores/hires plain, EHB plain (no copper/scap/dpf),
+// HAM6/HAM8 (any depth that maps to those modes), and any sliced/strips
+// mode (copper or scap on).
+const PLAIN_INDEXED_MODES = new Set([
+  'lores', 'lores-lace', 'hires', 'hires-lace',
+])
+const bestEligible = computed(() => {
+  const m = options.mode
+  if (options.copper || options.scap) return true
+  const t = hamType(m)
+  if (t === 'ham6' || t === 'ham8') return true
+  if (options.dualPlayfield) return false
+  if (isEhbMode(m)) return true
+  return PLAIN_INDEXED_MODES.has(m)
+})
+
 // Available modes for current chipset
 const availableModes = computed(() => modesForChipset(options.chipset))
 
@@ -894,6 +910,12 @@ watch(() => options.scap, (on) => {
 // only removes those mid-line moves; sliced stays on.
 watch(() => options.copper, (on) => {
   if (!on && options.scap) options.scap = false
+})
+
+// Clear --best whenever the surrounding mode switches it ineligible
+// (e.g. switching to a fixed-buffer mode or enabling DPF on lores).
+watch(bestEligible, (eligible) => {
+  if (!eligible) options.best = false
 })
 
 // Depth changes can invalidate DPF (requires depth=3 OCS / 4 AGA) and
@@ -2451,26 +2473,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    × image-jitter); picks the best-scoring trial. Active
                    for: HAM+sliced (centroid refinement), plain sliced, EHB+sliced,
                    strips DPF, strips EHB. -->
-              <div v-if="options.copper || options.scap" class="grid align-items-center">
+              <div v-if="bestEligible" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">Best</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.best" />
                   <span style="color: #888; font-size: 0.625rem;">~20–30× slower, parallel</span>
                 </div>
               </div>
-              <div v-if="options.best" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Ranking metric for --best: ms-ssim (default) gives a cleaner image and tracks SSIMULACRA2; psnr keeps maximum fine detail.">Best metric</label>
-                <div class="col-8 flex align-items-center gap-2">
-                  <SelectButton
-                    v-model="options.bestMetric"
-                    :options="[{label:'MS-SSIM', value:'msssim'}, {label:'PSNR', value:'psnr'}]"
-                    optionLabel="label" optionValue="value"
-                    :allowEmpty="false"
-                    size="small"
-                  />
-                </div>
-              </div>
-
               <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
                    hardware buffer): preserve source aspect by letterboxing/
                    pillarboxing the image inside the fixed frame instead of

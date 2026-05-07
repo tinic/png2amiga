@@ -608,14 +608,12 @@ struct Config {
     std::string ham_metric = "oklab2";
 
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
-    // strengths × palette-diversity values, ranks trials by --best-metric
-    // (SSIMULACRA2 by default), keeps the winner. Active in HAM6/HAM8,
-    // plain EHB, sliced palette, and strip palette. Cost varies by mode
-    // (~5× on HAM-sliced, ~20–30× on plain HAM/EHB sweeps); typical gain
-    // is +0.5–2 dB PSNR. Off by default — opt-in for offline / final
-    // exports.
+    // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
+    // keeps the winner. Active in HAM6/HAM8, plain EHB, sliced palette,
+    // and strip palette. Cost varies by mode (~5× on HAM-sliced, ~20–30×
+    // on plain HAM/EHB sweeps); typical gain is +0.5–2 dB PSNR. Off by
+    // default — opt-in for offline / final exports.
     bool best = false;
-    std::string best_metric = "ssimulacra2";  // "ssimulacra2" (default) | "msssim" | "psnr"
 
     // Seamless-tile mode. Replicates the input 3x3, runs the pipeline
     // over the bigger buffer so error-diffused dither converges to a
@@ -826,7 +824,6 @@ void print_usage() {
         "  --slice-changes <0-16>          Swaps per line (0 = auto)\n"
         "  --sliced-vertical-dither        Spread copper transitions across rows\n"
         "  --best                          Multi-restart search (~20–30× slower)\n"
-        "  --best-metric <m>               ssimulacra2 (default) | msssim | psnr\n"
         "\n"
         "Strip palette (mid-line swaps, OCS lores):\n"
         "  --strips                        Mid-line swaps; pair with --dpf or ehb\n"
@@ -998,18 +995,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--print-palette") {
             config.print_palette = true;
-            continue;
-        }
-
-        if (arg == "--best-metric") {
-            if (i + 1 >= argc)
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--best-metric requires msssim, ssimulacra2, or psnr"}};
-            std::string v = argv[++i];
-            if (v != "msssim" && v != "psnr" && v != "ssimulacra2")
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--best-metric must be msssim, ssimulacra2, or psnr"}};
-            config.best_metric = std::move(v);
             continue;
         }
 
@@ -2416,7 +2401,6 @@ api::Options make_api_options(const Config& cfg) {
     opts.ham_triple = static_cast<int>(cfg.ham_triple);
     opts.refine_iterations = cfg.refine_iterations;
     opts.best = cfg.best;
-    opts.best_metric = cfg.best_metric;
     opts.copper = cfg.copper;
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
     opts.sliced_spread_radius = cfg.sliced_spread_radius;
@@ -3288,7 +3272,7 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter();
 // delegate to api::encode_state (Genesis, SNES Mode 7 256, EGA, VGA,
 // Atari, CGA-fixed). Each trial: jitter the source image, re-encode
 // to PNG bytes, run encode_state with the trial's (strength,
-// diversity) settings. Score by best_metric (SSIMULACRA2 default).
+// diversity) settings. Score by SSIMULACRA2.
 //
 // Returns the winning state. On sweep failure (every trial errored)
 // falls back to a single non-jittered encode so the caller never gets
@@ -3336,14 +3320,13 @@ api::EncodeStateOrError best_via_encode_state(
     base_dith.method = cfg.dither_method;
     base_dith.strength = aopts.dither_strength;
     base_dith.error_clamp = aopts.error_clamp;
-    auto bm = pipeline::parse_best_metric(cfg.best_metric);
     auto winner = pipeline::best_sweep<Trial>(
         src, base_dith, cfg.palette_diversity,
         static_cast<int>(jitter_count),
         encode_once,
         [](const Trial& t) -> const Image& { return t.rendered; },
         make_cli_progress_reporter(),  // sweep-level: 1 line, "best"
-        jitter_amplitude, bm);
+        jitter_amplitude);
     if (winner) return std::move(winner->enc);
     // Fall back to single-pass on sweep failure. Same float-input route.
     return api::encode_state_image(src, aopts);
@@ -7081,7 +7064,6 @@ int run_main(int argc, char* argv[]) {
             // OCS's discrete 12-bit gamut already snaps small nudges.
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto sliced_metric = pipeline::parse_best_metric(config->best_metric);
             auto best = pipeline::best_sweep<CapTrial>(
                 *image, dith, config->palette_diversity,
                 /*jitter_count=*/8,
@@ -7098,8 +7080,7 @@ int run_main(int argc, char* argv[]) {
                 },
                 [](const CapTrial& t) -> const Image& { return t.rendered; },
                 make_cli_progress_reporter(),
-                jitter_amp,
-                sliced_metric);
+                jitter_amp);
             if (best.has_value()) {
                 copper_result = std::move(best->result);
             } else {

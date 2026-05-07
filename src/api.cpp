@@ -2038,14 +2038,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (!p) return std::unexpected{p.error()};
                 return HamTrial{*std::move(r), *std::move(p)};
             };
-            auto best_metric = pipeline::parse_best_metric(options.best_metric);
             float amp = (ham_params.bitplane_depth == 8) ? 0.4f : 1.0f;
             auto winner = pipeline::best_sweep<HamTrial>(
                 *image, dith, options.palette_diversity,
                 /*jitter_count=*/8,
                 encode_once,
                 [](const HamTrial& t) -> const Image& { return t.rendered; },
-                options.on_progress, amp, best_metric);
+                options.on_progress, amp);
             if (!winner) {
                 return std::unexpected{Error{
                     ErrorCode::unsupported_mode,
@@ -2426,7 +2425,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // 32-colour base palette → shallower median-cut basins,
                 // amplitude 1.0 (AGA-only weakening doesn't apply here
                 // since EHB is OCS-bound).
-                auto sliced_metric = pipeline::parse_best_metric(options.best_metric);
                 winner = pipeline::best_sweep<EhbSlicedTrial>(
                     *image, dith, options.palette_diversity,
                     /*jitter_count=*/8,
@@ -2439,8 +2437,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         return t.rendered;
                     },
                     options.on_progress,
-                    /*jitter_amplitude=*/1.0f,
-                    sliced_metric);
+                    /*jitter_amplitude=*/1.0f);
             }
             if (!winner.has_value()) {
                 auto r = encode_once(*image, dith,
@@ -2669,13 +2666,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     std::move(dr.indices), *std::move(pv), dr.total_error,
                 };
             };
-            auto bm = pipeline::parse_best_metric(options.best_metric);
             auto winner = pipeline::best_sweep<EhbPlainTrial>(
                 *image, base_dith, options.palette_diversity,
                 /*jitter_count=*/8,
                 encode_once,
                 [](const EhbPlainTrial& t) -> const Image& { return t.rendered; },
-                options.on_progress, /*jitter_amplitude=*/1.0f, bm);
+                options.on_progress, /*jitter_amplitude=*/1.0f);
             if (!winner) {
                 return std::unexpected{Error{
                     ErrorCode::unsupported_mode,
@@ -3128,7 +3124,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             };
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto sliced_metric = pipeline::parse_best_metric(options.best_metric);
             auto best = pipeline::best_sweep<CapTrial>(
                 *image, dith, options.palette_diversity,
                 /*jitter_count=*/8,
@@ -3146,8 +3141,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 },
                 [](const CapTrial& t) -> const Image& { return t.rendered; },
                 options.on_progress,
-                jitter_amp,
-                sliced_metric);
+                jitter_amp);
             if (best.has_value()) {
                 copper_result = std::move(best->result);
             } else {
@@ -3276,7 +3270,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.sliced_spread_decay,
                 options.sliced_vertical_dither,
                 options.best,
-                options.best_metric,
                 strips_user_pal_span,
                 (options.ham_metric == "srgb-mse")
                     ? ham::HamMetric::srgb_mse
@@ -3308,7 +3301,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     options.strips_debug,
                     options.on_progress,
                     options.best,
-                    options.best_metric,
                     options.sliced_spread_radius,
                     options.sliced_spread_decay,
                     options.sliced_vertical_dither,
@@ -3326,7 +3318,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.palette_diversity,
                 options.on_progress,
                 options.best,
-                options.best_metric,
                 options.sliced_spread_radius,
                 options.sliced_spread_decay,
                 options.sliced_vertical_dither,
@@ -3513,13 +3504,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 options.locks, options.reserves, options.pins,
                 std::vector<bool>{});
         };
-        auto bm = pipeline::parse_best_metric(options.best_metric);
         auto winner = pipeline::best_sweep<PlainAutoTrial>(
             *image, base_dith, options.palette_diversity,
             /*jitter_count=*/8,
             encode_once,
             [](const PlainAutoTrial& t) -> const Image& { return t.rendered; },
-            options.on_progress, /*jitter_amplitude=*/1.0f, bm);
+            options.on_progress, /*jitter_amplitude=*/1.0f);
         if (winner) {
             std::vector<Color3f> used_pal(
                 winner->pal.colors.begin(),

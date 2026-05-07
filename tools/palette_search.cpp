@@ -169,7 +169,7 @@ std::vector<Color3f> crossover(const std::vector<Color3f>& a,
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::println(stderr, "usage: {} <image> <depth> [pop=64] "
-                             "[gens=40] [out_pal=...] [fitness=fs|nn|msssim]",
+                             "[gens=40] [out_pal=...] [fitness=fs|nn]",
                      argv[0]);
         return 2;
     }
@@ -181,7 +181,6 @@ int main(int argc, char** argv) {
     std::string out_pal = (argc > 5) ? argv[5] : "/tmp/palette_search_best.txt";
     std::string fit_arg = (argc > 6) ? argv[6] : "fs";
     bool use_nn     = (fit_arg == "nn");
-    bool use_msssim = (fit_arg == "msssim");
 
     if (depth < 1 || depth > 6) {
         std::println(stderr, "depth must be 1-6 (lores OCS)");
@@ -264,27 +263,13 @@ int main(int argc, char** argv) {
     }
 
     std::println("Fitness mode: {}",
-                 use_nn      ? "nearest-neighbor (CPU)"
-                 : use_msssim ? "CPU FS + MS-SSIM"
-                              : "CPU FS + SSIMULACRA2");
+                 use_nn ? "nearest-neighbor (CPU)"
+                        : "CPU FS + SSIMULACRA2");
 
     // Score initial population.
     std::vector<float> scores(population.size(), 0.0f);
     auto score_all = [&]() {
-        if (use_msssim) {
-            pipeline::parallel_for(population.size(), [&](std::size_t i) {
-                auto cand = std::span<const Color3f>(population[i]);
-                auto dr = dither::apply(source, cand, dith);
-                Image rendered(source.width(), source.height());
-                auto px = rendered.pixels();
-                for (std::size_t p = 0; p < px.size(); ++p)
-                    px[p] = cand[dr.indices[p]];
-                scores[i] = pipeline::compute_msssim(source.pixels(),
-                                                      rendered.pixels(),
-                                                      source.width(),
-                                                      source.height());
-            });
-        } else {
+        {
             pipeline::parallel_for(population.size(), [&](std::size_t i) {
                 scores[i] = use_nn
                     ? fitness_nn(source, std::span<const Color3f>(population[i]))

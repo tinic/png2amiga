@@ -228,40 +228,6 @@ Image jitter_image(const Image& source, std::uint32_t seed,
 void parallel_for(std::size_t n,
                   std::function<void(std::size_t)> body);
 
-// MS-SSIM (multi-scale Structural Similarity Index) between two
-// linear-RGB images, computed on Rec. 709 luminance Y. Returns a value
-// in (0, 1] — higher = more similar; 1.0 = identical inputs. Five
-// scales with standard Wang et al. 2003 weights {0.0448, 0.2856,
-// 0.3001, 0.2363, 0.1333}; per-scale SSIM uses an 11×11 Gaussian
-// window (σ=1.5).
-//
-// Used by best_sweep as a more perceptual ranking metric than
-// PSNR. Captures local structure changes (banding, contour breakup,
-// per-line swap shimmer) that pixel-MSE PSNR averages away — the
-// horizontal-banding failure mode --sliced especially produces in tight
-// palettes.
-//
-// Both images must have identical (width, height); a/b sized at
-// least width*height. Returns 0 on shape mismatch.
-float compute_msssim(std::span<const Color3f> a,
-                     std::span<const Color3f> b,
-                     std::size_t width,
-                     std::size_t height);
-
-// Ranking metric for best_sweep. ssimulacra2 (default) is the metric
-// we report in the README shootout and the per-mode benchmarks, so
-// ranking trials by it is the most direct optimisation target. CPU
-// SSIMULACRA2 is ~6ms/call at 320x213 — adds ~1s to a 161-trial
-// --best, negligible. msssim and psnr remain available for callers
-// that need a different ranking objective.
-enum class BestMetric { msssim, psnr, ssimulacra2 };
-
-inline BestMetric parse_best_metric(std::string_view name) {
-    if (name == "psnr")   return BestMetric::psnr;
-    if (name == "msssim") return BestMetric::msssim;
-    return BestMetric::ssimulacra2;  // default
-}
-
 // Multi-restart parallel sweep for any --best sliced-aware encoder.
 // Sweeps:
 //   - dither_strength: 5 multipliers (0.7, 0.85, 1.0, 1.15, 1.3)
@@ -281,13 +247,13 @@ inline BestMetric parse_best_metric(std::string_view name) {
 // RenderedFn signature:
 //   const Image& (const T& result)
 //
-// Ranks by rendered-preview PSNR vs the ORIGINAL source — never the
-// jittered variant — and returns the highest-PSNR T (or std::nullopt
-// if every trial failed). Caller picks jitter_count: strips DPF uses
-// 24 (8-colour PF2 palette is highly basin-sensitive), strips EHB and
-// plain sliced use 8 (32-colour and 16-colour palettes have shallower
-// basins). User explicitly OK'd unbounded compute on best, so the
-// large trial count (5×4×N + 1) is a feature.
+// Ranks by rendered-preview SSIMULACRA2 vs the ORIGINAL source — never
+// the jittered variant — and returns the highest-scoring T (or
+// std::nullopt if every trial failed). Caller picks jitter_count:
+// strips DPF uses 24 (8-colour PF2 palette is highly basin-sensitive),
+// strips EHB and plain sliced use 8 (32-colour and 16-colour palettes
+// have shallower basins). User explicitly OK'd unbounded compute on
+// best, so the large trial count (5×4×N + 1) is a feature.
 template <typename T, typename EncodeFn, typename RenderedFn>
 std::optional<T> best_sweep(
     const Image& source,
@@ -297,8 +263,7 @@ std::optional<T> best_sweep(
     EncodeFn encode_fn,
     RenderedFn rendered_fn,
     const std::function<void(float, std::string_view)>& on_progress,
-    float jitter_amplitude = 1.0f,
-    BestMetric metric = BestMetric::ssimulacra2) {
+    float jitter_amplitude = 1.0f) {
     struct Trial {
         dither::Settings settings;
         int diversity;
@@ -353,21 +318,9 @@ std::optional<T> best_sweep(
         }
         if (!retry) return;
         const Image& rendered = rendered_fn(*retry);
-        float score;
-        if (metric == BestMetric::psnr) {
-            score = color_space::compute_psnr_blurred(
-                source.pixels(), rendered.pixels(),
-                source.width(), source.height());
-        } else if (metric == BestMetric::ssimulacra2) {
-            score = ssimulacra2::compute(
-                source.pixels(), rendered.pixels(),
-                source.width(), source.height());
-        } else {
-            // MS-SSIM beats PSNR for ranking on banding/shimmer cases.
-            score = compute_msssim(
-                source.pixels(), rendered.pixels(),
-                source.width(), source.height());
-        }
+        float score = ssimulacra2::compute(
+            source.pixels(), rendered.pixels(),
+            source.width(), source.height());
         std::lock_guard lk(best_mu);
         if (!best.has_value() || score > best_psnr) {
             best = std::move(*retry);
