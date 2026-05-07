@@ -590,24 +590,46 @@ float compute(std::span<const Color3f> orig,
     // At each scale the input is downsampled in LINEAR sRGB, then converted
     // to XYB. We mirror that exactly.
     constexpr int kNumScales = 6;
-    std::vector<Color3f> lin1(orig.begin(), orig.begin() + static_cast<std::ptrdiff_t>(n));
-    std::vector<Color3f> lin2(distorted.begin(),
-                              distorted.begin() + static_cast<std::ptrdiff_t>(n));
+    // thread_local: keep the source-copy allocation alive across
+    // calls. Same rationale as the Scratch arena below — `lin1`/`lin2`
+    // hold the full source image (and shrink as scales downsample),
+    // so freshly constructing them every call costs the allocator a
+    // ~68KB block × 2 per call.
+    thread_local std::vector<Color3f> lin1, lin2;
+    if (lin1.size() < n) lin1.resize(n);
+    if (lin2.size() < n) lin2.resize(n);
+    std::copy(orig.begin(), orig.begin() + static_cast<std::ptrdiff_t>(n),
+              lin1.begin());
+    std::copy(distorted.begin(),
+              distorted.begin() + static_cast<std::ptrdiff_t>(n),
+              lin2.begin());
     std::size_t w = width, h = height;
     std::vector<ScaleScores> per_scale;
     per_scale.reserve(kNumScales);
-    // All scratch buffers live for the duration of compute(); each
-    // scale reuses the same allocations. AMD uProf showed the original
-    // implementation spent 72% of CPU in the heap allocator (every
-    // gaussian_blur / multiply / to_xyb call freshly allocated a
-    // 273KB-at-scale-0 vector<float>). The scratch arena drops that to
-    // a one-shot allocation per call.
-    Scratch sc;
+    // All scratch buffers live for the duration of compute() AND
+    // ACROSS compute() calls — `thread_local` keeps the allocations
+    // alive between invocations so the --best inner loop (and
+    // population search) doesn't pay malloc cost on every iteration.
+    // AMD uProf showed the per-call construction (the previous
+    // commit's `Scratch sc;`) still cost 70% of CPU because each
+    // call's destructor freed the 7 vector<float>s × 68KB and the
+    // next call re-committed pages. thread_local pins the pages.
+    //
+    // Threading: each thread gets its own arena, so callers running
+    // best_sweep across cores via parallel_for won't contend.
+    thread_local Scratch sc;
     sc.reserve_to(w * h);
-    std::vector<float> X1, Y1, B1, X2, Y2, B2;
-    X1.resize(w * h); Y1.resize(w * h); B1.resize(w * h);
-    X2.resize(w * h); Y2.resize(w * h); B2.resize(w * h);
-    std::vector<Color3f> next1, next2;
+    thread_local std::vector<float> X1, Y1, B1, X2, Y2, B2;
+    if (X1.size() < w * h) { X1.resize(w * h); Y1.resize(w * h); B1.resize(w * h); }
+    if (X2.size() < w * h) { X2.resize(w * h); Y2.resize(w * h); B2.resize(w * h); }
+    // next1/next2 are also thread_local so their capacity persists
+    // across compute() calls. Size them to n up front; the swap-based
+    // double-buffer below keeps capacity constant (only `size()`
+    // shrinks via swap with a smaller buffer, and the next call's
+    // `resize(n)` is a no-op when capacity is already n).
+    thread_local std::vector<Color3f> next1, next2;
+    if (next1.size() < n) next1.resize(n);
+    if (next2.size() < n) next2.resize(n);
     for (int scale = 0; scale < kNumScales; ++scale) {
         if (w < 8 || h < 8) break;
         if (scale > 0) {
