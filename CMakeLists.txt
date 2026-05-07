@@ -180,6 +180,14 @@ else()
     if(MSVC)
         target_compile_options(png2amiga PRIVATE /arch:AVX2)
         target_compile_options(api_pipeline_smoke PRIVATE /arch:AVX2)
+        target_compile_options(bench_ssimulacra2 PRIVATE /arch:AVX2)
+        # MSVC's /arch:AVX2 does NOT predefine __AVX2__ (gcc/clang do).
+        # ssimulacra2.cpp's SIMD-backend gate keys on __AVX2__, so define
+        # it explicitly here for the MSVC path. Same for __FMA__ (the
+        # fmadd intrinsics live in the same immintrin.h block).
+        target_compile_definitions(png2amiga PRIVATE __AVX2__ __FMA__)
+        target_compile_definitions(api_pipeline_smoke PRIVATE __AVX2__ __FMA__)
+        target_compile_definitions(bench_ssimulacra2 PRIVATE __AVX2__ __FMA__)
     else()
         # Probe for AVX2 — succeeds on x86_64, fails on ARM64 (Apple
         # Silicon, etc.) where NEON is the default ISA and no flag is
@@ -190,6 +198,7 @@ else()
         if(PNG2AMIGA_HAS_MAVX2)
             target_compile_options(png2amiga PRIVATE -mavx2 -mfma)
             target_compile_options(api_pipeline_smoke PRIVATE -mavx2 -mfma)
+            target_compile_options(bench_ssimulacra2 PRIVATE -mavx2 -mfma)
         endif()
     endif()
 
