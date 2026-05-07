@@ -147,6 +147,18 @@ else()
         ${CMAKE_BINARY_DIR}/generated)
     target_link_libraries(api_pipeline_smoke PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
     target_compile_options(api_pipeline_smoke PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+
+    # bench_ssimulacra2: standalone microbench for the SSIMULACRA2
+    # metric. Used to drive AMD uProf / Apple Instruments profiling so
+    # we know which kernel inside ssimulacra2.cpp dominates wall time.
+    add_executable(bench_ssimulacra2
+        tools/bench_ssimulacra2.cpp
+        src/ssimulacra2.cpp
+    )
+    target_include_directories(bench_ssimulacra2 PRIVATE
+        src
+        ${CMAKE_BINARY_DIR}/generated)
+    target_compile_options(bench_ssimulacra2 PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
     # Include quantize_metal.cpp here too when there's no Metal —
     # it provides the C-stub symbols (false / std::unexpected) that
     # quantize_metal_wrap.cpp links against. The Metal-enabled

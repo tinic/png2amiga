@@ -180,7 +180,7 @@ struct Options {
     // image and tracks SSIMULACRA2 better; "psnr" keeps maximum
     // fine detail at the cost of perceptual quality.
     // User flips via --best-metric.
-    std::string best_metric = "msssim";
+    std::string best_metric = "ssimulacra2";
     bool best = false;               // multi-candidate sliced planner +
                                          // joint base-palette refinement.
                                          // HAM6 + copper and HAM8 + copper

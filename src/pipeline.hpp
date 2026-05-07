@@ -248,17 +248,18 @@ float compute_msssim(std::span<const Color3f> a,
                      std::size_t width,
                      std::size_t height);
 
-// Ranking metric for best_sweep. msssim (default) gives a cleaner
-// image and tracks SSIMULACRA2 well; psnr keeps maximum fine detail;
-// ssimulacra2 is the most perceptually accurate but the slowest (a
-// vendored port of cloudinary/ssimulacra2). User flips via
-// --best-metric.
+// Ranking metric for best_sweep. ssimulacra2 (default) is the metric
+// we report in the README shootout and the per-mode benchmarks, so
+// ranking trials by it is the most direct optimisation target. CPU
+// SSIMULACRA2 is ~6ms/call at 320x213 — adds ~1s to a 161-trial
+// --best, negligible. msssim and psnr remain available for callers
+// that need a different ranking objective.
 enum class BestMetric { msssim, psnr, ssimulacra2 };
 
 inline BestMetric parse_best_metric(std::string_view name) {
-    if (name == "psnr")        return BestMetric::psnr;
-    if (name == "ssimulacra2") return BestMetric::ssimulacra2;
-    return BestMetric::msssim;  // default
+    if (name == "psnr")   return BestMetric::psnr;
+    if (name == "msssim") return BestMetric::msssim;
+    return BestMetric::ssimulacra2;  // default
 }
 
 // Multi-restart parallel sweep for any --best sliced-aware encoder.
@@ -297,7 +298,7 @@ std::optional<T> best_sweep(
     RenderedFn rendered_fn,
     const std::function<void(float, std::string_view)>& on_progress,
     float jitter_amplitude = 1.0f,
-    BestMetric metric = BestMetric::psnr) {
+    BestMetric metric = BestMetric::ssimulacra2) {
     struct Trial {
         dither::Settings settings;
         int diversity;

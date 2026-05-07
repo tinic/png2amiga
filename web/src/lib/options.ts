@@ -513,7 +513,7 @@ export function defaultOptions(): Options {
     best: false,
     // Ranking metric for cap-best. 'msssim' (default) is a cleaner
     // image and tracks SSIMULACRA2; 'psnr' keeps maximum fine detail.
-    bestMetric: 'msssim',
+    bestMetric: 'ssimulacra2',
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',
