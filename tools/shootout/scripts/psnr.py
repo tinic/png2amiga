@@ -92,6 +92,7 @@ LABELS = {
     'p2a-lores-d5':          'png2amiga lores d=5 (FS)',
     'p2a-lores-d5-best':     'png2amiga lores d=5 + best (FS)',
     'hc-lores-d5':           'ham_convert ocs32 (dither_fs)',
+    'abc-lores-d5':          'abc lores d=5 (-floyd)',
     'libimagequant-32':      'libimagequant 32 (FS)',
     # 256-colour AGA lores head-to-head with libimagequant. Tests the
     # quantizer in the high-colour regime where the OCS-12-bit

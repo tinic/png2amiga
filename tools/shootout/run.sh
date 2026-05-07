@@ -98,15 +98,21 @@ run_png2amiga() {
 }
 
 # 1) abc HAM6
+# `-forcecolor 0 000` pins palette[0] = black, matching png2amiga's
+# --lock-color0 default and ham_convert's black_bkd flag. Without it
+# abc's quantizer is free to put any colour at slot 0, which makes the
+# fixed-slot-zero comparison unfair (see commit 0b4bc29 — that bug had
+# slot 0 drifting to #110000 / #111111 under our --best, distorting
+# results in our favour the other way).
 echo "==> [abc] ham6 + floyd"
 time_to "$OUT/abc-ham6.time" \
-  "$ABC2" "$TARGET" -ham -floyd \
+  "$ABC2" "$TARGET" -ham -floyd -forcecolor 0 000 \
     -preview "$OUT/abc-ham6.png" -iff "$OUT/abc-ham6.iff" >/dev/null
 
 # 2) abc SHAM6
 echo "==> [abc] sham6 + floyd"
 time_to "$OUT/abc-sham6.time" \
-  "$ABC2" "$TARGET" -sham -floyd \
+  "$ABC2" "$TARGET" -sham -floyd -forcecolor 0 000 \
     -preview "$OUT/abc-sham6.png" -iff "$OUT/abc-sham6.iff" >/dev/null
 
 # ham_convert is a Swing GUI app whose JVM does NOT exit after CLI work
@@ -218,6 +224,15 @@ run_png2amiga "p2a-lores-d5-best"    --mode lores --depth 5 --best
 #     ham_convert's full mode list includes indexed OCS/AGA modes
 #     (ocs2/4/8/16/32, aga64/128/256), not just HAM/EHB.
 run_ham_convert hc-lores-d5  ocs32
+
+# 14a) abc -bpc 5 (32-colour OCS lores indexed) + floyd. abc tops out at
+#      5 bitplanes (no AGA path), so this is the only abc indexed entry.
+#      Same -forcecolor 0 000 + -quantize as the HAM/SHAM entries above
+#      for apples-to-apples versus png2amiga's --lock-color0 default.
+echo "==> [abc] lores-d5 + floyd"
+time_to "$OUT/abc-lores-d5.time" \
+  "$ABC2" "$TARGET" -bpc 5 -floyd -quantize -forcecolor 0 000 \
+    -preview "$OUT/abc-lores-d5.png" -iff "$OUT/abc-lores-d5.iff" >/dev/null
 
 # 15) libimagequant via pngquant CLI: 32 colours, max quality (--speed 1),
 #     Floyd-Steinberg (the default for pngquant). pngquant outputs an
