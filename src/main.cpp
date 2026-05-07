@@ -7522,6 +7522,8 @@ int run_main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
         pal.colors = st.palette;
+        pal.name = st.base_palette_quantizer.empty()
+                   ? std::string{"best"} : st.base_palette_quantizer;
         used_palette = st.palette;
         dither_result.indices = st.indices;
         dither_result.total_error = static_cast<float>(st.quant_error);
@@ -7541,6 +7543,21 @@ int run_main(int argc, char* argv[]) {
                                : bitplane::Layout::interleaved);
         plain_best_done = true;
     }
+
+  // Single emit-site for the "auto" palette status (`Palette: N colors
+  // (auto, <quantizer>)` + cli_dump_palette). Set true by every code
+  // path that produces a quantizer-derived palette in `pal`. Special-
+  // case branches (CGA / EGA / Atari hi / user palette) print their
+  // own bespoke "Palette:" line and leave this false.
+  //
+  // Why a flag instead of inlining the print at each site: --best
+  // (plain_best_eligible) and the standard auto branch are two
+  // separate code paths producing the same kind of palette. The prior
+  // bug — `--best --print-palette` silently dumping nothing — happened
+  // because each path inlined its own status reporting, so the auto
+  // dump only got added to the standard branch and --best fell through
+  // the cracks. Single emit-site is the architectural fix.
+  bool emit_auto_palette_status = plain_best_done;
 
   if (!plain_best_done) {
     // CGA: build the fixed 4- or 2-color palette (auto-select variant if asked).
@@ -7696,12 +7713,7 @@ int run_main(int argc, char* argv[]) {
             max_colors, lock_zero_std, chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
-        // Use the palette's own .name — set by whichever algorithm
-        // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
-        // ega). Mode-specific precision is already on the Mode: line
-        // above, so don't duplicate it here.
-        cli_status("Palette:  {} colors (auto, {})", pal.size(), pal.name);
-        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+        emit_auto_palette_status = true;
     }
 
     if (config->match_range) {
@@ -7837,6 +7849,21 @@ int run_main(int argc, char* argv[]) {
         return 1;
     }
   }  // end if (!plain_best_done)
+
+  // Single emit-site for the auto-palette status. See comment ~L7547
+  // for the architectural rationale: BOTH plain_best_eligible (--best
+  // through api::encode_state_image) AND the !plain_best_done auto
+  // branch above set emit_auto_palette_status = true. Special-case
+  // branches (CGA / EGA / Atari hi / user palette) keep the flag
+  // false because they print their own bespoke "Palette:" line.
+  if (emit_auto_palette_status) {
+    // Use the palette's own .name — set by whichever algorithm
+    // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
+    // ega / "best" for the --best winner). Mode-specific precision
+    // is already on the Mode: line above, so don't duplicate.
+    cli_status("Palette:  {} colors (auto, {})", pal.size(), pal.name);
+    cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+  }
 
     // --tile post-process: crop the 3W x 3H pipeline output back to the
     // centre W x H tile. Indices, bitplanes, preview, source image, and

@@ -745,6 +745,195 @@ static Result<void> tile_crop_result(PipelineResult& r,
     return {};
 }
 
+// ---------------------------------------------------------------------------
+// PlainAutoTrial — shared output of `encode_plain_auto`. Both run_pipeline's
+// non-best plain auto branch (the one that built palette + dither + encode +
+// render inline) AND the lores/hires --best multi-restart sweep call this
+// function with the same args. Per-trial differences (palette_diversity,
+// jittered image, dither_strength) flow as parameters.
+//
+// The architectural rationale: previous --best path inlined a near-copy of
+// the non-best pipeline. Each time the non-best path got a feature added
+// (assemble_with_reserves, lock_color0 prepend, refine_with_dither's
+// locked_mask, etc.), the --best lambda silently fell behind. Most recently
+// the --best path was missing the `lock_color0` prepend, producing palettes
+// where slot 0 was a near-black quantizer centroid (#110000 / #111111)
+// rather than pure #000000. Running both paths through one function makes
+// future drift impossible.
+//
+// Scope: handles the auto-quantize palette branch only. Special-palette
+// branches (CGA / EGA-200 fixed kCgaHw / Atari hi mono / user --palette)
+// build `pal` themselves and bypass this helper — the --best path is gated
+// against those features anyway. DPF expansion / final preview tweaks /
+// transparency-mask blackout happen post-helper at the call site.
+// ---------------------------------------------------------------------------
+struct PlainAutoTrial {
+    Palette                       pal;          // assembled, snapped, refined
+    std::vector<bool>             locked_mask;  // pal.colors.size() entries
+    std::size_t                   pal_size;     // first N are the live palette
+    std::vector<std::uint8_t>     indices;      // dither_result.indices
+    bitplane::BitplaneData        planes;
+    Image                         rendered;
+    float                         total_error;
+};
+
+Result<PlainAutoTrial> encode_plain_auto(
+    const Image& img,
+    std::size_t depth,
+    std::size_t max_colors,
+    amiga::Mode mode,
+    amiga::Chipset chipset,
+    const dither::Settings& dith,
+    int palette_diversity,
+    int refine_iterations,
+    bool lock_color0,
+    bool has_transparency,
+    bool use_dpf,
+    bool match_range,
+    const std::vector<LockSpec>&    locks,
+    const std::vector<ReserveSpec>& reserves,
+    const std::vector<PinSpec>&     pins,
+    const std::vector<bool>&        tmask) {
+    // Atari uses the full palette (no border slot tied to index 0).
+    bool is_atari_local = amiga::is_atari(mode);
+    bool lock_zero = lock_color0 && (has_transparency || !is_atari_local);
+
+    // Reserve-count + reserved_mask (caller may pass zero reserves).
+    auto reserves_in_pal = palette_locks::validate_reserves(
+        reserves, locks, max_colors, lock_zero);
+    if (!reserves_in_pal) return std::unexpected{reserves_in_pal.error()};
+    std::size_t reserve_count = *reserves_in_pal;
+    std::vector<bool> reserved_mask(max_colors, false);
+    for (auto& r : reserves) {
+        auto i = static_cast<std::size_t>(r.index);
+        if (r.index >= 0 && i < max_colors) reserved_mask[i] = true;
+    }
+
+    // Quantize + assemble. EGA modes (ega-hi specifically — the 200-line
+    // ega_320/640 use kCgaHw and take a separate non-auto path at the
+    // call site) go through ega_histogram on a pre-snapped image.
+    auto qc = palette_locks::quant_counts_for_assemble(
+        max_colors, locks, reserve_count, lock_zero);
+    Image ega_snapped;
+    const bool is_ega_mode = amiga::is_ega(mode);
+    if (is_ega_mode) {
+        ega_snapped = Image(img.width(), img.height());
+        for (std::size_t y = 0; y < img.height(); ++y)
+            for (std::size_t x = 0; x < img.width(); ++x)
+                ega_snapped[x, y] = palette::quantize_to_ega(img[x, y]);
+    }
+    auto qfn = [&](std::size_t k) -> Result<Palette> {
+        if (is_ega_mode) return quantize::ega_histogram(ega_snapped, k);
+        return quantize::quantize(img, k,
+                                  quantize_algo(chipset, mode),
+                                  palette_diversity);
+    };
+    auto quantized = palette_locks::two_pass_quantize(
+        qfn, qc.qcount, qc.kfallback, lock_zero);
+    if (!quantized) return std::unexpected{quantized.error()};
+    if (amiga::is_stf(mode) || amiga::is_vga(mode))
+        snap_to_chipset(*quantized, chipset, mode);
+    auto assembled = palette_locks::assemble_with_reserves(
+        *quantized, locks, reserves, max_colors, lock_zero, chipset, mode);
+
+    PlainAutoTrial out;
+    out.pal = std::move(assembled.palette);
+    out.locked_mask = std::move(assembled.locked);
+    out.pal_size = std::min(out.pal.size(), max_colors);
+
+    if (match_range)
+        preprocess::match_palette_range(const_cast<Image&>(img), out.pal);
+
+    // Dither-aware refinement (auto-palette only). Same gates as the
+    // pre-extraction non-best path. The locked_mask flow keeps slot 0
+    // (when lock_color0 is true) at pure black across iterations.
+    if (refine_iterations > 0 &&
+        dith.method != dither::Method::none && reserve_count == 0 &&
+        !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
+        !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
+        auto refined = quantize::refine_with_dither(
+            img,
+            Palette{"refined", {out.pal.colors.begin(),
+                                out.pal.colors.begin() +
+                                    static_cast<std::ptrdiff_t>(out.pal_size)}},
+            dith, chipset, mode,
+            static_cast<std::size_t>(refine_iterations), out.locked_mask);
+        if (refined) {
+            out.pal.colors = std::move(refined->colors);
+            out.pal_size = out.pal.colors.size();
+        }
+    }
+
+    std::span<const Color3f> pal_span{out.pal.colors.data(), out.pal_size};
+
+    // Dither candidate set excludes reserved slots and (when transparent)
+    // index 0. For best-path callers that pass empty reserves and no
+    // transparency, the simple branch fires.
+    dither::DitherResult dr;
+    if (reserve_count > 0 || has_transparency) {
+        std::vector<Color3f> cand_pal;
+        std::vector<std::uint8_t> cand_to_full;
+        cand_pal.reserve(out.pal_size);
+        cand_to_full.reserve(out.pal_size);
+        for (std::size_t i = 0; i < out.pal_size; ++i) {
+            if (has_transparency && i == 0) continue;
+            if (reserved_mask[i]) continue;
+            cand_pal.push_back(out.pal.colors[i]);
+            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+        }
+        std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
+        dr = dither::apply(img, dither_span, dith);
+        for (auto& idx : dr.indices) idx = cand_to_full[idx];
+        if (has_transparency) {
+            for (std::size_t i = 0;
+                 i < tmask.size() && i < dr.indices.size(); ++i)
+                if (tmask[i]) dr.indices[i] = 0;
+        }
+    } else {
+        dr = dither::apply(img, pal_span, dith);
+    }
+    out.indices = std::move(dr.indices);
+    out.total_error = dr.total_error;
+
+    // Pin-index swaps post-dither (no-op for best — gated against pins).
+    if (!pins.empty()) {
+        auto pin_result = palette_locks::apply_pins(
+            out.pal, out.indices, out.locked_mask, pins,
+            img.width(), img.height());
+        if (!pin_result) return std::unexpected{pin_result.error()};
+    }
+
+    // Sort by perceptual brightness, except for HAM/DPF where palette
+    // layout is constrained. Best-path eligibility excludes DPF.
+    if (!amiga::is_ham(mode) && !use_dpf) {
+        palette_locks::sort_by_brightness(out.pal.colors, out.locked_mask,
+                                          out.indices,
+                                          out.pal.colors.size());
+    }
+
+    bool dos_planar = (amiga::is_ega(mode) || amiga::is_vga(mode))
+                      && !amiga::is_chunky(mode);
+    auto bp_layout = is_atari_local
+        ? bitplane::Layout::word_interleaved
+        : dos_planar ? bitplane::Layout::standard
+                     : bitplane::Layout::interleaved;
+    auto bp_res = bitplane::encode(out.indices, img.width(), img.height(),
+                                   depth, bp_layout);
+    if (!bp_res) return std::unexpected{bp_res.error()};
+    out.planes = *std::move(bp_res);
+
+    auto pal_view = std::vector<Color3f>(
+        out.pal.colors.begin(),
+        out.pal.colors.begin() +
+            static_cast<std::ptrdiff_t>(out.pal_size));
+    auto pv = pipeline::render_preview(out.planes, pal_view,
+                                        /*is_ham=*/false,
+                                        /*is_lace=*/false, chipset);
+    if (!pv) return std::unexpected{pv.error()};
+    out.rendered = *std::move(pv);
+    return out;
+}
+
 }  // close anon namespace so run_pipeline gets external linkage and can
    // be reached from pipeline.cpp via the api:: forwarder.
 
@@ -3092,75 +3281,41 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         options.locks.empty() && options.reserves.empty() &&
         options.pins.empty();
     if (lores_plain_best_eligible) {
-        struct LoresTrial {
-            Palette pal;
-            std::vector<std::uint8_t> indices;
-            bitplane::BitplaneData planes;
-            Image rendered;
-            float total_error;
-        };
+        // Both --best and the non-best plain auto branch route through
+        // encode_plain_auto (anon ns, src/api.cpp). Per-trial knobs flow as
+        // function arguments; eligibility above pins locks/reserves/pins/
+        // transparency/DPF empty so this matches the non-best behaviour
+        // bit-for-bit (verified by api-equiv-* ctests). Future feature
+        // additions land in encode_plain_auto and propagate to both paths
+        // automatically — the previous lock_color0 / refine-locked-mask
+        // skew is no longer possible.
         dither::Settings base_dith;
         base_dith.method = parse_dither(options.dither);
         base_dith.strength = options.dither_strength;
         base_dith.error_clamp = options.error_clamp;
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d,
-                               int diversity) -> Result<LoresTrial> {
-            auto q = quantize::quantize(img, max_colors,
-                                        quantize_algo(chipset, mode),
-                                        diversity);
-            if (!q) return std::unexpected{q.error()};
-            Palette pal_t = std::move(*q);
-            snap_to_chipset(pal_t, chipset, mode);
-            auto pal_size_t = std::min(pal_t.size(), max_colors);
-            // Dither-aware refinement on the trial palette. Same gates
-            // as the main path: skip for chunky/EGA/CGA/atari-hi.
-            if (options.refine_iterations > 0 &&
-                d.method != dither::Method::none &&
-                !amiga::is_chunky(mode) && !amiga::is_cga(mode) &&
-                !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
-                auto refined = quantize::refine_with_dither(
-                    img,
-                    Palette{"refined",
-                            {pal_t.colors.begin(),
-                             pal_t.colors.begin() +
-                                 static_cast<std::ptrdiff_t>(pal_size_t)}},
-                    d, chipset, mode,
-                    static_cast<std::size_t>(options.refine_iterations));
-                if (refined) {
-                    pal_t.colors = std::move(refined->colors);
-                    pal_size_t = pal_t.colors.size();
-                }
-            }
-            std::span<const Color3f> pal_span_t{pal_t.colors.data(), pal_size_t};
-            auto dr = dither::apply(img, pal_span_t, d);
-            auto bp_res = bitplane::encode(dr.indices, img.width(),
-                                           img.height(), depth);
-            if (!bp_res) return std::unexpected{bp_res.error()};
-            auto pv = pipeline::render_preview(*bp_res, std::vector<Color3f>(
-                                                pal_span_t.begin(),
-                                                pal_span_t.end()),
-                                                /*is_ham=*/false,
-                                                options.interlace, chipset);
-            if (!pv) return std::unexpected{pv.error()};
-            return LoresTrial{
-                std::move(pal_t), std::move(dr.indices), *std::move(bp_res),
-                *std::move(pv), dr.total_error,
-            };
+                               int diversity) -> Result<PlainAutoTrial> {
+            return encode_plain_auto(
+                img, depth, max_colors, mode, chipset,
+                d, diversity, options.refine_iterations,
+                options.lock_color0, /*has_transparency=*/false,
+                /*use_dpf=*/false, /*match_range=*/options.match_range,
+                options.locks, options.reserves, options.pins,
+                std::vector<bool>{});
         };
         auto bm = pipeline::parse_best_metric(options.best_metric);
-        auto winner = pipeline::best_sweep<LoresTrial>(
+        auto winner = pipeline::best_sweep<PlainAutoTrial>(
             *image, base_dith, options.palette_diversity,
             /*jitter_count=*/8,
             encode_once,
-            [](const LoresTrial& t) -> const Image& { return t.rendered; },
+            [](const PlainAutoTrial& t) -> const Image& { return t.rendered; },
             options.on_progress, /*jitter_amplitude=*/1.0f, bm);
         if (winner) {
-            auto pal_size_w = std::min(winner->pal.size(), max_colors);
             std::vector<Color3f> used_pal(
                 winner->pal.colors.begin(),
                 winner->pal.colors.begin() +
-                    static_cast<std::ptrdiff_t>(pal_size_w));
+                    static_cast<std::ptrdiff_t>(winner->pal_size));
 
             PipelineResult result;
             result.rendered = std::move(winner->rendered);
@@ -3288,41 +3443,72 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
     } else {
-        // Slot-budget for the quantizer. See palette_locks.hpp's
-        // QuantCounts comment — subtracts lock_zero + locks + reserves
-        // so the quantizer optimises for exactly the slots it'll fill.
-        auto qc = palette_locks::quant_counts_for_assemble(
-            max_colors, options.locks, reserve_count, lock_zero);
-        Image ega_snapped;
-        const bool is_ega_mode = amiga::is_ega(mode);
-        if (is_ega_mode) {
-            // EGA: pre-snap the image to the 6-bit gamut once; the
-            // ega_histogram quantizer then picks distinct slots.
-            ega_snapped = Image(image->width(), image->height());
-            for (std::size_t y = 0; y < image->height(); ++y)
-                for (std::size_t x = 0; x < image->width(); ++x)
-                    ega_snapped[x, y] = palette::quantize_to_ega((*image)[x, y]);
+        // AUTO palette: route through encode_plain_auto so non-best and
+        // --best plain paths share the SAME quantize → assemble → refine →
+        // dither → encode → render pipeline. Eliminates the architectural
+        // divergence that produced the lock_color0 bug (slot 0 != #000000
+        // under --best because the inline best lambda skipped
+        // assemble_with_reserves' lock_color0 prepend).
+        //
+        // The trial result carries everything the non-best path needs:
+        // post-assembly palette, locked_mask, dither indices+total_error,
+        // encoded planes, rendered preview. Skip the shared post-palette
+        // tail (refine/dither/pins/sort/encode/render at L~3486-3599) by
+        // early-returning from this branch with the constructed
+        // PipelineResult.
+        dither::Settings auto_dith;
+        auto_dith.method = parse_dither(options.dither);
+        auto_dith.strength = options.dither_strength;
+        auto_dith.error_clamp = options.error_clamp;
+        auto trial = encode_plain_auto(
+            *image, depth, max_colors, mode, chipset,
+            auto_dith, options.palette_diversity, options.refine_iterations,
+            options.lock_color0, has_transparency, use_dpf,
+            options.match_range,
+            options.locks, options.reserves, options.pins, tmask);
+        if (!trial) return std::unexpected{trial.error()};
+        std::vector<Color3f> used_palette(
+            trial->pal.colors.begin(),
+            trial->pal.colors.begin() +
+                static_cast<std::ptrdiff_t>(trial->pal_size));
+        auto trial_planes = std::move(trial->planes);
+        auto trial_indices = std::move(trial->indices);
+        // DPF expansion lives in the call-site (post-trial) since the
+        // helper returns the un-expanded planes for sliced/copper/strips
+        // re-use too (they all need the unexpanded base preview).
+        if (use_dpf) {
+            auto expanded = bitplane::expand_to_dpf_pf2(trial_planes);
+            if (!expanded) return std::unexpected{expanded.error()};
+            trial_planes = *std::move(expanded);
+            auto pf2_base = std::size_t{1} <<
+                            (trial_planes.depth / 2);
+            std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
+            shifted.insert(shifted.end(),
+                           used_palette.begin(), used_palette.end());
+            used_palette = std::move(shifted);
+            for (auto& idx : trial_indices)
+                idx = static_cast<std::uint8_t>(idx + pf2_base);
         }
-        auto qfn = [&](std::size_t k) -> Result<Palette> {
-            if (is_ega_mode) return quantize::ega_histogram(ega_snapped, k);
-            return quantize::quantize(*image, k,
-                                      quantize_algo(chipset, mode),
-                                      options.palette_diversity);
-        };
-        auto quantized = palette_locks::two_pass_quantize(
-            qfn, qc.qcount, qc.kfallback, lock_zero);
-        if (!quantized) return std::unexpected{quantized.error()};
-        // Snap palette to discrete gamut where applicable (STF/VGA).
-        if (amiga::is_stf(mode) || amiga::is_vga(mode))
-            snap_to_chipset(*quantized, chipset, mode);
-        // Single-call assemble + reserve overlay. Bakes in all four
-        // concerns (qcount-aware fill, reserve-skip mask, dedupe
-        // against locks-only, post-assemble overlay).
-        auto assembled = palette_locks::assemble_with_reserves(
-            *quantized, options.locks, options.reserves,
-            max_colors, lock_zero, chipset, mode);
-        pal = std::move(assembled.palette);
-        locked_mask = std::move(assembled.locked);
+        PipelineResult result;
+        result.rendered = std::move(trial->rendered);
+        result.planes = std::move(trial_planes);
+        result.palette = std::move(used_palette);
+        result.indices = std::move(trial_indices);
+        result.mode = mode;
+        result.hires = compound_hires ||
+                       amiga::get_mode_params(mode).is_hires;
+        result.interlace = options.interlace;
+        result.dpf = use_dpf;
+        result.aga = is_aga;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i])
+                    result.rendered.pixels()[i] = Color3f{0, 0, 0};
+        }
+        result.finalize_psnr(*image, trial->total_error);
+        return result;
     }
 
     if (options.match_range)

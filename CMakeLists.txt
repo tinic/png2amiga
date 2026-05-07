@@ -1721,6 +1721,109 @@ else()
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}
             -- --mode lores --sliced --dpf)
+    # Preprocess + dither variant coverage. Each of these went unverified
+    # by the prior 51-test suite — the smoke harness lacked the flags
+    # entirely until this batch.
+    add_test(NAME "api-equiv-preprocess-gamma"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --gamma 1.5)
+    add_test(NAME "api-equiv-preprocess-brightness"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --brightness 0.2)
+    add_test(NAME "api-equiv-preprocess-contrast"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --contrast 1.3)
+    add_test(NAME "api-equiv-preprocess-saturation"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --saturation 1.2)
+    add_test(NAME "api-equiv-preprocess-hue"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --hue-shift 0.1)
+    add_test(NAME "api-equiv-preprocess-sharpen"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sharpen 0.5)
+    add_test(NAME "api-equiv-preprocess-match-range"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --match-range)
+    add_test(NAME "api-equiv-preprocess-levels"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --black-point 0.05 --white-point 0.95)
+    # HAM op-selection metric + greedy fallback.
+    add_test(NAME "api-equiv-ham6-srgb-mse"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --ham-metric srgb-mse)
+    add_test(NAME "api-equiv-ham6-fast"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --ham-fast)
+    add_test(NAME "api-equiv-ham6-beam-32"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --ham-beam 32)
+    # Lores depth + chipset variants — closes the gap api-equiv-lores-d6
+    # would have surfaced if it'd existed earlier.
+    add_test(NAME "api-equiv-lores-d4"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --depth 4)
+    add_test(NAME "api-equiv-lores-d6-aga"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --depth 6 --chipset aga)
+    add_test(NAME "api-equiv-lores-aga"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --chipset aga --depth 8)
+    add_test(NAME "api-equiv-lores-sliced-d6-aga"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --depth 6 --chipset aga)
+    # Plain dither variants (lores).
+    add_test(NAME "api-equiv-lores-stucki"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dither stucki)
+    add_test(NAME "api-equiv-lores-jarvis"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dither jarvis)
+    add_test(NAME "api-equiv-lores-yliluoma1"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dither yliluoma1)
+    add_test(NAME "api-equiv-lores-gilbert"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dither gilbert)
+    add_test(NAME "api-equiv-lores-riemersma"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dither riemersma)
+    add_test(NAME "api-equiv-ham6-atkinson"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --dither atkinson)
+    add_test(NAME "api-equiv-ehb-stucki"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ehb --dither stucki)
+    add_test(NAME "api-equiv-lores-sliced-jarvis"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --dither jarvis)
+    add_test(NAME "api-equiv-lores-sliced-sierra-lite"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --dither sierra-lite)
     # Color-independence + render-pixel invariants for DPF reserves.
     add_test(NAME "reserve-indep-lores-dpf"
         COMMAND ${_indep_chk}

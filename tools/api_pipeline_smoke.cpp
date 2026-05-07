@@ -110,6 +110,20 @@ int main(int argc, char** argv) {
             error_clamp_set = true;
         }
         else if (a == "--apply-tuning") apply_tuning = true;
+        else if (a == "--gamma") opts.gamma = std::stof(std::string(next(a)));
+        else if (a == "--brightness") opts.brightness = std::stof(std::string(next(a)));
+        else if (a == "--contrast") opts.contrast = std::stof(std::string(next(a)));
+        else if (a == "--saturation") opts.saturation = std::stof(std::string(next(a)));
+        else if (a == "--hue-shift") opts.hue_shift = std::stof(std::string(next(a)));
+        else if (a == "--sharpen") opts.sharpen = std::stof(std::string(next(a)));
+        else if (a == "--black-point") opts.black_point = std::stof(std::string(next(a)));
+        else if (a == "--white-point") opts.white_point = std::stof(std::string(next(a)));
+        else if (a == "--match-range") opts.match_range = true;
+        else if (a == "--ham-metric") opts.ham_metric = std::string(next(a));
+        else if (a == "--ham-beam") opts.ham_beam = std::atoi(std::string(next(a)).c_str());
+        else if (a == "--ham-triple") opts.ham_triple = std::atoi(std::string(next(a)).c_str());
+        else if (a == "--ham-fast") opts.ham_fast = true;
+        else if (a == "--best-metric") opts.best_metric = std::string(next(a));
         else if (a == "--refine-iterations") {
             opts.refine_iterations = std::atoi(std::string(next(a)).c_str());
             refine_set = true;
