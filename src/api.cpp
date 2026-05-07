@@ -3379,11 +3379,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // the PipelineResult and we return early — bypassing the general
     // single-pass encode body below.
     //
-    // Gated to clean cases only: no user palette, no locks/reserves/
-    // pins, no transparency. These features touch palette generation
-    // in ways the trial closure doesn't replicate; the user's setup
-    // already constrains those to specific slots so a sweep won't
-    // help anyway.
+    // Gated to plain-mode cases. Reserves and transparency now flow
+    // through to pop search via the locked_mask / tmask plumbing.
+    // Locks (--lock-index) are still excluded — they imply an
+    // already-frozen palette which a search wouldn't help. User
+    // palettes and pins likewise.
     bool lores_plain_best_eligible =
         options.best &&
         (mode == amiga::Mode::lores ||
@@ -3391,8 +3391,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
          mode == amiga::Mode::hires ||
          mode == amiga::Mode::hires_interlace) &&
         !options.copper && !options.scap && !options.dual_playfield &&
-        !has_user_palette(options) && !has_transparency &&
-        options.locks.empty() && options.reserves.empty() &&
+        !has_user_palette(options) &&
+        options.locks.empty() &&
         options.pins.empty();
     if (lores_plain_best_eligible) {
         // Both --best and the non-best plain auto branch route through
@@ -3424,7 +3424,58 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             pso.generations   = 40;
             pso.stale_limit   = 10;
             pso.on_progress   = options.on_progress;
-            // No external seed — internal k-means handles diversity.
+
+            // When reserves or transparency are present, run
+            // encode_plain_auto once at diversity=0 to produce a
+            // properly-assembled seed palette (reserves slotted in
+            // at their fixed positions, slot 0 black if transparent).
+            // Pop search then refines around that — locked_mask
+            // freezes the reserved slots, tmask masks transparent
+            // pixels from dither + score.
+            // Out-of-range --reserve-range entries (e.g. range 5-7 at
+            // d=2 where max_colors=4) are silently dropped by
+            // validate_reserves, so a non-empty options.reserves
+            // doesn't always mean a reserve will land in the palette.
+            // Only build the encode_plain_auto seed when at least
+            // one reserve will actually take effect — otherwise the
+            // standard internal k-means seeding gives a tighter
+            // starting palette (matters at d=2 where the search
+            // space is tiny).
+            std::size_t reserves_in_pal = 0;
+            for (auto& r : options.reserves) {
+                if (r.index >= 0 &&
+                    static_cast<std::size_t>(r.index) < max_colors)
+                    ++reserves_in_pal;
+            }
+            const bool has_reserves_in_call = reserves_in_pal > 0;
+            std::vector<bool> seed_locked_mask;
+            if (has_reserves_in_call || has_transparency) {
+                auto seed_trial = encode_plain_auto(
+                    *image, depth, max_colors, mode, chipset,
+                    base_dith, /*palette_diversity=*/0,
+                    options.refine_iterations,
+                    options.lock_color0, has_transparency,
+                    /*use_dpf=*/false,
+                    /*match_range=*/options.match_range,
+                    options.locks, options.reserves, options.pins, tmask);
+                if (seed_trial) {
+                    Palette seed_pal;
+                    seed_pal.name   = "pop-seed";
+                    seed_pal.colors = std::vector<Color3f>(
+                        seed_trial->pal.colors.begin(),
+                        seed_trial->pal.colors.begin() +
+                            static_cast<std::ptrdiff_t>(seed_trial->pal_size));
+                    pso.seed_palettes.push_back(std::move(seed_pal));
+                    seed_locked_mask = std::move(seed_trial->locked_mask);
+                    if (seed_locked_mask.size() < max_colors)
+                        seed_locked_mask.resize(max_colors, false);
+                    if (has_transparency && !seed_locked_mask.empty())
+                        seed_locked_mask[0] = true;
+                    pso.locked_mask = seed_locked_mask;
+                }
+                if (has_transparency) pso.tmask = tmask;
+            }
+
             auto pop = palette_search::run_population_search(
                 *image, static_cast<int>(depth), max_colors,
                 mode, chipset, base_dith, options.lock_color0, pso);
@@ -3442,7 +3493,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     result.interlace = options.interlace;
                     result.dpf       = false;
                     result.aga       = is_aga;
-                    result.has_transparency = false;
+                    result.has_transparency = has_transparency;
+                    result.transparency_mask = tmask;
                     result.finalize_psnr(*image, pop->total_error);
                     return result;
                 }

@@ -44,16 +44,34 @@ void snap_palette_ocs(std::vector<Color3f>& pal) {
     for (auto& c : pal) c = snap_color_ocs(c);
 }
 
-void mutate(std::vector<Color3f>& pal, std::mt19937& rng, bool lock_color0) {
-    if (pal.size() <= (lock_color0 ? 1u : 0u)) return;
+// Mutate non-locked slots in `pal`. `locked` (if non-empty) flags
+// slots that must not change; lock_color0 implicitly locks slot 0
+// when locked is empty. Slots flagged as locked stay at their input
+// colour after this call.
+void mutate(std::vector<Color3f>& pal, std::mt19937& rng,
+            bool lock_color0,
+            const std::vector<bool>& locked = {}) {
+    if (pal.empty()) return;
+    auto is_locked = [&](std::size_t k) {
+        if (!locked.empty() && k < locked.size() && locked[k]) return true;
+        if (lock_color0 && k == 0) return true;
+        return false;
+    };
+    // Build the list of mutable slots once — significantly faster than
+    // rejection-sampling when many slots are locked (e.g. d=4 with 4
+    // reserves leaves only 12 mutable slots).
+    std::vector<std::size_t> free_slots;
+    free_slots.reserve(pal.size());
+    for (std::size_t k = 0; k < pal.size(); ++k)
+        if (!is_locked(k)) free_slots.push_back(k);
+    if (free_slots.empty()) return;
     std::uniform_int_distribution<int> count_dist(1, 2);
-    std::size_t lo = lock_color0 ? 1u : 0u;
-    std::uniform_int_distribution<std::size_t> slot_dist(lo, pal.size() - 1);
+    std::uniform_int_distribution<std::size_t> slot_dist(0, free_slots.size() - 1);
     std::uniform_real_distribution<float> dL(-0.08f, 0.08f);
     std::uniform_real_distribution<float> dab(-0.04f, 0.04f);
     int n_mutations = count_dist(rng);
     for (int i = 0; i < n_mutations; ++i) {
-        std::size_t k = slot_dist(rng);
+        std::size_t k = free_slots[slot_dist(rng)];
         auto lab = color_space::linear_to_oklab(pal[k]);
         lab.L = std::clamp(lab.L + dL(rng), 0.0f, 1.0f);
         lab.a = std::clamp(lab.a + dab(rng), -0.4f, 0.4f);
@@ -62,35 +80,106 @@ void mutate(std::vector<Color3f>& pal, std::mt19937& rng, bool lock_color0) {
     }
 }
 
+// Crossover that preserves locked slots from parent A. lock_color0
+// implicitly forces slot 0 to black (matches encode_plain_auto's
+// behaviour when transparent or non-Atari).
 std::vector<Color3f> crossover(const std::vector<Color3f>& a,
                                const std::vector<Color3f>& b,
                                std::mt19937& rng,
-                               bool lock_color0) {
+                               bool lock_color0,
+                               const std::vector<bool>& locked = {}) {
     std::vector<Color3f> child(a.size());
     if (child.empty()) return child;
     if (lock_color0) child[0] = Color3f{0, 0, 0};
     std::uniform_int_distribution<int> coin(0, 1);
-    std::size_t start = lock_color0 ? 1u : 0u;
-    for (std::size_t k = start; k < a.size(); ++k) {
-        child[k] = (coin(rng) != 0) ? a[k] : b[k];
+    for (std::size_t k = 0; k < a.size(); ++k) {
+        bool is_locked = (!locked.empty() && k < locked.size() && locked[k])
+                         || (lock_color0 && k == 0);
+        if (is_locked) {
+            // Use parent A's value (caller seeds A's locked slots
+            // with the user-supplied reserve colour; B may have
+            // different values from earlier mutations on a different
+            // path, but we standardise on A so the output is stable).
+            child[k] = a[k];
+        } else {
+            child[k] = (coin(rng) != 0) ? a[k] : b[k];
+        }
     }
     return child;
 }
 
-// `palette` here is the FULL effective palette (e.g. 64 entries for
-// EHB after expansion); the candidate's 32 base colours are expanded
-// upstream by run_population_search when ehb_expand is set.
+// Fitness with optional reserves + transparency support. When
+// `locked_mask` flags slots that the dither pass must not pick (the
+// reserve colours encode_plain_auto excludes from the candidate
+// pool), we build a sub-palette of free slots, dither against it,
+// then remap indices. When `tmask` is non-empty, transparent pixels
+// get index 0 post-dither and contribute neither to the dither
+// candidate set nor to the SSIMULACRA2 score (rendered + source
+// both forced to black at those pixels — same shape as the
+// upstream encode_plain_auto).
 float cpu_fitness(const Image& source,
                   std::span<const Color3f> palette,
-                  const dither::Settings& dith) {
-    auto dr = dither::apply(source, palette, dith);
-    Image rendered(source.width(), source.height());
+                  const dither::Settings& dith,
+                  const std::vector<bool>& locked_mask = {},
+                  const std::vector<bool>& tmask = {}) {
+    const std::size_t W = source.width();
+    const std::size_t H = source.height();
+    const bool has_reserves =
+        std::any_of(locked_mask.begin(), locked_mask.end(),
+                    [](bool b) { return b; });
+    const bool has_trans = !tmask.empty();
+
+    dither::DitherResult dr;
+    if (has_reserves || has_trans) {
+        // Build candidate sub-palette excluding locked + (when
+        // transparent) slot 0.
+        std::vector<Color3f>      cand_pal;
+        std::vector<std::uint8_t> cand_to_full;
+        cand_pal.reserve(palette.size());
+        cand_to_full.reserve(palette.size());
+        for (std::size_t i = 0; i < palette.size(); ++i) {
+            if (has_trans && i == 0) continue;
+            if (i < locked_mask.size() && locked_mask[i]) continue;
+            cand_pal.push_back(palette[i]);
+            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+        }
+        if (cand_pal.empty()) cand_pal.push_back(Color3f{0, 0, 0});
+        dr = dither::apply(source,
+            std::span<const Color3f>(cand_pal.data(), cand_pal.size()), dith);
+        for (auto& idx : dr.indices) idx = cand_to_full[idx];
+        if (has_trans) {
+            for (std::size_t i = 0;
+                 i < tmask.size() && i < dr.indices.size(); ++i)
+                if (tmask[i]) dr.indices[i] = 0;
+        }
+    } else {
+        dr = dither::apply(source, palette, dith);
+    }
+
+    Image rendered(W, H);
     auto px = rendered.pixels();
     for (std::size_t i = 0; i < px.size(); ++i) {
         px[i] = palette[dr.indices[i]];
     }
-    return ssimulacra2::compute(source.pixels(), rendered.pixels(),
-                                 source.width(), source.height());
+    if (has_trans) {
+        // Score against the source with transparent pixels masked to
+        // black on both sides, so SSIMULACRA2 doesn't penalise the
+        // (ignored) transparent regions.
+        Image src_masked(W, H);
+        auto src_px = src_masked.pixels();
+        auto orig_px = source.pixels();
+        for (std::size_t i = 0; i < src_px.size(); ++i) {
+            if (i < tmask.size() && tmask[i]) {
+                src_px[i] = Color3f{0, 0, 0};
+                px[i] = Color3f{0, 0, 0};
+            } else {
+                src_px[i] = orig_px[i];
+            }
+        }
+        return ssimulacra2::compute(src_masked.pixels(), rendered.pixels(),
+                                     W, H);
+    }
+    return ssimulacra2::compute(source.pixels(), rendered.pixels(), W, H);
 }
 
 } // namespace
@@ -118,44 +207,87 @@ Result<PopSearchResult> run_population_search(
                                       "pop search applies to d ∈ [1,5]"}};
     }
 
+    // Capture lock + transparency context. When the caller supplies
+    // a fully-assembled seed palette (encode_plain_auto's output —
+    // already has reserves at their fixed slots), we use it verbatim
+    // and only mutate the non-locked slots. When no seed is supplied,
+    // we fall back to the internal k-means seeding which doesn't
+    // know about reserves; gate that case on the locked_mask being
+    // empty.
+    const auto& locked_mask = opts.locked_mask;
+    const bool  has_locked  =
+        std::any_of(locked_mask.begin(), locked_mask.end(),
+                    [](bool b) { return b; });
+
+    auto enforce_locks = [&](std::vector<Color3f>& p,
+                              const std::vector<Color3f>* lock_src) {
+        // Restore locked-slot colours from the seed (or an explicit
+        // template). Called after any mutation that might have
+        // touched a locked slot via the rng.
+        for (std::size_t k = 0; k < p.size() && k < locked_mask.size(); ++k) {
+            if (locked_mask[k] && lock_src && k < lock_src->size())
+                p[k] = (*lock_src)[k];
+        }
+    };
+
     auto add_pal = [&](std::vector<Color3f> p,
                        std::vector<std::vector<Color3f>>& pop) {
         if (p.size() > max_colors) p.resize(max_colors);
         while (p.size() < max_colors) p.push_back(Color3f{0, 0, 0});
         snap_palette_ocs(p);
         if (lock_color0) p[0] = Color3f{0, 0, 0};
+        // The locked-slot enforcement happens via enforce_locks at
+        // the call site, since we need a `lock_src` reference here.
         pop.push_back(std::move(p));
     };
 
     std::vector<std::vector<Color3f>> population;
     population.reserve(static_cast<std::size_t>(opts.pop_size));
 
-    // Caller-provided seed palettes (e.g. --best winner).
+    // Caller-provided seed palettes (e.g. --best winner). When the
+    // caller threaded reserves through, the first seed already has
+    // them slotted in.
     for (const auto& sp : opts.seed_palettes) add_pal(sp.colors, population);
 
-    // K-means seeds across diversity values.
-    int n_kmeans = std::max(4, opts.pop_size / 8);
-    for (int s = 0; s < n_kmeans; ++s) {
-        int diversity = 1 + (s % 5);
-        auto q = quantize::quantize(source, max_colors,
-                                     quantize::Algorithm::ocs_bruteforce,
-                                     diversity);
-        if (q) add_pal(std::move(q->colors), population);
+    // Internal k-means seeding. SKIPPED when the caller has reserves
+    // — the k-means path doesn't know about reserve slots and would
+    // produce candidates that violate them. Caller-supplied seed
+    // (the only entry above) becomes the basin we mutate around.
+    if (!has_locked) {
+        int n_kmeans = std::max(4, opts.pop_size / 8);
+        for (int s = 0; s < n_kmeans; ++s) {
+            int diversity = 1 + (s % 5);
+            auto q = quantize::quantize(source, max_colors,
+                                         quantize::Algorithm::ocs_bruteforce,
+                                         diversity);
+            if (q) add_pal(std::move(q->colors), population);
+        }
     }
     if (population.empty()) {
         return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                                      "k-means seeding failed"}};
+                                      "no seeds available — caller must "
+                                      "supply seed_palettes when reserves "
+                                      "are present"}};
     }
 
-    // Fill remainder with mutated copies of the first seed.
+    // Fill remainder with mutated copies of the first seed. Each
+    // mutation respects locked_mask (skips reserved slots) and
+    // reapplies the seed's locked colours via enforce_locks in case
+    // of any drift.
     auto seed0 = population[0];
     std::mt19937 rng(0xa5a5);
     while (population.size() < static_cast<std::size_t>(opts.pop_size)) {
         auto p = seed0;
-        for (std::size_t k = (lock_color0 ? 1u : 0u); k < p.size(); ++k)
-            mutate(p, rng, lock_color0);
+        for (std::size_t k = 0; k < p.size(); ++k)
+            mutate(p, rng, lock_color0, locked_mask);
+        enforce_locks(p, &seed0);
         add_pal(std::move(p), population);
     }
+    // The first candidate is the unmutated seed itself — pop[0] is
+    // population[0] verbatim from above. Make sure its locked slots
+    // are also enforced (they should be, since seed0 came from the
+    // caller; this is just a safety belt against the snap step).
+    enforce_locks(population[0], &seed0);
 
     std::vector<float> scores(population.size(), 0.0f);
     // Score-cache mask: when a candidate carries over unchanged from
@@ -171,10 +303,12 @@ Result<PopSearchResult> run_population_search(
                 // (cheap: half_brite is a per-channel ×0.5 in sRGB).
                 auto full = palette::make_ehb_palette(population[i]);
                 scores[i] = cpu_fitness(source,
-                    std::span<const Color3f>(full.colors), dith);
+                    std::span<const Color3f>(full.colors), dith,
+                    opts.locked_mask, opts.tmask);
             } else {
                 scores[i] = cpu_fitness(source,
-                    std::span<const Color3f>(population[i]), dith);
+                    std::span<const Color3f>(population[i]), dith,
+                    opts.locked_mask, opts.tmask);
             }
         });
     };
@@ -222,14 +356,17 @@ Result<PopSearchResult> run_population_search(
             if (role < 2) {
                 auto& a = new_pop[static_cast<std::size_t>(parent_pick(rng))];
                 auto& b = new_pop[static_cast<std::size_t>(parent_pick(rng))];
-                auto child = crossover(a, b, rng, lock_color0);
+                auto child = crossover(a, b, rng, lock_color0, locked_mask);
                 snap_palette_ocs(child);
-                mutate(child, rng, lock_color0);
+                mutate(child, rng, lock_color0, locked_mask);
+                enforce_locks(child, &seed0);
                 new_pop.push_back(std::move(child));
             } else {
                 auto child =
                     new_pop[static_cast<std::size_t>(parent_pick(rng))];
-                for (int m = 0; m < 3; ++m) mutate(child, rng, lock_color0);
+                for (int m = 0; m < 3; ++m)
+                    mutate(child, rng, lock_color0, locked_mask);
+                enforce_locks(child, &seed0);
                 new_pop.push_back(std::move(child));
             }
             new_scores.push_back(0.0f);  // placeholder, will be filled
@@ -259,6 +396,11 @@ Result<PopSearchResult> run_population_search(
     // address into the 64-entry expanded palette; the returned
     // PopSearchResult.palette holds the BASE 32 (caller will re-
     // expand for storage / IFF CMAP / etc.).
+    //
+    // When reserves or transparency are present, build the dither
+    // candidate sub-palette (excluding locked + transparent-zero
+    // slots), dither against it, and remap indices to the full
+    // palette — same pattern as encode_plain_auto.
     auto& pal_vec = population[winner];
     Palette ehb_full;
     std::span<const Color3f> dither_pal = pal_vec;
@@ -266,7 +408,35 @@ Result<PopSearchResult> run_population_search(
         ehb_full   = palette::make_ehb_palette(pal_vec);
         dither_pal = std::span<const Color3f>(ehb_full.colors);
     }
-    auto dr = dither::apply(source, dither_pal, dith);
+    const bool has_reserves =
+        std::any_of(opts.locked_mask.begin(), opts.locked_mask.end(),
+                    [](bool b) { return b; });
+    const bool has_trans = !opts.tmask.empty();
+
+    dither::DitherResult dr;
+    if (has_reserves || has_trans) {
+        std::vector<Color3f>      cand_pal;
+        std::vector<std::uint8_t> cand_to_full;
+        cand_pal.reserve(dither_pal.size());
+        cand_to_full.reserve(dither_pal.size());
+        for (std::size_t i = 0; i < dither_pal.size(); ++i) {
+            if (has_trans && i == 0) continue;
+            if (i < opts.locked_mask.size() && opts.locked_mask[i]) continue;
+            cand_pal.push_back(dither_pal[i]);
+            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+        }
+        if (cand_pal.empty()) cand_pal.push_back(Color3f{0, 0, 0});
+        dr = dither::apply(source,
+            std::span<const Color3f>(cand_pal.data(), cand_pal.size()), dith);
+        for (auto& idx : dr.indices) idx = cand_to_full[idx];
+        if (has_trans) {
+            for (std::size_t i = 0;
+                 i < opts.tmask.size() && i < dr.indices.size(); ++i)
+                if (opts.tmask[i]) dr.indices[i] = 0;
+        }
+    } else {
+        dr = dither::apply(source, dither_pal, dith);
+    }
     Image rendered(source.width(), source.height());
     {
         auto px = rendered.pixels();
