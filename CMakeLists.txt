@@ -159,6 +159,18 @@ else()
         src
         ${CMAKE_BINARY_DIR}/generated)
     target_compile_options(bench_ssimulacra2 PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+    # Profilers (AMD uProf on Windows, perf/Instruments on Linux/macOS)
+    # need debug info to attribute samples to function names. MSVC
+    # Release default omits PDB; force /Zi (compile) + /DEBUG /OPT:REF
+    # /OPT:ICF (link) so the bench builds with PDB without losing the
+    # /O2 optimisations. Same idea on gcc/clang via -g (already in
+    # RelWithDebInfo, but Release alone strips it).
+    if(MSVC)
+        target_compile_options(bench_ssimulacra2 PRIVATE /Zi)
+        target_link_options(bench_ssimulacra2    PRIVATE /DEBUG /OPT:REF /OPT:ICF)
+    else()
+        target_compile_options(bench_ssimulacra2 PRIVATE -g)
+    endif()
     # Include quantize_metal.cpp here too when there's no Metal —
     # it provides the C-stub symbols (false / std::unexpected) that
     # quantize_metal_wrap.cpp links against. The Metal-enabled
