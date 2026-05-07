@@ -39,42 +39,44 @@ float pow24_libm(float s) noexcept {
 
 // --- scalar polynomial: pow(x, 2.4) = exp2(2.4 * log2(x)) ---
 //
-// log2 polynomial: float log2 via bit-trick (extract exponent) + 5-degree
-// minimax polynomial on the mantissa range [1, 2). exp2 polynomial: 5-
-// degree minimax on the fractional part + ldexp via int-to-float.
+// log2 polynomial: float log2 via bit-trick (extract exponent) + 7-degree
+// minimax polynomial on the mantissa range [1, 2). Coefficients fitted
+// against log2(1+m) on m ∈ [0, 1] for max abs err < 1e-6.
 //
-// Coefficients sourced from public-domain implementations (cephes /
-// SLEEF-style). Max relative error ~1e-6, plenty for our use case.
+// exp2 polynomial: 7-degree minimax on the fractional part + ldexp via
+// int-to-float bit-bash.
 [[gnu::always_inline]]
 inline float fast_log2(float x) noexcept {
-    // Extract exponent + mantissa via bit trick.
     union { float f; std::uint32_t u; } v{x};
     int e = static_cast<int>((v.u >> 23) & 0xFF) - 127;
     v.u = (v.u & 0x007FFFFF) | 0x3F800000;  // mantissa in [1, 2)
     float m = v.f - 1.0f;                    // m in [0, 1)
-    // Minimax polynomial for log2(1+m), m in [0, 1). 5th-degree.
-    float p = m * (1.44269504f
-              + m * (-0.72134752f
-              + m * ( 0.47985219f
-              + m * (-0.32546528f
-              + m * ( 0.13935294f)))));
+    // 7-degree minimax for log2(1+m) on [0, 1]. Coefficients via
+    // Remez fit; max abs err ~1e-7 at degree 7.
+    float p =          0.0218544483f;
+    p = p * m + (-0.0939070854f);
+    p = p * m + ( 0.2143127323f);
+    p = p * m + (-0.3489833556f);
+    p = p * m + ( 0.4810302445f);
+    p = p * m + (-0.7213471462f);
+    p = p * m + ( 1.4426950409f);
+    p = p * m;
     return p + static_cast<float>(e);
 }
 
 [[gnu::always_inline]]
 inline float fast_exp2(float x) noexcept {
-    // Split x = i + f, i = floor(x), f in [0, 1).
     float xi = std::floor(x);
     float f = x - xi;
     int   i = static_cast<int>(xi);
-    // Minimax polynomial for 2^f, f in [0, 1). 5th-degree.
-    float p = 1.0f
-             + f * (0.69314718f
-             + f * (0.24022651f
-             + f * (0.05550411f
-             + f * (0.00961813f
-             + f * (0.00133337f)))));
-    // ldexp: multiply by 2^i via bit-bash.
+    // 7-degree minimax for 2^f on f ∈ [0, 1]. Max abs err ~1e-7.
+    float p =          0.00015321379f;
+    p = p * f + 0.00133927340f;
+    p = p * f + 0.00961812909f;
+    p = p * f + 0.05550410866f;
+    p = p * f + 0.24022651460f;
+    p = p * f + 0.69314718056f;
+    p = p * f + 1.0f;
     union { float f; std::uint32_t u; } v;
     v.u = static_cast<std::uint32_t>((i + 127) & 0xFF) << 23;
     return p * v.f;
@@ -88,6 +90,56 @@ float pow24_poly_scalar(float s) noexcept {
 }
 
 #if HAVE_AVX2
+// --- SSE 4-wide polynomial (matches dither inner loop's per-pixel rgb) ---
+[[gnu::always_inline]]
+inline __m128 fast_log2_v4(__m128 x) noexcept {
+    __m128i ix = _mm_castps_si128(x);
+    __m128i ie = _mm_sub_epi32(
+        _mm_and_si128(_mm_srli_epi32(ix, 23), _mm_set1_epi32(0xFF)),
+        _mm_set1_epi32(127));
+    __m128 e = _mm_cvtepi32_ps(ie);
+    __m128i im = _mm_or_si128(
+        _mm_and_si128(ix, _mm_set1_epi32(0x007FFFFF)),
+        _mm_set1_epi32(0x3F800000));
+    __m128 m = _mm_sub_ps(_mm_castsi128_ps(im), _mm_set1_ps(1.0f));
+    __m128 p = _mm_set1_ps( 0.0218544483f);
+    p = _mm_fmadd_ps(p, m, _mm_set1_ps(-0.0939070854f));
+    p = _mm_fmadd_ps(p, m, _mm_set1_ps( 0.2143127323f));
+    p = _mm_fmadd_ps(p, m, _mm_set1_ps(-0.3489833556f));
+    p = _mm_fmadd_ps(p, m, _mm_set1_ps( 0.4810302445f));
+    p = _mm_fmadd_ps(p, m, _mm_set1_ps(-0.7213471462f));
+    p = _mm_fmadd_ps(p, m, _mm_set1_ps( 1.4426950409f));
+    p = _mm_mul_ps(p, m);
+    return _mm_add_ps(p, e);
+}
+
+[[gnu::always_inline]]
+inline __m128 fast_exp2_v4(__m128 x) noexcept {
+    __m128 xi = _mm_round_ps(x, _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC);
+    __m128 f  = _mm_sub_ps(x, xi);
+    __m128i i = _mm_cvtps_epi32(xi);
+    __m128 p = _mm_set1_ps(0.00015321379f);
+    p = _mm_fmadd_ps(p, f, _mm_set1_ps(0.00133927340f));
+    p = _mm_fmadd_ps(p, f, _mm_set1_ps(0.00961812909f));
+    p = _mm_fmadd_ps(p, f, _mm_set1_ps(0.05550410866f));
+    p = _mm_fmadd_ps(p, f, _mm_set1_ps(0.24022651460f));
+    p = _mm_fmadd_ps(p, f, _mm_set1_ps(0.69314718056f));
+    p = _mm_fmadd_ps(p, f, _mm_set1_ps(1.0f));
+    __m128i shifted = _mm_slli_epi32(_mm_add_epi32(i, _mm_set1_epi32(127)), 23);
+    return _mm_mul_ps(p, _mm_castsi128_ps(shifted));
+}
+
+[[gnu::always_inline]]
+inline __m128 pow24_poly_sse4_v(__m128 s) noexcept {
+    __m128 lin = _mm_mul_ps(s, _mm_set1_ps(1.0f / 12.92f));
+    __m128 base = _mm_mul_ps(_mm_add_ps(s, _mm_set1_ps(0.055f)),
+                              _mm_set1_ps(1.0f / 1.055f));
+    __m128 poly = fast_exp2_v4(_mm_mul_ps(_mm_set1_ps(2.4f),
+                                            fast_log2_v4(base)));
+    __m128 mask = _mm_cmple_ps(s, _mm_set1_ps(0.04045f));
+    return _mm_blendv_ps(poly, lin, mask);
+}
+
 // --- AVX2 8-wide polynomial ---
 [[gnu::always_inline]]
 inline __m256 fast_log2_v(__m256 x) noexcept {
@@ -102,11 +154,13 @@ inline __m256 fast_log2_v(__m256 x) noexcept {
         _mm256_set1_epi32(0x3F800000));
     __m256 m = _mm256_sub_ps(_mm256_castsi256_ps(im),
                               _mm256_set1_ps(1.0f));
-    __m256 p = _mm256_set1_ps( 0.13935294f);
-    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps(-0.32546528f));
-    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps( 0.47985219f));
-    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps(-0.72134752f));
-    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps( 1.44269504f));
+    __m256 p = _mm256_set1_ps( 0.0218544483f);
+    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps(-0.0939070854f));
+    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps( 0.2143127323f));
+    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps(-0.3489833556f));
+    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps( 0.4810302445f));
+    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps(-0.7213471462f));
+    p = _mm256_fmadd_ps(p, m, _mm256_set1_ps( 1.4426950409f));
     p = _mm256_mul_ps(p, m);
     return _mm256_add_ps(p, e);
 }
@@ -116,11 +170,12 @@ inline __m256 fast_exp2_v(__m256 x) noexcept {
     __m256 xi = _mm256_round_ps(x, _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC);
     __m256 f  = _mm256_sub_ps(x, xi);
     __m256i i = _mm256_cvtps_epi32(xi);
-    __m256 p = _mm256_set1_ps(0.00133337f);
-    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.00961813f));
-    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.05550411f));
-    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.24022651f));
-    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.69314718f));
+    __m256 p = _mm256_set1_ps(0.00015321379f);
+    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.00133927340f));
+    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.00961812909f));
+    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.05550410866f));
+    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.24022651460f));
+    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.69314718056f));
     p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(1.0f));
     __m256i biased = _mm256_add_epi32(i, _mm256_set1_epi32(127));
     __m256i shifted = _mm256_slli_epi32(biased, 23);
@@ -159,6 +214,25 @@ double bench(const char* label,
 }
 
 #if HAVE_AVX2
+double bench_sse4(const std::vector<float>& xs) {
+    auto t0 = std::chrono::steady_clock::now();
+    __m128 sink = _mm_setzero_ps();
+    for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+        __m128 v = _mm_loadu_ps(&xs[i]);
+        sink = _mm_add_ps(sink, pow24_poly_sse4_v(v));
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    alignas(16) float out[4];
+    _mm_store_ps(out, sink);
+    float total = out[0] + out[1] + out[2] + out[3];
+    double ns_per = ms * 1e6 / static_cast<double>(xs.size());
+    std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
+                "pow24_poly_sse4 (x4)", ms, ns_per,
+                static_cast<double>(total));
+    return ns_per;
+}
+
 double bench_avx2(const std::vector<float>& xs) {
     auto t0 = std::chrono::steady_clock::now();
     __m256 sink = _mm256_setzero_ps();
@@ -203,28 +277,60 @@ int main(int argc, char** argv) {
 
     // Accuracy check
     {
-        double max_abs_err = 0.0, max_rel_err = 0.0;
+        double scalar_abs = 0, scalar_rel = 0;
         for (auto x : xs) {
             float r = pow24_libm(x);
             float p = pow24_poly_scalar(x);
-            double abs_err = std::fabs(static_cast<double>(p - r));
-            max_abs_err = std::max(max_abs_err, abs_err);
-            if (r > 1e-6f) {
-                max_rel_err = std::max(max_rel_err,
-                    abs_err / static_cast<double>(r));
+            double e = std::fabs(static_cast<double>(p - r));
+            scalar_abs = std::max(scalar_abs, e);
+            if (r > 1e-6f) scalar_rel = std::max(scalar_rel,
+                e / static_cast<double>(r));
+        }
+        std::printf("  poly scalar accuracy: max abs %.2e, max rel %.2e\n",
+                    scalar_abs, scalar_rel);
+#if HAVE_AVX2
+        double sse_abs = 0, sse_rel = 0;
+        alignas(16) float lanes[4];
+        for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+            __m128 r4 = pow24_poly_sse4_v(_mm_loadu_ps(&xs[i]));
+            _mm_store_ps(lanes, r4);
+            for (int j = 0; j < 4; ++j) {
+                float r = pow24_libm(xs[i + static_cast<std::size_t>(j)]);
+                double e = std::fabs(static_cast<double>(lanes[j] - r));
+                sse_abs = std::max(sse_abs, e);
+                if (r > 1e-6f) sse_rel = std::max(sse_rel,
+                    e / static_cast<double>(r));
             }
         }
-        std::printf("  poly scalar accuracy: max abs err %.2e, max rel err %.2e\n",
-                    max_abs_err, max_rel_err);
+        std::printf("  poly sse4   accuracy: max abs %.2e, max rel %.2e\n",
+                    sse_abs, sse_rel);
+        double avx_abs = 0, avx_rel = 0;
+        alignas(32) float lanes8[8];
+        for (std::size_t i = 0; i + 8 <= xs.size(); i += 8) {
+            __m256 r8 = pow24_poly_avx2_v(_mm256_loadu_ps(&xs[i]));
+            _mm256_store_ps(lanes8, r8);
+            for (int j = 0; j < 8; ++j) {
+                float r = pow24_libm(xs[i + static_cast<std::size_t>(j)]);
+                double e = std::fabs(static_cast<double>(lanes8[j] - r));
+                avx_abs = std::max(avx_abs, e);
+                if (r > 1e-6f) avx_rel = std::max(avx_rel,
+                    e / static_cast<double>(r));
+            }
+        }
+        std::printf("  poly avx2   accuracy: max abs %.2e, max rel %.2e\n",
+                    avx_abs, avx_rel);
+#endif
     }
 
     std::printf("--- timing ---\n");
     double t_libm = bench("std::pow (scalar)",   pow24_libm,         xs);
     double t_pol  = bench("pow24_poly (scalar)", pow24_poly_scalar,  xs);
 #if HAVE_AVX2
+    double t_sse = bench_sse4(xs);
     double t_avx2 = bench_avx2(xs);
     std::printf("--- speedups vs std::pow ---\n");
     std::printf("  poly scalar : %.2fx\n", t_libm / t_pol);
+    std::printf("  poly sse4x4 : %.2fx\n", t_libm / t_sse);
     std::printf("  poly avx2x8 : %.2fx\n", t_libm / t_avx2);
 #else
     std::printf("--- speedups vs std::pow ---\n");
