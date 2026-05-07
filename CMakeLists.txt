@@ -148,6 +148,25 @@ else()
     target_link_libraries(api_pipeline_smoke PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
     target_compile_options(api_pipeline_smoke PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
+    # palette_search: experimental population-based palette search for
+    # small palettes (lores OCS d ≤ 4). --best does k-means + 161
+    # jittered restarts which rarely escapes basins at d=2/3 (sparse
+    # 4-colour / 8-colour palette space over the 4096-colour OCS gamut).
+    # This evolutionary search seeds from k-means + heavy perturbations
+    # and runs 256-pop × 40-gen with crossover + mutation, ranked by
+    # SSIMULACRA2. Standalone harness so we can sweep before deciding
+    # whether to integrate as a CLI flag.
+    add_executable(palette_search
+        tools/palette_search.cpp
+        ${PNG2AMIGA_CORE_SOURCES}
+    )
+    target_include_directories(palette_search PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(palette_search PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
+    target_compile_options(palette_search PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+
     # bench_ssimulacra2: standalone microbench for the SSIMULACRA2
     # metric. Used to drive AMD uProf / Apple Instruments profiling so
     # we know which kernel inside ssimulacra2.cpp dominates wall time.
@@ -279,6 +298,7 @@ else()
         # bool/int stubs that quantize_metal_wrap.cpp links against.
         target_sources(png2amiga PRIVATE src/quantize_metal.cpp)
         target_sources(api_pipeline_smoke PRIVATE src/quantize_metal.cpp)
+        target_sources(palette_search PRIVATE src/quantize_metal.cpp)
     endif()
 
     if(PNG2AMIGA_HAVE_METAL)
@@ -368,6 +388,16 @@ else()
         add_dependencies(api_pipeline_smoke quantize_metal_obj)
         target_link_libraries(api_pipeline_smoke PRIVATE ${_metal_cpp_obj})
         target_link_libraries(api_pipeline_smoke PRIVATE -lc++ -lc++abi)
+
+        # palette_search uses the same core sources (quantize::quantize
+        # → ocs_bruteforce → maybe gpu_restart on Metal-enabled). Same
+        # link recipe.
+        target_compile_definitions(palette_search PRIVATE PNG2AMIGA_HAVE_METAL=1)
+        target_link_libraries(palette_search PRIVATE
+            "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+        add_dependencies(palette_search quantize_metal_obj)
+        target_link_libraries(palette_search PRIVATE ${_metal_cpp_obj})
+        target_link_libraries(palette_search PRIVATE -lc++ -lc++abi)
     endif()
 
     enable_testing()
