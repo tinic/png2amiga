@@ -452,6 +452,13 @@ constexpr float kC2 = 0.0009f;
 // Returns {1-norm, 4-norm} aggregated over the plane.
 struct AvgPair { double mean1; double mean4; };
 
+// Hand-SIMD (8-lane AVX2 / 4-lane NEON / 4-lane WASM SIMD).
+// fp64 accumulators kept for sum precision (68k pixels × values up to
+// 1.0 lose ~3 decimal digits if summed in fp32). The per-pixel `d` is
+// computed in fp32 SIMD, then widened to fp64 for the running sum and
+// the d^4 contribution. Apple uProf showed ssim_plane at 3.59s of
+// 30.65s total CPU on EPYC; the scalar inner loop was MSVC-auto-
+// vectoriser-resistant (fp64 accumulators + max + cast).
 AvgPair ssim_plane(const std::vector<float>& mu1,
                    const std::vector<float>& mu2,
                    const std::vector<float>& s11,
@@ -459,13 +466,63 @@ AvgPair ssim_plane(const std::vector<float>& mu1,
                    const std::vector<float>& s12,
                    std::size_t w, std::size_t h) {
     double inv_n = 1.0 / static_cast<double>(w * h);
+    const std::size_t n = w * h;
+    const float* p_m1 = mu1.data();
+    const float* p_m2 = mu2.data();
+    const float* p_s11 = s11.data();
+    const float* p_s22 = s22.data();
+    const float* p_s12 = s12.data();
     double sum1 = 0.0, sum4 = 0.0;
-    for (std::size_t i = 0; i < w * h; ++i) {
-        float m1 = mu1[i], m2 = mu2[i];
+    std::size_t i = 0;
+#if PNG2AMIGA_BACKEND_AVX2
+    const std::size_t simd_end = n & ~7u;
+    const __m256 v_one = _mm256_set1_ps(1.0f);
+    const __m256 v_two = _mm256_set1_ps(2.0f);
+    const __m256 v_kC2 = _mm256_set1_ps(kC2);
+    const __m256 v_zero = _mm256_setzero_ps();
+    __m256d acc1_lo = _mm256_setzero_pd(), acc1_hi = _mm256_setzero_pd();
+    __m256d acc4_lo = _mm256_setzero_pd(), acc4_hi = _mm256_setzero_pd();
+    for (; i < simd_end; i += 8) {
+        __m256 m1 = _mm256_loadu_ps(p_m1 + i);
+        __m256 m2 = _mm256_loadu_ps(p_m2 + i);
+        __m256 m11 = _mm256_mul_ps(m1, m1);
+        __m256 m22 = _mm256_mul_ps(m2, m2);
+        __m256 m12 = _mm256_mul_ps(m1, m2);
+        __m256 dm  = _mm256_sub_ps(m1, m2);
+        __m256 num_m = _mm256_sub_ps(v_one, _mm256_mul_ps(dm, dm));
+        __m256 num_s = _mm256_add_ps(_mm256_mul_ps(v_two,
+                            _mm256_sub_ps(_mm256_loadu_ps(p_s12 + i), m12)),
+                        v_kC2);
+        __m256 denom_s = _mm256_add_ps(
+            _mm256_add_ps(_mm256_sub_ps(_mm256_loadu_ps(p_s11 + i), m11),
+                          _mm256_sub_ps(_mm256_loadu_ps(p_s22 + i), m22)),
+            v_kC2);
+        __m256 t = _mm256_div_ps(_mm256_mul_ps(num_m, num_s), denom_s);
+        __m256 d = _mm256_max_ps(_mm256_sub_ps(v_one, t), v_zero);
+        // Accumulate sum1 += d, sum4 += d^4 in fp64 to preserve sum precision.
+        __m256d d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(d));
+        __m256d d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(d, 1));
+        acc1_lo = _mm256_add_pd(acc1_lo, d_lo);
+        acc1_hi = _mm256_add_pd(acc1_hi, d_hi);
+        __m256d d2_lo = _mm256_mul_pd(d_lo, d_lo);
+        __m256d d2_hi = _mm256_mul_pd(d_hi, d_hi);
+        acc4_lo = _mm256_add_pd(acc4_lo, _mm256_mul_pd(d2_lo, d2_lo));
+        acc4_hi = _mm256_add_pd(acc4_hi, _mm256_mul_pd(d2_hi, d2_hi));
+    }
+    // Horizontal sum of the two 4-lane fp64 accumulators.
+    alignas(32) double tmp1[4], tmp1h[4], tmp4[4], tmp4h[4];
+    _mm256_store_pd(tmp1, acc1_lo);
+    _mm256_store_pd(tmp1h, acc1_hi);
+    _mm256_store_pd(tmp4, acc4_lo);
+    _mm256_store_pd(tmp4h, acc4_hi);
+    for (int j = 0; j < 4; ++j) { sum1 += tmp1[j] + tmp1h[j]; sum4 += tmp4[j] + tmp4h[j]; }
+#endif
+    for (; i < n; ++i) {
+        float m1 = p_m1[i], m2 = p_m2[i];
         float m11 = m1 * m1, m22 = m2 * m2, m12 = m1 * m2;
         float num_m = 1.0f - (m1 - m2) * (m1 - m2);
-        float num_s = 2.0f * (s12[i] - m12) + kC2;
-        float denom_s = (s11[i] - m11) + (s22[i] - m22) + kC2;
+        float num_s = 2.0f * (p_s12[i] - m12) + kC2;
+        float denom_s = (p_s11[i] - m11) + (p_s22[i] - m22) + kC2;
         double d = 1.0 - static_cast<double>(num_m * num_s / denom_s);
         d = std::max(d, 0.0);
         sum1 += d;
@@ -484,10 +541,63 @@ EdgeDiff edgediff_plane(const std::vector<float>& img1,
                         const std::vector<float>& mu2,
                         std::size_t w, std::size_t h) {
     double inv_n = 1.0 / static_cast<double>(w * h);
+    const std::size_t n = w * h;
+    const float* p_i1 = img1.data();
+    const float* p_m1 = mu1.data();
+    const float* p_i2 = img2.data();
+    const float* p_m2 = mu2.data();
     double r1 = 0, r4 = 0, b1 = 0, b4 = 0;
-    for (std::size_t i = 0; i < w * h; ++i) {
-        double d1 = (1.0 + std::abs(static_cast<double>(img2[i] - mu2[i]))) /
-                    (1.0 + std::abs(static_cast<double>(img1[i] - mu1[i]))) -
+    std::size_t i = 0;
+#if PNG2AMIGA_BACKEND_AVX2
+    const std::size_t simd_end = n & ~7u;
+    const __m256 v_one = _mm256_set1_ps(1.0f);
+    const __m256 v_zero = _mm256_setzero_ps();
+    const __m256 v_abs = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
+    __m256d acc_r1_lo = _mm256_setzero_pd(), acc_r1_hi = _mm256_setzero_pd();
+    __m256d acc_r4_lo = _mm256_setzero_pd(), acc_r4_hi = _mm256_setzero_pd();
+    __m256d acc_b1_lo = _mm256_setzero_pd(), acc_b1_hi = _mm256_setzero_pd();
+    __m256d acc_b4_lo = _mm256_setzero_pd(), acc_b4_hi = _mm256_setzero_pd();
+    for (; i < simd_end; i += 8) {
+        __m256 i1 = _mm256_loadu_ps(p_i1 + i);
+        __m256 m1v = _mm256_loadu_ps(p_m1 + i);
+        __m256 i2 = _mm256_loadu_ps(p_i2 + i);
+        __m256 m2v = _mm256_loadu_ps(p_m2 + i);
+        __m256 a1 = _mm256_and_ps(_mm256_sub_ps(i1, m1v), v_abs);
+        __m256 a2 = _mm256_and_ps(_mm256_sub_ps(i2, m2v), v_abs);
+        // d1 = (1+a2) / (1+a1) - 1 = (a2 - a1) / (1 + a1)
+        __m256 num   = _mm256_sub_ps(a2, a1);
+        __m256 denom = _mm256_add_ps(v_one, a1);
+        __m256 d1 = _mm256_div_ps(num, denom);
+        __m256 art   = _mm256_max_ps(d1, v_zero);
+        __m256 lost  = _mm256_max_ps(_mm256_sub_ps(v_zero, d1), v_zero);
+        // Widen + accumulate.
+        auto wide_acc = [](__m256d& alo, __m256d& ahi, __m256d& a4lo, __m256d& a4hi, __m256 v) {
+            __m256d lo = _mm256_cvtps_pd(_mm256_castps256_ps128(v));
+            __m256d hi = _mm256_cvtps_pd(_mm256_extractf128_ps(v, 1));
+            alo = _mm256_add_pd(alo, lo);
+            ahi = _mm256_add_pd(ahi, hi);
+            __m256d lo2 = _mm256_mul_pd(lo, lo);
+            __m256d hi2 = _mm256_mul_pd(hi, hi);
+            a4lo = _mm256_add_pd(a4lo, _mm256_mul_pd(lo2, lo2));
+            a4hi = _mm256_add_pd(a4hi, _mm256_mul_pd(hi2, hi2));
+        };
+        wide_acc(acc_r1_lo, acc_r1_hi, acc_r4_lo, acc_r4_hi, art);
+        wide_acc(acc_b1_lo, acc_b1_hi, acc_b4_lo, acc_b4_hi, lost);
+    }
+    auto hsum = [](__m256d a, __m256d b) {
+        alignas(32) double t[4], u[4];
+        _mm256_store_pd(t, a);
+        _mm256_store_pd(u, b);
+        return t[0]+t[1]+t[2]+t[3]+u[0]+u[1]+u[2]+u[3];
+    };
+    r1 = hsum(acc_r1_lo, acc_r1_hi);
+    r4 = hsum(acc_r4_lo, acc_r4_hi);
+    b1 = hsum(acc_b1_lo, acc_b1_hi);
+    b4 = hsum(acc_b4_lo, acc_b4_hi);
+#endif
+    for (; i < n; ++i) {
+        double d1 = (1.0 + std::abs(static_cast<double>(p_i2[i] - p_m2[i]))) /
+                    (1.0 + std::abs(static_cast<double>(p_i1[i] - p_m1[i]))) -
                     1.0;
         double artifact = std::max(d1, 0.0);
         r1 += artifact;
