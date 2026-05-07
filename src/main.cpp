@@ -2399,28 +2399,15 @@ api::Options make_api_options(const Config& cfg) {
     opts.white_point = cfg.preprocess.white_point;
     opts.match_range = cfg.match_range;
     opts.dither = std::string{dither_to_options_string(cfg.dither_method)};
-    // Per-mode dither auto-tuning. Inline Amiga branches (HAM, EHB,
-    // plain sliced, plain Amiga fallback) all call dither_tuning::defaults_for
-    // and override dither_strength/error_clamp when the user didn't
-    // pass them explicitly. Migrating any of those branches to
-    // api::encode_state without applying the same tuning here would
-    // silently regress CLI-side defaults. Apply at the bridge so any
-    // downstream encode_state caller gets the same tuned values the
-    // inline branches use.
-    auto tune_ctx = dither_tuning::Context{
-        .mode    = cfg.mode,
-        .depth   = static_cast<int>(cfg.depth),
-        .dpf     = cfg.dual_playfield,
-        .scap    = cfg.scap,
-        .copper  = cfg.copper,
-        .chipset = pipeline::resolve_chipset(cfg.chipset, cfg.mode),
-        .method  = cfg.dither_method,
-    };
-    auto tune = dither_tuning::defaults_for(tune_ctx);
+    // Per-mode dither auto-tuning is the encoder's job (run_pipeline
+    // resolves the -1.0f sentinel via dither_tuning::defaults_for at
+    // entry — single location for the lookup). The CLI passes the
+    // user's explicit value when they used --dither-strength /
+    // --error-clamp, otherwise sentinel so the encoder auto-tunes.
     opts.dither_strength = cfg.dither_strength_explicit
-        ? cfg.dither_strength : tune.strength;
+        ? cfg.dither_strength : -1.0f;
     opts.error_clamp = cfg.error_clamp_explicit
-        ? cfg.error_clamp : tune.error_clamp;
+        ? cfg.error_clamp : -1.0f;
     opts.palette_diversity = cfg.palette_diversity;
     opts.quantizer = cfg.quantizer;
     opts.ham_fast = cfg.ham_fast;

@@ -313,7 +313,11 @@ describe('defaultOptions', () => {
     expect(opts.brightness).toBe(0)
     expect(opts.contrast).toBe(1)
     expect(opts.saturation).toBe(1)
-    expect(opts.errorClamp).toBe(0.35)
+    // -1 sentinel = "auto-tune in the C++ encoder" (api::run_pipeline
+    // resolves via dither_tuning::defaults_for at entry). Web no longer
+    // pre-tunes; defaults sit at sentinel until the encoder runs.
+    expect(opts.errorClamp).toBe(-1)
+    expect(opts.ditherStrength).toBe(-1)
   })
 
   it('seeds the CGA text metric default', () => {

@@ -26,7 +26,7 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw, ditherDefaults } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw } = useWasm()
 
 function onStopEncode(): void {
   abortWasm()
@@ -1066,36 +1066,12 @@ onBeforeUnmount(() => {
   if (crtRenderer) { crtRenderer.dispose(); crtRenderer = null }
 })
 
-// Refresh strength + errorClamp from the C++ tuning table whenever the
-// mode, any context flag (copper/dpf/scap/depth/chipset), OR the dither
-// method itself changes. Method-aware overrides exist for palette-aware
-// methods (opt-checker, knoll, yliluoma, yliluoma2) — picking one of
-// those needs to immediately reset the strength slider to the tuned
-// optimum, not keep the previous F-S-tuned value the user happened to
-// have. The table always wins on context change.
-async function refreshDitherDefaults() {
-  if (wasmLoading.value) return
-  try {
-    const d = await ditherDefaults({
-      mode: options.mode,
-      chipset: options.chipset,
-      depth: options.depth,
-      copper: options.copper,
-      dualPlayfield: options.dualPlayfield,
-      scap: options.scap,
-      dither: options.dither,
-    })
-    if (typeof d.strength === 'number')   options.ditherStrength = d.strength
-    if (typeof d.errorClamp === 'number') options.errorClamp = d.errorClamp
-  } catch { /* WASM not ready yet — initial defaults stand */ }
-}
-watch(
-  () => [options.mode, options.copper, options.dualPlayfield, options.scap,
-         options.depth, options.chipset, options.dither],
-  () => { void refreshDitherDefaults() })
-// Also refresh once after WASM finishes loading so the very first preview
-// uses the table value (defaultOptions() seeds with a generic 0.35).
-watch(wasmLoading, (loading) => { if (!loading) void refreshDitherDefaults() })
+// Auto-tuning of dither strength + error_clamp lives in the C++ encoder
+// (api::run_pipeline resolves the -1.0f sentinel via
+// dither_tuning::defaults_for at entry). The web frontend leaves the
+// fields at sentinel by default so the encoder picks the tuned value
+// for the current (mode, depth, dpf, scap, copper, chipset, method)
+// bucket on every encode. No mode-watcher / re-fetch needed here.
 
 // Track slider tweaks (debounced)
 let tweakTimer: ReturnType<typeof setTimeout> | null = null

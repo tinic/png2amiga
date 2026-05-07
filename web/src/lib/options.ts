@@ -34,9 +34,14 @@ export interface Slider {
 }
 
 export type SliderKey =
-  | 'gamma' | 'ditherStrength' | 'brightness' | 'contrast' | 'saturation'
+  | 'gamma' | 'brightness' | 'contrast' | 'saturation'
   | 'hueShift' | 'sharpen' | 'blackPoint' | 'whitePoint'
-export type DiffusionSliderKey = 'errorClamp'
+// Defaults-only sliders (populated via sliderDefaults() but NOT rendered
+// in the Adjustments panel). The auto-tuning table
+// (dither_tuning::defaults_for) sets these whenever mode/method changes,
+// and they reach the encoder via runConvert's options dict; manual
+// override needs CLI / scripted callers.
+export type DiffusionSliderKey = 'errorClamp' | 'ditherStrength'
 
 export interface Example {
   name: string
@@ -431,17 +436,27 @@ export const SLIDERS: Slider[] = [
     tip: 'Clip the darkest fraction of the image. Deepens blacks.' },
   { key: 'whitePoint',     label: 'White Pt',    min: 0,   max: 0.5, step: 0.01, default: 0,
     tip: 'Clip the brightest fraction of the image. Cleans up highlights.' },
-  // Dither strength moved to the bottom — the per-mode tuning table
-  // (dither_tuning::defaults_for) auto-applies the empirical optimum
-  // whenever mode/method changes, so most users should never touch it.
-  // Kept always-visible so it can still be tweaked when needed.
-  { key: 'ditherStrength', label: 'Strength',    min: 0,   max: 3, step: 0.05, default: 0.8,
-    tip: 'Dithering intensity. Auto-tuned per mode/method; manual override only.' },
 ]
 
+// Defaults-only sliders. The per-mode tuning table
+// (dither_tuning::defaults_for) auto-applies the empirical optimum
+// whenever mode/method changes — strength and error_clamp are tuned
+// per (mode, depth, dpf, scap, copper, chipset, method) bucket so the
+// auto values are the right values 99% of the time. The web UI used
+// to expose both as sliders; both got removed (errorClamp first, then
+// ditherStrength) because the slider invited "fiddle until it looks
+// vaguely right" rather than "change mode/method to a better tuned
+// preset". CLI / scripted callers can still override via
+// --dither-strength / --error-clamp.
 export const DIFFUSION_SLIDERS: Slider[] = [
-  { key: 'errorClamp',    label: 'Error Clamp', min: 0,   max: 1, step: 0.025, default: 0.35,
-    tip: 'Max error accumulation per channel (squared internally). Lower = cleaner, higher = more dithering noise.' },
+  // Default = -1 sentinel: the C++ encoder (api::run_pipeline) resolves
+  // it via dither_tuning::defaults_for(ctx) at entry. Single source of
+  // truth for per-mode tuning; web doesn't need its own watcher to
+  // refresh these on mode change.
+  { key: 'errorClamp',     label: 'Error Clamp', min: -1,  max: 1, step: 0.025, default: -1,
+    tip: 'Max error accumulation per channel. -1 = auto-tune via the C++ tuning table.' },
+  { key: 'ditherStrength', label: 'Strength',    min: -1,  max: 3, step: 0.05,  default: -1,
+    tip: 'Dithering intensity. -1 = auto-tune via the C++ tuning table.' },
 ]
 
 // CGA-text-mode-only options. Shown only when mode === 'cga-text80x100'.

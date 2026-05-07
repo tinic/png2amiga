@@ -210,22 +210,12 @@ int main(int argc, char** argv) {
             else if (opts.mode.starts_with("genesis"))
                 opts.depth = 4;
         }
-        // Mirror main.cpp's make_api_options: when the user didn't pass
-        // --dither-strength / --error-clamp explicitly, plug in the
-        // dither_tuning::defaults_for value for this (mode, depth, copper,
-        // chipset, method) bucket. CLI inline pipelines do this; api::
-        // run_pipeline expects pre-tuned options, so any caller bypassing
-        // make_api_options has to apply tuning manually.
-        //
-        // IMPORTANT: tune BEFORE the per-mode dither override below. CLI
-        // does the same — `make_api_options` runs before
-        // genesis/cga/cga-text auto-fallback flips opts.dither. Tuning
-        // with the user-default FS context (since opts.dither is still
-        // "floyd-steinberg" here) picks the FS-tuned strength which is
-        // what the per-mode override then encodes with.
-        auto tune = api::dither_defaults_for(opts);
-        if (!dither_strength_set) opts.dither_strength = tune.strength;
-        if (!error_clamp_set)     opts.error_clamp     = tune.error_clamp;
+        // dither_strength / error_clamp auto-tuning lives in the
+        // encoder (api::run_pipeline resolves the -1.0f sentinel). Smoke
+        // leaves the fields at sentinel here when the user didn't pass
+        // them explicitly, mirroring make_api_options' new behaviour.
+        if (!dither_strength_set) opts.dither_strength = -1.0f;
+        if (!error_clamp_set)     opts.error_clamp     = -1.0f;
         // Per-mode dither auto-override: main.cpp picks opt-checker for
         // Genesis (tile-aligned 4×4 ordered dither — preserves tile
         // dedup across cells, ~40 % VRAM savings on photos vs FS which

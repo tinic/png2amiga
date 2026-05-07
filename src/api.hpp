@@ -135,8 +135,16 @@ struct Options {
                                             // (bayer*, checker, line*, etc.)
                                             // and palette-aware (yliluoma*,
                                             // knoll, opt-*, tri-tone).
-    float dither_strength = 1.0f;       // 0.0 = no dither, 1.0 = full
-    float error_clamp = 0.12f;          // max error per OKLab channel
+    // -1.0f sentinel = auto-tune via dither_tuning::defaults_for(ctx)
+    // inside run_pipeline. The encoder is the single location where this
+    // lookup lives. Callers (web, CLI, library) leave the field at -1.0f
+    // to get the per-(mode, depth, dpf, scap, copper, chipset, method)
+    // tuned optimum, or set a non-negative value to override.
+    //
+    // Why not 0.0f as sentinel: 0.0 is a valid value (no dither). -1.0f
+    // can never be produced by the tuning table.
+    float dither_strength = -1.0f;
+    float error_clamp = -1.0f;
 
     // Palette
     std::string palette_file;           // load palette from file (empty = auto)

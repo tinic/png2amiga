@@ -968,6 +968,30 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // tools/api_pipeline_smoke applies the same mirror in --apply-tuning so
     // api-equiv-* tests stay byte-identical). The web frontend benefits
     // here too — Vue defaults Options.palette_diversity to 4 unconditionally.
+    // Auto-tune dither strength + error_clamp when the caller left them
+    // at the -1.0f sentinel (api::Options defaults). This is the SINGLE
+    // location where the dither_tuning lookup feeds the encoder — web /
+    // CLI / library callers all converge here, so adding a new tuning
+    // bucket or changing the per-mode constants lands once and reaches
+    // every caller automatically. Previously the web maintained its own
+    // refreshDitherDefaults watcher that mirrored this lookup; now it
+    // can leave the fields at sentinel and the encoder handles it.
+    if (options.dither_strength < 0.0f || options.error_clamp < 0.0f) {
+        auto chipset_for_tune = (options.chipset == "aga")
+            ? amiga::Chipset::aga : amiga::Chipset::ocs;
+        auto tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = mode,
+            .depth   = std::clamp(options.depth, 1, 8),
+            .dpf     = options.dual_playfield,
+            .scap    = options.scap,
+            .copper  = options.copper,
+            .chipset = chipset_for_tune,
+            .method  = parse_dither(options.dither),
+        });
+        if (options.dither_strength < 0.0f) options.dither_strength = tune.strength;
+        if (options.error_clamp     < 0.0f) options.error_clamp     = tune.error_clamp;
+    }
+
     if (options.palette_diversity == 4 &&
         (mode == amiga::Mode::hires || mode == amiga::Mode::hires_interlace)) {
         options.palette_diversity = 5;
