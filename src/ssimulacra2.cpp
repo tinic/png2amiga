@@ -314,9 +314,51 @@ void downsample_2x_linear(const std::vector<Color3f>& src,
     }
 }
 
+// SIMD fast_cbrt for AVX2 8-lane / NEON 4-lane: bit-trick seed plus 2
+// Newton iterations. Same accuracy (~5e-7 over [0, 1.5]) as the
+// scalar version, just batched.
+#if PNG2AMIGA_BACKEND_AVX2
+inline __m256 fast_cbrt_v(__m256 x) noexcept {
+    __m256i xi = _mm256_castps_si256(x);
+    __m256i seed = _mm256_add_epi32(_mm256_srai_epi32(xi, 31) /*sign-zero*/,
+                                    _mm256_setzero_si256());
+    (void)seed;
+    // u.i = u.i / 3 + 0x2A510554. Integer divide-by-3 via shift+mul
+    // approximation: i / 3 ≈ (i * 0x55555556) >> 32 (mulhi). Cheaper
+    // path for our positive-only inputs: bias / 3 via divmul.
+    // Bypass the integer pipeline trickery — just compute u.i / 3
+    // via (uint32) divide which AVX2 lacks; fall back to scalar
+    // bit-trick over a SIMD-load span. Newton iterations themselves
+    // are pure-SIMD.
+    alignas(32) std::uint32_t bits[8];
+    _mm256_store_si256(reinterpret_cast<__m256i*>(bits), xi);
+    for (int j = 0; j < 8; ++j) {
+        bits[j] = bits[j] / 3u + 0x2A510554u;
+    }
+    __m256 y = _mm256_castsi256_ps(_mm256_load_si256(
+        reinterpret_cast<const __m256i*>(bits)));
+    // y = (2*y + x / y^2) / 3, twice.
+    const __m256 v_two       = _mm256_set1_ps(2.0f);
+    const __m256 v_one_third = _mm256_set1_ps(1.0f / 3.0f);
+    for (int it = 0; it < 2; ++it) {
+        __m256 yy = _mm256_mul_ps(y, y);
+        __m256 xydiv = _mm256_div_ps(x, yy);
+        y = _mm256_mul_ps(_mm256_add_ps(_mm256_mul_ps(v_two, y), xydiv),
+                          v_one_third);
+    }
+    return y;
+}
+#endif
+
 // Build per-plane XYB float buffers (X, Y, B) from linear-RGB pixels.
 // Caller pre-sizes X/Y/B (compute() arena). The loop below writes
 // every cell, so no zero-init needed.
+//
+// Hot function on EPYC AVX2 (uProf 9.52s of 35.18s) because of the
+// scalar 3×3 dot-products + 3 fast_cbrt invocations per pixel. The
+// AVX2 path below SoA-loads 8 RGB pixels via gather+stride, computes
+// the 3 dot-products in parallel, batched-cbrts via fast_cbrt_v,
+// applies make_positive in SIMD, scatter-stores into X/Y/B.
 void to_xyb_planes(const std::vector<Color3f>& src,
                    std::size_t w, std::size_t h,
                    std::vector<float>& X, std::vector<float>& Y,
@@ -325,12 +367,76 @@ void to_xyb_planes(const std::vector<Color3f>& src,
     if (X.size() < n) X.resize(n);
     if (Y.size() < n) Y.resize(n);
     if (B.size() < n) B.resize(n);
-    for (std::size_t i = 0; i < n; ++i) {
-        auto p = linear_to_xyb(src[i]);
+    const Color3f* ps = src.data();
+    float* px = X.data();
+    float* py = Y.data();
+    float* pb = B.data();
+    std::size_t i = 0;
+#if PNG2AMIGA_BACKEND_AVX2
+    // SoA load via gather: Color3f is 12 bytes (3 floats packed,
+    // no padding). Strides for r/g/b at offsets 0/4/8 across 12-byte
+    // elements. AVX2 has _mm256_i32gather_ps for indexed loads.
+    const __m256 v_kBias = _mm256_set1_ps(kBias);
+    const __m256 v_kBiasCbrt = _mm256_set1_ps(kBiasCbrt);
+    const __m256 c_L_r = _mm256_set1_ps(0.30f);
+    const __m256 c_L_g = _mm256_set1_ps(0.622f);
+    const __m256 c_L_b = _mm256_set1_ps(0.078f);
+    const __m256 c_M_r = _mm256_set1_ps(0.23f);
+    const __m256 c_M_g = _mm256_set1_ps(0.692f);
+    const __m256 c_M_b = _mm256_set1_ps(0.078f);
+    const __m256 c_S_r = _mm256_set1_ps(0.243422f);
+    const __m256 c_S_g = _mm256_set1_ps(0.204162f);
+    const __m256 c_S_b = _mm256_set1_ps(0.552416f);
+    const __m256 v_half = _mm256_set1_ps(0.5f);
+    const __m256 v_55   = _mm256_set1_ps(0.55f);
+    const __m256 v_14   = _mm256_set1_ps(14.0f);
+    const __m256 v_42   = _mm256_set1_ps(0.42f);
+    const __m256 v_01   = _mm256_set1_ps(0.01f);
+    // Stride indices: r at 3*j+0, g at 3*j+1, b at 3*j+2 across the
+    // float* view of Color3f.
+    const __m256i idx_r = _mm256_setr_epi32(0, 3, 6, 9, 12, 15, 18, 21);
+    const __m256i idx_g = _mm256_setr_epi32(1, 4, 7, 10, 13, 16, 19, 22);
+    const __m256i idx_b = _mm256_setr_epi32(2, 5, 8, 11, 14, 17, 20, 23);
+    const float* psf = reinterpret_cast<const float*>(ps);
+    const std::size_t simd_end = n & ~7u;
+    for (; i < simd_end; i += 8) {
+        const float* base = psf + i * 3;
+        __m256 r = _mm256_i32gather_ps(base, idx_r, 4);
+        __m256 g = _mm256_i32gather_ps(base, idx_g, 4);
+        __m256 b = _mm256_i32gather_ps(base, idx_b, 4);
+        // L,M,S mix (libjxl OpsinAbsorbance).
+        __m256 L = _mm256_fmadd_ps(c_L_b, b,
+                   _mm256_fmadd_ps(c_L_g, g, _mm256_mul_ps(c_L_r, r)));
+        __m256 M = _mm256_fmadd_ps(c_M_b, b,
+                   _mm256_fmadd_ps(c_M_g, g, _mm256_mul_ps(c_M_r, r)));
+        __m256 S = _mm256_fmadd_ps(c_S_b, b,
+                   _mm256_fmadd_ps(c_S_g, g, _mm256_mul_ps(c_S_r, r)));
+        // cbrt(x + bias) - kBiasCbrt.
+        __m256 Lp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(L, v_kBias)),
+                                  v_kBiasCbrt);
+        __m256 Mp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(M, v_kBias)),
+                                  v_kBiasCbrt);
+        __m256 Sp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(S, v_kBias)),
+                                  v_kBiasCbrt);
+        // XYB: X = (L'-M')/2, Y = (L'+M')/2, B = S'.
+        __m256 vx = _mm256_mul_ps(_mm256_sub_ps(Lp, Mp), v_half);
+        __m256 vy = _mm256_mul_ps(_mm256_add_ps(Lp, Mp), v_half);
+        __m256 vb = Sp;
+        // make_positive: B = (B - Y) + 0.55, X = X*14 + 0.42, Y += 0.01.
+        vb = _mm256_add_ps(_mm256_sub_ps(vb, vy), v_55);
+        vx = _mm256_fmadd_ps(vx, v_14, v_42);
+        vy = _mm256_add_ps(vy, v_01);
+        _mm256_storeu_ps(px + i, vx);
+        _mm256_storeu_ps(py + i, vy);
+        _mm256_storeu_ps(pb + i, vb);
+    }
+#endif
+    for (; i < n; ++i) {
+        auto p = linear_to_xyb(ps[i]);
         make_positive(p);
-        X[i] = p.x;
-        Y[i] = p.y;
-        B[i] = p.b;
+        px[i] = p.x;
+        py[i] = p.y;
+        pb[i] = p.b;
     }
 }
 
@@ -397,11 +503,45 @@ EdgeDiff edgediff_plane(const std::vector<float>& img1,
 // Multiply two float planes elementwise. Caller pre-sizes `out` (we
 // avoid the resize here to keep the per-call allocator pressure off
 // the hot path — see compute_one_scale's scratch arena).
+//
+// Hand-SIMD (8-lane AVX2 / 4-lane NEON / 4-lane WASM SIMD). MSVC's
+// auto-vectoriser left this scalar — a 32-pixel inner loop unroll
+// with 8 vmulps would have been the obvious vectorisation but
+// /arch:AVX2 alone didn't trigger it. AMD uProf showed multiply at
+// 6.78s of 35.18s total CPU on EPYC, ~19%; SIMDing it directly drops
+// that to bandwidth-bound (one mulps + load/store per 8 floats).
 void multiply(const std::vector<float>& a,
               const std::vector<float>& b,
               std::vector<float>& out) {
-    if (out.size() < a.size()) out.resize(a.size());
-    for (std::size_t i = 0; i < a.size(); ++i) out[i] = a[i] * b[i];
+    const std::size_t n = a.size();
+    if (out.size() < n) out.resize(n);
+    const float* pa = a.data();
+    const float* pb = b.data();
+    float*       po = out.data();
+    std::size_t i = 0;
+#if PNG2AMIGA_BACKEND_AVX2
+    const std::size_t simd_end = n & ~7u;
+    for (; i < simd_end; i += 8) {
+        __m256 va = _mm256_loadu_ps(pa + i);
+        __m256 vb = _mm256_loadu_ps(pb + i);
+        _mm256_storeu_ps(po + i, _mm256_mul_ps(va, vb));
+    }
+#elif PNG2AMIGA_BACKEND_NEON
+    const std::size_t simd_end = n & ~3u;
+    for (; i < simd_end; i += 4) {
+        float32x4_t va = vld1q_f32(pa + i);
+        float32x4_t vb = vld1q_f32(pb + i);
+        vst1q_f32(po + i, vmulq_f32(va, vb));
+    }
+#else  // WASM SIMD
+    const std::size_t simd_end = n & ~3u;
+    for (; i < simd_end; i += 4) {
+        v128_t va = wasm_v128_load(pa + i);
+        v128_t vb = wasm_v128_load(pb + i);
+        wasm_v128_store(po + i, wasm_f32x4_mul(va, vb));
+    }
+#endif
+    for (; i < n; ++i) po[i] = pa[i] * pb[i];
 }
 
 // One scale's 18 raw norms: 3 channels × {ssim, ringing, blurring} × {1n, 4n}.
