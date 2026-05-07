@@ -96,6 +96,7 @@ int main(int argc, char** argv) {
         else if (a == "--dpf" || a == "--dual-playfield") opts.dual_playfield = true;
         else if (a == "--best") opts.best = true;
         else if (a == "--interlace") opts.interlace = true;
+        else if (a == "--chipset") opts.chipset = std::string(next(a));
         else if (a == "--lock-color0") opts.lock_color0 = true;
         else if (a == "--no-lock-color0") opts.lock_color0 = false;
         else if (a == "--copper-changes") opts.copper_changes = std::atoi(std::string(next(a)).c_str());
@@ -164,6 +165,15 @@ int main(int argc, char** argv) {
                 opts.depth = aga ? 8 : 4;
             } else if (opts.mode == "lores" || opts.mode == "lores-lace") {
                 opts.depth = aga ? 8 : 5;
+            }
+            // DPF override: --dpf forces depth=3 (OCS) / 4 (AGA) — main.cpp
+            // L5655 does this BEFORE its dither_tuning lookup, so the tune
+            // bucket sees the post-DPF depth. Mirror it here to keep the
+            // dither_strength lookup matched.
+            if (opts.dual_playfield &&
+                (opts.mode == "lores" || opts.mode == "lores-lace" ||
+                 opts.mode == "hires" || opts.mode == "hires-lace")) {
+                opts.depth = aga ? 4 : 3;
             }
             // Fixed-buffer modes have hardware-defined depths. main.cpp
             // overrides Config::depth for these inside its dispatch

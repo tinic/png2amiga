@@ -1661,6 +1661,66 @@ else()
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}
             -- --mode lores --dpf --reserve-range 7 ff0000)
+    # Coverage gaps surfaced after the api hires palette_diversity bump
+    # broke api-equiv-hires-sliced-reserve: each of these exercises a
+    # path the prior 51-test set didn't pin.
+    add_test(NAME "api-equiv-hires-plain-reserve"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode hires --depth 4 --reserve-range 8-15 ff0000)
+    add_test(NAME "api-equiv-lores-lace"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores-lace)
+    add_test(NAME "api-equiv-hires-lace"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode hires-lace)
+    add_test(NAME "api-equiv-ehb-lace"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ehb-lace)
+    add_test(NAME "api-equiv-ham6-lace"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6-lace)
+    add_test(NAME "api-equiv-ham8-lace"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham8-lace --chipset aga)
+    add_test(NAME "api-equiv-ham8-sliced"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham8 --sliced --chipset aga)
+    add_test(NAME "api-equiv-lores-sliced-aga"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --chipset aga --depth 8)
+    add_test(NAME "api-equiv-strips-dpf"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --strips --dpf --depth 3)
+    # DPF variants — non-default chipset / mode / sliced. The original
+    # api-equiv-dpf only tested lores OCS depth-3; AGA, hires, and
+    # sliced+DPF all silently diverged because the smoke harness's
+    # --apply-tuning section didn't mirror main.cpp L5655's DPF depth
+    # override before the dither_tuning lookup.
+    add_test(NAME "api-equiv-dpf-aga"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dpf --chipset aga)
+    add_test(NAME "api-equiv-dpf-hires"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode hires --dpf)
+    add_test(NAME "api-equiv-dpf-hires-aga"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode hires --dpf --chipset aga)
+    add_test(NAME "api-equiv-dpf-sliced"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --sliced --dpf)
     # Color-independence + render-pixel invariants for DPF reserves.
     add_test(NAME "reserve-indep-lores-dpf"
         COMMAND ${_indep_chk}
