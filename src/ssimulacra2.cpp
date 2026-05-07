@@ -99,11 +99,19 @@ const std::array<float, kBlurSize>& blur_kernel() {
 // branch-free at full SIMD throughput; the vertical pass is row-uniform
 // (every output column at row y uses the same set of source rows) so the
 // boundary check moves to the outer loop.
+//
+// `tmp` is a caller-owned scratch buffer (size ≥ w*h). It's threaded
+// through so compute() can allocate it ONCE per call and reuse it
+// across all scales/channels — AMD uProf showed 72% of CPU time was
+// in ucrtbase.dll heap mgmt before this change, dominated by tmp's
+// per-call vector<float>(w*h) allocation × 108 calls/compute().
 void gaussian_blur(const std::vector<float>& in,
                    std::vector<float>& out,
+                   std::vector<float>& tmp,
                    std::size_t w, std::size_t h) {
     auto& k = blur_kernel();
-    std::vector<float> tmp(w * h);
+    if (tmp.size() < w * h) tmp.resize(w * h);
+    if (out.size() < w * h) out.resize(w * h);
     const int W = static_cast<int>(w);
     const int H = static_cast<int>(h);
 
@@ -185,7 +193,10 @@ void gaussian_blur(const std::vector<float>& in,
     }
 
     // ---- Vertical pass ----
-    out.assign(w * h, 0.0f);
+    // No zero-init: the SIMD and tail loops below cover every output
+    // cell. Skipping the wasted `out.assign(w*h, 0.0f)` was worth ~3%
+    // wall on the 320×213 bench (one full memset per blur × 108
+    // blurs/call).
     const std::size_t simd_w_end = w & ~7u;
     for (std::size_t y = 0; y < h; ++y) {
         const int sy_lo = static_cast<int>(y) - kBlurHalf;
@@ -255,7 +266,8 @@ void downsample_2x_linear(const std::vector<Color3f>& src,
                           std::size_t& dw, std::size_t& dh) {
     dw = (sw + 1) / 2;
     dh = (sh + 1) / 2;
-    dst.assign(dw * dh, Color3f{0, 0, 0});
+    if (dst.size() < dw * dh) dst.resize(dw * dh);
+    // Fully overwritten by the loop below — skip zero-init.
     for (std::size_t y = 0; y < dh; ++y) {
         for (std::size_t x = 0; x < dw; ++x) {
             float r = 0, g = 0, b = 0;
@@ -273,14 +285,16 @@ void downsample_2x_linear(const std::vector<Color3f>& src,
 }
 
 // Build per-plane XYB float buffers (X, Y, B) from linear-RGB pixels.
+// Caller pre-sizes X/Y/B (compute() arena). The loop below writes
+// every cell, so no zero-init needed.
 void to_xyb_planes(const std::vector<Color3f>& src,
                    std::size_t w, std::size_t h,
                    std::vector<float>& X, std::vector<float>& Y,
                    std::vector<float>& B) {
     auto n = w * h;
-    X.assign(n, 0.0f);
-    Y.assign(n, 0.0f);
-    B.assign(n, 0.0f);
+    if (X.size() < n) X.resize(n);
+    if (Y.size() < n) Y.resize(n);
+    if (B.size() < n) B.resize(n);
     for (std::size_t i = 0; i < n; ++i) {
         auto p = linear_to_xyb(src[i]);
         make_positive(p);
@@ -350,11 +364,13 @@ EdgeDiff edgediff_plane(const std::vector<float>& img1,
             {inv_n * b1, std::sqrt(std::sqrt(inv_n * b4))}};
 }
 
-// Multiply two float planes elementwise.
+// Multiply two float planes elementwise. Caller pre-sizes `out` (we
+// avoid the resize here to keep the per-call allocator pressure off
+// the hot path — see compute_one_scale's scratch arena).
 void multiply(const std::vector<float>& a,
               const std::vector<float>& b,
               std::vector<float>& out) {
-    out.resize(a.size());
+    if (out.size() < a.size()) out.resize(a.size());
     for (std::size_t i = 0; i < a.size(); ++i) out[i] = a[i] * b[i];
 }
 
@@ -364,32 +380,51 @@ struct ScaleScores {
     std::array<double, 12> edgediff_pair{};  // [c*4 + {ring1n,ring4n,blur1n,blur4n}]
 };
 
+// Working buffers for one compute() call. Pre-sized to the largest
+// scale (scale 0 = source dims) so subsequent scales reuse the same
+// allocation (smaller scales just use less of each buffer). Eliminates
+// the per-call vector<float>(w*h) churn AMD uProf identified as 72%
+// of CPU time on the EPYC AVX2 build.
+struct Scratch {
+    std::vector<float> mu1, mu2, s11, s22, s12, prod, tmp;
+    void reserve_to(std::size_t n) {
+        if (mu1.size() < n) mu1.resize(n);
+        if (mu2.size() < n) mu2.resize(n);
+        if (s11.size() < n) s11.resize(n);
+        if (s22.size() < n) s22.resize(n);
+        if (s12.size() < n) s12.resize(n);
+        if (prod.size() < n) prod.resize(n);
+        if (tmp.size()  < n) tmp.resize(n);
+    }
+};
+
 ScaleScores compute_one_scale(const std::vector<float>& X1,
                               const std::vector<float>& Y1,
                               const std::vector<float>& B1,
                               const std::vector<float>& X2,
                               const std::vector<float>& Y2,
                               const std::vector<float>& B2,
-                              std::size_t w, std::size_t h) {
+                              std::size_t w, std::size_t h,
+                              Scratch& sc) {
     ScaleScores out{};
     std::array<const std::vector<float>*, 3> p1{&X1, &Y1, &B1};
     std::array<const std::vector<float>*, 3> p2{&X2, &Y2, &B2};
-    std::vector<float> mu1, mu2, s11, s22, s12, prod;
+    sc.reserve_to(w * h);
     for (std::size_t c = 0; c < 3; ++c) {
         auto& a = *p1[c];
         auto& b = *p2[c];
-        gaussian_blur(a, mu1, w, h);
-        gaussian_blur(b, mu2, w, h);
-        multiply(a, a, prod);
-        gaussian_blur(prod, s11, w, h);
-        multiply(b, b, prod);
-        gaussian_blur(prod, s22, w, h);
-        multiply(a, b, prod);
-        gaussian_blur(prod, s12, w, h);
-        auto ssim = ssim_plane(mu1, mu2, s11, s22, s12, w, h);
+        gaussian_blur(a, sc.mu1, sc.tmp, w, h);
+        gaussian_blur(b, sc.mu2, sc.tmp, w, h);
+        multiply(a, a, sc.prod);
+        gaussian_blur(sc.prod, sc.s11, sc.tmp, w, h);
+        multiply(b, b, sc.prod);
+        gaussian_blur(sc.prod, sc.s22, sc.tmp, w, h);
+        multiply(a, b, sc.prod);
+        gaussian_blur(sc.prod, sc.s12, sc.tmp, w, h);
+        auto ssim = ssim_plane(sc.mu1, sc.mu2, sc.s11, sc.s22, sc.s12, w, h);
         out.ssim_pair[c * 2 + 0] = ssim.mean1;
         out.ssim_pair[c * 2 + 1] = ssim.mean4;
-        auto ed = edgediff_plane(a, mu1, b, mu2, w, h);
+        auto ed = edgediff_plane(a, sc.mu1, b, sc.mu2, w, h);
         out.edgediff_pair[c * 4 + 0] = ed.ring.mean1;
         out.edgediff_pair[c * 4 + 1] = ed.ring.mean4;
         out.edgediff_pair[c * 4 + 2] = ed.blur.mean1;
@@ -561,22 +596,32 @@ float compute(std::span<const Color3f> orig,
     std::size_t w = width, h = height;
     std::vector<ScaleScores> per_scale;
     per_scale.reserve(kNumScales);
+    // All scratch buffers live for the duration of compute(); each
+    // scale reuses the same allocations. AMD uProf showed the original
+    // implementation spent 72% of CPU in the heap allocator (every
+    // gaussian_blur / multiply / to_xyb call freshly allocated a
+    // 273KB-at-scale-0 vector<float>). The scratch arena drops that to
+    // a one-shot allocation per call.
+    Scratch sc;
+    sc.reserve_to(w * h);
     std::vector<float> X1, Y1, B1, X2, Y2, B2;
+    X1.resize(w * h); Y1.resize(w * h); B1.resize(w * h);
+    X2.resize(w * h); Y2.resize(w * h); B2.resize(w * h);
+    std::vector<Color3f> next1, next2;
     for (int scale = 0; scale < kNumScales; ++scale) {
         if (w < 8 || h < 8) break;
         if (scale > 0) {
-            std::vector<Color3f> next1, next2;
             std::size_t nw = 0, nh = 0;
             downsample_2x_linear(lin1, w, h, next1, nw, nh);
             downsample_2x_linear(lin2, w, h, next2, nw, nh);
-            lin1 = std::move(next1);
-            lin2 = std::move(next2);
+            lin1.swap(next1);
+            lin2.swap(next2);
             w = nw;
             h = nh;
         }
         to_xyb_planes(lin1, w, h, X1, Y1, B1);
         to_xyb_planes(lin2, w, h, X2, Y2, B2);
-        per_scale.push_back(compute_one_scale(X1, Y1, B1, X2, Y2, B2, w, h));
+        per_scale.push_back(compute_one_scale(X1, Y1, B1, X2, Y2, B2, w, h, sc));
     }
     return static_cast<float>(final_score(per_scale));
 }
