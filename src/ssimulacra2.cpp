@@ -102,7 +102,20 @@ inline void make_positive(XYB& v) noexcept {
 // calibrated weights in the 108-weight aggregation. Mirror-edge here
 // drifted internal vs external SSIMULACRA2 enough to flip the ranking
 // of HAM6 + --best vs baseline on FS-dithered content.
-constexpr int kBlurHalf = 6;
+// halfwidth 5 (kernel 11). σ=1.5 unchanged; tail weights at ±6 in the
+// original 13-tap kernel were exp(-8)/Σ ≈ 0.7% per side, so dropping
+// them shifts SSIMULACRA2 by ~0.03 on the synthetic noise bench
+// (91.4385 → 91.4105). Real-image scores tested in lockstep — no
+// systematic drift on lores/hires/ham6/ehb at the per-mode encode
+// level. Worth the 15% gaussian_blur speedup since blur is the top
+// hot function on EPYC AVX2 (52% of CPU at 5.5 ms baseline).
+//
+// Note: our internal port already deviated slightly from the vendored
+// libjxl-faithful binary in tools/shootout/vendor/ssimulacra2/ (we
+// use a finite Gaussian where libjxl uses recursive FastGaussian).
+// The README shootout uses the vendored binary, so its S2 numbers
+// don't move when we tune the internal port.
+constexpr int kBlurHalf = 5;
 constexpr int kBlurSize = 2 * kBlurHalf + 1;
 
 const std::array<float, kBlurSize>& blur_kernel() {
