@@ -191,6 +191,25 @@ else()
     else()
         target_compile_options(bench_ssimulacra2 PRIVATE -g)
     endif()
+
+    # bench_pow24: scalar vs polynomial vs AVX2 8-wide pow24 timing —
+    # used to decide whether replacing std::pow inside the dither hot
+    # loop is worth shipping. Header-only on color_space.hpp; no extra
+    # link deps.
+    add_executable(bench_pow24 tools/bench_pow24.cpp)
+    target_include_directories(bench_pow24 PRIVATE
+        src ${CMAKE_BINARY_DIR}/generated)
+    target_compile_options(bench_pow24 PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+    if(MSVC)
+        target_compile_options(bench_pow24 PRIVATE /Zi /arch:AVX2)
+        target_compile_definitions(bench_pow24 PRIVATE __AVX2__ __FMA__)
+        target_link_options(bench_pow24 PRIVATE /DEBUG /OPT:REF /OPT:ICF)
+    else()
+        target_compile_options(bench_pow24 PRIVATE -g)
+        if(PNG2AMIGA_HAS_MAVX2)
+            target_compile_options(bench_pow24 PRIVATE -mavx2 -mfma)
+        endif()
+    endif()
     # Include quantize_metal.cpp here too when there's no Metal —
     # it provides the C-stub symbols (false / std::unexpected) that
     # quantize_metal_wrap.cpp links against. The Metal-enabled
