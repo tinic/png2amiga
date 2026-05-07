@@ -109,6 +109,85 @@ inline Color3f srgb_u8_to_linear(std::uint8_t r, std::uint8_t g,
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// Float sRGB → linear LUT for the dither hot loop.
+//
+// apply_error_diffusion calls srgb_to_linear(target_s) per pixel (target_s
+// ∈ [-ec, 1+ec] in sRGB space). The reference impl branches and calls
+// std::pow(x, 2.4f) which AMD uProf showed dominating the 38 % of wall
+// time in apply_error_diffusion on `--mode ehb --best`. Replace with a
+// 4096-bin LUT covering [0, 1] + linear interpolation between bins, and
+// fall back to the analytic formula outside [0, 1]. Bin width 1/4096 →
+// max interp error ≈ 6e-6, well below sRGB→linear → quantize-to-OCS
+// noise floor.
+//
+// LUT size: 4097 floats = 16 KB, fits in L1.
+// ---------------------------------------------------------------------------
+
+inline constexpr std::size_t kSrgbLinearLutBins = 4096;
+
+#if defined(__GNUC__) && !defined(__clang__)
+constexpr auto make_srgb_linear_lut() noexcept {
+    std::array<float, kSrgbLinearLutBins + 1> lut{};
+    for (std::size_t i = 0; i <= kSrgbLinearLutBins; ++i) {
+        lut[i] = srgb_to_linear(static_cast<float>(i) /
+                                 static_cast<float>(kSrgbLinearLutBins));
+    }
+    return lut;
+}
+inline constexpr auto srgb_linear_lut = make_srgb_linear_lut();
+inline const std::array<float, kSrgbLinearLutBins + 1>&
+get_srgb_linear_lut() noexcept { return srgb_linear_lut; }
+#else
+inline const std::array<float, kSrgbLinearLutBins + 1>&
+get_srgb_linear_lut() noexcept {
+    static const auto lut = [] {
+        std::array<float, kSrgbLinearLutBins + 1> l{};
+        for (std::size_t i = 0; i <= kSrgbLinearLutBins; ++i)
+            l[i] = srgb_to_linear(static_cast<float>(i) /
+                                   static_cast<float>(kSrgbLinearLutBins));
+        return l;
+    }();
+    return lut;
+}
+#endif
+
+// LUT path is x86_64 + WASM only. On Apple Silicon (and ARM64 in general)
+// GCC 15 -O3 auto-vectorizes std::pow well enough that the LUT loses to
+// the analytic formula — see project_perf_dead_ends_2026_05.md. MSVC + the
+// Emscripten compiler don't auto-vectorize the same way and benefit from
+// the LUT, so dispatch by architecture.
+#if defined(__x86_64__) || defined(_M_X64) || defined(__EMSCRIPTEN__)
+[[gnu::always_inline]]
+inline float srgb_to_linear_fast(float s) noexcept {
+    // [-ec, 0) and (1, 1+ec] are rare in dither — fall back to analytic.
+    if (s <= 0.0f || s >= 1.0f) return srgb_to_linear(s);
+    auto& lut = get_srgb_linear_lut();
+    float fbin = s * static_cast<float>(kSrgbLinearLutBins);
+    auto i = static_cast<std::size_t>(fbin);
+    float frac = fbin - static_cast<float>(i);
+    return lut[i] + frac * (lut[i + 1] - lut[i]);
+}
+
+[[gnu::always_inline]]
+inline Color3f srgb_to_linear_fast(Color3f c) noexcept {
+    return {
+        srgb_to_linear_fast(c.r),
+        srgb_to_linear_fast(c.g),
+        srgb_to_linear_fast(c.b),
+    };
+}
+#else
+[[gnu::always_inline]]
+inline float srgb_to_linear_fast(float s) noexcept {
+    return srgb_to_linear(s);
+}
+[[gnu::always_inline]]
+inline Color3f srgb_to_linear_fast(Color3f c) noexcept {
+    return srgb_to_linear(c);
+}
+#endif
+
 // Convert sRGB hex (0xRRGGBB) to linear Color3f
 PNG2AMIGA_LUT_CONSTEXPR Color3f srgb_hex_to_linear(std::uint32_t hex) noexcept {
     auto r = static_cast<std::uint8_t>((hex >> 16) & 0xFF);

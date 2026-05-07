@@ -1023,7 +1023,10 @@ DitherResult apply_error_diffusion(
                 image_s[buf_idx].b + std::clamp(e.b, -ec, ec),
             };
             // Round-trip back to OKLab so the picker stays perceptual.
-            auto target_lin = color_space::srgb_to_linear(target_s);
+            // _fast: 4096-bin LUT + linear interp instead of three
+            // std::pow(x,2.4) — was the dominant cost inside this loop
+            // on AMD uProf's `--mode ehb --best` run.
+            auto target_lin = color_space::srgb_to_linear_fast(target_s);
             auto adjusted   = color_space::linear_to_oklab(target_lin);
 
             auto [idx, chosen_lab, dist_sq] =
