@@ -963,16 +963,34 @@ DitherResult apply_error_diffusion(
 
     float ec = error_clamp_val;
 
+    // pop_search calls this 2560×/run with W*H ≈ 64K pixels each. The
+    // four W*H buffers (~3 MB total per call) used to malloc/free every
+    // time → ucrtbase showed up as 22% of `--mode ehb --best` wall on
+    // AMD uProf. Hold them as thread_local scratch and resize-grow only
+    // (vector::resize keeps capacity). Each parallel_for worker has its
+    // own TLS instance, so no contention.
+    thread_local std::vector<Color3f> image_s_tls;
+    thread_local std::vector<OKLab>   image_lab_tls;
+    thread_local std::vector<Color3f> palette_s_tls;
+    thread_local std::vector<Color3f> err_buf_s_tls;
+
     DitherResult result;
     result.indices.resize(w * h);
     result.total_error = 0.0f;
 
+    image_s_tls.resize(w * h);
+    image_lab_tls.resize(w * h);
+    palette_s_tls.resize(palette_lab.size());
+    err_buf_s_tls.assign(w * h, Color3f{0, 0, 0});  // must zero between calls
+
+    auto& image_s   = image_s_tls;
+    auto& image_lab = image_lab_tls;
+    auto& palette_s = palette_s_tls;
+    auto& err_buf_s = err_buf_s_tls;
+
     // Precompute image in sRGB and OKLab. Picker still chooses
     // perceptually (OKLab); residual conservation runs in sRGB
     // (gamma-encoded) — see diffuse_raw_buffer for the rationale.
-    std::vector<Color3f> image_s(w * h);
-    std::vector<OKLab>  image_lab(w * h);
-    std::vector<Color3f> palette_s(palette_lab.size());
     for (std::size_t i = 0; i < palette_lab.size(); ++i) {
         palette_s[i] = color_space::linear_to_srgb(
             color_space::oklab_to_linear(palette_lab[i])).clamped();
@@ -985,7 +1003,6 @@ DitherResult apply_error_diffusion(
         }
     }
 
-    std::vector<Color3f> err_buf_s(w * h, Color3f{0, 0, 0});
     // SoA palette is built once on the stack and reused for all 68K
     // pixel lookups. ~3 KB stack vs a fresh malloc per call.
     PaletteSoA pal_soa;

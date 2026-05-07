@@ -129,24 +129,37 @@ float cpu_fitness(const Image& source,
                     [](bool b) { return b; });
     const bool has_trans = !tmask.empty();
 
+    // Pop search calls this 2560×/run; W*H ≈ 64K pixels here means
+    // 768 KB rendered + smaller cand_pal/src_masked allocations per
+    // call → ~22% ucrtbase on AMD uProf. Reuse buffers via thread_local
+    // scratch (each parallel_for worker has its own TLS).
+    thread_local Image rendered_tls(0, 0);
+    thread_local Image src_masked_tls(0, 0);
+    thread_local std::vector<Color3f>      cand_pal_tls;
+    thread_local std::vector<std::uint8_t> cand_to_full_tls;
+    if (rendered_tls.width() != W || rendered_tls.height() != H) {
+        rendered_tls = Image(W, H);
+    }
+
     dither::DitherResult dr;
     if (has_reserves || has_trans) {
         // Build candidate sub-palette excluding locked + (when
         // transparent) slot 0.
-        std::vector<Color3f>      cand_pal;
-        std::vector<std::uint8_t> cand_to_full;
-        cand_pal.reserve(palette.size());
-        cand_to_full.reserve(palette.size());
+        cand_pal_tls.clear();
+        cand_to_full_tls.clear();
+        cand_pal_tls.reserve(palette.size());
+        cand_to_full_tls.reserve(palette.size());
         for (std::size_t i = 0; i < palette.size(); ++i) {
             if (has_trans && i == 0) continue;
             if (i < locked_mask.size() && locked_mask[i]) continue;
-            cand_pal.push_back(palette[i]);
-            cand_to_full.push_back(static_cast<std::uint8_t>(i));
+            cand_pal_tls.push_back(palette[i]);
+            cand_to_full_tls.push_back(static_cast<std::uint8_t>(i));
         }
-        if (cand_pal.empty()) cand_pal.push_back(Color3f{0, 0, 0});
+        if (cand_pal_tls.empty()) cand_pal_tls.push_back(Color3f{0, 0, 0});
         dr = dither::apply(source,
-            std::span<const Color3f>(cand_pal.data(), cand_pal.size()), dith);
-        for (auto& idx : dr.indices) idx = cand_to_full[idx];
+            std::span<const Color3f>(cand_pal_tls.data(), cand_pal_tls.size()),
+            dith);
+        for (auto& idx : dr.indices) idx = cand_to_full_tls[idx];
         if (has_trans) {
             for (std::size_t i = 0;
                  i < tmask.size() && i < dr.indices.size(); ++i)
@@ -156,8 +169,7 @@ float cpu_fitness(const Image& source,
         dr = dither::apply(source, palette, dith);
     }
 
-    Image rendered(W, H);
-    auto px = rendered.pixels();
+    auto px = rendered_tls.pixels();
     for (std::size_t i = 0; i < px.size(); ++i) {
         px[i] = palette[dr.indices[i]];
     }
@@ -165,8 +177,10 @@ float cpu_fitness(const Image& source,
         // Score against the source with transparent pixels masked to
         // black on both sides, so SSIMULACRA2 doesn't penalise the
         // (ignored) transparent regions.
-        Image src_masked(W, H);
-        auto src_px = src_masked.pixels();
+        if (src_masked_tls.width() != W || src_masked_tls.height() != H) {
+            src_masked_tls = Image(W, H);
+        }
+        auto src_px = src_masked_tls.pixels();
         auto orig_px = source.pixels();
         for (std::size_t i = 0; i < src_px.size(); ++i) {
             if (i < tmask.size() && tmask[i]) {
@@ -176,10 +190,11 @@ float cpu_fitness(const Image& source,
                 src_px[i] = orig_px[i];
             }
         }
-        return ssimulacra2::compute(src_masked.pixels(), rendered.pixels(),
-                                     W, H);
+        return ssimulacra2::compute(src_masked_tls.pixels(),
+                                     rendered_tls.pixels(), W, H);
     }
-    return ssimulacra2::compute(source.pixels(), rendered.pixels(), W, H);
+    return ssimulacra2::compute(source.pixels(), rendered_tls.pixels(),
+                                 W, H);
 }
 
 } // namespace
