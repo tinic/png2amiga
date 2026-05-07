@@ -24,9 +24,9 @@ struct PopSearchResult {
 };
 
 struct PopSearchOptions {
-    int                pop_size      = 64;
-    int                generations   = 40;
-    int                stale_limit   = 10;
+    int                pop_size      = 128;
+    int                generations   = 64;
+    int                stale_limit   = 32;
     // EHB mode: candidates are 32-color *base* palettes; the search
     // expands each to a 64-color palette via make_ehb_palette before
     // dithering. Result.palette is the 32-color base.

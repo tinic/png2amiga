@@ -2541,9 +2541,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             base_dith.strength = options.dither_strength;
             base_dith.error_clamp = options.error_clamp;
             palette_search::PopSearchOptions pso;
-            pso.pop_size      = 64;
-            pso.generations   = 40;
-            pso.stale_limit   = 10;
+            pso.pop_size      = 128;
+            pso.generations   = 64;
+            pso.stale_limit   = 32;
             pso.ehb_expand    = true;
             pso.seed_palettes = std::move(ehb_seeds);
             pso.on_progress   = options.on_progress;
@@ -3411,9 +3411,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             depth >= 1 && depth <= 5;
         if (pop_only) {
             palette_search::PopSearchOptions pso;
-            pso.pop_size      = 64;
-            pso.generations   = 40;
-            pso.stale_limit   = 10;
+            pso.pop_size      = 128;
+            pso.generations   = 64;
+            pso.stale_limit   = 32;
             pso.on_progress   = options.on_progress;
 
             // When reserves or transparency are present, run
