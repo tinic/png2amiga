@@ -101,6 +101,37 @@ float fitness(const Image& source,
                                 source.width(), source.height());
 }
 
+// Nearest-neighbor fitness: per pixel, find candidate's nearest palette
+// entry in OKLab, sum squared distance. NEGATIVE so higher = better.
+// This is the operation the GPU compute shader implements (no FS
+// dither — fully parallel). If this scoring still finds palettes that
+// the encoder's FS-dither path likes, the GPU integration stays simple
+// (single nearest-neighbor kernel). If not, we need wavefront FS in
+// MSL — much harder.
+float fitness_nn(const Image& source,
+                 std::span<const Color3f> candidate) {
+    std::vector<color_space::OKLab> pal_lab(candidate.size());
+    for (std::size_t k = 0; k < candidate.size(); ++k) {
+        pal_lab[k] = color_space::linear_to_oklab(candidate[k]);
+    }
+    double sum_sq = 0.0;
+    auto pixels = source.pixels();
+    for (auto& px : pixels) {
+        auto lab = color_space::linear_to_oklab(px);
+        float best_d = std::numeric_limits<float>::infinity();
+        for (auto& pl : pal_lab) {
+            float dL = lab.L - pl.L;
+            float da = lab.a - pl.a;
+            float db = lab.b - pl.b;
+            float d  = dL * dL + da * da + db * db;
+            if (d < best_d) best_d = d;
+        }
+        sum_sq += static_cast<double>(best_d);
+    }
+    return -static_cast<float>(sum_sq /
+        static_cast<double>(source.pixels().size()));
+}
+
 // Mutate: perturb 1-2 slots in OKLab space, snap to gamut. Slot 0 is
 // kept = pure black so the mutant remains valid for lock_color0.
 void mutate(std::vector<Color3f>& pal, std::mt19937& rng) {
@@ -137,15 +168,20 @@ std::vector<Color3f> crossover(const std::vector<Color3f>& a,
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::println(stderr, "usage: {} <image> <depth> [pop=256] "
-                             "[gens=40] [out_pal=/tmp/best.txt]", argv[0]);
+        std::println(stderr, "usage: {} <image> <depth> [pop=64] "
+                             "[gens=40] [out_pal=...] [fitness=fs|nn|msssim]",
+                     argv[0]);
         return 2;
     }
     auto img_path = argv[1];
+
     int depth = std::atoi(argv[2]);
-    int pop_size = (argc > 3) ? std::atoi(argv[3]) : 256;
+    int pop_size = (argc > 3) ? std::atoi(argv[3]) : 64;
     int generations = (argc > 4) ? std::atoi(argv[4]) : 40;
     std::string out_pal = (argc > 5) ? argv[5] : "/tmp/palette_search_best.txt";
+    std::string fit_arg = (argc > 6) ? argv[6] : "fs";
+    bool use_nn     = (fit_arg == "nn");
+    bool use_msssim = (fit_arg == "msssim");
 
     if (depth < 1 || depth > 6) {
         std::println(stderr, "depth must be 1-6 (lores OCS)");
@@ -227,13 +263,35 @@ int main(int argc, char** argv) {
         add_pal(std::move(p));
     }
 
-    // Score initial population (parallel).
+    std::println("Fitness mode: {}",
+                 use_nn      ? "nearest-neighbor (CPU)"
+                 : use_msssim ? "CPU FS + MS-SSIM"
+                              : "CPU FS + SSIMULACRA2");
+
+    // Score initial population.
     std::vector<float> scores(population.size(), 0.0f);
     auto score_all = [&]() {
-        pipeline::parallel_for(population.size(), [&](std::size_t i) {
-            scores[i] = fitness(source, std::span<const Color3f>(population[i]),
-                                dith);
-        });
+        if (use_msssim) {
+            pipeline::parallel_for(population.size(), [&](std::size_t i) {
+                auto cand = std::span<const Color3f>(population[i]);
+                auto dr = dither::apply(source, cand, dith);
+                Image rendered(source.width(), source.height());
+                auto px = rendered.pixels();
+                for (std::size_t p = 0; p < px.size(); ++p)
+                    px[p] = cand[dr.indices[p]];
+                scores[i] = pipeline::compute_msssim(source.pixels(),
+                                                      rendered.pixels(),
+                                                      source.width(),
+                                                      source.height());
+            });
+        } else {
+            pipeline::parallel_for(population.size(), [&](std::size_t i) {
+                scores[i] = use_nn
+                    ? fitness_nn(source, std::span<const Color3f>(population[i]))
+                    : fitness(source, std::span<const Color3f>(population[i]),
+                              dith);
+            });
+        }
     };
     auto t0 = std::chrono::steady_clock::now();
     score_all();
@@ -300,6 +358,7 @@ int main(int argc, char** argv) {
     auto final_it = std::max_element(scores.begin(), scores.end());
     std::size_t final_best =
         static_cast<std::size_t>(final_it - scores.begin());
+
     std::println("\n=== Final best palette ===");
     std::println("S2 = {:.4f}, total search time = {:.1f} s",
                  scores[final_best], total_s);

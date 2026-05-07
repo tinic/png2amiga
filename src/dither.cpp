@@ -11,6 +11,28 @@
 #include <string>
 #include <vector>
 
+// SIMD backend selection — same gates as quantize.cpp / ssimulacra2.cpp.
+#if defined(__wasm_simd128__)
+    #include <wasm_simd128.h>
+    #define PNG2AMIGA_DITHER_SIMD_NEON      0
+    #define PNG2AMIGA_DITHER_SIMD_AVX2      0
+    #define PNG2AMIGA_DITHER_SIMD_WASM      1
+#elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define PNG2AMIGA_DITHER_SIMD_NEON      0
+    #define PNG2AMIGA_DITHER_SIMD_AVX2      1
+    #define PNG2AMIGA_DITHER_SIMD_WASM      0
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    #include <arm_neon.h>
+    #define PNG2AMIGA_DITHER_SIMD_NEON      1
+    #define PNG2AMIGA_DITHER_SIMD_AVX2      0
+    #define PNG2AMIGA_DITHER_SIMD_WASM      0
+#else
+    #define PNG2AMIGA_DITHER_SIMD_NEON      0
+    #define PNG2AMIGA_DITHER_SIMD_AVX2      0
+    #define PNG2AMIGA_DITHER_SIMD_WASM      0
+#endif
+
 namespace png2amiga::dither {
 
 namespace {
@@ -597,27 +619,136 @@ struct NearestResult {
     float dist_sq;
 };
 
-NearestResult find_nearest_oklab(OKLab pixel_lab,
-                                 std::span<const OKLab> palette_lab) {
-    float best_dist = std::numeric_limits<float>::max();
-    std::size_t best_idx = 0;
-    OKLab best_lab{};
+// SIMD-vectorised find_nearest_oklab over a Structure-of-Arrays palette.
+// Processes 4 palette entries per iteration (NEON) or 8 (AVX2). The
+// caller pre-builds the SoA layout once per palette and reuses it
+// across all 68K pixels of a frame — see make_palette_soa().
+//
+// Why SoA: AoS would force per-pixel gather (3 stride-3 loads) which
+// is ~10× slower than contiguous loads on Zen 1 / M3. SoA also lets
+// the same load broadcast across all comparisons.
+//
+// Fixed capacity 256 — enough for any indexed mode we support
+// (max d=8 = 256 colours). Stack-allocated to skip the malloc on
+// every dither::apply (which would dominate at small image sizes).
+constexpr std::size_t kMaxPaletteN = 256;
+struct PaletteSoA {
+    alignas(32) std::array<float, kMaxPaletteN> L;
+    alignas(32) std::array<float, kMaxPaletteN> a;
+    alignas(32) std::array<float, kMaxPaletteN> b;
+    std::size_t n;
+    std::size_t padded;
+};
 
-    for (std::size_t i = 0; i < palette_lab.size(); ++i) {
-        auto& cl = palette_lab[i];
-        float dL = pixel_lab.L - cl.L;
-        float da = pixel_lab.a - cl.a;
-        float db = pixel_lab.b - cl.b;
-        float dist = color_space::fma_dist_sq(dL, da, db);
-
-        if (dist < best_dist) {
-            best_dist = dist;
-            best_idx = i;
-            best_lab = cl;
+void fill_palette_soa(std::span<const OKLab> palette_lab,
+                      PaletteSoA& s) {
+    s.n = palette_lab.size();
+#if PNG2AMIGA_DITHER_SIMD_AVX2
+    constexpr std::size_t W = 8;
+#else
+    constexpr std::size_t W = 4;
+#endif
+    s.padded = std::min(((s.n + W - 1) / W) * W, kMaxPaletteN);
+    for (std::size_t i = 0; i < s.padded; ++i) {
+        if (i < s.n) {
+            s.L[i] = palette_lab[i].L;
+            s.a[i] = palette_lab[i].a;
+            s.b[i] = palette_lab[i].b;
+        } else {
+            // Padding sentinel: huge L so SIMD argmin can't pick it.
+            s.L[i] = 1e30f;
+            s.a[i] = 0.0f;
+            s.b[i] = 0.0f;
         }
     }
+}
 
-    return {best_idx, best_lab, best_dist};
+NearestResult find_nearest_oklab_soa(OKLab px,
+                                     const PaletteSoA& pal) {
+    const std::size_t n = pal.padded;
+    if (n == 0) return {0, OKLab{}, 0.0f};
+
+#if PNG2AMIGA_DITHER_SIMD_NEON
+    const float32x4_t pL = vdupq_n_f32(px.L);
+    const float32x4_t pa = vdupq_n_f32(px.a);
+    const float32x4_t pb = vdupq_n_f32(px.b);
+    float32x4_t      best_d = vdupq_n_f32(std::numeric_limits<float>::max());
+    uint32x4_t       best_i = vdupq_n_u32(0);
+    const uint32x4_t k0123  = uint32x4_t{0u, 1u, 2u, 3u};
+    for (std::size_t i = 0; i < n; i += 4) {
+        float32x4_t cL = vld1q_f32(pal.L.data() + i);
+        float32x4_t ca = vld1q_f32(pal.a.data() + i);
+        float32x4_t cb = vld1q_f32(pal.b.data() + i);
+        float32x4_t dL = vsubq_f32(pL, cL);
+        float32x4_t da = vsubq_f32(pa, ca);
+        float32x4_t db = vsubq_f32(pb, cb);
+        float32x4_t d  = vfmaq_f32(vfmaq_f32(vmulq_f32(dL, dL), da, da),
+                                    db, db);
+        uint32x4_t cur_i = vaddq_u32(k0123,
+                                vdupq_n_u32(static_cast<std::uint32_t>(i)));
+        uint32x4_t lt = vcltq_f32(d, best_d);
+        best_d = vbslq_f32(lt, d, best_d);
+        best_i = vbslq_u32(lt, cur_i, best_i);
+    }
+    // Reduce 4 lanes to 1.
+    alignas(16) float dd[4]; alignas(16) std::uint32_t ii[4];
+    vst1q_f32(dd, best_d); vst1q_u32(ii, best_i);
+    int   bk = 0;
+    float bd = dd[0];
+    for (int k = 1; k < 4; ++k)
+        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+    std::size_t bi = ii[bk];
+    if (bi >= pal.n) bi = pal.n - 1;
+    return {bi,
+            OKLab{pal.L[bi], pal.a[bi], pal.b[bi]},
+            bd};
+#elif PNG2AMIGA_DITHER_SIMD_AVX2
+    const __m256 pL = _mm256_set1_ps(px.L);
+    const __m256 pa = _mm256_set1_ps(px.a);
+    const __m256 pb = _mm256_set1_ps(px.b);
+    __m256 best_d = _mm256_set1_ps(std::numeric_limits<float>::max());
+    __m256i best_i = _mm256_setzero_si256();
+    const __m256i k01234567 = _mm256_setr_epi32(0,1,2,3,4,5,6,7);
+    for (std::size_t i = 0; i < n; i += 8) {
+        __m256 cL = _mm256_loadu_ps(pal.L.data() + i);
+        __m256 ca = _mm256_loadu_ps(pal.a.data() + i);
+        __m256 cb = _mm256_loadu_ps(pal.b.data() + i);
+        __m256 dL = _mm256_sub_ps(pL, cL);
+        __m256 da = _mm256_sub_ps(pa, ca);
+        __m256 db = _mm256_sub_ps(pb, cb);
+        __m256 d  = _mm256_fmadd_ps(db, db,
+                       _mm256_fmadd_ps(da, da, _mm256_mul_ps(dL, dL)));
+        __m256 lt = _mm256_cmp_ps(d, best_d, _CMP_LT_OQ);
+        best_d = _mm256_blendv_ps(best_d, d, lt);
+        __m256i cur_i = _mm256_add_epi32(k01234567,
+                        _mm256_set1_epi32(static_cast<int>(i)));
+        best_i = _mm256_castps_si256(
+            _mm256_blendv_ps(_mm256_castsi256_ps(best_i),
+                              _mm256_castsi256_ps(cur_i), lt));
+    }
+    alignas(32) float dd[8]; alignas(32) int ii[8];
+    _mm256_store_ps(dd, best_d);
+    _mm256_store_si256(reinterpret_cast<__m256i*>(ii), best_i);
+    int bk = 0; float bd = dd[0];
+    for (int k = 1; k < 8; ++k) if (dd[k] < bd) { bd = dd[k]; bk = k; }
+    std::size_t bi = static_cast<std::size_t>(ii[bk]);
+    if (bi >= pal.n) bi = pal.n - 1;
+    return {bi, OKLab{pal.L[bi], pal.a[bi], pal.b[bi]}, bd};
+#else
+    // WASM SIMD or scalar fallback.
+    float best_dist = std::numeric_limits<float>::max();
+    std::size_t best_idx = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        float dL = px.L - pal.L[i];
+        float da = px.a - pal.a[i];
+        float db = px.b - pal.b[i];
+        float d  = dL*dL + da*da + db*db;
+        if (d < best_dist) { best_dist = d; best_idx = i; }
+    }
+    return {best_idx,
+            OKLab{pal.L[best_idx], pal.a[best_idx], pal.b[best_idx]},
+            best_dist};
+#endif
 }
 
 // ===========================================================================
@@ -855,6 +986,10 @@ DitherResult apply_error_diffusion(
     }
 
     std::vector<Color3f> err_buf_s(w * h, Color3f{0, 0, 0});
+    // SoA palette is built once on the stack and reused for all 68K
+    // pixel lookups. ~3 KB stack vs a fresh malloc per call.
+    PaletteSoA pal_soa;
+    fill_palette_soa(palette_lab, pal_soa);
 
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = serpentine && (y % 2 == 1);
@@ -875,7 +1010,7 @@ DitherResult apply_error_diffusion(
             auto adjusted   = color_space::linear_to_oklab(target_lin);
 
             auto [idx, chosen_lab, dist_sq] =
-                find_nearest_oklab(adjusted, palette_lab);
+                find_nearest_oklab_soa(adjusted, pal_soa);
             result.indices[buf_idx] = static_cast<std::uint8_t>(idx);
             result.total_error += dist_sq;
 
@@ -2589,11 +2724,13 @@ DitherResult apply_none(const Image& image,
     result.indices.resize(w * h);
     result.total_error = 0.0f;
 
+    PaletteSoA pal_soa;
+    fill_palette_soa(palette_lab, pal_soa);
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(image[x, y]);
             auto [idx, chosen, dist_sq] =
-                find_nearest_oklab(pixel_lab, palette_lab);
+                find_nearest_oklab_soa(pixel_lab, pal_soa);
             result.indices[y * w + x] = static_cast<std::uint8_t>(idx);
             result.total_error += dist_sq;
         }

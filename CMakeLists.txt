@@ -54,6 +54,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/preprocess.cpp
     src/quantize.cpp
     src/quantize_metal_wrap.cpp
+    src/palette_search.cpp
     src/dither.cpp
     src/bitplane.cpp
     src/degas.cpp

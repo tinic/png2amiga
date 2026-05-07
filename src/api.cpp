@@ -21,6 +21,8 @@
 #include "palette.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
+#include "palette_search.hpp"
+#include "ssimulacra2.hpp"
 #include "pipeline.hpp"
 #include "png_io.hpp"
 #include "preprocess.hpp"
@@ -2492,6 +2494,94 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                           && options.locks.empty()
                           && options.pins.empty()
                           && !has_transparency;
+
+        // EHB pop-search path. Same eligibility as the legacy sweep; we
+        // gate on chipset==OCS because pop_search.cpp's snap-OCS step
+        // is OCS-only. Builds 32 base colours via the enriched-source
+        // PNN seed (matches the legacy sweep's seeding) → uses that as
+        // the seed_palettes for the evolutionary search → ehb_expand
+        // makes each candidate score under its 64-entry expansion.
+        bool ehb_pop_eligible = ehb_can_sweep &&
+                                 chipset == amiga::Chipset::ocs &&
+                                 !options.copper && !options.scap &&
+                                 !options.dual_playfield;
+        if (ehb_pop_eligible) {
+            // Build enriched-image PNN seed (same recipe as the legacy
+            // sweep's encode_once) — gives pop search a high-quality
+            // EHB-aware seed instead of plain median-cut.
+            Image enriched(image->width(), image->height() * 2);
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    enriched[x, y] = (*image)[x, y];
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x) {
+                    auto p = (*image)[x, y];
+                    auto s = color_space::linear_to_srgb(p).clamped();
+                    Color3f doubled{
+                        std::clamp(s.r * 2.0f, 0.0f, 1.0f),
+                        std::clamp(s.g * 2.0f, 0.0f, 1.0f),
+                        std::clamp(s.b * 2.0f, 0.0f, 1.0f),
+                    };
+                    enriched[x, image->height() + y] =
+                        color_space::srgb_to_linear(doubled);
+                }
+            std::vector<Palette> ehb_seeds;
+            if (auto q = quantize::quantize(enriched, 32,
+                    quantize::Algorithm::pnn,
+                    options.palette_diversity); q) {
+                snap_to_chipset(*q, chipset, mode);
+                palette::refine_ehb_base_palette(
+                    std::span<Color3f>(q->colors.data(), 32),
+                    image->pixels(),
+                    /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                if (options.lock_color0)
+                    q->colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+                ehb_seeds.push_back(std::move(*q));
+            }
+
+            dither::Settings base_dith;
+            base_dith.method = parse_dither(options.dither);
+            base_dith.strength = options.dither_strength;
+            base_dith.error_clamp = options.error_clamp;
+            palette_search::PopSearchOptions pso;
+            pso.pop_size      = 64;
+            pso.generations   = 40;
+            pso.stale_limit   = 10;
+            pso.ehb_expand    = true;
+            pso.seed_palettes = std::move(ehb_seeds);
+            pso.on_progress   = options.on_progress;
+            // Search runs at depth=5 (pop_search internal gate is
+            // depth ∈ [1,5]); EHB hardware uses 6 bitplanes but the
+            // *base* palette has only 32 entries.
+            auto pop = palette_search::run_population_search(
+                *image, /*depth=*/5, /*max_colors=*/32,
+                mode, chipset, base_dith, options.lock_color0, pso);
+            if (pop) {
+                // Re-expand to the full 64-entry EHB palette so the
+                // encoder + IFF CMAP write the right thing.
+                auto ehbp = palette::make_ehb_palette(pop->palette.colors);
+                auto enc = bitplane::encode(pop->indices,
+                    image->width(), image->height(), 6);
+                if (enc) {
+                    if (options.on_progress)
+                        options.on_progress(1.0f, "done");
+                    PipelineResult result;
+                    result.rendered  = std::move(pop->rendered);
+                    result.planes    = std::move(*enc);
+                    result.palette   = std::move(ehbp.colors);
+                    result.indices   = std::move(pop->indices);
+                    result.mode      = mode;
+                    result.hires     = false;
+                    result.interlace = options.interlace;
+                    result.dpf       = false;
+                    result.aga       = is_aga;
+                    result.has_transparency = false;
+                    result.finalize_psnr(*image, pop->total_error);
+                    return result;
+                }
+            }
+            // Fall through to legacy sweep on pop failure.
+        }
         if (ehb_can_sweep) {
             struct EhbPlainTrial {
                 Palette base_pal;
@@ -3317,6 +3407,49 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         base_dith.method = parse_dither(options.dither);
         base_dith.strength = options.dither_strength;
         base_dith.error_clamp = options.error_clamp;
+
+        // Pop-search-only path: at lores OCS d ∈ [1,5], best_sweep
+        // is dominated by pop search every test we've run — and the
+        // sweep adds 7-10 s of wall on top of pop. Skip the sweep
+        // entirely; pop search self-seeds via internal k-means
+        // diversity restarts.
+        const auto& mp_curr = amiga::get_mode_params(mode);
+        bool pop_only =
+            chipset == amiga::Chipset::ocs &&
+            !mp_curr.is_hires &&
+            depth >= 1 && depth <= 5;
+        if (pop_only) {
+            palette_search::PopSearchOptions pso;
+            pso.pop_size      = 64;
+            pso.generations   = 40;
+            pso.stale_limit   = 10;
+            pso.on_progress   = options.on_progress;
+            // No external seed — internal k-means handles diversity.
+            auto pop = palette_search::run_population_search(
+                *image, static_cast<int>(depth), max_colors,
+                mode, chipset, base_dith, options.lock_color0, pso);
+            if (pop) {
+                auto enc = bitplane::encode(pop->indices,
+                    image->width(), image->height(), depth);
+                if (enc) {
+                    PipelineResult result;
+                    result.rendered  = std::move(pop->rendered);
+                    result.planes    = std::move(*enc);
+                    result.palette   = std::move(pop->palette.colors);
+                    result.indices   = std::move(pop->indices);
+                    result.mode      = mode;
+                    result.hires     = compound_hires || mp_curr.is_hires;
+                    result.interlace = options.interlace;
+                    result.dpf       = false;
+                    result.aga       = is_aga;
+                    result.has_transparency = false;
+                    result.finalize_psnr(*image, pop->total_error);
+                    return result;
+                }
+            }
+            // Fall through to legacy sweep path on pop failure.
+        }
+
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d,
                                int diversity) -> Result<PlainAutoTrial> {
@@ -3341,6 +3474,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 winner->pal.colors.begin() +
                     static_cast<std::ptrdiff_t>(winner->pal_size));
 
+            // d≤5 case is already handled by the pop_only branch above.
+            // This block runs for d≥6 (or pop_only fallback) where
+            // the sweep winner stands.
             PipelineResult result;
             result.rendered = std::move(winner->rendered);
             result.planes = std::move(winner->planes);
