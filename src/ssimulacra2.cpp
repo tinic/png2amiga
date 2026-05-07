@@ -314,6 +314,29 @@ void downsample_2x_linear(const std::vector<Color3f>& src,
     }
 }
 
+// SIMD fast_cbrt for NEON 4-lane: bit-trick seed plus 2 Newton
+// iterations. Same accuracy (~5e-7 over [0, 1.5]) as scalar.
+#if PNG2AMIGA_BACKEND_NEON
+inline float32x4_t fast_cbrt_v(float32x4_t x) noexcept {
+    uint32x4_t xi = vreinterpretq_u32_f32(x);
+    // u.i / 3 + 0x2A510554. NEON has no integer divide; use scalar
+    // divide-by-3 over 4 lanes, then reinterpret. (One-time cost
+    // outside the SIMD pipe.)
+    alignas(16) std::uint32_t bits[4];
+    vst1q_u32(bits, xi);
+    for (int j = 0; j < 4; ++j) bits[j] = bits[j] / 3u + 0x2A510554u;
+    float32x4_t y = vreinterpretq_f32_u32(vld1q_u32(bits));
+    const float32x4_t v_two       = vdupq_n_f32(2.0f);
+    const float32x4_t v_one_third = vdupq_n_f32(1.0f / 3.0f);
+    for (int it = 0; it < 2; ++it) {
+        float32x4_t yy = vmulq_f32(y, y);
+        float32x4_t xydiv = vdivq_f32(x, yy);
+        y = vmulq_f32(vmlaq_f32(xydiv, v_two, y), v_one_third);
+    }
+    return y;
+}
+#endif
+
 // SIMD fast_cbrt for AVX2 8-lane / NEON 4-lane: bit-trick seed plus 2
 // Newton iterations. Same accuracy (~5e-7 over [0, 1.5]) as the
 // scalar version, just batched.
@@ -432,6 +455,50 @@ void to_xyb_planes(const std::vector<Color3f>& src,
         _mm256_storeu_ps(px + i, vx);
         _mm256_storeu_ps(py + i, vy);
         _mm256_storeu_ps(pb + i, vb);
+    }
+#elif PNG2AMIGA_BACKEND_NEON
+    // NEON has the perfect intrinsic for stride-3 deinterleave:
+    // vld3q_f32 loads 3*4 floats and returns them as {r4, g4, b4}.
+    // Apple M3 does this in 1-2 cycles per load — much cleaner than
+    // the AVX2 setr_ps shuffle dance.
+    const float32x4_t v_kBias     = vdupq_n_f32(kBias);
+    const float32x4_t v_kBiasCbrt = vdupq_n_f32(kBiasCbrt);
+    const float32x4_t c_L_r = vdupq_n_f32(0.30f);
+    const float32x4_t c_L_g = vdupq_n_f32(0.622f);
+    const float32x4_t c_L_b = vdupq_n_f32(0.078f);
+    const float32x4_t c_M_r = vdupq_n_f32(0.23f);
+    const float32x4_t c_M_g = vdupq_n_f32(0.692f);
+    const float32x4_t c_M_b = vdupq_n_f32(0.078f);
+    const float32x4_t c_S_r = vdupq_n_f32(0.243422f);
+    const float32x4_t c_S_g = vdupq_n_f32(0.204162f);
+    const float32x4_t c_S_b = vdupq_n_f32(0.552416f);
+    const float32x4_t v_half = vdupq_n_f32(0.5f);
+    const float32x4_t v_55   = vdupq_n_f32(0.55f);
+    const float32x4_t v_14   = vdupq_n_f32(14.0f);
+    const float32x4_t v_42   = vdupq_n_f32(0.42f);
+    const float32x4_t v_01   = vdupq_n_f32(0.01f);
+    const std::size_t simd_end = n & ~3u;
+    const float* psf = reinterpret_cast<const float*>(ps);
+    for (; i < simd_end; i += 4) {
+        float32x4x3_t rgb = vld3q_f32(psf + i * 3);
+        float32x4_t r = rgb.val[0];
+        float32x4_t g = rgb.val[1];
+        float32x4_t b = rgb.val[2];
+        float32x4_t L = vmlaq_f32(vmlaq_f32(vmulq_f32(c_L_r, r), c_L_g, g), c_L_b, b);
+        float32x4_t M = vmlaq_f32(vmlaq_f32(vmulq_f32(c_M_r, r), c_M_g, g), c_M_b, b);
+        float32x4_t S = vmlaq_f32(vmlaq_f32(vmulq_f32(c_S_r, r), c_S_g, g), c_S_b, b);
+        float32x4_t Lp = vsubq_f32(fast_cbrt_v(vaddq_f32(L, v_kBias)), v_kBiasCbrt);
+        float32x4_t Mp = vsubq_f32(fast_cbrt_v(vaddq_f32(M, v_kBias)), v_kBiasCbrt);
+        float32x4_t Sp = vsubq_f32(fast_cbrt_v(vaddq_f32(S, v_kBias)), v_kBiasCbrt);
+        float32x4_t vx = vmulq_f32(vsubq_f32(Lp, Mp), v_half);
+        float32x4_t vy = vmulq_f32(vaddq_f32(Lp, Mp), v_half);
+        float32x4_t vb = Sp;
+        vb = vaddq_f32(vsubq_f32(vb, vy), v_55);
+        vx = vmlaq_f32(v_42, vx, v_14);
+        vy = vaddq_f32(vy, v_01);
+        vst1q_f32(px + i, vx);
+        vst1q_f32(py + i, vy);
+        vst1q_f32(pb + i, vb);
     }
 #endif
     for (; i < n; ++i) {
