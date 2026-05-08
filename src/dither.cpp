@@ -1023,8 +1023,12 @@ DitherResult apply_error_diffusion(
                 image_s[buf_idx].b + std::clamp(e.b, -ec, ec),
             };
             // Round-trip back to OKLab so the picker stays perceptual.
-            auto target_lin = color_space::srgb_to_linear(target_s);
-            auto adjusted   = color_space::linear_to_oklab(target_lin);
+            // Fused SIMD srgb→oklab keeps data in __m128 across pow,
+            // LMS-mul, and cbrt — the v1.71.x perf round established
+            // that splitting it as two calls (srgb_to_linear_simd
+            // followed by linear_to_oklab) was neutral on Zen 1 because
+            // the Color3f roundtrip ate the SIMD speedup.
+            auto adjusted = color_space::srgb_to_oklab_simd(target_s);
 
             auto [idx, chosen_lab, dist_sq] =
                 find_nearest_oklab_soa(adjusted, pal_soa);

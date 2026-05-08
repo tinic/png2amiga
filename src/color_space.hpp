@@ -130,6 +130,15 @@ PNG2AMIGA_LUT_CONSTEXPR Color3f srgb_hex_to_linear(std::uint32_t hex) noexcept {
     return srgb_u8_to_linear(r, g, b);
 }
 
+// Defined here (before the SIMD section) so the fused srgb_to_oklab_simd
+// can return one. Full OKLab utility (linear_to_oklab, distances, batch
+// helpers) lives further down.
+struct OKLab {
+    float L{};
+    float a{};
+    float b{};
+};
+
 // ---------------------------------------------------------------------------
 // SIMD sRGB → linear for the dither hot loop.
 //
@@ -209,6 +218,86 @@ PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     return Color3f{out[0], out[1], out[2]};
 }
 
+namespace detail {
+
+// In-register fast_cbrt — same algorithm as fast_cbrt4, takes __m128
+// directly so the fused srgb_to_oklab path doesn't roundtrip through
+// f32x4 storage.
+PNG2AMIGA_INLINE_HOT __m128 fast_cbrt_m128_sse4(__m128 vf) noexcept {
+    __m128i v = _mm_castps_si128(vf);
+    __m128i sign_mask = _mm_set1_epi32(static_cast<int>(0x80000000));
+    __m128i sign    = _mm_and_si128(v, sign_mask);
+    __m128i absbits = _mm_andnot_si128(sign_mask, v);
+    __m128i t = _mm_add_epi32(_mm_srli_epi32(absbits, 2),
+                                _mm_srli_epi32(absbits, 4));
+    t = _mm_add_epi32(t, _mm_srli_epi32(t, 4));
+    t = _mm_add_epi32(t, _mm_srli_epi32(t, 8));
+    __m128i seed = _mm_add_epi32(_mm_set1_epi32(0x2a5137a0), t);
+    __m128 absx = _mm_castsi128_ps(absbits);
+    __m128 y    = _mm_castsi128_ps(seed);
+    __m128 third = _mm_set1_ps(0.33333333f);
+    __m128 two   = _mm_set1_ps(2.0f);
+    __m128 yy = _mm_mul_ps(y, y);
+    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y),
+                                      _mm_div_ps(absx, yy)));
+    yy = _mm_mul_ps(y, y);
+    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y),
+                                      _mm_div_ps(absx, yy)));
+    __m128i nonzero = _mm_cmpgt_epi32(absbits, _mm_setzero_si128());
+    __m128i out_bits = _mm_or_si128(
+        _mm_and_si128(_mm_castps_si128(y), nonzero), sign);
+    return _mm_castsi128_ps(out_bits);
+}
+
+}  // namespace detail
+
+// Fused srgb → oklab. Keeps data in __m128 across pow / LMS-mul /
+// cbrt; only extracts to scalars at the final OKLab matrix step.
+// Per-pixel call site that previously chained
+//   Color3f lin = srgb_to_linear(c);
+//   OKLab oklab = linear_to_oklab(lin);
+// collapses into one call with no Color3f roundtrip — which matters
+// per the v1.71.x perf round (`project_perf_dead_ends_2026_05.md`):
+// the un-fused version was neutral on Zen 1 even with proven 4× pow
+// speedup, because the Color3f pack/unpack ate the win.
+PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
+    __m128 srgb = _mm_setr_ps(c.r, c.g, c.b, 0.0f);
+    // 1) sRGB → linear (pow24, branchless mask).
+    __m128 lin_lin  = _mm_mul_ps(srgb, _mm_set1_ps(1.0f / 12.92f));
+    __m128 base = _mm_mul_ps(_mm_add_ps(srgb, _mm_set1_ps(0.055f)),
+                              _mm_set1_ps(1.0f / 1.055f));
+    __m128 ln_b = detail::sleef_lnf_sse4(base);
+    __m128 pw   = detail::sleef_expf_sse4(
+        _mm_mul_ps(_mm_set1_ps(2.4f), ln_b));
+    __m128 mask = _mm_cmple_ps(srgb, _mm_set1_ps(0.04045f));
+    __m128 lin  = _mm_blendv_ps(pw, lin_lin, mask);
+    // 2) Linear → LMS via 3 broadcast + FMA.
+    __m128 r_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(0, 0, 0, 0));
+    __m128 g_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(1, 1, 1, 1));
+    __m128 b_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(2, 2, 2, 2));
+    __m128 lms = _mm_mul_ps(
+        _mm_setr_ps(0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f),
+        r_b);
+    lms = _mm_fmadd_ps(
+        _mm_setr_ps(0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f),
+        g_b, lms);
+    lms = _mm_fmadd_ps(
+        _mm_setr_ps(0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f),
+        b_b, lms);
+    // 3) cbrt (4-wide, lane 3 padding).
+    __m128 lmsc = detail::fast_cbrt_m128_sse4(lms);
+    // 4) Final OKLab matrix — 3 dot products. Scalar tail since the
+    // result is a 3-float OKLab struct anyway.
+    alignas(16) float out[4];
+    _mm_store_ps(out, lmsc);
+    float l = out[0], m = out[1], s = out[2];
+    return {
+        std::fma( 0.2104542553f, l, std::fma( 0.7936177850f, m, -0.0040720468f * s)),
+        std::fma( 1.9779984951f, l, std::fma(-2.4285922050f, m,  0.4505937099f * s)),
+        std::fma( 0.0259040371f, l, std::fma( 0.7827717662f, m, -0.8086757660f * s)),
+    };
+}
+
 #elif defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
 
@@ -268,6 +357,73 @@ PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     alignas(16) float out[4];
     vst1q_f32(out, r);
     return Color3f{out[0], out[1], out[2]};
+}
+
+namespace detail {
+
+PNG2AMIGA_INLINE_HOT float32x4_t fast_cbrt_neon(float32x4_t vf) noexcept {
+    uint32x4_t v = vreinterpretq_u32_f32(vf);
+    uint32x4_t sign_mask = vdupq_n_u32(0x80000000u);
+    uint32x4_t sign    = vandq_u32(v, sign_mask);
+    uint32x4_t absbits = vbicq_u32(v, sign_mask);
+    uint32x4_t t = vaddq_u32(vshrq_n_u32(absbits, 2),
+                              vshrq_n_u32(absbits, 4));
+    t = vaddq_u32(t, vshrq_n_u32(t, 4));
+    t = vaddq_u32(t, vshrq_n_u32(t, 8));
+    uint32x4_t seed = vaddq_u32(vdupq_n_u32(0x2a5137a0u), t);
+    float32x4_t absx = vreinterpretq_f32_u32(absbits);
+    float32x4_t y    = vreinterpretq_f32_u32(seed);
+    float32x4_t third = vdupq_n_f32(0.33333333f);
+    float32x4_t two   = vdupq_n_f32(2.0f);
+    float32x4_t yy = vmulq_f32(y, y);
+    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y),
+                                    vdivq_f32(absx, yy)));
+    yy = vmulq_f32(y, y);
+    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y),
+                                    vdivq_f32(absx, yy)));
+    uint32x4_t nonzero = vcgtq_u32(absbits, vdupq_n_u32(0));
+    uint32x4_t out_bits = vorrq_u32(
+        vandq_u32(vreinterpretq_u32_f32(y), nonzero), sign);
+    return vreinterpretq_f32_u32(out_bits);
+}
+
+}  // namespace detail
+
+PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
+    alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
+    float32x4_t srgb = vld1q_f32(in);
+    // 1) sRGB → linear.
+    float32x4_t lin_lin = vmulq_n_f32(srgb, 1.0f / 12.92f);
+    float32x4_t base = vmulq_n_f32(
+        vaddq_f32(srgb, vdupq_n_f32(0.055f)), 1.0f / 1.055f);
+    float32x4_t ln_b = detail::sleef_lnf_neon(base);
+    float32x4_t pw   = detail::sleef_expf_neon(vmulq_n_f32(ln_b, 2.4f));
+    uint32x4_t  mask = vcleq_f32(srgb, vdupq_n_f32(0.04045f));
+    float32x4_t lin  = vbslq_f32(mask, lin_lin, pw);
+    // 2) Linear → LMS via 3 broadcast + FMA.
+    float32x4_t r_b = vdupq_laneq_f32(lin, 0);
+    float32x4_t g_b = vdupq_laneq_f32(lin, 1);
+    float32x4_t b_b = vdupq_laneq_f32(lin, 2);
+    alignas(16) const float col_r[4] = {
+        0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f};
+    alignas(16) const float col_g[4] = {
+        0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f};
+    alignas(16) const float col_b[4] = {
+        0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f};
+    float32x4_t lms = vmulq_f32(vld1q_f32(col_r), r_b);
+    lms = vfmaq_f32(lms, vld1q_f32(col_g), g_b);
+    lms = vfmaq_f32(lms, vld1q_f32(col_b), b_b);
+    // 3) cbrt.
+    float32x4_t lmsc = detail::fast_cbrt_neon(lms);
+    // 4) Final OKLab matrix — scalar tail.
+    alignas(16) float out[4];
+    vst1q_f32(out, lmsc);
+    float l = out[0], m = out[1], s = out[2];
+    return {
+        std::fma( 0.2104542553f, l, std::fma( 0.7936177850f, m, -0.0040720468f * s)),
+        std::fma( 1.9779984951f, l, std::fma(-2.4285922050f, m,  0.4505937099f * s)),
+        std::fma( 0.0259040371f, l, std::fma( 0.7827717662f, m, -0.8086757660f * s)),
+    };
 }
 
 #elif defined(__wasm_simd128__)
@@ -345,21 +501,90 @@ PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     return Color3f{out[0], out[1], out[2]};
 }
 
+namespace detail {
+
+PNG2AMIGA_INLINE_HOT v128_t fast_cbrt_wasm(v128_t vf) noexcept {
+    v128_t sign_mask = wasm_i32x4_splat(static_cast<int32_t>(0x80000000u));
+    v128_t sign    = wasm_v128_and(vf, sign_mask);
+    v128_t absbits = wasm_v128_andnot(vf, sign_mask);
+    v128_t t = wasm_i32x4_add(wasm_u32x4_shr(absbits, 2),
+                              wasm_u32x4_shr(absbits, 4));
+    t = wasm_i32x4_add(t, wasm_u32x4_shr(t, 4));
+    t = wasm_i32x4_add(t, wasm_u32x4_shr(t, 8));
+    v128_t seed = wasm_i32x4_add(wasm_i32x4_splat(0x2a5137a0), t);
+    v128_t absx = absbits;
+    v128_t y    = seed;
+    v128_t third = wasm_f32x4_splat(0.33333333f);
+    v128_t two   = wasm_f32x4_splat(2.0f);
+    v128_t yy = wasm_f32x4_mul(y, y);
+    y = wasm_f32x4_mul(third,
+        wasm_f32x4_add(wasm_f32x4_mul(two, y),
+                       wasm_f32x4_div(absx, yy)));
+    yy = wasm_f32x4_mul(y, y);
+    y = wasm_f32x4_mul(third,
+        wasm_f32x4_add(wasm_f32x4_mul(two, y),
+                       wasm_f32x4_div(absx, yy)));
+    v128_t nonzero = wasm_i32x4_gt(absbits, wasm_i32x4_splat(0));
+    v128_t out_bits = wasm_v128_or(wasm_v128_and(y, nonzero), sign);
+    return out_bits;
+}
+
+}  // namespace detail
+
+PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
+    alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
+    v128_t srgb = wasm_v128_load(in);
+    // 1) sRGB → linear.
+    v128_t lin_lin = wasm_f32x4_mul(srgb, wasm_f32x4_splat(1.0f / 12.92f));
+    v128_t base = wasm_f32x4_mul(
+        wasm_f32x4_add(srgb, wasm_f32x4_splat(0.055f)),
+        wasm_f32x4_splat(1.0f / 1.055f));
+    v128_t ln_b = detail::sleef_lnf_wasm(base);
+    v128_t pw   = detail::sleef_expf_wasm(
+        wasm_f32x4_mul(ln_b, wasm_f32x4_splat(2.4f)));
+    v128_t mask = wasm_f32x4_le(srgb, wasm_f32x4_splat(0.04045f));
+    v128_t lin  = wasm_v128_bitselect(lin_lin, pw, mask);
+    // 2) Linear → LMS via 3 broadcast + FMA.
+    v128_t r_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 0));
+    v128_t g_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 1));
+    v128_t b_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 2));
+    alignas(16) const float col_r[4] = {
+        0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f};
+    alignas(16) const float col_g[4] = {
+        0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f};
+    alignas(16) const float col_b[4] = {
+        0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f};
+    v128_t lms = wasm_f32x4_mul(wasm_v128_load(col_r), r_b);
+    lms = wasm_f32x4_add(wasm_f32x4_mul(wasm_v128_load(col_g), g_b), lms);
+    lms = wasm_f32x4_add(wasm_f32x4_mul(wasm_v128_load(col_b), b_b), lms);
+    // 3) cbrt.
+    v128_t lmsc = detail::fast_cbrt_wasm(lms);
+    // 4) Final OKLab matrix — scalar tail.
+    alignas(16) float out[4];
+    wasm_v128_store(out, lmsc);
+    float l = out[0], m = out[1], s = out[2];
+    return {
+        std::fma( 0.2104542553f, l, std::fma( 0.7936177850f, m, -0.0040720468f * s)),
+        std::fma( 1.9779984951f, l, std::fma(-2.4285922050f, m,  0.4505937099f * s)),
+        std::fma( 0.0259040371f, l, std::fma( 0.7827717662f, m, -0.8086757660f * s)),
+    };
+}
+
 #else  // No SIMD ISA detected — analytic scalar fallback.
 PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     return srgb_to_linear(c);
+}
+PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
+    return linear_to_oklab(srgb_to_linear(c));
 }
 #endif
 
 // ---------------------------------------------------------------------------
 // OKLab color space (perceptual)
 // ---------------------------------------------------------------------------
-
-struct OKLab {
-    float L{};
-    float a{};
-    float b{};
-};
+//
+// (struct OKLab is forward-defined above so srgb_to_oklab_simd can return
+//  one. This section adds the rest of the OKLab utility surface.)
 
 // Squared 3-component distance using std::fma for scalar paths. Saves one
 // rounding step per add (vfmadd231ss has the same throughput as a separate
