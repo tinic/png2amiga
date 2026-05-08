@@ -726,13 +726,32 @@ NearestResult find_nearest_oklab_soa(OKLab px,
             _mm256_blendv_ps(_mm256_castsi256_ps(best_i),
                               _mm256_castsi256_ps(cur_i), lt));
     }
-    alignas(32) float dd[8]; alignas(32) int ii[8];
-    _mm256_store_ps(dd, best_d);
+    // SIMD horizontal min — 3 stages of vminps + permute, broadcast the
+    // global min into all 8 lanes, then `cmp_eq + movemask + ctz` finds
+    // the lane index. Replaces MSVC's auto-unrolled 7-stage scalar
+    // vcomiss/vcmpss/cmovnbe chain that was 10.3 s of CPU on AMD uProf
+    // — the largest single hotspot in find_nearest_oklab_soa.
+    __m256 perm128 = _mm256_permute2f128_ps(best_d, best_d, 0x01);
+    __m256 m1 = _mm256_min_ps(best_d, perm128);
+    __m256 perm64 = _mm256_shuffle_ps(m1, m1, _MM_SHUFFLE(1, 0, 3, 2));
+    __m256 m2 = _mm256_min_ps(m1, perm64);
+    __m256 perm32 = _mm256_shuffle_ps(m2, m2, _MM_SHUFFLE(2, 3, 0, 1));
+    __m256 mglobal = _mm256_min_ps(m2, perm32);
+    int eq_mask = _mm256_movemask_ps(
+        _mm256_cmp_ps(best_d, mglobal, _CMP_EQ_OQ));
+    // ctz(eq_mask) is the first lane matching the global min.
+    int lane;
+#if defined(_MSC_VER) && !defined(__clang__)
+    unsigned long ctz; _BitScanForward(&ctz, static_cast<unsigned>(eq_mask));
+    lane = static_cast<int>(ctz);
+#else
+    lane = __builtin_ctz(static_cast<unsigned>(eq_mask));
+#endif
+    alignas(32) int ii[8];
     _mm256_store_si256(reinterpret_cast<__m256i*>(ii), best_i);
-    int bk = 0; float bd = dd[0];
-    for (int k = 1; k < 8; ++k) if (dd[k] < bd) { bd = dd[k]; bk = k; }
-    std::size_t bi = static_cast<std::size_t>(ii[bk]);
+    std::size_t bi = static_cast<std::size_t>(ii[lane]);
     if (bi >= pal.n) bi = pal.n - 1;
+    float bd = _mm_cvtss_f32(_mm256_castps256_ps128(mglobal));
     return {bi, OKLab{pal.L[bi], pal.a[bi], pal.b[bi]}, bd};
 #else
     // WASM SIMD or scalar fallback.
