@@ -7654,12 +7654,59 @@ int run_main(int argc, char* argv[]) {
         if (pal.colors.size() > max_colors)
             pal.colors.resize(max_colors);
         snap_palette(pal, chipset, config->mode);
-        // Apply locks on top of user palette
+        // JSON palette can carry per-slot lock/reserve flags
+        // (--print-palette-json round-trip). Merge them into
+        // config.locks / config.reserves UNLESS a CLI flag already
+        // targets that slot — CLI overrides the sidecar so users can
+        // tweak without rewriting the JSON. The slot's colour comes
+        // from pal.colors[idx].
+        auto cli_lock_at = [&](int idx) {
+            for (auto& l : config->locks) if (l.index == idx) return true;
+            return false;
+        };
+        auto cli_reserve_at = [&](int idx) {
+            for (auto& r : config->reserves) if (r.index == idx) return true;
+            return false;
+        };
+        auto rgb_from_color = [&](Color3f c) {
+            auto srgb = color_space::linear_to_srgb(c).clamped();
+            return std::tuple{
+                static_cast<int>(std::round(srgb.r * 255.0f)),
+                static_cast<int>(std::round(srgb.g * 255.0f)),
+                static_cast<int>(std::round(srgb.b * 255.0f))};
+        };
+        for (int li : pal.locked_indices) {
+            if (li < 0 || static_cast<std::size_t>(li) >= pal.colors.size())
+                continue;
+            if (cli_lock_at(li) || cli_reserve_at(li)) continue;
+            auto [r, g, b] = rgb_from_color(pal.colors[static_cast<std::size_t>(li)]);
+            config->locks.push_back({li, r, g, b});
+        }
+        for (int ri : pal.reserved_indices) {
+            if (ri < 0 || static_cast<std::size_t>(ri) >= pal.colors.size())
+                continue;
+            if (cli_lock_at(ri) || cli_reserve_at(ri)) continue;
+            auto [r, g, b] = rgb_from_color(pal.colors[static_cast<std::size_t>(ri)]);
+            config->reserves.push_back({ri, r, g, b});
+        }
+        // Apply CLI locks AND reserves on top of the user palette so a
+        // CLI flag fully respecifies the slot (colour + flag), not just
+        // the flag. The JSON-merge step above already skipped any slot
+        // covered by a CLI flag, so this loop only touches CLI-specified
+        // entries.
         for (auto& lock : config->locks) {
             auto idx = static_cast<std::size_t>(lock.index);
             if (idx < pal.colors.size()) {
                 pal.colors[idx] = palette_locks::to_color(lock, chipset, config->mode);
                 std_locked[idx] = true;
+            }
+        }
+        for (auto& res : config->reserves) {
+            auto idx = static_cast<std::size_t>(res.index);
+            if (idx < pal.colors.size()) {
+                pal.colors[idx] = palette_locks::to_color(
+                    api::LockSpec{res.index, res.r, res.g, res.b},
+                    chipset, config->mode);
             }
         }
         cli_status("Palette:  {} colors (loaded from {})",

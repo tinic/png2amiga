@@ -419,8 +419,32 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
         reinterpret_cast<const char*>(data.data()), data.size());
     Palette pal;
     pal.name = "json";
-    constexpr std::string_view rgb_key = "\"rgb\":\"";
+    constexpr std::string_view rgb_key      = "\"rgb\":\"";
+    constexpr std::string_view locked_key   = "\"locked\":";
+    constexpr std::string_view reserved_key = "\"reserved\":";
+    // The dump emits one object per slot in document order, with the
+    // shape `{"idx":N,"rgb":"RRGGBB","locked":B,"reserved":B}`. We rely
+    // on document order to recover slot indices: the n-th `"rgb"` entry
+    // is slot n. The "locked"/"reserved" flags between consecutive rgb
+    // entries belong to that entry. (The schema also has top-level
+    // "depth"/"chipset"/"mode" fields after the `]` — none of those
+    // contain `"rgb"` or `"locked"`/`"reserved"` keys, so the scan
+    // doesn't misattribute.)
+    auto scan_bool_after = [&](std::size_t after_pos,
+                               std::string_view key) -> bool {
+        auto k = text.find(key, after_pos);
+        if (k == std::string_view::npos) return false;
+        std::size_t v = k + key.size();
+        // Skip whitespace to the value.
+        while (v < text.size() &&
+               (text[v] == ' ' || text[v] == '\t' ||
+                text[v] == '\r' || text[v] == '\n')) {
+            ++v;
+        }
+        return v + 4 <= text.size() && text.substr(v, 4) == "true";
+    };
     std::size_t pos = 0;
+    int slot = 0;
     while (pos < text.size()) {
         auto k = text.find(rgb_key, pos);
         if (k == std::string_view::npos) break;
@@ -447,6 +471,33 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
             static_cast<std::uint8_t>((rgb >> 16) & 0xFF),
             static_cast<std::uint8_t>((rgb >>  8) & 0xFF),
             static_cast<std::uint8_t>(rgb & 0xFF)));
+
+        // Look ahead for this slot's flags. Bound the lookahead so a
+        // future slot's flags can't bleed into this one — the next
+        // `"rgb"` (if any) marks the end of this slot's object. For the
+        // last slot, scan to end-of-document.
+        auto next_rgb = text.find(rgb_key, hex_start + 6);
+        std::size_t flag_end = (next_rgb == std::string_view::npos)
+            ? text.size() : next_rgb;
+        // Restrict the find region to [hex_start+6, flag_end).
+        auto sub = text.substr(hex_start + 6, flag_end - (hex_start + 6));
+        // scan_bool_after looks within `text` so we re-derive offsets:
+        // find inside `sub`, then offset back if found.
+        auto find_flag = [&](std::string_view key) -> bool {
+            auto kk = sub.find(key);
+            if (kk == std::string_view::npos) return false;
+            std::size_t v = kk + key.size();
+            while (v < sub.size() &&
+                   (sub[v] == ' ' || sub[v] == '\t' ||
+                    sub[v] == '\r' || sub[v] == '\n')) {
+                ++v;
+            }
+            return v + 4 <= sub.size() && sub.substr(v, 4) == "true";
+        };
+        if (find_flag(locked_key))   pal.locked_indices.push_back(slot);
+        if (find_flag(reserved_key)) pal.reserved_indices.push_back(slot);
+        ++slot;
+        (void)scan_bool_after;  // unused after the inline lambda
         pos = hex_start + 6;
     }
     if (pal.colors.empty()) {

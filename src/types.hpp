@@ -171,6 +171,15 @@ struct Palette {
     std::string name;
     std::vector<Color3f> colors;
 
+    // Optional per-slot metadata carried by formats that encode it
+    // (currently only JSON via --print-palette-json round-trip). Stores
+    // slot indices into `colors`; both vectors are empty for formats
+    // that don't carry the flags. Consumed by the CLI load site, which
+    // merges them into config.locks / config.reserves with CLI flags
+    // taking precedence per-slot.
+    std::vector<int> locked_indices{};
+    std::vector<int> reserved_indices{};
+
     [[nodiscard]] std::span<const Color3f> as_span() const noexcept {
         return colors;
     }
