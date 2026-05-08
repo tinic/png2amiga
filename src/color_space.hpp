@@ -140,6 +140,36 @@ struct OKLab {
 };
 
 // ---------------------------------------------------------------------------
+// Fixed-exponent pow(x, 2.4) approximation for the sRGB → linear step.
+//
+// Direct degree-9 minimax fit of pow_branch(s) = ((s+0.055)/1.055)^2.4
+// on s ∈ [0, 1] — i.e. the polynomial input is `s` itself, the
+// (s+0.055)/1.055 scaling is baked into the coefficients. Single Horner
+// evaluation, no division, no log/exp split.
+//
+// Bench: tools/bench_pow24.cpp
+//   M3:    14.79 × over std::pow (NEON x4)
+//   Zen 1: 20.64 × over std::pow (SSE4 x4) / 37.21 × (AVX2 x8)
+// Accuracy:
+//   max abs err 1.19e-06, max rel err 2.06e-04
+//   well below 4-bit OCS quantization step (6.25 % per channel).
+//
+// Coefficients fitted via tools/fit_srgb_pow24.py.
+// ---------------------------------------------------------------------------
+namespace pow24_fixed {
+constexpr float c0 = +8.3605809601e-04f;
+constexpr float c1 = +3.6089365513e-02f;
+constexpr float c2 = +4.7321428955e-01f;
+constexpr float c3 = +9.5458970791e-01f;
+constexpr float c4 = -1.2557098121e+00f;
+constexpr float c5 = +1.9300281423e+00f;
+constexpr float c6 = -2.2409846367e+00f;
+constexpr float c7 = +1.7148746033e+00f;
+constexpr float c8 = -7.5960070594e-01f;
+constexpr float c9 = +1.4666385867e-01f;
+}
+
+// ---------------------------------------------------------------------------
 // SIMD sRGB → linear for the dither hot loop.
 //
 // apply_error_diffusion calls srgb_to_linear(target_s) once per pixel.
@@ -262,15 +292,20 @@ PNG2AMIGA_INLINE_HOT __m128 fast_cbrt_m128_sse4(__m128 vf) noexcept {
 // speedup, because the Color3f pack/unpack ate the win.
 PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     __m128 srgb = _mm_setr_ps(c.r, c.g, c.b, 0.0f);
-    // 1) sRGB → linear (pow24, branchless mask).
-    __m128 lin_lin  = _mm_mul_ps(srgb, _mm_set1_ps(1.0f / 12.92f));
-    __m128 base = _mm_mul_ps(_mm_add_ps(srgb, _mm_set1_ps(0.055f)),
-                              _mm_set1_ps(1.0f / 1.055f));
-    __m128 ln_b = detail::sleef_lnf_sse4(base);
-    __m128 pw   = detail::sleef_expf_sse4(
-        _mm_mul_ps(_mm_set1_ps(2.4f), ln_b));
+    // 1) sRGB → linear (fixed-2.4 degree-9 polynomial, branchless).
+    __m128 lin_branch = _mm_mul_ps(srgb, _mm_set1_ps(1.0f / 12.92f));
+    __m128 p = _mm_set1_ps(pow24_fixed::c9);
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c8));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c7));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c6));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c5));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c4));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c3));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c2));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c1));
+    p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c0));
     __m128 mask = _mm_cmple_ps(srgb, _mm_set1_ps(0.04045f));
-    __m128 lin  = _mm_blendv_ps(pw, lin_lin, mask);
+    __m128 lin  = _mm_blendv_ps(p, lin_branch, mask);
     // 2) Linear → LMS via 3 broadcast + FMA.
     __m128 r_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(0, 0, 0, 0));
     __m128 g_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(1, 1, 1, 1));
@@ -392,14 +427,20 @@ PNG2AMIGA_INLINE_HOT float32x4_t fast_cbrt_neon(float32x4_t vf) noexcept {
 PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
     float32x4_t srgb = vld1q_f32(in);
-    // 1) sRGB → linear.
-    float32x4_t lin_lin = vmulq_n_f32(srgb, 1.0f / 12.92f);
-    float32x4_t base = vmulq_n_f32(
-        vaddq_f32(srgb, vdupq_n_f32(0.055f)), 1.0f / 1.055f);
-    float32x4_t ln_b = detail::sleef_lnf_neon(base);
-    float32x4_t pw   = detail::sleef_expf_neon(vmulq_n_f32(ln_b, 2.4f));
+    // 1) sRGB → linear (fixed-2.4 degree-9 polynomial, branchless).
+    float32x4_t lin_branch = vmulq_n_f32(srgb, 1.0f / 12.92f);
+    float32x4_t p = vdupq_n_f32(pow24_fixed::c9);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c8), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c7), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c6), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c5), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c4), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c3), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c2), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c1), p, srgb);
+    p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c0), p, srgb);
     uint32x4_t  mask = vcleq_f32(srgb, vdupq_n_f32(0.04045f));
-    float32x4_t lin  = vbslq_f32(mask, lin_lin, pw);
+    float32x4_t lin  = vbslq_f32(mask, lin_branch, p);
     // 2) Linear → LMS via 3 broadcast + FMA.
     float32x4_t r_b = vdupq_laneq_f32(lin, 0);
     float32x4_t g_b = vdupq_laneq_f32(lin, 1);
@@ -534,16 +575,25 @@ PNG2AMIGA_INLINE_HOT v128_t fast_cbrt_wasm(v128_t vf) noexcept {
 PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
     v128_t srgb = wasm_v128_load(in);
-    // 1) sRGB → linear.
-    v128_t lin_lin = wasm_f32x4_mul(srgb, wasm_f32x4_splat(1.0f / 12.92f));
-    v128_t base = wasm_f32x4_mul(
-        wasm_f32x4_add(srgb, wasm_f32x4_splat(0.055f)),
-        wasm_f32x4_splat(1.0f / 1.055f));
-    v128_t ln_b = detail::sleef_lnf_wasm(base);
-    v128_t pw   = detail::sleef_expf_wasm(
-        wasm_f32x4_mul(ln_b, wasm_f32x4_splat(2.4f)));
+    // 1) sRGB → linear (fixed-2.4 degree-9 polynomial, branchless).
+    v128_t lin_branch = wasm_f32x4_mul(srgb,
+        wasm_f32x4_splat(1.0f / 12.92f));
+    auto madd = [&](v128_t prev, float k) {
+        return wasm_f32x4_add(wasm_f32x4_mul(prev, srgb),
+                               wasm_f32x4_splat(k));
+    };
+    v128_t p = wasm_f32x4_splat(pow24_fixed::c9);
+    p = madd(p, pow24_fixed::c8);
+    p = madd(p, pow24_fixed::c7);
+    p = madd(p, pow24_fixed::c6);
+    p = madd(p, pow24_fixed::c5);
+    p = madd(p, pow24_fixed::c4);
+    p = madd(p, pow24_fixed::c3);
+    p = madd(p, pow24_fixed::c2);
+    p = madd(p, pow24_fixed::c1);
+    p = madd(p, pow24_fixed::c0);
     v128_t mask = wasm_f32x4_le(srgb, wasm_f32x4_splat(0.04045f));
-    v128_t lin  = wasm_v128_bitselect(lin_lin, pw, mask);
+    v128_t lin  = wasm_v128_bitselect(lin_branch, p, mask);
     // 2) Linear → LMS via 3 broadcast + FMA.
     v128_t r_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 0));
     v128_t g_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 1));
