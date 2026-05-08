@@ -3567,87 +3567,131 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto pop = palette_search::run_population_search(
                 *image, static_cast<int>(depth), max_colors,
                 mode, chipset, base_dith, options.lock_color0, pso);
-            if (pop) {
-                auto enc = bitplane::encode(pop->indices,
-                    image->width(), image->height(), depth);
-                if (enc) {
-                    // Score helper — masks transparent pixels to black
-                    // on both sides so SSIMULACRA2 doesn't penalise the
-                    // ignored regions (matches cpu_fitness's masking).
-                    auto score_rendered =
-                        [&](const Image& rnd) -> float {
-                        if (!has_transparency) {
-                            return ssimulacra2::compute(image->pixels(),
-                                rnd.pixels(),
-                                image->width(), image->height());
-                        }
-                        Image src_m(image->width(), image->height());
-                        Image rnd_m(image->width(), image->height());
-                        auto sp = src_m.pixels();
-                        auto rp = rnd_m.pixels();
-                        auto op = image->pixels();
-                        auto orp = rnd.pixels();
-                        for (std::size_t i = 0; i < sp.size(); ++i) {
-                            if (i < tmask.size() && tmask[i]) {
-                                sp[i] = Color3f{0, 0, 0};
-                                rp[i] = Color3f{0, 0, 0};
-                            } else {
-                                sp[i] = op[i];
-                                rp[i] = orp[i];
-                            }
-                        }
-                        return ssimulacra2::compute(src_m.pixels(),
-                            rnd_m.pixels(),
-                            image->width(), image->height());
-                    };
 
-                    // Fallback safety net: when seed_keep is present
-                    // (locks / reserves / transparency in play),
-                    // compare pop's S2 against the encode_plain_auto
-                    // seed's S2 and keep whichever is higher. Pop
-                    // search seeds from this trial and *should* never
-                    // regress, but cpu_fitness's dither doesn't match
-                    // encode_plain_auto's exactly under heavy locks,
-                    // so the score domains can disagree.
-                    bool keep_pop = true;
-                    if (seed_keep) {
-                        float pop_s2  = score_rendered(pop->rendered);
-                        float seed_s2 = score_rendered(seed_keep->rendered);
-                        if (seed_s2 > pop_s2) keep_pop = false;
-                    }
+            // Also run the legacy multi-basin sweep (5 strengths × 2
+            // diversities × 8 jitter seeds = 80 trials of
+            // encode_plain_auto). Pop search is a single-seed GA — it
+            // converges fast on most images but gets stuck in a local
+            // optimum on heavy-locks scenes that other quantizer
+            // basins would beat. Running both and picking the higher
+            // S2 covers both regimes. Wall cost ~doubles, which the
+            // user explicitly OK'd for --best.
+            auto sweep_encode_once =
+                [&](const Image& img, const dither::Settings& d,
+                    int diversity) -> Result<PlainAutoTrial> {
+                return encode_plain_auto(
+                    img, depth, max_colors, mode, chipset,
+                    d, diversity, options.refine_iterations,
+                    options.lock_color0, has_transparency,
+                    /*use_dpf=*/false,
+                    /*match_range=*/options.match_range,
+                    options.locks, options.reserves, options.pins,
+                    tmask);
+            };
+            auto sweep = pipeline::best_sweep<PlainAutoTrial>(
+                *image, base_dith, options.palette_diversity,
+                /*jitter_count=*/8,
+                sweep_encode_once,
+                [](const PlainAutoTrial& t) -> const Image& {
+                    return t.rendered;
+                },
+                options.on_progress, /*jitter_amplitude=*/1.0f);
 
-                    PipelineResult result;
-                    if (keep_pop) {
-                        result.rendered = std::move(pop->rendered);
-                        result.planes   = std::move(*enc);
-                        result.palette  = std::move(pop->palette.colors);
-                        result.indices  = std::move(pop->indices);
-                        result.finalize_psnr(*image, pop->total_error);
-                    } else {
-                        // Seed wins — use its planes/indices/palette.
-                        std::vector<Color3f> seed_pal_keep(
-                            seed_keep->pal.colors.begin(),
-                            seed_keep->pal.colors.begin() +
-                                static_cast<std::ptrdiff_t>(
-                                    seed_keep->pal_size));
-                        result.rendered = std::move(seed_keep->rendered);
-                        result.planes   = std::move(seed_keep->planes);
-                        result.palette  = std::move(seed_pal_keep);
-                        result.indices  = std::move(seed_keep->indices);
-                        result.finalize_psnr(*image,
-                            seed_keep->total_error);
-                    }
-                    result.mode      = mode;
-                    result.hires     = compound_hires || mp_curr.is_hires;
-                    result.interlace = options.interlace;
-                    result.dpf       = false;
-                    result.aga       = is_aga;
-                    result.has_transparency = has_transparency;
-                    result.transparency_mask = tmask;
-                    return result;
+            // Score helper — masks transparent pixels to black on
+            // both sides so SSIMULACRA2 doesn't penalise the ignored
+            // regions (matches cpu_fitness's masking).
+            auto score_rendered =
+                [&](const Image& rnd) -> float {
+                if (!has_transparency) {
+                    return ssimulacra2::compute(image->pixels(),
+                        rnd.pixels(),
+                        image->width(), image->height());
                 }
+                Image src_m(image->width(), image->height());
+                Image rnd_m(image->width(), image->height());
+                auto sp = src_m.pixels();
+                auto rp = rnd_m.pixels();
+                auto op = image->pixels();
+                auto orp = rnd.pixels();
+                for (std::size_t i = 0; i < sp.size(); ++i) {
+                    if (i < tmask.size() && tmask[i]) {
+                        sp[i] = Color3f{0, 0, 0};
+                        rp[i] = Color3f{0, 0, 0};
+                    } else {
+                        sp[i] = op[i];
+                        rp[i] = orp[i];
+                    }
+                }
+                return ssimulacra2::compute(src_m.pixels(),
+                    rnd_m.pixels(),
+                    image->width(), image->height());
+            };
+
+            // 3-way candidate ranking: pop / seed / sweep. seed_keep is
+            // only present when locks/reserves/transparency are in
+            // play (otherwise pop_search's internal k-means seeding
+            // suffices). Pick the highest-scoring candidate.
+            enum Kind { K_POP, K_SEED, K_SWEEP };
+            struct Cand { float s2; Kind kind; };
+            std::vector<Cand> cands;
+            if (pop)
+                cands.push_back({score_rendered(pop->rendered), K_POP});
+            if (seed_keep)
+                cands.push_back({score_rendered(seed_keep->rendered),
+                                  K_SEED});
+            if (sweep)
+                cands.push_back({score_rendered(sweep->rendered),
+                                  K_SWEEP});
+
+            if (!cands.empty()) {
+                auto win = std::max_element(cands.begin(), cands.end(),
+                    [](const Cand& a, const Cand& b) {
+                        return a.s2 < b.s2;
+                    });
+                PipelineResult result;
+                if (win->kind == K_POP) {
+                    auto enc = bitplane::encode(pop->indices,
+                        image->width(), image->height(), depth);
+                    if (!enc) return std::unexpected{enc.error()};
+                    result.rendered = std::move(pop->rendered);
+                    result.planes   = std::move(*enc);
+                    result.palette  = std::move(pop->palette.colors);
+                    result.indices  = std::move(pop->indices);
+                    result.finalize_psnr(*image, pop->total_error);
+                } else if (win->kind == K_SEED) {
+                    std::vector<Color3f> pal_keep(
+                        seed_keep->pal.colors.begin(),
+                        seed_keep->pal.colors.begin() +
+                            static_cast<std::ptrdiff_t>(
+                                seed_keep->pal_size));
+                    result.rendered = std::move(seed_keep->rendered);
+                    result.planes   = std::move(seed_keep->planes);
+                    result.palette  = std::move(pal_keep);
+                    result.indices  = std::move(seed_keep->indices);
+                    result.finalize_psnr(*image,
+                        seed_keep->total_error);
+                } else {  // K_SWEEP
+                    std::vector<Color3f> pal_keep(
+                        sweep->pal.colors.begin(),
+                        sweep->pal.colors.begin() +
+                            static_cast<std::ptrdiff_t>(
+                                sweep->pal_size));
+                    result.rendered = std::move(sweep->rendered);
+                    result.planes   = std::move(sweep->planes);
+                    result.palette  = std::move(pal_keep);
+                    result.indices  = std::move(sweep->indices);
+                    result.finalize_psnr(*image, sweep->total_error);
+                }
+                result.mode      = mode;
+                result.hires     = compound_hires || mp_curr.is_hires;
+                result.interlace = options.interlace;
+                result.dpf       = false;
+                result.aga       = is_aga;
+                result.has_transparency = has_transparency;
+                result.transparency_mask = tmask;
+                return result;
             }
-            // Fall through to legacy sweep path on pop failure.
+            // All three failed — fall through to single-pass.
         }
 
         auto encode_once = [&](const Image& img,
