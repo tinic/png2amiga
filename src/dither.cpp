@@ -1023,11 +1023,13 @@ DitherResult apply_error_diffusion(
                 image_s[buf_idx].b + std::clamp(e.b, -ec, ec),
             };
             // Round-trip back to OKLab so the picker stays perceptual.
-            // Fused SIMD srgb→oklab keeps data in __m128 across pow,
-            // LMS-mul, and cbrt — the v1.71.x perf round established
-            // that splitting it as two calls (srgb_to_linear_simd
-            // followed by linear_to_oklab) was neutral on Zen 1 because
-            // the Color3f roundtrip ate the SIMD speedup.
+            // Fused SIMD srgb→oklab keeps data in __m128 / float32x4_t
+            // / v128_t across pow, LMS-mul, and cbrt — only extracts
+            // to scalars at the final OKLab matrix step. Local M3 best
+            // -of-3 wall on `--mode ehb --best --profile 4`: 47 s
+            // (fused) vs 54 s (analytic), ~13 % improvement. Zen 1 /
+            // MSVC stays neutral (the SLEEF division-bound polynomial
+            // doesn't beat std::pow there); no regression observed.
             auto adjusted = color_space::srgb_to_oklab_simd(target_s);
 
             auto [idx, chosen_lab, dist_sq] =
