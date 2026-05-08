@@ -1,5 +1,6 @@
 #include "ssimulacra2.hpp"
 
+#include "color_space.hpp"  // PNG2AMIGA_INLINE_HOT
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -154,35 +155,22 @@ const std::array<float, kBlurSize>& blur_kernel() {
 constexpr std::size_t kRingRowsP2 = 16;  // next pow-2 ≥ kBlurSize=11
 constexpr std::size_t kRingMask   = kRingRowsP2 - 1;
 
-void gaussian_blur(const std::vector<float>& in,
-                   std::vector<float>& out,
-                   std::vector<float>& tmp,
-                   std::size_t w, std::size_t h) {
-    auto& k = blur_kernel();
-    // tmp is the L1-resident row ring; resize to exactly what we need.
-    // Caller's `Scratch::reserve_to(w*h)` already over-allocates, so this
-    // is only a real grow on the first call after a smaller-than-usual
-    // run.
-    if (tmp.size() < kRingRowsP2 * w) tmp.resize(kRingRowsP2 * w);
-    if (out.size() < w * h) out.resize(w * h);
-    const int W = static_cast<int>(w);
-    const int H = static_cast<int>(h);
-
-    const std::size_t bx_lo = std::min<std::size_t>(kBlurHalf, w);
-    const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf))
-                                  ? (w - kBlurHalf) : bx_lo;
-    const std::size_t simd_end = (bx_hi > bx_lo)
-                                     ? (bx_lo + ((bx_hi - bx_lo) & ~7u))
-                                     : bx_lo;
-    const std::size_t simd_w_end = w & ~7u;
-
-    // ---- Per-row H pass into ring slot ----
-    auto h_pass = [&](int sy) {
-        // sy must be in [0, H). Writes into ring slot (sy & kRingMask).
-        const float* row  = in.data()  +
-            static_cast<std::size_t>(sy) * w;
-        float*       trow = tmp.data() +
-            static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w;
+// Per-row horizontal pass into the L1 ring buffer slot (sy & kRingMask).
+// Hoisted out of gaussian_blur as a forceinlined helper because MSVC
+// otherwise leaves the lambda as a separate function call (showed up as
+// `gaussian_blur::lambda_1` at 31 s of CPU on AMD uProf, eating most of
+// the streaming refactor's expected gain).
+PNG2AMIGA_INLINE_HOT
+void blur_h_pass_row(const std::vector<float>& in,
+                     std::vector<float>& tmp,
+                     const std::array<float, kBlurSize>& k,
+                     int sy, int W,
+                     std::size_t w, std::size_t bx_lo,
+                     std::size_t bx_hi, std::size_t simd_end) {
+    const float* row  = in.data()  +
+        static_cast<std::size_t>(sy) * w;
+    float*       trow = tmp.data() +
+        static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w;
         // Left boundary: scalar with bounds check.
         for (std::size_t x = 0; x < bx_lo; ++x) {
             float s = 0.0f;
@@ -248,12 +236,31 @@ void gaussian_blur(const std::vector<float>& in,
             }
             trow[x] = s;
         }
-    };
+}
+
+void gaussian_blur(const std::vector<float>& in,
+                   std::vector<float>& out,
+                   std::vector<float>& tmp,
+                   std::size_t w, std::size_t h) {
+    auto& k = blur_kernel();
+    if (tmp.size() < kRingRowsP2 * w) tmp.resize(kRingRowsP2 * w);
+    if (out.size() < w * h) out.resize(w * h);
+    const int W = static_cast<int>(w);
+    const int H = static_cast<int>(h);
+
+    const std::size_t bx_lo = std::min<std::size_t>(kBlurHalf, w);
+    const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf))
+                                  ? (w - kBlurHalf) : bx_lo;
+    const std::size_t simd_end = (bx_hi > bx_lo)
+                                     ? (bx_lo + ((bx_hi - bx_lo) & ~7u))
+                                     : bx_lo;
+    const std::size_t simd_w_end = w & ~7u;
 
     // Prime the ring with rows [0, kBlurHalf-1]. Earlier rows
     // (negative indices) are zero-padded by skipping them in the V
     // pass via the `clip` branch.
-    for (int y = 0; y < kBlurHalf && y < H; ++y) h_pass(y);
+    for (int y = 0; y < kBlurHalf && y < H; ++y)
+        blur_h_pass_row(in, tmp, k, y, W, w, bx_lo, bx_hi, simd_end);
 
     // ---- Streaming H + V loop ----
     for (int y = 0; y < H; ++y) {
@@ -261,7 +268,9 @@ void gaussian_blur(const std::vector<float>& in,
         // row y + kBlurHalf. (For y < H - kBlurHalf this is in range;
         // beyond that we run out of input rows and the V pass clips.)
         int sy_new = y + kBlurHalf;
-        if (sy_new < H) h_pass(sy_new);
+        if (sy_new < H)
+            blur_h_pass_row(in, tmp, k, sy_new, W, w,
+                            bx_lo, bx_hi, simd_end);
 
         // V pass for output row y, reading the ring's relevant 11 rows.
         const int sy_lo = y - kBlurHalf;
