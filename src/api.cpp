@@ -3505,8 +3505,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     ++reserves_in_pal;
             }
             const bool has_reserves_in_call = reserves_in_pal > 0;
+            const bool has_locks_in_call    = !options.locks.empty();
             std::vector<bool> seed_locked_mask;
-            if (has_reserves_in_call || has_transparency) {
+            if (has_reserves_in_call || has_transparency ||
+                has_locks_in_call) {
                 auto seed_trial = encode_plain_auto(
                     *image, depth, max_colors, mode, chipset,
                     base_dith, /*palette_diversity=*/0,
@@ -3523,12 +3525,29 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         seed_trial->pal.colors.begin() +
                             static_cast<std::ptrdiff_t>(seed_trial->pal_size));
                     pso.seed_palettes.push_back(std::move(seed_pal));
+                    // locked_mask = locks ∪ reserves ∪ {slot 0 if
+                    // transparent} — used only for mutate/crossover
+                    // gating. seed_trial->locked_mask is the assembled
+                    // mask containing all three.
                     seed_locked_mask = std::move(seed_trial->locked_mask);
                     if (seed_locked_mask.size() < max_colors)
                         seed_locked_mask.resize(max_colors, false);
                     if (has_transparency && !seed_locked_mask.empty())
                         seed_locked_mask[0] = true;
                     pso.locked_mask = seed_locked_mask;
+                    // dither_exclude_mask = reserves ∪ {slot 0 if
+                    // transparent}. Locks are NOT included — the
+                    // dither IS allowed to route image pixels to a
+                    // locked colour (mi2-redux locks 18/32 slots
+                    // expecting them to be reachable).
+                    std::vector<bool> excl(max_colors, false);
+                    for (auto& r : options.reserves) {
+                        if (r.index >= 0 &&
+                            static_cast<std::size_t>(r.index) < max_colors)
+                            excl[static_cast<std::size_t>(r.index)] = true;
+                    }
+                    if (has_transparency) excl[0] = true;
+                    pso.dither_exclude_mask = std::move(excl);
                 }
                 if (has_transparency) pso.tmask = tmask;
             }

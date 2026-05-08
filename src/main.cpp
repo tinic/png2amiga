@@ -7588,23 +7588,20 @@ int run_main(int argc, char* argv[]) {
     std::vector<bool> std_locked(max_colors, false);
 
     // --- Plain lores/hires + --best multi-restart delegation ----------
-    // Routes to api::run_pipeline's lores+best block, which now uses
-    // pop search at d≤5 OCS. Reserves and transparency now flow
-    // through too (api builds an encode_plain_auto seed and runs
-    // pop search around it with locked_mask + tmask threading).
-    // Locks (--lock-index) and pins still excluded — locks freeze
-    // arbitrary slots which would need broader plumbing through
-    // pop search; pins are a post-dither pixel placement that the
-    // search has no signal on.
+    // Routes to api::run_pipeline's lores+best block, which uses
+    // pop search at d≤5 OCS. Reserves, transparency, locks
+    // (--lock-index) and pins (--pin-index-at) all flow through:
+    // pop_search holds locked positions during mutation / crossover
+    // (only free slots vary), and encode_plain_auto applies pin
+    // index swaps per trial as a visual no-op so trial ranking is
+    // unaffected.
     bool plain_best_eligible = config->best &&
         (config->mode == amiga::Mode::lores ||
          config->mode == amiga::Mode::lores_interlace ||
          config->mode == amiga::Mode::hires ||
          config->mode == amiga::Mode::hires_interlace) &&
         !config->copper && !config->scap && !config->dual_playfield &&
-        !config->tile && !user_pal_std &&
-        config->locks.empty() &&
-        config->pins.empty();
+        !config->tile && !user_pal_std;
     if (plain_best_eligible) {
         // Float-input — skip the 8-bit PNG round-trip. Same as EHB /
         // strips paths after the encode_state_image migration.

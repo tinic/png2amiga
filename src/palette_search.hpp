@@ -38,13 +38,23 @@ struct PopSearchOptions {
     // caller has already produced a high-quality starting palette.
     std::vector<Palette> seed_palettes{};
     // Slots whose color is held fixed across all mutations. Sized to
-    // max_colors. true = locked. Used by --reserve-range to keep
-    // user-supplied reserve colors at their assigned slots, AND when
-    // transparency reserves slot 0 as black. Mutations skip these
-    // slots; OCS-snap respects them; the dither candidate set
-    // excludes them so reserved colors are never picked by the
-    // dither pass either (matches encode_plain_auto's behaviour).
+    // max_colors. true = locked. Used for both --lock-index AND
+    // --reserve-range: mutations skip these slots and OCS-snap
+    // respects them so locked / reserved colours stay put.
+    // NOTE: `locked_mask` is purely a mutate/crossover gate; it does
+    // NOT exclude slots from the dither candidate set. To exclude
+    // slots from being routable by the dither (e.g. reserves and the
+    // transparency slot 0), use `dither_exclude_mask` below.
     std::vector<bool>  locked_mask;
+    // Slots the dither must not route image pixels to. Strictly a
+    // subset of `locked_mask` in the locks-vs-reserves split:
+    //   --lock-index    in locked_mask only (dither CAN route here)
+    //   --reserve-range in BOTH masks       (dither CANNOT route here)
+    //   transparency    slot 0 in BOTH      (transparent → idx 0 only)
+    // Empty means "no exclusions" (every slot is dither-routable),
+    // which matches the pre-split behaviour for the common no-locks
+    // case.
+    std::vector<bool>  dither_exclude_mask;
     // Per-pixel transparency mask (w*h). When non-empty, transparent
     // pixels:
     //  - are skipped during dither (their indices forced to 0

@@ -109,23 +109,26 @@ std::vector<Color3f> crossover(const std::vector<Color3f>& a,
 }
 
 // Fitness with optional reserves + transparency support. When
-// `locked_mask` flags slots that the dither pass must not pick (the
-// reserve colours encode_plain_auto excludes from the candidate
-// pool), we build a sub-palette of free slots, dither against it,
-// then remap indices. When `tmask` is non-empty, transparent pixels
-// get index 0 post-dither and contribute neither to the dither
-// candidate set nor to the SSIMULACRA2 score (rendered + source
-// both forced to black at those pixels — same shape as the
-// upstream encode_plain_auto).
+// `dither_exclude_mask` flags slots that the dither pass must not
+// route to (reserves; slot 0 when transparent), we build a sub-
+// palette of routable slots, dither against it, then remap indices.
+// LOCKS belong in the encode_plain_auto seed but are NOT in the
+// exclude mask — the dither IS allowed to route to a locked slot
+// (e.g. mi2-redux fixes 18/32 slots to scene/costume colours and
+// expects the dither to actually use them).
+// When `tmask` is non-empty, transparent pixels get index 0 post-
+// dither and contribute neither to the dither candidate set nor to
+// the SSIMULACRA2 score (rendered + source both forced to black at
+// those pixels).
 float cpu_fitness(const Image& source,
                   std::span<const Color3f> palette,
                   const dither::Settings& dith,
-                  const std::vector<bool>& locked_mask = {},
+                  const std::vector<bool>& dither_exclude_mask = {},
                   const std::vector<bool>& tmask = {}) {
     const std::size_t W = source.width();
     const std::size_t H = source.height();
-    const bool has_reserves =
-        std::any_of(locked_mask.begin(), locked_mask.end(),
+    const bool has_excl =
+        std::any_of(dither_exclude_mask.begin(), dither_exclude_mask.end(),
                     [](bool b) { return b; });
     const bool has_trans = !tmask.empty();
 
@@ -142,16 +145,18 @@ float cpu_fitness(const Image& source,
     }
 
     dither::DitherResult dr;
-    if (has_reserves || has_trans) {
-        // Build candidate sub-palette excluding locked + (when
-        // transparent) slot 0.
+    if (has_excl || has_trans) {
+        // Build candidate sub-palette excluding reserved slots (and
+        // slot 0 when transparent). Locks are NOT in the exclude
+        // mask — the dither is allowed to route to a locked colour.
         cand_pal_tls.clear();
         cand_to_full_tls.clear();
         cand_pal_tls.reserve(palette.size());
         cand_to_full_tls.reserve(palette.size());
         for (std::size_t i = 0; i < palette.size(); ++i) {
             if (has_trans && i == 0) continue;
-            if (i < locked_mask.size() && locked_mask[i]) continue;
+            if (i < dither_exclude_mask.size() && dither_exclude_mask[i])
+                continue;
             cand_pal_tls.push_back(palette[i]);
             cand_to_full_tls.push_back(static_cast<std::uint8_t>(i));
         }
@@ -319,11 +324,11 @@ Result<PopSearchResult> run_population_search(
                 auto full = palette::make_ehb_palette(population[i]);
                 scores[i] = cpu_fitness(source,
                     std::span<const Color3f>(full.colors), dith,
-                    opts.locked_mask, opts.tmask);
+                    opts.dither_exclude_mask, opts.tmask);
             } else {
                 scores[i] = cpu_fitness(source,
                     std::span<const Color3f>(population[i]), dith,
-                    opts.locked_mask, opts.tmask);
+                    opts.dither_exclude_mask, opts.tmask);
             }
         });
     };
@@ -423,20 +428,22 @@ Result<PopSearchResult> run_population_search(
         ehb_full   = palette::make_ehb_palette(pal_vec);
         dither_pal = std::span<const Color3f>(ehb_full.colors);
     }
-    const bool has_reserves =
-        std::any_of(opts.locked_mask.begin(), opts.locked_mask.end(),
+    const bool has_excl =
+        std::any_of(opts.dither_exclude_mask.begin(),
+                    opts.dither_exclude_mask.end(),
                     [](bool b) { return b; });
     const bool has_trans = !opts.tmask.empty();
 
     dither::DitherResult dr;
-    if (has_reserves || has_trans) {
+    if (has_excl || has_trans) {
         std::vector<Color3f>      cand_pal;
         std::vector<std::uint8_t> cand_to_full;
         cand_pal.reserve(dither_pal.size());
         cand_to_full.reserve(dither_pal.size());
         for (std::size_t i = 0; i < dither_pal.size(); ++i) {
             if (has_trans && i == 0) continue;
-            if (i < opts.locked_mask.size() && opts.locked_mask[i]) continue;
+            if (i < opts.dither_exclude_mask.size() &&
+                opts.dither_exclude_mask[i]) continue;
             cand_pal.push_back(dither_pal[i]);
             cand_to_full.push_back(static_cast<std::uint8_t>(i));
         }
