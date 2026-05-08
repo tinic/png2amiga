@@ -103,6 +103,43 @@ float pow24_poly_scalar(float s) noexcept {
     return fast_exp2(2.4f * fast_log2(x));
 }
 
+// --- Fixed-2.4 specialised polynomial (no ln/exp split) ---
+// Degree-9 minimax fit of pow_branch(s) = ((s+0.055)/1.055)^2.4 on
+// s ∈ [0, 1]. Max abs err 2.3e-06, max rel err 2.7e-03. ~9 FMAs +
+// 1 mul, no division — much shorter than the SLEEF xlogf+xexpf chain.
+//
+// Coefficients fitted via tools/fit_srgb_pow24.py (Chebyshev least-
+// squares, then converted to monomial). Lowest degree first.
+namespace fixed24 {
+constexpr float c0 = +8.3605809601e-04f;
+constexpr float c1 = +3.6089365513e-02f;
+constexpr float c2 = +4.7321428955e-01f;
+constexpr float c3 = +9.5458970791e-01f;
+constexpr float c4 = -1.2557098121e+00f;
+constexpr float c5 = +1.9300281423e+00f;
+constexpr float c6 = -2.2409846367e+00f;
+constexpr float c7 = +1.7148746033e+00f;
+constexpr float c8 = -7.5960070594e-01f;
+constexpr float c9 = +1.4666385867e-01f;
+}
+
+[[gnu::noinline]]
+float pow24_fixed_scalar(float s) noexcept {
+    if (s <= 0.04045f) return s / 12.92f;
+    using namespace fixed24;
+    float p = c9;
+    p = std::fma(p, s, c8);
+    p = std::fma(p, s, c7);
+    p = std::fma(p, s, c6);
+    p = std::fma(p, s, c5);
+    p = std::fma(p, s, c4);
+    p = std::fma(p, s, c3);
+    p = std::fma(p, s, c2);
+    p = std::fma(p, s, c1);
+    p = std::fma(p, s, c0);
+    return p;
+}
+
 #if HAVE_AVX2
 // --- SSE 4-wide polynomial (matches dither inner loop's per-pixel rgb) ---
 [[gnu::always_inline]]
@@ -207,6 +244,41 @@ inline __m128 sleef_expf_v4(__m128 d) noexcept {
     // ldexp2(u, q): multiply by 2^q via biased-exponent injection
     __m128i shifted = _mm_slli_epi32(_mm_add_epi32(q, _mm_set1_epi32(127)), 23);
     return _mm_mul_ps(u, _mm_castsi128_ps(shifted));
+}
+
+[[gnu::always_inline]]
+inline __m128 pow24_fixed_sse4_v(__m128 s) noexcept {
+    __m128 lin = _mm_mul_ps(s, _mm_set1_ps(1.0f / 12.92f));
+    // Horner: ((((c9*s + c8)*s + c7)*s + ... )*s + c0)
+    __m128 p = _mm_set1_ps(fixed24::c9);
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c8));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c7));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c6));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c5));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c4));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c3));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c2));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c1));
+    p = _mm_fmadd_ps(p, s, _mm_set1_ps(fixed24::c0));
+    __m128 mask = _mm_cmple_ps(s, _mm_set1_ps(0.04045f));
+    return _mm_blendv_ps(p, lin, mask);
+}
+
+[[gnu::always_inline]]
+inline __m256 pow24_fixed_avx2_v(__m256 s) noexcept {
+    __m256 lin = _mm256_mul_ps(s, _mm256_set1_ps(1.0f / 12.92f));
+    __m256 p = _mm256_set1_ps(fixed24::c9);
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c8));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c7));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c6));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c5));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c4));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c3));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c2));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c1));
+    p = _mm256_fmadd_ps(p, s, _mm256_set1_ps(fixed24::c0));
+    __m256 mask = _mm256_cmp_ps(s, _mm256_set1_ps(0.04045f), _CMP_LE_OQ);
+    return _mm256_blendv_ps(p, lin, mask);
 }
 
 [[gnu::always_inline]]
@@ -388,6 +460,23 @@ inline float32x4_t pow24_sleef_neon_v(float32x4_t s) noexcept {
     uint32x4_t  mask = vcleq_f32(s, vdupq_n_f32(0.04045f));
     return vbslq_f32(mask, lin, pw);
 }
+
+[[gnu::always_inline]]
+inline float32x4_t pow24_fixed_neon_v(float32x4_t s) noexcept {
+    float32x4_t lin = vmulq_n_f32(s, 1.0f / 12.92f);
+    float32x4_t p = vdupq_n_f32(fixed24::c9);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c8), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c7), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c6), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c5), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c4), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c3), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c2), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c1), p, s);
+    p = vfmaq_f32(vdupq_n_f32(fixed24::c0), p, s);
+    uint32x4_t mask = vcleq_f32(s, vdupq_n_f32(0.04045f));
+    return vbslq_f32(mask, lin, p);
+}
 #endif  // HAVE_NEON
 
 #if HAVE_WASM_SIMD
@@ -456,6 +545,26 @@ inline v128_t pow24_sleef_wasm_v(v128_t s) noexcept {
         wasm_f32x4_splat(2.4f)));
     v128_t mask = wasm_f32x4_le(s, wasm_f32x4_splat(0.04045f));
     return wasm_v128_bitselect(lin, pw, mask);
+}
+
+[[gnu::always_inline]]
+inline v128_t pow24_fixed_wasm_v(v128_t s) noexcept {
+    v128_t lin = wasm_f32x4_mul(s, wasm_f32x4_splat(1.0f / 12.92f));
+    auto madd = [&](v128_t p, float k) {
+        return wasm_f32x4_add(wasm_f32x4_mul(p, s), wasm_f32x4_splat(k));
+    };
+    v128_t p = wasm_f32x4_splat(fixed24::c9);
+    p = madd(p, fixed24::c8);
+    p = madd(p, fixed24::c7);
+    p = madd(p, fixed24::c6);
+    p = madd(p, fixed24::c5);
+    p = madd(p, fixed24::c4);
+    p = madd(p, fixed24::c3);
+    p = madd(p, fixed24::c2);
+    p = madd(p, fixed24::c1);
+    p = madd(p, fixed24::c0);
+    v128_t mask = wasm_f32x4_le(s, wasm_f32x4_splat(0.04045f));
+    return wasm_v128_bitselect(lin, p, mask);
 }
 #endif  // HAVE_WASM_SIMD
 
@@ -532,6 +641,40 @@ double bench_sleef_sse(const std::vector<float>& xs) {
     return ns_per;
 }
 
+double bench_fixed_sse(const std::vector<float>& xs) {
+    auto t0 = std::chrono::steady_clock::now();
+    __m128 sink = _mm_setzero_ps();
+    for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+        sink = _mm_add_ps(sink, pow24_fixed_sse4_v(_mm_loadu_ps(&xs[i])));
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    alignas(16) float out[4]; _mm_store_ps(out, sink);
+    float total = out[0] + out[1] + out[2] + out[3];
+    double ns_per = ms * 1e6 / static_cast<double>(xs.size());
+    std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
+                "pow24_fixed_sse (x4)", ms, ns_per,
+                static_cast<double>(total));
+    return ns_per;
+}
+
+double bench_fixed_avx2(const std::vector<float>& xs) {
+    auto t0 = std::chrono::steady_clock::now();
+    __m256 sink = _mm256_setzero_ps();
+    for (std::size_t i = 0; i + 8 <= xs.size(); i += 8) {
+        sink = _mm256_add_ps(sink, pow24_fixed_avx2_v(_mm256_loadu_ps(&xs[i])));
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    alignas(32) float out[8]; _mm256_store_ps(out, sink);
+    float total = out[0]+out[1]+out[2]+out[3]+out[4]+out[5]+out[6]+out[7];
+    double ns_per = ms * 1e6 / static_cast<double>(xs.size());
+    std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
+                "pow24_fixed_avx2(x8)", ms, ns_per,
+                static_cast<double>(total));
+    return ns_per;
+}
+
 double bench_sleef_avx2(const std::vector<float>& xs) {
     auto t0 = std::chrono::steady_clock::now();
     __m256 sink = _mm256_setzero_ps();
@@ -554,6 +697,23 @@ double bench_sleef_avx2(const std::vector<float>& xs) {
 #endif  // HAVE_AVX2
 
 #if HAVE_NEON
+double bench_fixed_neon(const std::vector<float>& xs) {
+    auto t0 = std::chrono::steady_clock::now();
+    float32x4_t sink = vdupq_n_f32(0.0f);
+    for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+        sink = vaddq_f32(sink, pow24_fixed_neon_v(vld1q_f32(&xs[i])));
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    alignas(16) float out[4]; vst1q_f32(out, sink);
+    float total = out[0] + out[1] + out[2] + out[3];
+    double ns_per = ms * 1e6 / static_cast<double>(xs.size());
+    std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
+                "pow24_fixed_neon(x4)", ms, ns_per,
+                static_cast<double>(total));
+    return ns_per;
+}
+
 double bench_sleef_neon(const std::vector<float>& xs) {
     auto t0 = std::chrono::steady_clock::now();
     float32x4_t sink = vdupq_n_f32(0.0f);
@@ -575,6 +735,23 @@ double bench_sleef_neon(const std::vector<float>& xs) {
 #endif
 
 #if HAVE_WASM_SIMD
+double bench_fixed_wasm(const std::vector<float>& xs) {
+    auto t0 = std::chrono::steady_clock::now();
+    v128_t sink = wasm_f32x4_splat(0.0f);
+    for (std::size_t i = 0; i + 4 <= xs.size(); i += 4) {
+        sink = wasm_f32x4_add(sink, pow24_fixed_wasm_v(wasm_v128_load(&xs[i])));
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    alignas(16) float out[4]; wasm_v128_store(out, sink);
+    float total = out[0] + out[1] + out[2] + out[3];
+    double ns_per = ms * 1e6 / static_cast<double>(xs.size());
+    std::printf("  %-22s %.3f ms total, %.2f ns/call  (sink %.4f)\n",
+                "pow24_fixed_wasm(x4)", ms, ns_per,
+                static_cast<double>(total));
+    return ns_per;
+}
+
 double bench_sleef_wasm(const std::vector<float>& xs) {
     auto t0 = std::chrono::steady_clock::now();
     v128_t sink = wasm_f32x4_splat(0.0f);
@@ -629,6 +806,17 @@ int main(int argc, char** argv) {
         }
         std::printf("  poly scalar accuracy: max abs %.2e, max rel %.2e\n",
                     scalar_abs, scalar_rel);
+        double fxs_abs = 0, fxs_rel = 0;
+        for (auto x : xs) {
+            float r = pow24_libm(x);
+            float p = pow24_fixed_scalar(x);
+            double e = std::fabs(static_cast<double>(p - r));
+            fxs_abs = std::max(fxs_abs, e);
+            if (r > 1e-6f) fxs_rel = std::max(fxs_rel,
+                e / static_cast<double>(r));
+        }
+        std::printf("  fixed scalar accuracy: max abs %.2e, max rel %.2e\n",
+                    fxs_abs, fxs_rel);
 #if HAVE_AVX2
         double sse_abs = 0, sse_rel = 0;
         alignas(16) float lanes[4];
@@ -726,33 +914,43 @@ int main(int argc, char** argv) {
     }
 
     std::printf("--- timing ---\n");
-    double t_libm = bench("std::pow (scalar)",   pow24_libm,         xs);
-    double t_pol  = bench("pow24_poly (scalar)", pow24_poly_scalar,  xs);
+    double t_libm  = bench("std::pow (scalar)",    pow24_libm,        xs);
+    double t_pol   = bench("pow24_poly (scalar)",  pow24_poly_scalar, xs);
+    double t_fxs   = bench("pow24_fixed (scalar)", pow24_fixed_scalar, xs);
 #if HAVE_AVX2
     double t_sse = bench_sse4(xs);
     double t_avx2 = bench_avx2(xs);
     double t_sleef_sse = bench_sleef_sse(xs);
     double t_sleef_avx = bench_sleef_avx2(xs);
+    double t_fix_sse = bench_fixed_sse(xs);
+    double t_fix_avx = bench_fixed_avx2(xs);
 #endif
 #if HAVE_NEON
     double t_sleef_neon = bench_sleef_neon(xs);
+    double t_fix_neon = bench_fixed_neon(xs);
 #endif
 #if HAVE_WASM_SIMD
     double t_sleef_wasm = bench_sleef_wasm(xs);
+    double t_fix_wasm = bench_fixed_wasm(xs);
 #endif
     std::printf("--- speedups vs std::pow ---\n");
-    std::printf("  poly scalar   : %.2fx\n", t_libm / t_pol);
+    std::printf("  poly scalar    : %.2fx\n", t_libm / t_pol);
+    std::printf("  fixed scalar   : %.2fx\n", t_libm / t_fxs);
 #if HAVE_AVX2
-    std::printf("  poly sse4x4   : %.2fx\n", t_libm / t_sse);
-    std::printf("  poly avx2x8   : %.2fx\n", t_libm / t_avx2);
-    std::printf("  sleef sse4x4  : %.2fx\n", t_libm / t_sleef_sse);
-    std::printf("  sleef avx2x8  : %.2fx\n", t_libm / t_sleef_avx);
+    std::printf("  poly sse4x4    : %.2fx\n", t_libm / t_sse);
+    std::printf("  poly avx2x8    : %.2fx\n", t_libm / t_avx2);
+    std::printf("  sleef sse4x4   : %.2fx\n", t_libm / t_sleef_sse);
+    std::printf("  sleef avx2x8   : %.2fx\n", t_libm / t_sleef_avx);
+    std::printf("  fixed sse4x4   : %.2fx\n", t_libm / t_fix_sse);
+    std::printf("  fixed avx2x8   : %.2fx\n", t_libm / t_fix_avx);
 #endif
 #if HAVE_NEON
-    std::printf("  sleef neonx4  : %.2fx\n", t_libm / t_sleef_neon);
+    std::printf("  sleef neonx4   : %.2fx\n", t_libm / t_sleef_neon);
+    std::printf("  fixed neonx4   : %.2fx\n", t_libm / t_fix_neon);
 #endif
 #if HAVE_WASM_SIMD
-    std::printf("  sleef wasmx4  : %.2fx\n", t_libm / t_sleef_wasm);
+    std::printf("  sleef wasmx4   : %.2fx\n", t_libm / t_sleef_wasm);
+    std::printf("  fixed wasmx4   : %.2fx\n", t_libm / t_fix_wasm);
 #endif
     return 0;
 }
