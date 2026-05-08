@@ -3507,11 +3507,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             const bool has_reserves_in_call = reserves_in_pal > 0;
             const bool has_locks_in_call    = !options.locks.empty();
             std::vector<bool> seed_locked_mask;
+            // Hold seed_trial across the pop_search call so we can use
+            // its rendered output as a fallback when pop_search regresses
+            // against the seed (heavy locks compress the search space
+            // and cpu_fitness's dither doesn't always match
+            // encode_plain_auto's). Compared via SSIMULACRA2 below.
+            std::optional<PlainAutoTrial> seed_keep;
             if (has_reserves_in_call || has_transparency ||
                 has_locks_in_call) {
+                // Use options.palette_diversity for the seed — this
+                // matches what the non-best path would produce, so the
+                // S2 comparison below is between (pop_search winner)
+                // vs (the normal-pass output the user would get
+                // without --best), which is what the user asked for.
                 auto seed_trial = encode_plain_auto(
                     *image, depth, max_colors, mode, chipset,
-                    base_dith, /*palette_diversity=*/0,
+                    base_dith, options.palette_diversity,
                     options.refine_iterations,
                     options.lock_color0, has_transparency,
                     /*use_dpf=*/false,
@@ -3529,7 +3540,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     // transparent} — used only for mutate/crossover
                     // gating. seed_trial->locked_mask is the assembled
                     // mask containing all three.
-                    seed_locked_mask = std::move(seed_trial->locked_mask);
+                    seed_locked_mask = seed_trial->locked_mask;
                     if (seed_locked_mask.size() < max_colors)
                         seed_locked_mask.resize(max_colors, false);
                     if (has_transparency && !seed_locked_mask.empty())
@@ -3548,6 +3559,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     }
                     if (has_transparency) excl[0] = true;
                     pso.dither_exclude_mask = std::move(excl);
+                    seed_keep = std::move(*seed_trial);
                 }
                 if (has_transparency) pso.tmask = tmask;
             }
@@ -3559,11 +3571,72 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 auto enc = bitplane::encode(pop->indices,
                     image->width(), image->height(), depth);
                 if (enc) {
+                    // Score helper — masks transparent pixels to black
+                    // on both sides so SSIMULACRA2 doesn't penalise the
+                    // ignored regions (matches cpu_fitness's masking).
+                    auto score_rendered =
+                        [&](const Image& rnd) -> float {
+                        if (!has_transparency) {
+                            return ssimulacra2::compute(image->pixels(),
+                                rnd.pixels(),
+                                image->width(), image->height());
+                        }
+                        Image src_m(image->width(), image->height());
+                        Image rnd_m(image->width(), image->height());
+                        auto sp = src_m.pixels();
+                        auto rp = rnd_m.pixels();
+                        auto op = image->pixels();
+                        auto orp = rnd.pixels();
+                        for (std::size_t i = 0; i < sp.size(); ++i) {
+                            if (i < tmask.size() && tmask[i]) {
+                                sp[i] = Color3f{0, 0, 0};
+                                rp[i] = Color3f{0, 0, 0};
+                            } else {
+                                sp[i] = op[i];
+                                rp[i] = orp[i];
+                            }
+                        }
+                        return ssimulacra2::compute(src_m.pixels(),
+                            rnd_m.pixels(),
+                            image->width(), image->height());
+                    };
+
+                    // Fallback safety net: when seed_keep is present
+                    // (locks / reserves / transparency in play),
+                    // compare pop's S2 against the encode_plain_auto
+                    // seed's S2 and keep whichever is higher. Pop
+                    // search seeds from this trial and *should* never
+                    // regress, but cpu_fitness's dither doesn't match
+                    // encode_plain_auto's exactly under heavy locks,
+                    // so the score domains can disagree.
+                    bool keep_pop = true;
+                    if (seed_keep) {
+                        float pop_s2  = score_rendered(pop->rendered);
+                        float seed_s2 = score_rendered(seed_keep->rendered);
+                        if (seed_s2 > pop_s2) keep_pop = false;
+                    }
+
                     PipelineResult result;
-                    result.rendered  = std::move(pop->rendered);
-                    result.planes    = std::move(*enc);
-                    result.palette   = std::move(pop->palette.colors);
-                    result.indices   = std::move(pop->indices);
+                    if (keep_pop) {
+                        result.rendered = std::move(pop->rendered);
+                        result.planes   = std::move(*enc);
+                        result.palette  = std::move(pop->palette.colors);
+                        result.indices  = std::move(pop->indices);
+                        result.finalize_psnr(*image, pop->total_error);
+                    } else {
+                        // Seed wins — use its planes/indices/palette.
+                        std::vector<Color3f> seed_pal_keep(
+                            seed_keep->pal.colors.begin(),
+                            seed_keep->pal.colors.begin() +
+                                static_cast<std::ptrdiff_t>(
+                                    seed_keep->pal_size));
+                        result.rendered = std::move(seed_keep->rendered);
+                        result.planes   = std::move(seed_keep->planes);
+                        result.palette  = std::move(seed_pal_keep);
+                        result.indices  = std::move(seed_keep->indices);
+                        result.finalize_psnr(*image,
+                            seed_keep->total_error);
+                    }
                     result.mode      = mode;
                     result.hires     = compound_hires || mp_curr.is_hires;
                     result.interlace = options.interlace;
@@ -3571,7 +3644,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     result.aga       = is_aga;
                     result.has_transparency = has_transparency;
                     result.transparency_mask = tmask;
-                    result.finalize_psnr(*image, pop->total_error);
                     return result;
                 }
             }
