@@ -897,7 +897,10 @@ Result<PlainAutoTrial> encode_plain_auto(
     out.indices = std::move(dr.indices);
     out.total_error = dr.total_error;
 
-    // Pin-index swaps post-dither (no-op for best — gated against pins).
+    // Pin-index swaps post-dither. Each --best trial picks its own
+    // palette + indices; the pin swap is a visual no-op (it swaps both
+    // palette entries and pixel indices), so per-trial application
+    // doesn't affect ranking — the rendered image is unchanged.
     if (!pins.empty()) {
         auto pin_result = palette_locks::apply_pins(
             out.pal, out.indices, out.locked_mask, pins,
@@ -2483,16 +2486,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Plain EHB --best: multi-restart sweep over (dither_strength ×
         // diversity × pre-image jitter), ranked by best_metric.
         //
-        // Locks are now allowed: pop_search already honours the
-        // locked_mask coming from the assembled palette so the per-
-        // -slot pin-down works during mutation/crossover; only free
-        // slots vary across restarts. Pins and user palettes still
-        // exclude the sweep — pins replay a post-dither index swap that
-        // the sweep can't easily redo, and user palettes already pin
-        // every slot.
+        // Locks and pins now both flow through. Locks: pop_search
+        // honours the locked_mask coming from the assembled palette so
+        // the per-slot pin-down works during mutation/crossover; only
+        // free slots vary across restarts. Pins: encode_plain_auto
+        // applies the pin swap per trial — visual no-op so ranking
+        // isn't affected. User palettes still exclude the sweep.
         bool ehb_can_sweep = options.best
                           && !has_user_palette(options)
-                          && options.pins.empty()
                           && !has_transparency;
 
         // EHB pop-search path. Same eligibility as the legacy sweep; we
@@ -3373,12 +3374,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // the PipelineResult and we return early — bypassing the general
     // single-pass encode body below.
     //
-    // Gated to plain-mode cases. Reserves, transparency, and locks
-    // (--lock-index) all flow through to pop search via the
-    // locked_mask / tmask plumbing — pop_search holds the locked
-    // positions across mutation/crossover and only varies the free
-    // slots, which is what the mi2-redux costume-palette workflow
-    // wants. Pins and full user palettes still exclude the sweep.
+    // Gated to plain-mode cases. Reserves, transparency, locks
+    // (--lock-index), and pins (--pin-index-at) all flow through.
+    // Locks: pop_search holds locked positions during mutation /
+    // crossover; only free slots vary. Pins: encode_plain_auto applies
+    // the pin swap per trial — visual no-op so trial ranking is
+    // unaffected. Full user palettes are the only excluded case (every
+    // slot is already user-fixed).
     bool lores_plain_best_eligible =
         options.best &&
         (mode == amiga::Mode::lores ||
@@ -3386,8 +3388,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
          mode == amiga::Mode::hires ||
          mode == amiga::Mode::hires_interlace) &&
         !options.copper && !options.scap && !options.dual_playfield &&
-        !has_user_palette(options) &&
-        options.pins.empty();
+        !has_user_palette(options);
     if (lores_plain_best_eligible) {
         // Both --best and the non-best plain auto branch route through
         // encode_plain_auto (anon ns, src/api.cpp). Per-trial knobs flow as
