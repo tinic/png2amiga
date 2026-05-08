@@ -487,7 +487,7 @@ export const EXAMPLES: Example[] = [
   { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'ehb', dither: 'sierra-lite', copper: true, scap: true } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', alphaThreshold: 0 } },
-  { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'opt-checker', ditherStrength: 0.5 } },
+  { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'opt-checker' } },
   { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
   { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'floyd-steinberg', copper: true } },
