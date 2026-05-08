@@ -293,10 +293,22 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     auto height = static_cast<std::size_t>(h);
     auto pixel_count = width * height;
 
-    // Check for transparency
+    // Check for transparency. Either alpha < 255, OR pixel sRGB matches
+    // one of options.transparent_colors (sentinel-magenta atlases etc —
+    // see main.cpp for the CLI parallel; both paths are needed because
+    // the CLI passes a pre-loaded Image while the WASM/programmatic
+    // entry runs from raw bytes).
+    auto matches_sentinel = [&](std::uint8_t r, std::uint8_t g,
+                                 std::uint8_t b) {
+        for (auto& tc : options.transparent_colors)
+            if (tc[0] == r && tc[1] == g && tc[2] == b) return true;
+        return false;
+    };
     bool any_transparent = false;
     for (std::size_t i = 0; i < pixel_count; ++i) {
-        if (raw[i * 4 + 3] < 255) {
+        if (raw[i * 4 + 3] < 255 ||
+            (!options.transparent_colors.empty() &&
+             matches_sentinel(raw[i*4], raw[i*4+1], raw[i*4+2]))) {
             any_transparent = true;
             break;
         }
@@ -310,8 +322,13 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         auto base = i * 4;
         pixels[i] = color_space::srgb_u8_to_linear(
             raw[base], raw[base + 1], raw[base + 2]);
-        if (any_transparent)
-            src_alpha[i] = static_cast<float>(raw[base + 3]) / 255.0f;
+        if (any_transparent) {
+            if (matches_sentinel(raw[base], raw[base+1], raw[base+2])) {
+                src_alpha[i] = 0.0f;
+            } else {
+                src_alpha[i] = static_cast<float>(raw[base + 3]) / 255.0f;
+            }
+        }
     }
     free_raw();
 

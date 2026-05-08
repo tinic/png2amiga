@@ -784,6 +784,9 @@ struct Config {
     // Output
     bool print_palette = false;        // dump CMAP as idx=#rrggbb to stderr
     bool print_palette_json = false;   // dump CMAP as one-line JSON to stdout
+    std::string output_indexed_path;   // --output-indexed <file>: raw chunky bytes
+    // --transparent-color RRGGBB (repeatable): treat matching pixels as alpha=0
+    std::vector<std::array<std::uint8_t, 3>> transparent_colors;
     bool preview = false;              // show terminal image preview (iTerm2)
     int  preview_scale = 0;            // 0 = auto (2× on iTerm.app, 1× elsewhere);
                                        // any value 1..8 forces that integer scale.
@@ -860,6 +863,8 @@ void print_usage() {
         "  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)\n"
         "  --alpha-dither <method>         Dither alpha (default: none)\n"
         "  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)\n"
+        "  --transparent-color <rgbhex>    Treat sentinel RGB as alpha=0\n"
+        "                                  (repeatable, e.g. magenta atlases)\n"
         "  --mask <file>                   Export transparency mask\n"
         "  --mask-invert                   Invert mask polarity\n"
         "\n"
@@ -920,6 +925,8 @@ void print_usage() {
         "  --interleaved                   Alias for --layout interleaved\n"
         "  --print-palette                 Dump final CMAP to stderr (text)\n"
         "  --print-palette-json            Dump final CMAP to stdout (JSON)\n"
+        "  --output-indexed <file>         Raw chunky indices: 1 byte/pixel,\n"
+        "                                  scan order, no header (post-pin)\n"
         "  --preview                       Show iTerm2 inline preview\n"
         "  --preview-scale <1-8>           Preview display scale\n"
         "  --preview-video                 Batch only: loop frames inline\n"
@@ -1045,6 +1052,32 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--print-palette-json") {
             config.print_palette_json = true;
+            continue;
+        }
+        if (arg == "--output-indexed" && i + 1 < argc) {
+            config.output_indexed_path = argv[++i];
+            continue;
+        }
+        if (arg == "--transparent-color" && i + 1 < argc) {
+            std::string hex = argv[++i];
+            if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
+            if (hex.size() == 3) {
+                hex = std::string{hex[0],hex[0], hex[1],hex[1], hex[2],hex[2]};
+            }
+            if (hex.size() != 6 ||
+                !std::all_of(hex.begin(), hex.end(), [](char c) {
+                    return std::isxdigit(static_cast<unsigned char>(c));
+                })) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    "--transparent-color expects 3- or 6-digit hex (e.g. F0F or FF00FF)"}};
+            }
+            std::uint32_t v = static_cast<std::uint32_t>(
+                std::strtoul(hex.c_str(), nullptr, 16));
+            config.transparent_colors.push_back({
+                static_cast<std::uint8_t>((v >> 16) & 0xFF),
+                static_cast<std::uint8_t>((v >>  8) & 0xFF),
+                static_cast<std::uint8_t>(v & 0xFF),
+            });
             continue;
         }
 
@@ -2465,6 +2498,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.alpha_threshold = cfg.alpha_threshold;
     opts.alpha_dither = std::string{dither_to_options_string(cfg.alpha_dither)};
     opts.alpha_dither_strength = cfg.alpha_dither_strength;
+    opts.transparent_colors = cfg.transparent_colors;
     opts.symbol_name = cfg.symbol_name;
     opts.mask_invert = cfg.mask_invert;
     opts.crop_x = cfg.crop_x;
@@ -5310,6 +5344,37 @@ int run_main(int argc, char* argv[]) {
         return exit_code::no_input;
     }
 
+    // --transparent-color RRGGBB: synthesize an alpha channel where
+    // pixels matching any specified sRGB triple are alpha=0. Threads
+    // into the existing alpha→tmask pipeline; existing alpha (if any)
+    // is preserved on non-matching pixels.
+    if (!config->transparent_colors.empty()) {
+        const std::size_t pix = image->width() * image->height();
+        std::vector<float> a(pix, 1.0f);
+        if (image->has_alpha()) {
+            for (std::size_t y = 0; y < image->height(); ++y)
+                for (std::size_t x = 0; x < image->width(); ++x)
+                    a[y * image->width() + x] = image->alpha_at(x, y);
+        }
+        std::size_t hits = 0;
+        for (std::size_t i = 0; i < pix; ++i) {
+            auto p = (*image).pixels()[i];
+            auto srgb = color_space::linear_to_srgb(p).clamped();
+            std::uint8_t r = static_cast<std::uint8_t>(std::round(srgb.r * 255.0f));
+            std::uint8_t g = static_cast<std::uint8_t>(std::round(srgb.g * 255.0f));
+            std::uint8_t b = static_cast<std::uint8_t>(std::round(srgb.b * 255.0f));
+            for (auto& tc : config->transparent_colors) {
+                if (tc[0] == r && tc[1] == g && tc[2] == b) {
+                    a[i] = 0.0f; ++hits; break;
+                }
+            }
+        }
+        image->set_alpha(std::move(a));
+        cli_status("Transparent: {} pixel(s) matched sentinel ({} colour{})",
+                   hits, config->transparent_colors.size(),
+                   config->transparent_colors.size() == 1 ? "" : "s");
+    }
+
     // Compute target dimensions from source aspect ratio
     auto params = amiga::get_mode_params(config->mode);
     auto src_w = image->width();
@@ -7900,6 +7965,27 @@ int run_main(int argc, char* argv[]) {
     if (!planes) {
         std::println(stderr, "Encode error: {}", planes.error().message);
         return 1;
+    }
+
+    // --output-indexed <path>: chunky raw bytes in scan order
+    // (1 byte per pixel = palette slot index). Eliminates the
+    // RGB-PNG-→ rgb→slot post-process wrapper scripts otherwise need.
+    // Writes after dither/pin so the bytes match the final palette.
+    if (!config->output_indexed_path.empty() &&
+        !dither_result.indices.empty()) {
+        std::ofstream f(config->output_indexed_path,
+                        std::ios::binary | std::ios::trunc);
+        if (!f) {
+            std::println(stderr, "--output-indexed: cannot open '{}'",
+                         config->output_indexed_path);
+            return 1;
+        }
+        f.write(reinterpret_cast<const char*>(dither_result.indices.data()),
+                static_cast<std::streamsize>(dither_result.indices.size()));
+        cli_status("Indexed: {} ({} bytes, {}x{})",
+                   config->output_indexed_path,
+                   dither_result.indices.size(),
+                   image->width(), image->height());
     }
 
     used_palette.assign(pal_span.begin(), pal_span.end());

@@ -209,6 +209,13 @@ struct Options {
     float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)
     std::string alpha_dither;           // alpha dither method (empty = hard threshold)
     float alpha_dither_strength = 1.0f; // dither pattern intensity
+    // RGB-as-transparent: every pixel whose 8-bit sRGB exactly matches
+    // one of these triplets is treated as alpha=0 before quantization.
+    // Useful for atlases that encode transparency via a sentinel colour
+    // (e.g. magenta #FF00FF in MISE Explorer's MI2 sprite extractions).
+    // Multiple values supported — pass `--transparent-color` once per
+    // sentinel, since some pipelines emit several rounding variants.
+    std::vector<std::array<std::uint8_t, 3>> transparent_colors;
 
     // C header output
     std::string symbol_name;            // base name for C symbols (default: "image")
