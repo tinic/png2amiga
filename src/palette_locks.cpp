@@ -101,15 +101,23 @@ Result<std::size_t> validate_reserves(
 }
 
 Result<void> validate_pins(const std::vector<PinSpec>& pins,
-                           const std::vector<LockSpec>& locks,
+                           const std::vector<LockSpec>& /*locks*/,
+                           const std::vector<ReserveSpec>& reserves,
                            std::size_t max_colors,
                            std::size_t image_w,
                            std::size_t image_h,
-                           bool lock_zero_black) {
-    std::unordered_set<int> locked_indices;
-    for (auto& l : locks) locked_indices.insert(l.index);
-    if (lock_zero_black && !has_lock_at_zero(locks))
-        locked_indices.insert(0);
+                           bool /*lock_zero_black*/) {
+    // Lock + pin compose: --lock-index pins the slot's COLOUR while the
+    // pin pushes a specific PIXEL into that slot. The lock keeps
+    // palette[idx] = locked colour, the pin rewrites indices[pixel] to
+    // idx. Both invariants hold simultaneously; apply_pins handles the
+    // locked-target case by rewriting the index without swapping
+    // palette entries (which would otherwise clobber the lock).
+    //
+    // Reserve + pin DO genuinely conflict: --reserve-range bans image
+    // pixels from routing to the slot, and the pin demands one. Reject.
+    std::unordered_set<int> reserved_indices;
+    for (auto& r : reserves) reserved_indices.insert(r.index);
 
     std::unordered_set<int> pin_targets;
     for (auto& pin : pins) {
@@ -120,10 +128,11 @@ Result<void> validate_pins(const std::vector<PinSpec>& pins,
                             pin.index, max_colors),
             }};
         }
-        if (locked_indices.contains(pin.index)) {
+        if (reserved_indices.contains(pin.index)) {
             return std::unexpected{Error{
                 ErrorCode::invalid_depth,
-                std::format("--pin-index-at {} targets a locked slot",
+                std::format("--pin-index-at {} targets a slot reserved by "
+                            "--reserve-range (no image pixels can route there)",
                             pin.index),
             }};
         }
@@ -335,19 +344,26 @@ Result<void> apply_pins(Palette& palette,
             if (target < locked.size()) locked[target] = true;
             continue;
         }
-        if (target < locked.size() && locked[target]) {
-            return std::unexpected{Error{
-                ErrorCode::invalid_depth,
-                std::format("--pin-index-at {} targets a locked slot",
-                            pin.index),
-            }};
-        }
         if (target >= palette.colors.size() || src >= palette.colors.size()) {
             return std::unexpected{Error{
                 ErrorCode::invalid_depth,
                 std::format("--pin-index-at {}: source/target out of palette",
                             pin.index),
             }};
+        }
+        if (target < locked.size() && locked[target]) {
+            // Lock + pin compose: keep palette[target]'s locked colour
+            // intact (no swap) and rewrite ONLY the pinned pixel's
+            // index. The pin'd pixel will display as the locked
+            // colour — fine for the mi2-redux use case (sentinel pixels
+            // pinned to a locked-black slot are masked out by TRNS
+            // downstream anyway). Other pixels currently routed to
+            // `target` keep getting that colour, consistent with the
+            // lock semantic that "image pixels CAN route to a locked
+            // slot."
+            indices[pixel_offset] =
+                static_cast<std::uint8_t>(target);
+            continue;
         }
         // Swap palette entries
         std::swap(palette.colors[src], palette.colors[target]);

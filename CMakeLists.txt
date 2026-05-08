@@ -907,16 +907,30 @@ else()
     )
     set_tests_properties("pin-index-out-of-bounds" PROPERTIES WILL_FAIL TRUE)
 
-    # Pin targets a locked slot
+    # Pin targets a locked slot — semantically composes (lock pins
+    # the slot's COLOUR; pin pushes a specific PIXEL into that slot;
+    # apply_pins rewrites the pixel's index without swapping the
+    # palette so the lock invariant holds). Should succeed.
     add_test(
-        NAME "pin-index-targets-locked"
+        NAME "pin-and-lock-same-slot"
         COMMAND png2amiga --mode lores --depth 5
                 --lock-index 5 ff0000
                 --pin-index-at 5 100 50
                 ${PNG2AMIGA_TEST_INPUT}
-                ${CMAKE_BINARY_DIR}/test_reject_pin_locked.iff
+                ${CMAKE_BINARY_DIR}/test_pin_and_lock_same_slot.iff
     )
-    set_tests_properties("pin-index-targets-locked" PROPERTIES WILL_FAIL TRUE)
+
+    # Pin targets a reserved slot — genuine conflict (reserve bans
+    # image pixels from routing to the slot, pin demands one).
+    add_test(
+        NAME "pin-index-targets-reserved"
+        COMMAND png2amiga --mode lores --depth 5
+                --reserve-range 5 ff0000
+                --pin-index-at 5 100 50
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_reject_pin_reserved.iff
+    )
+    set_tests_properties("pin-index-targets-reserved" PROPERTIES WILL_FAIL TRUE)
 
     # Bad hex format
     add_test(

@@ -7549,7 +7549,8 @@ int run_main(int argc, char* argv[]) {
         std::println(stderr, "{}", v.error().message);
         return 1;
     }
-    if (auto v = palette_locks::validate_pins(config->pins, config->locks, max_colors,
+    if (auto v = palette_locks::validate_pins(config->pins, config->locks,
+                                              config->reserves, max_colors,
                                               image->width(), image->height(),
                                               lock_zero_std); !v) {
         std::println(stderr, "{}", v.error().message);

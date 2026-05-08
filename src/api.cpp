@@ -2495,7 +2495,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Validate locks/pins (EHB: targets must be in 0-31, the base palette).
         if (auto v = palette_locks::validate_locks(options.locks, 32); !v)
             return std::unexpected{v.error()};
-        if (auto v = palette_locks::validate_pins(options.pins, options.locks, 32,
+        if (auto v = palette_locks::validate_pins(options.pins, options.locks,
+                                                  options.reserves, 32,
                                                   image->width(), image->height(),
                                                   has_transparency); !v)
             return std::unexpected{v.error()};
@@ -2962,11 +2963,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 continue;
             }
             if (base_locked[target]) {
-                return std::unexpected{Error{
-                    ErrorCode::invalid_depth,
-                    std::format("--pin-index-at {} targets a locked slot",
-                                pin.index),
-                }};
+                // Lock + pin compose: rewrite the pinned pixel's index
+                // without swapping palette entries (a swap would clobber
+                // the lock). See palette_locks::apply_pins for the
+                // rationale.
+                dither_result.indices[pixel_offset] =
+                    static_cast<std::uint8_t>(target);
+                continue;
             }
             // Swap base palette entries
             std::swap(base_pal.colors[src], base_pal.colors[target]);
@@ -3576,7 +3579,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     if (auto v = palette_locks::validate_locks(options.locks, max_colors); !v)
         return std::unexpected{v.error()};
     if (auto v = palette_locks::validate_pins(options.pins, options.locks,
-                                              max_colors,
+                                              options.reserves, max_colors,
                                               image->width(), image->height(),
                                               lock_zero); !v)
         return std::unexpected{v.error()};

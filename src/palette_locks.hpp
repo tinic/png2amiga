@@ -55,6 +55,7 @@ Result<std::size_t> validate_reserves(
 // ---------------------------------------------------------------------------
 Result<void> validate_pins(const std::vector<PinSpec>& pins,
                            const std::vector<LockSpec>& locks,
+                           const std::vector<ReserveSpec>& reserves,
                            std::size_t max_colors,
                            std::size_t image_w,
                            std::size_t image_h,
