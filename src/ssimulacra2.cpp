@@ -189,50 +189,6 @@ void apply_v_taps_avx2(__m256& acc, const float* tmp_base, int y,
                  & static_cast<int>(kRingMask)) * w + x),
          acc)), ...);
 }
-#elif PNG2AMIGA_BACKEND_NEON
-template <std::size_t... Is>
-PNG2AMIGA_INLINE_HOT
-void apply_h_taps_neon(float32x4_t& acc, const float* row, std::size_t x,
-                       const std::array<float, kBlurSize>& k,
-                       std::index_sequence<Is...>) noexcept {
-    ((acc = vfmaq_f32(acc, vdupq_n_f32(k[Is]),
-         vld1q_f32(row + x +
-             static_cast<std::ptrdiff_t>(Is) - kBlurHalf))), ...);
-}
-template <std::size_t... Is>
-PNG2AMIGA_INLINE_HOT
-void apply_v_taps_neon(float32x4_t& acc, const float* tmp_base, int y,
-                       std::size_t w, std::size_t x,
-                       const std::array<float, kBlurSize>& k,
-                       std::index_sequence<Is...>) noexcept {
-    ((acc = vfmaq_f32(acc, vdupq_n_f32(k[Is]),
-         vld1q_f32(tmp_base +
-             static_cast<std::size_t>((y + static_cast<int>(Is) - kBlurHalf)
-                 & static_cast<int>(kRingMask)) * w + x))), ...);
-}
-#else  // WASM SIMD
-template <std::size_t... Is>
-PNG2AMIGA_INLINE_HOT
-void apply_h_taps_wasm(v128_t& acc, const float* row, std::size_t x,
-                       const std::array<float, kBlurSize>& k,
-                       std::index_sequence<Is...>) noexcept {
-    ((acc = wasm_f32x4_add(acc,
-         wasm_f32x4_mul(wasm_f32x4_splat(k[Is]),
-             wasm_v128_load(row + x +
-                 static_cast<std::ptrdiff_t>(Is) - kBlurHalf)))), ...);
-}
-template <std::size_t... Is>
-PNG2AMIGA_INLINE_HOT
-void apply_v_taps_wasm(v128_t& acc, const float* tmp_base, int y,
-                       std::size_t w, std::size_t x,
-                       const std::array<float, kBlurSize>& k,
-                       std::index_sequence<Is...>) noexcept {
-    ((acc = wasm_f32x4_add(acc,
-         wasm_f32x4_mul(wasm_f32x4_splat(k[Is]),
-             wasm_v128_load(tmp_base +
-                 static_cast<std::size_t>((y + static_cast<int>(Is) - kBlurHalf)
-                     & static_cast<int>(kRingMask)) * w + x)))), ...);
-}
 #endif
 
 constexpr auto kTapSeq = std::make_index_sequence<kBlurSize>{};
@@ -264,8 +220,11 @@ void blur_h_pass_row(const std::vector<float>& in,
             }
             trow[x] = s;
         }
-        // Interior: branch-free SIMD across 8 columns. Fully unrolled
-        // 11-tap kernel via parameter-pack fold (see apply_h_taps_*).
+        // Interior: branch-free SIMD across 8 columns. AVX2 uses the
+        // fully-unrolled fold (MSVC partially unrolled the loop and
+        // left a hot `cmp` for taps 8-10); NEON / WASM keep the loop
+        // form where the compiler schedules better with the natural
+        // loop structure.
         std::size_t x = bx_lo;
         for (; x < simd_end; x += 8) {
 #if PNG2AMIGA_BACKEND_AVX2
@@ -275,13 +234,21 @@ void blur_h_pass_row(const std::vector<float>& in,
 #elif PNG2AMIGA_BACKEND_NEON
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 float32x4_t acc = vdupq_n_f32(0.0f);
-                apply_h_taps_neon(acc, row, x + lane, k, kTapSeq);
+                for (int i = 0; i < kBlurSize; ++i) {
+                    float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
+                    float32x4_t v  = vld1q_f32(row + x + lane + i - kBlurHalf);
+                    acc = vfmaq_f32(acc, kv, v);
+                }
                 vst1q_f32(trow + x + lane, acc);
             }
 #else  // WASM SIMD
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 v128_t acc = wasm_f32x4_const_splat(0.0f);
-                apply_h_taps_wasm(acc, row, x + lane, k, kTapSeq);
+                for (int i = 0; i < kBlurSize; ++i) {
+                    v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
+                    v128_t v  = wasm_v128_load(row + x + lane + i - kBlurHalf);
+                    acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
+                }
                 wasm_v128_store(trow + x + lane, acc);
             }
 #endif
@@ -371,35 +338,26 @@ void gaussian_blur(const std::vector<float>& in,
 #elif PNG2AMIGA_BACKEND_NEON
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 float32x4_t acc = vdupq_n_f32(0.0f);
-                if (!clip) {
-                    apply_v_taps_neon(acc, tmp.data(), y, w, x + lane, k, kTapSeq);
-                } else {
-                    for (int i = 0; i < kBlurSize; ++i) {
-                        int sy = y + i - kBlurHalf;
-                        if (sy < 0 || sy >= H) continue;
-                        acc = vfmaq_f32(acc,
-                            vdupq_n_f32(k[static_cast<std::size_t>(i)]),
-                            vld1q_f32(tmp.data() +
-                                static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane));
-                    }
+                for (int i = 0; i < kBlurSize; ++i) {
+                    int sy = y + i - kBlurHalf;
+                    if (clip && (sy < 0 || sy >= H)) continue;
+                    float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
+                    float32x4_t v  = vld1q_f32(tmp.data() +
+                        static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane);
+                    acc = vfmaq_f32(acc, kv, v);
                 }
                 vst1q_f32(orow + x + lane, acc);
             }
 #else  // WASM SIMD
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 v128_t acc = wasm_f32x4_const_splat(0.0f);
-                if (!clip) {
-                    apply_v_taps_wasm(acc, tmp.data(), y, w, x + lane, k, kTapSeq);
-                } else {
-                    for (int i = 0; i < kBlurSize; ++i) {
-                        int sy = y + i - kBlurHalf;
-                        if (sy < 0 || sy >= H) continue;
-                        acc = wasm_f32x4_add(acc,
-                            wasm_f32x4_mul(
-                                wasm_f32x4_splat(k[static_cast<std::size_t>(i)]),
-                                wasm_v128_load(tmp.data() +
-                                    static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane)));
-                    }
+                for (int i = 0; i < kBlurSize; ++i) {
+                    int sy = y + i - kBlurHalf;
+                    if (clip && (sy < 0 || sy >= H)) continue;
+                    v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
+                    v128_t v  = wasm_v128_load(tmp.data() +
+                        static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane);
+                    acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
                 }
                 wasm_v128_store(orow + x + lane, acc);
             }
