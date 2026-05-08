@@ -46,37 +46,136 @@ Defaults defaults_for(const Context& ctx) {
         return Defaults{0.82f, 0.10f};                       // mean S2 83.30
     }
 
-    // ---- Palette-aware ordered methods: per-method optimal strength
-    // (mean-PSNR sweep over the 10 example images, lores depth=5,
-    // strengths 0.50, 0.60, 0.70, 0.80, 0.85, 0.90, 0.95, 1.00).
-    // These methods dither via per-pixel mixing-plan + Bayer index, so
-    // optimal strength is method-dependent rather than mode-dependent.
-    // error_clamp is unused by these methods but kept at 0.35 for the
-    // CLI surface consistency.
+    // ---- Palette-aware ordered methods: per-(method, mode, depth)
+    // optimal strength against SSIMULACRA2.
+    //
+    // Resweep 2026-05-08 against SSIMULACRA2 on (electrichues02 /
+    // chuck31 / lovers, 320×200 amiga and 640×200 hires), strengths
+    // 0.50–1.00 step 0.05–0.10. Pop-search palette work + perf-round
+    // OKLab refactors had shifted the optimums materially since the
+    // last sweep — palette quality is now high enough that opt-checker
+    // collapses pairs to no-checker more readily, so optimal strength
+    // varies depth-by-depth (more dither energy at low depth where the
+    // palette is sparse, less at high depth where partner-search
+    // already finds B==A naturally).
+    //
+    // error_clamp is unused by these methods but kept at 0.35 for CLI
+    // surface consistency.
+    // Mode-buckets shared across the per-method tables below.
+    const bool is_lores = (ctx.mode == amiga::Mode::lores ||
+                            ctx.mode == amiga::Mode::lores_interlace);
+    const bool is_hires = (ctx.mode == amiga::Mode::hires ||
+                            ctx.mode == amiga::Mode::hires_interlace);
     switch (ctx.method) {
-    // Palette-aware ordered:
     case dither::Method::opt_checker:
-        // c64 modes prefer different strengths than the lores baseline.
-        // MS-SSIM sweep on 320x200/160x200 c64 source images
-        // (dragon/fantasy/face for cell modes; head substituted for face
-        // on charset modes — head has more high-frequency detail that
-        // benefits charset glyph matching). hires/afli (higher-res, 2
-        // colors per cell) prefer less dither; cell modes with restricted
-        // palettes (multicolor/fli/charset/multicolor) sit at the lores
-        // 0.85 default.
+        // c64 hires/afli (2 colours per cell) prefer less dither.
         if (ctx.mode == amiga::Mode::c64_hires ||
             ctx.mode == amiga::Mode::c64_afli) {
             return Defaults{0.60f, 0.35f};
         }
-        return Defaults{0.85f, 0.35f};  // 32.495 dB
-    case dither::Method::opt_line:    return Defaults{0.70f, 0.35f};  // 32.421 dB
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.80f, 0.35f}; // S2 56.69
+        if (is_lores) switch (ctx.depth) {
+            case 2: return Defaults{1.00f, 0.35f};   // S2 -41.78
+            case 3: return Defaults{1.00f, 0.35f};   // S2   4.76
+            case 4: return Defaults{0.80f, 0.35f};   // S2  30.43
+            case 5: return Defaults{0.70f, 0.35f};   // S2  51.87
+            default: break;
+        }
+        if (is_hires) switch (ctx.depth) {
+            case 2: return Defaults{1.00f, 0.35f};   // S2 -45.66
+            case 3: return Defaults{0.90f, 0.35f};   // S2  -5.19
+            case 4: return Defaults{0.80f, 0.35f};   // S2  21.59
+            default: break;
+        }
+        return Defaults{0.85f, 0.35f};   // fallback for unswept modes
+    case dither::Method::opt_line:
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.80f, 0.35f}; // S2 55.65
+        if (is_lores) switch (ctx.depth) {
+            case 2: return Defaults{0.95f, 0.35f};
+            case 3: return Defaults{1.00f, 0.35f};
+            case 4: return Defaults{1.00f, 0.35f};
+            case 5: return Defaults{0.70f, 0.35f};
+            default: break;
+        }
+        if (is_hires) switch (ctx.depth) {
+            case 2: return Defaults{1.00f, 0.35f};
+            case 3: return Defaults{0.90f, 0.35f};
+            case 4: return Defaults{0.80f, 0.35f};
+            default: break;
+        }
+        return Defaults{0.80f, 0.35f};
     case dither::Method::opt_line_checker:
-                                      return Defaults{1.00f, 0.35f};  // 32.563 dB (flat below)
-    case dither::Method::knoll:       return Defaults{0.80f, 0.35f};  // 32.583 dB (after round() fix)
-    case dither::Method::tri_tone:    return Defaults{1.00f, 0.35f};  // 32.500 dB (flat below 1.0)
-    case dither::Method::yliluoma1:   return Defaults{0.50f, 0.35f};  // 31.055 dB (monotone declining)
-    case dither::Method::yliluoma:    return Defaults{0.70f, 0.35f};  // 32.296 dB
-    case dither::Method::yliluoma2:   return Defaults{0.60f, 0.35f};  // 32.007 dB
+        // S2-flat at 0.80 across all amiga (mode, depth) combos.
+        return Defaults{0.80f, 0.35f};
+    case dither::Method::knoll:
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.70f, 0.35f}; // S2 55.01
+        if (is_lores) switch (ctx.depth) {
+            case 2: return Defaults{0.80f, 0.35f};
+            case 3: return Defaults{0.60f, 0.35f};
+            case 4: return Defaults{0.80f, 0.35f};
+            case 5: return Defaults{0.60f, 0.35f};
+            default: break;
+        }
+        if (is_hires) switch (ctx.depth) {
+            case 2: return Defaults{0.80f, 0.35f};
+            case 3: return Defaults{0.80f, 0.35f};
+            case 4: return Defaults{0.80f, 0.35f};
+            default: break;
+        }
+        return Defaults{0.75f, 0.35f};
+    case dither::Method::tri_tone:
+        // S2-flat at 0.80 across all amiga (mode, depth) combos.
+        return Defaults{0.80f, 0.35f};
+    case dither::Method::yliluoma1:
+        // Strongest depth-sensitivity in the family — drops from 0.95
+        // at d=2 to 0.50 at d=5+.
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.50f, 0.35f}; // S2 34.56
+        if (is_lores) switch (ctx.depth) {
+            case 2: return Defaults{0.95f, 0.35f};
+            case 3: return Defaults{0.60f, 0.35f};
+            case 4: return Defaults{0.50f, 0.35f};
+            case 5: return Defaults{0.50f, 0.35f};
+            default: break;
+        }
+        if (is_hires) switch (ctx.depth) {
+            case 2: return Defaults{0.90f, 0.35f};
+            case 3: return Defaults{0.70f, 0.35f};
+            case 4: return Defaults{0.50f, 0.35f};
+            default: break;
+        }
+        return Defaults{0.50f, 0.35f};
+    case dither::Method::yliluoma:
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.70f, 0.35f}; // S2 48.08
+        if (is_lores) switch (ctx.depth) {
+            case 2: return Defaults{0.85f, 0.35f};
+            case 3: return Defaults{0.70f, 0.35f};
+            case 4: return Defaults{0.60f, 0.35f};
+            case 5: return Defaults{0.60f, 0.35f};
+            default: break;
+        }
+        if (is_hires) switch (ctx.depth) {
+            case 2: return Defaults{0.85f, 0.35f};
+            case 3: return Defaults{0.70f, 0.35f};
+            case 4: return Defaults{0.70f, 0.35f};
+            default: break;
+        }
+        return Defaults{0.70f, 0.35f};
+    case dither::Method::yliluoma2:
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.60f, 0.35f}; // S2 55.60
+        if (is_lores) switch (ctx.depth) {
+            case 2: return Defaults{0.80f, 0.35f};
+            case 3: return Defaults{0.60f, 0.35f};
+            case 4: return Defaults{0.70f, 0.35f};
+            case 5: return Defaults{0.60f, 0.35f};
+            default: break;
+        }
+        if (is_hires) switch (ctx.depth) {
+            case 2: return Defaults{0.80f, 0.35f};
+            case 3: return Defaults{0.70f, 0.35f};
+            case 4: return Defaults{0.70f, 0.35f};
+            default: break;
+        }
+        return Defaults{0.65f, 0.35f};
     // Error diffusion + structure-aware methods: fall through to the
     // mode-context tables below — per-mode tuning wins when there's an
     // entry. The per-method defaults are a separate switch at the end
