@@ -2481,14 +2481,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             return std::unexpected{v.error()};
 
         // Plain EHB --best: multi-restart sweep over (dither_strength ×
-        // diversity × pre-image jitter), ranked by best_metric. Only
-        // engaged on the simple case (no user palette, no locks/pins,
-        // no transparency, no pre-existing pin swaps to replay) — the
-        // joint state otherwise gets unwieldy. Same shape and trial
-        // count as plain sliced / strips EHB.
+        // diversity × pre-image jitter), ranked by best_metric.
+        //
+        // Locks are now allowed: pop_search already honours the
+        // locked_mask coming from the assembled palette so the per-
+        // -slot pin-down works during mutation/crossover; only free
+        // slots vary across restarts. Pins and user palettes still
+        // exclude the sweep — pins replay a post-dither index swap that
+        // the sweep can't easily redo, and user palettes already pin
+        // every slot.
         bool ehb_can_sweep = options.best
                           && !has_user_palette(options)
-                          && options.locks.empty()
                           && options.pins.empty()
                           && !has_transparency;
 
@@ -3370,11 +3373,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // the PipelineResult and we return early — bypassing the general
     // single-pass encode body below.
     //
-    // Gated to plain-mode cases. Reserves and transparency now flow
-    // through to pop search via the locked_mask / tmask plumbing.
-    // Locks (--lock-index) are still excluded — they imply an
-    // already-frozen palette which a search wouldn't help. User
-    // palettes and pins likewise.
+    // Gated to plain-mode cases. Reserves, transparency, and locks
+    // (--lock-index) all flow through to pop search via the
+    // locked_mask / tmask plumbing — pop_search holds the locked
+    // positions across mutation/crossover and only varies the free
+    // slots, which is what the mi2-redux costume-palette workflow
+    // wants. Pins and full user palettes still exclude the sweep.
     bool lores_plain_best_eligible =
         options.best &&
         (mode == amiga::Mode::lores ||
@@ -3383,7 +3387,6 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
          mode == amiga::Mode::hires_interlace) &&
         !options.copper && !options.scap && !options.dual_playfield &&
         !has_user_palette(options) &&
-        options.locks.empty() &&
         options.pins.empty();
     if (lores_plain_best_eligible) {
         // Both --best and the non-best plain auto branch route through
