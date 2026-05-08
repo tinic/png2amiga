@@ -25,6 +25,7 @@ enum class Format : unsigned char {
     iff_cmap,
     ocs_binary,
     text_hex,
+    json,
     unknown,
 };
 
@@ -39,6 +40,15 @@ Format detect_format(std::span<const std::uint8_t> data) {
             reinterpret_cast<const char*>(data.data()), gimp_magic.size());
         if (header == gimp_magic)
             return Format::gimp_gpl;
+    }
+
+    // JSON: first non-whitespace character is `{` or `[`. Matches the
+    // single-line dump produced by --print-palette-json.
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        char c = static_cast<char>(data[i]);
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '{' || c == '[') return Format::json;
+        break;
     }
 
     // IFF: starts with "FORM"
@@ -392,6 +402,62 @@ Result<Palette> parse_ocs_binary(std::span<const std::uint8_t> data) {
 // Public API
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// JSON palette parser — closes the round-trip with --print-palette-json.
+//
+// We parse only the keys we care about (rgb), and we do it via simple
+// string scanning rather than a full JSON parser. The schema produced
+// by --print-palette-json is fixed:
+//   {"palette":[{"idx":N,"rgb":"RRGGBB","locked":B,"reserved":B}, ...],
+//    "depth":N, "chipset":"...", "mode":"..."}
+// — but we tolerate whitespace and field-order variations. Other fields
+// (idx / locked / reserved / depth / chipset / mode) are informational
+// for now; the loader only consumes the colours in `palette[]` order.
+// ---------------------------------------------------------------------------
+Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
+    auto text = std::string_view(
+        reinterpret_cast<const char*>(data.data()), data.size());
+    Palette pal;
+    pal.name = "json";
+    constexpr std::string_view rgb_key = "\"rgb\":\"";
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        auto k = text.find(rgb_key, pos);
+        if (k == std::string_view::npos) break;
+        std::size_t hex_start = k + rgb_key.size();
+        if (hex_start + 6 > text.size()) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_png,
+                "JSON palette: truncated rgb value",
+            }};
+        }
+        auto hex = text.substr(hex_start, 6);
+        for (auto c : hex) {
+            if (!std::isxdigit(static_cast<unsigned char>(c))) {
+                return std::unexpected{Error{
+                    ErrorCode::invalid_png,
+                    std::string{"JSON palette: malformed rgb hex \""} +
+                        std::string{hex} + "\"",
+                }};
+            }
+        }
+        std::uint32_t rgb = 0;
+        std::from_chars(hex.data(), hex.data() + 6, rgb, 16);
+        pal.colors.push_back(color_space::srgb_u8_to_linear(
+            static_cast<std::uint8_t>((rgb >> 16) & 0xFF),
+            static_cast<std::uint8_t>((rgb >>  8) & 0xFF),
+            static_cast<std::uint8_t>(rgb & 0xFF)));
+        pos = hex_start + 6;
+    }
+    if (pal.colors.empty()) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_png,
+            "JSON palette: no \"rgb\" entries found",
+        }};
+    }
+    return pal;
+}
+
 Result<Palette> load_palette(std::string_view path) {
     auto data = read_file(path);
     if (!data) return std::unexpected{data.error()};
@@ -410,6 +476,8 @@ Result<Palette> load_palette_from_memory(std::span<const std::uint8_t> data) {
         return parse_ocs_binary(data);
     case Format::text_hex:
         return parse_text_hex(data);
+    case Format::json:
+        return parse_json_palette(data);
     case Format::unknown:
         return std::unexpected{Error{
             ErrorCode::invalid_png,
