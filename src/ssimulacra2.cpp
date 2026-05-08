@@ -135,36 +135,54 @@ const std::array<float, kBlurSize>& blur_kernel() {
     return k;
 }
 
-// Separable Gaussian, σ=1.5, kernel size 13. Hand-SIMDed (AVX2 8-lane,
-// WASM SIMD 4-lane). Boundary handling: zero-pad with no renormalisation,
-// matching libjxl FastGaussian semantics. The horizontal pass splits each
-// row into left-boundary / interior / right-boundary so the interior runs
-// branch-free at full SIMD throughput; the vertical pass is row-uniform
-// (every output column at row y uses the same set of source rows) so the
-// boundary check moves to the outer loop.
+// Separable Gaussian, σ=1.5, kernel size 11. Hand-SIMDed (AVX2 8-lane,
+// NEON 4-lane×2, WASM SIMD 4-lane×2). Boundary handling: zero-pad with no
+// renormalisation, matching libjxl FastGaussian semantics.
 //
-// `tmp` is a caller-owned scratch buffer (size ≥ w*h). It's threaded
-// through so compute() can allocate it ONCE per call and reuse it
-// across all scales/channels — AMD uProf showed 72% of CPU time was
-// in ucrtbase.dll heap mgmt before this change, dominated by tmp's
-// per-call vector<float>(w*h) allocation × 108 calls/compute().
+// **Streaming row-tiled** (commit notes 2026-05): instead of doing the full
+// horizontal pass into a w*h scratch and then the full vertical pass,
+// the H pass writes into a small circular ring buffer of `kRingRowsP2`
+// rows (16 rows × w floats ≈ 14-20 KB at 320 wide → fits in L1). The
+// V pass reads from the ring as soon as enough rows are filled. Each
+// input row gets H-passed exactly once. Net effect: the intermediate
+// w*h-sized tmp never round-trips through L2/L3/RAM between passes —
+// it lives in L1 across the whole blur.
+//
+// `tmp` is the caller-owned ring buffer (size ≥ kRingRowsP2 * w).
+// Caller pre-allocates once per compute() and reuses across the
+// 108 blur calls, same as the prior contract.
+constexpr std::size_t kRingRowsP2 = 16;  // next pow-2 ≥ kBlurSize=11
+constexpr std::size_t kRingMask   = kRingRowsP2 - 1;
+
 void gaussian_blur(const std::vector<float>& in,
                    std::vector<float>& out,
                    std::vector<float>& tmp,
                    std::size_t w, std::size_t h) {
     auto& k = blur_kernel();
-    if (tmp.size() < w * h) tmp.resize(w * h);
+    // tmp is the L1-resident row ring; resize to exactly what we need.
+    // Caller's `Scratch::reserve_to(w*h)` already over-allocates, so this
+    // is only a real grow on the first call after a smaller-than-usual
+    // run.
+    if (tmp.size() < kRingRowsP2 * w) tmp.resize(kRingRowsP2 * w);
     if (out.size() < w * h) out.resize(w * h);
     const int W = static_cast<int>(w);
     const int H = static_cast<int>(h);
 
-    // ---- Horizontal pass ----
     const std::size_t bx_lo = std::min<std::size_t>(kBlurHalf, w);
     const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf))
                                   ? (w - kBlurHalf) : bx_lo;
-    for (std::size_t y = 0; y < h; ++y) {
-        const float* row  = in.data()  + y * w;
-        float*       trow = tmp.data() + y * w;
+    const std::size_t simd_end = (bx_hi > bx_lo)
+                                     ? (bx_lo + ((bx_hi - bx_lo) & ~7u))
+                                     : bx_lo;
+    const std::size_t simd_w_end = w & ~7u;
+
+    // ---- Per-row H pass into ring slot ----
+    auto h_pass = [&](int sy) {
+        // sy must be in [0, H). Writes into ring slot (sy & kRingMask).
+        const float* row  = in.data()  +
+            static_cast<std::size_t>(sy) * w;
+        float*       trow = tmp.data() +
+            static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w;
         // Left boundary: scalar with bounds check.
         for (std::size_t x = 0; x < bx_lo; ++x) {
             float s = 0.0f;
@@ -176,11 +194,8 @@ void gaussian_blur(const std::vector<float>& in,
             }
             trow[x] = s;
         }
-        // Interior: branch-free SIMD across 8 columns (or 4×2 for WASM).
+        // Interior: branch-free SIMD across 8 columns.
         std::size_t x = bx_lo;
-        const std::size_t simd_end = (bx_hi > bx_lo)
-                                         ? (bx_lo + ((bx_hi - bx_lo) & ~7u))
-                                         : bx_lo;
         for (; x < simd_end; x += 8) {
 #if PNG2AMIGA_BACKEND_AVX2
             __m256 acc = _mm256_setzero_ps();
@@ -233,29 +248,36 @@ void gaussian_blur(const std::vector<float>& in,
             }
             trow[x] = s;
         }
-    }
+    };
 
-    // ---- Vertical pass ----
-    // No zero-init: the SIMD and tail loops below cover every output
-    // cell. Skipping the wasted `out.assign(w*h, 0.0f)` was worth ~3%
-    // wall on the 320×213 bench (one full memset per blur × 108
-    // blurs/call).
-    const std::size_t simd_w_end = w & ~7u;
-    for (std::size_t y = 0; y < h; ++y) {
-        const int sy_lo = static_cast<int>(y) - kBlurHalf;
-        const int sy_hi = static_cast<int>(y) + kBlurHalf;
+    // Prime the ring with rows [0, kBlurHalf-1]. Earlier rows
+    // (negative indices) are zero-padded by skipping them in the V
+    // pass via the `clip` branch.
+    for (int y = 0; y < kBlurHalf && y < H; ++y) h_pass(y);
+
+    // ---- Streaming H + V loop ----
+    for (int y = 0; y < H; ++y) {
+        // H-pass the next row needed for V at output row y, namely
+        // row y + kBlurHalf. (For y < H - kBlurHalf this is in range;
+        // beyond that we run out of input rows and the V pass clips.)
+        int sy_new = y + kBlurHalf;
+        if (sy_new < H) h_pass(sy_new);
+
+        // V pass for output row y, reading the ring's relevant 11 rows.
+        const int sy_lo = y - kBlurHalf;
+        const int sy_hi = y + kBlurHalf;
         const bool clip = (sy_lo < 0) || (sy_hi >= H);
-        float* orow = out.data() + y * w;
+        float* orow = out.data() + static_cast<std::size_t>(y) * w;
         std::size_t x = 0;
         for (; x < simd_w_end; x += 8) {
 #if PNG2AMIGA_BACKEND_AVX2
             __m256 acc = _mm256_setzero_ps();
             for (int i = 0; i < kBlurSize; ++i) {
-                int sy = static_cast<int>(y) + i - kBlurHalf;
+                int sy = y + i - kBlurHalf;
                 if (clip && (sy < 0 || sy >= H)) continue;
                 __m256 kv = _mm256_set1_ps(k[static_cast<std::size_t>(i)]);
                 __m256 v  = _mm256_loadu_ps(tmp.data() +
-                                static_cast<std::size_t>(sy) * w + x);
+                    static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x);
                 acc = _mm256_fmadd_ps(kv, v, acc);
             }
             _mm256_storeu_ps(orow + x, acc);
@@ -263,11 +285,11 @@ void gaussian_blur(const std::vector<float>& in,
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 float32x4_t acc = vdupq_n_f32(0.0f);
                 for (int i = 0; i < kBlurSize; ++i) {
-                    int sy = static_cast<int>(y) + i - kBlurHalf;
+                    int sy = y + i - kBlurHalf;
                     if (clip && (sy < 0 || sy >= H)) continue;
                     float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
                     float32x4_t v  = vld1q_f32(tmp.data() +
-                                static_cast<std::size_t>(sy) * w + x + lane);
+                        static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane);
                     acc = vfmaq_f32(acc, kv, v);
                 }
                 vst1q_f32(orow + x + lane, acc);
@@ -276,25 +298,25 @@ void gaussian_blur(const std::vector<float>& in,
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 v128_t acc = wasm_f32x4_const_splat(0.0f);
                 for (int i = 0; i < kBlurSize; ++i) {
-                    int sy = static_cast<int>(y) + i - kBlurHalf;
+                    int sy = y + i - kBlurHalf;
                     if (clip && (sy < 0 || sy >= H)) continue;
                     v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
                     v128_t v  = wasm_v128_load(tmp.data() +
-                                static_cast<std::size_t>(sy) * w + x + lane);
+                        static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane);
                     acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
                 }
                 wasm_v128_store(orow + x + lane, acc);
             }
 #endif
         }
-        // Tail across x (< 8 columns left).
+        // Tail across x.
         for (; x < w; ++x) {
             float s = 0.0f;
             for (int i = 0; i < kBlurSize; ++i) {
-                int sy = static_cast<int>(y) + i - kBlurHalf;
+                int sy = y + i - kBlurHalf;
                 if (clip && (sy < 0 || sy >= H)) continue;
                 s += k[static_cast<std::size_t>(i)] *
-                     tmp[static_cast<std::size_t>(sy) * w + x];
+                     tmp[static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x];
             }
             orow[x] = s;
         }
