@@ -23,6 +23,18 @@
     #define PNG2AMIGA_CBRT_BACKEND_SSE2 1
 #endif
 
+// Portable force-inline. MSVC ignores [[gnu::always_inline]] silently
+// and falls back to its own heuristics; for hot SIMD intrinsics that
+// need to be folded into the caller (no spill / reload through a
+// memory parameter), __forceinline is required. Clang errors on
+// `[[msvc::forceinline]]` when it isn't itself MSVC, so we can't use
+// the attribute syntax portably.
+#if defined(_MSC_VER) && !defined(__clang__)
+    #define PNG2AMIGA_INLINE_HOT __forceinline
+#else
+    #define PNG2AMIGA_INLINE_HOT inline __attribute__((always_inline))
+#endif
+
 namespace png2amiga::color_space {
 
 // ---------------------------------------------------------------------------
@@ -139,8 +151,7 @@ PNG2AMIGA_LUT_CONSTEXPR Color3f srgb_hex_to_linear(std::uint32_t hex) noexcept {
 
 namespace detail {
 
-[[gnu::always_inline]]
-inline __m128 sleef_lnf_sse4(__m128 d) noexcept {
+PNG2AMIGA_INLINE_HOT __m128 sleef_lnf_sse4(__m128 d) noexcept {
     __m128 d_scaled = _mm_mul_ps(d, _mm_set1_ps(4.0f / 3.0f));
     __m128i e_int = _mm_sub_epi32(
         _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(d_scaled), 23),
@@ -162,8 +173,7 @@ inline __m128 sleef_lnf_sse4(__m128 d) noexcept {
                          _mm_mul_ps(x, t));
 }
 
-[[gnu::always_inline]]
-inline __m128 sleef_expf_sse4(__m128 d) noexcept {
+PNG2AMIGA_INLINE_HOT __m128 sleef_expf_sse4(__m128 d) noexcept {
     __m128 q_f = _mm_round_ps(
         _mm_mul_ps(d, _mm_set1_ps(1.4426950408889634f)),
         _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
@@ -185,8 +195,7 @@ inline __m128 sleef_expf_sse4(__m128 d) noexcept {
 
 }  // namespace detail
 
-[[gnu::always_inline]]
-inline Color3f srgb_to_linear_simd(Color3f c) noexcept {
+PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     __m128 s = _mm_setr_ps(c.r, c.g, c.b, 0.0f);
     __m128 lin = _mm_mul_ps(s, _mm_set1_ps(1.0f / 12.92f));
     __m128 base = _mm_mul_ps(_mm_add_ps(s, _mm_set1_ps(0.055f)),
@@ -205,8 +214,7 @@ inline Color3f srgb_to_linear_simd(Color3f c) noexcept {
 
 namespace detail {
 
-[[gnu::always_inline]]
-inline float32x4_t sleef_lnf_neon(float32x4_t d) noexcept {
+PNG2AMIGA_INLINE_HOT float32x4_t sleef_lnf_neon(float32x4_t d) noexcept {
     float32x4_t d_scaled = vmulq_n_f32(d, 4.0f / 3.0f);
     int32x4_t e_int = vsubq_s32(
         vandq_s32(vshrq_n_s32(vreinterpretq_s32_f32(d_scaled), 23),
@@ -228,8 +236,7 @@ inline float32x4_t sleef_lnf_neon(float32x4_t d) noexcept {
                       vdupq_n_f32(0.693147180559945286226764f));
 }
 
-[[gnu::always_inline]]
-inline float32x4_t sleef_expf_neon(float32x4_t d) noexcept {
+PNG2AMIGA_INLINE_HOT float32x4_t sleef_expf_neon(float32x4_t d) noexcept {
     float32x4_t q_f = vrndnq_f32(vmulq_n_f32(d, 1.4426950408889634f));
     int32x4_t q = vcvtq_s32_f32(q_f);
     float32x4_t s = vfmaq_f32(d, q_f, vdupq_n_f32(-0.693145751953125f));
@@ -248,8 +255,7 @@ inline float32x4_t sleef_expf_neon(float32x4_t d) noexcept {
 
 }  // namespace detail
 
-[[gnu::always_inline]]
-inline Color3f srgb_to_linear_simd(Color3f c) noexcept {
+PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
     float32x4_t s = vld1q_f32(in);
     float32x4_t lin  = vmulq_n_f32(s, 1.0f / 12.92f);
@@ -322,8 +328,7 @@ inline v128_t sleef_expf_wasm(v128_t d) noexcept {
 
 }  // namespace detail
 
-[[gnu::always_inline]]
-inline Color3f srgb_to_linear_simd(Color3f c) noexcept {
+PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
     v128_t s    = wasm_v128_load(in);
     v128_t lin  = wasm_f32x4_mul(s, wasm_f32x4_splat(1.0f / 12.92f));
@@ -341,8 +346,7 @@ inline Color3f srgb_to_linear_simd(Color3f c) noexcept {
 }
 
 #else  // No SIMD ISA detected — analytic scalar fallback.
-[[gnu::always_inline]]
-inline Color3f srgb_to_linear_simd(Color3f c) noexcept {
+PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     return srgb_to_linear(c);
 }
 #endif
