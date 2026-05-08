@@ -959,6 +959,43 @@ Result<PlainAutoTrial> encode_plain_auto(
 }  // close anon namespace so run_pipeline gets external linkage and can
    // be reached from pipeline.cpp via the api:: forwarder.
 
+// --best eligibility — defined here so run_pipeline (programmatic API)
+// and main.cpp (CLI dispatch) share a single source of truth. main.cpp
+// dispatches most modes through encode_state_image rather than
+// run_pipeline, so the gate has to be reachable from both layers.
+Result<void> check_best_supported(const Options& options,
+                                  amiga::Mode mode,
+                                  bool has_transparency) {
+    if (!options.best) return {};
+    auto mode_params = amiga::get_mode_params(mode);
+    bool ham_best   = amiga::is_ham(mode) &&
+                      (mode_params.bitplane_depth == 6 ||
+                       mode_params.bitplane_depth == 8);
+    bool ehb_best   = (mode == amiga::Mode::ehb) &&
+                      !has_user_palette(options) && !has_transparency;
+    bool plain_best = (mode == amiga::Mode::lores ||
+                       mode == amiga::Mode::lores_interlace ||
+                       mode == amiga::Mode::hires ||
+                       mode == amiga::Mode::hires_interlace) &&
+                      !options.copper && !options.scap &&
+                      !options.dual_playfield && !options.tile &&
+                      !has_user_palette(options);
+    bool copper_best = options.copper;
+    bool scap_best   = options.scap;
+    bool snes_best   = (mode == amiga::Mode::snes_mode7_256);
+    if (ham_best || ehb_best || plain_best || copper_best ||
+        scap_best || snes_best) return {};
+    return std::unexpected{Error{
+        ErrorCode::unsupported_mode,
+        "--best is not supported in this configuration. "
+        "Supported: HAM6/HAM8, plain EHB (no user palette, "
+        "no transparency), plain lores/hires (no --copper, "
+        "no --scap, no --dpf, no --tile, no --palette), "
+        "sliced (--copper), strips (--scap), and "
+        "snes-mode7-256. Drop --best or change one of those "
+        "options."}};
+}
+
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     std::size_t input_size,
                                     const Options& orig_options,
@@ -1175,6 +1212,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                       prepared_image);
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
+
+    if (auto bcheck = check_best_supported(options, mode, has_transparency);
+        !bcheck) {
+        return std::unexpected{bcheck.error()};
+    }
 
     // Tile pre-processing: replicate the loaded image (and the alpha
     // mask, if any) into a 3x3 grid. The rest of the pipeline runs on

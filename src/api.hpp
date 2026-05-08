@@ -77,6 +77,18 @@ inline SizeBreakdown compute_size_breakdown(
     return s;
 }
 
+// --best eligibility predicate. Returns an Error explaining the
+// configuration mismatch when --best is requested but no actual
+// best-search path engages for this (mode, options) combination.
+// Returns success when --best is unset or fully supported. Both the
+// programmatic api::run_pipeline entry and main.cpp's CLI dispatch
+// call this before encoding starts so the silent fall-through is
+// caught at the dispatch boundary.
+struct Options;  // forward decl
+Result<void> check_best_supported(const Options& options,
+                                  amiga::Mode mode,
+                                  bool has_transparency);
+
 struct LockSpec {
     int index;       // palette slot, 0..max_colors-1
     int r, g, b;     // sRGB 0-255

@@ -5375,6 +5375,21 @@ int run_main(int argc, char* argv[]) {
                    config->transparent_colors.size() == 1 ? "" : "s");
     }
 
+    // --best eligibility check at the CLI dispatch boundary. Most modes
+    // route through api::encode_state_image rather than api::run_pipeline,
+    // so the run_pipeline-side gate alone wouldn't catch CLI invocations
+    // (cga-text, EGA/VGA, SNES, Genesis, etc.). Same predicate, single
+    // source of truth in api.cpp::check_best_supported.
+    if (config->best) {
+        auto probe_opts = make_api_options(*config);
+        if (auto bcheck = api::check_best_supported(probe_opts, config->mode,
+                                                    image->has_alpha());
+            !bcheck) {
+            std::println(stderr, "Error: {}", bcheck.error().message);
+            return exit_code::usage;
+        }
+    }
+
     // Compute target dimensions from source aspect ratio
     auto params = amiga::get_mode_params(config->mode);
     auto src_w = image->width();
