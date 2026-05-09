@@ -5652,6 +5652,24 @@ int run_main(int argc, char* argv[]) {
                 qpal.error().message);
             return exit_code::cant_create;
         }
+        // Run the same refine_with_dither pass the single-input
+        // path uses, against the joint training pixels. Without
+        // this, even "positional + --ji of same image" produces a
+        // different palette than the bare positional run because
+        // the refinement step (Lloyd k-means iteration with a
+        // dither-aware centroid update) doesn't fire. Using
+        // refine_iterations from config so user knobs match.
+        if (config->refine_iterations > 0) {
+            dither::Settings tdith;
+            tdith.method = config->dither_method;
+            tdith.strength = config->dither_strength;
+            tdith.error_clamp = config->error_clamp;
+            auto rp = quantize::refine_with_dither(
+                train, *qpal, tdith, qcs, config->mode,
+                static_cast<std::size_t>(
+                    config->refine_iterations));
+            if (rp) qpal = std::move(rp);
+        }
         for (std::size_t k = 0; k < qpal->colors.size(); ++k) {
             if (config->lock_color0 && k == 0) continue;
             bool already = false;
