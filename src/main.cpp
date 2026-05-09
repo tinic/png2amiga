@@ -5587,28 +5587,50 @@ int run_main(int argc, char* argv[]) {
         }
         // Build concat training image — bag-of-pixels, no spatial
         // layout. quantize::quantize iterates over the flat pixel
-        // buffer, so we pack all real pixels from every joint input
-        // into a 1-row Image and skip the previous max-width /
-        // 8-row-padding scheme. That earlier layout black-padded
-        // narrower inputs out to max_w (e.g. 32×32 cost frames in
-        // a 320-wide buffer = ~90% black padding by area), which
-        // skewed the quantizer toward black and starved real
-        // content colours — mi2-redux saw this as a 14-pt S2 drop
-        // vs. the previous PyTexturePacker pipeline. The earlier
-        // 8-row padding was defensive against SSIMULACRA2 cross-
-        // input bleed, but training is pure quantization — the
-        // S2 ranker doesn't see this buffer.
+        // buffer, so we pack opaque pixels from every joint input
+        // into a 1-row Image. Two filters apply:
+        //
+        //   - Skip the previous max-width / 8-row-padding scheme:
+        //     it black-padded narrower inputs (e.g. 32×32 frames
+        //     in a 320-wide buffer = ~90% black padding) which
+        //     biased the quantizer toward black.
+        //   - Skip alpha-0 pixels (PNG alpha channel OR synthesised
+        //     by --transparent-color). The earlier PyTexturePacker
+        //     atlas approach implicitly stripped the magenta
+        //     sentinels because the packer drew transparent atlas
+        //     regions as black; mi2-redux's --ji path was including
+        //     ~64K magenta pixels per input in the training buffer,
+        //     which dragged the palette away from real content.
+        //
+        // The S2 ranker doesn't see the training buffer (it scores
+        // per-input rendered output), so neither padding nor pixel
+        // ordering matters here.
         std::size_t total_pixels = 0;
-        for (auto& im : joint_imgs)
-            total_pixels += im.width() * im.height();
+        for (auto& im : joint_imgs) {
+            if (!im.has_alpha()) {
+                total_pixels += im.width() * im.height();
+            } else {
+                auto a = im.alpha();
+                for (auto v : a) if (v >= 0.5f) ++total_pixels;
+            }
+        }
         Image train(total_pixels, 1);
         auto train_px = train.pixels();
         std::size_t cur = 0;
         for (auto& im : joint_imgs) {
             auto src = im.pixels();
-            for (std::size_t i = 0; i < src.size(); ++i)
-                train_px[cur + i] = src[i];
-            cur += src.size();
+            if (!im.has_alpha()) {
+                for (std::size_t i = 0; i < src.size(); ++i)
+                    train_px[cur + i] = src[i];
+                cur += src.size();
+            } else {
+                auto a = im.alpha();
+                for (std::size_t i = 0; i < src.size(); ++i) {
+                    if (i < a.size() && a[i] >= 0.5f) {
+                        train_px[cur++] = src[i];
+                    }
+                }
+            }
         }
         // Quantize the union; same path as --quantize-from. Each
         // free slot gets a --lock-index entry so the main image
