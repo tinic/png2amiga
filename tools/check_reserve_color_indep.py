@@ -19,15 +19,19 @@ from pathlib import Path
 
 
 def run(bin_path: str, in_path: str, out_path: str,
-        reserve_range: str, reserve_color: str,
+        idx_path: str, reserve_range: str, reserve_color: str,
         extra_args: list[str]) -> None:
-    args = [
-        bin_path, "--mode", "lores",  # overridden by extra_args
-    ]
-    # extra_args carries --mode + any other flags; build the real argv.
+    # Build the real argv. We hash the --output-indexed sidecar (raw
+    # chunky palette indices) rather than the PNG itself, because the
+    # PNG output is now paletted and embeds the reserve colour in
+    # PLTE — which legitimately differs across reserve-colour runs
+    # without indicating a leak. The reserve-leak invariant is
+    # "pixel indices don't change", which is exactly what .idx
+    # contains.
     cmd = [bin_path]
     cmd += extra_args
     cmd += ["--reserve-range", reserve_range, reserve_color]
+    cmd += ["--output-indexed", idx_path]
     cmd += [in_path, out_path]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -56,14 +60,26 @@ def main() -> int:
         hashes: dict[str, str] = {}
         for color in args.colors:
             out = tdp / f"out_{color}.png"
-            run(args.bin, args.in_path, str(out),
+            idx = tdp / f"out_{color}.idx"
+            run(args.bin, args.in_path, str(out), str(idx),
                 args.reserve_range, color, extra)
-            h = hashlib.sha256(out.read_bytes()).hexdigest()
+            # Prefer .idx (raw chunky indices, no palette-table noise)
+            # when the encoder wrote one. Sliced / strips / DPF / HAM
+            # paths don't populate dither_result.indices, so
+            # --output-indexed is a no-op there — fall back to the PNG.
+            # Their PNG output is RGB (eligibility check in
+            # write_amiga_output excludes those modes), so reserve-
+            # colour leakage would still affect rendered pixels and
+            # show up in the PNG hash.
+            if idx.exists():
+                h = hashlib.sha256(idx.read_bytes()).hexdigest()
+            else:
+                h = hashlib.sha256(out.read_bytes()).hexdigest()
             hashes[color] = h
 
         unique = set(hashes.values())
         if len(unique) == 1:
-            print(f"PASS — all {len(hashes)} reserve colours produce identical PNG")
+            print(f"PASS — all {len(hashes)} reserve colours produce identical encoder output")
             for color, h in hashes.items():
                 print(f"  {color}: {h[:16]}…")
             return 0

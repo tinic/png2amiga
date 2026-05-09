@@ -3187,6 +3187,13 @@ struct AmigaOutputBundle {
     bitplane::BitplaneData planes;
     std::vector<Color3f>   cmap_palette;
     Image                  rendered;
+    // Per-pixel palette indices at native (pre-display-scale) dim.
+    // When set + mode is eligible (non-HAM, non-DPF, no per-line
+    // palettes), the default PNG write path emits a paletted PNG-8
+    // instead of an RGB PNG. Empty for HAM (indices encode SET/MODIFY
+    // operations, not slot positions) and for sliced/strips (per-line
+    // palettes don't fit a single global PLTE chunk).
+    std::vector<std::uint8_t> indices;
     amiga::Mode            mode = amiga::Mode::lores;
     amiga::Chipset         chipset = amiga::Chipset::ocs;
     bool                   hires = false;
@@ -3335,7 +3342,62 @@ int write_amiga_output(AmigaOutputBundle& out) {
         return 0;
     }
 
-    // Default: PNG preview.
+    // Default: PNG preview. When indices + global palette are
+    // available (lores/hires/EHB plain, no DPF, no per-line palette),
+    // emit a paletted PNG-8 so downstream tooling that needs the
+    // palette can read it directly from the PNG instead of a sidecar
+    // file. NN-replicate the indices to display dims (matches
+    // scale_for_display's algorithm) so the file matches what the
+    // RGB save would have produced visually.
+    bool palettized_eligible =
+        !out.indices.empty() &&
+        !out.cmap_palette.empty() &&
+        !out.dpf &&
+        !amiga::is_ham(out.mode) &&
+        (!out.scanline_palettes || out.scanline_palettes->empty()) &&
+        (!out.strips_line_moves || out.strips_line_moves->empty());
+    if (palettized_eligible) {
+        const auto sw = out.rendered.width();
+        const auto sh = out.rendered.height();
+        auto [pw, ph] = preview_display_dims(sw, sh, out.mode,
+                                              out.hires, out.interlace);
+        std::vector<std::uint8_t> idx_scaled;
+        if (pw == sw && ph == sh) {
+            idx_scaled = out.indices;
+        } else if (sw != 0 && sh != 0 &&
+                   pw % sw == 0 && ph % sh == 0) {
+            const auto kx = pw / sw, ky = ph / sh;
+            idx_scaled.resize(pw * ph);
+            for (std::size_t y = 0; y < sh; ++y) {
+                for (std::size_t x = 0; x < sw; ++x) {
+                    auto v = out.indices[y * sw + x];
+                    for (std::size_t dy = 0; dy < ky; ++dy)
+                        for (std::size_t dx = 0; dx < kx; ++dx)
+                            idx_scaled[(y * ky + dy) * pw + (x * kx + dx)] = v;
+                }
+            }
+        } else {
+            idx_scaled.resize(pw * ph);
+            for (std::size_t y = 0; y < ph; ++y) {
+                auto sy = std::min(sh - 1, (y * sh) / ph);
+                for (std::size_t x = 0; x < pw; ++x) {
+                    auto sx = std::min(sw - 1, (x * sw) / pw);
+                    idx_scaled[y * pw + x] = out.indices[sy * sw + sx];
+                }
+            }
+        }
+        int trans_idx = out.has_transparency ? 0 : -1;
+        auto r = png_io::save_palettized(path, idx_scaled,
+                                          out.cmap_palette, pw, ph,
+                                          trans_idx);
+        if (!r) {
+            std::println(stderr, "PNG write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("PNG:      {} (paletted, {} colours)",
+                   path, out.cmap_palette.size());
+        return 0;
+    }
     auto r = save_preview(path, out.rendered,
                           out.has_transparency, out.transparency_mask,
                           out.mode, out.hires, out.interlace);
@@ -8201,6 +8263,11 @@ int run_main(int argc, char* argv[]) {
             out.planes = planes.value();
             out.cmap_palette = used_palette;
             out.rendered = *preview;
+            // Indices forwarded for paletted PNG output. write_amiga_output
+            // gates on (non-HAM, non-DPF, non-sliced/strips), so HAM and
+            // copper paths see this populated but the eligibility check
+            // there falls back to RGB.
+            out.indices = dither_result.indices;
             out.mode = config->mode;
             out.chipset = chipset;
             out.hires = config->hires;
