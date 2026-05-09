@@ -3349,10 +3349,19 @@ int write_amiga_output(AmigaOutputBundle& out) {
     // file. NN-replicate the indices to display dims (matches
     // scale_for_display's algorithm) so the file matches what the
     // RGB save would have produced visually.
+    //
+    // Transparency falls back to the RGB+alpha path. PNG-8 tRNS only
+    // supports per-INDEX alpha; with lock_color0 + transparency, slot
+    // 0 is BOTH "transparent placeholder" and "pure black", so opaque-
+    // black source pixels naturally dither to slot 0 alongside the
+    // sentinel-transparent ones. Marking slot 0 alpha=0 in tRNS would
+    // erase those legitimate black pixels. RGB+alpha PNG carries per-
+    // pixel alpha and preserves the distinction.
     bool palettized_eligible =
         !out.indices.empty() &&
         !out.cmap_palette.empty() &&
         !out.dpf &&
+        !out.has_transparency &&
         !amiga::is_ham(out.mode) &&
         (!out.scanline_palettes || out.scanline_palettes->empty()) &&
         (!out.strips_line_moves || out.strips_line_moves->empty());
@@ -3386,10 +3395,11 @@ int write_amiga_output(AmigaOutputBundle& out) {
                 }
             }
         }
-        int trans_idx = out.has_transparency ? 0 : -1;
+        // has_transparency excluded by eligibility above — palettized
+        // path never carries transparency.
         auto r = png_io::save_palettized(path, idx_scaled,
                                           out.cmap_palette, pw, ph,
-                                          trans_idx);
+                                          /*transparent_index=*/-1);
         if (!r) {
             std::println(stderr, "PNG write error: {}", r.error().message);
             return exit_code::cant_create;
