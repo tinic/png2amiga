@@ -5585,26 +5585,27 @@ int run_main(int argc, char* argv[]) {
             }
             joint_imgs.push_back(*std::move(j));
         }
-        // Build concat training image — bag-of-pixels, no spatial
-        // layout. quantize::quantize iterates over the flat pixel
-        // buffer, so we pack opaque pixels from every joint input
-        // into a 1-row Image. Two filters apply:
+        // Build concat training image — pack opaque pixels from
+        // every joint input into a tile-arranged 2D buffer.
+        // refine_with_dither AND the OCS bruteforce quantizer are
+        // both spatially-aware: the former runs serpentine error
+        // diffusion (centroid updates depend on neighbour error
+        // propagation), the latter scores candidates against a
+        // dithered-image fitness that assumes 2D layout. A 1×N
+        // strip flattens all 2D structure and produced ±5 pt S2
+        // drift in the same-content A/B test by giving the
+        // dither only horizontal context.
         //
-        //   - Skip the previous max-width / 8-row-padding scheme:
-        //     it black-padded narrower inputs (e.g. 32×32 frames
-        //     in a 320-wide buffer = ~90% black padding) which
-        //     biased the quantizer toward black.
-        //   - Skip alpha-0 pixels (PNG alpha channel OR synthesised
-        //     by --transparent-color). The earlier PyTexturePacker
-        //     atlas approach implicitly stripped the magenta
-        //     sentinels because the packer drew transparent atlas
-        //     regions as black; mi2-redux's --ji path was including
-        //     ~64K magenta pixels per input in the training buffer,
-        //     which dragged the palette away from real content.
+        // Tile size 256×256: large enough that intra-tile dither
+        // behaves like a real frame, small enough that any
+        // padding tail is bounded. Tiles laid out in a roughly-
+        // square grid; the partial last tile cycles from
+        // already-written pixels rather than black-padding so
+        // we don't bias the quantizer toward slot 0.
         //
-        // The S2 ranker doesn't see the training buffer (it scores
-        // per-input rendered output), so neither padding nor pixel
-        // ordering matters here.
+        // Filters: skip alpha-0 pixels (PNG alpha channel OR
+        // synthesised by --transparent-color) so sentinel pixels
+        // (e.g. mi2-redux magenta) don't drag the palette.
         std::size_t total_pixels = 0;
         for (auto& im : joint_imgs) {
             if (!im.has_alpha()) {
@@ -5614,20 +5615,57 @@ int run_main(int argc, char* argv[]) {
                 for (auto v : a) if (v >= 0.5f) ++total_pixels;
             }
         }
-        Image train(total_pixels, 1);
+        if (total_pixels == 0) {
+            std::println(stderr,
+                "Joint-palette: no opaque pixels in training set "
+                "(every input is fully transparent?). Drop "
+                "--transparent-color or check inputs.");
+            return exit_code::usage;
+        }
+        constexpr std::size_t kTile = 256;
+        const std::size_t tile_pixels = kTile * kTile;
+        const std::size_t num_tiles =
+            (total_pixels + tile_pixels - 1) / tile_pixels;
+        std::size_t tiles_w = static_cast<std::size_t>(
+            std::ceil(std::sqrt(static_cast<double>(num_tiles))));
+        if (tiles_w == 0) tiles_w = 1;
+        const std::size_t tiles_h =
+            (num_tiles + tiles_w - 1) / tiles_w;
+        const std::size_t train_w = tiles_w * kTile;
+        const std::size_t train_h = tiles_h * kTile;
+        Image train(train_w, train_h);
         auto train_px = train.pixels();
-        std::size_t cur = 0;
+        // Fill row-major per-tile: write content pixels into
+        // (tile_x, tile_y) at (px_x, px_y) within tile. Wrap to
+        // first pixel when input runs out so the trailing dead
+        // space repeats real content rather than black-padding.
+        std::vector<Color3f> contents;
+        contents.reserve(total_pixels);
         for (auto& im : joint_imgs) {
             auto src = im.pixels();
             if (!im.has_alpha()) {
                 for (std::size_t i = 0; i < src.size(); ++i)
-                    train_px[cur + i] = src[i];
-                cur += src.size();
+                    contents.push_back(src[i]);
             } else {
                 auto a = im.alpha();
                 for (std::size_t i = 0; i < src.size(); ++i) {
-                    if (i < a.size() && a[i] >= 0.5f) {
-                        train_px[cur++] = src[i];
+                    if (i < a.size() && a[i] >= 0.5f)
+                        contents.push_back(src[i]);
+                }
+            }
+        }
+        for (std::size_t ty = 0; ty < tiles_h; ++ty) {
+            for (std::size_t tx = 0; tx < tiles_w; ++tx) {
+                const std::size_t tile_idx = ty * tiles_w + tx;
+                for (std::size_t py = 0; py < kTile; ++py) {
+                    for (std::size_t px = 0; px < kTile; ++px) {
+                        const std::size_t flat =
+                            tile_idx * tile_pixels +
+                            py * kTile + px;
+                        const std::size_t src_i = flat % contents.size();
+                        train_px[(ty * kTile + py) * train_w +
+                                 (tx * kTile + px)] =
+                            contents[src_i];
                     }
                 }
             }
@@ -5652,20 +5690,27 @@ int run_main(int argc, char* argv[]) {
                 qpal.error().message);
             return exit_code::cant_create;
         }
-        // Run the same refine_with_dither pass the single-input
-        // path uses, against the joint training pixels. Without
-        // this, even "positional + --ji of same image" produces a
-        // different palette than the bare positional run because
-        // the refinement step (Lloyd k-means iteration with a
-        // dither-aware centroid update) doesn't fire. Using
-        // refine_iterations from config so user knobs match.
+        // Refine the trained palette against the POSITIONAL
+        // image's actual 2D layout, not the synthetic tile buffer.
+        // refine_with_dither runs serpentine error diffusion +
+        // centroid updates that depend on the source's spatial
+        // structure — running it on the rearranged tile buffer
+        // produced ±5 pt drift between solo and "positional +
+        // --ji of self" because the tile layout's pixel order
+        // doesn't match any real image. Using the positional's
+        // layout for refinement makes the same-content case
+        // converge identically to solo, and biases cross-content
+        // refinement toward the positional's dither character
+        // (a sensible default — main output quality is what's
+        // visible in --output / -o, joint-input outputs are the
+        // sidecar).
         if (config->refine_iterations > 0) {
             dither::Settings tdith;
             tdith.method = config->dither_method;
             tdith.strength = config->dither_strength;
             tdith.error_clamp = config->error_clamp;
             auto rp = quantize::refine_with_dither(
-                train, *qpal, tdith, qcs, config->mode,
+                *image, *qpal, tdith, qcs, config->mode,
                 static_cast<std::size_t>(
                     config->refine_iterations));
             if (rp) qpal = std::move(rp);
