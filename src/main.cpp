@@ -241,15 +241,21 @@ inline bool g_print_palette      = false;
 inline bool g_print_palette_json = false;
 
 // Dump a colour list:
-//   text mode (--print-palette): stderr, `idx: #rrggbb [tag]` per slot
-//      with 🔒 = locked, 🔖 = reserved.
+//   text mode (--print-palette): stderr, `idx: #rrggbb [tag] (Npx)` per
+//      slot with 🔒 = locked, 🔖 = reserved.
 //   JSON mode (--print-palette-json): stdout, single line, schema:
-//      {"palette":[{"idx":0,"rgb":"FF00FF","locked":true,"reserved":false}, ...],
+//      {"palette":[{"idx":0,"rgb":"FF00FF","locked":true,"reserved":false,
+//                   "pixels":12345}, ...],
 //       "depth":N, "chipset":"ocs|aga", "mode":"lores"}
-// Each colour is snapped to 8-bit sRGB. Both modes can be on at once.
+// `pixels` is the count of source pixels routed to this slot by the
+// dither (zero for unused slots, including locked/reserved slots that
+// the dither never picked) — added so callers can detect over-locked
+// palettes and unused slots without re-rendering. Each colour is
+// snapped to 8-bit sRGB. Both modes can be on at once.
 template <typename Cfg>
 inline void cli_dump_palette(std::span<const Color3f> colors,
-                             const Cfg& cfg) {
+                             const Cfg& cfg,
+                             std::span<const std::uint8_t> indices = {}) {
     if (!g_print_palette && !g_print_palette_json) return;
     auto is_locked = [&](int idx) {
         if (cfg.lock_color0 && idx == 0) return true;
@@ -260,6 +266,13 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
         for (auto& r : cfg.reserves) if (r.index == idx) return true;
         return false;
     };
+    // Per-slot pixel-routed count. Zero for every slot when indices is
+    // empty (sliced/strips/HAM paths don't populate it; the field then
+    // omits or reports 0).
+    std::vector<std::size_t> pix_count(colors.size(), 0);
+    for (auto v : indices) {
+        if (v < pix_count.size()) ++pix_count[v];
+    }
     if (g_print_palette) {
         std::println(stderr,
             "Palette dump: {} entries  🔒 = locked, 🔖 = reserved",
@@ -272,8 +285,15 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
             std::string_view tag = "";
             if      (is_reserved(static_cast<int>(k))) tag = " 🔖";
             else if (is_locked(static_cast<int>(k)))   tag = " 🔒";
-            std::println(stderr, "  {:3}: #{:02x}{:02x}{:02x}{}",
-                         k, r, g, b, tag);
+            if (!indices.empty()) {
+                std::println(stderr,
+                    "  {:3}: #{:02x}{:02x}{:02x}{} ({}px)",
+                    k, r, g, b, tag, pix_count[k]);
+            } else {
+                std::println(stderr,
+                    "  {:3}: #{:02x}{:02x}{:02x}{}",
+                    k, r, g, b, tag);
+            }
         }
     }
     if (g_print_palette_json) {
@@ -287,10 +307,11 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
             auto b = static_cast<int>(std::round(srgb.b * 255.0f));
             out += std::format(
                 "{}{{\"idx\":{},\"rgb\":\"{:02X}{:02X}{:02X}\","
-                "\"locked\":{},\"reserved\":{}}}",
+                "\"locked\":{},\"reserved\":{},\"pixels\":{}}}",
                 k == 0 ? "" : ",", k, r, g, b,
                 is_locked(static_cast<int>(k)) ? "true" : "false",
-                is_reserved(static_cast<int>(k)) ? "true" : "false");
+                is_reserved(static_cast<int>(k)) ? "true" : "false",
+                pix_count[k]);
         }
         // chipset: explicit if user passed --chipset, else "ocs".
         // Mode-driven AGA forcing (HAM7/HAM8) reports "aga".
@@ -311,6 +332,37 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
 inline void cli_print_dither(dither::Method method, float strength) {
     cli_status("Dither:   {} (strength: {:.2f})",
                dither_name(method), strength);
+}
+
+// SSIMULACRA2 with optional transparency masking. When `tmask` is
+// non-empty, transparent pixels are forced to black on BOTH source
+// and rendered before scoring so the metric measures only the
+// visible region. Without this, alpha=0 source pixels contribute
+// noise to the score (rendered = palette[0] = often black, source =
+// whatever the user pre-painted under the alpha) — mi2-redux saw
+// this as a 5–10 pt S2 swing depending on what the source carried
+// under the magenta sentinel.
+inline float score_s2_masked(std::span<const Color3f> src,
+                             std::span<const Color3f> rendered,
+                             std::size_t w, std::size_t h,
+                             const std::vector<bool>& tmask) {
+    if (tmask.empty()) {
+        return ssimulacra2::compute(src, rendered, w, h);
+    }
+    Image src_m(w, h);
+    Image rnd_m(w, h);
+    auto sp = src_m.pixels();
+    auto rp = rnd_m.pixels();
+    for (std::size_t i = 0; i < sp.size(); ++i) {
+        if (i < tmask.size() && tmask[i]) {
+            sp[i] = Color3f{0, 0, 0};
+            rp[i] = Color3f{0, 0, 0};
+        } else {
+            sp[i] = src[i];
+            rp[i] = rendered[i];
+        }
+    }
+    return ssimulacra2::compute(src_m.pixels(), rnd_m.pixels(), w, h);
 }
 
 // Non-Amiga "Encoded:" status line for chunky/tiled/text-mode outputs
@@ -690,6 +742,13 @@ struct Config {
 
     // Palette
     std::string palette_file;            // load palette from file (empty = auto)
+    // --quantize-from <file>: train the palette on a separate image
+    // (typically a joint atlas of multiple frames), then re-quantise
+    // the actual input with that palette locked. Internally: pass 1
+    // builds the palette from quantize_from; pass 2 sets every slot
+    // as a --lock-index entry so the encoder uses exactly that
+    // palette while still applying the user's chosen dither.
+    std::string quantize_from;
 
     // C header
     std::string symbol_name;           // base name for C symbols (default: derived from output)
@@ -842,6 +901,7 @@ void print_usage() {
         "\n"
         "Palette:\n"
         "  --palette <file>                Load palette (.gpl, IFF, hex text, .json)\n"
+        "  --quantize-from <file>          Train palette on file, lock onto input\n"
         "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn | gpu-restart\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
         "  --no-lock-color0                Allow palette index 0 to be image colour\n"
@@ -1833,6 +1893,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
             }
             else if (arg == "--palette") {
                 config.palette_file = std::string(val);
+            }
+            else if (arg == "--quantize-from") {
+                config.quantize_from = std::string(val);
             }
             else if (arg == "--mask") {
                 config.mask_path = std::string(val);
@@ -5416,6 +5479,67 @@ int run_main(int argc, char* argv[]) {
         return exit_code::no_input;
     }
 
+    // --quantize-from <file>: two-pass workflow. Build the palette
+    // from a separate training image (typically a joint atlas of
+    // multiple frames), then encode the actual input with that
+    // palette locked slot-for-slot. Replaces the manual --best on
+    // train.png + --print-palette-json + --palette pal.json + 32×
+    // --lock-index pipeline that mi2-redux's wrappers wired up by
+    // hand. User's chosen --dither / --depth / --mode flow through
+    // unchanged for pass 2.
+    if (!config->quantize_from.empty()) {
+        auto qimg = png_io::load(config->quantize_from);
+        if (!qimg) {
+            std::println(stderr, "Error loading --quantize-from {}: {}",
+                         config->quantize_from, qimg.error().message);
+            return exit_code::no_input;
+        }
+        auto qparams = amiga::get_mode_params(config->mode);
+        auto qcs = config->chipset.value_or(amiga::Chipset::ocs);
+        // EHB / HAM bake their own behaviour into max_colors; treat
+        // them as the base-palette count (32 for EHB; for HAM the
+        // base is 2^(depth-2) since 2 bits are control). Plain modes
+        // use 1 << depth.
+        std::size_t qmax = std::size_t{1} << config->depth;
+        if (config->mode == amiga::Mode::ehb) qmax = 32;
+        else if (amiga::is_ham(config->mode))
+            qmax = std::size_t{1} << (qparams.bitplane_depth - 2);
+        auto qalgo = (qcs == amiga::Chipset::aga)
+            ? quantize::Algorithm::pnn
+            : quantize::Algorithm::ocs_bruteforce;
+        auto qpal = quantize::quantize(*qimg, qmax, qalgo,
+                                        config->palette_diversity);
+        if (!qpal) {
+            std::println(stderr, "--quantize-from quantize error: {}",
+                         qpal.error().message);
+            return exit_code::cant_create;
+        }
+        // Build LockSpec entries from the trained palette. lock_color0
+        // already covers slot 0 if set, so skip that index when locked
+        // — the assemble pass will keep slot 0 black on its own.
+        for (std::size_t k = 0; k < qpal->colors.size(); ++k) {
+            if (config->lock_color0 && k == 0) continue;
+            // Skip slots already user-locked / user-reserved so an
+            // explicit override on the CLI wins.
+            bool already = false;
+            for (auto& l : config->locks)
+                if (l.index == static_cast<int>(k)) { already = true; break; }
+            for (auto& r : config->reserves)
+                if (r.index == static_cast<int>(k)) { already = true; break; }
+            if (already) continue;
+            auto srgb = color_space::linear_to_srgb(
+                qpal->colors[k]).clamped();
+            api::LockSpec ls;
+            ls.index = static_cast<int>(k);
+            ls.r = static_cast<std::uint8_t>(std::round(srgb.r * 255.0f));
+            ls.g = static_cast<std::uint8_t>(std::round(srgb.g * 255.0f));
+            ls.b = static_cast<std::uint8_t>(std::round(srgb.b * 255.0f));
+            config->locks.push_back(ls);
+        }
+        cli_status("Quant from: {} → {} locked slots",
+                   config->quantize_from, qpal->colors.size());
+    }
+
     // --transparent-color RRGGBB: synthesize an alpha channel where
     // pixels matching any specified sRGB triple are alpha=0. Threads
     // into the existing alpha→tmask pipeline; existing alpha (if any)
@@ -8101,7 +8225,8 @@ int run_main(int argc, char* argv[]) {
     // ega / "best" for the --best winner). Mode-specific precision
     // is already on the Mode: line above, so don't duplicate.
     cli_status("Palette:  {} colors (auto, {})", pal.size(), pal.name);
-    cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+    cli_dump_palette(std::span<const Color3f>(pal.colors), *config,
+                     std::span<const std::uint8_t>(dither_result.indices));
   }
 
     // --tile post-process: crop the 3W x 3H pipeline output back to the
@@ -8171,9 +8296,14 @@ int run_main(int argc, char* argv[]) {
     float std_psnr = color_space::compute_psnr_blurred(
         image->pixels(), preview->pixels(),
         image->width(), image->height());
-    float std_s2 = ssimulacra2::compute(
+    // Mask transparent pixels so the score reflects only the visible
+    // region. Reproduces what cpu_fitness already does internally for
+    // the --best ranker — keeps the user-visible S2 consistent with
+    // the score the ranker optimises against.
+    float std_s2 = score_s2_masked(
         image->pixels(), preview->pixels(),
-        image->width(), image->height());
+        image->width(), image->height(),
+        transparency_mask);
     cli_print_encoded(
         static_cast<int>(planes->depth),
         static_cast<int>(planes->total_bytes()),
