@@ -7980,27 +7980,6 @@ int run_main(int argc, char* argv[]) {
         return 1;
     }
 
-    // --output-indexed <path>: chunky raw bytes in scan order
-    // (1 byte per pixel = palette slot index). Eliminates the
-    // RGB-PNG-→ rgb→slot post-process wrapper scripts otherwise need.
-    // Writes after dither/pin so the bytes match the final palette.
-    if (!config->output_indexed_path.empty() &&
-        !dither_result.indices.empty()) {
-        std::ofstream f(config->output_indexed_path,
-                        std::ios::binary | std::ios::trunc);
-        if (!f) {
-            std::println(stderr, "--output-indexed: cannot open '{}'",
-                         config->output_indexed_path);
-            return 1;
-        }
-        f.write(reinterpret_cast<const char*>(dither_result.indices.data()),
-                static_cast<std::streamsize>(dither_result.indices.size()));
-        cli_status("Indexed: {} ({} bytes, {}x{})",
-                   config->output_indexed_path,
-                   dither_result.indices.size(),
-                   image->width(), image->height());
-    }
-
     used_palette.assign(pal_span.begin(), pal_span.end());
 
     // Render preview before any DPF expansion (combined indices read from
@@ -8013,6 +7992,30 @@ int run_main(int argc, char* argv[]) {
         return 1;
     }
   }  // end if (!plain_best_done)
+
+  // --output-indexed <path>: chunky raw bytes in scan order
+  // (1 byte per pixel = palette slot index). Runs in BOTH branches —
+  // the standard auto path above and the plain_best_eligible
+  // (api::encode_state_image) path that populates dither_result.indices
+  // from the api state. Writes after dither/pin so the bytes match
+  // the final palette; runs before the --tile crop so non-tile
+  // outputs are unaffected (--tile is excluded from --best anyway).
+  if (!config->output_indexed_path.empty() &&
+      !dither_result.indices.empty()) {
+      std::ofstream f(config->output_indexed_path,
+                      std::ios::binary | std::ios::trunc);
+      if (!f) {
+          std::println(stderr, "--output-indexed: cannot open '{}'",
+                       config->output_indexed_path);
+          return 1;
+      }
+      f.write(reinterpret_cast<const char*>(dither_result.indices.data()),
+              static_cast<std::streamsize>(dither_result.indices.size()));
+      cli_status("Indexed: {} ({} bytes, {}x{})",
+                 config->output_indexed_path,
+                 dither_result.indices.size(),
+                 image->width(), image->height());
+  }
 
   // Single emit-site for the auto-palette status. See comment ~L7547
   // for the architectural rationale: BOTH plain_best_eligible (--best
