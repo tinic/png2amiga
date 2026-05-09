@@ -749,6 +749,16 @@ struct Config {
     // as a --lock-index entry so the encoder uses exactly that
     // palette while still applying the user's chosen dither.
     std::string quantize_from;
+    // Multi-input joint-palette mode. When `joint_inputs` is non-
+    // empty, the encoder concatenates every input's pixels (the
+    // positional input plus each --input flag) into a training
+    // buffer, quantises that once to produce a shared palette, then
+    // dithers each input independently against the shared palette.
+    // Each --output-each entry resolves to per-input output paths
+    // via {dir}/{base}/{stem} substitution, or as a bare-extension
+    // shortcut (`.idx` writes alongside the source).
+    std::vector<std::string> joint_inputs;
+    std::vector<std::string> output_each;
 
     // C header
     std::string symbol_name;           // base name for C symbols (default: derived from output)
@@ -902,6 +912,8 @@ void print_usage() {
         "Palette:\n"
         "  --palette <file>                Load palette (.gpl, IFF, hex text, .json)\n"
         "  --quantize-from <file>          Train palette on file, lock onto input\n"
+        "  --joint-input, --ji <file>      Add input to joint-palette training set\n"
+        "  --output-each, --oe <pattern>   Per-input output: '.ext' or path with {{dir}}/{{stem}}\n"
         "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn | gpu-restart\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
         "  --no-lock-color0                Allow palette index 0 to be image colour\n"
@@ -923,7 +935,7 @@ void print_usage() {
         "  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)\n"
         "  --alpha-dither <method>         Dither alpha (default: none)\n"
         "  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)\n"
-        "  --transparent-color <rgbhex>    Treat sentinel RGB as alpha=0\n"
+        "  --transparent-color, --tc <hex> Treat sentinel RGB as alpha=0\n"
         "                                  (repeatable, e.g. magenta atlases)\n"
         "  --mask <file>                   Export transparency mask\n"
         "  --mask-invert                   Invert mask polarity\n"
@@ -969,12 +981,13 @@ void print_usage() {
         "  --c64-petscii-graphics          Restrict PETSCII to graphics glyphs\n"
         "\n"
         "Palette index pinning (lores/hires/EHB/Atari):\n"
-        "  --lock-index <id> <rgbhex>      Pin slot's colour; image pixels CAN\n"
+        "  --lock-index, --li <id> <hex>   Pin slot's colour; image pixels CAN\n"
         "                                  still route to it (quantizer uses it)\n"
-        "  --reserve-range <range> <rgb>   Pin slot's colour; image pixels CANNOT\n"
+        "  --reserve-range, --rr <r> <hex> Pin slot's colour; image pixels CANNOT\n"
         "                                  route to it (quantizer skips it).\n"
         "                                  Range: 0,1,5-10 / -5 / 5- (open ends)\n"
-        "  --pin-index-at <id> <x> <y>     Swap pixel (x,y)'s slot with <id>\n"
+        "  --pin-index-at, --pia <id> <x> <y>\n"
+        "                                  Swap pixel (x,y)'s slot with <id>\n"
         "\n"
         "Output:\n"
         "  --symbol <name>                 Base symbol name (default: from filename)\n"
@@ -1118,7 +1131,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
             config.output_indexed_path = argv[++i];
             continue;
         }
-        if (arg == "--transparent-color" && i + 1 < argc) {
+        if ((arg == "--transparent-color" || arg == "--tc") &&
+            i + 1 < argc) {
             std::string hex = argv[++i];
             if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
             if (hex.size() == 3) {
@@ -1465,7 +1479,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
 
         // --lock-index <id> <rgbhex>: lock palette slot to a specific color.
-        if (arg == "--lock-index" && i + 2 < argc) {
+        if ((arg == "--lock-index" || arg == "--li") &&
+            i + 2 < argc) {
             int idx = std::atoi(argv[++i]);
             if (idx < 0 || idx > 255) {
                 return std::unexpected{Error{ErrorCode::invalid_depth,
@@ -1513,7 +1528,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
         // resolved per mode in the pipeline). Quantizer cannot place
         // image colours into reserved slots; the slots are filled with
         // the user-supplied default colour.
-        if (arg == "--reserve-range" && i + 2 < argc) {
+        if ((arg == "--reserve-range" || arg == "--rr") &&
+            i + 2 < argc) {
             auto ranges = std::string_view(argv[++i]);
             auto hex = std::string(argv[++i]);
             if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
@@ -1593,7 +1609,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
 
         // --pin-index-at <id> <x> <y>: pin palette slot to source pixel.
-        if (arg == "--pin-index-at" && i + 3 < argc) {
+        if ((arg == "--pin-index-at" || arg == "--pia") &&
+            i + 3 < argc) {
             int idx = std::atoi(argv[++i]);
             int x = std::atoi(argv[++i]);
             int y = std::atoi(argv[++i]);
@@ -1896,6 +1913,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
             }
             else if (arg == "--quantize-from") {
                 config.quantize_from = std::string(val);
+            }
+            else if (arg == "--joint-input" || arg == "--ji") {
+                config.joint_inputs.push_back(std::string(val));
+            }
+            else if (arg == "--output-each" || arg == "--oe") {
+                config.output_each.push_back(std::string(val));
             }
             else if (arg == "--mask") {
                 config.mask_path = std::string(val);
@@ -5479,6 +5502,167 @@ int run_main(int argc, char* argv[]) {
         return exit_code::no_input;
     }
 
+    // Joint-palette mode: when `--joint-input` is repeated, train
+    // the palette on the union of (positional input + every
+    // --joint-input) pixels, then dither each input independently
+    // against the shared palette. Replaces mi2-redux's PyTexture-
+    // Packer / joint-atlas / region-trim hack — quantization is
+    // bag-of-pixels, no spatial layout needed. Per-input outputs
+    // flow through --output-each.
+    //
+    // MVP gate: mode in {lores/hires/lores-lace/hires-lace/ehb};
+    // no copper/scap/dpf/tile; no pins; --output-each required.
+    // The validation below runs BEFORE we touch the joint inputs.
+    bool joint_mode = !config->joint_inputs.empty();
+    std::vector<Image> joint_imgs;  // [0]=positional, [1..]=--input
+    if (joint_mode) {
+        if (config->output_each.empty()) {
+            std::println(stderr,
+                "Error: --joint-input requires --output-each "
+                "<pattern>. Pass `--output-each .idx` (or .png) "
+                "so each input gets a per-file output.");
+            return exit_code::usage;
+        }
+        if (!config->pins.empty()) {
+            std::println(stderr,
+                "Error: --pin-index-at is not supported in joint-"
+                "palette mode (a pin's (x, y) coordinates only "
+                "make sense for one input). Drop --pin-index-at.");
+            return exit_code::usage;
+        }
+        bool mode_ok =
+            config->mode == amiga::Mode::lores ||
+            config->mode == amiga::Mode::lores_interlace ||
+            config->mode == amiga::Mode::hires ||
+            config->mode == amiga::Mode::hires_interlace ||
+            config->mode == amiga::Mode::ehb;
+        if (!mode_ok || config->copper || config->scap ||
+            config->dual_playfield || config->tile) {
+            std::println(stderr,
+                "Error: joint-palette mode (--joint-input) only "
+                "supports plain lores/hires/EHB without --copper "
+                "/ --scap / --dpf / --tile.");
+            return exit_code::usage;
+        }
+        // Load each joint input. The positional was already loaded
+        // and (--transparent-color synthesised) above; we apply the
+        // same sentinel pass to each --input here so the training
+        // buffer has consistent alpha across all inputs.
+        joint_imgs.push_back(*image);
+        for (auto& jp : config->joint_inputs) {
+            auto j = png_io::load(jp);
+            if (!j) {
+                std::println(stderr,
+                    "Error loading --joint-input {}: {}", jp,
+                    j.error().message);
+                return exit_code::no_input;
+            }
+            if (!config->transparent_colors.empty()) {
+                const std::size_t pix = j->width() * j->height();
+                std::vector<float> a(pix, 1.0f);
+                if (j->has_alpha()) {
+                    for (std::size_t y = 0; y < j->height(); ++y)
+                        for (std::size_t x = 0; x < j->width(); ++x)
+                            a[y * j->width() + x] =
+                                j->alpha_at(x, y);
+                }
+                for (std::size_t i = 0; i < pix; ++i) {
+                    auto p = (*j).pixels()[i];
+                    auto srgb =
+                        color_space::linear_to_srgb(p).clamped();
+                    std::uint8_t r = static_cast<std::uint8_t>(
+                        std::round(srgb.r * 255.0f));
+                    std::uint8_t g = static_cast<std::uint8_t>(
+                        std::round(srgb.g * 255.0f));
+                    std::uint8_t b = static_cast<std::uint8_t>(
+                        std::round(srgb.b * 255.0f));
+                    for (auto& tc : config->transparent_colors) {
+                        if (tc[0] == r && tc[1] == g &&
+                            tc[2] == b) { a[i] = 0.0f; break; }
+                    }
+                }
+                j->set_alpha(std::move(a));
+            }
+            joint_imgs.push_back(*std::move(j));
+        }
+        // Build concat training image: vertically stack inputs with
+        // 8-row black padding between adjacent inputs (covers
+        // SSIMULACRA2's Gaussian σ at coarsest scale so cross-
+        // input bleed in --best scoring is zero). Max-width pads
+        // narrower inputs on the right with black.
+        std::size_t max_w = 0;
+        std::size_t total_h = 0;
+        for (auto& im : joint_imgs) {
+            max_w = std::max(max_w, im.width());
+            total_h += im.height();
+        }
+        constexpr std::size_t pad_rows = 8;
+        if (joint_imgs.size() > 1)
+            total_h += pad_rows * (joint_imgs.size() - 1);
+        Image train(max_w, total_h);
+        auto train_px = train.pixels();
+        std::fill(train_px.begin(), train_px.end(),
+                  Color3f{0.0f, 0.0f, 0.0f});
+        std::size_t y_cursor = 0;
+        for (std::size_t i = 0; i < joint_imgs.size(); ++i) {
+            auto& im = joint_imgs[i];
+            for (std::size_t y = 0; y < im.height(); ++y) {
+                for (std::size_t x = 0; x < im.width(); ++x) {
+                    train_px[(y_cursor + y) * max_w + x] =
+                        im[x, y];
+                }
+            }
+            y_cursor += im.height() + pad_rows;
+        }
+        // Quantize the union; same path as --quantize-from. Each
+        // free slot gets a --lock-index entry so the main image
+        // pipeline runs against the trained palette without re-
+        // quantising per-image. Skip slots already user-locked /
+        // user-reserved so explicit CLI overrides win.
+        auto qparams = amiga::get_mode_params(config->mode);
+        auto qcs = config->chipset.value_or(amiga::Chipset::ocs);
+        std::size_t qmax = std::size_t{1} << config->depth;
+        if (config->mode == amiga::Mode::ehb) qmax = 32;
+        auto qalgo = (qcs == amiga::Chipset::aga)
+            ? quantize::Algorithm::pnn
+            : quantize::Algorithm::ocs_bruteforce;
+        auto qpal = quantize::quantize(train, qmax, qalgo,
+                                        config->palette_diversity);
+        if (!qpal) {
+            std::println(stderr,
+                "Joint-palette quantize error: {}",
+                qpal.error().message);
+            return exit_code::cant_create;
+        }
+        for (std::size_t k = 0; k < qpal->colors.size(); ++k) {
+            if (config->lock_color0 && k == 0) continue;
+            bool already = false;
+            for (auto& l : config->locks)
+                if (l.index == static_cast<int>(k)) {
+                    already = true; break; }
+            for (auto& r : config->reserves)
+                if (r.index == static_cast<int>(k)) {
+                    already = true; break; }
+            if (already) continue;
+            auto srgb = color_space::linear_to_srgb(
+                qpal->colors[k]).clamped();
+            api::LockSpec ls;
+            ls.index = static_cast<int>(k);
+            ls.r = static_cast<std::uint8_t>(
+                std::round(srgb.r * 255.0f));
+            ls.g = static_cast<std::uint8_t>(
+                std::round(srgb.g * 255.0f));
+            ls.b = static_cast<std::uint8_t>(
+                std::round(srgb.b * 255.0f));
+            config->locks.push_back(ls);
+        }
+        cli_status("Joint palette: trained on {} inputs "
+                   "({}x{} concat) → {} locked slots",
+                   joint_imgs.size(), max_w, total_h,
+                   qpal->colors.size());
+        (void) qparams;
+    }
+
     // --quantize-from <file>: two-pass workflow. Build the palette
     // from a separate training image (typically a joint atlas of
     // multiple frames), then encode the actual input with that
@@ -8690,6 +8874,120 @@ int run_main(int argc, char* argv[]) {
     if (!config->mask_path.empty())
         save_mask(config->mask_path, transparency_mask,
                   target_w, target_h, config->mask_invert, config->interlace);
+
+    // Joint-palette mode: render each input (positional + every
+    // --joint-input) against the trained shared palette and write
+    // per-input outputs via --output-each. Runs last so the main
+    // input has gone through the full pipeline (preview, --output,
+    // --output-indexed, etc.) and the palette in `pal` is final.
+    // Each pattern in --output-each expands to a per-input path:
+    //   ".idx" / ".png"          → alongside source as <stem>.<ext>
+    //   {dir}/{base}/{stem}      → printf-style substitution
+    // Format is selected by the resolved path's extension.
+    if (joint_mode && !config->output_each.empty()) {
+        namespace fs = std::filesystem;
+        auto resolve = [&](const std::string& pat,
+                           const std::string& src) -> std::string {
+            fs::path p(src);
+            std::string dir  = p.parent_path().string();
+            std::string name = p.filename().string();  // with extension
+            std::string stem = p.stem().string();      // without extension
+            if (!pat.empty() && pat[0] == '.') {
+                fs::path o = dir.empty()
+                    ? fs::path(stem + pat)
+                    : fs::path(dir) / (stem + pat);
+                return o.string();
+            }
+            std::string out = pat;
+            auto repl = [&](std::string_view tok,
+                            std::string_view val) {
+                std::size_t pos = 0;
+                while ((pos = out.find(tok, pos)) !=
+                       std::string::npos) {
+                    out.replace(pos, tok.size(), val);
+                    pos += val.size();
+                }
+            };
+            repl("{dir}",  dir);
+            repl("{stem}", stem);
+            repl("{name}", name);  // rarely useful — filename with ext
+            return out;
+        };
+        auto write_outputs = [&](const std::string& src,
+                                  std::span<const std::uint8_t> idx,
+                                  std::size_t w, std::size_t h) -> int {
+            for (auto& pat : config->output_each) {
+                auto out_path = resolve(pat, src);
+                if (ends_with(out_path, ".idx")) {
+                    std::ofstream f(out_path,
+                        std::ios::binary | std::ios::trunc);
+                    if (!f) {
+                        std::println(stderr,
+                            "--output-each: cannot open '{}'",
+                            out_path);
+                        return exit_code::cant_create;
+                    }
+                    f.write(reinterpret_cast<const char*>(idx.data()),
+                            static_cast<std::streamsize>(idx.size()));
+                    cli_status("Joint-out: {} ({} bytes, {}x{})",
+                               out_path, idx.size(), w, h);
+                } else if (ends_with(out_path, ".png")) {
+                    std::vector<std::uint8_t> idx_v(idx.begin(),
+                                                     idx.end());
+                    auto r = png_io::save_palettized(
+                        out_path, idx_v, pal.colors, w, h,
+                        /*transparent_index=*/-1);
+                    if (!r) {
+                        std::println(stderr,
+                            "--output-each: PNG write error: {}",
+                            r.error().message);
+                        return exit_code::cant_create;
+                    }
+                    cli_status("Joint-out: {} (paletted, {}x{})",
+                               out_path, w, h);
+                } else {
+                    std::println(stderr,
+                        "--output-each: unsupported extension "
+                        "in '{}' (expected .idx or .png)",
+                        out_path);
+                    return exit_code::usage;
+                }
+            }
+            return 0;
+        };
+        // Positional first — its indices were already produced by
+        // the main encode pipeline. Per-input dither for the rest.
+        if (auto rc = write_outputs(config->input_path,
+                                     dither_result.indices,
+                                     image->width(),
+                                     image->height());
+            rc != 0) return rc;
+        for (std::size_t i = 0; i < config->joint_inputs.size(); ++i) {
+            auto& jp = config->joint_inputs[i];
+            auto& jimg = joint_imgs[i + 1];  // [0] is positional
+            // Re-render via api::encode_state_image with the
+            // already-locked palette. dither / strength / mode flow
+            // through the standard make_api_options path.
+            api::Options jopts = make_api_options(*config);
+            jopts.width  = static_cast<int>(jimg.width());
+            jopts.height = static_cast<int>(jimg.height());
+            // Don't recurse into joint mode for the per-input
+            // encode (this Options doesn't carry joint_inputs;
+            // make_api_options doesn't either, but be explicit).
+            jopts.best = false;
+            auto enc = api::encode_state_image(jimg, jopts);
+            if (!enc.ok()) {
+                std::println(stderr,
+                    "--joint-input {} encode error: {}", jp,
+                    enc.error_msg);
+                return exit_code::cant_create;
+            }
+            if (auto rc = write_outputs(jp, enc.state.indices,
+                                         jimg.width(),
+                                         jimg.height());
+                rc != 0) return rc;
+        }
+    }
 
     // CMake/Ninja depfile: input PNG + optional palette file are the
     // only external inputs we read. Output is the file we just wrote.
