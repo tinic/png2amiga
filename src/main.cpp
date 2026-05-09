@@ -5585,34 +5585,30 @@ int run_main(int argc, char* argv[]) {
             }
             joint_imgs.push_back(*std::move(j));
         }
-        // Build concat training image: vertically stack inputs with
-        // 8-row black padding between adjacent inputs (covers
-        // SSIMULACRA2's Gaussian σ at coarsest scale so cross-
-        // input bleed in --best scoring is zero). Max-width pads
-        // narrower inputs on the right with black.
-        std::size_t max_w = 0;
-        std::size_t total_h = 0;
-        for (auto& im : joint_imgs) {
-            max_w = std::max(max_w, im.width());
-            total_h += im.height();
-        }
-        constexpr std::size_t pad_rows = 8;
-        if (joint_imgs.size() > 1)
-            total_h += pad_rows * (joint_imgs.size() - 1);
-        Image train(max_w, total_h);
+        // Build concat training image — bag-of-pixels, no spatial
+        // layout. quantize::quantize iterates over the flat pixel
+        // buffer, so we pack all real pixels from every joint input
+        // into a 1-row Image and skip the previous max-width /
+        // 8-row-padding scheme. That earlier layout black-padded
+        // narrower inputs out to max_w (e.g. 32×32 cost frames in
+        // a 320-wide buffer = ~90% black padding by area), which
+        // skewed the quantizer toward black and starved real
+        // content colours — mi2-redux saw this as a 14-pt S2 drop
+        // vs. the previous PyTexturePacker pipeline. The earlier
+        // 8-row padding was defensive against SSIMULACRA2 cross-
+        // input bleed, but training is pure quantization — the
+        // S2 ranker doesn't see this buffer.
+        std::size_t total_pixels = 0;
+        for (auto& im : joint_imgs)
+            total_pixels += im.width() * im.height();
+        Image train(total_pixels, 1);
         auto train_px = train.pixels();
-        std::fill(train_px.begin(), train_px.end(),
-                  Color3f{0.0f, 0.0f, 0.0f});
-        std::size_t y_cursor = 0;
-        for (std::size_t i = 0; i < joint_imgs.size(); ++i) {
-            auto& im = joint_imgs[i];
-            for (std::size_t y = 0; y < im.height(); ++y) {
-                for (std::size_t x = 0; x < im.width(); ++x) {
-                    train_px[(y_cursor + y) * max_w + x] =
-                        im[x, y];
-                }
-            }
-            y_cursor += im.height() + pad_rows;
+        std::size_t cur = 0;
+        for (auto& im : joint_imgs) {
+            auto src = im.pixels();
+            for (std::size_t i = 0; i < src.size(); ++i)
+                train_px[cur + i] = src[i];
+            cur += src.size();
         }
         // Quantize the union; same path as --quantize-from. Each
         // free slot gets a --lock-index entry so the main image
@@ -5657,8 +5653,8 @@ int run_main(int argc, char* argv[]) {
             config->locks.push_back(ls);
         }
         cli_status("Joint palette: trained on {} inputs "
-                   "({}x{} concat) → {} locked slots",
-                   joint_imgs.size(), max_w, total_h,
+                   "({} pixels) → {} locked slots",
+                   joint_imgs.size(), total_pixels,
                    qpal->colors.size());
         (void) qparams;
     }
