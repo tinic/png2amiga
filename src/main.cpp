@@ -927,7 +927,7 @@ void print_usage() {
         "  --print-palette-json            Dump final CMAP to stdout (JSON)\n"
         "  --output-indexed <file>         Raw chunky indices: 1 byte/pixel,\n"
         "                                  scan order, no header (post-pin)\n"
-        "  --preview                       Show iTerm2 inline preview\n"
+        "  --preview                       Inline preview (iTerm2, kitty, sixel)\n"
         "  --preview-scale <1-8>           Preview display scale\n"
         "  --preview-video                 Batch only: loop frames inline\n"
         "  --preview-video-fps <fps>       Playback rate (default 12.5)\n"
