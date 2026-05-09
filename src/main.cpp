@@ -841,7 +841,7 @@ void print_usage() {
         "  --refine <0-32>                 Palette refinement iterations (default: 8)\n"
         "\n"
         "Palette:\n"
-        "  --palette <file>                Load palette (.gpl, IFF, hex text)\n"
+        "  --palette <file>                Load palette (.gpl, IFF, hex text, .json)\n"
         "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn | gpu-restart\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
         "  --no-lock-color0                Allow palette index 0 to be image colour\n"

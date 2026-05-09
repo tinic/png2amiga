@@ -4,10 +4,13 @@
 # (CMakeLists.txt for the cmake-built ones; spng.h for libspng), fire
 # `git submodule update --init --recursive` once, and fail with a
 # clear message if we're outside a git checkout (e.g. tarball install).
+# Sentinel files: must exist when the corresponding submodule is
+# checked out. libspng is vendored (not a submodule), so it's not
+# listed here. ssimulacra2 ships its source tree under src/ — pick a
+# file inside the repo root rather than a non-existent top-level path.
 set(_p2a_required_submodule_files
     "${CMAKE_CURRENT_SOURCE_DIR}/libwebp/CMakeLists.txt"
-    "${CMAKE_CURRENT_SOURCE_DIR}/libspng/spng.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ssimulacra2/ssimulacra2.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ssimulacra2/README.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/constixel/constixel.hpp")
 set(_p2a_need_init FALSE)
 foreach(_p2a_f IN LISTS _p2a_required_submodule_files)
@@ -21,8 +24,14 @@ if(_p2a_need_init)
        EXISTS "${CMAKE_SOURCE_DIR}/.gitmodules")
         find_package(Git REQUIRED)
         message(STATUS "Initializing git submodules (third_party/*)")
+        # `-c safe.directory=*` sidesteps Git 2.35.2+'s "dubious
+        # ownership" guard, which trips inside CI Docker containers
+        # where the workspace dir is owned by a different uid than the
+        # user running cmake. Per-process flag — does NOT mutate global
+        # config.
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+            COMMAND ${GIT_EXECUTABLE} -c "safe.directory=*"
+                    submodule update --init --recursive
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESULT_VARIABLE _p2a_subres)
         if(NOT _p2a_subres EQUAL 0)
