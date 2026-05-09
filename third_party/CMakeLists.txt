@@ -1,3 +1,44 @@
+# Auto-init git submodules when a fresh clone hasn't done it yet.
+# Plain `git clone` skips submodules; mi2-redux's bootstrap.sh and other
+# downstream wrappers hit this. Detect a missing per-submodule sentinel
+# (CMakeLists.txt for the cmake-built ones; spng.h for libspng), fire
+# `git submodule update --init --recursive` once, and fail with a
+# clear message if we're outside a git checkout (e.g. tarball install).
+set(_p2a_required_submodule_files
+    "${CMAKE_CURRENT_SOURCE_DIR}/libwebp/CMakeLists.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/libspng/spng.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ssimulacra2/ssimulacra2.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/constixel/constixel.hpp")
+set(_p2a_need_init FALSE)
+foreach(_p2a_f IN LISTS _p2a_required_submodule_files)
+    if(NOT EXISTS "${_p2a_f}")
+        set(_p2a_need_init TRUE)
+        break()
+    endif()
+endforeach()
+if(_p2a_need_init)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/.git" AND
+       EXISTS "${CMAKE_SOURCE_DIR}/.gitmodules")
+        find_package(Git REQUIRED)
+        message(STATUS "Initializing git submodules (third_party/*)")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESULT_VARIABLE _p2a_subres)
+        if(NOT _p2a_subres EQUAL 0)
+            message(FATAL_ERROR
+                "git submodule update --init --recursive failed (rc=${_p2a_subres}). "
+                "Run it manually in ${CMAKE_SOURCE_DIR} and re-run cmake.")
+        endif()
+    else()
+        message(FATAL_ERROR
+            "third_party submodules are missing and the source tree is not a git "
+            "checkout (no .git or .gitmodules). Re-clone with "
+            "`git clone --recurse-submodules` or fetch the release tarball that "
+            "bundles third_party/.")
+    endif()
+endif()
+
 add_library(stb STATIC stb_impl.c)
 target_include_directories(stb SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
