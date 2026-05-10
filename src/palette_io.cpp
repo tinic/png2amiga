@@ -419,9 +419,6 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
         reinterpret_cast<const char*>(data.data()), data.size());
     Palette pal;
     pal.name = "json";
-    constexpr std::string_view rgb_key      = "\"rgb\":\"";
-    constexpr std::string_view locked_key   = "\"locked\":";
-    constexpr std::string_view reserved_key = "\"reserved\":";
     // The dump emits one object per slot in document order, with the
     // shape `{"idx":N,"rgb":"RRGGBB","locked":B,"reserved":B}`. We rely
     // on document order to recover slot indices: the n-th `"rgb"` entry
@@ -430,32 +427,55 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
     // "depth"/"chipset"/"mode" fields after the `]` — none of those
     // contain `"rgb"` or `"locked"`/`"reserved"` keys, so the scan
     // doesn't misattribute.)
-    auto scan_bool_after = [&](std::size_t after_pos,
-                               std::string_view key) -> bool {
-        auto k = text.find(key, after_pos);
-        if (k == std::string_view::npos) return false;
-        std::size_t v = k + key.size();
-        // Skip whitespace to the value.
-        while (v < text.size() &&
-               (text[v] == ' ' || text[v] == '\t' ||
-                text[v] == '\r' || text[v] == '\n')) {
-            ++v;
+    //
+    // Tolerated whitespace: between `"key"` and `:`, and between `:`
+    // and the value — so any standard JSON pretty-printer round-trips
+    // (Python's `json.dump` defaults to `"key": value` with a space).
+    auto skip_ws = [&](std::string_view s, std::size_t i) {
+        while (i < s.size() &&
+               (s[i] == ' ' || s[i] == '\t' ||
+                s[i] == '\r' || s[i] == '\n')) ++i;
+        return i;
+    };
+    // Find `"name"` followed by optional ws, `:`, optional ws — return
+    // the position immediately after the colon (skipping trailing ws),
+    // or npos if the key isn't present (or isn't followed by a colon).
+    auto find_kv = [&](std::string_view region, std::string_view name)
+            -> std::size_t {
+        std::string quoted = std::string{"\""} + std::string{name} + "\"";
+        std::size_t i = 0;
+        while (i < region.size()) {
+            auto k = region.find(quoted, i);
+            if (k == std::string_view::npos) return std::string_view::npos;
+            std::size_t v = skip_ws(region, k + quoted.size());
+            if (v < region.size() && region[v] == ':') {
+                return skip_ws(region, v + 1);
+            }
+            i = k + quoted.size();
         }
-        return v + 4 <= text.size() && text.substr(v, 4) == "true";
+        return std::string_view::npos;
     };
     std::size_t pos = 0;
     int slot = 0;
     while (pos < text.size()) {
-        auto k = text.find(rgb_key, pos);
-        if (k == std::string_view::npos) break;
-        std::size_t hex_start = k + rgb_key.size();
-        if (hex_start + 6 > text.size()) {
+        auto rest = text.substr(pos);
+        std::size_t v = find_kv(rest, "rgb");
+        if (v == std::string_view::npos) break;
+        // Value should be a string starting with `"`.
+        if (v >= rest.size() || rest[v] != '"') {
+            return std::unexpected{Error{
+                ErrorCode::invalid_png,
+                "JSON palette: rgb value is not a string",
+            }};
+        }
+        std::size_t hex_start_in_rest = v + 1;
+        if (hex_start_in_rest + 6 > rest.size()) {
             return std::unexpected{Error{
                 ErrorCode::invalid_png,
                 "JSON palette: truncated rgb value",
             }};
         }
-        auto hex = text.substr(hex_start, 6);
+        auto hex = rest.substr(hex_start_in_rest, 6);
         for (auto c : hex) {
             if (!std::isxdigit(static_cast<unsigned char>(c))) {
                 return std::unexpected{Error{
@@ -472,33 +492,32 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
             static_cast<std::uint8_t>((rgb >>  8) & 0xFF),
             static_cast<std::uint8_t>(rgb & 0xFF)));
 
-        // Look ahead for this slot's flags. Bound the lookahead so a
-        // future slot's flags can't bleed into this one — the next
-        // `"rgb"` (if any) marks the end of this slot's object. For the
-        // last slot, scan to end-of-document.
-        auto next_rgb = text.find(rgb_key, hex_start + 6);
-        std::size_t flag_end = (next_rgb == std::string_view::npos)
-            ? text.size() : next_rgb;
-        // Restrict the find region to [hex_start+6, flag_end).
-        auto sub = text.substr(hex_start + 6, flag_end - (hex_start + 6));
-        // scan_bool_after looks within `text` so we re-derive offsets:
-        // find inside `sub`, then offset back if found.
-        auto find_flag = [&](std::string_view key) -> bool {
-            auto kk = sub.find(key);
-            if (kk == std::string_view::npos) return false;
-            std::size_t v = kk + key.size();
-            while (v < sub.size() &&
-                   (sub[v] == ' ' || sub[v] == '\t' ||
-                    sub[v] == '\r' || sub[v] == '\n')) {
-                ++v;
+        // Bound flag lookup to this object — the next `"rgb"` (if any)
+        // marks the end. Look only at the substring [after-hex .. next).
+        std::size_t after_hex_abs = pos + hex_start_in_rest + 6;
+        std::size_t next_rgb_abs = std::string_view::npos;
+        {
+            auto rest2 = text.substr(after_hex_abs);
+            std::size_t nv = find_kv(rest2, "rgb");
+            if (nv != std::string_view::npos) {
+                // Step back to where `"rgb"` started in rest2.
+                auto k = rest2.find("\"rgb\"");
+                if (k != std::string_view::npos)
+                    next_rgb_abs = after_hex_abs + k;
             }
-            return v + 4 <= sub.size() && sub.substr(v, 4) == "true";
+        }
+        std::size_t flag_end = (next_rgb_abs == std::string_view::npos)
+            ? text.size() : next_rgb_abs;
+        auto sub = text.substr(after_hex_abs, flag_end - after_hex_abs);
+        auto find_flag = [&](std::string_view key) -> bool {
+            std::size_t fv = find_kv(sub, key);
+            if (fv == std::string_view::npos) return false;
+            return fv + 4 <= sub.size() && sub.substr(fv, 4) == "true";
         };
-        if (find_flag(locked_key))   pal.locked_indices.push_back(slot);
-        if (find_flag(reserved_key)) pal.reserved_indices.push_back(slot);
+        if (find_flag("locked"))   pal.locked_indices.push_back(slot);
+        if (find_flag("reserved")) pal.reserved_indices.push_back(slot);
         ++slot;
-        (void)scan_bool_after;  // unused after the inline lambda
-        pos = hex_start + 6;
+        pos = after_hex_abs;
     }
     if (pal.colors.empty()) {
         return std::unexpected{Error{
