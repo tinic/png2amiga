@@ -335,6 +335,75 @@ inline void cli_print_dither(dither::Method method, float strength) {
                dither_name(method), strength);
 }
 
+// Apply --transparent-color sentinel synthesis to an image: any
+// pixel matching one of the user's RGB triples gets alpha=0.
+// Existing alpha (PNG native) is preserved on non-matching pixels.
+// Returns the count of newly-synthesised transparent pixels.
+inline std::size_t apply_transparent_color_sentinels(
+        Image& img,
+        const std::vector<std::array<std::uint8_t, 3>>& sentinels) {
+    if (sentinels.empty()) return 0;
+    const std::size_t pix = img.width() * img.height();
+    std::vector<float> a(pix, 1.0f);
+    if (img.has_alpha()) {
+        for (std::size_t y = 0; y < img.height(); ++y)
+            for (std::size_t x = 0; x < img.width(); ++x)
+                a[y * img.width() + x] = img.alpha_at(x, y);
+    }
+    std::size_t hits = 0;
+    auto px = img.pixels();
+    for (std::size_t i = 0; i < pix; ++i) {
+        auto srgb = color_space::linear_to_srgb(px[i]).clamped();
+        std::uint8_t r = static_cast<std::uint8_t>(
+            std::round(srgb.r * 255.0f));
+        std::uint8_t g = static_cast<std::uint8_t>(
+            std::round(srgb.g * 255.0f));
+        std::uint8_t b = static_cast<std::uint8_t>(
+            std::round(srgb.b * 255.0f));
+        for (auto& tc : sentinels) {
+            if (tc[0] == r && tc[1] == g && tc[2] == b) {
+                a[i] = 0.0f;
+                ++hits;
+                break;
+            }
+        }
+    }
+    img.set_alpha(std::move(a));
+    return hits;
+}
+
+// Matte to black — proper alpha premultiplication, run before any
+// data reaches the quantizer or dither. For each pixel, replace
+// RGB with `RGB * alpha`, compositing the input onto a black
+// background:
+//
+//     result = src * alpha + black * (1 - alpha) = src * alpha
+//
+// This is the correct fix for sentinel-colour bleed: alpha-0
+// pixels (PNG native transparent OR --transparent-color synthesised)
+// become pure black, so their dither error diffusion can't bleed
+// the original RGB (e.g. magenta) into adjacent opaque pixels.
+// Semi-transparent pixels (0 < alpha < 1) get scaled toward black
+// proportionally — also correct, since the encoder will composite
+// against black anyway when the alpha eventually hits the binary
+// transparency mask.
+//
+// Multiplication is in linear-light space (Color3f is linear-RGB
+// already in our pipeline), which is the only mathematically
+// correct way to matte. Doing this in sRGB gamut would
+// over-darken semi-transparent pixels.
+inline void matte_to_black(Image& img) {
+    if (!img.has_alpha()) return;
+    auto px = img.pixels();
+    auto a  = img.alpha();
+    for (std::size_t i = 0; i < px.size() && i < a.size(); ++i) {
+        const float alpha = std::clamp(a[i], 0.0f, 1.0f);
+        px[i].r *= alpha;
+        px[i].g *= alpha;
+        px[i].b *= alpha;
+    }
+}
+
 // SSIMULACRA2 with optional transparency masking. When `tmask` is
 // non-empty, transparent pixels are forced to black on BOTH source
 // and rendered before scoring so the metric measures only the
@@ -5545,10 +5614,15 @@ int run_main(int argc, char* argv[]) {
                 "/ --scap / --dpf / --tile.");
             return exit_code::usage;
         }
-        // Load each joint input. The positional was already loaded
-        // and (--transparent-color synthesised) above; we apply the
-        // same sentinel pass to each --input here so the training
-        // buffer has consistent alpha across all inputs.
+        // Apply --transparent-color synthesis + premultiply to
+        // the positional BEFORE pushing into joint_imgs. The main
+        // tc-synthesis block runs LATER (after joint mode), so
+        // without this the atlas would see the positional's
+        // sentinel-magenta pixels as content. Same shape as the
+        // per-input loop below.
+        apply_transparent_color_sentinels(*image,
+            config->transparent_colors);
+        matte_to_black(*image);
         joint_imgs.push_back(*image);
         for (auto& jp : config->joint_inputs) {
             auto j = png_io::load(jp);
@@ -5558,32 +5632,9 @@ int run_main(int argc, char* argv[]) {
                     j.error().message);
                 return exit_code::no_input;
             }
-            if (!config->transparent_colors.empty()) {
-                const std::size_t pix = j->width() * j->height();
-                std::vector<float> a(pix, 1.0f);
-                if (j->has_alpha()) {
-                    for (std::size_t y = 0; y < j->height(); ++y)
-                        for (std::size_t x = 0; x < j->width(); ++x)
-                            a[y * j->width() + x] =
-                                j->alpha_at(x, y);
-                }
-                for (std::size_t i = 0; i < pix; ++i) {
-                    auto p = (*j).pixels()[i];
-                    auto srgb =
-                        color_space::linear_to_srgb(p).clamped();
-                    std::uint8_t r = static_cast<std::uint8_t>(
-                        std::round(srgb.r * 255.0f));
-                    std::uint8_t g = static_cast<std::uint8_t>(
-                        std::round(srgb.g * 255.0f));
-                    std::uint8_t b = static_cast<std::uint8_t>(
-                        std::round(srgb.b * 255.0f));
-                    for (auto& tc : config->transparent_colors) {
-                        if (tc[0] == r && tc[1] == g &&
-                            tc[2] == b) { a[i] = 0.0f; break; }
-                    }
-                }
-                j->set_alpha(std::move(a));
-            }
+            apply_transparent_color_sentinels(*j,
+                config->transparent_colors);
+            matte_to_black(*j);
             joint_imgs.push_back(*std::move(j));
         }
         // Build a 2D training atlas via smol-atlas's Shelf-Best-
@@ -5869,6 +5920,11 @@ int run_main(int argc, char* argv[]) {
                    hits, config->transparent_colors.size(),
                    config->transparent_colors.size() == 1 ? "" : "s");
     }
+    // Matte to black before the quantizer / dither. Compositing
+    // RGB = src * alpha drops alpha-0 sentinels to pure black so
+    // their dither error doesn't bleed the original colour
+    // (e.g. magenta) into adjacent opaque pixels.
+    matte_to_black(*image);
 
     // --best eligibility check at the CLI dispatch boundary. Most modes
     // route through api::encode_state_image rather than api::run_pipeline,
