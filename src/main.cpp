@@ -5706,44 +5706,49 @@ int run_main(int argc, char* argv[]) {
                 }
             }
         }
-        const std::size_t max_w = train_w;
-        const std::size_t total_h = train_h;
-        // Quantize the union; same path as --quantize-from. Each
-        // free slot gets a --lock-index entry so the main image
-        // pipeline runs against the trained palette without re-
-        // quantising per-image. Skip slots already user-locked /
-        // user-reserved so explicit CLI overrides win.
-        auto qparams = amiga::get_mode_params(config->mode);
-        auto qcs = config->chipset.value_or(amiga::Chipset::ocs);
-        std::size_t qmax = std::size_t{1} << config->depth;
-        if (config->mode == amiga::Mode::ehb) qmax = 32;
-        auto qalgo = (qcs == amiga::Chipset::aga)
-            ? quantize::Algorithm::pnn
-            : quantize::Algorithm::ocs_bruteforce;
-        auto qpal = quantize::quantize(train, qmax, qalgo,
-                                        config->palette_diversity);
-        if (!qpal) {
+        // Train the palette by running the FULL pipeline on the
+        // atlas — same path mi2-redux's external 2D-pack workflow
+        // uses: PyTexturePacker builds an atlas, then `png2amiga
+        // --best` runs on that atlas to produce an optimised
+        // 32-colour palette via pop_search + best_sweep. The
+        // captured palette is then locked onto each individual
+        // input. We do exactly that here, in-process, by calling
+        // api::encode_state_image with config->best on the atlas.
+        //
+        // User --li / --rr / --tc / etc. flow through via
+        // make_api_options so training honours every constraint
+        // the user passes; pop_search optimises only the FREE
+        // slots. Without this step the joint palette is far
+        // worse than the 2D-pack baseline because pop_search
+        // never runs (we were doing quantize + refine_with_dither
+        // alone, which is steps 1+2 of encode_plain_auto's 4-step
+        // pipeline).
+        api::Options train_opts = make_api_options(*config);
+        train_opts.width  = static_cast<int>(train.width());
+        train_opts.height = static_cast<int>(train.height());
+        // No joint-mode recursion in the training call.
+        // (joint_inputs / output_each don't live in api::Options
+        // anyway, but be explicit about --best.)
+        train_opts.best = config->best;
+        // Suppress the per-trial progress line — the parent
+        // pipeline will print its own progress for the main
+        // encode, and the training is just the first phase.
+        train_opts.on_progress = nullptr;
+
+        auto train_enc = api::encode_state_image(train, train_opts);
+        if (!train_enc.ok()) {
             std::println(stderr,
-                "Joint-palette quantize error: {}",
-                qpal.error().message);
+                "Joint-palette training failed: {}",
+                train_enc.error_msg);
             return exit_code::cant_create;
         }
-        // Refine on the training atlas itself (real 2D layout
-        // with content + black filler). Earlier attempts refining
-        // on the positional alone biased the palette away from
-        // joint inputs.
-        if (config->refine_iterations > 0) {
-            dither::Settings tdith;
-            tdith.method = config->dither_method;
-            tdith.strength = config->dither_strength;
-            tdith.error_clamp = config->error_clamp;
-            auto rp = quantize::refine_with_dither(
-                train, *qpal, tdith, qcs, config->mode,
-                static_cast<std::size_t>(
-                    config->refine_iterations));
-            if (rp) qpal = std::move(rp);
-        }
-        for (std::size_t k = 0; k < qpal->colors.size(); ++k) {
+        // Pull the trained palette and stamp every free slot in
+        // as a --lock-index. Skip user-locked / user-reserved
+        // slots (those are already in config->locks / reserves
+        // and were honoured during training).
+        const auto& trained = train_enc.state.palette;
+        std::size_t added = 0;
+        for (std::size_t k = 0; k < trained.size(); ++k) {
             if (config->lock_color0 && k == 0) continue;
             bool already = false;
             for (auto& l : config->locks)
@@ -5754,7 +5759,7 @@ int run_main(int argc, char* argv[]) {
                     already = true; break; }
             if (already) continue;
             auto srgb = color_space::linear_to_srgb(
-                qpal->colors[k]).clamped();
+                trained[k]).clamped();
             api::LockSpec ls;
             ls.index = static_cast<int>(k);
             ls.r = static_cast<std::uint8_t>(
@@ -5764,12 +5769,13 @@ int run_main(int argc, char* argv[]) {
             ls.b = static_cast<std::uint8_t>(
                 std::round(srgb.b * 255.0f));
             config->locks.push_back(ls);
+            ++added;
         }
         cli_status("Joint palette: trained on {} inputs "
-                   "({}x{} atlas) → {} locked slots",
-                   joint_imgs.size(), max_w, total_h,
-                   qpal->colors.size());
-        (void) qparams;
+                   "({}x{} atlas, {}-best={}) → {} new locks",
+                   joint_imgs.size(), train_w, train_h,
+                   config->best ? "yes" : "no",
+                   config->best ? "yes" : "no", added);
     }
 
     // --quantize-from <file>: two-pass workflow. Build the palette
