@@ -373,6 +373,25 @@ inline std::size_t apply_transparent_color_sentinels(
     return hits;
 }
 
+// --transparent-output-slot N: rewrite indices so every alpha=0 pixel
+// (per the transparency mask) writes slot N instead of slot 0.
+// Applied right before .idx / per-input output write — the palette
+// itself is untouched, only the indexed-byte stream changes. Default
+// N=0 is a no-op (legacy behaviour).
+inline void apply_transparent_slot_swap(
+        std::vector<std::uint8_t>& indices,
+        const std::vector<bool>& tmask,
+        int slot) {
+    if (slot <= 0) return;
+    // std::vector<bool> is the specialised proxy type — can't take
+    // a span over it, so we index directly.
+    const auto N = static_cast<std::uint8_t>(slot);
+    const auto n = std::min(indices.size(), tmask.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        if (tmask[i]) indices[i] = N;
+    }
+}
+
 // Matte to black — discretized alpha premultiplication, run before
 // any data reaches the quantizer or dither.
 //
@@ -854,6 +873,17 @@ struct Config {
     float alpha_threshold = 0.0f;      // offset from 0.5 midpoint (-0.5..0.5)
     dither::Method alpha_dither = dither::Method::none;  // none = use threshold
     float alpha_dither_strength = 1.0f; // strength for alpha dither (independent)
+    // --transparent-output-slot <N>: write slot N (not slot 0) for
+    // every alpha=0 pixel in the indexed output (.idx + paletted PNG).
+    // The palette itself is unchanged (slot 0 is still the transparent
+    // placeholder = black, slot N keeps whatever colour the locks /
+    // quantizer put there). Useful for downstream formats that need
+    // transparency on a different slot — e.g. SCUMM SMAP wants slot
+    // 17, since slot 0 carries actual black art content. Default 0
+    // (no swap, legacy behaviour). Pair with `--reserve-range N
+    // <colour>` so no opaque pixel naturally routes to slot N — that
+    // way every N in the output indices is unambiguously transparent.
+    int transparent_output_slot = 0;
 
     // Palette refinement
     int refine_iterations = 8;         // dither-aware palette refinement
@@ -1022,6 +1052,10 @@ void print_usage() {
         "  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)\n"
         "  --alpha-dither <method>         Dither alpha (default: none)\n"
         "  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)\n"
+        "  --transparent-output-slot <N>   Write slot N (not 0) for alpha=0 pixels in\n"
+        "                                  .idx / --output-each output. Pair with\n"
+        "                                  --reserve-range N <colour> so no opaque\n"
+        "                                  pixel ever routes there.\n"
         "  --transparent-color, --tc <hex> Treat sentinel RGB as alpha=0\n"
         "                                  (repeatable, e.g. magenta atlases)\n"
         "  --mask <file>                   Export transparency mask\n"
@@ -1999,6 +2033,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
             else if (arg == "--alpha-dither-strength") {
                 config.alpha_dither_strength = std::stof(std::string(val));
             }
+            else if (arg == "--transparent-output-slot") {
+                config.transparent_output_slot = std::atoi(
+                    std::string(val).c_str());
+            }
             else if (arg == "--palette") {
                 config.palette_file = std::string(val);
             }
@@ -2676,6 +2714,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.alpha_dither = std::string{dither_to_options_string(cfg.alpha_dither)};
     opts.alpha_dither_strength = cfg.alpha_dither_strength;
     opts.transparent_colors = cfg.transparent_colors;
+    opts.transparent_output_slot = cfg.transparent_output_slot;
     opts.symbol_name = cfg.symbol_name;
     opts.mask_invert = cfg.mask_invert;
     opts.crop_x = cfg.crop_x;
@@ -8647,12 +8686,22 @@ int run_main(int argc, char* argv[]) {
                        config->output_indexed_path);
           return 1;
       }
-      f.write(reinterpret_cast<const char*>(dither_result.indices.data()),
-              static_cast<std::streamsize>(dither_result.indices.size()));
-      cli_status("Indexed: {} ({} bytes, {}x{})",
+      // Apply --transparent-output-slot swap on a copy so the
+      // in-memory indices stay consistent (slot 0 = transparent)
+      // for any subsequent renders / status output.
+      std::vector<std::uint8_t> out_idx = dither_result.indices;
+      apply_transparent_slot_swap(out_idx, transparency_mask,
+          config->transparent_output_slot);
+      f.write(reinterpret_cast<const char*>(out_idx.data()),
+              static_cast<std::streamsize>(out_idx.size()));
+      cli_status("Indexed: {} ({} bytes, {}x{}{})",
                  config->output_indexed_path,
-                 dither_result.indices.size(),
-                 image->width(), image->height());
+                 out_idx.size(),
+                 image->width(), image->height(),
+                 config->transparent_output_slot > 0
+                     ? std::format(", transparent→slot {}",
+                                    config->transparent_output_slot)
+                     : std::string{});
   }
 
   // Single emit-site for the auto-palette status. See comment ~L7547
@@ -9173,6 +9222,7 @@ int run_main(int argc, char* argv[]) {
         };
         auto write_outputs = [&](const std::string& src,
                                   std::span<const std::uint8_t> idx,
+                                  const std::vector<bool>& tmask,
                                   std::size_t w, std::size_t h) -> int {
             for (auto& pat : config->output_each) {
                 auto out_path = resolve(pat, src);
@@ -9185,10 +9235,20 @@ int run_main(int argc, char* argv[]) {
                             out_path);
                         return exit_code::cant_create;
                     }
-                    f.write(reinterpret_cast<const char*>(idx.data()),
-                            static_cast<std::streamsize>(idx.size()));
-                    cli_status("Joint-out: {} ({} bytes, {}x{})",
-                               out_path, idx.size(), w, h);
+                    // Apply --transparent-output-slot swap on a copy.
+                    std::vector<std::uint8_t> out_idx(idx.begin(),
+                                                       idx.end());
+                    apply_transparent_slot_swap(out_idx, tmask,
+                        config->transparent_output_slot);
+                    f.write(reinterpret_cast<const char*>(out_idx.data()),
+                            static_cast<std::streamsize>(out_idx.size()));
+                    cli_status("Joint-out: {} ({} bytes, {}x{}{})",
+                               out_path, out_idx.size(), w, h,
+                               config->transparent_output_slot > 0
+                                   ? std::format(
+                                         ", transparent→slot {}",
+                                         config->transparent_output_slot)
+                                   : std::string{});
                 } else if (ends_with(out_path, ".png")) {
                     std::vector<std::uint8_t> idx_v(idx.begin(),
                                                      idx.end());
@@ -9217,6 +9277,7 @@ int run_main(int argc, char* argv[]) {
         // the main encode pipeline. Per-input dither for the rest.
         if (auto rc = write_outputs(config->input_path,
                                      dither_result.indices,
+                                     transparency_mask,
                                      image->width(),
                                      image->height());
             rc != 0) return rc;
@@ -9241,6 +9302,7 @@ int run_main(int argc, char* argv[]) {
                 return exit_code::cant_create;
             }
             if (auto rc = write_outputs(jp, enc.state.indices,
+                                         enc.state.transparency_mask,
                                          jimg.width(),
                                          jimg.height());
                 rc != 0) return rc;

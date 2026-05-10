@@ -229,6 +229,17 @@ struct Options {
     // sentinel, since some pipelines emit several rounding variants.
     std::vector<std::array<std::uint8_t, 3>> transparent_colors;
 
+    // Slot number that alpha=0 pixels write to in the output indices
+    // (.idx + paletted PNG). Default 0 — preserves legacy behaviour
+    // where transparent pixels collapse onto the "transparent
+    // placeholder" slot 0 (= black under lock_color0). Set non-zero
+    // for downstream formats whose transparency convention differs
+    // from "slot 0 == transparent" (e.g. SCUMM SMAP wants slot 17
+    // since slot 0 carries real black art). The palette is not
+    // touched — slot 0 still exists in the palette; only the index
+    // written for alpha=0 pixels is changed.
+    int transparent_output_slot = 0;
+
     // C header output
     std::string symbol_name;            // base name for C symbols (default: "image")
 
