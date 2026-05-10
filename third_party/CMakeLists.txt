@@ -100,3 +100,14 @@ target_include_directories(webp_headers SYSTEM INTERFACE
 add_library(constixel INTERFACE)
 target_include_directories(constixel SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/constixel)
+
+# smol-atlas: 2D rectangular bin packer (Shelf Best Height Fit heuristic),
+# vendored as a single-file pair in smol-atlas/. Used by --joint-input mode
+# to pack the training set into a 2D atlas with black-filled empty regions
+# (matches the PyTexturePacker behaviour mi2-redux's 2D-pack pipeline had).
+add_library(smol_atlas STATIC smol-atlas/smol-atlas.cpp)
+target_include_directories(smol_atlas SYSTEM PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/smol-atlas)
+if(EMSCRIPTEN)
+    target_compile_options(smol_atlas PRIVATE -pthread)
+endif()

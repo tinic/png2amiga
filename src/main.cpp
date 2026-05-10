@@ -1,5 +1,6 @@
 #include "amiga.hpp"
 #include "api.hpp"
+#include "smol-atlas.h"
 #include "c64.hpp"
 #include "c64_prg.hpp"
 #include "bitplane.hpp"
@@ -5585,46 +5586,109 @@ int run_main(int argc, char* argv[]) {
             }
             joint_imgs.push_back(*std::move(j));
         }
-        // Build a 2D training atlas — vertically stack inputs at
-        // the max-width position, leave every other pixel BLACK.
-        // This deliberately re-introduces the "black filler"
-        // pattern that mi2-redux's PyTexturePacker pipeline had
-        // and that produced visibly better results than every
-        // padding-free alternative (1×N strip, tile-cycle).
+        // Build a 2D training atlas via smol-atlas's Shelf-Best-
+        // Height-Fit bin packer. Mirrors what mi2-redux's
+        // PyTexturePacker pipeline does externally: pack inputs
+        // into a roughly-square 2D layout, leave empty regions
+        // as black. The empty regions provide a "dark anchor"
+        // that bg-heavy scenes (mi2-redux interior rooms) need —
+        // without it, dinky-hol bg collapsed to S2=−2 because
+        // the joint quantizer over-allocated to bright cost
+        // colours. Real bin-packing produces the same atlas
+        // shape as PyTexturePacker, so quality should track.
         //
-        // Why black filler helps: mi2-redux's bg-heavy scenes
-        // (interior rooms, dark) need a substantial portion of
-        // the 32-slot palette devoted to dark colours. Without
-        // an explicit dark anchor, the joint training balances
-        // across all input pixels and the bright cost frames
-        // crowd out the dark slots — dinky-hol bg dropped to
-        // S2=−8.21 ("worse than random"). The atlas's empty
-        // regions and the alpha=0 areas WITHIN inputs (sentinel
-        // magenta after --transparent-color synthesis) all
-        // become black, concentrating "dark demand" on slot 0
-        // and freeing the other 31 slots for real content.
+        // Atlas sizing: start at sqrt(sum_of_areas * 1.3) per side
+        // (~80 % packing efficiency). Grow on overflow — smol-
+        // atlas can't grow in place, so we recreate with bigger
+        // dims and retry.
         //
-        // refine_with_dither's serpentine error diffusion gets
-        // genuine 2D structure to work with — black-on-content
-        // boundaries are sharp but no different from any other
-        // image-edge transition.
-        std::size_t max_w = 0;
-        std::size_t total_h = 0;
+        // Sort inputs by height descending — Shelf-Best-Height-Fit
+        // is much more efficient that way.
+        struct AtlasItem {
+            std::size_t img_idx;
+            int x, y, w, h;
+        };
+        std::vector<std::size_t> order(joint_imgs.size());
+        std::iota(order.begin(), order.end(), std::size_t{0});
+        std::sort(order.begin(), order.end(),
+            [&](std::size_t a, std::size_t b) {
+                return joint_imgs[a].height() > joint_imgs[b].height();
+            });
+        std::size_t total_area = 0;
+        std::size_t max_input_w = 0;
+        std::size_t max_input_h = 0;
         for (auto& im : joint_imgs) {
-            max_w = std::max(max_w, im.width());
-            total_h += im.height();
+            total_area += im.width() * im.height();
+            max_input_w = std::max(max_input_w, im.width());
+            max_input_h = std::max(max_input_h, im.height());
         }
-        if (max_w == 0 || total_h == 0) {
+        if (total_area == 0) {
             std::println(stderr,
                 "Joint-palette: zero-sized training set.");
             return exit_code::usage;
         }
-        Image train(max_w, total_h);
+        // Initial side: sqrt of inflated area, but at least the
+        // largest individual dim so any single input still fits.
+        int atlas_w = static_cast<int>(std::max<std::size_t>(
+            max_input_w,
+            static_cast<std::size_t>(
+                std::ceil(std::sqrt(
+                    static_cast<double>(total_area) * 1.3)))));
+        int atlas_h = atlas_w;
+        if (static_cast<std::size_t>(atlas_h) < max_input_h)
+            atlas_h = static_cast<int>(max_input_h);
+        std::vector<AtlasItem> placed(joint_imgs.size());
+        bool packed = false;
+        for (int attempt = 0; attempt < 6 && !packed; ++attempt) {
+            smol_atlas_t* atlas = sma_atlas_create(atlas_w, atlas_h);
+            bool all_fit = true;
+            for (auto idx : order) {
+                auto& im = joint_imgs[idx];
+                auto* it = sma_item_add(atlas,
+                    static_cast<int>(im.width()),
+                    static_cast<int>(im.height()));
+                if (!it) {
+                    all_fit = false;
+                    break;
+                }
+                placed[idx] = AtlasItem{
+                    idx,
+                    sma_item_x(it), sma_item_y(it),
+                    sma_item_width(it), sma_item_height(it)};
+            }
+            sma_atlas_destroy(atlas);
+            if (all_fit) {
+                packed = true;
+            } else {
+                // Grow atlas: prefer growing the smaller dim.
+                if (atlas_w <= atlas_h) atlas_w *= 2;
+                else                     atlas_h *= 2;
+            }
+        }
+        if (!packed) {
+            std::println(stderr,
+                "Joint-palette: failed to pack {} inputs into a "
+                "training atlas (last try {}x{}). Inputs may be too "
+                "many or too large.", joint_imgs.size(), atlas_w,
+                atlas_h);
+            return exit_code::cant_create;
+        }
+        // Tighten dims to actually-used extent (smol-atlas may
+        // have left tail space empty; quantize sees that black,
+        // which inflates slot-0 demand without adding signal).
+        int used_w = 0, used_h = 0;
+        for (auto& p : placed) {
+            used_w = std::max(used_w, p.x + p.w);
+            used_h = std::max(used_h, p.y + p.h);
+        }
+        const std::size_t train_w = static_cast<std::size_t>(used_w);
+        const std::size_t train_h = static_cast<std::size_t>(used_h);
+        Image train(train_w, train_h);
         auto train_px = train.pixels();
         std::fill(train_px.begin(), train_px.end(),
                   Color3f{0.0f, 0.0f, 0.0f});
-        std::size_t y_cursor = 0;
-        for (auto& im : joint_imgs) {
+        for (auto& p : placed) {
+            auto& im = joint_imgs[p.img_idx];
             auto src = im.pixels();
             const bool has_alpha = im.has_alpha();
             auto a = has_alpha ? im.alpha()
@@ -5632,16 +5696,18 @@ int run_main(int argc, char* argv[]) {
             for (std::size_t y = 0; y < im.height(); ++y) {
                 for (std::size_t x = 0; x < im.width(); ++x) {
                     const std::size_t si = y * im.width() + x;
-                    // Alpha-0 pixels stay black (atlas init).
-                    // Skipping the write keeps the magenta
-                    // sentinel from being copied into training.
-                    if (has_alpha && si < a.size() && a[si] < 0.5f)
-                        continue;
-                    train_px[(y_cursor + y) * max_w + x] = src[si];
+                    if (has_alpha && si < a.size() &&
+                        a[si] < 0.5f)
+                        continue;  // leave atlas pixel black
+                    train_px[(static_cast<std::size_t>(p.y) + y) *
+                              train_w +
+                             (static_cast<std::size_t>(p.x) + x)] =
+                        src[si];
                 }
             }
-            y_cursor += im.height();
         }
+        const std::size_t max_w = train_w;
+        const std::size_t total_h = train_h;
         // Quantize the union; same path as --quantize-from. Each
         // free slot gets a --lock-index entry so the main image
         // pipeline runs against the trained palette without re-

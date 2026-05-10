@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.79.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.80.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -218,7 +218,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
+    target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel smol_atlas)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # SIMD baseline for the hand-vectorized kernels in quantize.cpp /
