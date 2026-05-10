@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.81.1 LANGUAGES C CXX)
+project(png2amiga VERSION 1.82.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -96,7 +96,7 @@ if(EMSCRIPTEN)
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga_wasm PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
+    target_link_libraries(png2amiga_wasm PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     # -pthread enables std::thread / std::jthread / std::mutex / std::atomic
     # in WASM via Emscripten's pthreads-on-web-workers shim. Requires the
     # browser to be cross-origin isolated (COOP/COEP headers, see
@@ -146,7 +146,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(api_pipeline_smoke PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
+    target_link_libraries(api_pipeline_smoke PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     target_compile_options(api_pipeline_smoke PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # palette_search: experimental population-based palette search for
@@ -165,7 +165,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(palette_search PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel)
+    target_link_libraries(palette_search PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     target_compile_options(palette_search PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # bench_ssimulacra2: standalone microbench for the SSIMULACRA2
@@ -218,7 +218,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel smol_atlas)
+    target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel smol_atlas nlohmann_json)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # SIMD baseline for the hand-vectorized kernels in quantize.cpp /

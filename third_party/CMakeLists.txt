@@ -101,6 +101,14 @@ add_library(constixel INTERFACE)
 target_include_directories(constixel SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/constixel)
 
+# nlohmann/json: header-only JSON parser (MIT, single-file). Used for
+# palette JSON load (--palette *.json) so we get spec-compliant
+# tokenizing — the previous hand-rolled substring scanner broke on
+# key reordering, embedded keyword strings, etc.
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json SYSTEM INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/json)
+
 # smol-atlas: 2D rectangular bin packer (Shelf Best Height Fit heuristic),
 # vendored as a single-file pair in smol-atlas/. Used by --joint-input mode
 # to pack the training set into a 2D atlas with black-filled empty regions

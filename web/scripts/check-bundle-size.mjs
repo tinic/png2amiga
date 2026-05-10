@@ -20,7 +20,10 @@ const BUDGETS = [
   // glue. Without pthreads we sit at ~24 KB; with pthreads ~50 KB.
   // Headroom for future Emscripten updates.
   { match: /^png2amiga-.*\.js$/,    max:  64 * 1024, label: 'wasm glue'  },
-  { match: /^png2amiga-.*\.wasm$/,  max:   2.25 * 1024 * 1024, label: 'wasm binary' },
+  // 2.40 MB up from 2.25 MB — vendored nlohmann/json for spec-
+  // compliant palette JSON parsing (tolerates key reordering /
+  // pretty-printing / comments). Adds ~50 KB to the WASM binary.
+  { match: /^png2amiga-.*\.wasm$/,  max:   2.4 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
   { match: /^index-.*\.css$/,       max: 500 * 1024, label: 'css'        },

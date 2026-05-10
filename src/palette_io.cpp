@@ -2,6 +2,12 @@
 #include "color_space.hpp"
 #include "palette.hpp"
 
+// nlohmann/json's exceptions hit strict warnings as errors in some
+// of our config combos (assignment-suppress-on-throw) — silence the
+// header's own warnings without affecting the rest of the TU.
+#define JSON_USE_IMPLICIT_CONVERSIONS 0
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -405,85 +411,71 @@ Result<Palette> parse_ocs_binary(std::span<const std::uint8_t> data) {
 // ---------------------------------------------------------------------------
 // JSON palette parser — closes the round-trip with --print-palette-json.
 //
-// We parse only the keys we care about (rgb), and we do it via simple
-// string scanning rather than a full JSON parser. The schema produced
-// by --print-palette-json is fixed:
-//   {"palette":[{"idx":N,"rgb":"RRGGBB","locked":B,"reserved":B}, ...],
-//    "depth":N, "chipset":"...", "mode":"..."}
-// — but we tolerate whitespace and field-order variations. Other fields
-// (idx / locked / reserved / depth / chipset / mode) are informational
-// for now; the loader only consumes the colours in `palette[]` order.
+// Schema produced by --print-palette-json (single-line by default; any
+// pretty-printer with whitespace, key reordering, or extra fields
+// round-trips since we use a real JSON parser):
+//
+//   {
+//     "palette": [
+//       {"idx": N, "rgb": "RRGGBB", "locked": B, "reserved": B,
+//        "pixels": N},
+//       ...
+//     ],
+//     "depth": N, "chipset": "ocs|aga", "mode": "lores|..."
+//   }
+//
+// We consume `palette[].rgb` (required) and `palette[].locked` /
+// `palette[].reserved` (optional). Slot index = array order; the
+// `idx` field is informational. Other top-level fields are passed
+// through but not enforced — depth/chipset/mode the caller's CLI
+// flags supersede.
 // ---------------------------------------------------------------------------
 Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
-    auto text = std::string_view(
-        reinterpret_cast<const char*>(data.data()), data.size());
     Palette pal;
     pal.name = "json";
-    // The dump emits one object per slot in document order, with the
-    // shape `{"idx":N,"rgb":"RRGGBB","locked":B,"reserved":B}`. We rely
-    // on document order to recover slot indices: the n-th `"rgb"` entry
-    // is slot n. The "locked"/"reserved" flags between consecutive rgb
-    // entries belong to that entry. (The schema also has top-level
-    // "depth"/"chipset"/"mode" fields after the `]` — none of those
-    // contain `"rgb"` or `"locked"`/`"reserved"` keys, so the scan
-    // doesn't misattribute.)
-    //
-    // Tolerated whitespace: between `"key"` and `:`, and between `:`
-    // and the value — so any standard JSON pretty-printer round-trips
-    // (Python's `json.dump` defaults to `"key": value` with a space).
-    auto skip_ws = [&](std::string_view s, std::size_t i) {
-        while (i < s.size() &&
-               (s[i] == ' ' || s[i] == '\t' ||
-                s[i] == '\r' || s[i] == '\n')) ++i;
-        return i;
-    };
-    // Find `"name"` followed by optional ws, `:`, optional ws — return
-    // the position immediately after the colon (skipping trailing ws),
-    // or npos if the key isn't present (or isn't followed by a colon).
-    auto find_kv = [&](std::string_view region, std::string_view name)
-            -> std::size_t {
-        std::string quoted = std::string{"\""} + std::string{name} + "\"";
-        std::size_t i = 0;
-        while (i < region.size()) {
-            auto k = region.find(quoted, i);
-            if (k == std::string_view::npos) return std::string_view::npos;
-            std::size_t v = skip_ws(region, k + quoted.size());
-            if (v < region.size() && region[v] == ':') {
-                return skip_ws(region, v + 1);
-            }
-            i = k + quoted.size();
-        }
-        return std::string_view::npos;
-    };
-    std::size_t pos = 0;
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(data.begin(), data.end(),
+                                     /*cb=*/nullptr,
+                                     /*allow_exceptions=*/true,
+                                     /*ignore_comments=*/true);
+    } catch (const nlohmann::json::parse_error& e) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_png,
+            std::string{"JSON palette: parse error — "} + e.what(),
+        }};
+    }
+    if (!doc.is_object() || !doc.contains("palette") ||
+        !doc["palette"].is_array()) {
+        return std::unexpected{Error{
+            ErrorCode::invalid_png,
+            "JSON palette: top-level object must have an array "
+            "field \"palette\"",
+        }};
+    }
+    const auto& arr = doc["palette"];
     int slot = 0;
-    while (pos < text.size()) {
-        auto rest = text.substr(pos);
-        std::size_t v = find_kv(rest, "rgb");
-        if (v == std::string_view::npos) break;
-        // Value should be a string starting with `"`.
-        if (v >= rest.size() || rest[v] != '"') {
+    for (const auto& entry : arr) {
+        if (!entry.is_object() || !entry.contains("rgb") ||
+            !entry["rgb"].is_string()) {
             return std::unexpected{Error{
                 ErrorCode::invalid_png,
-                "JSON palette: rgb value is not a string",
+                std::string{"JSON palette: slot "} +
+                    std::to_string(slot) +
+                    " missing string \"rgb\"",
             }};
         }
-        std::size_t hex_start_in_rest = v + 1;
-        if (hex_start_in_rest + 6 > rest.size()) {
+        std::string hex = entry["rgb"].get<std::string>();
+        if (hex.size() != 6 ||
+            !std::all_of(hex.begin(), hex.end(), [](char c) {
+                return std::isxdigit(static_cast<unsigned char>(c));
+            })) {
             return std::unexpected{Error{
                 ErrorCode::invalid_png,
-                "JSON palette: truncated rgb value",
+                std::string{"JSON palette: slot "} +
+                    std::to_string(slot) +
+                    " malformed rgb \"" + hex + "\"",
             }};
-        }
-        auto hex = rest.substr(hex_start_in_rest, 6);
-        for (auto c : hex) {
-            if (!std::isxdigit(static_cast<unsigned char>(c))) {
-                return std::unexpected{Error{
-                    ErrorCode::invalid_png,
-                    std::string{"JSON palette: malformed rgb hex \""} +
-                        std::string{hex} + "\"",
-                }};
-            }
         }
         std::uint32_t rgb = 0;
         std::from_chars(hex.data(), hex.data() + 6, rgb, 16);
@@ -491,38 +483,19 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
             static_cast<std::uint8_t>((rgb >> 16) & 0xFF),
             static_cast<std::uint8_t>((rgb >>  8) & 0xFF),
             static_cast<std::uint8_t>(rgb & 0xFF)));
-
-        // Bound flag lookup to this object — the next `"rgb"` (if any)
-        // marks the end. Look only at the substring [after-hex .. next).
-        std::size_t after_hex_abs = pos + hex_start_in_rest + 6;
-        std::size_t next_rgb_abs = std::string_view::npos;
-        {
-            auto rest2 = text.substr(after_hex_abs);
-            std::size_t nv = find_kv(rest2, "rgb");
-            if (nv != std::string_view::npos) {
-                // Step back to where `"rgb"` started in rest2.
-                auto k = rest2.find("\"rgb\"");
-                if (k != std::string_view::npos)
-                    next_rgb_abs = after_hex_abs + k;
-            }
-        }
-        std::size_t flag_end = (next_rgb_abs == std::string_view::npos)
-            ? text.size() : next_rgb_abs;
-        auto sub = text.substr(after_hex_abs, flag_end - after_hex_abs);
-        auto find_flag = [&](std::string_view key) -> bool {
-            std::size_t fv = find_kv(sub, key);
-            if (fv == std::string_view::npos) return false;
-            return fv + 4 <= sub.size() && sub.substr(fv, 4) == "true";
-        };
-        if (find_flag("locked"))   pal.locked_indices.push_back(slot);
-        if (find_flag("reserved")) pal.reserved_indices.push_back(slot);
+        if (entry.contains("locked") && entry["locked"].is_boolean() &&
+            entry["locked"].get<bool>())
+            pal.locked_indices.push_back(slot);
+        if (entry.contains("reserved") &&
+            entry["reserved"].is_boolean() &&
+            entry["reserved"].get<bool>())
+            pal.reserved_indices.push_back(slot);
         ++slot;
-        pos = after_hex_abs;
     }
     if (pal.colors.empty()) {
         return std::unexpected{Error{
             ErrorCode::invalid_png,
-            "JSON palette: no \"rgb\" entries found",
+            "JSON palette: \"palette\" array is empty",
         }};
     }
     return pal;
