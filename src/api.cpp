@@ -248,7 +248,29 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                                    // through the bytes-only entry point.
                                    const Image* prepared_image = nullptr) {
     if (prepared_image) {
-        if (out_tmask) out_tmask->clear();
+        // Build tmask from the prepared image's alpha channel (if
+        // any) so encode_state_image callers — chiefly main.cpp's
+        // joint-mode --ji per-input render path — get transparency
+        // honoured. Without this, the dither candidate set fails
+        // to exclude slot 0 and the post-dither force-to-0 step
+        // never fires, off-by-one shifting every opaque pixel's
+        // routing. Threshold matches the rest of the pipeline
+        // (alpha < 0.5 ⇒ transparent).
+        if (out_tmask) {
+            out_tmask->clear();
+            if (prepared_image->has_alpha()) {
+                auto a = prepared_image->alpha();
+                out_tmask->resize(a.size(), false);
+                bool any = false;
+                for (std::size_t i = 0; i < a.size(); ++i) {
+                    if (a[i] < 0.5f) {
+                        (*out_tmask)[i] = true;
+                        any = true;
+                    }
+                }
+                if (!any) out_tmask->clear();  // all opaque
+            }
+        }
         return *prepared_image;
     }
     int w{}, h{};

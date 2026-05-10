@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.83.1 LANGUAGES C CXX)
+project(png2amiga VERSION 1.83.2 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -1516,6 +1516,31 @@ else()
             --expect-unique-colors 1
             --expect-all-color 000000
             -- --mode ehb --reserve-range 1-31 ff0000)
+
+    # ---------------------------------------------------------------
+    # --joint-input + --lock-index consistency:
+    # the same image rendered solo vs as a --ji input must produce
+    # byte-identical .idx output (regression: load_and_preprocess's
+    # prepared_image bypass dropped tmask, so transparent slot 0 was
+    # not excluded from the dither candidate set, off-by-one shifting
+    # every opaque pixel's slot routing in --ji renders).
+    # ---------------------------------------------------------------
+    set(_ji_lock_chk
+        "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_ji_lock_consistency.py;--bin;$<TARGET_FILE:png2amiga>")
+
+    # logo.png is RGBA — alpha channel exercises the prepared_image
+    # tmask synthesis on the --ji path.
+    add_test(NAME "ji-lock-consistency-rgba"
+        COMMAND ${_ji_lock_chk}
+            --in "${CMAKE_SOURCE_DIR}/examples/logo.png"
+            --mode lores --depth 5)
+
+    # asterix.png is RGB (no alpha) — exercises the same path with
+    # tmask staying empty (no transparency exclusion needed).
+    add_test(NAME "ji-lock-consistency-rgb"
+        COMMAND ${_ji_lock_chk}
+            --in "${CMAKE_SOURCE_DIR}/examples/asterix.png"
+            --mode lores --depth 5)
 
     # Lores 5bpp: reserving 1-31 leaves only slot 0 (= black). Output
     # must be all-black.

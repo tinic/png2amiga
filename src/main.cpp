@@ -373,36 +373,52 @@ inline std::size_t apply_transparent_color_sentinels(
     return hits;
 }
 
-// Matte to black — proper alpha premultiplication, run before any
-// data reaches the quantizer or dither. For each pixel, replace
-// RGB with `RGB * alpha`, compositing the input onto a black
-// background:
+// Matte to black — discretized alpha premultiplication, run before
+// any data reaches the quantizer or dither.
 //
-//     result = src * alpha + black * (1 - alpha) = src * alpha
+// For each pixel:
+//   alpha < 0.5  →  RGB = 0, alpha = 0   (transparent, slot 0)
+//   alpha ≥ 0.5  →  RGB unchanged, alpha = 1   (opaque)
 //
-// This is the correct fix for sentinel-colour bleed: alpha-0
-// pixels (PNG native transparent OR --transparent-color synthesised)
-// become pure black, so their dither error diffusion can't bleed
-// the original RGB (e.g. magenta) into adjacent opaque pixels.
-// Semi-transparent pixels (0 < alpha < 1) get scaled toward black
-// proportionally — also correct, since the encoder will composite
-// against black anyway when the alpha eventually hits the binary
-// transparency mask.
+// Why discretized rather than the textbook `RGB *= alpha`:
 //
-// Multiplication is in linear-light space (Color3f is linear-RGB
-// already in our pipeline), which is the only mathematically
-// correct way to matte. Doing this in sRGB gamut would
-// over-darken semi-transparent pixels.
+//   1. The downstream pipeline binarises alpha anyway (tmask =
+//      alpha < 0.5; transparent pixels are force-routed to slot 0
+//      post-dither). Semi-transparent pixels would otherwise be
+//      darkened proportionally but still routed to a content slot,
+//      which is neither what the encoder represents (Amiga has
+//      no per-pixel alpha) nor what compositing into the final
+//      preview would produce.
+//
+//   2. Discretized matte is IDEMPOTENT — applying matte_to_black
+//      twice is the same as once. The textbook continuous form
+//      isn't (`RGB * α * α ≠ RGB * α` for 0 < α < 1), and main.cpp's
+//      joint-mode flow can run matte more than once on the same
+//      image (once in the joint-mode block, again in the main
+//      pipeline). A non-idempotent matte left semi-transparent
+//      edges darker on the positional than on --ji renders, off-
+//      by-1 shifting ~50 edge pixels.
+//
+// Sentinel-colour bleed (the original motivation — magenta from
+// --transparent-color spilling into opaque neighbours via dither
+// error) is fully handled by the alpha < 0.5 branch zeroing RGB.
 inline void matte_to_black(Image& img) {
     if (!img.has_alpha()) return;
     auto px = img.pixels();
     auto a  = img.alpha();
+    std::vector<float> new_alpha(a.size());
     for (std::size_t i = 0; i < px.size() && i < a.size(); ++i) {
-        const float alpha = std::clamp(a[i], 0.0f, 1.0f);
-        px[i].r *= alpha;
-        px[i].g *= alpha;
-        px[i].b *= alpha;
+        if (a[i] < 0.5f) {
+            px[i] = Color3f{0.0f, 0.0f, 0.0f};
+            new_alpha[i] = 0.0f;
+        } else {
+            // RGB stays as-is (already at full intensity for
+            // opaque content); alpha snaps to 1 so subsequent
+            // matte calls are no-ops.
+            new_alpha[i] = 1.0f;
+        }
     }
+    img.set_alpha(std::move(new_alpha));
 }
 
 // SSIMULACRA2 with optional transparency masking. When `tmask` is
