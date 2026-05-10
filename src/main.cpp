@@ -1088,6 +1088,10 @@ void print_usage() {
         "  --list-modes                    Print supported modes and exit\n"
         "  --list-dithers                  Print supported dither methods and exit\n"
         "  --profile <N>                   Run encode N times for sampling profilers\n"
+        "  --score-vs <ref>                Score input against reference (no encoding).\n"
+        "                                  Input may be a .png OR a .idx (raw chunky\n"
+        "                                  bytes); .idx requires --palette and inherits\n"
+        "                                  dims from <ref>.\n"
         "\n"
         "Exit codes (sysexits.h):\n"
         "  0 ok    1 internal    64 usage    66 no input    73 cannot create\n");
@@ -5102,34 +5106,90 @@ int run_main(int argc, char* argv[]) {
     if (!config->score_vs.empty()) {
         if (config->input_path.empty()) {
             std::println(stderr,
-                "Error: --score-vs requires <distorted.png> as input");
+                "Error: --score-vs requires "
+                "<distorted.png|distorted.idx> as input");
             return exit_code::usage;
-        }
-        auto distorted = png_io::load(config->input_path);
-        if (!distorted) {
-            std::println(stderr, "Load distorted: {}", distorted.error().message);
-            return 1;
         }
         auto reference = png_io::load(config->score_vs);
         if (!reference) {
             std::println(stderr, "Load reference: {}", reference.error().message);
             return 1;
         }
-        if (distorted->width() != reference->width() ||
-            distorted->height() != reference->height()) {
-            std::println(stderr,
-                "Error: --score-vs dimensions differ: distorted {}x{}, "
-                "reference {}x{}",
-                distorted->width(), distorted->height(),
-                reference->width(), reference->height());
-            return 1;
+        const auto w = reference->width();
+        const auto h = reference->height();
+        // .idx input: raw chunky palette indices, one byte per pixel,
+        // scan order, no header. Dimensions inherited from the
+        // reference; palette must be provided via --palette (any
+        // supported format: .gpl / IFF CMAP / hex / JSON).
+        Image distorted_img(w, h);
+        if (ends_with(config->input_path, ".idx")) {
+            if (config->palette_file.empty()) {
+                std::println(stderr,
+                    "Error: --score-vs <reference.png> "
+                    "<distorted.idx> requires --palette <file> "
+                    "to render the indexed bytes (no .idx header).");
+                return exit_code::usage;
+            }
+            auto pal = palette_io::load_palette(config->palette_file);
+            if (!pal) {
+                std::println(stderr, "Load palette: {}",
+                             pal.error().message);
+                return 1;
+            }
+            std::ifstream f(config->input_path,
+                            std::ios::binary);
+            if (!f) {
+                std::println(stderr,
+                    "Load distorted .idx: cannot open '{}'",
+                    config->input_path);
+                return 1;
+            }
+            const std::size_t expected = w * h;
+            std::vector<std::uint8_t> raw(expected);
+            f.read(reinterpret_cast<char*>(raw.data()),
+                   static_cast<std::streamsize>(expected));
+            std::size_t got =
+                static_cast<std::size_t>(f.gcount());
+            // Detect tail bytes so a too-large file is also a
+            // hard error (gcount caps at the requested count).
+            f.peek();
+            if (got != expected || !f.eof()) {
+                std::println(stderr,
+                    "Error: --score-vs .idx size mismatch: "
+                    "reference is {}x{} = {} bytes, file has "
+                    "different size",
+                    w, h, expected);
+                return 1;
+            }
+            auto px = distorted_img.pixels();
+            for (std::size_t i = 0; i < expected; ++i) {
+                const std::uint8_t idx = raw[i];
+                px[i] = (idx < pal->colors.size())
+                    ? pal->colors[idx]
+                    : Color3f{0.0f, 0.0f, 0.0f};
+            }
+        } else {
+            auto distorted = png_io::load(config->input_path);
+            if (!distorted) {
+                std::println(stderr, "Load distorted: {}",
+                             distorted.error().message);
+                return 1;
+            }
+            if (distorted->width() != w ||
+                distorted->height() != h) {
+                std::println(stderr,
+                    "Error: --score-vs dimensions differ: "
+                    "distorted {}x{}, reference {}x{}",
+                    distorted->width(), distorted->height(),
+                    w, h);
+                return 1;
+            }
+            distorted_img = std::move(*distorted);
         }
-        auto w = reference->width();
-        auto h = reference->height();
         float psnr = color_space::compute_psnr_blurred(
-            reference->pixels(), distorted->pixels(), w, h);
+            reference->pixels(), distorted_img.pixels(), w, h);
         float s2 = ssimulacra2::compute(
-            reference->pixels(), distorted->pixels(), w, h);
+            reference->pixels(), distorted_img.pixels(), w, h);
         cli_status("Encoded:  scored, PSNR: {:.2f} dB, S2: {:.2f}", psnr, s2);
         return exit_code::ok;
     }
