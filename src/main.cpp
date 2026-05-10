@@ -43,6 +43,7 @@
 #include <format>
 #include <fstream>
 #include <mutex>
+#include <numeric>  // std::iota — needed for joint-mode atlas sort
 #include <optional>
 #include <print>
 #include <unordered_set>
@@ -5186,6 +5187,16 @@ int run_main(int argc, char* argv[]) {
             }
             distorted_img = std::move(*distorted);
         }
+        // Matte both sides to black before scoring — same treatment
+        // the encoder applies before the quantizer / dither runs
+        // (see matte_to_black above). Without this, alpha-0 magenta
+        // sentinels in the reference vs black in the distorted
+        // .idx (slot 0 = transparent) would tank the score for
+        // pixels neither side actually cares about. Symmetric so
+        // the reference and distorted are evaluated under the same
+        // assumptions.
+        matte_to_black(*reference);
+        matte_to_black(distorted_img);
         float psnr = color_space::compute_psnr_blurred(
             reference->pixels(), distorted_img.pixels(), w, h);
         float s2 = ssimulacra2::compute(
