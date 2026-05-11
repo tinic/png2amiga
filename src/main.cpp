@@ -392,6 +392,106 @@ inline void apply_transparent_slot_swap(
     }
 }
 
+// Path-suffix predicate; used by the per-output-each writer below
+// (and elsewhere in main.cpp). Defined at file scope so helpers
+// declared in the anon ns can reach it.
+inline bool ends_with(std::string_view s, std::string_view suffix) {
+    if (suffix.size() > s.size()) return false;
+    return s.substr(s.size() - suffix.size()) == suffix;
+}
+
+// Resolve --output-each pattern to a concrete path for one input.
+// Tokens: {dir} = parent dir, {stem} = filename without extension,
+// {name} = filename with extension. Bare `.ext` shortcut puts the
+// output alongside the source as `<stem><ext>`.
+inline std::string resolve_oe_pattern(const std::string& pat,
+                                      const std::string& src) {
+    namespace fs = std::filesystem;
+    fs::path p(src);
+    std::string dir  = p.parent_path().string();
+    std::string name = p.filename().string();
+    std::string stem = p.stem().string();
+    if (!pat.empty() && pat[0] == '.') {
+        fs::path o = dir.empty()
+            ? fs::path(stem + pat)
+            : fs::path(dir) / (stem + pat);
+        return o.string();
+    }
+    std::string out = pat;
+    auto repl = [&](std::string_view tok, std::string_view val) {
+        std::size_t pos = 0;
+        while ((pos = out.find(tok, pos)) != std::string::npos) {
+            out.replace(pos, tok.size(), val);
+            pos += val.size();
+        }
+    };
+    repl("{dir}",  dir);
+    repl("{stem}", stem);
+    repl("{name}", name);
+    return out;
+}
+
+// Write one input's per-output-each results (.idx + paletted .png).
+// `idx_in` is the encoder-produced indices for this input; `tmask`
+// is the corresponding transparency mask. `palette` is the shared
+// palette (for the paletted PNG case). `swap_slot` is the value of
+// --transparent-output-slot. Returns exit_code on failure, 0 on
+// success. Used by both lores and EHB joint write paths so the
+// EHB block (which returns early before reaching the unified write
+// loop) gets identical per-input output behaviour.
+inline int write_oe_outputs(
+        const std::vector<std::string>& patterns,
+        const std::string& src,
+        std::span<const std::uint8_t> idx_in,
+        const std::vector<bool>& tmask,
+        std::span<const Color3f> palette,
+        std::size_t w, std::size_t h,
+        int swap_slot) {
+    for (auto& pat : patterns) {
+        auto out_path = resolve_oe_pattern(pat, src);
+        if (ends_with(out_path, ".idx")) {
+            std::ofstream f(out_path,
+                std::ios::binary | std::ios::trunc);
+            if (!f) {
+                std::println(stderr,
+                    "--output-each: cannot open '{}'", out_path);
+                return exit_code::cant_create;
+            }
+            std::vector<std::uint8_t> out_idx(idx_in.begin(),
+                                               idx_in.end());
+            apply_transparent_slot_swap(out_idx, tmask, swap_slot);
+            f.write(reinterpret_cast<const char*>(out_idx.data()),
+                    static_cast<std::streamsize>(out_idx.size()));
+            cli_status("Joint-out: {} ({} bytes, {}x{}{})",
+                       out_path, out_idx.size(), w, h,
+                       swap_slot > 0
+                           ? std::format(", transparent→slot {}",
+                                          swap_slot)
+                           : std::string{});
+        } else if (ends_with(out_path, ".png")) {
+            std::vector<std::uint8_t> idx_v(idx_in.begin(),
+                                             idx_in.end());
+            std::vector<Color3f> pal_v(palette.begin(), palette.end());
+            auto r = png_io::save_palettized(out_path, idx_v,
+                pal_v, w, h, /*transparent_index=*/-1);
+            if (!r) {
+                std::println(stderr,
+                    "--output-each: PNG write error: {}",
+                    r.error().message);
+                return exit_code::cant_create;
+            }
+            cli_status("Joint-out: {} (paletted, {}x{})",
+                       out_path, w, h);
+        } else {
+            std::println(stderr,
+                "--output-each: unsupported extension in '{}' "
+                "(expected .idx or .png)", out_path);
+            return exit_code::usage;
+        }
+    }
+    return 0;
+}
+
 // Matte to black — discretized alpha premultiplication, run before
 // any data reaches the quantizer or dither.
 //
@@ -2151,11 +2251,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
     // strips regimes explicitly. The CLI block below errors out otherwise.
 
     return config;
-}
-
-bool ends_with(std::string_view s, std::string_view suffix) {
-    if (suffix.size() > s.size()) return false;
-    return s.substr(s.size() - suffix.size()) == suffix;
 }
 
 // Derive a C symbol name from a filename path
@@ -5924,8 +6019,16 @@ int run_main(int argc, char* argv[]) {
         // slots (those are already in config->locks / reserves
         // and were honoured during training).
         const auto& trained = train_enc.state.palette;
+        // Cap loop to the mode's BASE palette size so EHB (which
+        // returns a 64-entry expanded palette but only has 32 base
+        // slots addressable by --lock-index) doesn't push locks at
+        // indices ≥ 32 which the validator then rejects.
+        std::size_t base_palette_size = std::size_t{1} << config->depth;
+        if (config->mode == amiga::Mode::ehb) base_palette_size = 32;
+        const std::size_t lock_count =
+            std::min(trained.size(), base_palette_size);
         std::size_t added = 0;
-        for (std::size_t k = 0; k < trained.size(); ++k) {
+        for (std::size_t k = 0; k < lock_count; ++k) {
             if (config->lock_color0 && k == 0) continue;
             bool already = false;
             for (auto& l : config->locks)
@@ -7759,6 +7862,77 @@ int run_main(int argc, char* argv[]) {
         if (!config->mask_path.empty())
             save_mask(config->mask_path, transparency_mask,
                       target_w, target_h, config->mask_invert, config->interlace);
+
+        // --output-indexed (EHB mode): write the 0..63 indices from
+        // the EHB encode state. Lores has a unified writer further
+        // down; EHB returns early before reaching it, so inline the
+        // same logic + --transparent-output-slot swap here.
+        if (!config->output_indexed_path.empty() &&
+            !st.indices.empty()) {
+            std::ofstream f(config->output_indexed_path,
+                            std::ios::binary | std::ios::trunc);
+            if (!f) {
+                std::println(stderr,
+                    "--output-indexed: cannot open '{}'",
+                    config->output_indexed_path);
+                return 1;
+            }
+            std::vector<std::uint8_t> out_idx = st.indices;
+            apply_transparent_slot_swap(out_idx, transparency_mask,
+                config->transparent_output_slot);
+            f.write(reinterpret_cast<const char*>(out_idx.data()),
+                    static_cast<std::streamsize>(out_idx.size()));
+            cli_status("Indexed: {} ({} bytes, {}x{}{})",
+                       config->output_indexed_path,
+                       out_idx.size(),
+                       st.rendered.width(), st.rendered.height(),
+                       config->transparent_output_slot > 0
+                           ? std::format(", transparent→slot {}",
+                                          config->transparent_output_slot)
+                           : std::string{});
+        }
+
+        // Joint --ji / --oe writes (EHB mode): the standard joint
+        // write loop further down isn't reached because the EHB
+        // block returns early. Mirror it here so EHB joint inputs
+        // produce per-input .idx / paletted .png files.
+        if (!config->joint_inputs.empty() &&
+            !config->output_each.empty()) {
+            // Positional first — its indices are in st.
+            if (auto rc = write_oe_outputs(
+                    config->output_each,
+                    config->input_path,
+                    st.indices, transparency_mask,
+                    st.palette,
+                    st.rendered.width(), st.rendered.height(),
+                    config->transparent_output_slot);
+                rc != 0) return rc;
+            // Per-input: re-render each --joint-input against the
+            // shared (now-locked) palette via encode_state_image.
+            for (std::size_t i = 0; i < config->joint_inputs.size(); ++i) {
+                auto& jp = config->joint_inputs[i];
+                auto& jimg = joint_imgs[i + 1];  // [0] = positional
+                api::Options jopts = make_api_options(*config);
+                jopts.width  = static_cast<int>(jimg.width());
+                jopts.height = static_cast<int>(jimg.height());
+                jopts.best = false;  // training already converged
+                auto ji_enc = api::encode_state_image(jimg, jopts);
+                if (!ji_enc.ok()) {
+                    std::println(stderr,
+                        "--joint-input {} encode error: {}", jp,
+                        ji_enc.error_msg);
+                    return exit_code::cant_create;
+                }
+                if (auto rc = write_oe_outputs(
+                        config->output_each, jp,
+                        ji_enc.state.indices,
+                        ji_enc.state.transparency_mask,
+                        ji_enc.state.palette,
+                        jimg.width(), jimg.height(),
+                        config->transparent_output_slot);
+                    rc != 0) return rc;
+            }
+        }
 
         return 0;
     }

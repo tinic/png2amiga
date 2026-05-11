@@ -989,12 +989,17 @@ Result<void> check_best_supported(const Options& options,
                                   amiga::Mode mode,
                                   bool has_transparency) {
     if (!options.best) return {};
+    // has_transparency used to gate EHB --best off (legacy: pop_search
+    // for EHB wasn't transparency-aware). Both that and the lores/
+    // hires gates have since been lifted; keep the parameter for ABI
+    // stability + the gate's pre-existing call sites.
+    (void)has_transparency;
     auto mode_params = amiga::get_mode_params(mode);
     bool ham_best   = amiga::is_ham(mode) &&
                       (mode_params.bitplane_depth == 6 ||
                        mode_params.bitplane_depth == 8);
     bool ehb_best   = (mode == amiga::Mode::ehb) &&
-                      !has_user_palette(options) && !has_transparency;
+                      !has_user_palette(options);
     bool plain_best = (mode == amiga::Mode::lores ||
                        mode == amiga::Mode::lores_interlace ||
                        mode == amiga::Mode::hires ||
@@ -1010,11 +1015,11 @@ Result<void> check_best_supported(const Options& options,
     return std::unexpected{Error{
         ErrorCode::unsupported_mode,
         "--best is not supported in this configuration. "
-        "Supported: HAM6/HAM8, plain EHB (no user palette, "
-        "no transparency), plain lores/hires (no --copper, "
-        "no --scap, no --dpf, no --tile, no --palette), "
-        "sliced (--copper), strips (--scap), and "
-        "snes-mode7-256. Drop --best or change one of those "
+        "Supported: HAM6/HAM8, plain EHB (no user palette), "
+        "plain lores/hires (no --copper, no --scap, no --dpf, "
+        "no --tile, no --palette), sliced (--copper), strips "
+        "(--scap), and snes-mode7-256. Drop --best or change "
+        "one of those "
         "options."}};
 }
 
@@ -2575,8 +2580,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // applies the pin swap per trial — visual no-op so ranking
         // isn't affected. User palettes still exclude the sweep.
         bool ehb_can_sweep = options.best
-                          && !has_user_palette(options)
-                          && !has_transparency;
+                          && !has_user_palette(options);
 
         // EHB pop-search path. Same eligibility as the legacy sweep; we
         // gate on chipset==OCS because pop_search.cpp's snap-OCS step
@@ -2633,6 +2637,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             pso.ehb_expand    = true;
             pso.seed_palettes = std::move(ehb_seeds);
             pso.on_progress   = options.on_progress;
+            // Transparency support: pop_search forces tmask pixels
+            // to slot 0 post-dither and excludes slot 0 from the
+            // dither candidate set / mutate gate. Identical wiring
+            // as the plain lores/hires path; mark slot 0 in both
+            // masks so cpu_fitness keeps it black and the dither
+            // can't route opaque pixels there. The half-brite half
+            // of the expanded EHB palette (slots 32-63) is left
+            // open — slot 32 is half-brite-of-black = black anyway,
+            // so opaque-black routing there is visually correct.
+            if (has_transparency) {
+                pso.tmask = tmask;
+                std::vector<bool> mask0(32, false);
+                mask0[0] = true;
+                pso.locked_mask         = mask0;
+                pso.dither_exclude_mask = mask0;
+            }
             // Search runs at depth=5 (pop_search internal gate is
             // depth ∈ [1,5]); EHB hardware uses 6 bitplanes but the
             // *base* palette has only 32 entries.
