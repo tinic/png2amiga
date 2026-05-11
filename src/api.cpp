@@ -2678,7 +2678,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     result.interlace = options.interlace;
                     result.dpf       = false;
                     result.aga       = is_aga;
-                    result.has_transparency = false;
+                    result.has_transparency = has_transparency;
+                    if (has_transparency) result.transparency_mask = tmask;
                     result.finalize_psnr(*image, pop->total_error);
                     return result;
                 }
@@ -2758,6 +2759,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     bp.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                 auto ehbp = palette::make_ehb_palette(bp.colors);
                 auto dr = dither::apply(img, ehbp.colors, d);
+                // Force transparent pixels (per the outer tmask) to
+                // slot 0 post-dither. The EHB legacy sweep doesn't
+                // run pop_search, so this is its own opportunity to
+                // honour transparency.
+                if (has_transparency) {
+                    for (std::size_t i = 0;
+                         i < tmask.size() && i < dr.indices.size(); ++i)
+                        if (tmask[i]) dr.indices[i] = 0;
+                }
                 auto bp_res = bitplane::encode(dr.indices,
                                                 img.width(), img.height(), 6);
                 if (!bp_res) return std::unexpected{bp_res.error()};
@@ -3742,10 +3752,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             return encode_plain_auto(
                 img, depth, max_colors, mode, chipset,
                 d, diversity, options.refine_iterations,
-                options.lock_color0, /*has_transparency=*/false,
+                options.lock_color0, has_transparency,
                 /*use_dpf=*/false, /*match_range=*/options.match_range,
                 options.locks, options.reserves, options.pins,
-                std::vector<bool>{});
+                tmask);
         };
         auto winner = pipeline::best_sweep<PlainAutoTrial>(
             *image, base_dith, options.palette_diversity,
@@ -3773,7 +3783,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.interlace = options.interlace;
             result.dpf = false;
             result.aga = is_aga;
-            result.has_transparency = false;
+            result.has_transparency = has_transparency;
+            result.transparency_mask = tmask;
             result.finalize_psnr(*image, winner->total_error);
             return result;
         }
