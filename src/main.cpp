@@ -1193,6 +1193,7 @@ void print_usage() {
         "  --transparent-color, --tc <hex> Treat sentinel RGB as alpha=0\n"
         "                                  (repeatable, e.g. magenta atlases)\n"
         "  --mask <file>                   Export transparency mask\n"
+        "                                  (.png/.iff/.raw/.h by extension)\n"
         "  --mask-invert                   Invert mask polarity\n"
         "\n"
         "Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):\n"
@@ -3085,8 +3086,31 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
                    static_cast<std::streamsize>(planes->data.size()));
         cli_status("Mask:     {} ({}x{} raw, {} bytes)", path, w, h,
                      planes->data.size());
+    } else if (ends_with(path, ".h")) {
+        auto indices = build_indices();
+        auto planes = bitplane::encode(indices, w, h, 1);
+        if (!planes) {
+            std::println(stderr, "Mask encode error: {}", planes.error().message);
+            return;
+        }
+        std::vector<Color3f> mask_palette = {
+            Color3f{0.0f, 0.0f, 0.0f},
+            Color3f{1.0f, 1.0f, 1.0f},
+        };
+        cheader::CHeaderOptions hopts;
+        hopts.symbol_name = pipeline::derive_symbol_name(path);
+        hopts.interlace = interlace;
+        auto result = cheader::save(path, *planes, mask_palette,
+                                    amiga::Mode::lores, hopts);
+        if (!result) {
+            std::println(stderr, "Mask C header write error: {}",
+                         result.error().message);
+            return;
+        }
+        cli_status("Mask:     {} ({}x{} C header, 1 bitplane, symbol '{}')",
+                   path, w, h, hopts.symbol_name);
     } else {
-        std::println(stderr, "Mask: unsupported extension for '{}' (use .png, .iff, or .raw)", path);
+        std::println(stderr, "Mask: unsupported extension for '{}' (use .png, .iff, .raw, or .h)", path);
     }
 }
 

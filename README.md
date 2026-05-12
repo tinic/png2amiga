@@ -586,6 +586,7 @@ Transparency:
   --transparent-color, --tc <hex> Treat sentinel RGB as alpha=0
                                   (repeatable, e.g. magenta atlases)
   --mask <file>                   Export transparency mask
+                                  (.png/.iff/.raw/.h by extension)
   --mask-invert                   Invert mask polarity
 
 Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):

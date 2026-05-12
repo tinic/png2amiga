@@ -882,6 +882,48 @@ else()
                 ${CMAKE_BINARY_DIR}/fade-ehb.png
     )
 
+    # --mask: transparency mask export in 4 formats (.png / .iff / .raw / .h).
+    # Uses logo.png since lovers.jpg has no alpha channel (save_mask early-
+    # returns with "no transparency in source image" for opaque inputs).
+    set(MASK_TEST_INPUT "${CMAKE_SOURCE_DIR}/examples/logo.png")
+    foreach(ext IN ITEMS png iff raw h)
+        add_test(
+            NAME "mask-format-${ext}"
+            COMMAND png2amiga --mode lores --depth 5
+                    --mask ${CMAKE_BINARY_DIR}/mask-out.${ext}
+                    ${MASK_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/mask-main.iff
+        )
+        add_test(
+            NAME "mask-format-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E
+                    compare_files ${CMAKE_BINARY_DIR}/mask-out.${ext}
+                                  ${CMAKE_BINARY_DIR}/mask-out.${ext}
+        )
+        set_tests_properties("mask-format-${ext}-exists"
+                             PROPERTIES DEPENDS "mask-format-${ext}")
+    endforeach()
+    # Validate the .h variant's content: must have header guard, WIDTH/
+    # HEIGHT/DEPTH/BPR/CAMG defines, and a plane0 array. Symbol derives
+    # from the output stem so we check for the lowercased stem.
+    add_test(
+        NAME "mask-format-h-content"
+        COMMAND python3 -c
+            "import sys,re; \
+            content = open('${CMAKE_BINARY_DIR}/mask-out.h').read(); \
+            ok = all(re.search(p, content) for p in [ \
+                r'#ifndef\\s+MASK_OUT_H', \
+                r'#define\\s+MASK_OUT_WIDTH\\s+320', \
+                r'#define\\s+MASK_OUT_HEIGHT\\s+\\d+', \
+                r'#define\\s+MASK_OUT_DEPTH\\s+1', \
+                r'#define\\s+MASK_OUT_BPR\\s+40', \
+                r'const\\s+UWORD\\s+mask_out_plane0\\[\\]', \
+            ]); \
+            sys.exit(0 if ok else (print('mask .h missing expected defines/symbol') or 1))"
+    )
+    set_tests_properties("mask-format-h-content"
+                         PROPERTIES DEPENDS "mask-format-h")
+
     # Copper supports locks (fixed palette slots for blitter objects)
     add_test(
         NAME "lock-index-copper-accepted"
