@@ -484,15 +484,15 @@ export const CGA_TEXT_DEFAULTS = {
 
 export const EXAMPLES: Example[] = [
   { name: 'makena',       file: 'makena.jpg',          opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', ditherStrength: 0.5 } },
-  { name: 'fantasy',      file: 'fantasy.png',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
+  { name: 'fantasy',      file: 'fantasy.jpg',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'ehb', dither: 'sierra-lite', copper: true, scap: true } },
   { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', alphaThreshold: 0 } },
-  { name: 'space',        file: 'space3.png',          opts: { mode: 'lores', depth: 5, dither: 'opt-checker' } },
-  { name: 'photo',        file: 'photo.jpg',           opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
-  { name: 'grungy',       file: 'grungy.png',          opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
-  { name: 'fantasy1',     file: 'fantasy1.png',        opts: { mode: 'lores', depth: 3, dither: 'floyd-steinberg', copper: true } },
-  { name: 'fromthe',      file: 'fromthe.png',         opts: { mode: 'lores', depth: 3, dither: 'opt-checker', dualPlayfield: true, scap: true } },
-  { name: 'asterix',      file: 'asterix.png',         opts: { mode: 'cga-text80x100', chipset: 'cga', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
+  { name: 'space',        file: 'space3.jpg',         opts: { mode: 'lores', depth: 5, dither: 'opt-checker' } },
+  { name: 'photo',        file: 'photo.jpg',          opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
+  { name: 'grungy',       file: 'grungy.jpg',         opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
+  { name: 'fantasy1',     file: 'fantasy1.jpg',       opts: { mode: 'lores', depth: 3, dither: 'floyd-steinberg', copper: true } },
+  { name: 'fromthe',      file: 'fromthe.jpg',        opts: { mode: 'lores', depth: 3, dither: 'opt-checker', dualPlayfield: true, scap: true } },
+  { name: 'asterix',      file: 'asterix.jpg',        opts: { mode: 'cga-text80x100', chipset: 'cga', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
 ]
 
 export function defaultOptions(): Options {
