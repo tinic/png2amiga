@@ -348,8 +348,8 @@ encoders have to snap to the nearest 4-bit-per-channel grid point.
 
 That's why some 32-color rows below show png2amiga's PSNR _behind_
 pngquant's by ~1 dB while still leading perceptually (51.55 vs
-51.14 SSIMULACRA2 — the 12-bit handicap costs PSNR but the OKLab
-+ ocs-bruteforce quantizer still wins the eyeball test). And it's
+51.14 SSIMULACRA2 — the 12-bit handicap costs PSNR but the 
+OKLab + ocs-bruteforce quantizer still wins the eyeball test). And it's
 why the 256-color tier is closer on PSNR: there both encoders
 work in 24-bit (png2amiga's `--chipset aga` gates lift the OCS
 snap).
