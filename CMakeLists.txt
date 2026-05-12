@@ -240,6 +240,16 @@ else()
         target_compile_options(api_pipeline_smoke PRIVATE /arch:AVX2)
         target_compile_options(bench_ssimulacra2 PRIVATE /arch:AVX2)
         target_compile_options(palette_search PRIVATE /arch:AVX2)
+        # /fp:contract — enable FMA contraction (a*b + c → vfmadd) only.
+        # Stays under /fp:precise so reassociation, FTZ/DAZ, and
+        # signed-zeros/NaN handling all keep IEEE semantics — none of
+        # the Walczyk cbrt's Newton iterations are affected. Earlier
+        # /fp:fast attempt regressed badly (FTZ/DAZ killed the cbrt's
+        # subnormal-transit beam-search paths); contract-only avoids that.
+        target_compile_options(png2amiga PRIVATE /fp:contract)
+        target_compile_options(api_pipeline_smoke PRIVATE /fp:contract)
+        target_compile_options(bench_ssimulacra2 PRIVATE /fp:contract)
+        target_compile_options(palette_search PRIVATE /fp:contract)
         # MSVC's /arch:AVX2 does NOT predefine __AVX2__ (gcc/clang do).
         # ssimulacra2.cpp's SIMD-backend gate keys on __AVX2__, so define
         # it explicitly here for the MSVC path. Same for __FMA__ (the
@@ -269,6 +279,16 @@ else()
             target_compile_options(bench_ssimulacra2 PRIVATE -mavx2 -mfma)
             target_compile_options(palette_search PRIVATE -mavx2 -mfma)
         endif()
+        # -ffp-contract=fast — GCC/Clang equivalent of MSVC's /fp:contract.
+        # Allows FMA contraction across separate statements (e.g.
+        # `float x = a*b; y = x + c;` can still fuse to vfmadd) but keeps
+        # the rest of IEEE semantics intact. See the MSVC branch above
+        # for why we don't go further (full -ffast-math regresses the
+        # Walczyk cbrt's subnormal transit beam-search paths).
+        target_compile_options(png2amiga PRIVATE -ffp-contract=fast)
+        target_compile_options(api_pipeline_smoke PRIVATE -ffp-contract=fast)
+        target_compile_options(bench_ssimulacra2 PRIVATE -ffp-contract=fast)
+        target_compile_options(palette_search PRIVATE -ffp-contract=fast)
     endif()
 
     if(MSVC)
