@@ -100,6 +100,15 @@ LABELS = {
     'p2a-lores-d8':          'png2amiga lores d=8 AGA (FS)',
     'p2a-lores-d8-best':     'png2amiga lores d=8 AGA + best (FS)',
     'libimagequant-256':     'libimagequant 256 (FS)',
+    # ImageMagick / Netpbm baselines. No "force one slot, quantize
+    # the rest" flag in either, so their palette is fully unconstrained
+    # (unlike png2amiga / ham_convert / abc, which all pin slot 0 to
+    # black). Slight palette-size advantage to them, but the perceptual
+    # gap is much larger than 1 slot's worth at any N.
+    'imagemagick-32':        'ImageMagick 32 (FS)',
+    'imagemagick-256':       'ImageMagick 256 (FS)',
+    'netpbm-32':             'Netpbm 32 (pnmquant -floyd)',
+    'netpbm-256':            'Netpbm 256 (pnmquant -floyd)',
 }
 
 def read_time(stem: str) -> float | None:

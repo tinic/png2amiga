@@ -335,9 +335,12 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 (Cloudinary 2022 — perceptual, calibrated against human ratings;
 30=low, 50=fair, 70=high quality).
 
-All entries reserve palette index 0 for black: png2amiga's `--lock-color0`
-default, ham_convert's `black_bkd` flag, and abc's `-forcecolor 0 000`
-(apples-to-apples).
+png2amiga, ham_convert, and abc reserve palette index 0 for black via
+their respective lock flags (`--lock-color0` / `black_bkd` /
+`-forcecolor 0 000`). pngquant, ImageMagick, and Netpbm† don't expose
+a "pin one slot, quantize the rest" knob, so they're free to spend
+the black-slot bit elsewhere — a small advantage on photographic
+input that doesn't change the conclusion at any palette size below.
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
@@ -349,9 +352,11 @@ default, ham_convert's `black_bkd` flag, and abc's `-forcecolor 0 000`
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.81     | 74.82       |    16.15 |
 | png2amiga   | HAM6 (no copper)                  | 30.22     | 72.94       |     0.26 |
 | png2amiga   | HAM6 + best (no copper)           | 30.22     | 72.94       |    10.52 |
+| Netpbm      | pnmquant 256 (`-floyd`)†          | 31.59     | 72.20       |     0.11 |
 | png2amiga   | EHB + strips + best               | 29.39     | 71.60       |    20.84 |
 | ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.45     | 70.41       |     4.07 |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 30.04     | 70.05       |    46.42 |
+| ImageMagick | 256 colors (`-dither FS`)†        | 30.69     | 66.85       |     0.05 |
 | abc         | HAM6 (`-floyd`)                   | 28.31     | 63.24       |     0.75 |
 | png2amiga   | EHB + best (no copper)            | 24.09     | 61.16       |     7.13 |
 | abc         | SHAM6 (`-floyd`)                  | 26.66     | 60.59       |     1.25 |
@@ -362,6 +367,17 @@ default, ham_convert's `black_bkd` flag, and abc's `-forcecolor 0 000`
 | ham_convert | EHB (`dither_fs`)                 | 25.82     | 49.68       |     6.07 |
 | ham_convert | ocs32 (`dither_fs`)               | 24.42     | 37.70       |     6.05 |
 | abc         | lores d=5 (`-floyd`, `-bpc 5`)    | 25.35     | 36.32       |     2.34 |
+| Netpbm      | pnmquant 32 (`-floyd`)†           | 23.96     | 30.07       |     0.09 |
+| ImageMagick | 32 colors (`-dither FS`)†         | 23.41     | 21.90       |     0.05 |
+
+† ImageMagick and Netpbm have no "force one slot, quantize the
+rest" flag — `-remap` / `-mapfile` only accept a fully-fixed
+palette. Their palette is unconstrained on these runs, which is a
+small advantage on photographic input that doesn't move the
+rankings. At 256 colors libimagequant has the highest PSNR
+(33.61 dB) but lands ~3 SSIMULACRA2 below png2amiga — typical
+MSE-vs-perceptual split when the quantizer runs in linear/sRGB
+rather than a perceptually uniform space.
 
 The harness lives at `tools/shootout/`:
 

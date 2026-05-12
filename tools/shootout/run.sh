@@ -263,6 +263,39 @@ if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
         --force 256 "$TARGET"
 fi
 
+# 19/20) ImageMagick reference (`magick -dither FS -colors N`). No
+# pin-one-slot flag exists, so its palette is fully unconstrained on
+# both runs. Skipped when `magick` isn't installed.
+MAGICK="${MAGICK:-$(command -v magick || true)}"
+if [ -n "$MAGICK" ] && [ -x "$MAGICK" ]; then
+    for N in 32 256; do
+        echo "==> [ImageMagick] $N colours + floyd"
+        time_to "$OUT/imagemagick-$N.time" \
+          "$MAGICK" "$TARGET" -dither FloydSteinberg -colors "$N" \
+            "PNG24:$OUT/imagemagick-$N.png"
+    done
+else
+    echo "WARNING: ImageMagick (\`magick\`) not found — skipping." >&2
+    echo "         Install via: brew install imagemagick" >&2
+fi
+
+# 21/22) Netpbm reference (`pnmquant -floyd N`). Same constraint as
+# ImageMagick: no "force one slot" flag, so palette is unconstrained.
+# Skipped when netpbm isn't installed.
+PNGTOPNM="${PNGTOPNM:-$(command -v pngtopnm || true)}"
+PNMQUANT="${PNMQUANT:-$(command -v pnmquant || true)}"
+PNMTOPNG="${PNMTOPNG:-$(command -v pnmtopng || true)}"
+if [ -n "$PNGTOPNM" ] && [ -n "$PNMQUANT" ] && [ -n "$PNMTOPNG" ]; then
+    for N in 32 256; do
+        echo "==> [Netpbm] $N colours + floyd"
+        time_to "$OUT/netpbm-$N.time" \
+          bash -c "'$PNGTOPNM' '$TARGET' | '$PNMQUANT' -floyd $N | '$PNMTOPNG' > '$OUT/netpbm-$N.png'"
+    done
+else
+    echo "WARNING: Netpbm (\`pngtopnm\` / \`pnmquant\` / \`pnmtopng\`) not found — skipping." >&2
+    echo "         Install via: brew install netpbm" >&2
+fi
+
 # --- Step 3: PSNR table ----------------------------------------------------
 echo
 echo "==> Computing PSNR..."
