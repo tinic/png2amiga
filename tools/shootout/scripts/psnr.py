@@ -109,6 +109,14 @@ LABELS = {
     'imagemagick-256':       'ImageMagick 256 (FS)',
     'netpbm-32':             'Netpbm 32 (pnmquant -floyd)',
     'netpbm-256':            'Netpbm 256 (pnmquant -floyd)',
+    'ffmpeg-32':             'ffmpeg 32 (palettegen + FS)',
+    'ffmpeg-256':            'ffmpeg 256 (palettegen + FS)',
+    'gifsicle-32':           'gifsicle 32 (--dither floyd-steinberg)',
+    'gifsicle-256':          'gifsicle 256 (--dither floyd-steinberg)',
+    'pngnq-32':              'pngnq 32 (NeuQuant + FS, -s 1)',
+    'pngnq-256':             'pngnq 256 (NeuQuant + FS, -s 1)',
+    'didder-32':             'didder 32 (mmcq + FS edm)',
+    'didder-256':            'didder 256 (mmcq + FS edm)',
 }
 
 def read_time(stem: str) -> float | None:

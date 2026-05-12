@@ -337,16 +337,18 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 
 png2amiga, ham_convert, and abc reserve palette index 0 for black via
 their respective lock flags (`--lock-color0` / `black_bkd` /
-`-forcecolor 0 000`). pngquant, ImageMagick, and Netpbm† don't expose
-a "pin one slot, quantize the rest" knob, so they're free to spend
-the black-slot bit elsewhere — a small advantage on photographic
-input that doesn't change the conclusion at any palette size below.
+`-forcecolor 0 000`). pngquant, ImageMagick, Netpbm, ffmpeg, gifsicle,
+pngnq, and didder† don't expose a "pin one slot, quantize the rest"
+knob, so they're free to spend the black-slot bit elsewhere — a small
+advantage on photographic input that doesn't change the conclusion at
+any palette size below.
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
 | **png2amiga** | **lores d=8 AGA + best**       | 32.30     | **82.83**   |    37.64 |
 | png2amiga   | lores d=8 AGA                     | 32.38     | 82.52       |     1.54 |
 | pngquant    | libimagequant 256 (`--speed 1`)   | 33.61     | 80.13       |     0.06 |
+| ffmpeg      | 256 (`palettegen`+FS)†            | 31.18     | 78.61       |     0.06 |
 | png2amiga   | HAM6 + sliced + best              | 30.99     | 76.15       |    24.80 |
 | png2amiga   | HAM6 + sliced                     | 30.50     | 75.60       |     0.38 |
 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.81     | 74.82       |    16.15 |
@@ -356,7 +358,10 @@ input that doesn't change the conclusion at any palette size below.
 | png2amiga   | EHB + strips + best               | 29.39     | 71.60       |    20.84 |
 | ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.45     | 70.41       |     4.07 |
 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 30.04     | 70.05       |    46.42 |
-| ImageMagick | 256 colors (`-dither FS`)†        | 30.69     | 66.85       |     0.05 |
+| gifsicle    | 256 (`--dither floyd-steinberg`)† | 32.94     | 69.47       |     0.02 |
+| didder      | 256 (`mmcq`+FS edm serpentine)†   | 28.27     | 68.52       |     0.13 |
+| ImageMagick | 256 (`-dither FS`)†               | 30.69     | 66.85       |     0.05 |
+| pngnq       | 256 (NeuQuant + FS, `-s 1`)†      | 31.61     | 65.73       |     0.07 |
 | abc         | HAM6 (`-floyd`)                   | 28.31     | 63.24       |     0.75 |
 | png2amiga   | EHB + best (no copper)            | 24.09     | 61.16       |     7.13 |
 | abc         | SHAM6 (`-floyd`)                  | 26.66     | 60.59       |     1.25 |
@@ -367,17 +372,33 @@ input that doesn't change the conclusion at any palette size below.
 | ham_convert | EHB (`dither_fs`)                 | 25.82     | 49.68       |     6.07 |
 | ham_convert | ocs32 (`dither_fs`)               | 24.42     | 37.70       |     6.05 |
 | abc         | lores d=5 (`-floyd`, `-bpc 5`)    | 25.35     | 36.32       |     2.34 |
-| Netpbm      | pnmquant 32 (`-floyd`)†           | 23.96     | 30.07       |     0.09 |
-| ImageMagick | 32 colors (`-dither FS`)†         | 23.41     | 21.90       |     0.05 |
+| ffmpeg      | 32 (`palettegen`+FS)†             | 23.74     | 31.72       |     0.05 |
+| pngnq       | 32 (NeuQuant + FS, `-s 1`)†       | 25.76     | 30.81       |     0.04 |
+| Netpbm      | pnmquant 32 (`-floyd`)†           | 23.96     | 30.08       |     0.11 |
+| didder      | 32 (`mmcq`+FS edm serpentine)†    | 22.56     | 22.19       |     0.10 |
+| ImageMagick | 32 (`-dither FS`)†                | 23.41     | 21.90       |     0.05 |
+| gifsicle    | 32 (`--dither floyd-steinberg`)†  | 20.84     | 15.70       |     0.03 |
 
-† ImageMagick and Netpbm have no "force one slot, quantize the
-rest" flag — `-remap` / `-mapfile` only accept a fully-fixed
-palette. Their palette is unconstrained on these runs, which is a
-small advantage on photographic input that doesn't move the
-rankings. At 256 colors libimagequant has the highest PSNR
-(33.61 dB) but lands ~3 SSIMULACRA2 below png2amiga — typical
-MSE-vs-perceptual split when the quantizer runs in linear/sRGB
-rather than a perceptually uniform space.
+† None of the general-purpose quantizers (pngquant, ImageMagick,
+Netpbm, ffmpeg, gifsicle, pngnq, didder) expose a "force one slot,
+quantize the rest" flag — `-remap` / `-mapfile` / their equivalents
+accept either no constraints or a fully-fixed palette. Their palette
+is unconstrained on these runs, which is a small advantage on
+photographic input that doesn't move the rankings. At 256 colors
+libimagequant has the highest PSNR (33.61 dB) but lands ~3
+SSIMULACRA2 below png2amiga — typical MSE-vs-perceptual split when
+the quantizer runs in linear/sRGB rather than a perceptually uniform
+space. Notable per-tool observations: **gifsicle** at 256 has very
+high PSNR (32.94 dB, beating most of the Amiga-mode encoders) but
+sits 13 SSIMULACRA2 below png2amiga; **pngnq** (NeuQuant) lands well
+below its perceptual-aware competitors despite the slowest-quality
+setting; **didder**'s `mmcq:N` median-cut pairs a clean dither
+implementation with an unsophisticated quantizer.
+
+(Tools not included: `pngnq-s9` — sources broken at all known
+mirrors; `exoquant` — Rust library, no CLI; `gurkandemir/Color-Quantizer`
+— interactive K-means classroom tool. None of the three is a fair
+benchmark target right now.)
 
 The harness lives at `tools/shootout/`:
 

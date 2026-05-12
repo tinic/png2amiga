@@ -296,6 +296,84 @@ else
     echo "         Install via: brew install netpbm" >&2
 fi
 
+# 23/24) ffmpeg reference (`palettegen` → `paletteuse=dither=floyd_steinberg`).
+# Two-stage: build the median-cut palette as a 16x16 PNG, then apply it. No
+# pin-one-slot flag here either. Skipped when ffmpeg isn't installed.
+FFMPEG="${FFMPEG:-$(command -v ffmpeg || true)}"
+if [ -n "$FFMPEG" ] && [ -x "$FFMPEG" ]; then
+    for N in 32 256; do
+        echo "==> [ffmpeg] $N colours + floyd"
+        # palettegen stage isn't timed; it's preparatory.
+        "$FFMPEG" -y -i "$TARGET" \
+            -vf "palettegen=max_colors=$N:reserve_transparent=0" \
+            "$OUT/_palff_$N.png" </dev/null >/dev/null 2>&1
+        time_to "$OUT/ffmpeg-$N.time" \
+            "$FFMPEG" -y -i "$TARGET" -i "$OUT/_palff_$N.png" \
+              -lavfi "paletteuse=dither=floyd_steinberg" \
+              "$OUT/ffmpeg-$N.png" </dev/null >/dev/null 2>&1
+    done
+else
+    echo "WARNING: ffmpeg not found — skipping." >&2
+    echo "         Install via: brew install ffmpeg" >&2
+fi
+
+# 25/26) gifsicle (`--colors N --dither=floyd-steinberg`). Round-trips
+# through a GIF since gifsicle works on GIF only — the PSNR script
+# already handles .gif inputs via Pillow, but for the unified PNG
+# input we transcode back to PNG with ImageMagick.
+GIFSICLE="${GIFSICLE:-$(command -v gifsicle || true)}"
+if [ -n "$GIFSICLE" ] && [ -x "$GIFSICLE" ] && [ -n "$MAGICK" ]; then
+    for N in 32 256; do
+        echo "==> [gifsicle] $N colours + floyd"
+        "$MAGICK" "$TARGET" "$OUT/_gs_in.gif" 2>/dev/null
+        time_to "$OUT/gifsicle-$N.time" \
+            "$GIFSICLE" --colors "$N" --dither=floyd-steinberg \
+              "$OUT/_gs_in.gif" -o "$OUT/_gs_$N.gif"
+        "$MAGICK" "$OUT/_gs_$N.gif" "PNG24:$OUT/gifsicle-$N.png" 2>/dev/null
+    done
+else
+    echo "WARNING: gifsicle not found (or no ImageMagick to transcode) — skipping." >&2
+    echo "         Install via: brew install gifsicle" >&2
+fi
+
+# 27/28) pngnq (NeuQuant + Floyd-Steinberg, slowest quality `-s 1`).
+# Note: pngnq-s9 (a maintained fork with perceptual metrics) was
+# evaluated too — its source repos (cthebreeze / ckolivas on GitHub,
+# the SourceForge mirror) all 404 / are broken at the moment, so it's
+# omitted. The Brew-shipped pngnq is the NeuQuant baseline.
+PNGNQ="${PNGNQ:-$(command -v pngnq || true)}"
+if [ -n "$PNGNQ" ] && [ -x "$PNGNQ" ]; then
+    for N in 32 256; do
+        echo "==> [pngnq] $N colours + floyd"
+        cp "$TARGET" "$OUT/_pn_in.png"
+        time_to "$OUT/pngnq-$N.time" \
+            "$PNGNQ" -f -n "$N" -Q f -s 1 -e ".nq.png" -d "$OUT" "$OUT/_pn_in.png"
+        mv "$OUT/_pn_in.nq.png" "$OUT/pngnq-$N.png"
+    done
+else
+    echo "WARNING: pngnq not found — skipping." >&2
+    echo "         Install via: brew install pngnq" >&2
+fi
+
+# 29/30) didder (median-cut via mmcq:N + Floyd-Steinberg edm,
+# serpentine). The mmcq:N palette-spec is a recent addition; if it
+# fails ("not recognized as an RGB tuple"), install from main:
+#   GOBIN=/tmp/gobin go install \
+#     github.com/makeworld-the-better-one/didder@main
+DIDDER="${DIDDER:-$(command -v didder || true)}"
+if [ -n "$DIDDER" ] && [ -x "$DIDDER" ]; then
+    for N in 32 256; do
+        echo "==> [didder] $N colours + floyd"
+        time_to "$OUT/didder-$N.time" \
+            "$DIDDER" --palette "mmcq:$N" -i "$TARGET" \
+              -o "$OUT/didder-$N.png" edm --serpentine FloydSteinberg
+    done
+else
+    echo "WARNING: didder not found — skipping." >&2
+    echo "         Install via: GOBIN=\$HOME/bin go install \\" >&2
+    echo "                      github.com/makeworld-the-better-one/didder@main" >&2
+fi
+
 # --- Step 3: PSNR table ----------------------------------------------------
 echo
 echo "==> Computing PSNR..."
