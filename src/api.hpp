@@ -217,6 +217,18 @@ struct Options {
     // are visible.
     bool sliced_vertical_dither = false;
 
+    // Forward-look beam scavenge for sliced / copper modes — phase B
+    // of encode_copper that takes the swap budget left unused by the
+    // greedy planner and assigns dormant slots to high-residual pixels
+    // (scored against a 4-row forward window). On its own it's a mixed
+    // bag: clear win on diverse content (ocs_4096 +10 S2,
+    // electrichues02 +5, makena +4), small regression on smooth game
+    // art (shooter, fromthe). --best sweeps both states and picks the
+    // S2 winner per image, so enabling it under --best is unambiguously
+    // helpful; outside --best, leave at the default false unless the
+    // user has measured.
+    bool sliced_beam = false;
+
     // Transparency
     float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)
     std::string alpha_dither;           // alpha dither method (empty = hard threshold)
@@ -370,6 +382,10 @@ struct ConvertResult {
     int depth{};                        // bitplane depth
     int colors{};                       // number of palette colors
     float copperChanges{};              // avg actual color changes per line (0 if no copper)
+    float avgPaletteUsedPerLine{};      // avg distinct palette indices touched per scanline
+                                        // (sliced / strips diagnostic; 0 if mode has no
+                                        // per-line palette). Pair with the per-row palette
+                                        // size to see how saturated the line palette is.
     int totalColors{};                  // unique colors in rendered output
     int planeBytes{};                   // raw bitplane data size
     int copperBytes{};                  // copper-list bytes total (sliced scanline_changes

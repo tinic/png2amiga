@@ -2237,7 +2237,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             };
             auto encode_once = [&](const Image& img,
                                    const dither::Settings& d,
-                                   int diversity) -> Result<EhbSlicedTrial> {
+                                   int diversity,
+                                   bool beam_on) -> Result<EhbSlicedTrial> {
                 // Pre-build the global base palette ourselves with
                 // PNN + pair-aware refinement (and 1-opt on --best),
                 // then hand it to encode_copper as the line-0 seed.
@@ -2348,7 +2349,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     options.sliced_spread_decay >= 0.0f
                         ? options.sliced_spread_decay : -1.0f,
                     options.sliced_vertical_dither,
-                    ehb_cap_excluded);
+                    ehb_cap_excluded,
+                    /*quantizer_override=*/std::nullopt,
+                    beam_on);
                 if (!cr) return std::unexpected{cr.error()};
 
                 // For each reserved base slot, also exclude its half-brite
@@ -2510,27 +2513,46 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             std::optional<EhbSlicedTrial> winner;
             if (options.best) {
                 // Same sweep shape as plain sliced and strips EHB: 8 jitter
-                // seeds × 5 strengths × 4 diversities + 1 baseline.
-                // 32-color base palette → shallower median-cut basins,
-                // amplitude 1.0 (AGA-only weakening doesn't apply here
-                // since EHB is OCS-bound).
-                winner = pipeline::best_sweep<EhbSlicedTrial>(
-                    *image, dith, options.palette_diversity,
-                    /*jitter_count=*/8,
-                    [&](const Image& jittered_in,
-                        const dither::Settings& d, int div)
-                            -> Result<EhbSlicedTrial> {
-                        return encode_once(jittered_in, d, div);
-                    },
-                    [](const EhbSlicedTrial& t) -> const Image& {
-                        return t.rendered;
-                    },
-                    options.on_progress,
-                    /*jitter_amplitude=*/1.0f);
+                // seeds × 5 strengths × 4 diversities + 1 baseline ×
+                // 2 beam states = ~322 trials. 32-color base palette
+                // → shallower median-cut basins, amplitude 1.0
+                // (AGA-only weakening doesn't apply here since EHB is
+                // OCS-bound).
+                float best_score = -std::numeric_limits<float>::infinity();
+                int sweep_idx = 0;
+                for (bool beam_on : {false, true}) {
+                    auto sweep_winner = pipeline::best_sweep<EhbSlicedTrial>(
+                        *image, dith, options.palette_diversity,
+                        /*jitter_count=*/8,
+                        [&](const Image& jittered_in,
+                            const dither::Settings& d, int div)
+                                -> Result<EhbSlicedTrial> {
+                            return encode_once(jittered_in, d, div, beam_on);
+                        },
+                        [](const EhbSlicedTrial& t) -> const Image& {
+                            return t.rendered;
+                        },
+                        [&](float p, std::string_view s) {
+                            if (s == "done" && sweep_idx == 0) return;
+                            if (options.on_progress) options.on_progress(
+                                (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                        },
+                        /*jitter_amplitude=*/1.0f);
+                    if (!sweep_winner.has_value()) continue;
+                    float s2 = ssimulacra2::compute(
+                        image->pixels(), sweep_winner->rendered.pixels(),
+                        image->width(), image->height());
+                    if (s2 > best_score) {
+                        best_score = s2;
+                        winner = std::move(sweep_winner);
+                    }
+                    ++sweep_idx;
+                }
             }
             if (!winner.has_value()) {
                 auto r = encode_once(*image, dith,
-                                     options.palette_diversity);
+                                     options.palette_diversity,
+                                     options.sliced_beam);
                 if (!r) return std::unexpected{r.error()};
                 winner = std::move(*r);
                 if (options.on_progress) options.on_progress(1.0f, "done");
@@ -3210,7 +3232,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto spread_d = options.sliced_spread_decay >= 0.0f
             ? options.sliced_spread_decay : -1.0f;
         auto encode_once = [&](const Image& img,
-                               const dither::Settings& d, int diversity) {
+                               const dither::Settings& d, int diversity,
+                               bool beam_on) {
             return copper::encode_copper(
                 img, depth, d, chipset,
                 static_cast<std::size_t>(options.copper_changes),
@@ -3222,53 +3245,81 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 /*on_progress=*/{},
                 spread_r, spread_d,
                 options.sliced_vertical_dither,
-                sliced_excluded);
+                sliced_excluded,
+                /*quantizer_override=*/std::nullopt,
+                beam_on);
         };
 
         Result<copper::CopperResult> copper_result;
         if (options.best) {
-            // Plain sliced: 8 jitter seeds. Same shape as strips EHB —
-            // 16-color (or wider) palette so the median-cut basin is
-            // less acute than DPF's 8-color PF2; 8 seeds × 5×4 = 161
-            // trials is the sweet spot.
+            // Plain sliced: 8 jitter seeds. 16-color (or wider) palette
+            // so the median-cut basin is less acute than DPF's 8-color
+            // PF2; 8 seeds × 5×4 = 161 trials is the sweet spot.
             //
-            // copper::encode_copper returns the rendered preview via
-            // copper::render_copper_capped on (planes, scanline_palettes).
-            // We pre-render here per trial so best_sweep can rank by
-            // PSNR.
+            // --best ALSO sweeps the beam axis (phase B forward-look
+            // scavenge in encode_copper): two best_sweeps total, one
+            // with beam off, one with beam on; the SSIMULACRA2-ranked
+            // sweep returns the winner. On images where beam wins
+            // (ocs_4096 type — high per-row diversity, low greedy
+            // budget use), --best now picks +5..+11 S2 of additional
+            // gain over the same flag without beam. On images where
+            // beam loses (shooter, fromthe — smooth content where the
+            // beam disturbs cross-row palette continuity), the
+            // beam-off sweep wins on score and beam isn't selected.
+            // Cost is 2× the previous --best wall time for sliced.
             struct CapTrial {
                 copper::CopperResult result;
                 Image rendered;
             };
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto best = pipeline::best_sweep<CapTrial>(
-                *image, dith, options.palette_diversity,
-                /*jitter_count=*/8,
-                [&](const Image& jittered_in,
-                    const dither::Settings& d, int div) -> Result<CapTrial> {
-                    auto enc = encode_once(jittered_in, d, div);
-                    if (!enc) return std::unexpected{enc.error()};
-                    auto preview = pipeline::render_preview(
-                        enc->planes, enc->base_palette,
-                        /*is_ham=*/false, options.interlace, chipset,
-                        &enc->scanline_palettes,
-                        enc->changes_per_line);
-                    if (!preview) return std::unexpected{preview.error()};
-                    return CapTrial{*std::move(enc), *std::move(preview)};
-                },
-                [](const CapTrial& t) -> const Image& { return t.rendered; },
-                options.on_progress,
-                jitter_amp);
-            if (best.has_value()) {
-                copper_result = std::move(best->result);
+            std::optional<CapTrial> best_overall;
+            float best_overall_score = -std::numeric_limits<float>::infinity();
+            int sweep_idx = 0;
+            for (bool beam_on : {false, true}) {
+                auto sweep_winner = pipeline::best_sweep<CapTrial>(
+                    *image, dith, options.palette_diversity,
+                    /*jitter_count=*/8,
+                    [&](const Image& jittered_in,
+                        const dither::Settings& d, int div) -> Result<CapTrial> {
+                        auto enc = encode_once(jittered_in, d, div, beam_on);
+                        if (!enc) return std::unexpected{enc.error()};
+                        auto preview = pipeline::render_preview(
+                            enc->planes, enc->base_palette,
+                            /*is_ham=*/false, options.interlace, chipset,
+                            &enc->scanline_palettes,
+                            enc->changes_per_line);
+                        if (!preview) return std::unexpected{preview.error()};
+                        return CapTrial{*std::move(enc), *std::move(preview)};
+                    },
+                    [](const CapTrial& t) -> const Image& { return t.rendered; },
+                    [&](float p, std::string_view s) {
+                        if (s == "done" && sweep_idx == 0) return;
+                        if (options.on_progress) options.on_progress(
+                            (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                    },
+                    jitter_amp);
+                ++sweep_idx;
+                if (!sweep_winner.has_value()) continue;
+                float score = ssimulacra2::compute(
+                    image->pixels(), sweep_winner->rendered.pixels(),
+                    image->width(), image->height());
+                if (score > best_overall_score) {
+                    best_overall_score = score;
+                    best_overall = std::move(sweep_winner);
+                }
+            }
+            if (best_overall.has_value()) {
+                copper_result = std::move(best_overall->result);
             } else {
                 copper_result = encode_once(*image, dith,
-                                            options.palette_diversity);
+                                            options.palette_diversity,
+                                            /*beam_on=*/false);
             }
         } else {
             copper_result = encode_once(*image, dith,
-                                        options.palette_diversity);
+                                        options.palette_diversity,
+                                        options.sliced_beam);
             if (options.on_progress) options.on_progress(1.0f, "done");
         }
         if (!copper_result) return std::unexpected{copper_result.error()};
@@ -3423,7 +3474,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     options.sliced_spread_decay,
                     options.sliced_vertical_dither,
                     strips_user_pal_span,
-                    strips_ehb_reserves);
+                    strips_ehb_reserves,
+                    options.sliced_beam);
             }()
             : [&] {
                 // strips-DPF reserves/locks: indices reference the OCS
@@ -3489,7 +3541,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     options.sliced_vertical_dither,
                     strips_user_pal_span,
                     strips_dpf_reserves,
-                    strips_dpf_locks);
+                    strips_dpf_locks,
+                    options.sliced_beam);
             }();
         if (!strips_res) return std::unexpected{strips_res.error()};
 
@@ -4383,6 +4436,8 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         }
     }
     r.copperChanges = p.copper_changes;
+    r.avgPaletteUsedPerLine =
+        pipeline::compute_avg_palette_used_per_line(p.rendered, p.scanline_palettes);
     r.totalColors = count_unique_colors(p.rendered);
     r.planeBytes = static_cast<int>(p.planes.total_bytes());
     r.aga = p.aga;

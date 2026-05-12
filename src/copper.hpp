@@ -271,7 +271,22 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // ocs_bruteforce for OCS). Ignored
                                    // when user_palette is supplied.
                                    std::optional<quantize::Algorithm>
-                                       quantizer_override = std::nullopt);
+                                       quantizer_override = std::nullopt,
+                                   // Forward-look beam: phase B scavenges
+                                   // unused palette slots on rows where the
+                                   // greedy planner under-fills the swap
+                                   // budget. Scored against a 4-row forward
+                                   // window; only accepted swaps that reduce
+                                   // window OKLab² error are applied. Helps
+                                   // diverse content (ocs_4096 +10 S2,
+                                   // electrichues02 +5, makena +4) and stays
+                                   // out of the way on smooth images (the
+                                   // empty-slot-half gate + window scoring
+                                   // both reject unhelpful swaps). For images
+                                   // where the heuristic still loses, --best
+                                   // sweeps beam=off and beam=on and the
+                                   // S2-ranked sweep picks per image.
+                                   bool sliced_beam = false);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.

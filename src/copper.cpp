@@ -391,7 +391,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    float neighbor_decay,
                                    bool vertical_dither,
                                    const std::vector<std::size_t>& dither_excluded,
-                                   std::optional<quantize::Algorithm> quantizer_override) {
+                                   std::optional<quantize::Algorithm> quantizer_override,
+                                   bool sliced_beam) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -440,7 +441,9 @@ Result<CopperResult> encode_copper(const Image& image,
                                          skip_initial_swap_rows, is_lace, is_ehb,
                                          on_progress, neighbor_radius,
                                          neighbor_decay, vertical_dither,
-                                         dither_excluded);
+                                         dither_excluded,
+                                         /*quantizer_override=*/std::nullopt,
+                                         sliced_beam);
             if (!stretch) return std::unexpected{stretch.error()};
             if (stretch->max_moves_per_line <= move_budget) return stretch;
             // Stretch overshot — try the next-smaller bump, or fall through.
@@ -805,6 +808,7 @@ Result<CopperResult> encode_copper(const Image& image,
         // with the base palette as-is).
         auto this_row_changes = (y < skip_initial_swap_rows)
             ? std::size_t{0} : changes_per_line;
+
         for (std::size_t s = 0; s < this_row_changes; ++s) {
             SwapCandidate swap{0, {}, -1.0f};
             if (is_ehb) {
@@ -876,6 +880,213 @@ Result<CopperResult> encode_copper(const Image& image,
                 skip_hi_flag,
                 skip_lo_flag,
             });
+        }
+
+        // ---- PHASE B: forward-look beam fill (PNG2AMIGA_SLICED_BEAM=1) ----
+        // Phase A (greedy) exits at the first non-positive ER swap. On
+        // high-diversity rows it converges in 2–3 swaps because most
+        // palette slots have empty clusters (no pixels currently
+        // assigned). The 25+ unused budget slots sit dormant while
+        // the same row contains ~50 distinct source colors that the
+        // dither has to map onto ~6 used slots.
+        //
+        // Phase B scavenges those dormant slots, scored against a
+        // forward window of `kBeamLookahead` rows so the swap is only
+        // accepted when it genuinely reduces total OKLab² error across
+        // current AND future rows. The window evaluation reuses
+        // `all_lab[y..y+K-1]` (the source row OKLab cache built once at
+        // line 574) and a small inline nearest-palette scan per pixel.
+        //
+        // Gated behind PNG2AMIGA_SLICED_BEAM for A/B until we have a
+        // regression sweep. The scoring is what makes this safe on
+        // smooth images: a swap that hurts the window-residual fails
+        // and the slot stays untouched, preserving cross-row palette
+        // continuity that smooth images depend on.
+        // Beam fires only on rows where the row content is genuinely
+        // under-served by the current palette — i.e., many slots have
+        // EMPTY clusters in stats[]. On smooth rows (game art,
+        // photographs with limited per-row palette), the few-swap
+        // greedy bail just means the row content is covered by a
+        // small subset of slots; the unused slots still hold
+        // perceptually-meaningful colors from other rows that beam's
+        // residual-fill would clobber, breaking cross-row palette
+        // continuity (shooter, photo, fromthe in early tests).
+        //
+        // Diverse rows like ocs_4096 (52 unique colors / row) have
+        // most slots empty after greedy because the greedy can't even
+        // propose centroids for slots with zero count — so empty-slot
+        // share is the discriminator we want.
+        std::size_t empty_slot_count = 0;
+        for (std::size_t k = 0; k < num_colors; ++k) {
+            if (swapped[k]) continue;
+            if (!excluded_mask.empty() && excluded_mask[k]) continue;
+            if (sc.stats[k].count < 0.5) ++empty_slot_count;
+        }
+        const bool beam_eligible = empty_slot_count >= num_colors / 2;
+        if (!is_ehb && beam_eligible && sliced_beam) {
+            constexpr std::size_t kBeamLookahead = 4;  // rows in the window
+            // Window error of `all_lab[y0..y0+win-1]` against an OKLab
+            // palette of size num_colors.
+            auto window_error = [&](
+                const std::vector<color_space::OKLab>& pal_lab_eval,
+                std::size_t y0, std::size_t win) -> double {
+                double total = 0.0;
+                std::size_t y_end = std::min(y0 + win, height);
+                for (std::size_t yy = y0; yy < y_end; ++yy) {
+                    auto& rl = all_lab[yy];
+                    for (std::size_t x = 0; x < width; ++x) {
+                        float best_d = std::numeric_limits<float>::max();
+                        for (std::size_t k = 0; k < num_colors; ++k) {
+                            if (!excluded_mask.empty() && excluded_mask[k]) continue;
+                            float dL = rl[x].L - pal_lab_eval[k].L;
+                            float da = rl[x].a - pal_lab_eval[k].a;
+                            float db = rl[x].b - pal_lab_eval[k].b;
+                            float d = color_space::fma_dist_sq(dL, da, db);
+                            if (d < best_d) best_d = d;
+                        }
+                        total += static_cast<double>(best_d);
+                    }
+                }
+                return total;
+            };
+
+            std::vector<color_space::OKLab> proposed_lab(num_colors);
+            for (std::size_t k = 0; k < num_colors; ++k)
+                proposed_lab[k] = pal_lab[k];
+
+            // Only target *genuinely empty* slots. Stealing a slot with a
+            // small-but-non-empty cluster breaks cross-row palette
+            // continuity that smooth images depend on (fromthe lost
+            // -2.83 S2 at default budget; shooter -1.7; brick/chuck30/
+            // chuck31 used to drift mid-sweep). The window-error gate
+            // further below already rejects unhelpful steals — this
+            // threshold prevents them from even being proposed.
+            constexpr double kStealEmptyThreshold = 0.5;  // weighted px
+            while (changes.size() < this_row_changes) {
+                // Pick the lowest-utility (= empty) unused slot.
+                std::size_t target_slot = std::numeric_limits<std::size_t>::max();
+                double min_count = std::numeric_limits<double>::infinity();
+                for (std::size_t k = 0; k < num_colors; ++k) {
+                    if (swapped[k]) continue;
+                    if (!excluded_mask.empty() && excluded_mask[k]) continue;
+                    if (sc.stats[k].count >= kStealEmptyThreshold) continue;
+                    if (sc.stats[k].count < min_count) {
+                        min_count = sc.stats[k].count;
+                        target_slot = k;
+                    }
+                }
+                if (target_slot == std::numeric_limits<std::size_t>::max()) break;
+
+                // Find the source pixel in the forward window with the
+                // highest residual error against the current palette.
+                // Approximates "what color, placed at any slot, would
+                // most improve the window" — for that pixel specifically
+                // the residual collapses to zero.
+                float max_res = 0.0f;
+                std::size_t best_yy = 0, best_x = 0;
+                std::size_t y_end_r = std::min(y + kBeamLookahead, height);
+                for (std::size_t yy = y; yy < y_end_r; ++yy) {
+                    auto& rl = all_lab[yy];
+                    for (std::size_t x = 0; x < width; ++x) {
+                        float best_d = std::numeric_limits<float>::max();
+                        for (std::size_t k = 0; k < num_colors; ++k) {
+                            if (!excluded_mask.empty() && excluded_mask[k]) continue;
+                            float dL = rl[x].L - pal_lab[k].L;
+                            float da = rl[x].a - pal_lab[k].a;
+                            float db = rl[x].b - pal_lab[k].b;
+                            float d = color_space::fma_dist_sq(dL, da, db);
+                            if (d < best_d) best_d = d;
+                        }
+                        if (best_d > max_res) {
+                            max_res = best_d;
+                            best_yy = yy;
+                            best_x = x;
+                        }
+                    }
+                }
+                if (max_res <= 0.0f) break;
+
+                auto pixel_lab = all_lab[best_yy][best_x];
+                auto pixel_linear =
+                    color_space::oklab_to_linear(pixel_lab).clamped();
+                if (chipset != amiga::Chipset::aga) {
+                    pixel_linear = palette::quantize_to_ocs(pixel_linear);
+                }
+                auto pixel_lab_q = color_space::linear_to_oklab(pixel_linear);
+
+                // Drift cap (chuck31 fix) — refuse any individual swap
+                // that moves a slot too far from its base_pal anchor.
+                auto base_lab_b = color_space::linear_to_oklab(base_pal[target_slot]);
+                float ddLb = base_lab_b.L - pixel_lab_q.L;
+                float ddab = base_lab_b.a - pixel_lab_q.a;
+                float ddbb = base_lab_b.b - pixel_lab_q.b;
+                constexpr float kMaxDriftSqB = 0.03f;
+                if (color_space::fma_dist_sq(ddLb, ddab, ddbb) > kMaxDriftSqB) {
+                    swapped[target_slot] = true;  // don't reconsider
+                    continue;
+                }
+
+                // Score against the forward window — only accept if the
+                // proposed palette reduces total window error. This is
+                // the gate that protects smooth images: when no future
+                // benefit exists, the swap fails and the slot stays put.
+                proposed_lab[target_slot] = pixel_lab_q;
+                (void)window_error;  // helper kept for future tuning
+                double err_cur = 0.0;
+                double err_new = 0.0;
+                std::size_t y_end = std::min(y + kBeamLookahead, height);
+                for (std::size_t yy = y; yy < y_end; ++yy) {
+                    auto& rl = all_lab[yy];
+                    for (std::size_t x = 0; x < width; ++x) {
+                        float best_cur = std::numeric_limits<float>::max();
+                        float best_new = std::numeric_limits<float>::max();
+                        for (std::size_t k = 0; k < num_colors; ++k) {
+                            if (!excluded_mask.empty() && excluded_mask[k]) continue;
+                            float dL = rl[x].L - pal_lab[k].L;
+                            float da = rl[x].a - pal_lab[k].a;
+                            float db = rl[x].b - pal_lab[k].b;
+                            float d = color_space::fma_dist_sq(dL, da, db);
+                            if (d < best_cur) best_cur = d;
+                            float dL2 = rl[x].L - proposed_lab[k].L;
+                            float da2 = rl[x].a - proposed_lab[k].a;
+                            float db2 = rl[x].b - proposed_lab[k].b;
+                            float d2 = color_space::fma_dist_sq(dL2, da2, db2);
+                            if (d2 < best_new) best_new = d2;
+                        }
+                        err_cur += static_cast<double>(best_cur);
+                        err_new += static_cast<double>(best_new);
+                    }
+                }
+                if (err_new >= err_cur) {
+                    // No net benefit; revert proposed_lab and skip.
+                    proposed_lab[target_slot] = pal_lab[target_slot];
+                    swapped[target_slot] = true;
+                    continue;
+                }
+
+                // Accept.
+                bool skip_hi_flag2 = false;
+                bool skip_lo_flag2 = false;
+                if (chipset == amiga::Chipset::aga) {
+                    auto old_hilo = palette::linear_to_aga_hilo(current_pal[target_slot]);
+                    auto new_hilo = palette::linear_to_aga_hilo(pixel_linear);
+                    skip_hi_flag2 = (old_hilo.hi == new_hilo.hi);
+                    skip_lo_flag2 = (old_hilo.lo == new_hilo.lo);
+                }
+                swapped[target_slot] = true;
+                current_pal[target_slot] = pixel_linear;
+                pal_lab[target_slot] = pixel_lab_q;
+                proposed_lab[target_slot] = pixel_lab_q;
+                refresh_swap_scratch(sc, pal_lab, rows_lab, width,
+                                     static_cast<std::uint8_t>(target_slot),
+                                     planner_excluded);
+                changes.push_back(CopperChange{
+                    static_cast<std::uint8_t>(target_slot),
+                    pixel_linear,
+                    skip_hi_flag2,
+                    skip_lo_flag2,
+                });
+            }
         }
 
         // Sort changes by the spatial position where each swapped register

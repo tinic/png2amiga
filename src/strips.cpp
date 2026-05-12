@@ -544,32 +544,56 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        const std::vector<std::pair<std::size_t, Color3f>>&
                                            reserved_slots,
                                        const std::vector<std::pair<std::size_t, Color3f>>&
-                                           locked_slots) {
+                                           locked_slots,
+                                       bool sliced_beam) {
     // --best: multi-restart with varied palette_diversity + dither
-    // strength. The strips planner is deterministic for a given input, so
-    // varying these knobs is the only way to sample different
-    // optimisation landscapes. Each restart is a full encode (~100 ms);
-    // user OK'd unbounded compute. Keep the lowest-error result.
+    // strength + beam (forward-look scavenge in the sliced base pass).
+    // The strips planner is deterministic for a given input, so varying
+    // these knobs is the only way to sample different optimisation
+    // landscapes. Each restart is a full encode (~100 ms); user OK'd
+    // unbounded compute. Keep the highest-S2 result across both beam
+    // states.
     if (enable_best) {
         // DPF: 24 jitter seeds — the 8-color PF2 palette is highly
         // sensitive to which colors win the median-cut, so heavy jitter
         // sampling buys more here than for wider palettes (EHB stays at
-        // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
-        auto best = pipeline::best_sweep<ScapResult>(
-            image, dither_settings, palette_diversity, /*jitter_count=*/24,
-            [&](const Image& jittered_in,
-                const dither::Settings& d, int div) {
-                return encode_strips_dpf_ocs(
-                    jittered_in, width_arg, height_arg, lock_color0,
-                    d, debug_overlay, copper_changes_override, div,
-                    /*on_progress=*/{}, /*enable_best=*/false,
-                    sliced_spread_radius, sliced_spread_decay,
-                    sliced_vertical_dither, external_palette,
-                    reserved_slots, locked_slots);
-            },
-            [](const ScapResult& r) -> const Image& { return r.rendered; },
-            on_progress,
-            /*jitter_amplitude=*/1.0f);
+        // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores; with
+        // the beam sweep that's 2× — ~4–6 min, still within the
+        // unbounded-compute budget.
+        std::optional<ScapResult> best_overall;
+        float best_overall_score = -std::numeric_limits<float>::infinity();
+        int sweep_idx = 0;
+        for (bool beam_on : {false, true}) {
+            auto sweep = pipeline::best_sweep<ScapResult>(
+                image, dither_settings, palette_diversity, /*jitter_count=*/24,
+                [&](const Image& jittered_in,
+                    const dither::Settings& d, int div) {
+                    return encode_strips_dpf_ocs(
+                        jittered_in, width_arg, height_arg, lock_color0,
+                        d, debug_overlay, copper_changes_override, div,
+                        /*on_progress=*/{}, /*enable_best=*/false,
+                        sliced_spread_radius, sliced_spread_decay,
+                        sliced_vertical_dither, external_palette,
+                        reserved_slots, locked_slots, beam_on);
+                },
+                [](const ScapResult& r) -> const Image& { return r.rendered; },
+                [&](float p, std::string_view s) {
+                    if (s == "done" && sweep_idx == 0) return;
+                    if (on_progress) on_progress(
+                        (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                },
+                /*jitter_amplitude=*/1.0f);
+            if (!sweep.has_value()) continue;
+            float s2 = ssimulacra2::compute(
+                image.pixels(), sweep->rendered.pixels(),
+                image.width(), image.height());
+            if (s2 > best_overall_score) {
+                best_overall_score = s2;
+                best_overall = std::move(sweep);
+            }
+            ++sweep_idx;
+        }
+        auto best = std::move(best_overall);
         if (best.has_value()) return std::move(*best);
         // Fall through to the single-pass path if every restart failed
         // (shouldn't happen with valid input, but degrade gracefully).
@@ -712,7 +736,9 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
             : std::numeric_limits<std::size_t>::max(),
         sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f,
         sliced_vertical_dither,
-        dpf_dither_excluded);
+        dpf_dither_excluded,
+        /*quantizer_override=*/std::nullopt,
+        sliced_beam);
     if (!copper_result) return std::unexpected{copper_result.error()};
     auto& sliced_palettes = copper_result->scanline_palettes;
     auto& base_palette_vec = copper_result->base_palette;
@@ -1632,26 +1658,47 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                        std::span<const Color3f>
                                            external_palette,
                                        const std::vector<std::pair<std::size_t, Color3f>>&
-                                           reserved_slots) {
+                                           reserved_slots,
+                                       bool sliced_beam) {
     // --best: 8 jitter seeds (32-base palette has shallower basins
     // than DPF's 8-base, so heavy jitter sampling buys less here).
-    // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores.
+    // Total 5×4×8 + 1 = 161 trials, ~30–40 s on 8 cores; 2× for the
+    // beam sweep.
     if (enable_best) {
-        auto best = pipeline::best_sweep<ScapResult>(
-            image, dither_settings, palette_diversity, /*jitter_count=*/8,
-            [&](const Image& jittered_in,
-                const dither::Settings& d, int div) {
-                return encode_strips_ehb_ocs(
-                    jittered_in, width_arg, height_arg, lock_color0,
-                    d, copper_changes_override, div, debug_overlay,
-                    /*on_progress=*/{}, /*enable_best=*/false,
-                    sliced_spread_radius, sliced_spread_decay,
-                    sliced_vertical_dither, external_palette, reserved_slots);
-            },
-            [](const ScapResult& r) -> const Image& { return r.rendered; },
-            on_progress,
-            /*jitter_amplitude=*/1.0f);
-        if (best.has_value()) return std::move(*best);
+        std::optional<ScapResult> best_overall;
+        float best_overall_score = -std::numeric_limits<float>::infinity();
+        int sweep_idx = 0;
+        for (bool beam_on : {false, true}) {
+            auto sweep = pipeline::best_sweep<ScapResult>(
+                image, dither_settings, palette_diversity, /*jitter_count=*/8,
+                [&](const Image& jittered_in,
+                    const dither::Settings& d, int div) {
+                    return encode_strips_ehb_ocs(
+                        jittered_in, width_arg, height_arg, lock_color0,
+                        d, copper_changes_override, div, debug_overlay,
+                        /*on_progress=*/{}, /*enable_best=*/false,
+                        sliced_spread_radius, sliced_spread_decay,
+                        sliced_vertical_dither, external_palette, reserved_slots,
+                        beam_on);
+                },
+                [](const ScapResult& r) -> const Image& { return r.rendered; },
+                [&](float p, std::string_view s) {
+                    if (s == "done" && sweep_idx == 0) return;
+                    if (on_progress) on_progress(
+                        (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                },
+                /*jitter_amplitude=*/1.0f);
+            if (!sweep.has_value()) continue;
+            float s2 = ssimulacra2::compute(
+                image.pixels(), sweep->rendered.pixels(),
+                image.width(), image.height());
+            if (s2 > best_overall_score) {
+                best_overall_score = s2;
+                best_overall = std::move(sweep);
+            }
+            ++sweep_idx;
+        }
+        if (best_overall.has_value()) return std::move(*best_overall);
     }
     auto& table = kStrips6bplEhb;
     if (table.slots.empty()) {
@@ -1834,7 +1881,9 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             : std::numeric_limits<std::size_t>::max(),
         sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f,
         sliced_vertical_dither,
-        ehb_dither_excluded);
+        ehb_dither_excluded,
+        /*quantizer_override=*/std::nullopt,
+        sliced_beam);
     if (!copper_result) return std::unexpected{copper_result.error()};
     // Copies (not refs) so the joint-refinement pass below can reassign
     // them when it re-runs sliced with a refined base palette.

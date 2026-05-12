@@ -1021,6 +1021,12 @@ struct Config {
     bool sliced_vertical_dither = false;  // 1-D Bayer alternation between old/new
                                           // palette colors per scanline; off by
                                           // default (better S2/PSNR)
+    bool sliced_beam = false;             // forward-look phase B in encode_copper:
+                                          // assign dormant slots to high-residual
+                                          // pixels, scored against a 4-row
+                                          // forward window. --best sweeps both
+                                          // states automatically; outside --best
+                                          // this flag lets the user force-enable.
     bool fade_in = false;              // 16-step fade-in from black
 
     // Cross-fade: encode the bitmap once, animate the palette through one
@@ -1461,6 +1467,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--sliced-beam") {
+            config.sliced_beam = true;
+            continue;
+        }
         if (arg == "--sliced-vertical-dither") {
             config.sliced_vertical_dither = true;
             continue;
@@ -2834,6 +2844,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.copper_changes = static_cast<int>(cfg.copper_changes);
     opts.sliced_spread_radius = cfg.sliced_spread_radius;
     opts.sliced_vertical_dither = cfg.sliced_vertical_dither;
+    opts.sliced_beam = cfg.sliced_beam;
     opts.sliced_spread_decay = cfg.sliced_spread_decay;
     opts.lock_color0 = cfg.lock_color0;
     opts.dual_playfield = cfg.dual_playfield;
@@ -8072,7 +8083,8 @@ int run_main(int argc, char* argv[]) {
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d, int diversity,
                                std::function<void(float, std::string_view)>
-                                   prog) {
+                                   prog,
+                               bool beam_on) {
             return copper::encode_copper(
                 img, config->depth, d, chipset,
                 static_cast<std::size_t>(config->copper_changes), nullptr,
@@ -8086,15 +8098,19 @@ int run_main(int argc, char* argv[]) {
                     ? config->sliced_spread_decay : -1.0f,
                 config->sliced_vertical_dither,
                 sliced_excluded,
-                parse_quantizer_override(config->quantizer));
+                parse_quantizer_override(config->quantizer),
+                beam_on);
         };
 
         Result<copper::CopperResult> copper_result;
         if (config->best) {
             // Plain sliced: 8 jitter seeds (16-color palette has shallower
-            // basins than DPF's 8-color PF2; 8 seeds × 5×4 = 161 trials,
-            // ~30–60 s on 8 cores). Same parallel-sweep machinery as
-            // strips DPF/EHB via pipeline::best_sweep.
+            // basins than DPF's 8-color PF2; 8 seeds × 5×4 = 161 trials).
+            // --best ALSO sweeps the beam axis: 2 best_sweeps with
+            // beam=off/on, ranked by SSIMULACRA2 against the source.
+            // Wall time ~doubles for sliced --best. Same trial pattern
+            // mirrored in api.cpp (CapTrial path) for the WASM/library
+            // surface.
             struct CapTrial {
                 copper::CopperResult result;
                 Image rendered;
@@ -8105,34 +8121,60 @@ int run_main(int argc, char* argv[]) {
             // OCS's discrete 12-bit gamut already snaps small nudges.
             float jitter_amp = (chipset == amiga::Chipset::aga)
                 ? 0.4f : 1.0f;
-            auto best = pipeline::best_sweep<CapTrial>(
-                *image, dith, config->palette_diversity,
-                /*jitter_count=*/8,
-                [&](const Image& jittered_in,
-                    const dither::Settings& d, int div) -> Result<CapTrial> {
-                    auto enc = encode_once(jittered_in, d, div, {});
-                    if (!enc) return std::unexpected{enc.error()};
-                    auto preview = pipeline::render_preview(
-                        enc->planes, enc->base_palette,
-                        /*is_ham=*/false, config->interlace, chipset,
-                        &enc->scanline_palettes, enc->changes_per_line);
-                    if (!preview) return std::unexpected{preview.error()};
-                    return CapTrial{*std::move(enc), *std::move(preview)};
-                },
-                [](const CapTrial& t) -> const Image& { return t.rendered; },
-                make_cli_progress_reporter(),
-                jitter_amp);
-            if (best.has_value()) {
-                copper_result = std::move(best->result);
+            std::optional<CapTrial> best_overall;
+            float best_overall_score = -std::numeric_limits<float>::infinity();
+            // Two best_sweeps (beam off + on) share a single progress
+            // stream — each sweep contributes 50% of the visible bar.
+            auto inner_progress = make_cli_progress_reporter();
+            int sweep_idx = 0;
+            for (bool beam_on : {false, true}) {
+                auto sweep = pipeline::best_sweep<CapTrial>(
+                    *image, dith, config->palette_diversity,
+                    /*jitter_count=*/8,
+                    [&](const Image& jittered_in,
+                        const dither::Settings& d, int div) -> Result<CapTrial> {
+                        auto enc = encode_once(jittered_in, d, div, {}, beam_on);
+                        if (!enc) return std::unexpected{enc.error()};
+                        auto preview = pipeline::render_preview(
+                            enc->planes, enc->base_palette,
+                            /*is_ham=*/false, config->interlace, chipset,
+                            &enc->scanline_palettes, enc->changes_per_line);
+                        if (!preview) return std::unexpected{preview.error()};
+                        return CapTrial{*std::move(enc), *std::move(preview)};
+                    },
+                    [](const CapTrial& t) -> const Image& { return t.rendered; },
+                    [&](float p, std::string_view s) {
+                        // Map per-sweep [0,1] to global [sweep_idx/2, (sweep_idx+1)/2].
+                        // Suppress the per-sweep "done" so we get exactly
+                        // one terminal "done" after the second sweep.
+                        if (s == "done" && sweep_idx == 0) return;
+                        if (inner_progress) inner_progress(
+                            (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                    },
+                    jitter_amp);
+                ++sweep_idx;
+                if (!sweep.has_value()) continue;
+                float s2 = ssimulacra2::compute(
+                    image->pixels(), sweep->rendered.pixels(),
+                    image->width(), image->height());
+                if (s2 > best_overall_score) {
+                    best_overall_score = s2;
+                    best_overall = std::move(sweep);
+                }
+            }
+            if (best_overall.has_value()) {
+                copper_result = std::move(best_overall->result);
             } else {
                 copper_result = encode_once(*image, dith,
                                             config->palette_diversity,
-                                            make_cli_progress_reporter());
+                                            make_cli_progress_reporter(),
+                                            config->sliced_beam);
             }
         } else {
             copper_result = encode_once(*image, dith,
                                         config->palette_diversity,
-                                        make_cli_progress_reporter());
+                                        make_cli_progress_reporter(),
+                                        config->sliced_beam);
         }
         if (!copper_result) {
             std::println(stderr, "Copper encode error: {}",
@@ -8228,6 +8270,16 @@ int run_main(int argc, char* argv[]) {
             image->width(), image->height());
         int cop_cap_entries = static_cast<int>(
             copper_result->planes.height * copper_result->changes_per_line);
+        {
+            float used = pipeline::compute_avg_palette_used_per_line(
+                *preview, copper_result->scanline_palettes);
+            std::size_t row0 = copper_result->scanline_palettes.empty()
+                ? 0 : copper_result->scanline_palettes[0].size();
+            if (row0 > 0) {
+                cli_status("Palette:  used {:.1f} of {} slots/line ({:.0f}%)",
+                           used, row0, 100.0f * used / float(row0));
+            }
+        }
         cli_print_encoded(
             static_cast<int>(copper_result->planes.depth),
             static_cast<int>(copper_result->planes.total_bytes()),
@@ -8368,6 +8420,16 @@ int run_main(int argc, char* argv[]) {
                      st.strips_max_visible_moves_per_line,
                      st.strips_avg_total_moves_per_line,
                      st.max_moves_per_line);
+        {
+            float used = pipeline::compute_avg_palette_used_per_line(
+                st.rendered, st.scanline_palettes);
+            std::size_t row0 = st.scanline_palettes.empty()
+                ? 0 : st.scanline_palettes[0].size();
+            if (row0 > 0) {
+                cli_status("Palette:  used {:.1f} of {} slots/line ({:.0f}%)",
+                           used, row0, 100.0f * used / float(row0));
+            }
+        }
         int strips_ops = 0;
         for (auto& moves : st.strips_line_moves) strips_ops += static_cast<int>(moves.size());
         cli_print_encoded(

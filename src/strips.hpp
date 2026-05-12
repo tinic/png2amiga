@@ -299,7 +299,12 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        // so mid-line MOVEs can't overwrite
                                        // the locked color.
                                        const std::vector<std::pair<std::size_t, Color3f>>&
-                                           locked_slots = {});
+                                           locked_slots = {},
+                                       // Forwarded to encode_copper for the
+                                       // sliced base pass that seeds the per-
+                                       // line palette state. See `sliced_beam`
+                                       // on copper::encode_copper.
+                                       bool sliced_beam = false);
 
 // ---------------------------------------------------------------------------
 // strips for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
@@ -340,7 +345,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                        // excluded). The mid-line strips
                                        // planner additionally avoids them.
                                        const std::vector<std::pair<std::size_t, Color3f>>&
-                                           reserved_slots = {});
+                                           reserved_slots = {},
+                                       bool sliced_beam = false);
 
 // ---------------------------------------------------------------------------
 // strips for HAM6 (6 bitplanes — 2 control + 4 data, 16-color base palette

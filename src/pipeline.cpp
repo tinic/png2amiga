@@ -77,6 +77,45 @@ void PipelineResult::finalize_psnr(const Image& src, float total_error) {
         src.width(), src.height());
 }
 
+float compute_avg_palette_used_per_line(
+    const Image& rendered,
+    const std::vector<std::vector<Color3f>>& scanline_palettes) noexcept {
+    if (scanline_palettes.empty()) return 0.0f;
+    const std::size_t W = rendered.width();
+    const std::size_t H = rendered.height();
+    double sum_used = 0.0;
+    std::size_t valid_rows = 0;
+    std::array<std::uint64_t, 4> used{};  // 256-bit bitmap; palette ≤ 256
+    for (std::size_t y = 0; y < H && y < scanline_palettes.size(); ++y) {
+        const auto& pal = scanline_palettes[y];
+        if (pal.empty()) continue;
+        used.fill(0);
+        const std::size_t row_off = y * W;
+        for (std::size_t x = 0; x < W; ++x) {
+            auto& px = rendered.pixels()[row_off + x];
+            auto px_lab = color_space::linear_to_oklab(px);
+            float best_d = std::numeric_limits<float>::infinity();
+            std::size_t best_i = 0;
+            for (std::size_t i = 0; i < pal.size() && i < 256; ++i) {
+                auto p_lab = color_space::linear_to_oklab(pal[i]);
+                float dL = px_lab.L - p_lab.L;
+                float da = px_lab.a - p_lab.a;
+                float db = px_lab.b - p_lab.b;
+                float d = color_space::fma_dist_sq(dL, da, db);
+                if (d < best_d) { best_d = d; best_i = i; }
+            }
+            used[best_i >> 6] |= std::uint64_t{1} << (best_i & 63);
+        }
+        std::size_t count = 0;
+        for (auto w : used) count += static_cast<std::size_t>(std::popcount(w));
+        sum_used += static_cast<double>(count);
+        ++valid_rows;
+    }
+    return valid_rows
+        ? static_cast<float>(sum_used / static_cast<double>(valid_rows))
+        : 0.0f;
+}
+
 Image jitter_image(const Image& source, std::uint32_t seed,
                    float amplitude) {
     Image j(source.width(), source.height());

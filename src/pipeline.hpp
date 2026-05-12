@@ -119,6 +119,14 @@ struct PipelineResult {
     bool has_transparency = false;
     std::vector<bool> transparency_mask;
     float copper_changes{};
+
+    // Average number of unique palette indices actually referenced per
+    // scanline, over all rows that have a per-line palette. Sliced /
+    // strips diagnostic: a small ratio of this to `scanline_palettes[y]
+    // .size()` means the quantiser is allocating slots the dither
+    // didn't end up using. Zero for modes without per-line palettes.
+    float avg_palette_used_per_line{};
+
     float quant_error{};
     float psnr{};
     // SSIMULACRA2 score (Cloudinary 2022) of rendered preview vs source.
@@ -171,6 +179,17 @@ struct PipelineResult {
     // preview. Replaces the same 4 lines repeated at every mode branch.
     void finalize_psnr(const Image& src, float total_error);
 };
+
+// Average # of distinct palette indices a row's pixels reference, over
+// all rows that have a non-empty per-line palette. Pixels are matched
+// against their row's palette via nearest OKLab distance (same metric
+// the encoder used to pick the index). Returns 0 for modes without
+// per-line palettes. Diagnostic for sliced / strips: low utilisation
+// (e.g. 8 of 32 slots/line) hints the quantiser is allocating slots
+// the dither doesn't end up using.
+float compute_avg_palette_used_per_line(
+    const Image& rendered,
+    const std::vector<std::vector<Color3f>>& scanline_palettes) noexcept;
 
 // Single per-mode preview-render dispatcher. Picks the right back-end:
 //   - HAM (no scanline palettes)        → ham::render_ham
