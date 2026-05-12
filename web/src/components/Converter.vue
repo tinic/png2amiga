@@ -278,14 +278,22 @@ function drawPalette(bytes: Uint8Array) {
 // row per source scanline — with the same H-CSS dimension as the
 // preview so they align vertically. CSS width scales per-slot to a
 // visible swatch (kPalettePerLineSlotCssPx) regardless of slot count.
-const kPalettePerLineSlotCssPx = 4
+const kPalettePerLineSlotCssPx = 8
+function fillRgbaFromRgb(out: Uint8ClampedArray, src: Uint8Array, pixels: number) {
+  for (let i = 0; i < pixels; ++i) {
+    out[i*4 + 0] = src[i*3 + 0] ?? 0
+    out[i*4 + 1] = src[i*3 + 1] ?? 0
+    out[i*4 + 2] = src[i*3 + 2] ?? 0
+    out[i*4 + 3] = 255
+  }
+}
 function paintScanlinePaletteStrip(result: ConvertResult, cssH: number) {
   const canvas = scanlinePaletteCanvasRef.value
-  if (!canvas) return
   const bytes = result.scanlinePaletteBytes
   const n = result.scanlinePaletteSize ?? 0
   const rows = result.height
-  if (!bytes || n <= 0 || rows <= 0 || bytes.length < rows * n * 3) {
+  const valid = canvas && bytes && n > 0 && rows > 0 && bytes.length >= rows * n * 3
+  if (!valid) {
     hasScanlinePalette.value = false
     return
   }
@@ -299,15 +307,8 @@ function paintScanlinePaletteStrip(result: ConvertResult, cssH: number) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   ctx.imageSmoothingEnabled = false
-  // Build the ImageData in one shot. Source layout is already RGB
-  // packed row-major; we just need to interleave an alpha=255.
   const img = ctx.createImageData(n, rows)
-  for (let i = 0; i < rows * n; ++i) {
-    img.data[i*4 + 0] = bytes[i*3 + 0]
-    img.data[i*4 + 1] = bytes[i*3 + 1]
-    img.data[i*4 + 2] = bytes[i*3 + 2]
-    img.data[i*4 + 3] = 255
-  }
+  fillRgbaFromRgb(img.data, bytes, rows * n)
   ctx.putImageData(img, 0, 0)
 }
 
@@ -2866,10 +2867,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                @pointerdown="loupePointerDown" @pointermove="loupePointerMove" @pointerup="loupePointerUp"
                :class="{ 'loupe-active': loupeActive }"
           >
-            <div class="canvas-wrap relative flex flex-row gap-1 align-items-start"
+            <div class="canvas-wrap relative flex flex-row align-items-start"
                  :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
-              <canvas v-show="hasScanlinePalette" ref="scanlinePaletteCanvasRef"
+              <canvas v-show="hasScanlinePalette && paletteViewActive" ref="scanlinePaletteCanvasRef"
                       class="scanline-palette-strip"
+                      style="margin-right: 8px;"
                       title="Per-scanline base palette — one column per slot, one row per scanline." />
               <canvas ref="canvasRef" class="preview-canvas" v-show="!crtEnabled" />
               <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />

@@ -47,6 +47,8 @@ interface ReplyEnvelope {
   snesPaletteBytes?: ArrayBuffer
   paletteBytes?: ArrayBuffer
   indices?: ArrayBuffer
+  scanlinePaletteBytes?: ArrayBuffer
+  scanlinePaletteSize?: number
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -151,6 +153,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('c64Mc1', result.c64Mc1),
     ...opt('c64Mc2', result.c64Mc2),
     ...opt('c64BgColor', result.c64BgColor),
+    ...opt('scanlinePaletteSize', result.scanlinePaletteSize),
     ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []
@@ -160,6 +163,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
       dst: 'c64CharsetData' | 'genesisTileBytes' | 'genesisTilemapBytes'
         | 'genesisPaletteBytes' | 'snesTileBytes' | 'snesTilemapBytes'
         | 'snesPaletteBytes' | 'paletteBytes' | 'indices'
+        | 'scanlinePaletteBytes'
   ): void => {
     if (!src) return
     const arr = new Uint8Array(src as ArrayBuffer)
@@ -176,6 +180,7 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
   forwardArrayBuffer(result.snesPaletteBytes, 'snesPaletteBytes')
   forwardArrayBuffer(result.paletteBytes, 'paletteBytes')
   forwardArrayBuffer(result.indices, 'indices')
+  forwardArrayBuffer(result.scanlinePaletteBytes, 'scanlinePaletteBytes')
 
   if (result.rgba) {
     const arr = new Uint8Array(result.rgba)

@@ -3516,6 +3516,37 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.strips_avg_visible_moves_per_line = strips_res->avg_visible_moves_per_line;
         result.strips_max_visible_moves_per_line = strips_res->max_visible_moves_per_line;
         result.strips_slot_count                 = strips_res->slot_table.slots.size();
+
+        // Synthesize per-line palette snapshots for the web tool's
+        // per-scanline strip view. Strips planner only retains the
+        // line-MOVE deltas, so we replay them against the frame-start
+        // palette: for each row, hblank MOVEs (those before the first
+        // WAIT in line_moves[y]) update the running state; at the line
+        // gate we snapshot — that snapshot is the palette under which
+        // the visible part of the scanline begins painting. Mid-line
+        // MOVEs after the line gate continue to evolve the running
+        // state (they apply at strip boundaries within the row) so
+        // subsequent rows pick up where the last visible MOVE left off.
+        {
+            const std::size_t H = result.rendered.height();
+            result.scanline_palettes.resize(H);
+            auto running = result.palette;
+            for (std::size_t y = 0; y < H && y < result.strips_line_moves.size(); ++y) {
+                bool snapped = false;
+                for (auto& mv : result.strips_line_moves[y]) {
+                    if (mv.kind == strips::ScapOpKind::kWait) {
+                        if (!snapped) {
+                            result.scanline_palettes[y] = running;
+                            snapped = true;
+                        }
+                    } else if (mv.reg < running.size()) {
+                        running[mv.reg] = palette::ocs_to_linear(mv.rgb_ocs);
+                    }
+                }
+                if (!snapped) result.scanline_palettes[y] = running;
+            }
+        }
+
         result.finalize_psnr(*image, strips_res->total_error);
         return result;
     }
