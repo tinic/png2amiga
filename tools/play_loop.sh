@@ -9,9 +9,9 @@
 #   -w width    Inline image cell width in iTerm2 columns (default: 60).
 #
 # Examples:
-#   tools/play_loop.sh example_video/output_*.png
-#   tools/play_loop.sh -d 0.04 example_video/output_*.png   # ~25 fps
-#   tools/play_loop.sh -n 1   example_video/output_*.png   # play once
+#   tools/play_loop.sh examples/video/output_*.png
+#   tools/play_loop.sh -d 0.04 examples/video/output_*.png   # ~25 fps
+#   tools/play_loop.sh -n 1   examples/video/output_*.png   # play once
 #
 # Requires iTerm2 (uses its inline-image escape sequence). On other
 # terminals the bytes are printed but no image renders. Press Ctrl-C
