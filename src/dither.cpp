@@ -1029,6 +1029,10 @@ DitherResult apply_error_diffusion(
 
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = serpentine && (y % 2 == 1);
+        // Hoist the serpentine direction multiplier out of the per-pixel
+        // kernel diffusion loop below — replaces `reverse ? -kdx : kdx`
+        // (cmov + register dependency) with a constant multiply.
+        const int dir = reverse ? -1 : 1;
 
         for (std::size_t step = 0; step < w; ++step) {
             std::size_t x = reverse ? (w - 1 - step) : step;
@@ -1064,8 +1068,7 @@ DitherResult apply_error_diffusion(
                 (target_s.b - chosen_s.b) * strength,
             };
             for (auto& [kdx, kdy, weight] : kernel) {
-                int actual_dx = reverse ? -kdx : kdx;
-                auto nx = static_cast<int>(x) + actual_dx;
+                auto nx = static_cast<int>(x) + kdx * dir;
                 auto ny = static_cast<int>(y) + kdy;
 
                 if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
@@ -2176,6 +2179,9 @@ DitherResult apply_structure_fs(
 
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = serpentine && (y % 2 == 1);
+        // Hoist serpentine direction sign — replaces `if (reverse) dx = -dx;`
+        // (or the equivalent ternary) inside the per-pixel kernel loop.
+        const int dir = reverse ? -1 : 1;
         for (std::size_t step = 0; step < w; ++step) {
             std::size_t x = reverse ? (w - 1 - step) : step;
             auto idx = y * w + x;
@@ -2231,9 +2237,7 @@ DitherResult apply_structure_fs(
                 (image_s[idx].b - chosen_s.b) * strength,
             };
             for (auto& kr : kernel) {
-                int dx = kr.dx;
-                if (reverse) dx = -dx;
-                auto nx = static_cast<std::ptrdiff_t>(x) + dx;
+                auto nx = static_cast<std::ptrdiff_t>(x) + kr.dx * dir;
                 auto ny = static_cast<std::ptrdiff_t>(y) + kr.dy;
                 if (nx < 0 || nx >= static_cast<std::ptrdiff_t>(w)) continue;
                 if (ny < 0 || ny >= static_cast<std::ptrdiff_t>(h)) continue;
@@ -3375,6 +3379,8 @@ float diffuse_raw_buffer(const Image& image,
 
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = is_diff && settings.serpentine && (y & 1);
+        // Hoist serpentine direction sign out of the kernel loop below.
+        const int dir = reverse ? -1 : 1;
 
         for (std::size_t step = 0; step < w; ++step) {
             std::size_t x = reverse ? (w - 1 - step) : step;
@@ -3433,8 +3439,7 @@ float diffuse_raw_buffer(const Image& image,
                     riem_head = (riem_head + 1) % RIEM_QSIZE;
                 } else {
                     for (auto& [kdx, kdy, kw] : kernel) {
-                        auto nx = static_cast<std::ptrdiff_t>(x) +
-                                  (reverse ? -kdx : kdx);
+                        auto nx = static_cast<std::ptrdiff_t>(x) + kdx * dir;
                         auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
                         if (nx < 0 || ny < 0) continue;
                         if (static_cast<std::size_t>(nx) >= w) continue;

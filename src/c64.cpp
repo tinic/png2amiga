@@ -159,6 +159,10 @@ inline std::vector<std::uint8_t> global_fs_indices(
     std::vector<std::uint8_t> out(W * H);
     for (std::size_t y = 0; y < H; ++y) {
         bool reverse = (y & 1) != 0;
+        // Hoist serpentine direction sign out of the per-pixel kernel
+        // loop below — replaces `reverse ? -k[0] : k[0]` cmov with a
+        // constant multiply.
+        const float dir = reverse ? -1.0f : 1.0f;
         for (std::size_t step = 0; step < W; ++step) {
             auto x = reverse ? (W - 1 - step) : step;
             auto idx = y * W + x;
@@ -184,8 +188,7 @@ inline std::vector<std::uint8_t> global_fs_indices(
                 adj.L - cl.L, adj.a - cl.a, adj.b - cl.b,
             };
             for (auto& k : fs_kernel) {
-                float sx = reverse ? -k[0] : k[0];
-                int nx = static_cast<int>(x) + static_cast<int>(sx);
+                int nx = static_cast<int>(x) + static_cast<int>(k[0] * dir);
                 int ny = static_cast<int>(y) + static_cast<int>(k[1]);
                 if (nx < 0 || static_cast<std::size_t>(nx) >= W ||
                     ny < 0 || static_cast<std::size_t>(ny) >= H)
