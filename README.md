@@ -585,7 +585,20 @@ Output:
   --preview-scale <1-8>           Preview display scale
   --preview-video                 Batch only: loop frames inline
   --preview-video-fps <fps>       Playback rate (default 12.5)
-    Extensions: .png .iff .h .raw .pal .pi1 .pi2 .pi3 .prg .koa .hir
+    Extensions:
+      .png                          Preview (24-bit)
+      .iff / .ilbm                  Amiga IFF ILBM
+      .h                            C header (Amiga UWORD bitplane arrays)
+      .cpp / .c                     Amiga cpp viewer (build-amiga.sh);
+                                    DOS C viewer with PC modes (ia16-elf-gcc)
+      .raw / .bin                   Raw interleaved bitplanes (writes .pal sibling)
+      .pal                          OCS palette only (big-endian 0x0RGB words)
+      .idx                          Raw chunky indices (1 byte/pixel, scan order);
+                                    also via --output-indexed / --output-each .idx
+      .pi1 / .pi2 / .pi3            Atari Degas (STF/STE low / med / hi)
+      .prg                          C64 PRG (autostart)
+      .koa                          C64 Koala paint
+      .hir                          C64 hires bitmap
 
 Batch (multi-frame, shared palette / copper):
   --batch <dir>                   Encode N inputs as a horizontal atlas;
