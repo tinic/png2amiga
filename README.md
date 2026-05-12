@@ -439,6 +439,171 @@ OCS palette quantization) uses lock-free per-row work distribution with
 deterministic merge order. Safe to use under `ccache` / build cache
 hashing.
 
+## Full CLI reference
+
+<!--
+  KEEP IN SYNC with `./build/png2amiga --help`.
+  Refresh this block (and bump --help text on the same edit) before
+  committing any change that adds, removes, renames, or re-defaults a
+  flag. One-liner to regenerate:
+      ./build/png2amiga --help > /tmp/help.txt
+  Then paste between the fences below.
+-->
+
+```
+png2amiga 1.85.1.1033
+
+Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
+
+
+Modes:
+  --mode <mode>                   Graphics mode (default: lores)
+    Amiga:  lores | lores-lace | hires | hires-lace |
+            ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]
+    Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi
+    DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |
+            cga-320 | cga-640 | cga-composite |
+            cga-text80x{200,100,50,25}
+    SNES:   snes-mode7-256 | snes-mode7-direct
+    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh
+    C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |
+            c64-petscii | c64-charset-hires | c64-charset-multicolor
+  --depth <1-8>                   Bitplane depth (default: 5)
+  --chipset ocs|aga               Amiga chipset (default: auto)
+  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)
+  --width <int>                   Override output width
+  --height <int>                  Override output height
+  --no-scale                      Use source dimensions verbatim
+
+Dithering:
+  --dither <method>               Dither method (default: floyd-steinberg;
+                                  --list-dithers for the full catalog)
+  --dither-strength <float>       Dither amount 0.0-2.0 (default: 1.0)
+  --error-clamp <float>           Max error per channel (default: 0.35)
+  --refine <0-32>                 Palette refinement iterations (default: 8)
+
+Palette:
+  --palette <file>                Load palette (.gpl, IFF, hex text, .json)
+  --quantize-from <file>          Train palette on file, lock onto input
+  --joint-input, --ji <file>      Add input to joint-palette training set
+  --output-each, --oe <pattern>   Per-input output: '.ext' or path with {dir}/{stem}
+  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn | gpu-restart
+  --palette-diversity <0-9>       Drop near-duplicate palette entries
+  --no-lock-color0                Allow palette index 0 to be image colour
+  --print-palette                 Dump final CMAP to stderr (text)
+  --print-palette-json            Dump final CMAP to stdout (JSON)
+
+Image processing:
+  --brightness <float>            -1.0..1.0 (default: 0.0)
+  --contrast <float>              0.0..3.0 (default: 1.0)
+  --saturation <float>            0.0..3.0 (default: 1.0)
+  --gamma <float>                 0.1..8.0 (default: 1.0)
+  --hue-shift <float>             -180..180 degrees (default: 0)
+  --sharpen <float>               -1.0..2.0 (default: 0.0)
+  --black-point <float>           0.0..0.5 (default: 0.0)
+  --white-point <float>           0.0..0.5 (default: 0.0)
+  --match-range                   Stretch source chroma per-(L, hue) onto palette gamut
+  --crop <x,y,w,h>                Manual crop region (pixels)
+  --crop-auto                     Auto-crop to mode aspect ratio
+
+Transparency:
+  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)
+  --alpha-dither <method>         Dither alpha (default: none)
+  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)
+  --transparent-output-slot <N>   Write slot N (not 0) for alpha=0 pixels in
+                                  .idx / --output-each output. Pair with
+                                  --reserve-range N <colour> so no opaque
+                                  pixel ever routes there.
+  --transparent-color, --tc <hex> Treat sentinel RGB as alpha=0
+                                  (repeatable, e.g. magenta atlases)
+  --mask <file>                   Export transparency mask
+  --mask-invert                   Invert mask polarity
+
+Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):
+  --sliced                        Per-scanline palette swaps
+  --slice-changes <0-16>          Swaps per line (0 = auto)
+  --sliced-vertical-dither        Spread copper transitions across rows
+  --best                          Multi-restart search (~20–30× slower)
+
+Strip palette (mid-line swaps, OCS lores):
+  --strips                        Mid-line swaps; pair with --dpf or ehb
+
+Seamless tile:
+  --tile                          Replicate input 3x3 before dither, export centre
+                                  tile only. Lores/hires/EHB only.
+
+Cross-fade (lores/hires/EHB; --preview animates):
+  --fade-to <target.png>          Target image to fade INPUT into (INPUT is the start).
+  --fade-frames <2-256>           Frames per segment (default: 16)
+  --fade-loop                     Loop forward (source→...→target→source); else
+                                  ping-pong (source→...→target→...→source).
+
+HAM:
+  --ham-beam <1-256>              DP search beam (default: 48)
+  --ham-triple <0-256>            Triple-pixel refinement (default: 16)
+  --ham-fast                      Greedy encoder (no DP search)
+  --ham-metric <oklab2|srgb-mse>  Op-selection metric (default: oklab2)
+
+Platform-specific:
+  --native-par                    Letterbox / pillarbox to preserve
+                                  source aspect on fixed-buffer hardware
+  --tile-budget <N>               Max unique tiles for charset / tile modes
+  --tile-reserve <N>              Reserve N tile slots from the budget
+  --cga-palette <p>               p0-low | p0-high | p1-low | p1-high
+  --cga-bg <0..15>                CGA background colour
+  --cga-text-metric <m>           blur (default) | mse
+  --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |
+                                  aniso73 | aniso35 | aniso37 | wide55 | wide77
+  --c64-palette <p>               pepto | vice | colodore (default) |
+                                  deekay | godot | c64wiki | levy
+  --c64-metric <m>                blur (default) | mse
+  --c64-petscii-graphics          Restrict PETSCII to graphics glyphs
+
+Palette index pinning (lores/hires/EHB/Atari):
+  --lock-index, --li <id> <hex>   Pin slot's colour; image pixels CAN
+                                  still route to it (quantizer uses it)
+  --reserve-range, --rr <r> <hex> Pin slot's colour; image pixels CANNOT
+                                  route to it (quantizer skips it).
+                                  Range: 0,1,5-10 / -5 / 5- (open ends)
+  --pin-index-at, --pia <id> <x> <y>
+                                  Swap pixel (x,y)'s slot with <id>
+
+Output:
+  --symbol <name>                 Base symbol name (default: from filename)
+  --fade-in                       Fade in/out on viewer entry / exit
+  --layout <which>                auto | interleaved | standard |
+                                  word-interleaved
+  --non-interleaved, --planar     Alias for --layout standard
+  --interleaved                   Alias for --layout interleaved
+  --output-indexed <file>         Raw chunky indices: 1 byte/pixel,
+                                  scan order, no header (post-pin)
+  --preview                       Inline preview (iTerm2, kitty, sixel)
+  --preview-scale <1-8>           Preview display scale
+  --preview-video                 Batch only: loop frames inline
+  --preview-video-fps <fps>       Playback rate (default 12.5)
+    Extensions: .png .iff .h .raw .pal .pi1 .pi2 .pi3 .prg .koa .hir
+
+Batch (multi-frame, shared palette / copper):
+  --batch <dir>                   Encode N inputs as a horizontal atlas;
+                                  emit per-frame outputs into <dir>
+  --batch-format <ext>            h (default) | iff | png | raw | cpp
+
+Build integration:
+  -q, --quiet                     Suppress stdout status (errors → stderr)
+  --json                          JSON status output (implies --quiet)
+  --depfile <path>                Write a Make-format depfile
+  --list-modes                    Print supported modes and exit
+  --list-dithers                  Print supported dither methods and exit
+  --profile <N>                   Run encode N times for sampling profilers
+  --score-vs <ref>                Score input against reference (no encoding).
+                                  Input may be a .png OR a .idx (raw chunky
+                                  bytes); .idx requires --palette and inherits
+                                  dims from <ref>.
+
+Exit codes (sysexits.h):
+  0 ok    1 internal    64 usage    66 no input    73 cannot create
+```
+
 ## License
 
 MIT

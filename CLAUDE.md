@@ -2,6 +2,21 @@
 
 PNG/JPEG to Commodore Amiga graphics converter written in C++26.
 
+## README CLI block must track --help
+
+`README.md` ends with a `## Full CLI reference` section that mirrors
+`./build/png2amiga --help` verbatim. Before committing any change that
+adds, removes, renames, or re-defaults a CLI flag (or updates a flag
+description), refresh the block:
+
+```bash
+./build/png2amiga --help > /tmp/help.txt
+# paste between the ``` fences under "## Full CLI reference" in README.md
+```
+
+Skipping this leaves the published help out of sync with the binary —
+treat it as part of the same commit as the flag change.
+
 ## Build
 
 ```bash
