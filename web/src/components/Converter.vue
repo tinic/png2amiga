@@ -278,7 +278,11 @@ function drawPalette(bytes: Uint8Array) {
 // row per source scanline — with the same H-CSS dimension as the
 // preview so they align vertically. CSS width scales per-slot to a
 // visible swatch (kPalettePerLineSlotCssPx) regardless of slot count.
+// At ≥ 32 slots we cap total width to kPalettePerLineMaxCssPx and let
+// the per-slot width shrink so the strip stays on-screen for d=6..8
+// (64/128/256 colors per row).
 const kPalettePerLineSlotCssPx = 8
+const kPalettePerLineMaxCssPx = 256
 function fillRgbaFromRgb(out: Uint8ClampedArray, src: Uint8Array, pixels: number) {
   for (let i = 0; i < pixels; ++i) {
     out[i*4 + 0] = src[i*3 + 0] ?? 0
@@ -301,8 +305,10 @@ function paintScanlinePaletteStrip(result: ConvertResult, cssH: number) {
   canvas.width = n
   canvas.height = rows
   // Lock CSS height to the preview's so the strip aligns row-for-row
-  // with the rendered image. Width scales per slot for legibility.
-  canvas.style.width = `${n * kPalettePerLineSlotCssPx}px`
+  // with the rendered image. Width is min(N×slot, maxWidth) so d=6..8
+  // (64..256 colors) stays visible.
+  const cssW = Math.min(n * kPalettePerLineSlotCssPx, kPalettePerLineMaxCssPx)
+  canvas.style.width = `${cssW}px`
   canvas.style.height = `${cssH}px`
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -2867,12 +2873,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                @pointerdown="loupePointerDown" @pointermove="loupePointerMove" @pointerup="loupePointerUp"
                :class="{ 'loupe-active': loupeActive }"
           >
-            <div class="canvas-wrap relative flex flex-row align-items-start"
+            <div class="canvas-wrap flex flex-row align-items-start"
                  :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
               <canvas v-show="hasScanlinePalette && paletteViewActive" ref="scanlinePaletteCanvasRef"
                       class="scanline-palette-strip"
                       style="margin-right: 8px;"
                       title="Per-scanline base palette — one column per slot, one row per scanline." />
+              <div class="preview-stack relative">
               <canvas ref="canvasRef" class="preview-canvas" v-show="!crtEnabled" />
               <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />
               <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
@@ -2891,6 +2898,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   </div>
                   <div class="text-xs text-color-secondary mt-1" v-if="progressStage">{{ progressStage }}</div>
                 </div>
+              </div>
               </div>
             </div>
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
