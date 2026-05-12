@@ -1,5 +1,6 @@
 #include "ssimulacra2.hpp"
 
+#include "aligned_vector.hpp"  // AlignedFloatVec (32-byte aligned for AVX2)
 #include "color_space.hpp"  // PNG2AMIGA_INLINE_HOT
 #include <algorithm>
 #include <array>
@@ -199,8 +200,8 @@ constexpr auto kTapSeq = std::make_index_sequence<kBlurSize>{};
 // `gaussian_blur::lambda_1` at 31 s of CPU on AMD uProf, eating most of
 // the streaming refactor's expected gain).
 PNG2AMIGA_INLINE_HOT
-void blur_h_pass_row(const std::vector<float>& in,
-                     std::vector<float>& tmp,
+void blur_h_pass_row(const AlignedFloatVec& in,
+                     AlignedFloatVec& tmp,
                      const std::array<float, kBlurSize>& k,
                      int sy, int W,
                      std::size_t w, std::size_t bx_lo,
@@ -230,7 +231,11 @@ void blur_h_pass_row(const std::vector<float>& in,
 #if PNG2AMIGA_BACKEND_AVX2
             __m256 acc = _mm256_setzero_ps();
             apply_h_taps_avx2(acc, row, x, k, kTapSeq);
-            _mm256_storeu_ps(trow + x, acc);
+            // Store is aligned: trow base is 32-byte aligned (tmp is
+            // AlignedFloatVec) and x is a multiple of 8. The kernel's
+            // 11-tap horizontal loads up in apply_h_taps_avx2 remain
+            // unaligned by design (sliding window).
+            _mm256_store_ps(trow + x, acc);
 #elif PNG2AMIGA_BACKEND_NEON
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 float32x4_t acc = vdupq_n_f32(0.0f);
@@ -276,9 +281,9 @@ void blur_h_pass_row(const std::vector<float>& in,
         }
 }
 
-void gaussian_blur(const std::vector<float>& in,
-                   std::vector<float>& out,
-                   std::vector<float>& tmp,
+void gaussian_blur(const AlignedFloatVec& in,
+                   AlignedFloatVec& out,
+                   AlignedFloatVec& tmp,
                    std::size_t w, std::size_t h) {
     auto& k = blur_kernel();
     if (tmp.size() < kRingRowsP2 * w) tmp.resize(kRingRowsP2 * w);
@@ -334,7 +339,8 @@ void gaussian_blur(const std::vector<float>& in,
                         acc);
                 }
             }
-            _mm256_storeu_ps(orow + x, acc);
+            // Aligned: orow is AlignedFloatVec.data() and x is mul of 8.
+            _mm256_store_ps(orow + x, acc);
 #elif PNG2AMIGA_BACKEND_NEON
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 float32x4_t acc = vdupq_n_f32(0.0f);
@@ -473,8 +479,8 @@ inline __m256 fast_cbrt_v(__m256 x) noexcept {
 // applies make_positive in SIMD, scatter-stores into X/Y/B.
 void to_xyb_planes(const std::vector<Color3f>& src,
                    std::size_t w, std::size_t h,
-                   std::vector<float>& X, std::vector<float>& Y,
-                   std::vector<float>& B) {
+                   AlignedFloatVec& X, AlignedFloatVec& Y,
+                   AlignedFloatVec& B) {
     auto n = w * h;
     if (X.size() < n) X.resize(n);
     if (Y.size() < n) Y.resize(n);
@@ -541,9 +547,10 @@ void to_xyb_planes(const std::vector<Color3f>& src,
         vb = _mm256_add_ps(_mm256_sub_ps(vb, vy), v_55);
         vx = _mm256_fmadd_ps(vx, v_14, v_42);
         vy = _mm256_add_ps(vy, v_01);
-        _mm256_storeu_ps(px + i, vx);
-        _mm256_storeu_ps(py + i, vy);
-        _mm256_storeu_ps(pb + i, vb);
+        // Stores aligned: X/Y/B are AlignedFloatVec, i is mul of 8.
+        _mm256_store_ps(px + i, vx);
+        _mm256_store_ps(py + i, vy);
+        _mm256_store_ps(pb + i, vb);
     }
 #elif PNG2AMIGA_BACKEND_NEON
     // NEON has the perfect intrinsic for stride-3 deinterleave:
@@ -618,11 +625,11 @@ struct AvgPair { double mean1; double mean4; };
 // the d^4 contribution. Apple uProf showed ssim_plane at 3.59s of
 // 30.65s total CPU on EPYC; the scalar inner loop was MSVC-auto-
 // vectoriser-resistant (fp64 accumulators + max + cast).
-AvgPair ssim_plane(const std::vector<float>& mu1,
-                   const std::vector<float>& mu2,
-                   const std::vector<float>& s11,
-                   const std::vector<float>& s22,
-                   const std::vector<float>& s12,
+AvgPair ssim_plane(const AlignedFloatVec& mu1,
+                   const AlignedFloatVec& mu2,
+                   const AlignedFloatVec& s11,
+                   const AlignedFloatVec& s22,
+                   const AlignedFloatVec& s12,
                    std::size_t w, std::size_t h) {
     double inv_n = 1.0 / static_cast<double>(w * h);
     const std::size_t n = w * h;
@@ -642,19 +649,20 @@ AvgPair ssim_plane(const std::vector<float>& mu1,
     __m256d acc1_lo = _mm256_setzero_pd(), acc1_hi = _mm256_setzero_pd();
     __m256d acc4_lo = _mm256_setzero_pd(), acc4_hi = _mm256_setzero_pd();
     for (; i < simd_end; i += 8) {
-        __m256 m1 = _mm256_loadu_ps(p_m1 + i);
-        __m256 m2 = _mm256_loadu_ps(p_m2 + i);
+        // All loads aligned: mu*/s** are AlignedFloatVec, i is mul of 8.
+        __m256 m1 = _mm256_load_ps(p_m1 + i);
+        __m256 m2 = _mm256_load_ps(p_m2 + i);
         __m256 m11 = _mm256_mul_ps(m1, m1);
         __m256 m22 = _mm256_mul_ps(m2, m2);
         __m256 m12 = _mm256_mul_ps(m1, m2);
         __m256 dm  = _mm256_sub_ps(m1, m2);
         __m256 num_m = _mm256_sub_ps(v_one, _mm256_mul_ps(dm, dm));
         __m256 num_s = _mm256_add_ps(_mm256_mul_ps(v_two,
-                            _mm256_sub_ps(_mm256_loadu_ps(p_s12 + i), m12)),
+                            _mm256_sub_ps(_mm256_load_ps(p_s12 + i), m12)),
                         v_kC2);
         __m256 denom_s = _mm256_add_ps(
-            _mm256_add_ps(_mm256_sub_ps(_mm256_loadu_ps(p_s11 + i), m11),
-                          _mm256_sub_ps(_mm256_loadu_ps(p_s22 + i), m22)),
+            _mm256_add_ps(_mm256_sub_ps(_mm256_load_ps(p_s11 + i), m11),
+                          _mm256_sub_ps(_mm256_load_ps(p_s22 + i), m22)),
             v_kC2);
         __m256 t = _mm256_div_ps(_mm256_mul_ps(num_m, num_s), denom_s);
         __m256 d = _mm256_max_ps(_mm256_sub_ps(v_one, t), v_zero);
@@ -694,10 +702,10 @@ AvgPair ssim_plane(const std::vector<float>& mu1,
 // blurring (original has edge where distorted is smooth). Asymmetric.
 struct EdgeDiff { AvgPair ring; AvgPair blur; };
 
-EdgeDiff edgediff_plane(const std::vector<float>& img1,
-                        const std::vector<float>& mu1,
-                        const std::vector<float>& img2,
-                        const std::vector<float>& mu2,
+EdgeDiff edgediff_plane(const AlignedFloatVec& img1,
+                        const AlignedFloatVec& mu1,
+                        const AlignedFloatVec& img2,
+                        const AlignedFloatVec& mu2,
                         std::size_t w, std::size_t h) {
     double inv_n = 1.0 / static_cast<double>(w * h);
     const std::size_t n = w * h;
@@ -717,10 +725,11 @@ EdgeDiff edgediff_plane(const std::vector<float>& img1,
     __m256d acc_b1_lo = _mm256_setzero_pd(), acc_b1_hi = _mm256_setzero_pd();
     __m256d acc_b4_lo = _mm256_setzero_pd(), acc_b4_hi = _mm256_setzero_pd();
     for (; i < simd_end; i += 8) {
-        __m256 i1 = _mm256_loadu_ps(p_i1 + i);
-        __m256 m1v = _mm256_loadu_ps(p_m1 + i);
-        __m256 i2 = _mm256_loadu_ps(p_i2 + i);
-        __m256 m2v = _mm256_loadu_ps(p_m2 + i);
+        // All loads aligned: img*/mu* are AlignedFloatVec, i is mul of 8.
+        __m256 i1 = _mm256_load_ps(p_i1 + i);
+        __m256 m1v = _mm256_load_ps(p_m1 + i);
+        __m256 i2 = _mm256_load_ps(p_i2 + i);
+        __m256 m2v = _mm256_load_ps(p_m2 + i);
         __m256 a1 = _mm256_and_ps(_mm256_sub_ps(i1, m1v), v_abs);
         __m256 a2 = _mm256_and_ps(_mm256_sub_ps(i2, m2v), v_abs);
         // d1 = (1+a2) / (1+a1) - 1 = (a2 - a1) / (1 + a1)
@@ -779,9 +788,9 @@ EdgeDiff edgediff_plane(const std::vector<float>& img1,
 // /arch:AVX2 alone didn't trigger it. AMD uProf showed multiply at
 // 6.78s of 35.18s total CPU on EPYC, ~19%; SIMDing it directly drops
 // that to bandwidth-bound (one mulps + load/store per 8 floats).
-void multiply(const std::vector<float>& a,
-              const std::vector<float>& b,
-              std::vector<float>& out) {
+void multiply(const AlignedFloatVec& a,
+              const AlignedFloatVec& b,
+              AlignedFloatVec& out) {
     const std::size_t n = a.size();
     if (out.size() < n) out.resize(n);
     const float* pa = a.data();
@@ -791,9 +800,10 @@ void multiply(const std::vector<float>& a,
 #if PNG2AMIGA_BACKEND_AVX2
     const std::size_t simd_end = n & ~7u;
     for (; i < simd_end; i += 8) {
-        __m256 va = _mm256_loadu_ps(pa + i);
-        __m256 vb = _mm256_loadu_ps(pb + i);
-        _mm256_storeu_ps(po + i, _mm256_mul_ps(va, vb));
+        // All aligned: a/b/out are AlignedFloatVec, i is mul of 8.
+        __m256 va = _mm256_load_ps(pa + i);
+        __m256 vb = _mm256_load_ps(pb + i);
+        _mm256_store_ps(po + i, _mm256_mul_ps(va, vb));
     }
 #elif PNG2AMIGA_BACKEND_NEON
     const std::size_t simd_end = n & ~3u;
@@ -825,7 +835,7 @@ struct ScaleScores {
 // the per-call vector<float>(w*h) churn AMD uProf identified as 72%
 // of CPU time on the EPYC AVX2 build.
 struct Scratch {
-    std::vector<float> mu1, mu2, s11, s22, s12, prod, tmp;
+    AlignedFloatVec mu1, mu2, s11, s22, s12, prod, tmp;
     void reserve_to(std::size_t n) {
         if (mu1.size() < n) mu1.resize(n);
         if (mu2.size() < n) mu2.resize(n);
@@ -837,17 +847,17 @@ struct Scratch {
     }
 };
 
-ScaleScores compute_one_scale(const std::vector<float>& X1,
-                              const std::vector<float>& Y1,
-                              const std::vector<float>& B1,
-                              const std::vector<float>& X2,
-                              const std::vector<float>& Y2,
-                              const std::vector<float>& B2,
+ScaleScores compute_one_scale(const AlignedFloatVec& X1,
+                              const AlignedFloatVec& Y1,
+                              const AlignedFloatVec& B1,
+                              const AlignedFloatVec& X2,
+                              const AlignedFloatVec& Y2,
+                              const AlignedFloatVec& B2,
                               std::size_t w, std::size_t h,
                               Scratch& sc) {
     ScaleScores out{};
-    std::array<const std::vector<float>*, 3> p1{&X1, &Y1, &B1};
-    std::array<const std::vector<float>*, 3> p2{&X2, &Y2, &B2};
+    std::array<const AlignedFloatVec*, 3> p1{&X1, &Y1, &B1};
+    std::array<const AlignedFloatVec*, 3> p2{&X2, &Y2, &B2};
     sc.reserve_to(w * h);
     for (std::size_t c = 0; c < 3; ++c) {
         auto& a = *p1[c];
@@ -1058,7 +1068,7 @@ float compute(std::span<const Color3f> orig,
     // best_sweep across cores via parallel_for won't contend.
     thread_local Scratch sc;
     sc.reserve_to(w * h);
-    thread_local std::vector<float> X1, Y1, B1, X2, Y2, B2;
+    thread_local AlignedFloatVec X1, Y1, B1, X2, Y2, B2;
     if (X1.size() < w * h) { X1.resize(w * h); Y1.resize(w * h); B1.resize(w * h); }
     if (X2.size() < w * h) { X2.resize(w * h); Y2.resize(w * h); B2.resize(w * h); }
     // next1/next2 are also thread_local so their capacity persists
