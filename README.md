@@ -335,13 +335,31 @@ setting. Metrics: PSNR (sRGB byte distance) and SSIMULACRA2
 (Cloudinary 2022 — perceptual, calibrated against human ratings;
 30=low, 50=fair, 70=high quality).
 
-png2amiga, ham_convert, and abc reserve palette index 0 for black via
-their respective lock flags (`--lock-color0` / `black_bkd` /
-`-forcecolor 0 000`). pngquant, ImageMagick, Netpbm, ffmpeg, gifsicle,
-pngnq, and didder† don't expose a "pin one slot, quantize the rest"
-knob, so they're free to spend the black-slot bit elsewhere — a small
-advantage on photographic input that doesn't change the conclusion at
-any palette size below.
+**Palette precision asymmetry** — read this before comparing PSNR
+columns. png2amiga's `lores d=5`, every `HAM6` row, and the
+ham_convert / abc lores-d5 / ocs32 / HAM6 / SHAM6 entries all
+operate on real Amiga OCS hardware: a **12-bit palette** (4 bits
+per channel, 4096 colors total). The general-purpose quantizers
+(pngquant, ImageMagick, Netpbm, ffmpeg, gifsicle, pngnq, didder)
+quantize into **24-bit sRGB** (8 bits per channel, 16M colors).
+That precision gap alone gives the 24-bit tools ~1 dB of "free"
+PSNR — they can land on the optimum-MSE centroid; the Amiga-mode
+encoders have to snap to the nearest 4-bit-per-channel grid point.
+
+That's why some 32-color rows below show png2amiga's PSNR _behind_
+pngquant's by ~1 dB while still leading perceptually (51.55 vs
+51.14 SSIMULACRA2 — the 12-bit handicap costs PSNR but the OKLab
++ ocs-bruteforce quantizer still wins the eyeball test). And it's
+why the 256-color tier is closer on PSNR: there both encoders
+work in 24-bit (png2amiga's `--chipset aga` gates lift the OCS
+snap).
+
+png2amiga, ham_convert, and abc additionally reserve palette index 0
+for black via their respective lock flags (`--lock-color0` /
+`black_bkd` / `-forcecolor 0 000`). The general-purpose quantizers
+don't expose a "pin one slot, quantize the rest" knob, so they're
+free to spend the black-slot bit elsewhere — another small advantage
+that doesn't move the rankings.
 
 | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |-------------|-----------------------------------|----------:|------------:|---------:|
