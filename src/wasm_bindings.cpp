@@ -304,6 +304,11 @@ val js_convert_rgba(val input_array, val js_opts) {
         obj.set("paletteBytes",
                 make_uint8_array(result.paletteBytes));
     }
+    if (!result.scanlinePaletteBytes.empty()) {
+        obj.set("scanlinePaletteBytes",
+                make_uint8_array(result.scanlinePaletteBytes));
+        obj.set("scanlinePaletteSize", result.scanlinePaletteSize);
+    }
     // Per-pixel palette index map (non-HAM, non-strips modes only).
     // Used by the web swatch's hover-isolate feature: index-equality
     // distinguishes two slots that resolve to the same RGB (e.g. EHB

@@ -94,6 +94,12 @@ const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL
 const charsetCanvasRef = useTemplateRef<HTMLCanvasElement>('charsetCanvasRef')
 const genesisTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisTilesCanvasRef')
 const snesTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('snesTilesCanvasRef')
+// Sliced / strips / copper-HAM modes evolve their palette per scanline.
+// We render the per-row base palette as a vertical strip beside the
+// preview: backing is N×H pixels (one column per slot, one row per
+// scanline) and CSS-scaled to align with the preview canvas vertically.
+const scanlinePaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('scanlinePaletteCanvasRef')
+const hasScanlinePalette = ref(false)
 const crtEnabled = ref(false)
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
@@ -265,6 +271,44 @@ function drawPalette(bytes: Uint8Array) {
       ctx.fillRect(cx, cy, kPaletteSwatchPx, kPaletteSwatchPx)
     }
   }
+}
+
+// Render the per-scanline palette as a vertical strip alongside the
+// preview canvas. Backing is `N × H` pixels — one column per slot, one
+// row per source scanline — with the same H-CSS dimension as the
+// preview so they align vertically. CSS width scales per-slot to a
+// visible swatch (kPalettePerLineSlotCssPx) regardless of slot count.
+const kPalettePerLineSlotCssPx = 4
+function paintScanlinePaletteStrip(result: ConvertResult, cssH: number) {
+  const canvas = scanlinePaletteCanvasRef.value
+  if (!canvas) return
+  const bytes = result.scanlinePaletteBytes
+  const n = result.scanlinePaletteSize ?? 0
+  const rows = result.height
+  if (!bytes || n <= 0 || rows <= 0 || bytes.length < rows * n * 3) {
+    hasScanlinePalette.value = false
+    return
+  }
+  hasScanlinePalette.value = true
+  canvas.width = n
+  canvas.height = rows
+  // Lock CSS height to the preview's so the strip aligns row-for-row
+  // with the rendered image. Width scales per slot for legibility.
+  canvas.style.width = `${n * kPalettePerLineSlotCssPx}px`
+  canvas.style.height = `${cssH}px`
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.imageSmoothingEnabled = false
+  // Build the ImageData in one shot. Source layout is already RGB
+  // packed row-major; we just need to interleave an alpha=255.
+  const img = ctx.createImageData(n, rows)
+  for (let i = 0; i < rows * n; ++i) {
+    img.data[i*4 + 0] = bytes[i*3 + 0]
+    img.data[i*4 + 1] = bytes[i*3 + 1]
+    img.data[i*4 + 2] = bytes[i*3 + 2]
+    img.data[i*4 + 3] = 255
+  }
+  ctx.putImageData(img, 0, 0)
 }
 
 // Custom floating tooltip that tracks the cursor while it's over a
@@ -1760,6 +1804,7 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   paintCharsetCanvas(result)
   paintGenesisTilesCanvas(result)
   paintSnesTilesCanvas(result)
+  paintScanlinePaletteStrip(result, cssH)
   return true
 }
 
@@ -2821,7 +2866,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                @pointerdown="loupePointerDown" @pointermove="loupePointerMove" @pointerup="loupePointerUp"
                :class="{ 'loupe-active': loupeActive }"
           >
-            <div class="canvas-wrap relative" :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
+            <div class="canvas-wrap relative flex flex-row gap-1 align-items-start"
+                 :style="loupeActive ? { transform: `scale(4) translate(${loupeX/4}px, ${loupeY/4}px)`, transformOrigin: '0 0' } : {}">
+              <canvas v-show="hasScanlinePalette" ref="scanlinePaletteCanvasRef"
+                      class="scanline-palette-strip"
+                      title="Per-scanline base palette — one column per slot, one row per scanline." />
               <canvas ref="canvasRef" class="preview-canvas" v-show="!crtEnabled" />
               <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />
               <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
@@ -3285,6 +3334,14 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   background-color: #c0c0c0;
+}
+
+.scanline-palette-strip {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 1px solid var(--surface-border, #444);
+  flex: 0 0 auto;
 }
 
 .overlay {

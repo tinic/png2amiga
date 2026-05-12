@@ -402,6 +402,15 @@ struct ConvertResult {
     // line / 256-mode palette fields above).
     std::vector<std::uint8_t> paletteBytes;
 
+    // Per-scanline palette swatch grid for sliced / strips / copper-HAM
+    // modes. Packed `height × scanlinePaletteSize × 3 RGB bytes` — row y
+    // starts at offset `y * scanlinePaletteSize * 3`. Empty when the mode
+    // doesn't have per-line palette evolution. Used by the web tool to
+    // draw a vertical strip beside the preview showing how the palette
+    // shifts down the frame.
+    std::vector<std::uint8_t> scanlinePaletteBytes;
+    int scanlinePaletteSize{};
+
     // Per-pixel palette index map for non-HAM, non-sliced/strips modes.
     // Layout: width × height bytes, idx = pixel's slot in paletteBytes.
     // Empty when the encoder doesn't emit a single 1:1 index grid

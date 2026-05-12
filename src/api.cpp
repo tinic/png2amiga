@@ -4319,6 +4319,38 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     if (p.indices.size() == expected_n) {
         r.indices = p.indices;
     }
+
+    // Per-scanline palette swatch strip for sliced / strips / copper-HAM
+    // modes. Each row's full base palette gets packed as sRGB RGB triples;
+    // the web tool renders this as a vertical strip beside the preview.
+    if (!p.scanline_palettes.empty()) {
+        std::size_t colors_per_row = p.scanline_palettes[0].size();
+        if (colors_per_row > 0) {
+            r.scanlinePaletteSize = static_cast<int>(colors_per_row);
+            r.scanlinePaletteBytes.reserve(
+                p.scanline_palettes.size() * colors_per_row * 3);
+            for (auto& row_pal : p.scanline_palettes) {
+                // Per-row palettes can theoretically differ in length
+                // across modes; clamp to the row-0 size so the JS-side
+                // grid is rectangular. Pad short rows with black.
+                std::size_t n = std::min(row_pal.size(), colors_per_row);
+                for (std::size_t i = 0; i < n; ++i) {
+                    auto s = color_space::linear_to_srgb(row_pal[i]).clamped();
+                    r.scanlinePaletteBytes.push_back(static_cast<std::uint8_t>(
+                        std::round(s.r * 255.0f)));
+                    r.scanlinePaletteBytes.push_back(static_cast<std::uint8_t>(
+                        std::round(s.g * 255.0f)));
+                    r.scanlinePaletteBytes.push_back(static_cast<std::uint8_t>(
+                        std::round(s.b * 255.0f)));
+                }
+                for (std::size_t i = n; i < colors_per_row; ++i) {
+                    r.scanlinePaletteBytes.push_back(0);
+                    r.scanlinePaletteBytes.push_back(0);
+                    r.scanlinePaletteBytes.push_back(0);
+                }
+            }
+        }
+    }
     r.copperChanges = p.copper_changes;
     r.totalColors = count_unique_colors(p.rendered);
     r.planeBytes = static_cast<int>(p.planes.total_bytes());

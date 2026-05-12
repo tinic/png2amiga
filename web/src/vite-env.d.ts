@@ -76,6 +76,13 @@ declare module '@wasm/png2amiga.js' {
     // Final per-mode palette as sRGB bytes, 3 per entry. Empty if the
     // mode emits per-line / per-tile palettes instead (genesis, snes).
     paletteBytes?: Uint8Array
+    // Per-scanline palette swatch grid for sliced / strips / copper-HAM
+    // modes. Packed `height × scanlinePaletteSize × 3` sRGB bytes — row y
+    // starts at offset `y * scanlinePaletteSize * 3`. Used to render a
+    // vertical strip beside the preview showing the palette's per-line
+    // evolution. Missing for modes without per-line palettes.
+    scanlinePaletteBytes?: Uint8Array
+    scanlinePaletteSize?: number
     // Per-pixel palette index map (non-HAM modes that emit a 1:1 index
     // grid). Used by the web swatch's hover-isolate feature so two
     // palette slots with the same rendered RGB (e.g. EHB slot 0
