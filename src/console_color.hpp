@@ -1,6 +1,6 @@
 #pragma once
 
-// Console / retro-display colour quanta — a single home for the per-channel
+// Console / retro-display color quanta — a single home for the per-channel
 // bit-depth tricks shared across Sega Genesis (BGR333), SNES (BGR555 +
 // Direct-Color RGB443 pixel byte), Master System / NES / PCE if they land
 // later. Each console's quirks are encoded as parameters, not duplicated
@@ -60,7 +60,7 @@ constexpr int quantise_srgb_to_int(float srgb_v, int bits) noexcept {
 
 // ---------------------------------------------------------------------------
 // Snap a linear-RGB sample to a per-channel-bit grid in sRGB space.
-// Returns the snapped colour in linear RGB.
+// Returns the snapped color in linear RGB.
 // ---------------------------------------------------------------------------
 inline Color3f quantise_per_channel(Color3f linear,
                                     int r_bits, int g_bits, int b_bits) noexcept {
@@ -80,7 +80,7 @@ inline Color3f quantise_uniform(Color3f linear, int bits_per_channel) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Pack a linear colour into a hardware palette word.
+// Pack a linear color into a hardware palette word.
 //
 // Layout: bits packed (B << (r_bits + g_bits)) | (G << r_bits) | R.
 // This matches both Sega Genesis CRAM (BGR333 → 0BBB0GGG0RRR layout
@@ -123,7 +123,7 @@ inline Color3f rgb443_quantize(Color3f linear) noexcept {
 }
 
 // SNES Mode 7 Direct Color: pixel byte is BBGGGRRR (3+3+2 bits = 256
-// effective colours). Mode 7 tilemap has no per-cell palette field, so
+// effective colors). Mode 7 tilemap has no per-cell palette field, so
 // the `ppp` low-bit boost is unavailable — the gamut really is 256.
 inline Color3f rgb332_quantize(Color3f linear) noexcept {
     return quantise_per_channel(linear, 3, 3, 2);
@@ -149,8 +149,8 @@ inline std::uint8_t pack_rgb443_byte(Color3f linear) noexcept {
 
 // ---------------------------------------------------------------------------
 // Sega Genesis BGR333 — 3 bits per channel in CRAM, packed 0BBB0GGG0RRR.
-// 9 bits of colour information across 12 bits of word storage; the 0-bits
-// are not meaningful colour data but the hardware reads the word as 16-bit.
+// 9 bits of color information across 12 bits of word storage; the 0-bits
+// are not meaningful color data but the hardware reads the word as 16-bit.
 // ---------------------------------------------------------------------------
 inline Color3f bgr333_quantize(Color3f linear) noexcept {
     return quantise_uniform(linear, 3);

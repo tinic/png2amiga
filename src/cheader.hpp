@@ -79,9 +79,9 @@ struct CHeaderOptions {
     std::span<const bitplane::BitplaneData> extra_frame_planes;
     std::vector<std::string> frame_labels;  // one per frame, for stem-named symbols
 
-    // Caller-provided count of unique RGB colours actually present in the
+    // Caller-provided count of unique RGB colors actually present in the
     // rendered preview. Differs from palette.size() for HAM (MODIFY ops
-    // create intermediate colours), EHB (halfbrites get used), sliced / strips
+    // create intermediate colors), EHB (halfbrites get used), sliced / strips
     // (per-scanline palette evolution). Reported in the viewer's exit
     // message as "Colors: N". 0 = caller didn't compute it; viewer
     // omits the line.
@@ -93,14 +93,14 @@ struct CHeaderOptions {
     // MOVE's value word, then patches those addresses with per-frame
     // values every `fade_frame_hold_vbls` VBLs. Right-click exits.
     //
-    // fade_per_frame_values[f] is the flat list of 16-bit colour
+    // fade_per_frame_values[f] is the flat list of 16-bit color
     // values to write for frame f, in the same order the cop list
     // emits its COLOR MOVEs (per-row HI sweep then per-row LO sweep
     // for AGA; per-row sweep only for OCS). Frame 0 should match
     // the cop list's baked-in values (frame 0 of the fade IS the
     // source palette). fade_per_frame_values.size() = F frames.
     //
-    // Restriction (v1): AGA banked palettes (>32 colours) are not yet
+    // Restriction (v1): AGA banked palettes (>32 colors) are not yet
     // supported because the runtime cop-list scan would have to track
     // BPLCON3 bank/LOCT context per MOVE. Caller must guard with that
     // check before populating.

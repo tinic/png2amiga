@@ -40,7 +40,7 @@ cfbc125 Stage 0: Metal scaffolding (hello-kernel)
 30852fe Stage A: parallel-restart Lloyd k-means
 74a7dbb Stage B: soft k-means + deterministic annealing
 9825b61 Stage C v1: real scolorq w/ Jacobi solver — DIVERGED
-7e29bd5 Stage C v2: graph-coloured ICM + fresh-g + LDLT — works,
+7e29bd5 Stage C v2: graph-colored ICM + fresh-g + LDLT — works,
                     but dither pattern loses raw S2 at K > 4.
 ```
 
@@ -88,9 +88,9 @@ E(p, a) = Σ_x ||I(x) - F·p[a](x)||²,  F = [1,2,1;2,4,2;1,2,1]/16
 Six kernels:
 - `scolorq_filtered_output` — out(x) = F·p[a](x)
 - `scolorq_compute_g` — g(x) = F·(I - out)(x)
-- `scolorq_assign_subgrid(ox, oy)` — graph-coloured in-place ICM
+- `scolorq_assign_subgrid(ox, oy)` — graph-colored in-place ICM
   on stride-3 sub-grids (no two threads in the same dispatch are
-  filter-neighbours; 9 dispatches per iter)
+  filter-neighbors; 9 dispatches per iter)
 - `scolorq_build_Mb` — atomic-build the K×K matrix M[k,k']
   = Σ_x F_k(x)·F_k'(x) and vector b[k] = Σ_x F_k(x)·I(x), with
   sparse F_k bucketing in registers (≤9 non-zero entries per pixel,
@@ -113,7 +113,7 @@ filtered cost IS lower, exactly as the paper claims.
 |  32 | -5.07 | -37.05 |
 
 Root cause: the dither pattern emerging from naive ICM is
-*structured* (checker/stripes in regions of similar colour) rather
+*structured* (checker/stripes in regions of similar color) rather
 than blue-noise. The eye and SSIMULACRA2 penalize high-frequency
 content that *would* average right under a Gaussian filter but
 doesn't hide under proper perceptual evaluation. Bonn's claimed
@@ -160,9 +160,9 @@ assumes a *single* pixel flip. Two simultaneous flips at
 non-independent pixels make the actual cost change
 **non-additive** because their filter footprints overlap. With
 1M pixels updating in lockstep, the "expected good move" for each
-pixel collides with its neighbours' moves — the cost oscillates.
+pixel collides with its neighbors' moves — the cost oscillates.
 
-### Stage C: why graph-coloured ICM works algorithmically but
+### Stage C: why graph-colored ICM works algorithmically but
 ### still loses on raw S2
 Graph-colouring guarantees within-sub-grid pixels are independent
 (stride 3 > 2× filter radius). With 9 sub-grids per iter and
@@ -300,7 +300,7 @@ lost 19 S2 points. Two compounding factors likely:
   OCS 4096 but still coarse enough that occasional centroid
   collapse is a real risk at K=256.
 - **Downstream Lloyd retraining**: snes_io.cpp re-runs
-  quantize::quantize on the *displayed* colours after tile
+  quantize::quantize on the *displayed* colors after tile
   assignment to keep the palette anchored where it's actually
   used. This iterative retraining homogenises away whatever
   basin-quality advantage gpu-restart had on the initial

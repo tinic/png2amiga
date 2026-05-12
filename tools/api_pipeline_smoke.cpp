@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
         // dither_strength / error_clamp auto-tuning lives in the
         // encoder (api::run_pipeline resolves the -1.0f sentinel). Smoke
         // leaves the fields at sentinel here when the user didn't pass
-        // them explicitly, mirroring make_api_options' new behaviour.
+        // them explicitly, mirroring make_api_options' new behavior.
         if (!dither_strength_set) opts.dither_strength = -1.0f;
         if (!error_clamp_set)     opts.error_clamp     = -1.0f;
         // Per-mode dither auto-override: main.cpp picks opt-checker for

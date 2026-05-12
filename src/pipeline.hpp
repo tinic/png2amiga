@@ -33,7 +33,7 @@ std::string derive_symbol_name(std::string_view path);
 
 // Canonical chipset resolution. Modes that need >6 bitplanes force AGA;
 // otherwise the user's request wins (explicit Chipset::ocs is preserved),
-// and an empty/unrecognised request defaults to OCS. Used by both CLI
+// and an empty/unrecognized request defaults to OCS. Used by both CLI
 // (Config::chipset is std::optional<Chipset>) and WASM (Options::chipset
 // is a string parsed from JS).
 amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested,
@@ -142,7 +142,7 @@ struct PipelineResult {
     // means "not a CGA-320 run" (viewer falls back to its default 0x30).
     std::uint8_t cga_mode_ctrl2 = 0xFF;
 
-    // c64 modes: shared VIC-II background colour (0..15). Needed for PRG
+    // c64 modes: shared VIC-II background color (0..15). Needed for PRG
     // / .koa / .hir export — raw_frame stores bitmap + screen + color
     // RAM but not bg. 0 for non-c64 runs.
     std::uint8_t c64_bg_color = 0;
@@ -184,7 +184,7 @@ struct PipelineResult {
 // Used by main.cpp's CLI dispatchers and api.cpp's run_pipeline so all
 // preview-correctness fixes land in one place.
 //
-// Known per-back-end behavioural divergences preserved by this
+// Known per-back-end behavioral divergences preserved by this
 // dispatcher (don't unify silently — each was an explicit choice):
 //   - chipset / OCS quantization: only render_copper_capped snaps
 //     output pixels to the 12-bit OCS gamut. bitplane::render and the
@@ -197,7 +197,7 @@ struct PipelineResult {
 //     field-agnostic.
 //   - data_bits: HAM-only; computed from planes.depth - 2 internally.
 // Callers must still pass is_lace and chipset; they're forwarded only
-// where each back-end honours them. The deferred OCS preview-vs-chip
+// where each back-end honors them. The deferred OCS preview-vs-chip
 // gradient bug (REFACTOR_PLAN.md target #3 step 5) lives entirely in
 // the render_copper_capped branch.
 Result<Image> render_preview(
@@ -250,8 +250,8 @@ void parallel_for(std::size_t n,
 // Ranks by rendered-preview SSIMULACRA2 vs the ORIGINAL source — never
 // the jittered variant — and returns the highest-scoring T (or
 // std::nullopt if every trial failed). Caller picks jitter_count:
-// strips DPF uses 24 (8-colour PF2 palette is highly basin-sensitive),
-// strips EHB and plain sliced use 8 (32-colour and 16-colour palettes
+// strips DPF uses 24 (8-color PF2 palette is highly basin-sensitive),
+// strips EHB and plain sliced use 8 (32-color and 16-color palettes
 // have shallower basins). User explicitly OK'd unbounded compute on
 // best, so the large trial count (5×4×N + 1) is a feature.
 template <typename T, typename EncodeFn, typename RenderedFn>
@@ -276,7 +276,7 @@ std::optional<T> best_sweep(
     // test-suite-lores + examples confirmed d∈{0,1,2} never wins on
     // mean SSIMULACRA2 at any depth. d=4 is the per-depth peak from
     // depth 4 upward; d=3 stays in the sweep so individual images that
-    // happen to favour a slightly less aggressive reseed still get
+    // happen to favor a slightly less aggressive reseed still get
     // sampled. Trims --best trial count by 2× over the previous {0..3}.
     const int diversities[] = { 3, 4 };
     for (auto s : strengths) {

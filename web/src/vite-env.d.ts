@@ -156,12 +156,12 @@ declare module '@wasm/png2amiga.js' {
     lockColor0?: boolean
     // Per-slot palette reserves. Each entry removes the slot from the
     // dither candidate set — the encoder never routes image pixels
-    // through it, but the slot keeps its colour for display (CMAP,
+    // through it, but the slot keeps its color for display (CMAP,
     // runtime needs). Wired by the Reserve palette panel in Advanced
     // settings.
     reserves?: { index: number; r: number; g: number; b: number }[]
     // Per-slot palette locks. Each entry pins palette[index] to the
-    // given sRGB colour but keeps the slot in the dither candidate
+    // given sRGB color but keeps the slot in the dither candidate
     // set. The web "Reserve palette" panel sends its toggled slots
     // through here (lock semantics — pin across re-encodes, dither
     // still uses them) even though the UI label says "reserve".

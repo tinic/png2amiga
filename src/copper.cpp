@@ -190,10 +190,10 @@ void refresh_swap_scratch(
 // rows: scanline pixels (current + optional neighbors for smoothing)
 // rows_lab: precomputed OKLab of row pixels
 // weights: per-row weight (1.0 for current, less for neighbors)
-// hist_pool: top-N most-frequent source colours (RGB444-bucketed) from
+// hist_pool: top-N most-frequent source colors (RGB444-bucketed) from
 //   the whole image. When non-empty, the centroid candidate is
 //   *snapped to the nearest histogram entry* before being scored —
-//   guarantees the chip ends up displaying an actual source colour
+//   guarantees the chip ends up displaying an actual source color
 //   rather than an arbitrary OCS-grid centroid that may match no
 //   real pixel. Per ham_convert 1.0.x ("source palette size for
 //   lines>0 increased from 16 to 256 — much better picture quality").
@@ -260,13 +260,13 @@ SwapCandidate find_best_swap(
                 linear = palette::quantize_to_ocs(linear);
             }
             // [Histogram-pool snap experiment: tested and rejected.
-            //  Snapping centroid to the nearest source colour in a
+            //  Snapping centroid to the nearest source color in a
             //  256-entry histogram regressed lores+sliced by ~0.5 dB
             //  averaged across 4 images. Reason: centroid is the
-            //  optimal-for-cluster colour; snapping it onto a strict
+            //  optimal-for-cluster color; snapping it onto a strict
             //  256-color subset of the 4096-RGB444-gamut loses
             //  optimization headroom. The OCS snap above already
-            //  produces a chip-displayable colour. Argument kept on
+            //  produces a chip-displayable color. Argument kept on
             //  the signature for future use; unused at default empty
             //  span.]
             (void)hist_pool; (void)hist_pool_lab;
@@ -286,7 +286,7 @@ SwapCandidate find_best_swap(
 // k+32 vs new error from cluster k against C plus cluster k+32 against
 // halve(C).
 //
-// Two candidate colours are tried per slot: the base cluster's centroid
+// Two candidate colors are tried per slot: the base cluster's centroid
 // (best for cluster k alone), and the half-brite cluster's centroid
 // doubled in sRGB (best for cluster k+32 alone). Whichever gives the
 // larger combined-cluster error reduction wins. With one tiebreak: if
@@ -456,7 +456,7 @@ Result<CopperResult> encode_copper(const Image& image,
     if (user_palette && !user_palette->empty()) {
         // Use user palette as-is (already snapped to chipset by caller).
         // Locks overlay on top — user-palette case preserves its own
-        // colour set; locks are point fixes from --lock-index /
+        // color set; locks are point fixes from --lock-index /
         // --reserve-range.
         base_pal = *user_palette;
         if (base_pal.size() > num_colors)
@@ -491,13 +491,13 @@ Result<CopperResult> encode_copper(const Image& image,
         // Subtract locked.size() from k1 so the quantizer optimises for
         // the slots it'll actually fill (= unlocked + non-zero count).
         // Without this, the quantizer's "first num_colors-1" output
-        // includes colours that land at locked indices and get
-        // overwritten below, displacing those colours entirely. For
+        // includes colors that land at locked indices and get
+        // overwritten below, displacing those colors entirely. For
         // 5bpp + 15 reserves at slots 1-15: quantizer at K=31 puts the
         // dark tones at slots 1-15 (sorted by L), the locked overlay
-        // overwrites them with reserve colours, and the dither's
+        // overwrites them with reserve colors, and the dither's
         // candidate set ends up with only the bright tail (slots
-        // 16-31) plus slot 0 — image renders with no dark/mid colours.
+        // 16-31) plus slot 0 — image renders with no dark/mid colors.
         // Floor at 1.
         std::size_t k1 = num_colors;
         if (lock_color0 && k1 > 1) --k1;
@@ -512,12 +512,12 @@ Result<CopperResult> encode_copper(const Image& image,
         // Fill base_pal: lock_zero at slot 0 (if requested), locks at
         // their indices, quantized in the remaining unlocked slots in
         // order. Skipping locked indices when filling means the
-        // quantizer's colours land specifically where the dither will
+        // quantizer's colors land specifically where the dither will
         // actually be able to use them. Note: the K=k1 quantizer doesn't
         // see the reserve set, so an occasional pick may bit-match a
         // reserve — find_best_swap below catches the per-line variant
         // (the more common leak vector) by rejecting centroids that
-        // OCS-snap onto a reserved colour.
+        // OCS-snap onto a reserved color.
         base_pal.assign(num_colors, Color3f{0.0f, 0.0f, 0.0f});
         std::vector<bool> base_locked(num_colors, false);
         if (lock_color0) {
@@ -582,10 +582,10 @@ Result<CopperResult> encode_copper(const Image& image,
     // Reserve mask: slots the dither pass refuses to pick, AND that the
     // swap planner must pretend don't exist when assigning pixels to
     // clusters. Without skipping reserves in build_swap_scratch / anchor
-    // selection, pixels close to a reserve colour get assigned to that
+    // selection, pixels close to a reserve color get assigned to that
     // locked slot; find_best_swap then can't help that cluster, and pass
     // 2 dither has to route those pixels to a worse slot. Net effect:
-    // reserve colour leaks into output quality even though the encoder
+    // reserve color leaks into output quality even though the encoder
     // never writes those slots.
     std::vector<bool> excluded_mask;
     if (!dither_excluded.empty()) {
@@ -595,10 +595,10 @@ Result<CopperResult> encode_copper(const Image& image,
     }
     // EHB-aware mask: pal_lab is sized 64 (32 base + 32 half-brite). When
     // base slot k is reserved, its hardware-derived sibling k+32 = halve(k)
-    // ALSO holds a reserve-derived colour the encoder mustn't route pixels
+    // ALSO holds a reserve-derived color the encoder mustn't route pixels
     // through. Build a 64-entry mask flagging both. Used by
     // build_swap_scratch / refresh_swap_scratch / change-sort /
-    // column-error feedback under is_ehb=true so reserve colour can't
+    // column-error feedback under is_ehb=true so reserve color can't
     // bias EHB cluster stats either.
     std::vector<bool> excluded_mask_ehb;
     if (is_ehb && !excluded_mask.empty()) {
@@ -612,8 +612,8 @@ Result<CopperResult> encode_copper(const Image& image,
     }
     auto& planner_excluded = is_ehb ? excluded_mask_ehb : excluded_mask;
 
-    // [Top-N source colour histogram pool experiment: tested and
-    //  rejected — snapping centroid to nearest source colour in a
+    // [Top-N source color histogram pool experiment: tested and
+    //  rejected — snapping centroid to nearest source color in a
     //  256-entry RGB444 histogram regressed lores+sliced by ~0.5 dB.
     //  Centroid → OCS-grid snap is already enough; further
     //  constraining to a histogram subset loses optimization
@@ -624,7 +624,7 @@ Result<CopperResult> encode_copper(const Image& image,
     // pixels assign to. Per ham_convert 1.2.0 ("most common color is
     // never changed to reduce horizontal blocking artefacts"), holding
     // this slot fixed across all scanlines avoids wasting per-row
-    // copper bandwidth re-introducing a colour that's already there
+    // copper bandwidth re-introducing a color that's already there
     // and reduces vertical "sliced look" on uniform regions.
     // Skipped when lock_color0 already locks slot 0 AND num_colors
     // is small (≤4) — locking 50% of a tiny palette starves the
@@ -822,11 +822,11 @@ Result<CopperResult> encode_copper(const Image& image,
             // greedy planner can pick centroids that are perceptually
             // far from base when consecutive rows have varied content;
             // accumulating those moves over many rows produces a slot
-            // whose colour is wildly different from base_pal[slot]. A
+            // whose color is wildly different from base_pal[slot]. A
             // pixel near base_pal[slot]'s value in subsequent rows then
             // finds the drifted slot in OKLab terms (very dark vs
             // slightly-brighter is a near-tie in OKLab L) and renders
-            // with the drifted colour, producing visible cross-row
+            // with the drifted color, producing visible cross-row
             // banding (chuck31: black-space pixels rendering as #444433
             // because slot 1 had drifted from base #111 to #444).
             // The cap keeps each slot perceptually within ΔE ~12 of base.

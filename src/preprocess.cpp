@@ -148,7 +148,7 @@ void apply(Image& image, const Settings& s) {
 //
 // Replaces the old axis-aligned OKLab-bounding-box stretch (which
 // over-stretched diagonals and rotated hues away from palette
-// reachable colours). The `percentile` and `margin` params are kept
+// reachable colors). The `percentile` and `margin` params are kept
 // in the signature for ABI compatibility but are unused — both
 // concepts are subsumed by the per-(L, h) 95th-percentile binning
 // and the palette-hull intersection respectively.
@@ -251,7 +251,7 @@ void match_palette_range(Image& image, const Palette& palette,
     // Diffuse the c_src grid — bins the source under-sampled (e.g. a
     // hue+lightness combination present in only a few pixels) would
     // otherwise have c_src = 0 and stretch by infinity. A 3-tap box
-    // blur on each axis spreads neighbouring info into empty cells.
+    // blur on each axis spreads neighboring info into empty cells.
     auto diffuse = [&]() {
         Grid tmp{};
         for (int Lb = 0; Lb < kL; ++Lb) {

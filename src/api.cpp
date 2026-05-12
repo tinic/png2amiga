@@ -251,7 +251,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         // Build tmask from the prepared image's alpha channel (if
         // any) so encode_state_image callers — chiefly main.cpp's
         // joint-mode --ji per-input render path — get transparency
-        // honoured. Without this, the dither candidate set fails
+        // honored. Without this, the dither candidate set fails
         // to exclude slot 0 and the post-dither force-to-0 step
         // never fires, off-by-one shifting every opaque pixel's
         // routing. Threshold matches the rest of the pipeline
@@ -687,9 +687,9 @@ Options decompose_mode_options(const Options& opts) {
 //
 // `--tile`: replicate a W x H image into a 3W x 3H grid of identical
 // copies, run the full pipeline (quantize / dither / encode) over the
-// big buffer, then crop the centre W x H back out for export. Running
+// big buffer, then crop the center W x H back out for export. Running
 // error diffusion across the source-period-3W width lets the dither
-// converge to a W-periodic pattern; the centre tile inherits that
+// converge to a W-periodic pattern; the center tile inherits that
 // pattern, and so its right edge dither matches its left edge dither
 // when the user actually tiles it. The outer 8 cells are scratch and
 // get discarded.
@@ -768,7 +768,7 @@ static std::vector<bool> tile_crop_centre_mask(const std::vector<bool>& tiled,
     return out;
 }
 
-// Apply the centre crop to a PipelineResult that was encoded from a
+// Apply the center crop to a PipelineResult that was encoded from a
 // 3W x 3H replicate. Re-encodes bitplanes from the cropped indices so
 // the .iff/.h/.cpp output paths see the right dimensions and bitplane
 // data without any extra knowledge of the tile mode.
@@ -1114,7 +1114,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
     }
 
-    // --reserve-range gating. Modes where reserves can't yet be honoured
+    // --reserve-range gating. Modes where reserves can't yet be honored
     // (HAM dynamic palette, copper per-line palettes, dual-playfield split,
     // multi-palette tile modes, fixed hardware palettes) reject early with
     // a clear message rather than silently dropping the spec.
@@ -1127,18 +1127,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         };
         if (amiga::is_ham(mode))
             return reject("not supported in HAM modes (palette is dynamic — "
-                          "the modify ops produce arbitrary colours, no "
+                          "the modify ops produce arbitrary colors, no "
                           "fixed slot to reserve)");
         // DPF: PF1 is zeroed in the current implementation
         // (`expand_to_dpf_pf2` puts the encoded depth-3/4 image into PF2
         // and leaves the upper-bank planes all-zero). So a reserve on
         // the depth-3/4 base palette IS effectively a PF2 reserve, no
-        // ambiguity. Validate against the PF2 max colours (1<<depth)
+        // ambiguity. Validate against the PF2 max colors (1<<depth)
         // rather than the full 6/8-plane width.
         // (PF1 reserves are out of scope; PF1 is all-zero today.)
         if (amiga::is_genesis(mode))
             return reject("not supported in Genesis modes (4 separate "
-                          "16-colour palette lines; reserve target ambiguous)");
+                          "16-color palette lines; reserve target ambiguous)");
         if (amiga::is_snes(mode))
             return reject("not supported in SNES Mode 7 yet "
                           "(encoder is opaque to the reserve overlay)");
@@ -1247,7 +1247,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // Tile pre-processing: replicate the loaded image (and the alpha
     // mask, if any) into a 3x3 grid. The rest of the pipeline runs on
-    // the 3W x 3H buffer; the centre crop happens at the per-branch
+    // the 3W x 3H buffer; the center crop happens at the per-branch
     // return points below.
     if (tile_active) {
         *image = tile_replicate_3x3(*image);
@@ -1496,7 +1496,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // user values, the quantizer fills only unreserved slots, and the
         // dither candidate set excludes reserves. Without this the chunky
         // VGA path silently ignored reserves and the rendered output
-        // depended on the reserve colour.
+        // depended on the reserve color.
         auto reserves_in_pal_vga = palette_locks::validate_reserves(
             options.reserves, options.locks, max_colors,
             options.lock_color0);
@@ -1597,7 +1597,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // --- C64 / VIC-II ---
-    // Brute-force per-cell quantization (4 colours per 4×8 cell,
+    // Brute-force per-cell quantization (4 colors per 4×8 cell,
     // 1 shared bg + 3 fg). Image arrives at 160×200 from the
     // pipeline's resize stage; we render back to 160×200 and let
     // preview_scale do the 2:1 hardware doubling. No dither pass
@@ -1834,7 +1834,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // 3. Pre-convert each palette line to OKLab so the picker is cheap.
         //    For S/H modes also pre-compute the shadowed-palette views so
         //    shadow tiles' picker scores against the correct effective
-        //    colour set.
+        //    color set.
         std::array<std::vector<color_space::OKLab>, genesis::kPaletteCount>
             palette_lab, shadow_lab;
         std::array<std::vector<Color3f>, genesis::kPaletteCount>
@@ -1856,10 +1856,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         // 4. Per-pixel re-quantise via per-tile mirrored 3×3 ED.
         //
-        // Build a 3W×3H buffer per 8×8 tile where the centre block is
+        // Build a 3W×3H buffer per 8×8 tile where the center block is
         // the source tile and the 8 surrounding blocks are mirror
         // reflections (h-flip on left/right, v-flip on top/bottom,
-        // both on corners). Run ED on the full 24×24, take the centre
+        // both on corners). Run ED on the full 24×24, take the center
         // 8×8. Identical source tiles produce identical mirrored
         // buffers → identical post-ED patterns → cleaner dedup. Same
         // approach as c64 charset (commit 7236237).
@@ -1917,7 +1917,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         block_chosen[bi] = chosen;
                         return {chosen, thr};
                     });
-                // Copy centre 8×8 back to the global buffers.
+                // Copy center 8×8 back to the global buffers.
                 for (std::size_t ly = 0; ly < kTS; ++ly) {
                     for (std::size_t lx = 0; lx < kTS; ++lx) {
                         auto bi = (kTS + ly) * k3T + (kTS + lx);
@@ -2095,7 +2095,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // strips. Each trial encodes a jittered source under different
             // (dither_strength × diversity) and is ranked by best_metric
             // against the unjittered original. 8 jitter seeds matches
-            // plain sliced's setting; HAM8 uses amplitude 0.4 (its 64-colour
+            // plain sliced's setting; HAM8 uses amplitude 0.4 (its 64-color
             // base + 8-bit modify channels are more sensitive to large
             // pre-image perturbations — AGA shimmer).
             struct HamTrial {
@@ -2257,7 +2257,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     };
                     // Subtract locks + reserves: same fix as plain EHB
                     // and copper sliced. Without this, the quantizer
-                    // outputs more colours than the unlocked-and-
+                    // outputs more colors than the unlocked-and-
                     // unreserved tail can hold; the locked overlay
                     // overwrites darks/mids and the dither's candidate
                     // set ends up bright-only.
@@ -2274,8 +2274,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     seed_pal.name = sr->name;
                     // Lock mask: lock_zero + reserves are held fixed during
                     // refine so its iterative convergence isn't biased by
-                    // the reserve colour (without it the unlocked slots'
-                    // values depend on which reserve colour the user picked).
+                    // the reserve color (without it the unlocked slots'
+                    // values depend on which reserve color the user picked).
                     std::array<bool, 32> ehb_seed_locked{};
                     if (options.lock_color0) ehb_seed_locked[0] = true;
                     for (auto& r : options.reserves) {
@@ -2312,7 +2312,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 }
                 // Forward locks + reserves so encode_copper enforces
                 // them across every per-line palette evolution. Without
-                // this the seed_pal pins the colours at line 0 only;
+                // this the seed_pal pins the colors at line 0 only;
                 // copper's MOVE planner is free to swap them out on
                 // subsequent lines.
                 std::vector<std::pair<std::size_t, Color3f>>
@@ -2375,8 +2375,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (!ehb_cap_excluded.empty()) cand_to_full_per_row.resize(h);
                 // Lock mask for the per-row refine: lock_zero + reserves
                 // are held fixed so refine's iterative convergence stays
-                // colour-independent (without it, the refine path differs
-                // per reserve colour and unlocked slots drift accordingly).
+                // color-independent (without it, the refine path differs
+                // per reserve color and unlocked slots drift accordingly).
                 std::array<bool, 32> ehb_per_row_locked{};
                 if (options.lock_color0) ehb_per_row_locked[0] = true;
                 for (auto i : ehb_cap_excluded) {
@@ -2389,8 +2389,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     // Pair-aware refinement on the row's base palette
                     // using only that row's pixels — same idea as plain
                     // EHB but per-line, so each scanline's 32 base
-                    // colours are jointly optimal under the half-brite
-                    // pairing for the colours actually appearing on
+                    // colors are jointly optimal under the half-brite
+                    // pairing for the colors actually appearing on
                     // that row.
                     palette::refine_ehb_base_palette(
                         std::span<Color3f>(base32.data(), 32),
@@ -2511,7 +2511,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (options.best) {
                 // Same sweep shape as plain sliced and strips EHB: 8 jitter
                 // seeds × 5 strengths × 4 diversities + 1 baseline.
-                // 32-colour base palette → shallower median-cut basins,
+                // 32-color base palette → shallower median-cut basins,
                 // amplitude 1.0 (AGA-only weakening doesn't apply here
                 // since EHB is OCS-bound).
                 winner = pipeline::best_sweep<EhbSlicedTrial>(
@@ -2574,7 +2574,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // diversity × pre-image jitter), ranked by best_metric.
         //
         // Locks and pins now both flow through. Locks: pop_search
-        // honours the locked_mask coming from the assembled palette so
+        // honors the locked_mask coming from the assembled palette so
         // the per-slot pin-down works during mutation/crossover; only
         // free slots vary across restarts. Pins: encode_plain_auto
         // applies the pin swap per trial — visual no-op so ranking
@@ -2584,7 +2584,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         // EHB pop-search path. Same eligibility as the legacy sweep; we
         // gate on chipset==OCS because pop_search.cpp's snap-OCS step
-        // is OCS-only. Builds 32 base colours via the enriched-source
+        // is OCS-only. Builds 32 base colors via the enriched-source
         // PNN seed (matches the legacy sweep's seeding) → uses that as
         // the seed_palettes for the evolutionary search → ehb_expand
         // makes each candidate score under its 64-entry expansion.
@@ -2704,7 +2704,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                    int diversity) -> Result<EhbPlainTrial> {
                 // Pair-aware EHB seeding: quantise the *union* of the
                 // source pixels and their sRGB-doubled darks. A picked
-                // colour either matches a bright pixel directly OR is
+                // color either matches a bright pixel directly OR is
                 // 2x a dark pixel (whose half-brite copy will then
                 // land exactly on that dark pixel). Plain median-cut
                 // / OCS-brute on the source alone tends to cluster in
@@ -2749,8 +2749,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 Palette bp = std::move(*qr);
                 palette_locks::finalize_palette(bp.colors, 32,
                                                  options.lock_color0);
-                // Pair-aware refinement: jointly optimise the 32 base
-                // colours under the hardware-tied half-brite pairing.
+                // Pair-aware refinement: jointly optimize the 32 base
+                // colors under the hardware-tied half-brite pairing.
                 palette::refine_ehb_base_palette(
                     std::span<Color3f>(bp.colors.data(), 32),
                     img.pixels(),
@@ -2762,7 +2762,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // Force transparent pixels (per the outer tmask) to
                 // slot 0 post-dither. The EHB legacy sweep doesn't
                 // run pop_search, so this is its own opportunity to
-                // honour transparency.
+                // honor transparency.
                 if (has_transparency) {
                     for (std::size_t i = 0;
                          i < tmask.size() && i < dr.indices.size(); ++i)
@@ -2901,7 +2901,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             base_locked = std::move(assembled.locked);
         }
 
-        // Pair-aware refinement: jointly optimise the 32 base colours
+        // Pair-aware refinement: jointly optimize the 32 base colors
         // under the hardware-tied half-brite pairing. Skipped when the
         // user supplied an external palette or has user-defined locks
         // beyond slot-0 — the refinement isn't lock-aware yet. The
@@ -2920,8 +2920,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (lock_zero_ehb)
                 base_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
             // Reclaim duplicate half-brite slots by doubling their
-            // base colour where possible. Doubles the effective
-            // colour count when the source has dark clusters that
+            // base color where possible. Doubles the effective
+            // color count when the source has dark clusters that
             // collapsed onto the same hb code.
             palette::dedupe_ehb_halfbrite(
                 std::span<Color3f>(base_pal.colors.data(), 32),
@@ -2975,7 +2975,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         } else {
             // diffuse_raw_buffer + pick_palette_index_with_ostro path —
             // same dither used by EHB+sliced / strips+EHB. Bisect against
-            // dither::apply on a fixed 64-colour EHB palette showed it
+            // dither::apply on a fixed 64-color EHB palette showed it
             // produces +28 SSIMULACRA2 for free (encode_copper with 0
             // changes/line measured 63.76 vs plain EHB's apply path
             // 35.79 on the same palette). The diffuse_raw_buffer path
@@ -3228,8 +3228,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         Result<copper::CopperResult> copper_result;
         if (options.best) {
             // Plain sliced: 8 jitter seeds. Same shape as strips EHB —
-            // 16-colour (or wider) palette so the median-cut basin is
-            // less acute than DPF's 8-colour PF2; 8 seeds × 5×4 = 161
+            // 16-color (or wider) palette so the median-cut basin is
+            // less acute than DPF's 8-color PF2; 8 seeds × 5×4 = 161
             // trials is the sweet spot.
             //
             // copper::encode_copper returns the rendered preview via
@@ -3341,7 +3341,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     // --- strips (mid-line palette swaps) ---
     // Two variants:
-    //   * DPF: OCS lores DPF (depth=3), 8 PF2 colours. cpp export ready.
+    //   * DPF: OCS lores DPF (depth=3), 8 PF2 colors. cpp export ready.
     //   * EHB: OCS EHB (6bpp, 32 base + 32 hardware half-brites). No
     //     cpp export wired yet — the encoder produces planes + preview.
     if (options.scap) {
@@ -3558,7 +3558,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Both --best and the non-best plain auto branch route through
         // encode_plain_auto (anon ns, src/api.cpp). Per-trial knobs flow as
         // function arguments; eligibility above pins locks/reserves/pins/
-        // transparency/DPF empty so this matches the non-best behaviour
+        // transparency/DPF empty so this matches the non-best behavior
         // bit-for-bit (verified by api-equiv-* ctests). Future feature
         // additions land in encode_plain_auto and propagate to both paths
         // automatically — the previous lock_color0 / refine-locked-mask
@@ -3652,7 +3652,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     // dither_exclude_mask = reserves ∪ {slot 0 if
                     // transparent}. Locks are NOT included — the
                     // dither IS allowed to route image pixels to a
-                    // locked colour (mi2-redux locks 18/32 slots
+                    // locked color (mi2-redux locks 18/32 slots
                     // expecting them to be reachable).
                     std::vector<bool> excl(max_colors, false);
                     for (auto& r : options.reserves) {
@@ -3970,7 +3970,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // CGA 320x200 4-color: auto-select the hardware palette whose 4
         // colors best cover the image. We try all four variants
         // (p0-low green/red/brown, p0-high light-green/red/yellow,
-        //  p1-low cyan/magenta/grey, p1-high cyan/magenta/white)
+        //  p1-low cyan/magenta/gray, p1-high cyan/magenta/white)
         // with the default black background and pick the one with
         // lowest sum-of-nearest-OKLab-distance² across the image.
         palette::CgaPalette best = palette::CgaPalette::p1_high;
@@ -4286,12 +4286,12 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.depth = static_cast<int>(p.planes.depth);
     r.colors = static_cast<int>(p.palette.size());
     // EHB sliced/strips: report 64 (matching plain EHB) since the
-    // hardware always doubles to 64 effective colours per line.
+    // hardware always doubles to 64 effective colors per line.
     if (p.mode == amiga::Mode::ehb && r.colors == 32) r.colors = 64;
     // Pack the final palette as sRGB bytes (3 per entry) for the web
     // tool's palette swatch view. Empty when palette is empty.
     //
-    // EHB sliced/strips store only the 32 base colours per scanline
+    // EHB sliced/strips store only the 32 base colors per scanline
     // (the line-0 base is what gets exposed via p.palette); plain EHB
     // already stores 64 (32 base + 32 hardware half-brite). Extend the
     // sliced/strips case to 64 so the swatch view is consistent across

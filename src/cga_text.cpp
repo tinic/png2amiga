@@ -66,11 +66,11 @@ constexpr bool is_excluded_glyph(amiga::Mode mode, std::uint8_t ch) noexcept {
     }
 }
 
-// Map a CGA color index (0..15) to its sRGB-normalised RGB triple.
+// Map a CGA color index (0..15) to its sRGB-normalized RGB triple.
 // Source of truth is palette::kCgaHw (IBM CGA IRGB master palette).
 // Returned Color3f channels are sRGB / 255 — NOT linearised. Useful
 // in substitute_cell() rules that want to reason about the picked
-// fg/bg colours without going through the encoder's linear/OKLab
+// fg/bg colors without going through the encoder's linear/OKLab
 // pipeline.
 inline Color3f cga_index_to_srgb(std::uint8_t idx) noexcept {
     auto hex = palette::kCgaHw[idx & 0x0F];
@@ -95,7 +95,7 @@ inline Color3f cga_index_to_srgb(std::uint8_t idx) noexcept {
 //
 // Return value: possibly-modified (ch, fg, bg). The picker's per-
 // cell error stays as-is; substitutions are expected to be
-// visually neutral (same colour mass per cell) and just rearrange
+// visually neutral (same color mass per cell) and just rearrange
 // pixels so adjacent cells de-correlate.
 struct CellSubst { std::uint8_t ch, fg, bg; };
 inline CellSubst substitute_cell(amiga::Mode mode,
@@ -380,7 +380,7 @@ encode(const Image& image, amiga::Mode mode,
     // MSE between source and rendered, low-pass-filter both with a small
     // HVS-approximating kernel and compute MSE on the blurred versions.
     // For uniform regions this naturally rewards checker glyphs that
-    // average to the right colour after blur, exactly the way a human
+    // average to the right color after blur, exactly the way a human
     // perceives them on a CRT — without the artefacts that pure mean-bias
     // produced.
     //
@@ -407,7 +407,7 @@ encode(const Image& image, amiga::Mode mode,
             }
             for (int i = 0; i < n; ++i)
                 raw[static_cast<std::size_t>(i)] /= sum;
-            // Centre into kKD slot at offset (kKR - half).
+            // Center into kKD slot at offset (kKR - half).
             int off = kKR - half;
             for (auto& v : out) v = 0.0f;
             for (int i = 0; i < n; ++i)
@@ -422,7 +422,7 @@ encode(const Image& image, amiga::Mode mode,
                     kBlurKernel[r][c] = ky[r] * kx[c];
         };
         std::array<float, kKD> ky{}, kx{};
-        // Centre the 1D weights into the 7-slot array at offset kKR -
+        // Center the 1D weights into the 7-slot array at offset kKR -
         // half. Used by the binomial branch where we want the exact
         // [1,2,1]/4 weights (Gaussian approximation drifts from the
         // historical default).

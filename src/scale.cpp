@@ -92,7 +92,7 @@ Image scale_horizontal(const Image& src, std::size_t dst_width) {
             }
             // Lanczos can produce small negative lobes at sharp
             // edges; clamp to the valid linear-RGB range so the
-            // downstream quantiser sees physical colours.
+            // downstream quantiser sees physical colors.
             dst[x, y] = sum.clamped();
         }
     }

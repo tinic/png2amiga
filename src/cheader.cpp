@@ -371,7 +371,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (mode == amiga::Mode::ehb && pal_count > 32) pal_count = 32;
 
     // Fade-to (multi-frame palette animation). v1 limits: progressive,
-    // non-HAM, no fade-in mixing. AGA banks (>32 colours) are
+    // non-HAM, no fade-in mixing. AGA banks (>32 colors) are
     // supported because the runtime scan walks COLOR MOVEs in cop-
     // list order ignoring BPLCON3 toggles, and the value table is
     // packed in the same per-bank HI-then-LO order.

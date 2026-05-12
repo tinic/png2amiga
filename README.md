@@ -228,7 +228,7 @@ buffer; the default is to stretch-fill.
 Add `--sliced` to any bitmap mode (lores, hires, EHB, HAM6, HAM8) to let
 the Copper coprocessor rewrite palette registers in the horizontal blank
 between every scanline. Each line displays with its own palette state,
-and the planner picks per-line color swaps that minimise OKLab error
+and the planner picks per-line color swaps that minimize OKLab error
 against the source row.
 
 This is the same technique that's been used in Amiga demos and HAM
@@ -445,13 +445,13 @@ hashing.
   KEEP IN SYNC with `./build/png2amiga --help`.
   Refresh this block (and bump --help text on the same edit) before
   committing any change that adds, removes, renames, or re-defaults a
-  flag. One-liner to regenerate:
-      ./build/png2amiga --help > /tmp/help.txt
+  flag. One-liner to regenerate (note: --help prints to stderr):
+      ./build/png2amiga --help 2> /tmp/help.txt
   Then paste between the fences below.
 -->
 
 ```
-png2amiga 1.85.1.1033
+png2amiga 1.86.0.1035
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -489,9 +489,23 @@ Palette:
   --output-each, --oe <pattern>   Per-input output: '.ext' or path with {dir}/{stem}
   --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn | gpu-restart
   --palette-diversity <0-9>       Drop near-duplicate palette entries
-  --no-lock-color0                Allow palette index 0 to be image colour
   --print-palette                 Dump final CMAP to stderr (text)
   --print-palette-json            Dump final CMAP to stdout (JSON)
+
+Palette index pinning (lores/hires/EHB/Atari):
+  --no-lock-color0                Allow palette index 0 to be image color
+  --lock-index, --li <id> <hex>   Pin slot's color; image pixels CAN
+                                  still route to it (quantizer uses it)
+  --reserve-range, --rr <r> <hex> Pin slot's color; image pixels CANNOT
+                                  route to it (quantizer skips it).
+                                  Range: 0,1,5-10 / -5 / 5- (open ends)
+  --pin-index-at, --pia <id> <x> <y>
+                                  Swap pixel (x,y)'s slot with <id>
+
+Search quality:
+  --best                          Multi-restart search (~20–30× slower).
+                                  Works with plain HAM/EHB/lores/hires
+                                  and with --sliced / --strips.
 
 Image processing:
   --brightness <float>            -1.0..1.0 (default: 0.0)
@@ -512,7 +526,7 @@ Transparency:
   --alpha-dither-strength <float> Alpha dither strength (default: 1.0)
   --transparent-output-slot <N>   Write slot N (not 0) for alpha=0 pixels in
                                   .idx / --output-each output. Pair with
-                                  --reserve-range N <colour> so no opaque
+                                  --reserve-range N <color> so no opaque
                                   pixel ever routes there.
   --transparent-color, --tc <hex> Treat sentinel RGB as alpha=0
                                   (repeatable, e.g. magenta atlases)
@@ -523,13 +537,12 @@ Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):
   --sliced                        Per-scanline palette swaps
   --slice-changes <0-16>          Swaps per line (0 = auto)
   --sliced-vertical-dither        Spread copper transitions across rows
-  --best                          Multi-restart search (~20–30× slower)
 
 Strip palette (mid-line swaps, OCS lores):
   --strips                        Mid-line swaps; pair with --dpf or ehb
 
 Seamless tile:
-  --tile                          Replicate input 3x3 before dither, export centre
+  --tile                          Replicate input 3x3 before dither, export center
                                   tile only. Lores/hires/EHB only.
 
 Cross-fade (lores/hires/EHB; --preview animates):
@@ -550,7 +563,7 @@ Platform-specific:
   --tile-budget <N>               Max unique tiles for charset / tile modes
   --tile-reserve <N>              Reserve N tile slots from the budget
   --cga-palette <p>               p0-low | p0-high | p1-low | p1-high
-  --cga-bg <0..15>                CGA background colour
+  --cga-bg <0..15>                CGA background color
   --cga-text-metric <m>           blur (default) | mse
   --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |
                                   aniso73 | aniso35 | aniso37 | wide55 | wide77
@@ -558,15 +571,6 @@ Platform-specific:
                                   deekay | godot | c64wiki | levy
   --c64-metric <m>                blur (default) | mse
   --c64-petscii-graphics          Restrict PETSCII to graphics glyphs
-
-Palette index pinning (lores/hires/EHB/Atari):
-  --lock-index, --li <id> <hex>   Pin slot's colour; image pixels CAN
-                                  still route to it (quantizer uses it)
-  --reserve-range, --rr <r> <hex> Pin slot's colour; image pixels CANNOT
-                                  route to it (quantizer skips it).
-                                  Range: 0,1,5-10 / -5 / 5- (open ends)
-  --pin-index-at, --pia <id> <x> <y>
-                                  Swap pixel (x,y)'s slot with <id>
 
 Output:
   --symbol <name>                 Base symbol name (default: from filename)

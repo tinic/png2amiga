@@ -133,7 +133,7 @@ const ALL_MODES: ModeOption[] = [
   { value: 'hires-lace',       label: 'Hires Interlace',              chipset: 'ocs' },
   { value: 'ham6-hires-lace',  label: 'HAM6 Hires Interlace',         chipset: 'aga' },
   { value: 'ham8-hires-lace',  label: 'HAM8 Hires Interlace',         chipset: 'aga' },
-  // Commodore 64 / VIC-II — fixed 16-colour palette, per-cell colour
+  // Commodore 64 / VIC-II — fixed 16-color palette, per-cell color
   // constraints. Multicolor first / default; sprite / charset modes
   // follow on the merge branch.
   { value: 'c64-multicolor', label: 'Multicolor (160x200, 4/cell)',
@@ -180,11 +180,11 @@ const ALL_MODES: ModeOption[] = [
   // greedy distance-merging when content has more.
   { value: 'snes-mode7-256',    label: 'Mode 7 (256 BGR555 palette)',
                                 chipset: 'snes' },
-  { value: 'snes-mode7-direct', label: 'Mode 7 Direct (2048-colour gamut)',
+  { value: 'snes-mode7-direct', label: 'Mode 7 Direct (2048-color gamut)',
                                 chipset: 'snes' },
   // Sega Genesis / Mega Drive — 8x8 4bpp tiles + 4 palettes × 16 BGR333.
   // -sh modes use the VDP's Shadow/Highlight (priority bit per tile,
-  // ~128 effective colours; runtime sets VDP_setHilightShadow(TRUE)).
+  // ~128 effective colors; runtime sets VDP_setHilightShadow(TRUE)).
   { value: 'genesis-h32',    label: 'H32 (256x224)',    chipset: 'genesis' },
   { value: 'genesis-h40',    label: 'H40 (320x224)',    chipset: 'genesis' },
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
@@ -255,7 +255,7 @@ export const C64_METRICS: C64MetricOption[] = [
 
 // C64 palette hex values (16 entries each, 0xRRGGBB) — mirrors
 // src/palette.hpp's kC64* tables. Used by the charset diagnostic
-// renderer so JS can paint glyphs with the same colours the encoder
+// renderer so JS can paint glyphs with the same colors the encoder
 // chose.
 const C64_PALETTE_HEX: Record<string, readonly number[]> = {
   pepto:    [
@@ -424,9 +424,9 @@ export const SLIDERS: Slider[] = [
   { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1, step: 0.05, default: 0,
     tip: 'Additive lightness shift in perceptual OKLab space.' },
   { key: 'contrast',       label: 'Contrast',    min: 0,   max: 3, step: 0.05, default: 1,
-    tip: 'Scale around perceptual mid-grey. 1.0 = no change, >1 increases contrast.' },
+    tip: 'Scale around perceptual mid-gray. 1.0 = no change, >1 increases contrast.' },
   { key: 'saturation',     label: 'Saturation',  min: 0,   max: 3, step: 0.05, default: 1,
-    tip: 'Chroma scaling in OKLab space. 0 = greyscale, 1 = original, >1 = boosted color.' },
+    tip: 'Chroma scaling in OKLab space. 0 = grayscale, 1 = original, >1 = boosted color.' },
   { key: 'hueShift',       label: 'Hue',         min: -180, max: 180, step: 1,  default: 0,
     tip: 'Rotate all colors in OKLab. Shifts hues to better match the Amiga palette.' },
   { key: 'sharpen',        label: 'Sharpen',     min: -1,  max: 2, step: 0.05, default: 0,
@@ -615,14 +615,14 @@ export function isCgaText(mode: string): boolean {
       || mode === 'cga-text40x200' || mode === 'cga-text40x100'
 }
 // per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
-// At freeform mode the Native PAR / fixed-buffer behaviour is replaced
+// At freeform mode the Native PAR / fixed-buffer behavior is replaced
 // by the user-typed dims; at default size they stay fixed-buffer.
 export function isTileFreeformMode(mode: string): boolean {
   return isC64CharsetMode(mode) || isGenesisMode(mode) || isSnesMode(mode)
       || isCgaText(mode)
 }
 // SNES Mode 7 Direct quantises every pixel to the BBGGGRRR grid; the
-// 2048-colour gamut comes from per-tile palette-field bits. Yliluoma
+// 2048-color gamut comes from per-tile palette-field bits. Yliluoma
 // family (palette-aware ordered dithers) doesn't apply here — restrict
 // the gallery + force a fallback when this mode is selected.
 export function isSnesDirectMode(mode: string): boolean {
@@ -683,7 +683,7 @@ const MODE_PAR: Record<string, number> = {
   // ratio = 2 × 0.936 = 1.872 (wide).
   'c64-multicolor':  1.872,
   'c64-fli':         1.872,
-  // Atari ST/STE — colour modes target a 4:3 CRT.
+  // Atari ST/STE — color modes target a 4:3 CRT.
   //   low  320×200 → 4:3 ⇒ PAR ≈ 0.833 (slightly tall, like ega-320)
   //   med  640×200 → 4:3 ⇒ PAR ≈ 0.417 (2.4× tall, like ega-640)
   //   hi   640×400 monochrome monitor ⇒ PAR 1.0 (square)

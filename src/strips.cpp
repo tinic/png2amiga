@@ -506,24 +506,24 @@ ScapMove make_move(std::uint8_t reg, std::uint16_t rgb_ocs, int slot_index = -1)
 // Two-stage approach to keep F-S texture flowing across the whole frame
 // while still letting each strip pick a palette tuned to its content:
 //
-//   Stage 1 (planning) — global F-S vs the 8-colour base palette
+//   Stage 1 (planning) — global F-S vs the 8-color base palette
 //   produces a per-pixel base_index whose distribution per strip drives
 //   the per-line MOVE planner. Each strip's swap is the OKLab centroid
 //   of the strip pixels currently assigned to one of its registers,
 //   chosen for biggest error reduction.
 //
 //   Stage 2 (rendering) — runs F-S a second time, but this time against
-//   the EVOLVING per-strip palette: for each pixel the nearest-colour
+//   the EVOLVING per-strip palette: for each pixel the nearest-color
 //   lookup uses strip_palettes[strip(x)], and residuals propagate
 //   through the standard F-S kernel across strip boundaries. Errors
 //   are in linear RGB so they discharge in whichever palette is active
-//   downstream — F-S texture is uniform; only the colour rendition
+//   downstream — F-S texture is uniform; only the color rendition
 //   shifts at strip boundaries (and only by the amount the palette
 //   actually changed).
 //
 //   This combines:
 //     * uniform dither texture across the frame (no per-strip "blocks")
-//     * per-strip palette specialisation (good colour fidelity)
+//     * per-strip palette specialisation (good color fidelity)
 // ---------------------------------------------------------------------------
 Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        int width_arg,
@@ -551,8 +551,8 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
     // optimisation landscapes. Each restart is a full encode (~100 ms);
     // user OK'd unbounded compute. Keep the lowest-error result.
     if (enable_best) {
-        // DPF: 24 jitter seeds — the 8-colour PF2 palette is highly
-        // sensitive to which colours win the median-cut, so heavy jitter
+        // DPF: 24 jitter seeds — the 8-color PF2 palette is highly
+        // sensitive to which colors win the median-cut, so heavy jitter
         // sampling buys more here than for wider palettes (EHB stays at
         // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
         auto best = pipeline::best_sweep<ScapResult>(
@@ -629,10 +629,10 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
     }
     auto& src = *src_image;
 
-    // ---- 1. sliced first: per-line 8-colour palette evolution.
-    // strips layers on top of sliced. With only 8 PF2 colours the per-line
+    // ---- 1. sliced first: per-line 8-color palette evolution.
+    // strips layers on top of sliced. With only 8 PF2 colors the per-line
     // search space is tiny, but sliced still finds useful palette diffs
-    // against neighbour scanlines.
+    // against neighbor scanlines.
     constexpr int kBaseColors = 8;        // PF2 width = 3 bitplanes
     // PF2 index → COLOR-register mapping:
     //   * OCS DPF combiner rule: PF2 index 0 falls through to COLOR00
@@ -668,13 +668,13 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         if (dpf_user_pal.size() > 8) dpf_user_pal.resize(8);
     }
     // --reserve-range + --lock-index plumbing: both pin a PF2 slot's
-    // colour. Differences:
+    // color. Differences:
     //   * reserves are dither_excluded — image pixels never route there.
     //   * locks are NOT excluded — dither picks them normally; only the
-    //     slot's colour is fixed.
+    //     slot's color is fixed.
     // Both feed encode_copper's `locked` (sliced never re-emits the
     // slot), and both flag the strips swap planner mask so mid-line
-    // MOVEs can't overwrite the pinned colour.
+    // MOVEs can't overwrite the pinned color.
     std::array<bool, 8> reserved_mask_dpf{};
     std::vector<std::size_t> dpf_dither_excluded;
     dpf_dither_excluded.reserve(reserved_slots.size());
@@ -688,7 +688,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         if (idx < 8) reserved_mask_dpf[idx] = true;
     }
     // Combined locked list for encode_copper. Reserves and locks both
-    // pin colours; only the dither_excluded vector distinguishes them.
+    // pin colors; only the dither_excluded vector distinguishes them.
     std::vector<std::pair<std::size_t, Color3f>> copper_locked;
     copper_locked.reserve(reserved_slots.size() + locked_slots.size());
     copper_locked.insert(copper_locked.end(),
@@ -752,14 +752,14 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
     // simply never picks k=0 and the planner targets k=1..7.
     std::size_t k_min = 1u;
 
-    // Stage-2 error diffusion setup. Honours the user's --dither choice
+    // Stage-2 error diffusion setup. Honors the user's --dither choice
     // by pulling the diffusion kernel from dither.hpp. The buffer is
     // a whole-image OKLab error grid (matches the EHB+sliced path in
     // main.cpp): residuals diffuse in the perceptual space, get
     // strength-multiplied at scatter time, and per-channel-clamped on
     // read. Linear-RGB diffusion (the previous approach) blew up across
     // strip palette swaps because the residual magnitude isn't
-    // perceptually proportional and DPF's tight 8-colour palette has
+    // perceptually proportional and DPF's tight 8-color palette has
     // gaps wider than the residuals could absorb.
     // ED scaffolding (kernel, error buf, structure bias, Riemersma) all
     // live inside dither::diffuse_raw_buffer (the post-pass-1 driver
@@ -829,7 +829,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         if (pass > 0) {
             // base_index is rebuilt per-row inside the planner against
             // the per-line sliced-evolved palette (no carry-over between
-            // passes needed; matches EHB strips's v1.26.2+ behaviour).
+            // passes needed; matches EHB strips's v1.26.2+ behavior).
             for (auto& v : line_moves) v.clear();
             // err_buf is owned by dither::diffuse_raw_buffer (allocated
             // fresh each pass-2 call), so no manual reset is needed.
@@ -839,10 +839,10 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
             total_error_atomic.store(0.0);
             rows_done.store(0);
         }
-    // hw_state tracks the actual hardware state of the 8 PF2 colour
+    // hw_state tracks the actual hardware state of the 8 PF2 color
     // registers across lines. With --slice-changes 1..7 we can't fully
     // refresh the palette every line, so the PREVIOUS line's strips
-    // swaps + partial sliced MOVEs decide what colours sit in those
+    // swaps + partial sliced MOVEs decide what colors sit in those
     // registers when the next line's HBLANK starts. Strip 0 MUST be
     // encoded against this real state or pixels are encoded with a
     // palette the chip isn't actually displaying.
@@ -895,7 +895,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         // 1. Per-line sliced MOVEs in HBLANK.
         //
         //   Default (copper_changes_override == 0): unconditionally
-        //   re-emit all 8 PF2 base colours (≤9 hblank MOVEs; k=0
+        //   re-emit all 8 PF2 base colors (≤9 hblank MOVEs; k=0
         //   dual-writes COLOR00+COLOR08, k=1..7 single MOVE each),
         //   well below the 14-MOVE OCS hblank capacity. Whatever
         //   registers strips polluted on line y-1 get fully overwritten
@@ -929,7 +929,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
             std::size_t hblank_budget = std::min<std::size_t>(
                 copper_changes_override, kMaxCombined);
             // Score per-slot diff in OKLab² between actual hw_state
-            // (the colour the chip is sitting on at end of line y-1)
+            // (the color the chip is sitting on at end of line y-1)
             // and target = sliced_palettes[y]. Top-K wins emit-budget.
             std::array<std::pair<int, float>, kBaseColors> diffs{};
             for (std::size_t k = 0; k < kBaseColors; ++k) {
@@ -1004,7 +1004,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         //    planner has no incentive to pick under-utilised registers
         //    even when doing so would unlock far better total-line
         //    coverage. Beam search picks the chain with min total strip
-        //    error across all slots, naturally favouring decisions that
+        //    error across all slots, naturally favoring decisions that
         //    don't waste the line on micro-tweaking one register.
         //
         //    Score: per-line per-strip per-register cluster stats are
@@ -1168,7 +1168,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 auto& soa_pixels = strip_pixels_soa[s + 1];
                 for (std::size_t k = k_min; k < kBaseColors; ++k) {
                     // --reserve-range: skip locked PF2 slots so the mid-line
-                    // strips planner can't overwrite the user's fixed colour.
+                    // strips planner can't overwrite the user's fixed color.
                     if (reserved_mask_dpf[k]) continue;
                     reset_pixel_min(tl_pixel_min_dpf, soa_pixels);
                     for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
@@ -1189,7 +1189,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 // Per-state per-register cap so beam expansion covers
                 // multiple registers — without it, the top-K moves can
                 // all target the same dominant register with slight
-                // colour variations.
+                // color variations.
                 std::sort(moves.begin(), moves.end(),
                     [](const Move& a, const Move& b) {
                         return a.err < b.err;
@@ -1361,7 +1361,7 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
     //
     // In debug_overlay mode all entries stay at 0x0000 — together with
     // the forced-zero per-line MOVEs this means the viewer's frame-init
-    // writes black to every register and only strips MOVEs change colours.
+    // writes black to every register and only strips MOVEs change colors.
     std::vector<Color3f> output_palette(16, Color3f{0.0f, 0.0f, 0.0f});
     if (!debug_overlay) {
         for (std::size_t k = 0; k < kBaseColors; ++k) {
@@ -1380,8 +1380,8 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
     //   * x % 4  == 0  (not 8)  → top quarter
     // Markers paint into PF1 LSB (= dst plane 0 of the 6-plane DPF
     // output) at column x. PF1 in front of PF2, so non-zero PF1 pixels
-    // override the image. palette[1] is recoloured to yellow so PF1
-    // index 1 displays the ruler colour. Also recolour the same in the
+    // override the image. palette[1] is recolored to yellow so PF1
+    // index 1 displays the ruler color. Also recolor the same in the
     // per-pixel preview so PNG / stats reflect the markers.
     if (debug_overlay) {
         output_palette[1] = Color3f{1.0f, 0.0f, 0.0f};   // red
@@ -1537,7 +1537,7 @@ static Result<ScapResult> encode_scap_ehb_debug(std::size_t width,
         // 19 strips MOVEs: opposing primary/complement RGB pairs on the
         // shared register. Pair N cycles through (R,C), (G,M), (B,Y);
         // pair-mod-3 picks which axis. Each stripe is a single solid
-        // saturated colour. Vivid hues make slot positions easy to
+        // saturated color. Vivid hues make slot positions easy to
         // pick out against the red ruler.
         for (std::size_t s = 0; s < table.slots.size(); ++s) {
             auto pair_n = s / 2;
@@ -1749,7 +1749,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
         if (qr) {
             Palette seed_pal = std::move(*qr);
             // Build the 32-slot seed: lock_zero at 0, reserves at their
-            // indices, quantizer colours at the remaining unlocked slots
+            // indices, quantizer colors at the remaining unlocked slots
             // (skipping reserved indices when filling so reserves don't
             // displace anything).
             std::vector<Color3f> placed(32, Color3f{0.0f, 0.0f, 0.0f});
@@ -1773,8 +1773,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             seed_pal.colors = std::move(placed);
             // Build refine's locked mask: lock_color0 + reserved slots are
             // held fixed during refine so its iterative convergence is
-            // not biased by the reserve colour (and the unlocked slots'
-            // colours stay deterministic across reserve-colour choices).
+            // not biased by the reserve color (and the unlocked slots'
+            // colors stay deterministic across reserve-color choices).
             std::array<bool, 32> refine_locked{};
             if (lock_color0) refine_locked[0] = true;
             for (auto& [idx, _] : reserved_slots) {
@@ -1936,7 +1936,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
     // index iteration was building toward. Pure index refinement wins.
     //
     // Actual hardware register state across lines. strips swaps leave
-    // registers holding swap-colours at end-of-line; the per-line
+    // registers holding swap-colors at end-of-line; the per-line
     // sliced MOVEs need to diff against THIS, not against sliced_palettes
     // from the previous line.
     std::vector<Color3f> hw_state(kBaseColors);
@@ -1999,8 +1999,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 // Skip reserved base slots AND their half-brite siblings —
                 // the encoder must never bind a pixel to a reserved index,
                 // else cluster centroids and per-strip dither score against
-                // the reserve colour and the planner's swap choices become
-                // colour-dependent.
+                // the reserve color and the planner's swap choices become
+                // color-dependent.
                 std::size_t base_k = k & (kBaseColors - 1);
                 if (reserved_mask_ehb[base_k]) continue;
                 float dL = tgt.L - P_eff_lab[k].L;
@@ -2014,7 +2014,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
 
         // 1. Per-line sliced MOVEs: diff vs the ACTUAL hardware register
         // state at end of the previous line. strips's mid-line swaps on
-        // line y-1 may have left registers holding swap-colours rather
+        // line y-1 may have left registers holding swap-colors rather
         // than sliced_palettes[y-1], so a diff vs sliced_palettes misses
         // them and the registers carry stale state into line y.
         {
@@ -2678,13 +2678,13 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
 // kStrips6bplEhb slot table (19 mid-line MOVE positions) transfers
 // directly. We mid-line-swap the 16 BASE palette registers; HAM SET ops
 // resolve against whichever strip palette is currently active, while
-// MODIFY ops continue to mutate the rolling output colour irrespective
+// MODIFY ops continue to mutate the rolling output color irrespective
 // of palette state.
 //
 // v0 simplifications (deliberate, see commit msg):
 //   * Greedy single-pass strip swap planner: per-strip pixel histogram,
 //     swap the K least-used base slots with the strip's most-frequent
-//     RGB444-bucketed colours.
+//     RGB444-bucketed colors.
 //   * No multi-pass joint refinement (EHB strips runs 6 passes).
 //   * No best wiring.
 //   * Inline HAM op selector — keeps scap.cpp self-contained without
@@ -2819,7 +2819,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
                 strips_input[x, y] = image[x, y];
     }
 
-    // ---- 1. Per-line sliced base palette (16 colours, evolving across rows).
+    // ---- 1. Per-line sliced base palette (16 colors, evolving across rows).
     // Use ham::encode_ham_copper for the per-line sliced plan. We pre-
     // dithered above (when applicable), so disable dither here to
     // avoid double-application — the sliced planner sees the same image
@@ -2886,7 +2886,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
     std::atomic<std::size_t> rows_done{0};
 
     // Actual hardware register state at end of the previous line. strips
-    // swaps mid-line on row y-1 leave registers holding swap-colours
+    // swaps mid-line on row y-1 leave registers holding swap-colors
     // rather than sliced_palettes[y-1], so the per-line sliced MOVEs MUST
     // diff vs THIS to correctly restore the intended line-entry palette.
     // Carry-over forces serial when copper_changes_override > 0 (the
@@ -2921,7 +2921,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
         int abs_vpos = static_cast<int>(y) + kVStart;
         auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
 
-        // Strip working palette: starts as sliced_palettes[y] (16 colours),
+        // Strip working palette: starts as sliced_palettes[y] (16 colors),
         // mutates as strips MOVEs land. The HAM op picker uses whichever
         // strip palette is active at the current pixel.
         std::vector<Color3f> strip_pal = sliced_palettes[y];
@@ -2990,9 +2990,9 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
         // only if it strictly reduces the row's HAM-DP error.
         //
         // This replaces the prior centroid-based scorer (which picked
-        // swaps that minimised SET-only nearest-color error but
+        // swaps that minimized SET-only nearest-color error but
         // sometimes hurt the actual HAM encode because MODIFY ops can
-        // already reach the colour better than any palette swap would).
+        // already reach the color better than any palette swap would).
         //
         // The HAM rolling state crosses strip boundaries unchanged
         // (only the palette consulted for SET ops swaps), so encoding
@@ -3425,7 +3425,7 @@ Result<ScapResult> make_scap_probe_a_dpf_ocs(int width, int height) {
     //   reg 0  = black (bg, also PF1 idx 0 = transparent)
     //   reg 1  = yellow (PF1 minor tick every 16 px,  plane 0 only)
     //   reg 3  = red    (PF1 major tick every 64 px,  plane 0|2 -> idx 3)
-    //   reg 9  = strips-controlled (PF2 colour, swept by per-line copper)
+    //   reg 9  = strips-controlled (PF2 color, swept by per-line copper)
     //   others = black
     res.palette.assign(16, Color3f{0.0f, 0.0f, 0.0f});
     res.palette[1] = Color3f{1.0f, 1.0f, 0.0f};   // yellow

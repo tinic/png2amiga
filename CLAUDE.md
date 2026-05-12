@@ -10,7 +10,7 @@ adds, removes, renames, or re-defaults a CLI flag (or updates a flag
 description), refresh the block:
 
 ```bash
-./build/png2amiga --help > /tmp/help.txt
+./build/png2amiga --help 2> /tmp/help.txt   # NB: --help prints to stderr
 # paste between the ``` fences under "## Full CLI reference" in README.md
 ```
 

@@ -21,11 +21,11 @@ using ProgressCb =
 
 // Per-cell error metric driving the brute-force glyph + (fg, bg) search.
 //
-//   mse  — sum of squared OKLab distances per sub-pixel. Optimised in
+//   mse  — sum of squared OKLab distances per sub-pixel. Optimized in
 //          parallel via the sum-decomposition trick (independent argmins
 //          for fg and bg). Default; pairs naturally with pixel-level
 //          dithering on the input (the encoder picks the dominant 2
-//          colours per cell to match a pre-dithered image).
+//          colors per cell to match a pre-dithered image).
 //
 //   blur — Pappas-Neuhoff perceptual halftoning. Both source and the
 //          rendered cell are convolved with a 3×3 binomial low-pass
@@ -46,11 +46,11 @@ enum class Metric : std::uint8_t { mse, blur };
 // per-mode but soften high-frequency detail; exposed for opt-in A/B.
 //
 //   binomial    — 3×3 (≈ Gaussian σ=0.85), conservative default.
-//   aniso53     — 5×3 horizontal-favouring Gaussian (best on 8×1, 8×2
+//   aniso53     — 5×3 horizontal-favoring Gaussian (best on 8×1, 8×2
 //                 cells if you want max SSIMULACRA2).
-//   aniso73     — 7×3 horizontal-favouring Gaussian.
-//   aniso35     — 3×5 vertical-favouring Gaussian (taller cell modes).
-//   aniso37     — 3×7 vertical-favouring Gaussian.
+//   aniso73     — 7×3 horizontal-favoring Gaussian.
+//   aniso35     — 3×5 vertical-favoring Gaussian (taller cell modes).
+//   aniso37     — 3×7 vertical-favoring Gaussian.
 //   wide55      — 5×5 broader symmetric Gaussian σ≈1.0.
 //   wide77      — 7×7 wider symmetric Gaussian σ≈1.5 (best on 8×4 /
 //                 8×8 cells if you want max SSIMULACRA2).
@@ -100,7 +100,7 @@ struct CgaTextResult {
 // encoding (only those characters produce the NTSC artifact patterns).
 // If `palette16` is empty, the encoder uses the fixed 16-entry CGA/IBM
 // IRGB master palette (palette::kCgaHw) — correct for CGA text modes and
-// the default EGA behaviour. For EGA text modes you can pass any 16 colors
+// the default EGA behavior. For EGA text modes you can pass any 16 colors
 // (typically picked from the 64-entry IrgbIRGB gamut via
 // quantize::ega_histogram); the encoder treats fg/bg attribute nibbles
 // as indices into this palette, and the picked colors are returned in

@@ -68,7 +68,7 @@ Defaults defaults_for(const Context& ctx) {
                             ctx.mode == amiga::Mode::hires_interlace);
     switch (ctx.method) {
     case dither::Method::opt_checker:
-        // c64 hires/afli (2 colours per cell) prefer less dither.
+        // c64 hires/afli (2 colors per cell) prefer less dither.
         if (ctx.mode == amiga::Mode::c64_hires ||
             ctx.mode == amiga::Mode::c64_afli) {
             return Defaults{0.60f, 0.35f};
@@ -202,7 +202,7 @@ Defaults defaults_for(const Context& ctx) {
 
     // ---- strips: layered on top of sliced. -----------------------------------
     if (ctx.scap) {
-        if (ctx.dpf)        return Defaults{0.9f, 0.10f};   // 8 colours
+        if (ctx.dpf)        return Defaults{0.9f, 0.10f};   // 8 colors
         if (ctx.mode == amiga::Mode::ehb)
                             return Defaults{0.9f, 0.10f};   // 64 effective
         return kFallback;

@@ -88,12 +88,12 @@ enum class Method : unsigned char {
     opt_line,         // Optimal Line — Yliluoma N=2 pair, y&1 phase (CRT-scanline friendly)
     opt_line_checker, // Optimal Line-Checker — Yliluoma N=2 pair, line_checker phase
     knoll,            // Knoll pattern dither — N=16 plan on 4×4 Bayer (US 6,606,166 expired 2019)
-    tri_tone,         // Yliluoma tri-tone — 2×2 cell, 3 colours (one 50%, two 25%)
+    tri_tone,         // Yliluoma tri-tone — 2×2 cell, 3 colors (one 50%, two 25%)
     yliluoma1,        // Yliluoma Algorithm 1 — exhaustive pair × ratio search w/ luma threshold
     aseprite_old,     // Aseprite "old" 4×4 — hand-tuned, checker-biased
     libcaca_3x3,      // libcaca hand-tuned 3×3 dispersed dot
     libcaca_6x6,      // libcaca hand-tuned 6×6 dispersed dot
-    pegasus_8x8,      // Pegasus/REXPaint 8×8 mosaic (centre-biased)
+    pegasus_8x8,      // Pegasus/REXPaint 8×8 mosaic (center-biased)
     cranley_bayer,    // Bayer 8×8 with Cranley-Patterson random offset (Quilez)
     quasicrystal,     // Sum-of-cosines quasicrystal pattern (Sloan 2010)
     truchet,          // Truchet-tile threshold pattern
@@ -290,7 +290,7 @@ std::uint8_t pick_knoll_index(
     std::span<const png2amiga::color_space::OKLab> palette_lab,
     std::size_t x, std::size_t y, float strength);
 
-// Tri-tone — Yliluoma's named 2×2 / 3-colour preset. One palette entry
+// Tri-tone — Yliluoma's named 2×2 / 3-color preset. One palette entry
 // at 50% (Bayer cells 0 and 1) plus two more at 25% each (cells 2 and
 // 3). Implemented as a 4-step greedy plan with palette repeats allowed,
 // indexed by Bayer 2×2.
@@ -373,10 +373,10 @@ bool uses_error_diffusion(Method method);
 
 // Pick a palette index for a target Lab using the right strategy:
 //   • yliluoma family → pick_yliluoma_family_index
-//   • everything else → nearest neighbour with second-nearest tracked
+//   • everything else → nearest neighbor with second-nearest tracked
 //     for ostromoukhov's variable scaling
 // `k_min` skips reserved entries (e.g. transparent color 0 in DPF/EHB).
-// Out-param `chosen_lab` is the picked palette colour. Returns the
+// Out-param `chosen_lab` is the picked palette color. Returns the
 // ostromoukhov threshold (sb / (sb+ss) for nearest pair, 0.5 for
 // yliluoma — i.e. unit kernel scale).
 //
@@ -410,7 +410,7 @@ std::uint8_t pick_yliluoma_family_index(
 // {1, 2, …, N-1} (N=16 cell area on a 4×4 Bayer), score the linear mix
 // against target; pick the best triple. A luminance-difference cutoff
 // trims the pair list ("Improvement to Algorithm 1") so the search
-// stays tractable on 32+ colour palettes.
+// stays tractable on 32+ color palettes.
 std::uint8_t pick_yliluoma1_index(
     const png2amiga::color_space::OKLab& target,
     std::span<const png2amiga::color_space::OKLab> palette_lab,

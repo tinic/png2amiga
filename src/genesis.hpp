@@ -6,7 +6,7 @@
 //
 //   * cluster_tiles_into_palettes: assign each 8×8 tile of the source image
 //     to one of N palette lines (Genesis fixes N at 4) using k-means in
-//     OKLab over per-tile colour-set centroids. Reuses quantize::quantize
+//     OKLab over per-tile color-set centroids. Reuses quantize::quantize
 //     to extract each cluster's 15 best entries (color 0 reserved as
 //     transparent / backdrop).
 //
@@ -68,7 +68,7 @@ struct GenesisResult {
 };
 
 // Cluster each 8×8 tile into one of kPaletteCount palette lines and pick
-// the 15 best colours (palette index 0 = transparent / backdrop) per line.
+// the 15 best colors (palette index 0 = transparent / backdrop) per line.
 //
 //   `image` is the BGR333-quantised source (already letterboxed to the
 //   target Genesis resolution by the caller).
@@ -83,7 +83,7 @@ GenesisResult cluster_tiles_into_palettes(
 
 // Same as above + per-tile shadow flag (for S/H modes). After base
 // palettes are picked, each tile chooses normal vs shadowed based on
-// which gives lower nearest-neighbour OKLab² error against the assigned
+// which gives lower nearest-neighbor OKLab² error against the assigned
 // palette. The shadowed palette is the hardware-derived halving of each
 // base entry — no extra CRAM consumed.
 GenesisResult cluster_tiles_into_palettes_sh(

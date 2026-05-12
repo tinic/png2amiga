@@ -212,7 +212,7 @@ std::vector<expq::OKLab> kmeanspp_init(
                                           MTL::ResourceStorageModeShared);
     // Second index buffer for ICM ping-pong: scolorq reads from
     // indices_in (the previous iteration's assignment) and writes
-    // to indices_out so neighbour lookups don't see partial updates
+    // to indices_out so neighbor lookups don't see partial updates
     // mid-pass. Same memory shape as idx_buf.
     auto* idx_buf2   = device->newBuffer(R * N * sizeof(unsigned),
                                           MTL::ResourceStorageModeShared);
@@ -339,7 +339,7 @@ std::vector<expq::OKLab> kmeanspp_init(
 
                 unsigned restart_u = unsigned(r);
 
-                // Graph-coloured ICM: 9 sub-grid passes per iter.
+                // Graph-colored ICM: 9 sub-grid passes per iter.
                 // Recompute filtered output + g BEFORE each sub-grid
                 // so the gradient reflects the post-prior-sub-grid
                 // state — required for monotone descent (stale g

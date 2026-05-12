@@ -17,7 +17,7 @@ using OKLab = color_space::OKLab;
 
 // Per-tile descriptor used by the clustering step. We approximate each
 // tile as its centroid in OKLab plus a "spread" term so two tiles that
-// share a centroid but cover very different colour ranges still want
+// share a centroid but cover very different color ranges still want
 // distinct palettes. Cheap and good enough for k=4.
 struct TileFingerprint {
     OKLab centroid{};
@@ -244,7 +244,7 @@ GenesisResult cluster_tiles_into_palettes(
     }
 
     // Note: a Lloyd-style refinement step (re-assign each tile to the
-    // palette that minimises its nearest-neighbour quantisation error,
+    // palette that minimises its nearest-neighbor quantisation error,
     // then rebuild palettes) was tested and produced mixed results: it
     // gained 0.8-1.0 dB on photo.jpg but regressed lovers/fantasy by up
     // to -2.3 dB. The score function uses nearest-only OKLab², while

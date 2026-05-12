@@ -74,7 +74,7 @@ struct ScapSlotTable {
 //   2. WAIT(hp=line_gate_hpos, vp=44+y) — gates the chain to the
 //      visible area.
 //   3. 20 strips MOVEs back-to-back (no fillers) — the planner picks
-//      (reg, colour) per slot to greedy-minimise OKLab error in the
+//      (reg, color) per slot to greedy-minimize OKLab error in the
 //      upcoming strip. Strip s covers pixels [slots[s-1].pixel_x ..
 //      slots[s].pixel_x).
 //   4. WAIT(hp=end_of_line_hpos, vp=44+y) — releases the copper to
@@ -233,7 +233,7 @@ struct ScapResult {
 
     // Rendered preview produced by the planner. Width × height linear-RGB
     // image where each pixel is looked up against the per-strip palette
-    // state active at that column (PF2 colour the hardware would
+    // state active at that column (PF2 color the hardware would
     // actually display). Empty for probe outputs.
     Image rendered;
 };
@@ -241,9 +241,9 @@ struct ScapResult {
 // ---------------------------------------------------------------------------
 // Planner — OCS DPF, lores 320 px.
 //
-// Quantises the image to 8 base PF2 colours (reg 8..15), then per scanline
+// Quantises the image to 8 base PF2 colors (reg 8..15), then per scanline
 // does a greedy slot-by-slot search: at each slot pixel_x boundary, find the
-// (reg, colour) MOVE that most reduces OKLab error in the upcoming strip,
+// (reg, color) MOVE that most reduces OKLab error in the upcoming strip,
 // emit it, and continue. Up to slot.capacity MOVEs may be chained per slot.
 // The accumulated palette state carries across lines (sliced-style) so swaps
 // from the bottom of one line act as the entry palette for the top of the
@@ -258,11 +258,11 @@ struct ScapResult {
 // always used together:
 //   * Force the 8 base-palette MOVEs at line start to write 0x0000, so
 //     each line opens with PF2 regs all black; the 20 strips MOVEs then
-//     do every visible colour change. Makes it obvious where each
+//     do every visible color change. Makes it obvious where each
 //     MOVE actually lands on real hardware vs. the planner's model.
 //   * Paint yellow vertical ruler markers into PF1 at every 4/8/16 px
 //     (top-quarter / top-half / full height) so MOVE landing positions
-//     can be read off the screen. Also recolours palette[1] to yellow.
+//     can be read off the screen. Also recolors palette[1] to yellow.
 // Off (default) for production. Pair with examples/ramps.png as the
 // canonical visual test case.
 Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
@@ -283,27 +283,27 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                            external_palette = {},
                                        // --reserve-range: PF2-base slot
                                        // indices (0..7) locked to a fixed
-                                       // colour. Forwarded to encode_copper
+                                       // color. Forwarded to encode_copper
                                        // as locked + dither excluded, AND the
                                        // strips swap planner avoids them so
                                        // mid-line MOVEs can't overwrite the
-                                       // reserved colour.
+                                       // reserved color.
                                        const std::vector<std::pair<std::size_t, Color3f>>&
                                            reserved_slots = {},
                                        // --lock-index: like reserved_slots,
                                        // but image pixels MAY still route
                                        // through these slots (dither picks
-                                       // them normally). The colour is
+                                       // them normally). The color is
                                        // pinned (encode_copper's `locked`),
                                        // and the strips planner skips them
                                        // so mid-line MOVEs can't overwrite
-                                       // the locked colour.
+                                       // the locked color.
                                        const std::vector<std::pair<std::size_t, Color3f>>&
                                            locked_slots = {});
 
 // ---------------------------------------------------------------------------
 // strips for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
-// half-brite colours).
+// half-brite colors).
 //
 // 6bpp EHB has identical BPL DMA bandwidth to 6-plane lores (and to OCS DPF
 // 3+3) — same 6 plane fetches per 16 px — so the existing kStrips6bplOcs
@@ -335,7 +335,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                            external_palette = {},
                                        // --reserve-range: base-palette slots
                                        // (0..31) that must keep their fixed
-                                       // colour on every scanline (passed to
+                                       // color on every scanline (passed to
                                        // encode_copper as locked + dither
                                        // excluded). The mid-line strips
                                        // planner additionally avoids them.
@@ -343,7 +343,7 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                                            reserved_slots = {});
 
 // ---------------------------------------------------------------------------
-// strips for HAM6 (6 bitplanes — 2 control + 4 data, 16-colour base palette
+// strips for HAM6 (6 bitplanes — 2 control + 4 data, 16-color base palette
 // with HAM SET / MODIFY ops at pixel granularity).
 //
 // HAM6 has the same BPL DMA pattern as EHB and OCS DPF (6 plane fetches
@@ -351,8 +351,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
 // table transfers directly. The encoder mid-line-swaps the 16 BASE
 // palette registers on the same 19-slot grid; HAM op selection happens
 // per pixel against whichever strip palette is currently active. The
-// rolling "previous output colour" HAM state crosses strip boundaries
-// unchanged — MODIFY ops apply to the prior colour irrespective of
+// rolling "previous output color" HAM state crosses strip boundaries
+// unchanged — MODIFY ops apply to the prior color irrespective of
 // palette, SET ops resolve against the new strip palette.
 //
 // Output: 6-plane bitplane data, 16-entry base palette, per-line strips

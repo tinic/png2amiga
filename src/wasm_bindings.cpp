@@ -103,7 +103,7 @@ Options parse_js_options(val js_opts) {
     // reserves: array of { index, r, g, b } objects removing those slots
     // from the dither candidate set. The web Reserve-palette panel posts
     // one entry per swatch the user toggled on. The slot keeps its
-    // colour for display (CMAP / runtime needs) but the encoder never
+    // color for display (CMAP / runtime needs) but the encoder never
     // routes image pixels there.
     if (js_opts.hasOwnProperty("reserves")) {
         val arr = js_opts["reserves"];
@@ -120,11 +120,11 @@ Options parse_js_options(val js_opts) {
         }
     }
     // locks: array of { index, r, g, b } objects pinning palette slots
-    // to specific sRGB colours. Unlike reserves, locked slots stay in
+    // to specific sRGB colors. Unlike reserves, locked slots stay in
     // the dither candidate set (the encoder may still route image
     // pixels to them). The web "Reserve palette" panel sends locks
     // here even though the UI uses the word "reserve" — the user-
-    // facing meaning is "pin this colour across re-encodes," which
+    // facing meaning is "pin this color across re-encodes," which
     // is the LOCK semantic at the encoder level.
     if (js_opts.hasOwnProperty("locks")) {
         val arr = js_opts["locks"];

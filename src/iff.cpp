@@ -175,7 +175,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     // mutations inside find_ham_swaps / copper::encode (and especially
     // --best's joint base-palette refinement, where base_palette
     // is the OKLab centroid of all rows, not row 0 specifically)
-    // produce wrong colours via every IFF reader.
+    // produce wrong colors via every IFF reader.
     auto pchg_pal0 = (options.scanline_palettes &&
                       !options.scanline_palettes->empty())
         ? std::span<const Color3f>(*(options.scanline_palettes->data()))
@@ -205,7 +205,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     // CAMG looks like a modern 32-bit Amiga ModeID. Pre-AGA readers
     // mask off the high bits and see the OCS flags unchanged; AGA-aware
     // readers (RECOIL, ViewTek, IrfanView IFF plugin, modern AmigaOS)
-    // need the monitor ID to recognise HAM8 / 6+ plane indexed modes.
+    // need the monitor ID to recognize HAM8 / 6+ plane indexed modes.
     // Without it our HAM8 IFFs were misrendered as malformed HAM6.
     auto camg = make_camg(mode, options.hires, options.interlace, options.dpf);
     constexpr std::uint32_t PAL_MONITOR_ID = 0x00021000;

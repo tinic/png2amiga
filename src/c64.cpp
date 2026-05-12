@@ -108,7 +108,7 @@ constexpr std::size_t kCols  = 40;  // 160 / 4
 constexpr std::size_t kRows  = 25;  // 200 / 8
 
 // FLI / AFLI hardware bug: the leftmost 3 character columns always
-// display the global $D021 background colour (on real VIC-II the
+// display the global $D021 background color (on real VIC-II the
 // per-row screen-pointer reload happens too late to read valid data
 // for cells 0..2). The encoder emits whatever bytes it wants there;
 // we overpaint the preview so the PNG matches what hardware shows.
@@ -122,11 +122,11 @@ constexpr std::array<std::array<float, 3>, 3> kCellBlur = {{
     {1.0f/16, 2.0f/16, 1.0f/16},
 }};
 
-// Floyd-Steinberg dither against the full 16-colour palette over the
+// Floyd-Steinberg dither against the full 16-color palette over the
 // whole image (no cell constraints). Returned per-pixel index map drives
 // "global-FS palette coherence": each cell picks its own slot palette
-// from the top-N most-used colours in its region of this output. Without
-// it, flat cells snap to a single colour and dump diffusion error onto
+// from the top-N most-used colors in its region of this output. Without
+// it, flat cells snap to a single color and dump diffusion error onto
 // the next cell that happens to have a more diverse palette — visible
 // as 4×8 / 8×8 cell-boundary blocking under error diffusion. (Ported
 // from png2c64 commits 949d539 / b46e2a1.)
@@ -421,25 +421,25 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
     res.bitmap.assign(kRows * kCols * kCellH, 0);     // 8000 bytes
     res.screen_ram.assign(kRows * kCols, 0);          // upper-nibble = c1, lower = c2
     res.color_ram.assign(kRows * kCols, 0);           // c3 (low nibble)
-    res.bg_color = 0;  // black; per-cell bg is encoded in the cell colours
+    res.bg_color = 0;  // black; per-cell bg is encoded in the cell colors
                        // even though the C64 hardware uses one shared bg
                        // register. We pick bg=0 globally and let cells use
-                       // the bg "slot" for their own dark-cluster colour.
+                       // the bg "slot" for their own dark-cluster color.
                        // (Real per-image bg sweep is a TODO refinement.)
 
     // Pass 1: per-cell quad pick. Two paths:
     //
     //   - Any dither method (!= none): use "global-FS palette
     //     coherence". Run a full-image FS dither against all 16
-    //     palette colours, then take the top-4 most-used colours in
+    //     palette colors, then take the top-4 most-used colors in
     //     each cell as that cell's quad. Stops flat cells from snapping
-    //     to one colour — they get coherent gradients across cell
+    //     to one color — they get coherent gradients across cell
     //     boundaries instead of dumping accumulated diffusion error
     //     onto the next cell. Removes 4×8 / 8×8 cell-boundary blocking.
     //     Ported from png2c64 (949d539 / b46e2a1); we apply it across
     //     ordered + ED + palette-aware since all of them dither
     //     against the cell palette and benefit from a coherent
-    //     neighbourhood.
+    //     neighborhood.
     //   - method == none: per-cell brute force MSE/blur — picks the
     //     optimal static palette since there's no dither budget to
     //     spread error.
@@ -539,7 +539,7 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
     }
 
     // Pass 2: per-pixel index pick with dither. The pick callback
-    // looks up the cell's 4-colour palette and routes through
+    // looks up the cell's 4-color palette and routes through
     // pick_palette_index_with_ostro — same code path the Yliluoma /
     // ED / Ostromoukhov families use elsewhere. diffuse_raw_buffer
     // owns the err_buf, ordered-bias, Riemersma queue, and structure
@@ -594,7 +594,7 @@ Result<EncodeResult> encode_multicolor(const Image& image, Palette pal,
 }
 
 // ---------------------------------------------------------------------------
-// c64-hires: 320×200, 8×8 cells, 2 colours per cell (no shared bg).
+// c64-hires: 320×200, 8×8 cells, 2 colors per cell (no shared bg).
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -604,7 +604,7 @@ constexpr std::size_t kHiCellH = 8;
 constexpr std::size_t kHiCols  = 40;   // 320 / 8
 constexpr std::size_t kHiRows  = 25;   // 200 / 8
 
-// Per-pixel error against a 2-colour pair, returning the chosen index
+// Per-pixel error against a 2-color pair, returning the chosen index
 // 0/1 plus the squared OKLab error.
 inline float cell_error_for_pair(
     std::span<const color_space::OKLab> pix_lab,
@@ -671,7 +671,7 @@ Result<EncodeResult> encode_hires(const Image& image, Palette pal,
     // Pass 1: per-cell pair pick. Two paths:
     //
     //   - Any dither method (!= none): global-FS palette coherence —
-    //     top-2 most-used colours in each cell's region of a full-
+    //     top-2 most-used colors in each cell's region of a full-
     //     palette FS dither output. Same fix as encode_multicolor.
     //   - method == none: per-cell brute force C(16,2) = 120 pairs
     //     with mse/blur scoring (no dither = static MSE-optimal pair).
@@ -771,7 +771,7 @@ Result<EncodeResult> encode_hires(const Image& image, Palette pal,
     }
 
     // Pass 2: per-pixel dither via diffuse_raw_buffer with per-cell
-    // 2-colour palette callback. Index 0/1 written to the bitmap MSB-
+    // 2-color palette callback. Index 0/1 written to the bitmap MSB-
     // first within each row byte.
     std::vector<std::uint8_t> indices(W * H, 0);
     auto pick = [&](const color_space::OKLab& target,
@@ -821,7 +821,7 @@ Result<EncodeResult> encode_hires(const Image& image, Palette pal,
 }
 
 // ---------------------------------------------------------------------------
-// c64-FLI: 160×200 multicolor + per-row (c1, c2) screen colours
+// c64-FLI: 160×200 multicolor + per-row (c1, c2) screen colors
 //          within each 4×8 cell + per-cell color_ram (c3) + global bg.
 // ---------------------------------------------------------------------------
 
@@ -851,7 +851,7 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
         pal_s[i] = {pal_lab[i].L, pal_lab[i].a, pal_lab[i].b};
 
     // FLI scores per-row (each row of a 4×8 cell has its own
-    // 4-colour palette). Per-row blur uses a 4-pixel × 1-row tap
+    // 4-color palette). Per-row blur uses a 4-pixel × 1-row tap
     // table; the 3×3 binomial collapses vertically (replicate-pad)
     // to a [1,2,1]/4 horizontal kernel, which is a sensible 1D PN
     // approximation for these strip-shaped rows.
@@ -874,7 +874,7 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
     //   For each candidate color_ram value cr ∈ {0..15} \ {bg}:
     //     For each of 8 rows: try every (c1, c2) pair from
     //       {0..15} \ {bg, cr}, score row error against the row's
-    //       4 pixels under the 4-colour set {bg, c1, c2, cr}.
+    //       4 pixels under the 4-color set {bg, c1, c2, cr}.
     //     Sum row errors → cell error for this cr.
     //   Pick the cr that minimises total cell error, plus its
     //   row-best (c1, c2) pairs.
@@ -885,18 +885,18 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
     std::vector<std::uint8_t> cell_cr(kRows * kCols, 0);
 
     // Global-FS palette coherence path (any dither method != none).
-    // For each cell: cr = most-used non-bg colour in the cell's region
+    // For each cell: cr = most-used non-bg color in the cell's region
     // of a full-palette FS dither output. Each row's (c1, c2) screen
     // pair = top-2 of that row's pixels excluding bg and cr. Same
-    // fix as encode_multicolor — stops the per-row 4-colour palette
-    // from snapping into 1 dominant colour and creating cell-boundary
+    // fix as encode_multicolor — stops the per-row 4-color palette
+    // from snapping into 1 dominant color and creating cell-boundary
     // blocking under error diffusion. Ported from png2c64 b46e2a1.
     if (settings.method != dither::Method::none) {
         auto fs = global_fs_indices(image, pal_lab);
         for (std::size_t cy = 0; cy < kRows; ++cy) {
             for (std::size_t cx = 0; cx < kCols; ++cx) {
                 std::size_t cell_idx = cy * kCols + cx;
-                // Cell histogram → cr = top non-bg colour.
+                // Cell histogram → cr = top non-bg color.
                 std::array<std::uint16_t, 16> cell_hist{};
                 for (std::size_t py = 0; py < kCellH; ++py)
                     for (std::size_t px = 0; px < kCellW; ++px)
@@ -1015,7 +1015,7 @@ Result<EncodeResult> encode_fli(const Image& image, Palette pal,
     }
     }  // end else (method == none brute-force path)
 
-    // Pass 2: per-pixel dither using the cell's row-specific 4-colour set.
+    // Pass 2: per-pixel dither using the cell's row-specific 4-color set.
     std::vector<std::uint8_t> indices(W * H, 0);
     auto pick = [&](const color_space::OKLab& target,
                     std::size_t x, std::size_t y) -> dither::PickResult {
@@ -1114,7 +1114,7 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
 
     // Pass 1: per-cell-row pair pick.
     //   - method != none: global-FS palette coherence — top-2 most-
-    //     used colours in each row's 8 pixels of a full-palette FS
+    //     used colors in each row's 8 pixels of a full-palette FS
     //     output. Same fix as encode_multicolor / encode_hires.
     //   - method == none: per-row brute force C(16,2) = 120 pairs.
     std::vector<std::array<std::array<std::uint8_t, 2>, kHiCellH>>
@@ -1202,7 +1202,7 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
     }
     }  // end else (method == none brute-force path)
 
-    // Pass 2: per-pixel dither against per-row 2-colour palette.
+    // Pass 2: per-pixel dither against per-row 2-color palette.
     std::vector<std::uint8_t> indices(W * H, 0);
     auto pick = [&](const color_space::OKLab& target,
                     std::size_t x, std::size_t y) -> dither::PickResult {
@@ -1255,7 +1255,7 @@ Result<EncodeResult> encode_afli(const Image& image, Palette pal,
 }
 
 // ---------------------------------------------------------------------------
-// c64-charset-hires: 320×200, 8×8 cells, 2 colours per cell. Per-cell
+// c64-charset-hires: 320×200, 8×8 cells, 2 colors per cell. Per-cell
 // quantisation matches encode_hires; the resulting 8-byte glyph
 // patterns are then deduplicated and merged-by-Hamming-distance to
 // fit the 256-slot charset budget.
@@ -1314,7 +1314,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
     auto kCells = cs_cols * cs_rows;
     // c64 char index is 8-bit; cap budget at 256 in v1 even if caller
     // requests more (banking is the runtime's job — we still emit the
-    // full glyph catalogue but screen_ram truncates entries past 255).
+    // full glyph catalog but screen_ram truncates entries past 255).
     std::size_t budget = std::min(tile_budget, std::size_t{256});
     std::size_t effective_budget = (budget > tile_reserve)
         ? (budget - tile_reserve) : 1;
@@ -1407,15 +1407,15 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
     // (FS depends on scan order + accumulated upstream error) and burn
     // two glyph slots instead of one. Per-cell ED would also be wrong:
     // each cell would start with a cold err_buf and snap into a
-    // different pattern than its neighbour with the same content.
+    // different pattern than its neighbor with the same content.
     //
-    // Fix: build a 3W×3H buffer for each cell where the centre block
+    // Fix: build a 3W×3H buffer for each cell where the center block
     // is the source cell and the 8 surrounding blocks are mirror
     // reflections (h-flip on left/right, v-flip on top/bottom, both
-    // on corners). Run ED across the full 3W×3H, take the centre
+    // on corners). Run ED across the full 3W×3H, take the center
     // W×H. Identical source cells produce identical mirrored buffers
     // → identical post-ED patterns → clean dedup. The mirror also
-    // primes err_buf with realistic upstream content so the centre
+    // primes err_buf with realistic upstream content so the center
     // pattern is the steady-state response, not a transient.
     constexpr std::size_t k3W = 3 * kHiCellW;
     constexpr std::size_t k3H = 3 * kHiCellH;
@@ -1455,7 +1455,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
                 return {chosen, thr};
             };
             (void)dither::diffuse_raw_buffer(block, settings, pick);
-            // Copy centre W×H back to the global indices buffer.
+            // Copy center W×H back to the global indices buffer.
             for (std::size_t ly = 0; ly < kHiCellH; ++ly) {
                 for (std::size_t lx = 0; lx < kHiCellW; ++lx) {
                     auto block_off = (kHiCellH + ly) * k3W + (kHiCellW + lx);
@@ -1543,7 +1543,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
     }
 
     // Build charset_data: unique_glyphs × 8 bytes, tightly packed.
-    // c64 char index is 8-bit; cap emitted catalogue at 256 in v1.
+    // c64 char index is 8-bit; cap emitted catalog at 256 in v1.
     auto unique_glyphs = std::min(glyphs.size(), std::size_t{256});
     std::vector<std::uint8_t> charset_data(unique_glyphs * 8, 0);
     for (std::size_t g = 0; g < unique_glyphs; ++g) {
@@ -1562,7 +1562,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
     res.color_ram.assign(kCells, 0);    // upper=c1, lower=c0
     res.bg_color = 0;
 
-    // Render + pack screen / colour. screen_ram[cell] = glyph index.
+    // Render + pack screen / color. screen_ram[cell] = glyph index.
     for (std::size_t i = 0; i < kCells; ++i) {
         auto cy = i / cs_cols;
         auto cx = i % cs_cols;
@@ -1591,11 +1591,11 @@ Result<EncodeResult> encode_charset_hires(const Image& image, Palette pal,
 }
 
 // ---------------------------------------------------------------------------
-// c64-charset-multicolor: 160×200 logical, 4×8 cells, 4 colours per
+// c64-charset-multicolor: 160×200 logical, 4×8 cells, 4 colors per
 // cell (1 shared bg + 2 shared mc + 1 per-cell fg). Global bg / mc1 /
 // mc2 are picked by brute-force outer loop; per-cell fg picked per
 // cell; per-pixel index assignment runs through diffuse_raw_buffer
-// with a per-cell 4-colour palette callback so dither can reshape
+// with a per-cell 4-color palette callback so dither can reshape
 // the pattern.
 // ---------------------------------------------------------------------------
 
@@ -1667,7 +1667,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
     constexpr std::size_t kCellPx = kCellW * kCellH;  // 32
 
     // Outer pass: brute-force shared (mc1, mc2). For each candidate,
-    // iterate cells, pick best fg ∈ remaining 13 colours, sum total
+    // iterate cells, pick best fg ∈ remaining 13 colors, sum total
     // image error. Pick global (mc1, mc2) with lowest total.
     std::array<color_space::OKLab, kCellPx> cell_lab{};
     std::array<Color3f, kCellPx> raw_cell{};
@@ -1742,7 +1742,7 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
 
     // Pass 2: per-cell mirrored-3×3 ED. Same pattern as
     // encode_charset_hires — each cell's ED runs on a 3W×3H buffer
-    // with mirror-reflected neighbours, producing a self-consistent
+    // with mirror-reflected neighbors, producing a self-consistent
     // dither that's identical for identical source cells (so dedup
     // collapses cleanly to ≤256 glyphs).
     constexpr std::size_t k3W = 3 * kCellW;
@@ -2213,14 +2213,14 @@ Result<EncodeResult> encode_petscii(const Image& image_in, Palette pal,
 
     // mse path: per-pair score still computes per pixel via fg_mask
     // bit-test; we precompute fg-area and bg-area pixel-error sums
-    // per (cell, glyph, palette colour) so the inner (g, fg, bg)
+    // per (cell, glyph, palette color) so the inner (g, fg, bg)
     // call is a 32-table lookup instead of 64 per-pixel adds.
     // For each (cell, glyph, c=0..15): fg_sum[c][cell][g]  =
     //   Σ_{p: fg_mask bit set} ‖raw[p] - pal_s[c]‖²
     // and bg_sum[c][cell][g] = Σ_{p: !set} ‖raw[p] - pal_s[c]‖².
-    // Total sum over a pixel for any colour c is invariant of which
+    // Total sum over a pixel for any color c is invariant of which
     // it lands in, so pix_err[c][cell][p] precomputed then split by
-    // mask. Memory: 16 colours × ncells × 256 glyphs × 4 B = 4 MB
+    // mask. Memory: 16 colors × ncells × 256 glyphs × 4 B = 4 MB
     // per side (8 MB total), still L2-friendly for typical sizes.
     std::vector<std::array<std::array<float, kNumGlyphs>, 16>>
         mse_fg_sum;  // [c][cell][g]
@@ -2235,15 +2235,15 @@ Result<EncodeResult> encode_petscii(const Image& image_in, Palette pal,
         // Chroma weight for mse: ΔL² + W·(Δa² + Δb²). 0.5 was tuned on
         // petsciiator's 57 examples — at W=1.0 (plain OKLab²) mean ΔS2
         // vs petsciiator was +5.41; at W=0.5 it climbs to +5.94. The
-        // VIC-II 16-colour palette is chroma-extreme (saturated
+        // VIC-II 16-color palette is chroma-extreme (saturated
         // primaries far from each other), so cells with mid-saturation
         // source content get over-penalised on chroma mismatch and the
-        // encoder picks luminance-correct but chroma-wrong colours.
+        // encoder picks luminance-correct but chroma-wrong colors.
         // Halving the chroma term gives luminance more say in the
         // (g, fg, bg) decision; PSNR drops (+0.7→+0.18 dB) because
         // chroma is now under-prioritised numerically, but
         // SSIMULACRA2 — the perceptually meaningful metric — is what
-        // we're optimising.
+        // we're optimizing.
         constexpr float kChromaW = 0.5f;
         pipeline::parallel_for(ncells, [&](std::size_t cell_idx) {
             const auto& raw = cell_raw[cell_idx];
@@ -2528,8 +2528,8 @@ Result<std::string> charset_header(const EncodeResult& enc,
     write_byte_array(out, std::string(symbol_name) + "_color",
                      std::span<const std::uint8_t>(enc.color_ram));
 
-    // Full 16-colour VIC-II palette as 12-bit 0x0RGB words. The screen
-    // and colour bytes index into the standard VIC-II palette, but
+    // Full 16-color VIC-II palette as 12-bit 0x0RGB words. The screen
+    // and color bytes index into the standard VIC-II palette, but
     // emitting the resolved hex makes downstream tooling self-contained.
     auto pal_lin = palette_colors(pal);
     out += std::format("static const unsigned short {}_palette[16] = {{\n",

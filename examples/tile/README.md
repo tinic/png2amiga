@@ -37,7 +37,7 @@ faint or strong seam line shows up.
 
 ## What you'll see
 
-The naive "replicate 3×3, dither, crop centre" approach is the simplest
+The naive "replicate 3×3, dither, crop center" approach is the simplest
 possible attempt at FS-tile synchronisation. It works partially:
 
 - **`ramp_vertical`**: FS scans rows left→right. With horizontal stripes
@@ -53,7 +53,7 @@ possible attempt at FS-tile synchronisation. It works partially:
   region. In practice `--tile` neither helps nor hurts here.
 - **`ramp_diagonal`** / **`plasma`**: smooth periodic content.
   Empirically `--tile` can produce a slightly *worse* seam than raw
-  because the FS state arriving at column W of the centre after warmup
+  because the FS state arriving at column W of the center after warmup
   isn't actually periodic — the row-to-row error term doesn't have a
   W-period.
 
@@ -73,7 +73,7 @@ actually close the loop:
    region needed, mathematically guaranteed seamless. Requires either
    modifying `dither::apply` to take a `wrap_x` flag or wrapping the
    dither call.
-2. **Iterative settling.** Run `--tile` once. Take the centre crop.
+2. **Iterative settling.** Run `--tile` once. Take the center crop.
    Replicate it 3×3 again, dither, crop. Repeat until the seam metric
    stabilises (typically 2–3 passes).
 

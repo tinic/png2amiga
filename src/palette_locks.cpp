@@ -107,9 +107,9 @@ Result<void> validate_pins(const std::vector<PinSpec>& pins,
                            std::size_t image_w,
                            std::size_t image_h,
                            bool /*lock_zero_black*/) {
-    // Lock + pin compose: --lock-index pins the slot's COLOUR while the
+    // Lock + pin compose: --lock-index pins the slot's COLOR while the
     // pin pushes a specific PIXEL into that slot. The lock keeps
-    // palette[idx] = locked colour, the pin rewrites indices[pixel] to
+    // palette[idx] = locked color, the pin rewrites indices[pixel] to
     // idx. Both invariants hold simultaneously; apply_pins handles the
     // locked-target case by rewriting the index without swapping
     // palette entries (which would otherwise clobber the lock).
@@ -273,11 +273,11 @@ AssembledPalette assemble_locked_palette(
     };
     // Dedupe against ALL locked slots (lock_zero, user --lock-index,
     // --reserve-range). Critical when the user pins many slots to
-    // colours from the existing palette: the quantizer's naturals
+    // colors from the existing palette: the quantizer's naturals
     // coincide bit-exactly with those locks, so without dedupe we'd
-    // place each colour twice (once at the locked slot, once at a
+    // place each color twice (once at the locked slot, once at a
     // quantizer-fill slot) and the palette would report fewer unique
-    // colours than max_colors (e.g. 31 of 32 with one such collision).
+    // colors than max_colors (e.g. 31 of 32 with one such collision).
     //
     // The caller compensates by asking the quantizer for the FULL
     // max_colors - lock_zero count — NOT max_colors - lock_zero -
@@ -352,13 +352,13 @@ Result<void> apply_pins(Palette& palette,
             }};
         }
         if (target < locked.size() && locked[target]) {
-            // Lock + pin compose: keep palette[target]'s locked colour
+            // Lock + pin compose: keep palette[target]'s locked color
             // intact (no swap) and rewrite ONLY the pinned pixel's
             // index. The pin'd pixel will display as the locked
-            // colour — fine for the mi2-redux use case (sentinel pixels
+            // color — fine for the mi2-redux use case (sentinel pixels
             // pinned to a locked-black slot are masked out by TRNS
             // downstream anyway). Other pixels currently routed to
-            // `target` keep getting that colour, consistent with the
+            // `target` keep getting that color, consistent with the
             // lock semantic that "image pixels CAN route to a locked
             // slot."
             indices[pixel_offset] =
@@ -403,10 +403,10 @@ AssembledPalette assemble_with_reserves(
     amiga::Chipset chipset,
     amiga::Mode mode) {
     // Reserves are NOT in assemble's lock list (so the dedupe pass
-    // doesn't drop quantizer entries that match reserve colours bit-
+    // doesn't drop quantizer entries that match reserve colors bit-
     // exactly), but they ARE skipped during fill via the reserved-skip
     // mask. After assemble, overlay each reserve at its index — the
-    // quantized colour that landed there is discarded, but the qcount
+    // quantized color that landed there is discarded, but the qcount
     // subtraction in quant_counts_for_assemble already sized the
     // quantizer for the unreserved-and-unlocked slot count.
     std::vector<bool> reserve_skip(max_colors, false);
@@ -440,7 +440,7 @@ void sort_by_brightness(std::vector<Color3f>& palette,
         return i < locked.size() && locked[i];
     };
 
-    // Collect unlocked indices and sort them by their colour's OKLab L.
+    // Collect unlocked indices and sort them by their color's OKLab L.
     std::vector<std::size_t> unlocked_src;
     unlocked_src.reserve(sort_n);
     std::vector<std::size_t> unlocked_dst;

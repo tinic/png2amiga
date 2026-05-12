@@ -47,7 +47,7 @@ void snap_palette_ocs(std::vector<Color3f>& pal) {
 // Mutate non-locked slots in `pal`. `locked` (if non-empty) flags
 // slots that must not change; lock_color0 implicitly locks slot 0
 // when locked is empty. Slots flagged as locked stay at their input
-// colour after this call.
+// color after this call.
 void mutate(std::vector<Color3f>& pal, std::mt19937& rng,
             bool lock_color0,
             const std::vector<bool>& locked = {}) {
@@ -82,7 +82,7 @@ void mutate(std::vector<Color3f>& pal, std::mt19937& rng,
 
 // Crossover that preserves locked slots from parent A. lock_color0
 // implicitly forces slot 0 to black (matches encode_plain_auto's
-// behaviour when transparent or non-Atari).
+// behavior when transparent or non-Atari).
 std::vector<Color3f> crossover(const std::vector<Color3f>& a,
                                const std::vector<Color3f>& b,
                                std::mt19937& rng,
@@ -97,7 +97,7 @@ std::vector<Color3f> crossover(const std::vector<Color3f>& a,
                          || (lock_color0 && k == 0);
         if (is_locked) {
             // Use parent A's value (caller seeds A's locked slots
-            // with the user-supplied reserve colour; B may have
+            // with the user-supplied reserve color; B may have
             // different values from earlier mutations on a different
             // path, but we standardise on A so the output is stable).
             child[k] = a[k];
@@ -114,7 +114,7 @@ std::vector<Color3f> crossover(const std::vector<Color3f>& a,
 // palette of routable slots, dither against it, then remap indices.
 // LOCKS belong in the encode_plain_auto seed but are NOT in the
 // exclude mask — the dither IS allowed to route to a locked slot
-// (e.g. mi2-redux fixes 18/32 slots to scene/costume colours and
+// (e.g. mi2-redux fixes 18/32 slots to scene/costume colors and
 // expects the dither to actually use them).
 // When `tmask` is non-empty, transparent pixels get index 0 post-
 // dither and contribute neither to the dither candidate set nor to
@@ -148,7 +148,7 @@ float cpu_fitness(const Image& source,
     if (has_excl || has_trans) {
         // Build candidate sub-palette excluding reserved slots (and
         // slot 0 when transparent). Locks are NOT in the exclude
-        // mask — the dither is allowed to route to a locked colour.
+        // mask — the dither is allowed to route to a locked color.
         cand_pal_tls.clear();
         cand_to_full_tls.clear();
         cand_pal_tls.reserve(palette.size());
@@ -241,7 +241,7 @@ Result<PopSearchResult> run_population_search(
 
     auto enforce_locks = [&](std::vector<Color3f>& p,
                               const std::vector<Color3f>* lock_src) {
-        // Restore locked-slot colours from the seed (or an explicit
+        // Restore locked-slot colors from the seed (or an explicit
         // template). Called after any mutation that might have
         // touched a locked slot via the rng.
         for (std::size_t k = 0; k < p.size() && k < locked_mask.size(); ++k) {
@@ -292,7 +292,7 @@ Result<PopSearchResult> run_population_search(
 
     // Fill remainder with mutated copies of the first seed. Each
     // mutation respects locked_mask (skips reserved slots) and
-    // reapplies the seed's locked colours via enforce_locks in case
+    // reapplies the seed's locked colors via enforce_locks in case
     // of any drift.
     auto seed0 = population[0];
     std::mt19937 rng(0xa5a5);

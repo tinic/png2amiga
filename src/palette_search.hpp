@@ -40,7 +40,7 @@ struct PopSearchOptions {
     // Slots whose color is held fixed across all mutations. Sized to
     // max_colors. true = locked. Used for both --lock-index AND
     // --reserve-range: mutations skip these slots and OCS-snap
-    // respects them so locked / reserved colours stay put.
+    // respects them so locked / reserved colors stay put.
     // NOTE: `locked_mask` is purely a mutate/crossover gate; it does
     // NOT exclude slots from the dither candidate set. To exclude
     // slots from being routable by the dither (e.g. reserves and the
@@ -52,7 +52,7 @@ struct PopSearchOptions {
     //   --reserve-range in BOTH masks       (dither CANNOT route here)
     //   transparency    slot 0 in BOTH      (transparent → idx 0 only)
     // Empty means "no exclusions" (every slot is dither-routable),
-    // which matches the pre-split behaviour for the common no-locks
+    // which matches the pre-split behavior for the common no-locks
     // case.
     std::vector<bool>  dither_exclude_mask;
     // Per-pixel transparency mask (w*h). When non-empty, transparent

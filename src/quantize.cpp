@@ -217,7 +217,7 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
     // Under Emscripten we deliberately don't include <thread> (the
     // WASM pthread shim is gated separately) and parallel_for runs
     // serially anyway, so a single-chunk sweep matches the original
-    // serial behaviour on the web.
+    // serial behavior on the web.
 #ifdef __EMSCRIPTEN__
     constexpr unsigned nchunks = 1;
 #else
@@ -328,7 +328,7 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
         // arbitrary unpicked OCS codes (in 0..4095 order) for no
         // benefit, surfacing chromatic phantoms like (0,0,17) on
         // gray-only sources. Pad remaining slots with duplicates of
-        // the last-picked colour — the encoder's dither sees only
+        // the last-picked color — the encoder's dither sees only
         // the unique entries either way.
         constexpr float kSaturatedEps = 1e-9f;
         if (best_total < kSaturatedEps && k > 0) {
@@ -448,9 +448,9 @@ Palette median_cut(std::span<const Color3f> colors,
         // Without this, median-cut starts with one giant box: the
         // first split direction is dominated by whatever channel has
         // the largest range across the whole image, and tiny minority
-        // colours in extreme hue corners can get buried for the first
+        // colors in extreme hue corners can get buried for the first
         // few splits. Pre-bucketing guarantees an extreme-corner
-        // colour gets an initial slot when present in the source —
+        // color gets an initial slot when present in the source —
         // small bucket → contributes one centroid to the starting set,
         // then normal median-cut takes over for the remainder.
         //
@@ -1312,7 +1312,7 @@ Result<Palette> quantize(const Image& image, std::size_t max_colors,
         // unavailable (no Apple GPU, or built without Xcode).
         if (auto r = gpu_restart_quantize(image, max_colors); r) {
             // Apply the existing palette diversity pass post-hoc so
-            // gpu_restart honours --palette-diversity like the other
+            // gpu_restart honors --palette-diversity like the other
             // quantizers do.
             if (palette_diversity > 0) {
                 diversify_palette(*r, image.pixels(), palette_diversity,
@@ -1379,12 +1379,12 @@ Result<Palette> refine_with_dither(
     // Per-pixel nearest-palette assignment buffer (nearest-color, NOT
     // dither-driven). The previous implementation used the dither's
     // index buffer here, which has pixels rerouted across cluster
-    // boundaries by neighbour error — that breaks K-means' convergence
+    // boundaries by neighbor error — that breaks K-means' convergence
     // guarantee (assignment metric ≠ centroid metric) and pollutes
     // each cluster's centroid with pixels that don't perceptually
     // belong. Nearest-match is the K-means assignment libimagequant
     // uses (kmeans.rs:92-108); dither-awareness comes from the
-    // neighbour-coherence weight below, not from re-routing pixels.
+    // neighbor-coherence weight below, not from re-routing pixels.
     std::vector<std::uint8_t> nearest(w * h);
     std::vector<color_space::OKLab> img_lab(w * h);
     for (std::size_t y = 0; y < h; ++y)
@@ -1420,10 +1420,10 @@ Result<Palette> refine_with_dither(
         // Spatial Color Quantization: weight each pixel's contribution to
         // its cluster centroid by how many of its 4-neighbors share the
         // same nearest-palette assignment. Pixels in contiguous same-
-        // colour regions pull harder on the centroid; isolated single-
+        // color regions pull harder on the centroid; isolated single-
         // pixel "islands" pull less.
-        //   0 matching neighbours → weight 1.0  (isolated pixel)
-        //   4 matching neighbours → weight 3.0  (interior of a region)
+        //   0 matching neighbors → weight 1.0  (isolated pixel)
+        //   4 matching neighbors → weight 3.0  (interior of a region)
         struct Acc { double L{}, a{}, b{}, w{}; };
         std::vector<Acc> acc(num_colors);
 
@@ -1494,7 +1494,7 @@ Result<Palette> refine_with_dither(
         if (!changed) break;
 
         // Update per-pixel feedback weights (libimagequant's
-        // adjust_weight rule, normalised against the per-iteration p99
+        // adjust_weight rule, normalized against the per-iteration p99
         // error so typical pixels stay near weight 1 and only the
         // long-tail outliers grow). Capped at 8 to keep extreme
         // pixels from monopolising the centroid.

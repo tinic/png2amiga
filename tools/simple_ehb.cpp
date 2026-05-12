@@ -1,6 +1,6 @@
 // Simplest-possible-honest EHB encoder.
 //
-//   Wu quantize → 32 base colours.
+//   Wu quantize → 32 base colors.
 //   Twin-aware k-means refine (joint base + half-brite pairing).
 //   Build 64-effective palette (32 base + sRGB-halved twins).
 //   FS error diffusion, serpentine, in OKLab perceptual nearest.

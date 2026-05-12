@@ -201,7 +201,7 @@ function paletteToggle() {
 const kPaletteSwatchPx = 8
 const kPaletteCssScale = 2
 const kPalettePerRow = 32
-// Draw the EHB halfbrite carve-out: faint outline, no colour fill.
+// Draw the EHB halfbrite carve-out: faint outline, no color fill.
 function drawPaletteCarveCell(ctx: CanvasRenderingContext2D,
                               cx: number, cy: number) {
   ctx.strokeStyle = 'rgba(255,255,255,0.18)'
@@ -270,7 +270,7 @@ function drawPalette(bytes: Uint8Array) {
 // Custom floating tooltip that tracks the cursor while it's over a
 // palette swatch. Native `title=` would only fire after a long pause,
 // and only on the swatch the cursor entered first — bad UX for a 32-
-// or 256-cell grid where you want to flick across colours and read
+// or 256-cell grid where you want to flick across colors and read
 // values fly-by. The tooltip shows index, #RRGGBB, and rgb(...).
 const paletteTooltip = reactive({
   visible: false,
@@ -394,7 +394,7 @@ function buildMaskedRgba(target: PaletteHit | null,
   return maskByRgb(lastRgba, target.r, target.g, target.b, n)
 }
 
-// Repaint the preview canvas honouring the current hover mask.
+// Repaint the preview canvas honoring the current hover mask.
 // Page-CSS checkerboard shows through alpha=0 pixels.
 function repaintMaskedPreview() {
   const canvas = canvasRef.value
@@ -442,7 +442,7 @@ const reservesSupported = computed(() => {
   // allows reserves through ("PF1 is zeroed in the current
   // implementation, so reserves on the depth-3/4 base palette ARE
   // PF2 reserves"), and copper.cpp's find_best_swap already rejects
-  // OCS-snapping onto reserved colours. No special-case needed.
+  // OCS-snapping onto reserved colors. No special-case needed.
   return true
 })
 const numReserveRows = computed(() => {
@@ -474,7 +474,7 @@ const reserveGridItems = computed<ReserveGridItem[]>(() => {
       // Slot 0 is implicitly locked to black when "Reserve color 0 for
       // black" is on, and the encoder rejects redundant reserves on it.
       // Render the swatch read-only in that case so the user can see
-      // the colour but the click is inert.
+      // the color but the click is inert.
       const readonly = (idx === 0 && options.lockColor0)
       items.push({
         kind: 'swatch',
@@ -723,15 +723,15 @@ const isEffectiveFixedBuffer = computed(() =>
 
 // Dual playfield: only valid for standard Amiga modes (no HAM, no EHB,
 // no Atari/DOS) at the matching depth for the current chipset (3 for
-// OCS = 8 PF2 colours, 4 for AGA = 16).
+// OCS = 8 PF2 colors, 4 for AGA = 16).
 //
 // OCS hires is excluded (any -lace variant too): OCS hires caps at 4
-// bitplanes total, so DPF would split 2+2 giving only 4 colours per
+// bitplanes total, so DPF would split 2+2 giving only 4 colors per
 // playfield, and the chipset doesn't officially support hires+DPF.
 //
 // OCS lores-lace + DPF IS allowed — BPLCON0's LACE bit (2) and DBLPF
 // bit (10) are independent and can be set together. The hardware does
-// 320×400 with two 8-colour playfields fine, even though the
+// 320×400 with two 8-color playfields fine, even though the
 // combination flickers on consumer monitors without scan-doubling.
 // AGA hires + DPF (depth=4 → 4+4) is also fine.
 const dpfAvailable = computed(() => {
@@ -743,7 +743,7 @@ const dpfAvailable = computed(() => {
 })
 
 // strips — mid-line palette swaps. Two flavours, both OCS lores only:
-//   * DPF + lores (depth=3): 3-plane PF2, 8 base colours.
+//   * DPF + lores (depth=3): 3-plane PF2, 8 base colors.
 //   * EHB (mode=ehb): 32 base + 32 hardware-derived half-brites.
 // strips is an extension to sliced (per-line palette evolution); enabling
 // strips turns sliced on too, and turning sliced off cascades strips off.
@@ -1054,7 +1054,7 @@ function buildWasmOptions(): WasmOptions {
   // slots are removed from the dither candidate set. The encoder
   // sizes the quantizer's palette for the unreserved slots only
   // (subtract reserves from qcount in api.cpp), so the rendered
-  // image uses exactly max_colors - reserves unique colours.
+  // image uses exactly max_colors - reserves unique colors.
   const cleanReserves = reserves.filter(r =>
     !(r.index === 0 && options.lockColor0))
   const out: WasmOptions = {
@@ -1367,7 +1367,7 @@ function trackConvertSuccess(_result: ConvertResult, convertMs: number): void {
 }
 
 // Charset diagnostic: paint each unique glyph onto charsetCanvasRef,
-// coloured by the glyph's first-occurrence cell.
+// colored by the glyph's first-occurrence cell.
 //   hires:      8×8, c0/c1 = (bg/fg) from cell color nibbles.
 //   multicolor: 4×8 logical, stretched 2× horizontally for display
 //               parity; bg/mc1/mc2 from globals, fg from cell color.
@@ -2371,7 +2371,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="isCgaText(options.mode) && options.cgaTextMetric === 'blur'"
                    class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold"
-                  title="Pappas-Neuhoff blur-kernel shape. The kernel must match the cell aspect: tall-cell modes (8×1, 8×2) want horizontal-favouring kernels, square-cell modes (8×4, 8×8) want symmetric. Auto selects bench-tuned per-mode defaults; manual override for A/B.">
+                  title="Pappas-Neuhoff blur-kernel shape. The kernel must match the cell aspect: tall-cell modes (8×1, 8×2) want horizontal-favoring kernels, square-cell modes (8×4, 8×8) want symmetric. Auto selects bench-tuned per-mode defaults; manual override for A/B.">
                   Kernel
                 </label>
                 <div class="col-8">
@@ -2385,7 +2385,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    one whose look you prefer. -->
               <div v-if="options.chipset === 'c64'" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold"
-                  title="VIC-II 16-colour palette. Pepto is the most-cited reference; VICE/Colodore/Deekay/Godot/C64Wiki/Levy are alternative measurements or community standards.">
+                  title="VIC-II 16-color palette. Pepto is the most-cited reference; VICE/Colodore/Deekay/Godot/C64Wiki/Levy are alternative measurements or community standards.">
                   Palette
                 </label>
                 <div class="col-8">
@@ -2462,7 +2462,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
               <!-- strips — mid-line palette swaps (OCS lores only, DPF or EHB) -->
               <div v-if="scapAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Strip palette: mid-line palette swaps inside the displayed area, on top of the sliced palette's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colours) and EHB (32 base + 32 hardware-derived half-brites).">Strips</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Strip palette: mid-line palette swaps inside the displayed area, on top of the sliced palette's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colors) and EHB (32 base + 32 hardware-derived half-brites).">Strips</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.scap" />
                   <span style="color: #888; font-size: 0.625rem;">mid-line swaps</span>
@@ -2487,7 +2487,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
                    hardware buffer): preserve source aspect by letterboxing/
                    pillarboxing the image inside the fixed frame instead of
-                   stretching. Stays visible (greyed out) for tile-freeform
+                   stretching. Stays visible (grayed out) for tile-freeform
                    modes when Resize is on so the layout doesn't jump. -->
               <div v-if="isFixedBufferMode(options.mode) || isTileFreeformMode(options.mode)"
                    class="grid align-items-center">
@@ -2729,13 +2729,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <!-- Reserve palette: 16xN grid; click to reserve/unreserve
                    individual slots. Reserved slots are removed from the
                    dither candidate set — the encoder never routes image
-                   pixels through them, but the slot keeps its colour for
+                   pixels through them, but the slot keeps its color for
                    display (CMAP / runtime). Visible only when the encoder
                    emits a global swatch palette (HAM / sliced / strips
                    have none). -->
               <div v-if="numReserveRows > 0" class="pt-3 mt-3 border-top-1 surface-border">
                 <label class="block text-xs text-color-secondary font-semibold mb-1"
-                       title="Click a swatch to reserve that palette slot. Reserved slots stay in the palette but the encoder won't dither image pixels into them — useful for sprite colours, runtime palette regions, EHB upper-bank carve-outs, etc. Click again to unreserve.">Reserve palette</label>
+                       title="Click a swatch to reserve that palette slot. Reserved slots stay in the palette but the encoder won't dither image pixels into them — useful for sprite colors, runtime palette regions, EHB upper-bank carve-outs, etc. Click again to unreserve.">Reserve palette</label>
                 <div class="lock-grid" :style="{ gridTemplateRows: `1rem repeat(${numReserveRows}, 0.94rem)` }">
                   <template v-for="item in reserveGridItems" :key="item.key">
                     <div v-if="item.kind === 'corner'"></div>
@@ -2783,7 +2783,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
                 <div class="flex align-items-center gap-2 mt-2">
                   <input type="checkbox" v-model="options.slicedVerticalDither" id="slicedVerticalDither" />
-                  <label for="slicedVerticalDither" class="text-xs text-color-secondary" title="Spread copper transitions across rows via 1-D Bayer alternation between old/new palette colours. Smoother on a CRT, slightly worse S2/PSNR.">Vertical palette dither</label>
+                  <label for="slicedVerticalDither" class="text-xs text-color-secondary" title="Spread copper transitions across rows via 1-D Bayer alternation between old/new palette colors. Smoother on a CRT, slightly worse S2/PSNR.">Vertical palette dither</label>
                 </div>
               </div>
 
@@ -2879,10 +2879,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                @blur="paletteHoverLeave">
             <canvas ref="paletteCanvasRef" class="palette-canvas"
                     role="img"
-                    aria-label="Palette swatches; hover for index and colour values" />
+                    aria-label="Palette swatches; hover for index and color values" />
           </div>
           <!-- eslint-enable -->
-          <!-- Charset diagnostic: actual generated glyphs, coloured by
+          <!-- Charset diagnostic: actual generated glyphs, colored by
                each glyph's first-occurrence cell. Only for c64-charset. -->
           <div v-if="isC64CharsetMode(options.mode)"
                class="surface-card border-round-lg p-2">

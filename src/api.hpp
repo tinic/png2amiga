@@ -28,7 +28,7 @@ namespace png2amiga::api {
 //
 // Inputs:
 //   plane_bytes    — bitplane data size (e.g. planes.total_bytes()).
-//   palette_size   — number of colour entries (Color3f count).
+//   palette_size   — number of color entries (Color3f count).
 //   aga            — chipset is AGA (palette costs 2× and copper writes
 //                    cost 2× per change for hi+lo nibble passes).
 //   sliced_changes    — total sliced scanline changes across the frame
@@ -95,14 +95,14 @@ struct LockSpec {
 };
 
 // Reserve a palette slot from the quantizer entirely. Differs from
-// LockSpec: locks pin a slot to a colour but the quantizer may still
+// LockSpec: locks pin a slot to a color but the quantizer may still
 // route image pixels there if they happen to match. Reserves remove
 // the slot from the candidate set — the encoded image never references
-// it. Useful for sprite-colour slots, runtime palette regions, EHB
+// it. Useful for sprite-color slots, runtime palette regions, EHB
 // upper-bank carve-outs, etc.
 struct ReserveSpec {
     int index;       // palette slot, 0..max_colors-1
-    int r, g, b;     // sRGB 0-255 default colour for the slot
+    int r, g, b;     // sRGB 0-255 default color for the slot
 };
 
 // Pin a palette slot to whatever color the source pixel at (x, y) ends up
@@ -115,7 +115,7 @@ struct PinSpec {
 };
 
 // Canonical encoder schema. Every parameter the pipeline (preprocess →
-// quantize → dither → encode) honours lives here. The CLI parses into
+// quantize → dither → encode) honors lives here. The CLI parses into
 // main.cpp's Config and translates via make_api_options() (one-line
 // bridge in main.cpp); the WASM frontend builds Options directly from
 // JS. New encoder knobs should land here FIRST, then the bridge picks
@@ -205,7 +205,7 @@ struct Options {
     // Copper palette (per-scanline palette changes)
     bool copper = false;                // use per-scanline copper palettes
     int copper_changes = 0;             // override changes/line (0 = auto)
-    // Per-line palette planner neighbour-row smoothing. -1 means use the
+    // Per-line palette planner neighbor-row smoothing. -1 means use the
     // encode_copper default (radius=4, decay=0.85). Exposed for sweep
     // tooling (--slice-spread-radius / --slice-spread-decay on the CLI).
     int sliced_spread_radius = -1;
@@ -223,14 +223,14 @@ struct Options {
     float alpha_dither_strength = 1.0f; // dither pattern intensity
     // RGB-as-transparent: every pixel whose 8-bit sRGB exactly matches
     // one of these triplets is treated as alpha=0 before quantization.
-    // Useful for atlases that encode transparency via a sentinel colour
+    // Useful for atlases that encode transparency via a sentinel color
     // (e.g. magenta #FF00FF in MISE Explorer's MI2 sprite extractions).
     // Multiple values supported — pass `--transparent-color` once per
     // sentinel, since some pipelines emit several rounding variants.
     std::vector<std::array<std::uint8_t, 3>> transparent_colors;
 
     // Slot number that alpha=0 pixels write to in the output indices
-    // (.idx + paletted PNG). Default 0 — preserves legacy behaviour
+    // (.idx + paletted PNG). Default 0 — preserves legacy behavior
     // where transparent pixels collapse onto the "transparent
     // placeholder" slot 0 (= black under lock_color0). Set non-zero
     // for downstream formats whose transparency convention differs
@@ -291,10 +291,10 @@ struct Options {
     // Seamless-tile mode. Pre-replicates the (already preprocessed)
     // input image into a 3x3 layout, runs quantize / dither / encode
     // over the full 3W x 3H buffer so the error-diffused dither at
-    // the right edge of the centre tile converges to match its left
-    // edge, then crops the centre tile for export — every output
-    // path gets only the centre W x H. The terminal `--preview` is
-    // the only consumer that re-tiles the centre back to 3x3 for
+    // the right edge of the center tile converges to match its left
+    // edge, then crops the center tile for export — every output
+    // path gets only the center W x H. The terminal `--preview` is
+    // the only consumer that re-tiles the center back to 3x3 for
     // visual seam verification.
     //
     // Allowed only on freeform indexed bitmap modes (lores / hires /
@@ -327,7 +327,7 @@ struct Options {
     // ignored everywhere else. The VIC-II palette has no unique sRGB
     // ground-truth — different tools/scenes prefer different RGB tables.
     // Colodore is the default (matches png2c64) — it's measurement-based
-    // so colours track real CRT output more closely than other tables.
+    // so colors track real CRT output more closely than other tables.
     std::string c64_palette = "colodore";
 
     // Per-cell error metric for C64 modes (cell brute force). Both
@@ -348,7 +348,7 @@ struct Options {
     // SNES / Genesis / Amiga 16x16 / PS1 64x64. When 0 the encoder
     // uses its mode default (256 for c64). Use higher budgets when
     // the runtime swaps charset banks across frames; the encoder
-    // emits the full glyph catalogue but writes screen_ram with the
+    // emits the full glyph catalog but writes screen_ram with the
     // platform's hardware-native index width (8-bit on c64, 16-bit
     // on Genesis / SNES).
     std::size_t tile_budget = 0;
@@ -410,10 +410,10 @@ struct ConvertResult {
 
     // c64 charset modes — copy of the encoder's raw_frame so the web
     // frontend can render a charset diagnostic (the actual generated
-    // glyphs, coloured by their first-occurrence cell). Layout:
+    // glyphs, colored by their first-occurrence cell). Layout:
     //   bytes 0..unique_glyphs*8       — charset_data (8 bytes/glyph)
     //   then  cols*rows                — screen_ram (glyph index)
-    //   then  cols*rows                — color_ram (per-cell colour)
+    //   then  cols*rows                — color_ram (per-cell color)
     // Empty for non-charset runs.
     std::vector<std::uint8_t> c64CharsetData;
     int c64Mc1{};                        // multicolor: shared mc1 (0..15)
@@ -575,7 +575,7 @@ struct EncodeState {
     // bbgggrrr-format Direct Color pixel byte array.
     std::vector<std::uint8_t> raw_frame;
 
-    // c64 modes: shared VIC-II background colour. Needed for PRG /
+    // c64 modes: shared VIC-II background color. Needed for PRG /
     // .koa / .hir export. 0 for non-c64 runs.
     std::uint8_t c64_bg_color = 0;
 

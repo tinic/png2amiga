@@ -44,7 +44,7 @@ float gaus(float pos, float scale) {
 
 // Fetch source texel at integer offset (off in source pixels).
 // Operates on a per-source-texel grid: pos is in source-texel units,
-// floor()ed so fetch always lands on the canonical centre.
+// floor()ed so fetch always lands on the canonical center.
 vec3 fetch(vec2 pos, vec2 off) {
   pos = (floor(pos * u_srcSize + off) + vec2(0.5)) / u_srcSize;
   if (any(lessThan(pos, vec2(0.0))) || any(greaterThan(pos, vec2(1.0)))) {
@@ -53,7 +53,7 @@ vec3 fetch(vec2 pos, vec2 off) {
   return toLinear(texture2D(u_src, pos).rgb);
 }
 
-// Distance to nearest texel centre (range [-0.5, 0.5]).
+// Distance to nearest texel center (range [-0.5, 0.5]).
 vec2 dist(vec2 pos) {
   pos = pos * u_srcSize;
   return -((pos - floor(pos)) - vec2(0.5));
@@ -65,7 +65,7 @@ vec3 horz3(vec2 pos, float off) {
   vec3 c = fetch(pos, vec2( 0.0, off));
   vec3 d = fetch(pos, vec2( 1.0, off));
   float dst = dist(pos).x;
-  // Gaussian weights centred on dst with hardPix sharpness
+  // Gaussian weights centered on dst with hardPix sharpness
   float wb = gaus(dst - 1.0, u_hardPix);
   float wc = gaus(dst        , u_hardPix);
   float wd = gaus(dst + 1.0, u_hardPix);
@@ -127,8 +127,8 @@ vec3 bloom(vec2 pos) {
 }
 
 // PAL chroma low-pass + 1-H delay-line averaging. Samples a 5-tap
-// horizontal × 2-row vertical neighbourhood, converts each to YUV, and
-// returns the *averaged U/V* with Y from the centre tap. Used to
+// horizontal × 2-row vertical neighborhood, converts each to YUV, and
+// returns the *averaged U/V* with Y from the center tap. Used to
 // replace the C64 frame's chroma while keeping luma sharp — same model
 // as png2c64's CPU pass, in 1 fragment.
 vec3 palChroma(vec2 pos) {
@@ -151,7 +151,7 @@ vec3 palChroma(vec2 pos) {
       if (dx == 0 && dy == 0) yuvCenter = vec3(Y, U, V);
     }
   }
-  // Reconstruct RGB: keep centre Y, replace U/V with the smoothed
+  // Reconstruct RGB: keep center Y, replace U/V with the smoothed
   // values (the PAL viewer's eye sees luma at full bandwidth and chroma
   // smeared horizontally + vertically across line pairs).
   vec3 yuv = vec3(yuvCenter.x, uSum, vSum);

@@ -97,9 +97,9 @@ AssembledPalette assemble_locked_palette(
     amiga::Chipset chipset,
     amiga::Mode mode,
     // Indices to SKIP when filling unlocked slots with quantized
-    // colours. Use this to make the fill avoid landing in slots that
+    // colors. Use this to make the fill avoid landing in slots that
     // will be overwritten by a post-assemble reserve overlay — without
-    // it, fill puts quantized colours at the front-of-unlocked, the
+    // it, fill puts quantized colors at the front-of-unlocked, the
     // reserve overlay displaces them, and the unreserved tail goes
     // unfilled (3bpp + reserve 1-4 → slots 5-7 black). Reserves are
     // NOT placed by assemble; the caller overlays them and they're
@@ -148,7 +148,7 @@ bool contains_locked_black(const Palette& palette);
 // downstream finalize_palette dedupe has a spare to drop.
 //
 // Why two passes: when slot 0 is reserved for black, the simplest
-// approach is to ask the quantizer for K-1 colours and prepend the
+// approach is to ask the quantizer for K-1 colors and prepend the
 // locked black. Most images don't drive the quantizer to pick black
 // in K-1 clusters, so the K-1 partition cleanly fills slots 1..K-1.
 // On dark sources the quantizer DOES pick black at K-1; in that
@@ -158,7 +158,7 @@ bool contains_locked_black(const Palette& palette);
 //
 // Caller is expected to pass a quantize_fn that:
 //   • takes the slot count K
-//   • returns a Result<Palette> of K colours, snapped to the target
+//   • returns a Result<Palette> of K colors, snapped to the target
 //     chipset/mode gamut and diversified (caller-side concern)
 // The returned Palette is then ready for `finalize_palette()` or
 // `assemble_locked_palette()` as appropriate.
@@ -213,7 +213,7 @@ QuantCounts quant_counts_for_assemble(std::size_t max_colors,
 //   • qcount must subtract reserves (else the quantizer optimises for
 //     the wrong slot count and the dither's gamut collapses).
 //   • assemble's fill must SKIP reserved indices (else reserves
-//     displace quantized colours, leaving the tail empty).
+//     displace quantized colors, leaving the tail empty).
 //   • assemble's lock list must NOT include reserves (else dedupe
 //     drops every quantizer entry that bit-matches a reserve, leaving
 //     the tail empty for a different reason).
@@ -226,7 +226,7 @@ QuantCounts quant_counts_for_assemble(std::size_t max_colors,
 // — and is left to the caller).
 //
 // Reserves are applied via the same chipset/mode snap that locks use
-// (palette_locks::to_color), so the placed colours match what the
+// (palette_locks::to_color), so the placed colors match what the
 // hardware can actually display.
 // ---------------------------------------------------------------------------
 AssembledPalette assemble_with_reserves(

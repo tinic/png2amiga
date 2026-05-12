@@ -232,7 +232,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                    // invoke from worker contexts.
                                    std::function<void(float, std::string_view)>
                                        on_progress = {},
-                                   // Per-line palette planner neighbour-row
+                                   // Per-line palette planner neighbor-row
                                    // smoothing. SIZE_MAX / -1.0f means
                                    // "use the depth/is_ehb-aware default";
                                    // explicit values from the CLI flags
@@ -260,7 +260,7 @@ Result<CopperResult> encode_copper(const Image& image,
                                    bool vertical_dither = false,
                                    // Slots the dither pass must never pick.
                                    // Used by --reserve-range: those slots
-                                   // hold a fixed user colour (also locked
+                                   // hold a fixed user color (also locked
                                    // via `locked`), and image content must
                                    // route around them across all scanlines.
                                    const std::vector<std::size_t>& dither_excluded = {},

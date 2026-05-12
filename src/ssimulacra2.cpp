@@ -96,7 +96,7 @@ inline void make_positive(XYB& v) noexcept {
 
 // Separable Gaussian blur, σ=1.5, half-width=6 (kernel size 13).
 // Zero-pad boundary (out-of-bounds samples contribute 0 and are NOT
-// renormalised), matching libjxl FastGaussian's "zero-pad boundary
+// renormalized), matching libjxl FastGaussian's "zero-pad boundary
 // handling" — important because the EdgeDiff map's per-pixel
 // (1+|x-mu|) ratio is sensitive to whether the local mean dips at the
 // border, and the border-region edge maps carry some of the highest

@@ -348,7 +348,7 @@ constexpr auto make_libcaca_6x6() noexcept {
 }
 
 // Pegasus / REXPaint 8×8 mosaic — biases on-pixels toward each tile's
-// centre, producing a "tiled glyph" look that reads on character-cell
+// center, producing a "tiled glyph" look that reads on character-cell
 // displays where each pixel is a separate visual unit.
 constexpr auto make_pegasus_8x8() noexcept {
     constexpr std::array<std::array<int, 8>, 8> raw = {{
@@ -629,7 +629,7 @@ struct NearestResult {
 // the same load broadcast across all comparisons.
 //
 // Fixed capacity 256 — enough for any indexed mode we support
-// (max d=8 = 256 colours). Stack-allocated to skip the malloc on
+// (max d=8 = 256 colors). Stack-allocated to skip the malloc on
 // every dither::apply (which would dominate at small image sizes).
 constexpr std::size_t kMaxPaletteN = 256;
 struct PaletteSoA {
@@ -888,7 +888,7 @@ constexpr std::array floyd_steinberg_kernel = {
 // winning shape preserves energy (sum=1.0), puts 0.25 on each of
 // right / right2 / bottom-left / bottom, and zeros bottom-right +
 // bottom2 — still recognisably "Atkinson-shape" but rebalanced for
-// multi-colour palettes in OKLab.
+// multi-color palettes in OKLab.
 //
 //      * 0.25 0.25
 // 0.25 0.25 0
@@ -906,7 +906,7 @@ constexpr std::array atkinson_kernel = {
 // Sierra Lite — Frankie Sierra 1990 "Filter Lite". Kernel-shape sweep
 // (576 combos × 5 images × 2 modes) found apparent +0.7 dB winners
 // at sum≈0.925, but disambiguation showed they were a strength effect
-// in disguise: normalised-winner shape × strength sweep matches
+// in disguise: normalized-winner shape × strength sweep matches
 // canonical-shape × strength sweep within 0.02 dB. Strength tuning,
 // not kernel reshaping, is the real lever — see dither_tuning.cpp
 // where sierra-lite's strength was raised from 0.85 to 0.90.
@@ -921,7 +921,7 @@ constexpr std::array sierra_lite_kernel = {
 // sweep — mean PSNR 33.30 dB vs the optimum's 33.72 dB (+0.41 dB win).
 //
 // The OKLab-tuned shape redistributes weights to push more energy
-// straight down (centre column +0.05) and to the immediate right
+// straight down (center column +0.05) and to the immediate right
 // (+0.05), away from the row-2 corners (which go slightly negative).
 // 12-cell sum still ≈ 1.0 (energy preserving). Mirror-symmetric: cells
 // (1,1)/(-1,1) share weight 0.095, (2,1)/(-2,1) share 0.048, etc.
@@ -935,12 +935,12 @@ constexpr std::array stucki_kernel = {
     DiffusionEntry{ 2, 0,  0.045f},   // c2: right2       (was 4/42 ≈ 0.095)
     DiffusionEntry{-2, 1,  0.048f},   // c3: row1 |±2|    (was 2/42 ≈ 0.048)
     DiffusionEntry{-1, 1,  0.095f},   // c4: row1 |±1|    (was 4/42 ≈ 0.095)
-    DiffusionEntry{ 0, 1,  0.240f},   // c5: row1 centre  (was 8/42 ≈ 0.190)
+    DiffusionEntry{ 0, 1,  0.240f},   // c5: row1 center  (was 8/42 ≈ 0.190)
     DiffusionEntry{ 1, 1,  0.095f},   // c4 mirror
     DiffusionEntry{ 2, 1,  0.048f},   // c3 mirror
     DiffusionEntry{-2, 2, -0.026f},   // c6: row2 |±2|    (was 1/42 ≈ 0.024) — NEGATIVE
     DiffusionEntry{-1, 2,  0.048f},   // c7: row2 |±1|    (was 2/42 ≈ 0.048)
-    DiffusionEntry{ 0, 2,  0.145f},   // c8: row2 centre  (was 4/42 ≈ 0.095)
+    DiffusionEntry{ 0, 2,  0.145f},   // c8: row2 center  (was 4/42 ≈ 0.095)
     DiffusionEntry{ 1, 2,  0.048f},   // c7 mirror
     DiffusionEntry{ 2, 2, -0.026f},   // c6 mirror
 };
@@ -951,7 +951,7 @@ constexpr std::array stucki_kernel = {
 // optimum's 33.59 dB (+0.33 dB perceptual gain).
 //
 // OKLab-tuned shape rebalances toward the immediate right and row-1
-// |±2| corners, lightens row-1/2 |±1| and the row-2 centre, and pushes
+// |±2| corners, lightens row-1/2 |±1| and the row-2 center, and pushes
 // row-2 corners slightly negative — same family pattern as the Atkinson
 // and Stucki re-tunes. 12-cell sum ≈ 0.90 (gentle under-distribution).
 //
@@ -960,12 +960,12 @@ constexpr std::array jarvis_kernel = {
     DiffusionEntry{ 2, 0,  0.104f},   // c2: right2         (≈ canonical 5/48)
     DiffusionEntry{-2, 1,  0.113f},   // c3: row1 |±2|      (was 3/48 ≈ 0.063)
     DiffusionEntry{-1, 1,  0.054f},   // c4: row1 |±1|      (was 5/48 ≈ 0.104)
-    DiffusionEntry{ 0, 1,  0.146f},   // c5: row1 centre    (≈ canonical 7/48)
+    DiffusionEntry{ 0, 1,  0.146f},   // c5: row1 center    (≈ canonical 7/48)
     DiffusionEntry{ 1, 1,  0.054f},   // c4 mirror
     DiffusionEntry{ 2, 1,  0.113f},   // c3 mirror
     DiffusionEntry{-2, 2, -0.029f},   // c6: row2 |±2|      (was 1/48 ≈ 0.021) — NEGATIVE
     DiffusionEntry{-1, 2,  0.062f},   // c7: row2 |±1|      (≈ canonical 3/48)
-    DiffusionEntry{ 0, 2,  0.054f},   // c8: row2 centre    (was 5/48 ≈ 0.104)
+    DiffusionEntry{ 0, 2,  0.054f},   // c8: row2 center    (was 5/48 ≈ 0.104)
     DiffusionEntry{ 1, 2,  0.062f},   // c7 mirror
     DiffusionEntry{ 2, 2, -0.029f},   // c6 mirror
 };
@@ -1372,7 +1372,7 @@ DitherResult apply_riemersma(
 
     // Riemersma's canonical queue: 16 entries with exponential decay.
     // ratio = (1/16)^(1/15) so weight_i = ratio^(QSIZE-1-i) gives oldest
-    // entry weight = 1/16, newest entry weight = 1.0. Sum is normalised
+    // entry weight = 1/16, newest entry weight = 1.0. Sum is normalized
     // implicitly by error propagation — accumulated error converges.
     constexpr std::size_t QSIZE = 16;
     std::array<Color3f, QSIZE> queue{};  // sRGB residual queue
@@ -1384,7 +1384,7 @@ DitherResult apply_riemersma(
             weights[i] = w_acc;
             w_acc *= ratio;
         }
-        // Normalise so sum = 1.
+        // Normalize so sum = 1.
         float total = 0.0f;
         for (float wt : weights) total += wt;
         for (float& wt : weights) wt /= total;
@@ -1450,14 +1450,14 @@ DitherResult apply_riemersma(
 // (https://bisqwit.iki.fi/story/howto/dither/jy/)
 //
 // At each pixel, *devise a mixing plan* of 64 palette indices whose
-// average colour matches the target. Sort by luma, then index into the
+// average color matches the target. Sort by luma, then index into the
 // plan with the standard 8×8 Bayer threshold. Result: every pixel's
-// output is one of 64 colours pre-selected to make the right *averaged*
-// colour at viewing distance — far better than single-threshold ordered
-// dither when the palette is small (CGA, EHB, 4–16 colours).
+// output is one of 64 colors pre-selected to make the right *averaged*
+// color at viewing distance — far better than single-threshold ordered
+// dither when the palette is small (CGA, EHB, 4–16 colors).
 //
 // Greedy plan construction (Yliluoma method 1): at step k, try each
-// palette colour, pick the one whose addition to the plan minimises
+// palette color, pick the one whose addition to the plan minimises
 // distance from target. O(N×P) per pixel.
 // ===========================================================================
 
@@ -1627,9 +1627,9 @@ std::uint8_t pick_knoll_index(
     return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
 }
 
-// Tri-tone — Yliluoma's 2×2 / 3-colour preset. Greedy plan of 4 entries
+// Tri-tone — Yliluoma's 2×2 / 3-color preset. Greedy plan of 4 entries
 // (palette repeats allowed) sorted by luma, indexed by the standard
-// Bayer 2×2 phase. When the 4-step plan picks the same colour twice,
+// Bayer 2×2 phase. When the 4-step plan picks the same color twice,
 // you naturally get the "one at 50% + two at 25%" pattern Yliluoma
 // describes.
 std::uint8_t pick_tri_tone_index(
@@ -1697,7 +1697,7 @@ std::uint8_t pick_tri_tone_index(
 // to target. Per Yliluoma's "Improvement to Algorithm 1", a
 // luminance-difference cutoff trims the pair list — pairs with
 // ΔL > strength·0.6 are skipped, which kills millions of unhelpful
-// far-apart pairs and keeps the search tractable on 32+ colour
+// far-apart pairs and keeps the search tractable on 32+ color
 // palettes. Output for the current pixel: bayer threshold ∈ [0, N) is
 // compared to r — below r → palette[i], else palette[j].
 std::uint8_t pick_yliluoma1_index(
@@ -1711,8 +1711,8 @@ std::uint8_t pick_yliluoma1_index(
     if (P == 1) return 0;
 
     // Luma cutoff scales linearly with strength up to a moderate cap.
-    // At strength=0 only same-colour "pairs" (i==j) survive → nearest-
-    // colour, no dither. At strength=1 cutoff is 0.3 in OKLab L — wide
+    // At strength=0 only same-color "pairs" (i==j) survive → nearest-
+    // color, no dither. At strength=1 cutoff is 0.3 in OKLab L — wide
     // enough for genuine pair averaging but tight enough to keep the
     // search from picking visually-correct-on-average but per-pixel-
     // extreme pairs (the failure mode of unbounded Algorithm 1).
@@ -1768,11 +1768,11 @@ bool needs_discrete_palette(Method method) {
 // well on CRTs because the phosphor + scanline blur averages adjacent
 // pixels into the intended midtone with near-zero spatial frequency.
 //
-// O(P²) per pixel where P = palette size. For our typical 16/32-colour
+// O(P²) per pixel where P = palette size. For our typical 16/32-color
 // palettes this is hundreds of pairs per pixel, well under 100M ops on
 // a 320×200 image. Cheap.
 // Shared core for Optimal Checker / Line / Line-Checker: greedy
-// Yliluoma N=2 pair search anchored on the nearest-colour, then pick
+// Yliluoma N=2 pair search anchored on the nearest-color, then pick
 // `lo` (luma-sorted darker) or `hi` based on the per-method `phase` (0
 // or 1). Strength controls a separation penalty in the partner search.
 static std::uint8_t opt_pair_pick(
@@ -1786,10 +1786,10 @@ static std::uint8_t opt_pair_pick(
 
     float s = std::clamp(strength, 0.0f, 1.0f);
 
-    // Step 0: nearest-colour pick over the full palette. This anchors
-    // the pair so step 1 can't run off into wildly distant colours —
+    // Step 0: nearest-color pick over the full palette. This anchors
+    // the pair so step 1 can't run off into wildly distant colors —
     // unlike a free brute-force pair search, which at strength=1 would
-    // happily pick (black, white) for a midgrey target.
+    // happily pick (black, white) for a midgray target.
     std::size_t A = 0;
     float best_a = std::numeric_limits<float>::max();
     for (std::size_t k = 0; k < P; ++k) {
@@ -1801,7 +1801,7 @@ static std::uint8_t opt_pair_pick(
     }
 
     // Strength=0 short-circuit — never call the algorithm "no dither"
-    // when the user asks for none. Returns plain nearest-colour.
+    // when the user asks for none. Returns plain nearest-color.
     if (s == 0.0f) return static_cast<std::uint8_t>(A);
 
     // Step 1: pick partner B such that (palette[A] + palette[B]) / 2
@@ -1840,7 +1840,7 @@ static std::uint8_t opt_pair_pick(
         if (err < best_b) { best_b = err; B = k; }
     }
 
-    // If B collapsed back to A (no candidate beat the same-colour
+    // If B collapsed back to A (no candidate beat the same-color
     // baseline), no checker — return A for both phases.
     if (B == A) return static_cast<std::uint8_t>(A);
 
@@ -1875,7 +1875,7 @@ std::uint8_t pick_opt_line_checker_index(
     // line_checker_mat has 4 distinct thresholds per 2×2 cell (-0.35,
     // -0.15, +0.15, +0.35). Map to plan indices 0..3 by the threshold
     // ordering — line dominance (rows) plus subtle column variation
-    // gives a 4-colour line-tinted pattern, not just a 2-tone line.
+    // gives a 4-color line-tinted pattern, not just a 2-tone line.
     constexpr std::size_t PLAN_SIZE = 4;
     const std::size_t P = palette_lab.size();
     if (P == 0) return 0;
@@ -1933,7 +1933,7 @@ namespace { // reopen anon namespace for the apply_* helpers below
 
 // `mode2` selects Yliluoma method 2: weights candidates by closeness to
 // target's luma rather than its full OKLab vector during plan
-// construction. Tends to produce smoother gradients with less colour
+// construction. Tends to produce smoother gradients with less color
 // drift on small palettes than method 1.
 DitherResult apply_yliluoma(
     const Image& image,
@@ -2042,7 +2042,7 @@ DitherResult apply_yliluoma(
 //
 // Adapted from dalpil's bi-level Python reference; here the bias is
 // applied as an OKLab-L offset before nearest-pair selection so it
-// works with N-colour palettes too.
+// works with N-color palettes too.
 // ===========================================================================
 
 // Bias mode chooses how the per-pixel threshold is modulated.
@@ -2281,13 +2281,13 @@ namespace {
 
 // Separable 5×5 Gaussian, σ ≈ 0.7. Coefficients sum to 1.0; symmetric.
 // (Generated by sampling the 1D normal PDF at integer offsets and
-// normalising.) Centre tap ≈ 0.55, ±1 ≈ 0.21, ±2 ≈ 0.012.
+// normalizing.) Center tap ≈ 0.55, ±1 ≈ 0.21, ±2 ≈ 0.012.
 constexpr float kHvsKernel[5] = {
     0.012144f, 0.215441f, 0.544830f, 0.215441f, 0.012144f
 };
 
 // Evaluate the HVS-blurred OKLab value at a single pixel position by
-// running the separable kernel against the surrounding palette colours.
+// running the separable kernel against the surrounding palette colors.
 // Edge clamp (replicate) — keeps cost evaluation bounded near borders.
 inline OKLab hvs_blur_at(
     std::span<const OKLab> blurred_h,  // horizontal-pass result, w*h
@@ -2541,7 +2541,7 @@ DitherResult apply_dbs(
         if (!changed) break;
     }
 
-    // Recompute total error against the actual chosen colours in
+    // Recompute total error against the actual chosen colors in
     // OKLab — the optimisation target was blur-space, but the
     // reported error stays in OKLab units the rest of the pipeline
     // expects. (When dbs_use_srgb is set, source_lab holds sRGB
@@ -3587,7 +3587,7 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         // R2 with U(0,1) → triangle(-1,1) remap (Wronski 2016, "Dithering
         // part three"). Triangular noise PDF removes the DC bias plain R2
         // has near 0% / 100% intensity, so dark and bright gradients
-        // dither evenly instead of clipping to flat colour.
+        // dither evenly instead of clipping to flat color.
         constexpr float phi1 = 0.7548776662f;
         constexpr float phi2 = 0.5698402910f;
         float u = std::fmod(static_cast<float>(x) * phi1 +

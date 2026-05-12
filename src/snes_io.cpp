@@ -254,9 +254,9 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     //   pre-pack quantisation cost; the final PSNR is recomputed by the
     //   caller against the post-merge `rendered`.
     //
-    //   ED runs per-8×8-tile on a 24×24 mirror-padded buffer (centre =
-    //   source tile, 8 surrounding blocks = h/v/hv-flips of the centre).
-    //   The 24×24 ED's centre block is the steady-state response to the
+    //   ED runs per-8×8-tile on a 24×24 mirror-padded buffer (center =
+    //   source tile, 8 surrounding blocks = h/v/hv-flips of the center).
+    //   The 24×24 ED's center block is the steady-state response to the
     //   tile's own content, so identical source tiles produce identical
     //   chunky bytes → tile-dedup collapses them cleanly to one 256-tile
     //   slot. Same fix as c64 charset (commit 7236237) and Genesis
@@ -358,12 +358,12 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         }
         report(kStageQuant, "quantising");
     } else {
-        // Mode 7 Direct: pixel byte = BBGGGRRR (3+3+2 = 256 colours).
+        // Mode 7 Direct: pixel byte = BBGGGRRR (3+3+2 = 256 colors).
         // The tilemap carries no palette field per cell, so the
-        // 2048-colour gamut documented for Modes 3/4 isn't reachable.
+        // 2048-color gamut documented for Modes 3/4 isn't reachable.
         // Quantise the dither target to the SAME 3-3-2 grid the byte
         // can actually store — using rgb443_quantize (4-4-3) here was
-        // the source of the colour artefacts: the picker thought it
+        // the source of the color artefacts: the picker thought it
         // had finer precision than the byte could hold, so the
         // diffusion residual fought the truncation.
         out.quant_error = 0.0f;
@@ -429,8 +429,8 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     // replication path that rgb332_quantize uses to encode it. Plain
     // division (r3/7, g3/7, b2/3) drifts from the quantiser by ~2 sRGB
     // units per channel and is what made the dither distance metric
-    // disagree with the actual displayed colour.
-    // Direct-colour byte (BBGGGRRR) → OKLab cache. Only 256 possible
+    // disagree with the actual displayed color.
+    // Direct-color byte (BBGGGRRR) → OKLab cache. Only 256 possible
     // byte values, but unpack_direct gets called per-pixel-per-tile-
     // pair inside distance_fn (called O(N²) by pack_snes_mode7_frame's
     // greedy merger). AMDuProf showed linear_to_oklab at 33 % of CPU
@@ -525,7 +525,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             float dbb = a_blur[i].b - b_blur[i].b;
             coarse += color_space::fma_dist_sq(dL, da, dbb);
         }
-        // α = 0.4 (60% per-pixel, 40% coarse). Higher α favours
+        // α = 0.4 (60% per-pixel, 40% coarse). Higher α favors
         // structural matches over fine-detail accuracy; lower keeps
         // edges sharp at the cost of texture blending. 0.4 chosen
         // empirically to land roughly midway on photo content.
@@ -649,7 +649,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             // The post-Lloyd tiles only display 256 × 64 = 16384
             // pixel "slots" — nothing else from the source image
             // matters at this point. Re-derive the 256-entry palette
-            // via median-cut on JUST those displayed colours so the
+            // via median-cut on JUST those displayed colors so the
             // palette anchors land where they're actually used. Then
             // re-snap every tile byte to the closest entry in the
             // new palette and let Lloyd re-converge with the new
@@ -677,7 +677,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
 
                 // Remap a byte from old-palette index → new-palette
                 // index by finding the new entry nearest the byte's
-                // OLD displayed colour.
+                // OLD displayed color.
                 auto remap = [&](std::uint8_t b) -> std::uint8_t {
                     auto cur = pal_lab[b];
                     std::size_t best = 0;
@@ -696,7 +696,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                 // patterns in the chunky buffer and compares against
                 // tile patterns under the new pal_lab. Without
                 // remapping chunky, the distance metric reads stale
-                // colours and PSNR collapses.
+                // colors and PSNR collapses.
                 for (auto& byte : tiles) byte = remap(byte);
                 for (auto& byte : chunky) byte = remap(byte);
 

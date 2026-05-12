@@ -101,31 +101,31 @@ enum class Mode : unsigned char {
     // the 256-palette variant, a companion 256-entry BGR555 CGRAM file.
     snes_mode7_256,     // 256-entry BGR555 palette + ≤ 256 unique tiles
     snes_mode7_direct,  // BBGGGRRR Direct Color pixel bytes (3+3+2 =
-                        // 256 effective colours). The 2048-colour gamut
+                        // 256 effective colors). The 2048-color gamut
                         // documented for Modes 3/4 Direct Color comes
                         // from a tilemap palette-field byte that Mode 7
                         // doesn't have, so the hardware really does cap
                         // at 256 here.
 
     // Commodore 64 / VIC-II — fixed 16-color palette, cell-based with
-    // per-cell colour constraints.
-    //   c64_hires:      320×200, 8×8 cells, 2 colours per cell.
-    //                   1 bit per pixel; per-cell colour pair stored in
+    // per-cell color constraints.
+    //   c64_hires:      320×200, 8×8 cells, 2 colors per cell.
+    //                   1 bit per pixel; per-cell color pair stored in
     //                   1000-byte screen RAM (upper / lower nibble).
     //   c64_multicolor: 160×200 logical (2:1 hardware doubling), 4×8
-    //                   cells, 4 colours per cell (1 shared bg + 3
+    //                   cells, 4 colors per cell (1 shared bg + 3
     //                   per-cell). 2 bits per pixel.
     //   c64_fli:        160×200 multicolor + per-row (c1, c2) screen
-    //                   colours within each 4×8 cell. 8000-byte
+    //                   colors within each 4×8 cell. 8000-byte
     //                   bitmap + 8 screen RAMs (1000 bytes each;
     //                   one per cell-row) + 1000-byte color RAM. The
     //                   per-row swap is achieved by a raster-IRQ that
     //                   reloads the screen-RAM pointer 8× per cell.
-    //   c64_afli:       320×200 hires + per-row colour pair within
+    //   c64_afli:       320×200 hires + per-row color pair within
     //                   each 8×8 cell. Same raster trick as FLI but
     //                   on the 1bpp bitmap.
-    c64_hires,          // 320×200, 2 colours per 8×8 cell
-    c64_multicolor,     // 160×200, 4 colours per 4×8 cell (1 shared bg + 3)
+    c64_hires,          // 320×200, 2 colors per 8×8 cell
+    c64_multicolor,     // 160×200, 4 colors per 4×8 cell (1 shared bg + 3)
     c64_fli,            // 160×200, multicolor + per-row screen pair
     c64_afli,           // 320×200, hires + per-row screen pair
     c64_petscii,        // 320×200, PETSCII text mode glyph match
@@ -139,20 +139,20 @@ enum class Mode : unsigned char {
                             //   screen RAM + 1000-byte color RAM.
     c64_charset_multicolor, // 160×200 logical, multicolor 4×8 cells; same
                             //   dedup + merge as charset-hires but 4
-                            //   colours per cell (1 shared bg + 2 shared
-                            //   mc colours + 1 per-cell fg).
+                            //   colors per cell (1 shared bg + 2 shared
+                            //   mc colors + 1 per-cell fg).
 
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,        // 256×224, 4 palette lines × 16 BGR333 entries each.
                         //  Tile-based: 8×8 4bpp tiles + tilemap; each tile
                         //  picks one palette line. Color 0 of each line is
-                        //  transparent. 60 visible + 1 backdrop colours.
-    genesis_h40,        // 320×224, same colour structure as h32.
+                        //  transparent. 60 visible + 1 backdrop colors.
+    genesis_h40,        // 320×224, same color structure as h32.
 
     // Genesis Shadow/Highlight — extends genesis_h{32,40} via the VDP's
     // S/H mode (register $8C bit 3). When enabled, plane-A LOW-priority
-    // tiles render with each colour halved (3-bit DAC values >> 1),
-    // doubling the effective palette to ~128 colours. The encoder
+    // tiles render with each color halved (3-bit DAC values >> 1),
+    // doubling the effective palette to ~128 colors. The encoder
     // chooses per-tile whether to use the base or shadowed palette and
     // sets the tilemap priority bit accordingly. Output requires the
     // SGDK runtime to call `VDP_setHilightShadow(TRUE)` (or write VDP
@@ -303,11 +303,11 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     case Mode::snes_mode7_256:
         return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
     case Mode::snes_mode7_direct:
-        // 256 effective colours (BBGGGRRR). Mode 7 has no tilemap
-        // palette-field byte, so the 2048-colour gamut documented for
+        // 256 effective colors (BBGGGRRR). Mode 7 has no tilemap
+        // palette-field byte, so the 2048-color gamut documented for
         // Modes 3/4 Direct Color isn't reachable here.
         return {256, 224, 8, 256, false, false, false, false, 1, 1, 1.167f};
-    // C64 hires: 320×200, 8×8 cells, 2 colours per cell. Hardware
+    // C64 hires: 320×200, 8×8 cells, 2 colors per cell. Hardware
     // pixels are 1:1 (no doubling). PAL hardware-pixel ratio 0.936:1.
     case Mode::c64_hires:
         return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
@@ -341,7 +341,7 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {256, 224, 4, 64, false, false, false, false, 1, 1, 1.167f};
     case Mode::genesis_h40:
         return {320, 224, 4, 64, false, false, false, false, 1, 1, 0.933f};
-    // S/H modes: same buffer, ~128 effective colours via per-tile shadow.
+    // S/H modes: same buffer, ~128 effective colors via per-tile shadow.
     case Mode::genesis_h32_sh:
         return {256, 224, 4, 128, false, false, false, false, 1, 1, 1.167f};
     case Mode::genesis_h40_sh:

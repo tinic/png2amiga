@@ -45,7 +45,7 @@ PNG2AMIGA_LUT_CONSTEXPR Color3f ocs_to_linear(std::uint16_t rgb12) noexcept {
 //
 // Why OKLab-nearest rather than per-channel sRGB rounding directly: in
 // dark regions, OCS levels are crowded together in linear light, so
-// per-channel rounding picks perceptually-wrong neighbours. Measured
+// per-channel rounding picks perceptually-wrong neighbors. Measured
 // +4.70 to +10.66 SSIMULACRA2 on HDR/banded content; wash (~±1) on
 // smooth photographic content.
 namespace detail {
@@ -156,8 +156,8 @@ PNG2AMIGA_LUT_CONSTEXPR Color3f quantize_to_stf(Color3f color) noexcept {
 // research efforts produced slightly different RGB tables. We carry seven
 // of the most-cited variants and let the user pick. Indexed 0..15 in
 // standard VIC-II order: black, white, red, cyan, purple, green, blue,
-// yellow, orange, brown, light red, dark grey, medium grey, light green,
-// light blue, light grey.
+// yellow, orange, brown, light red, dark gray, medium gray, light green,
+// light blue, light gray.
 // ---------------------------------------------------------------------------
 
 // Pepto (Philip "Pepto" Timmermann, 2001) — pepto.de/projects/colorvic/.
@@ -283,14 +283,14 @@ inline std::array<Color3f, 4> cga_build_palette(CgaPalette p,
 // index N does NOT map to CGA master color N. We store it explicitly.
 //
 // The mapping from pattern to color is (approximately — monitor-dependent):
-//   0000 → black       1000 → grey
+//   0000 → black       1000 → gray
 //   0001 → blue        1001 → light blue
 //   0010 → green       1010 → light green
 //   0011 → cyan        1011 → light cyan
 //   0100 → red         1100 → light red
 //   0101 → magenta     1101 → light magenta
 //   0110 → brown       1110 → yellow
-//   0111 → light grey  1111 → white
+//   0111 → light gray  1111 → white
 // That is: pattern N corresponds to RGBI color N via the standard "old CGA"
 // composite decoder. This is the simplest reasonable model; tools like
 // DOSBox support multiple palettes (old/new CGA, adjustable tint).
@@ -488,7 +488,7 @@ inline
 #endif
 auto workbench_20_colors() {
     return std::array<Color3f, 4>{
-        color_space::srgb_hex_to_linear(0x959595),  // Grey (background)
+        color_space::srgb_hex_to_linear(0x959595),  // Gray (background)
         color_space::srgb_hex_to_linear(0x000000),  // Black
         color_space::srgb_hex_to_linear(0xFFFFFF),  // White
         color_space::srgb_hex_to_linear(0x3B67A2),  // Blue
@@ -552,11 +552,11 @@ inline std::size_t find_nearest(Color3f color,
 // We compute this in sRGB space (as the hardware operates on DAC values).
 // ---------------------------------------------------------------------------
 
-// Half-brite a base linear-RGB colour, matching the OCS hardware DAC:
+// Half-brite a base linear-RGB color, matching the OCS hardware DAC:
 // the 4-bit per-channel nibble is shifted right by one (truncating),
 // then re-replicated to 8-bit. EHB is fundamentally an OCS feature, so
 // we snap the input to OCS before halving — even AGA-EHB outputs OCS-
-// quantised colours through the EHB path. The previous implementation
+// quantised colors through the EHB path. The previous implementation
 // used sRGB × 0.5 which is wrong for OCS: e.g. halve(0x33) is 0x11
 // (nibble 3 >> 1 = 1, nibble-replicated), not 0x19 (sRGB / 2).
 // Single source of truth replacing strips::half_brite + copper::halve_brite.
@@ -570,22 +570,22 @@ inline Color3f half_brite(const Color3f& c) {
     return ocs_to_linear(halved);
 }
 
-// Reclaim duplicate half-brite slots by doubling their base colour.
+// Reclaim duplicate half-brite slots by doubling their base color.
 //
 // The half-brite section (palette indices 32..63) is hardware-derived
 // as halve(base[i]) for each base slot, where halve is per-nibble
 // integer right-shift in OCS 4-bit space. When two base slots happen
-// to halve to the same code (e.g. two dark colours both >>1 to 0,
+// to halve to the same code (e.g. two dark colors both >>1 to 0,
 // or two slots that differ only in the LSB of every nibble), the
-// half-brite half wastes one of the 64 effective colours.
+// half-brite half wastes one of the 64 effective colors.
 //
-// We can recover that slot when the base colour's components all sit
+// We can recover that slot when the base color's components all sit
 // in the lower half of the OCS gamut (every nibble <= 7): doubling
 // the base shifts every nibble left by one, so halve(double(b)) = b.
-// The original (darker) colour migrates from the BASE slot into its
-// HALF-BRITE slot, and the BASE slot now holds a brighter colour.
+// The original (darker) color migrates from the BASE slot into its
+// HALF-BRITE slot, and the BASE slot now holds a brighter color.
 // Net effect: one previously-duplicate half-brite slot becomes a
-// new distinct colour.
+// new distinct color.
 //
 // A small fixed-point iteration is enough: doubling slot j only
 // changes slot j's base + its half-brite, so each pass strictly
@@ -680,7 +680,7 @@ inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
 //
 // Median-cut alone picks 32 base colors that span the source's dominant
 // clusters; deriving the half-brite copies as base/2 then leaves the
-// dark half of the gamut covered "for free" but unoptimised. The
+// dark half of the gamut covered "for free" but unoptimized. The
 // hardware-tied pairing (hb = base/2 in sRGB DAC space) means that
 // where you put a base color also dictates where its half-brite copy
 // lands, so the optimum 32-base set is the one that minimises total
@@ -706,13 +706,13 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
                                     // Per-base-slot mask: true = slot is
                                     // locked / reserved. Locked slots are
                                     // EXCLUDED from the per-pixel nearest-of-64
-                                    // search (so reserve colour can't pull
+                                    // search (so reserve color can't pull
                                     // pixels into its cluster) AND held fixed
                                     // in the per-slot update (so re-stamps
                                     // aren't needed downstream). Without
                                     // both, refine's iterative convergence
-                                    // depends on the reserve colour and the
-                                    // unlocked slots' colours leak through.
+                                    // depends on the reserve color and the
+                                    // unlocked slots' colors leak through.
                                     std::span<const bool> locked_mask = {}) {
     if (base_colors.size() < 32 || image_pixels.empty()) return;
     constexpr std::size_t kBaseN = 32;
@@ -729,7 +729,7 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
     };
 
     // OCS candidate set: when snap_to_ocs is true, the joint MSE
-    // minimum has to be one of 4096 displayable colours. Brute-force
+    // minimum has to be one of 4096 displayable colors. Brute-force
     // over all of them per slot, evaluating joint OKLab MSE with the
     // hardware-correct half_brite (per-nibble truncating shift). For
     // AGA (24-bit) we fall back to the closed-form sRGB centroid
@@ -859,11 +859,11 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
 }
 
 // "Extra OCS palette optimization" — 1-opt coordinate-descent local
-// search on the 32-colour EHB base palette, ranked by full-image
-// nearest-neighbour squared OKLab error. Same shape as ham_convert's
-// EHB optimiser (decompiled from app/HAM_convert.java around lines
+// search on the 32-color EHB base palette, ranked by full-image
+// nearest-neighbor squared OKLab error. Same shape as ham_convert's
+// EHB optimizer (decompiled from app/HAM_convert.java around lines
 // 6857-7095): per pass, find the slot whose removal hurts least, then
-// find the source-image colour that, dropped into that slot, lowers
+// find the source-image color that, dropped into that slot, lowers
 // total error the most. Repeat until the chosen insertion candidate
 // matches the previous pass's pick (slot converged) — then move on to
 // the next slot. Half-brite copies are auto-rederived after every
@@ -924,7 +924,7 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
     };
 
     // Build candidate set: distinct snapped (chipset-precision) source
-    // colours, ranked by histogram count and capped at `max_candidates`.
+    // colors, ranked by histogram count and capped at `max_candidates`.
     // The cap matters: 320x180 photos can yield ~1000-1500 unique OCS
     // codes and the inner loop is the dominant cost. The decompiled
     // ham_convert path also caps at 4096 (the OCS gamut size).
@@ -978,7 +978,7 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
     if (on_progress) emit_progress(0);
     for (int pass = 0; pass < max_passes;) {
         // 1. Removal candidate: replace each slot k in [slot_start, 32)
-        //    with its neighbour and pick the slot whose removal yields
+        //    with its neighbor and pick the slot whose removal yields
         //    the lowest total error.
         int remove_slot = slot_start;
         double remove_err = std::numeric_limits<double>::infinity();
@@ -999,7 +999,7 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
             }
         }
 
-        // 2. Insertion candidate: try every distinct source colour in
+        // 2. Insertion candidate: try every distinct source color in
         //    the removed slot, pick the one with lowest error.
         std::vector<double> errs(candidates.size(),
                                   std::numeric_limits<double>::infinity());

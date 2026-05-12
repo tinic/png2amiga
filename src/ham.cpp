@@ -1747,7 +1747,7 @@ std::vector<HamSwap> find_ham_swaps(
     std::size_t changes_per_line,
     amiga::Chipset chipset,
     bool best_quality,
-    // Optional neighbour rows (prev_row, next_row) and per-row weights.
+    // Optional neighbor rows (prev_row, next_row) and per-row weights.
     // When non-empty, measure_row_error scores each candidate palette by
     // running independent rolling HAM-state encodes on every row and
     // summing weighted errors — same idea as copper.cpp's swap planner.
@@ -1779,12 +1779,12 @@ std::vector<HamSwap> find_ham_swaps(
             return err;
         };
         float err = encode_one_row(row);
-        // Add weighted neighbour-row contributions when provided. Each
-        // neighbour row gets its own rolling HAM state (same algorithm
+        // Add weighted neighbor-row contributions when provided. Each
+        // neighbor row gets its own rolling HAM state (same algorithm
         // hardware would run on it), and the weighted error sums into
         // the per-trial score. This gives the planner a "what palette
-        // works for this row AND its neighbours" signal — the inner-
-        // loop equivalent of copper.cpp's neighbour-row weighting.
+        // works for this row AND its neighbors" signal — the inner-
+        // loop equivalent of copper.cpp's neighbor-row weighting.
         for (std::size_t i = 0; i < extra_rows.size(); ++i) {
             auto& nr = extra_rows[i];
             if (nr.empty()) continue;
@@ -1895,7 +1895,7 @@ std::vector<HamSwap> find_ham_swaps(
             prev = result.result_color;
         }
 
-        // Build candidate target colours: top-K highest-error source pixels
+        // Build candidate target colors: top-K highest-error source pixels
         // (OCS-quantised on OCS, dedup by 12-bit key) + OKLab centroid of
         // the K worst pixels. Centroid often beats any single pixel when a
         // smooth high-error region (skin, sky band) needs a fresh anchor.
@@ -2158,13 +2158,13 @@ Result<HamResult> encode_ham_copper_generic(
         // current_pal, so this must be serial. Cheap vs the beam search.
         report_global(stage);
         std::size_t pass1_step = std::max<std::size_t>(1, h / 20);
-        // 3-line neighbour context experimentally hurt HAM6+sliced across
+        // 3-line neighbor context experimentally hurt HAM6+sliced across
         // 4 hero images at both weight=0.25 and weight=0.5 (chuck31
         // -0.46/-0.50 dB, electrichues02 -0.09/-0.10, lovers -0.40,
         // fromthe +0.08). HAM op selection is sequential-state-bound
-        // within a row, so scoring a palette against neighbour rows
+        // within a row, so scoring a palette against neighbor rows
         // (which roll their own HAM state from the same palette) adds
-        // noise that doesn't represent real chip behaviour. The
+        // noise that doesn't represent real chip behavior. The
         // ham_convert 3-line trick applies to palette quantisation,
         // not the per-line sliced swap planner. Disabled by default;
         // structure preserved for future experimentation.

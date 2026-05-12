@@ -86,7 +86,7 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
 // HamPrecomp: caller-owned cache. Build once per palette change.
 // encode_ham_pixel: pick the lowest-error SET / MODIFY-{R,G,B} op for
 //   `target` given previous pixel's output `prev`. Returns the encoded
-//   value (control<<data_bits | data), the actual output sRGB colour,
+//   value (control<<data_bits | data), the actual output sRGB color,
 //   and OKLab² error.
 // ---------------------------------------------------------------------------
 // Padded to 4 bytes. The natural 3-byte layout caused a store-to-load
@@ -105,7 +105,7 @@ constexpr std::uint8_t reduce_to_bits(std::uint8_t val, std::size_t bits) noexce
 // attributed ~4 % of HAM6+strips CPU to that zero-fill. The 3/4-arg
 // ctor lets existing `SRGBColor{r,g,b}` brace-init sites stay
 // untouched (4-arg ctor with defaulted pad). `SRGBColor{}` keeps
-// its zero-init behaviour because the defaulted default ctor is
+// its zero-init behavior because the defaulted default ctor is
 // not user-provided, so value-init zero-initialises first.
 struct SRGBColor {
     std::uint8_t r;
@@ -187,7 +187,7 @@ void refine_scanline_triple_per_strip(
 // SSIMULACRA2 (the modern subjective-quality metric) much better than
 // sRGB-MSE — measured ~+9 SSIMULACRA2 points on dithered HAM6+sliced, and
 // ~+3.5 OKLab-dB on banded/HDR content. sRGB-MSE wins headline PSNR
-// (~+0.5-1 dB) by optimising the *reported metric* directly, but PSNR
+// (~+0.5-1 dB) by optimizing the *reported metric* directly, but PSNR
 // is a poor predictor of subjective quality on HAM output (where dither
 // noise and discrete banding dominate the perception).
 //

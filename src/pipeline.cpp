@@ -191,8 +191,8 @@ Result<Image> render_preview(
     // No-op for AGA (24-bit native).
     if (chipset != amiga::Chipset::aga) {
         for (auto& p : r->pixels()) p = palette::quantize_to_ocs(p);
-        // Defence in depth: every emitted pixel must be a 12-bit OCS
-        // colour (nibble-replicated 8-bit sRGB byte). The snap above
+        // Defense in depth: every emitted pixel must be a 12-bit OCS
+        // color (nibble-replicated 8-bit sRGB byte). The snap above
         // guarantees this, but past regressions in render_copper_capped
         // and EHB+strips shipped non-displayable previews that scored
         // fictional 24-bit precision. If a future code path bypasses

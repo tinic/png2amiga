@@ -132,7 +132,7 @@ std::string fmt_size(int bytes) {
 // F−1 transition lists on top.
 //
 // OCS: each MOVE = 4 B (one 32-bit copper instruction). AGA: each
-// 24-bit colour update = 2 MOVEs (HI + LO mux), so 8 B per slot
+// 24-bit color update = 2 MOVEs (HI + LO mux), so 8 B per slot
 // change. WAIT word = 4 B once per row per frame.
 inline int fade_actual_bytes(
         const std::vector<std::vector<std::vector<Color3f>>>& seq,
@@ -242,7 +242,7 @@ std::string_view mode_to_options_string(amiga::Mode m);
 inline bool g_print_palette      = false;
 inline bool g_print_palette_json = false;
 
-// Dump a colour list:
+// Dump a color list:
 //   text mode (--print-palette): stderr, `idx: #rrggbb [tag] (Npx)` per
 //      slot with 🔒 = locked, 🔖 = reserved.
 //   JSON mode (--print-palette-json): stdout, single line, schema:
@@ -252,7 +252,7 @@ inline bool g_print_palette_json = false;
 // `pixels` is the count of source pixels routed to this slot by the
 // dither (zero for unused slots, including locked/reserved slots that
 // the dither never picked) — added so callers can detect over-locked
-// palettes and unused slots without re-rendering. Each colour is
+// palettes and unused slots without re-rendering. Each color is
 // snapped to 8-bit sRGB. Both modes can be on at once.
 template <typename Cfg>
 inline void cli_dump_palette(std::span<const Color3f> colors,
@@ -395,7 +395,7 @@ inline std::size_t apply_transparent_color_sentinels(
 // (per the transparency mask) writes slot N instead of slot 0.
 // Applied right before .idx / per-input output write — the palette
 // itself is untouched, only the indexed-byte stream changes. Default
-// N=0 is a no-op (legacy behaviour).
+// N=0 is a no-op (legacy behavior).
 inline void apply_transparent_slot_swap(
         std::vector<std::uint8_t>& indices,
         const std::vector<bool>& tmask,
@@ -456,7 +456,7 @@ inline std::string resolve_oe_pattern(const std::string& pat,
 // --transparent-output-slot. Returns exit_code on failure, 0 on
 // success. Used by both lores and EHB joint write paths so the
 // EHB block (which returns early before reaching the unified write
-// loop) gets identical per-input output behaviour.
+// loop) gets identical per-input output behavior.
 inline int write_oe_outputs(
         const std::vector<std::string>& patterns,
         const std::string& src,
@@ -536,8 +536,8 @@ inline int write_oe_outputs(
 //      edges darker on the positional than on --ji renders, off-
 //      by-1 shifting ~50 edge pixels.
 //
-// Sentinel-colour bleed (the original motivation — magenta from
-// --transparent-color spilling into opaque neighbours via dither
+// Sentinel-color bleed (the original motivation — magenta from
+// --transparent-color spilling into opaque neighbors via dither
 // error) is fully handled by the alpha < 0.5 branch zeroing RGB.
 inline void matte_to_black(Image& img) {
     if (!img.has_alpha()) return;
@@ -592,12 +592,12 @@ inline float score_s2_masked(std::span<const Color3f> src,
 // Non-Amiga "Encoded:" status line for chunky/tiled/text-mode outputs
 // (C64, SNES, Genesis, cga-text, indexed PNG-8 benchmark, etc). Mirrors
 // the suffix of `cli_print_encoded` so all CLI outputs report the same
-// metric block: "..., N colours, error: X, PSNR: Y dB, S2: Z".
+// metric block: "..., N colors, error: X, PSNR: Y dB, S2: Z".
 inline void cli_print_encoded_other(std::string_view blurb,
                                     std::size_t num_colors,
                                     double quant_error,
                                     float psnr, float s2) {
-    cli_status("Encoded:  {}, {} colours, error: {:.4f}, "
+    cli_status("Encoded:  {}, {} colors, error: {:.4f}, "
                "PSNR: {:.2f} dB, S2: {:.2f}",
                blurb, num_colors, quant_error, psnr, s2);
 }
@@ -936,7 +936,7 @@ struct Config {
 
     // Seamless-tile mode. Replicates the input 3x3, runs the pipeline
     // over the bigger buffer so error-diffused dither converges to a
-    // tile-able pattern, then crops the centre back out for export.
+    // tile-able pattern, then crops the center back out for export.
     // Allowed only on freeform indexed bitmap modes (lores, hires, EHB
     // ± interlace ± dpf). See api::Options::tile.
     bool tile = false;
@@ -994,12 +994,12 @@ struct Config {
     // --transparent-output-slot <N>: write slot N (not slot 0) for
     // every alpha=0 pixel in the indexed output (.idx + paletted PNG).
     // The palette itself is unchanged (slot 0 is still the transparent
-    // placeholder = black, slot N keeps whatever colour the locks /
+    // placeholder = black, slot N keeps whatever color the locks /
     // quantizer put there). Useful for downstream formats that need
     // transparency on a different slot — e.g. SCUMM SMAP wants slot
     // 17, since slot 0 carries actual black art content. Default 0
-    // (no swap, legacy behaviour). Pair with `--reserve-range N
-    // <colour>` so no opaque pixel naturally routes to slot N — that
+    // (no swap, legacy behavior). Pair with `--reserve-range N
+    // <color>` so no opaque pixel naturally routes to slot N — that
     // way every N in the output indices is unambiguously transparent.
     int transparent_output_slot = 0;
 
@@ -1025,7 +1025,7 @@ struct Config {
 
     // Cross-fade: encode the bitmap once, animate the palette through one
     // or more target images. Indices stay constant; per-slot palette
-    // colours interpolate in OKLab between consecutive stops, snapped to
+    // colors interpolate in OKLab between consecutive stops, snapped to
     // chipset gamut on every frame so the transition doesn't band on a
     // 12-bit DAC. --preview animates the sequence in the terminal.
     //
@@ -1046,7 +1046,7 @@ struct Config {
     bool c64_petscii_graphics_only = false;
     // Tile-based modes (c64 charset; SNES / Genesis / future Amiga 16x16
     // / PS1 64x64). 0 = mode default. >0 sets a custom dedup budget so
-    // demos can ship larger glyph catalogues across charset banks.
+    // demos can ship larger glyph catalogs across charset banks.
     std::size_t tile_budget = 0;
     std::size_t tile_reserve = 0;
     int cga_bg = 0;                    // background color index (0..15 in master palette)
@@ -1151,9 +1151,23 @@ void print_usage() {
         "  --output-each, --oe <pattern>   Per-input output: '.ext' or path with {{dir}}/{{stem}}\n"
         "  --quantizer <name>              auto | median-cut | ocs-bruteforce | pnn | gpu-restart\n"
         "  --palette-diversity <0-9>       Drop near-duplicate palette entries\n"
-        "  --no-lock-color0                Allow palette index 0 to be image colour\n"
         "  --print-palette                 Dump final CMAP to stderr (text)\n"
         "  --print-palette-json            Dump final CMAP to stdout (JSON)\n"
+        "\n"
+        "Palette index pinning (lores/hires/EHB/Atari):\n"
+        "  --no-lock-color0                Allow palette index 0 to be image color\n"
+        "  --lock-index, --li <id> <hex>   Pin slot's color; image pixels CAN\n"
+        "                                  still route to it (quantizer uses it)\n"
+        "  --reserve-range, --rr <r> <hex> Pin slot's color; image pixels CANNOT\n"
+        "                                  route to it (quantizer skips it).\n"
+        "                                  Range: 0,1,5-10 / -5 / 5- (open ends)\n"
+        "  --pin-index-at, --pia <id> <x> <y>\n"
+        "                                  Swap pixel (x,y)'s slot with <id>\n"
+        "\n"
+        "Search quality:\n"
+        "  --best                          Multi-restart search (~20–30× slower).\n"
+        "                                  Works with plain HAM/EHB/lores/hires\n"
+        "                                  and with --sliced / --strips.\n"
         "\n"
         "Image processing:\n"
         "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
@@ -1174,7 +1188,7 @@ void print_usage() {
         "  --alpha-dither-strength <float> Alpha dither strength (default: 1.0)\n"
         "  --transparent-output-slot <N>   Write slot N (not 0) for alpha=0 pixels in\n"
         "                                  .idx / --output-each output. Pair with\n"
-        "                                  --reserve-range N <colour> so no opaque\n"
+        "                                  --reserve-range N <color> so no opaque\n"
         "                                  pixel ever routes there.\n"
         "  --transparent-color, --tc <hex> Treat sentinel RGB as alpha=0\n"
         "                                  (repeatable, e.g. magenta atlases)\n"
@@ -1185,13 +1199,12 @@ void print_usage() {
         "  --sliced                        Per-scanline palette swaps\n"
         "  --slice-changes <0-16>          Swaps per line (0 = auto)\n"
         "  --sliced-vertical-dither        Spread copper transitions across rows\n"
-        "  --best                          Multi-restart search (~20–30× slower)\n"
         "\n"
         "Strip palette (mid-line swaps, OCS lores):\n"
         "  --strips                        Mid-line swaps; pair with --dpf or ehb\n"
         "\n"
         "Seamless tile:\n"
-        "  --tile                          Replicate input 3x3 before dither, export centre\n"
+        "  --tile                          Replicate input 3x3 before dither, export center\n"
         "                                  tile only. Lores/hires/EHB only.\n"
         "\n"
         "Cross-fade (lores/hires/EHB; --preview animates):\n"
@@ -1212,7 +1225,7 @@ void print_usage() {
         "  --tile-budget <N>               Max unique tiles for charset / tile modes\n"
         "  --tile-reserve <N>              Reserve N tile slots from the budget\n"
         "  --cga-palette <p>               p0-low | p0-high | p1-low | p1-high\n"
-        "  --cga-bg <0..15>                CGA background colour\n"
+        "  --cga-bg <0..15>                CGA background color\n"
         "  --cga-text-metric <m>           blur (default) | mse\n"
         "  --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |\n"
         "                                  aniso73 | aniso35 | aniso37 | wide55 | wide77\n"
@@ -1220,15 +1233,6 @@ void print_usage() {
         "                                  deekay | godot | c64wiki | levy\n"
         "  --c64-metric <m>                blur (default) | mse\n"
         "  --c64-petscii-graphics          Restrict PETSCII to graphics glyphs\n"
-        "\n"
-        "Palette index pinning (lores/hires/EHB/Atari):\n"
-        "  --lock-index, --li <id> <hex>   Pin slot's colour; image pixels CAN\n"
-        "                                  still route to it (quantizer uses it)\n"
-        "  --reserve-range, --rr <r> <hex> Pin slot's colour; image pixels CANNOT\n"
-        "                                  route to it (quantizer skips it).\n"
-        "                                  Range: 0,1,5-10 / -5 / 5- (open ends)\n"
-        "  --pin-index-at, --pia <id> <x> <y>\n"
-        "                                  Swap pixel (x,y)'s slot with <id>\n"
         "\n"
         "Output:\n"
         "  --symbol <name>                 Base symbol name (default: from filename)\n"
@@ -1463,7 +1467,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--tile") {
             // Seamless-tile mode: replicate the input 3x3, run the
-            // pipeline, crop the centre back out for export. See
+            // pipeline, crop the center back out for export. See
             // api::Options::tile.
             config.tile = true;
             continue;
@@ -1769,8 +1773,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
         // --reserve-range <ranges> <rgbhex>: hard-reserve palette slots.
         // Range form: "0,1,5-10" / "-5" (= 0..5) / "5-" (= 5..palette-end,
         // resolved per mode in the pipeline). Quantizer cannot place
-        // image colours into reserved slots; the slots are filled with
-        // the user-supplied default colour.
+        // image colors into reserved slots; the slots are filled with
+        // the user-supplied default color.
         if ((arg == "--reserve-range" || arg == "--rr") &&
             i + 2 < argc) {
             auto ranges = std::string_view(argv[++i]);
@@ -2263,7 +2267,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
     }
 
     // strips post-parse fixup. Three supported configurations:
-    //   * DPF: --strips --dpf, OCS lores depth=3, 8 PF2 colours.
+    //   * DPF: --strips --dpf, OCS lores depth=3, 8 PF2 colors.
     //   * EHB: --strips --mode ehb, 32 base + 32 hardware half-brite.
     // No auto-promotion — the user must opt into one of the supported
     // strips regimes explicitly. The CLI block below errors out otherwise.
@@ -2397,7 +2401,7 @@ unsigned resolve_preview_scale(int user_override) {
         return static_cast<unsigned>(user_override);
 #ifdef __APPLE__
     // HiDPI is the default on Apple laptops since 2012; doubling on a
-    // recognised inline-image terminal makes preview readable. Other
+    // recognized inline-image terminal makes preview readable. Other
     // platforms default to 1× — Linux + Windows HiDPI exists but isn't
     // common enough to assume; users on those setups can pass
     // --preview-scale 2 explicitly.
@@ -3306,7 +3310,7 @@ void save_raw_vga(std::string_view path,
 
 // Single canonical preview-scaling stage. Encodes the per-mode aspect
 // rules every consumer needs:
-//   - DOS modes (CGA / EGA / VGA): nearest-neighbour to the PAR-aware
+//   - DOS modes (CGA / EGA / VGA): nearest-neighbor to the PAR-aware
 //     display dimensions so the PNG / iTerm2 inline image shows the
 //     scene at roughly 4:3 like a CRT would. CGA text modes skip the
 //     2× base scale since 640x200 cell rendering is already comfortable.
@@ -3623,7 +3627,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
 
     if (ends_with(path, ".h")) {
         auto ch = build_ch_opts();
-        // .h: don't pad. Tile mode produces planes at the centre-crop width
+        // .h: don't pad. Tile mode produces planes at the center-crop width
         // (e.g. 64×64) and the .h header must report those dims rather than
         // the mode default (e.g. 320). Sliced / strips paths are gated
         // against tile, so their planes.width already matches display_w
@@ -3733,7 +3737,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
             std::println(stderr, "PNG write error: {}", r.error().message);
             return exit_code::cant_create;
         }
-        cli_status("PNG:      {} (paletted, {} colours)",
+        cli_status("PNG:      {} (paletted, {} colors)",
                    path, out.cmap_palette.size());
         return 0;
     }
@@ -3817,18 +3821,18 @@ api::EncodeStateOrError best_via_encode_state(
     return api::encode_state_image(src, aopts);
 }
 
-// --tile preview helper: replicate the centre tile into a 3x3 grid so the
+// --tile preview helper: replicate the center tile into a 3x3 grid so the
 // user can verify that the seam between adjacent copies is invisible. Only
-// applied to terminal preview; export paths always see the centre crop.
-Image tile_3x3_for_preview(const Image& centre) {
-    auto w = centre.width();
-    auto h = centre.height();
+// applied to terminal preview; export paths always see the center crop.
+Image tile_3x3_for_preview(const Image& center) {
+    auto w = center.width();
+    auto h = center.height();
     Image out(w * 3, h * 3);
     for (std::size_t ty = 0; ty < 3; ++ty) {
         for (std::size_t tx = 0; tx < 3; ++tx) {
             for (std::size_t y = 0; y < h; ++y) {
                 for (std::size_t x = 0; x < w; ++x) {
-                    out[tx * w + x, ty * h + y] = centre[x, y];
+                    out[tx * w + x, ty * h + y] = center[x, y];
                 }
             }
         }
@@ -3841,7 +3845,7 @@ Image tile_3x3_for_preview(const Image& centre) {
 // `--fade-to a.png[,b.png,...] --fade-frames N [--fade-loop]` lets the user
 // animate a static indexed bitmap by morphing the palette through one or
 // more target images. The bitmap's dither indices stay constant; only the
-// per-slot palette colours change. For each target, the per-slot target
+// per-slot palette colors change. For each target, the per-slot target
 // palette is the OKLab centroid of all target pixels currently assigned to
 // that slot — so slot k naturally fades from "what those pixels looked
 // like in the source" to "what they look like in the target".
@@ -4216,7 +4220,7 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
 }
 
 // Joint dither — replaces the joint-k-means hard assignments with
-// dither-smoothed indices that minimise the SUM of OKLab distance
+// dither-smoothed indices that minimize the SUM of OKLab distance
 // across source and every target axis.
 //
 // Source axis is driven by dither::diffuse_raw_buffer: it handles
@@ -4359,7 +4363,7 @@ std::vector<std::uint8_t> fade_joint_dither(
             }
         }
 
-        // Tell diffuse_raw_buffer the source's chosen colour so it
+        // Tell diffuse_raw_buffer the source's chosen color so it
         // diffuses source-side error itself (or, in ordered mode,
         // just records the choice).
         dither::PickResult r;
@@ -5376,8 +5380,8 @@ int run_main(int argc, char* argv[]) {
     // --- `--mode png` benchmark path ---
     // Indexed-PNG output (PNG-8 with PLTE) so we can compare our quantizer
     // head-to-head against pngquant / libimagequant on a level playing field.
-    // No Amiga encoding, no copper, no CAP. Honours --depth (1..8 = 2..256
-    // colours), --dither, --dither-strength, --error-clamp, --palette-diversity,
+    // No Amiga encoding, no copper, no CAP. Honors --depth (1..8 = 2..256
+    // colors), --dither, --dither-strength, --error-clamp, --palette-diversity,
     // --quantizer, --width / --height (passthrough resize). Everything else
     // is ignored.
     if (config->png_benchmark) {
@@ -5388,7 +5392,7 @@ int run_main(int argc, char* argv[]) {
         }
         if (config->depth < 1 || config->depth > 8) {
             std::println(stderr,
-                "Error: --mode png needs --depth 1..8 (2..256 colours)");
+                "Error: --mode png needs --depth 1..8 (2..256 colors)");
             return exit_code::usage;
         }
 
@@ -5491,7 +5495,7 @@ int run_main(int argc, char* argv[]) {
         cli_print_input(img.width(), img.height());
         cli_print_target(w, h, static_cast<int>(config->depth));
         cli_print_palette(std::format(
-            "{} colours, indexed PNG-8 (benchmark, {})",
+            "{} colors, indexed PNG-8 (benchmark, {})",
             quantized->colors.size(), quantized->name));
         cli_dump_palette(std::span<const Color3f>(quantized->colors), *config);
         cli_print_dither(dith.method, dith.strength);
@@ -5661,7 +5665,7 @@ int run_main(int argc, char* argv[]) {
         }
 
         // Depth defaults for standard Amiga modes when --depth wasn't given:
-        //   AGA lores / lores-lace / hires / hires-lace → 8 (full 256-colour
+        //   AGA lores / lores-lace / hires / hires-lace → 8 (full 256-color
         //                                                    gamut).
         //   OCS hires / hires-lace → 4 (hardware cap; the global default of
         //                              5 would fail the depth-vs-max gate
@@ -5884,7 +5888,7 @@ int run_main(int argc, char* argv[]) {
         // that bg-heavy scenes (mi2-redux interior rooms) need —
         // without it, dinky-hol bg collapsed to S2=−2 because
         // the joint quantizer over-allocated to bright cost
-        // colours. Real bin-packing produces the same atlas
+        // colors. Real bin-packing produces the same atlas
         // shape as PyTexturePacker, so quality should track.
         //
         // Atlas sizing: start at sqrt(sum_of_areas * 1.3) per side
@@ -5999,14 +6003,14 @@ int run_main(int argc, char* argv[]) {
         // Train the palette by running the FULL pipeline on the
         // atlas — same path mi2-redux's external 2D-pack workflow
         // uses: PyTexturePacker builds an atlas, then `png2amiga
-        // --best` runs on that atlas to produce an optimised
-        // 32-colour palette via pop_search + best_sweep. The
+        // --best` runs on that atlas to produce an optimized
+        // 32-color palette via pop_search + best_sweep. The
         // captured palette is then locked onto each individual
         // input. We do exactly that here, in-process, by calling
         // api::encode_state_image with config->best on the atlas.
         //
         // User --li / --rr / --tc / etc. flow through via
-        // make_api_options so training honours every constraint
+        // make_api_options so training honors every constraint
         // the user passes; pop_search optimises only the FREE
         // slots. Without this step the joint palette is far
         // worse than the 2D-pack baseline because pop_search
@@ -6035,7 +6039,7 @@ int run_main(int argc, char* argv[]) {
         // Pull the trained palette and stamp every free slot in
         // as a --lock-index. Skip user-locked / user-reserved
         // slots (those are already in config->locks / reserves
-        // and were honoured during training).
+        // and were honored during training).
         const auto& trained = train_enc.state.palette;
         // Cap loop to the mode's BASE palette size so EHB (which
         // returns a 64-entry expanded palette but only has 32 base
@@ -6093,7 +6097,7 @@ int run_main(int argc, char* argv[]) {
         }
         auto qparams = amiga::get_mode_params(config->mode);
         auto qcs = config->chipset.value_or(amiga::Chipset::ocs);
-        // EHB / HAM bake their own behaviour into max_colors; treat
+        // EHB / HAM bake their own behavior into max_colors; treat
         // them as the base-palette count (32 for EHB; for HAM the
         // base is 2^(depth-2) since 2 bits are control). Plain modes
         // use 1 << depth.
@@ -6163,13 +6167,13 @@ int run_main(int argc, char* argv[]) {
             }
         }
         image->set_alpha(std::move(a));
-        cli_status("Transparent: {} pixel(s) matched sentinel ({} colour{})",
+        cli_status("Transparent: {} pixel(s) matched sentinel ({} color{})",
                    hits, config->transparent_colors.size(),
                    config->transparent_colors.size() == 1 ? "" : "s");
     }
     // Matte to black before the quantizer / dither. Compositing
     // RGB = src * alpha drops alpha-0 sentinels to pure black so
-    // their dither error doesn't bleed the original colour
+    // their dither error doesn't bleed the original color
     // (e.g. magenta) into adjacent opaque pixels.
     matte_to_black(*image);
 
@@ -6635,7 +6639,7 @@ int run_main(int argc, char* argv[]) {
         switch (config->mode) {
         case amiga::Mode::c64_hires:
             cli_status("Mode:     C64 hires ({}×{}, {}×{} cells, "
-                       "2 colours/cell)", _rw, _rh, _cols, _rows); break;
+                       "2 colors/cell)", _rw, _rh, _cols, _rows); break;
         case amiga::Mode::c64_fli:
             cli_status("Mode:     C64 FLI ({}×{} logical, {}×{} cells, "
                        "multicolor + per-row screen)",
@@ -6655,11 +6659,11 @@ int run_main(int argc, char* argv[]) {
                        "shared mc + per-cell fg)", _cols, _rows); break;
         default:
             cli_status("Mode:     C64 multicolor ({}×{} logical, "
-                       "{}×{} cells, 4 colours/cell)",
+                       "{}×{} cells, 4 colors/cell)",
                        _rw, _rh, _cols, _rows); break;
         }
         // C64 fixed VIC-II palette — st.palette holds whichever VIC-II
-        // colour table the user picked via --c64-palette.
+        // color table the user picked via --c64-palette.
         if (!st.palette.empty())
             cli_dump_palette(std::span<const Color3f>(st.palette), *config);
 
@@ -6849,13 +6853,13 @@ int run_main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
         cli_print_mode(std::format(
-            "SNES Mode 7 ({}), {}x{} @ 8bpp chunky, 256 colours",
+            "SNES Mode 7 ({}), {}x{} @ 8bpp chunky, 256 colors",
             (config->mode == amiga::Mode::snes_mode7_256
                  ? "256-palette BGR555"
                  : "Direct Color BBGGGRRR"),
             st.rendered.width(), st.rendered.height()));
         // SNES Mode 7: 256-palette path has st.palette; Direct Color
-        // (BBGGGRRR pixel bytes) carries colour inline → palette empty.
+        // (BBGGGRRR pixel bytes) carries color inline → palette empty.
         if (!st.palette.empty())
             cli_dump_palette(std::span<const Color3f>(st.palette), *config);
         cli_print_dither(config->dither_method,
@@ -7003,9 +7007,9 @@ int run_main(int argc, char* argv[]) {
         cli_print_mode(std::format(
             "Sega Genesis ({}), {}x{} @ 4bpp tiles, 4 palettes x 16 BGR333",
             mode_label, st.rendered.width(), st.rendered.height()));
-        // Genesis: 4 banks × 16 BGR333 colours. genesis_palette_words is
+        // Genesis: 4 banks × 16 BGR333 colors. genesis_palette_words is
         // the raw CRAM (uint16 0BBB0GGG0RRR0000); decode back to Color3f
-        // for the dump so the per-bank colours are visible. Skip empty
+        // for the dump so the per-bank colors are visible. Skip empty
         // banks (encoder only fills what it uses).
         if (g_print_palette && !st.genesis_palette_words.empty()) {
             std::println(stderr,
@@ -7479,7 +7483,7 @@ int run_main(int argc, char* argv[]) {
         }
 
         // HAM: dump the (resolved) base palette only after encode finishes
-        // — cli_print_palette above prints the base-colour count BEFORE
+        // — cli_print_palette above prints the base-color count BEFORE
         // encode (dither_tuning + DP search shape it).
         cli_dump_palette(std::span<const Color3f>(st.palette), *config);
 
@@ -7960,7 +7964,7 @@ int run_main(int argc, char* argv[]) {
     // owns the per-line stream itself, EHB has its own copper branch
     // (line 4745), HAM has its own copper branch (line 4523). Skip the
     // plain sliced path for those so `--sliced --strips` doesn't fall into
-    // depth-5 sliced and produce a 32-colour result with EHB-mode confusion.
+    // depth-5 sliced and produce a 32-color result with EHB-mode confusion.
     if (config->copper && !config->scap &&
         !amiga::is_ham(config->mode) &&
         config->mode != amiga::Mode::ehb) {
@@ -8050,8 +8054,8 @@ int run_main(int argc, char* argv[]) {
 
         Result<copper::CopperResult> copper_result;
         if (config->best) {
-            // Plain sliced: 8 jitter seeds (16-colour palette has shallower
-            // basins than DPF's 8-colour PF2; 8 seeds × 5×4 = 161 trials,
+            // Plain sliced: 8 jitter seeds (16-color palette has shallower
+            // basins than DPF's 8-color PF2; 8 seeds × 5×4 = 161 trials,
             // ~30–60 s on 8 cores). Same parallel-sweep machinery as
             // strips DPF/EHB via pipeline::best_sweep.
             struct CapTrial {
@@ -8236,9 +8240,9 @@ int run_main(int argc, char* argv[]) {
     // --- strips (mid-line palette swaps) ---
     // Two paths:
     //   * DPF (production): --strips + --dpf + OCS lores depth=3 → 8 PF2
-    //     colours, full cpp viewer export.
+    //     colors, full cpp viewer export.
     //   * Lores 5bpp (investigation): --strips + OCS lores depth=5 (no
-    //     --dpf) → 32 colours, single playfield, PNG preview only,
+    //     --dpf) → 32 colors, single playfield, PNG preview only,
     //     no copper-list cpp output yet.
     if (config->scap) {
         bool strips_ehb = config->mode == amiga::Mode::ehb;
@@ -8297,7 +8301,7 @@ int run_main(int argc, char* argv[]) {
             // DPF strips: st.palette is the 16-entry COLOR00..15 register
             // layout (output_palette in scap.cpp). OCS DPF uses both
             // halves of the CLUT: PF1 → CLUT[0..7], PF2 → CLUT[8..15].
-            // We only encode into PF2 (3 bitplanes → 8 colours), so the
+            // We only encode into PF2 (3 bitplanes → 8 colors), so the
             // PF1 half is zeroed. Report the encoding-palette count.
             std::size_t pf2_colors = std::size_t{1} << 3;  // OCS DPF lores
             cli_print_palette(std::format(
@@ -8400,7 +8404,7 @@ int run_main(int argc, char* argv[]) {
     // transparency mask, if any) into a 3x3 grid. The pipeline below
     // — quantize, dither, encode — runs over the 3W x 3H buffer, so
     // the FS-style error diffusion converges to a tile-able pattern
-    // before the centre crop happens after bitplane::encode below.
+    // before the center crop happens after bitplane::encode below.
     std::size_t tile_w_std = 0, tile_h_std = 0;
     if (config->tile) {
         tile_w_std = image->width();
@@ -8428,7 +8432,7 @@ int run_main(int argc, char* argv[]) {
 
     // OCS DPF uses the 16-entry CLUT view for --reserve-range /
     // --lock-index / --pin-index-at: CLUT[0..7] = PF1 (zeroed by this
-    // encoder), CLUT[8..15] = PF2 (the encoder's 8-colour palette). The
+    // encoder), CLUT[8..15] = PF2 (the encoder's 8-color palette). The
     // user-facing index space is the 16-entry CLUT (matches the
     // --strips DPF path), but the encoder operates on PF2-base 0..7.
     // Translate before feeding the quantiser / dither / assemble; keep
@@ -8707,7 +8711,7 @@ int run_main(int argc, char* argv[]) {
         // (--print-palette-json round-trip). Merge them into
         // config.locks / config.reserves UNLESS a CLI flag already
         // targets that slot — CLI overrides the sidecar so users can
-        // tweak without rewriting the JSON. The slot's colour comes
+        // tweak without rewriting the JSON. The slot's color comes
         // from pal.colors[idx].
         auto cli_lock_at = [&](int idx) {
             for (auto& l : config->locks) if (l.index == idx) return true;
@@ -8750,7 +8754,7 @@ int run_main(int argc, char* argv[]) {
             config->pins.push_back({jp.idx, jp.x, jp.y});
         }
         // Apply CLI locks AND reserves on top of the user palette so a
-        // CLI flag fully respecifies the slot (colour + flag), not just
+        // CLI flag fully respecifies the slot (color + flag), not just
         // the flag. The JSON-merge step above already skipped any slot
         // covered by a CLI flag, so this loop only touches CLI-specified
         // entries.
@@ -8836,7 +8840,7 @@ int run_main(int argc, char* argv[]) {
         // Single-call assemble + reserve overlay (matches api.cpp's
         // run_pipeline path). All four reserve concerns baked in.
         // DPF: feed the PF2-base-translated locks AND reserves so the
-        // assemble step writes the colours into the 8-entry PF2 palette
+        // assemble step writes the colors into the 8-entry PF2 palette
         // at the right offsets (cli_dump_palette uses the raw 16-entry
         // config->locks / reserves separately for the 🔒 / 🔖 markers).
         auto assembled = palette_locks::assemble_with_reserves(
@@ -9047,8 +9051,8 @@ int run_main(int argc, char* argv[]) {
   }
 
     // --tile post-process: crop the 3W x 3H pipeline output back to the
-    // centre W x H tile. Indices, bitplanes, preview, source image, and
-    // transparency mask all collapse to the centre crop so every
+    // center W x H tile. Indices, bitplanes, preview, source image, and
+    // transparency mask all collapse to the center crop so every
     // downstream consumer (DPF expansion, PSNR, IFF/.h/.cpp emitters,
     // save_preview) sees the right dimensions without further changes.
     if (config->tile) {
@@ -9075,7 +9079,7 @@ int run_main(int argc, char* argv[]) {
             for (std::size_t x = 0; x < w; ++x)
                 cp[x, y] = (*preview)[x + w, y + h];
         *preview = std::move(cp);
-        // Crop source image (so PSNR is computed against the centre)
+        // Crop source image (so PSNR is computed against the center)
         Image ci(w, h);
         for (std::size_t y = 0; y < h; ++y)
             for (std::size_t x = 0; x < w; ++x)
@@ -9185,7 +9189,7 @@ int run_main(int argc, char* argv[]) {
         }
     }
 
-    // Terminal preview. --tile re-tiles the centre 3x3 so the user can
+    // Terminal preview. --tile re-tiles the center 3x3 so the user can
     // verify seam continuity. --fade-to animates the palette sequence;
     // both compose orthogonally with the regular static preview.
     if (config->preview) {

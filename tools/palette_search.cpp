@@ -2,7 +2,7 @@
 //
 // Background: --best does k-means + multi-restart over (jitter × strength
 // × diversity) = 161 trials, ranked by SSIMULACRA2. At d ≤ 4 the palette
-// basin space (4-16 colours over the 4096-colour OCS gamut) is sparse
+// basin space (4-16 colors over the 4096-color OCS gamut) is sparse
 // enough that k-means' local minima trap many candidates — observed:
 // at lores d=2 makena, --best gives S2 = -54.88, basically tied with the
 // no-best -54.95. The 161 jittered seeds aren't sampling enough basins.
