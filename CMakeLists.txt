@@ -248,6 +248,14 @@ else()
         target_compile_definitions(api_pipeline_smoke PRIVATE __AVX2__ __FMA__)
         target_compile_definitions(bench_ssimulacra2 PRIVATE __AVX2__ __FMA__)
         target_compile_definitions(palette_search PRIVATE __AVX2__ __FMA__)
+        # cga_font.hpp's `kCgaCanonicalBitmaps` consteval table calls
+        # `make_glyph_canonical_bitmap` 32 times, each scanning 256
+        # glyphs with an O(n²) dedup walk — overshoots MSVC's default
+        # /constexpr:steps 1048576. Bump to match the clang/Emscripten
+        # path (10M steps). Set per source so every target that picks
+        # up cga_text.cpp (png2amiga, palette_search, …) inherits it.
+        set_source_files_properties(src/cga_text.cpp PROPERTIES
+            COMPILE_OPTIONS /constexpr:steps10000000)
     else()
         # Probe for AVX2 — succeeds on x86_64, fails on ARM64 (Apple
         # Silicon, etc.) where NEON is the default ISA and no flag is
