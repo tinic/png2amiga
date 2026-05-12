@@ -18,8 +18,8 @@ Algorithm resolve_algorithm(amiga::Mode mode, amiga::Chipset chipset,
     }
     if (user == "fast") return Algorithm::median_cut;  // legacy alias
 
-    // 2. Auto-select. Per-mode defaults reflect the bench results in
-    // experiments/gpu_quantize/FINDINGS.md:
+    // 2. Auto-select. Per-mode defaults from an offline GPU-quantize
+    // benchmark sweep:
     //   - AGA / VGA continuous gamuts: gpu-restart wins +2.6..+3.4 ΔS2
     //   - OCS 12-bit discrete gamut: gpu-restart loses -6.36 ΔS2
     //   - HAM AGA: PNN wins ~10-13% over median-cut (Ward's anchors)
