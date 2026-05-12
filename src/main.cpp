@@ -297,6 +297,15 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
                     k, r, g, b, tag);
             }
         }
+        if (!cfg.pins.empty()) {
+            std::println(stderr,
+                "Pins: {} entry(ies)  📍 (slot ← pixel coord)",
+                cfg.pins.size());
+            for (auto& p : cfg.pins) {
+                std::println(stderr,
+                    "  📍 slot {:3} ← ({},{})", p.index, p.x, p.y);
+            }
+        }
     }
     if (g_print_palette_json) {
         // Single-line JSON to stdout — captureable separately from
@@ -314,6 +323,15 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
                 is_locked(static_cast<int>(k)) ? "true" : "false",
                 is_reserved(static_cast<int>(k)) ? "true" : "false",
                 pix_count[k]);
+        }
+        // pins[] — round-trips through parse_json_palette into
+        // Palette::pins, then back into config.pins at the CLI load
+        // site. Empty array is emitted when the user passed no pins.
+        out += "],\"pins\":[";
+        for (std::size_t i = 0; i < cfg.pins.size(); ++i) {
+            auto& p = cfg.pins[i];
+            out += std::format("{}{{\"idx\":{},\"x\":{},\"y\":{}}}",
+                               i == 0 ? "" : ",", p.index, p.x, p.y);
         }
         // chipset: explicit if user passed --chipset, else "ocs".
         // Mode-driven AGA forcing (HAM7/HAM8) reports "aga".
@@ -8277,17 +8295,30 @@ int run_main(int argc, char* argv[]) {
                 resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         } else {
             // DPF strips: st.palette is the 16-entry COLOR00..15 register
-            // layout (output_palette in scap.cpp); only 8 of those slots
-            // are actually used (PF2 has 3 bitplanes → 8 colours).
-            // Report the visible-colour count, not the register count.
+            // layout (output_palette in scap.cpp). OCS DPF uses both
+            // halves of the CLUT: PF1 → CLUT[0..7], PF2 → CLUT[8..15].
+            // We only encode into PF2 (3 bitplanes → 8 colours), so the
+            // PF1 half is zeroed. Report the encoding-palette count.
             std::size_t pf2_colors = std::size_t{1} << 3;  // OCS DPF lores
             cli_print_palette(std::format(
-                "{} colors (PF2 3bpl, {})", pf2_colors,
-                resolve_quantizer_name(config->mode, chipset, config->quantizer)));
+                "{} colors (auto, ocs-optimal)", pf2_colors));
         }
         cli_dump_palette(std::span<const Color3f>(st.palette), *config);
-        cli_print_dither(config->dither_method,
-                         make_api_options(*config).dither_strength);
+        // Resolve the -1.0f dither-strength sentinel through dither_tuning
+        // so the printed value matches what the strips encoder actually
+        // ran with, not the unresolved CLI default. Mirrors cga / sliced.
+        auto strips_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode    = config->mode,
+            .depth   = static_cast<int>(config->depth),
+            .dpf     = config->dual_playfield,
+            .scap    = true,
+            .copper  = true,    // strips layers on sliced
+            .chipset = chipset,
+            .method  = config->dither_method,
+        });
+        float strips_strength = config->dither_strength_explicit
+            ? config->dither_strength : strips_tune.strength;
+        cli_print_dither(config->dither_method, strips_strength);
         cli_status("Copper:   hblank avg {:.1f} (max {}), visible avg "
                      "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
                      st.strips_avg_hblank_moves_per_line,
@@ -8395,6 +8426,95 @@ int run_main(int argc, char* argv[]) {
     auto lock_zero_std = !user_pal_std && config->lock_color0 &&
                              (has_transparency || !is_atari_std);
 
+    // OCS DPF uses the 16-entry CLUT view for --reserve-range /
+    // --lock-index / --pin-index-at: CLUT[0..7] = PF1 (zeroed by this
+    // encoder), CLUT[8..15] = PF2 (the encoder's 8-colour palette). The
+    // user-facing index space is the 16-entry CLUT (matches the
+    // --strips DPF path), but the encoder operates on PF2-base 0..7.
+    // Translate before feeding the quantiser / dither / assemble; keep
+    // the raw config->locks/reserves for the dump's 🔒/🔖 markers.
+    //
+    // Mapping (inverse of strips' pf2_writes):
+    //   CLUT 0  → PF2 idx 0  (background; also implicit lock_color0 target)
+    //   CLUT 1..7 → PF1 (zeroed); silently drop
+    //   CLUT 8  → PF2 idx 0  (AGA-DPF dual-write of CLUT 0)
+    //   CLUT 9..15 → PF2 idx 1..7
+    bool dpf_clut_indexing =
+        config->dual_playfield && chipset != amiga::Chipset::aga;
+    auto dpf_clut_to_pf2 = [&](int user_idx) -> std::optional<int> {
+        if (user_idx < 0) return std::nullopt;
+        auto i = static_cast<std::size_t>(user_idx);
+        if (i == 0 || i == 8) return 0;
+        if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
+        return std::nullopt;  // PF1 territory or out-of-range
+    };
+    auto translate_dpf_reserves =
+        [&](std::span<const api::ReserveSpec> raw) {
+            std::vector<api::ReserveSpec> out;
+            out.reserve(raw.size());
+            if (!dpf_clut_indexing) {
+                out.assign(raw.begin(), raw.end());
+                return out;
+            }
+            bool slot0_emitted = false;
+            for (auto& r : raw) {
+                auto pf2_idx = dpf_clut_to_pf2(r.index);
+                if (!pf2_idx) continue;
+                if (*pf2_idx == 0) {
+                    // CLUT 0 / CLUT 8 both fold to PF2 idx 0. Skip if
+                    // lock_color0 already owns it (validate_reserves
+                    // would error on the duplicate); also dedupe across
+                    // CLUT 0 + CLUT 8 reservations.
+                    if (lock_zero_std) continue;
+                    if (slot0_emitted) continue;
+                    slot0_emitted = true;
+                }
+                out.push_back({*pf2_idx, r.r, r.g, r.b});
+            }
+            return out;
+        };
+    auto translate_dpf_locks =
+        [&](std::span<const api::LockSpec> raw) {
+            std::vector<api::LockSpec> out;
+            out.reserve(raw.size());
+            if (!dpf_clut_indexing) {
+                out.assign(raw.begin(), raw.end());
+                return out;
+            }
+            bool slot0_emitted = false;
+            for (auto& l : raw) {
+                auto pf2_idx = dpf_clut_to_pf2(l.index);
+                if (!pf2_idx) continue;
+                if (*pf2_idx == 0) {
+                    if (slot0_emitted) continue;
+                    slot0_emitted = true;
+                }
+                out.push_back({*pf2_idx, l.r, l.g, l.b});
+            }
+            return out;
+        };
+    auto translate_dpf_pins =
+        [&](std::span<const api::PinSpec> raw) {
+            std::vector<api::PinSpec> out;
+            out.reserve(raw.size());
+            if (!dpf_clut_indexing) {
+                out.assign(raw.begin(), raw.end());
+                return out;
+            }
+            for (auto& p : raw) {
+                auto pf2_idx = dpf_clut_to_pf2(p.index);
+                if (!pf2_idx) continue;  // PF1 pins are unrepresentable
+                out.push_back({*pf2_idx, p.x, p.y});
+            }
+            return out;
+        };
+    std::vector<api::ReserveSpec> pf2_reserves =
+        translate_dpf_reserves(config->reserves);
+    std::vector<api::LockSpec> pf2_locks =
+        translate_dpf_locks(config->locks);
+    std::vector<api::PinSpec> pf2_pins =
+        translate_dpf_pins(config->pins);
+
     // Locals that the post-encode emission block (line ~7600+) consumes.
     // Hoisted so both the inline encoder body below AND the --best
     // delegation can populate them. Results start in an "uninit" error
@@ -8411,26 +8531,26 @@ int run_main(int argc, char* argv[]) {
     bool plain_best_done = false;
 
     // Validate locks/pins
-    if (auto v = palette_locks::validate_locks(config->locks, max_colors); !v) {
+    if (auto v = palette_locks::validate_locks(pf2_locks, max_colors); !v) {
         std::println(stderr, "{}", v.error().message);
         return 1;
     }
-    if (auto v = palette_locks::validate_pins(config->pins, config->locks,
-                                              config->reserves, max_colors,
+    if (auto v = palette_locks::validate_pins(pf2_pins, pf2_locks,
+                                              pf2_reserves, max_colors,
                                               image->width(), image->height(),
                                               lock_zero_std); !v) {
         std::println(stderr, "{}", v.error().message);
         return 1;
     }
     auto reserves_in_pal_std = palette_locks::validate_reserves(
-        config->reserves, config->locks, max_colors, lock_zero_std);
+        pf2_reserves, pf2_locks, max_colors, lock_zero_std);
     if (!reserves_in_pal_std) {
         std::println(stderr, "{}", reserves_in_pal_std.error().message);
         return 1;
     }
     std::size_t reserve_count_std = *reserves_in_pal_std;
     std::vector<bool> reserved_mask_std(max_colors, false);
-    for (auto& r : config->reserves) {
+    for (auto& r : pf2_reserves) {
         auto i = static_cast<std::size_t>(r.index);
         if (r.index >= 0 && i < max_colors) reserved_mask_std[i] = true;
     }
@@ -8618,6 +8738,17 @@ int run_main(int argc, char* argv[]) {
             auto [r, g, b] = rgb_from_color(pal.colors[static_cast<std::size_t>(ri)]);
             config->reserves.push_back({ri, r, g, b});
         }
+        // Merge JSON pins[] into config.pins. CLI --pin-index-at wins
+        // per-slot (skip JSON pins targeting a slot the user already
+        // pinned via flags). Same precedence rule as locks/reserves above.
+        auto cli_pin_at = [&](int idx) {
+            for (auto& p : config->pins) if (p.index == idx) return true;
+            return false;
+        };
+        for (auto& jp : pal.pins) {
+            if (cli_pin_at(jp.idx)) continue;
+            config->pins.push_back({jp.idx, jp.x, jp.y});
+        }
         // Apply CLI locks AND reserves on top of the user palette so a
         // CLI flag fully respecifies the slot (colour + flag), not just
         // the flag. The JSON-merge step above already skipped any slot
@@ -8662,9 +8793,11 @@ int run_main(int argc, char* argv[]) {
     } else {
         // Slot-budget for the quantizer. See palette_locks::QuantCounts
         // — subtracts lock_zero + locks + reserves so the quantizer
-        // optimises for exactly the slots it'll fill.
+        // optimises for exactly the slots it'll fill. Use the PF2-base
+        // translated lock list under --dpf so the count matches the
+        // assemble step below.
         auto qc = palette_locks::quant_counts_for_assemble(
-            max_colors, config->locks, reserve_count_std, lock_zero_std);
+            max_colors, pf2_locks, reserve_count_std, lock_zero_std);
         // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
         // quantizer centroids collapse to the same gamut slot when snapped —
         // that's why a 16-color EGA request can end up using only 7-8 colors.
@@ -8702,8 +8835,12 @@ int run_main(int argc, char* argv[]) {
             snap_palette(*quantized, chipset, config->mode);
         // Single-call assemble + reserve overlay (matches api.cpp's
         // run_pipeline path). All four reserve concerns baked in.
+        // DPF: feed the PF2-base-translated locks AND reserves so the
+        // assemble step writes the colours into the 8-entry PF2 palette
+        // at the right offsets (cli_dump_palette uses the raw 16-entry
+        // config->locks / reserves separately for the 🔒 / 🔖 markers).
         auto assembled = palette_locks::assemble_with_reserves(
-            *quantized, config->locks, config->reserves,
+            *quantized, pf2_locks, pf2_reserves,
             max_colors, lock_zero_std, chipset, config->mode);
         pal = std::move(assembled.palette);
         std_locked = std::move(assembled.locked);
@@ -8799,10 +8936,13 @@ int run_main(int argc, char* argv[]) {
         dither_result = dither::apply(*image, pal_span, dith);
     }
 
-    // Apply pin-index swaps (post-quantization, post-dither).
-    if (!config->pins.empty()) {
+    // Apply pin-index swaps (post-quantization, post-dither). Use the
+    // PF2-base-translated pins under --dpf — the encoder operates on
+    // the 8-entry PF2 palette; CLUT-layout indices (CLUT 9..15 / 8/0)
+    // were already remapped above.
+    if (!pf2_pins.empty()) {
         auto pin_result = palette_locks::apply_pins(
-            pal, dither_result.indices, std_locked, config->pins,
+            pal, dither_result.indices, std_locked, pf2_pins,
             image->width(), image->height());
         if (!pin_result) {
             std::println(stderr, "{}", pin_result.error().message);
@@ -8890,8 +9030,20 @@ int run_main(int argc, char* argv[]) {
     // ega / "best" for the --best winner). Mode-specific precision
     // is already on the Mode: line above, so don't duplicate.
     cli_status("Palette:  {} colors (auto, {})", pal.size(), pal.name);
-    cli_dump_palette(std::span<const Color3f>(pal.colors), *config,
-                     std::span<const std::uint8_t>(dither_result.indices));
+    // DPF dumps the 16-entry CLUT view (PF1 zeros at 0..7, PF2 at
+    // 8..15), matching --strips DPF and the --reserve-range index
+    // space exposed to the user. Per-slot pixel counts are dropped
+    // here because the dither indices are in PF2-base 0..7 — the
+    // mapping back to CLUT 8..15 would be misleading on PF1 slots.
+    if (dpf_clut_indexing) {
+        std::vector<Color3f> dpf_clut(16, Color3f{0.0f, 0.0f, 0.0f});
+        for (std::size_t k = 0; k < pal.colors.size() && k < 8; ++k)
+            dpf_clut[8 + k] = pal.colors[k];
+        cli_dump_palette(std::span<const Color3f>(dpf_clut), *config);
+    } else {
+        cli_dump_palette(std::span<const Color3f>(pal.colors), *config,
+                         std::span<const std::uint8_t>(dither_result.indices));
+    }
   }
 
     // --tile post-process: crop the 3W x 3H pipeline output back to the

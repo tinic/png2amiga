@@ -3425,21 +3425,72 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     strips_user_pal_span,
                     strips_ehb_reserves);
             }()
-            : strips::encode_strips_dpf_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                options.lock_color0,
-                strips_dith,
-                options.strips_debug,
-                static_cast<std::size_t>(options.copper_changes),
-                options.palette_diversity,
-                options.on_progress,
-                options.best,
-                options.sliced_spread_radius,
-                options.sliced_spread_decay,
-                options.sliced_vertical_dither,
-                strips_user_pal_span);
+            : [&] {
+                // strips-DPF reserves/locks: indices reference the OCS
+                // DPF 16-entry CLUT layout (CLUT[0..7] = PF1, CLUT[8..15]
+                // = PF2). PF1 is zeroed in our encoder, so any CLUT-1..7
+                // entry is a silent no-op. PF2 base indices 0..7 map to
+                // CLUT registers via the OCS DPF combiner:
+                //   PF2 idx 0 → COLOR00 (dual-written to COLOR08 for
+                //               AGA-DPF source compatibility)
+                //   PF2 idx 1..7 → COLOR09..15
+                // Translate CLUT slot → PF2 base index for the planner.
+                auto translate_to_pf2 = [&](int user_idx) -> std::optional<int> {
+                    if (user_idx < 0) return std::nullopt;
+                    auto i = static_cast<std::size_t>(user_idx);
+                    if (i == 0 || i == 8) return 0;
+                    if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
+                    return std::nullopt;
+                };
+                std::vector<std::pair<std::size_t, Color3f>> strips_dpf_reserves;
+                strips_dpf_reserves.reserve(options.reserves.size());
+                for (auto& r : options.reserves) {
+                    auto pf2 = translate_to_pf2(r.index);
+                    if (!pf2) continue;
+                    bool dup = std::any_of(strips_dpf_reserves.begin(),
+                                           strips_dpf_reserves.end(),
+                                           [&](const auto& p) {
+                                               return static_cast<int>(p.first) == *pf2;
+                                           });
+                    if (dup) continue;
+                    strips_dpf_reserves.emplace_back(
+                        static_cast<std::size_t>(*pf2),
+                        palette_locks::to_color(
+                            LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                }
+                std::vector<std::pair<std::size_t, Color3f>> strips_dpf_locks;
+                strips_dpf_locks.reserve(options.locks.size());
+                for (auto& l : options.locks) {
+                    auto pf2 = translate_to_pf2(l.index);
+                    if (!pf2) continue;
+                    bool dup = std::any_of(strips_dpf_locks.begin(),
+                                           strips_dpf_locks.end(),
+                                           [&](const auto& p) {
+                                               return static_cast<int>(p.first) == *pf2;
+                                           });
+                    if (dup) continue;
+                    strips_dpf_locks.emplace_back(
+                        static_cast<std::size_t>(*pf2),
+                        palette_locks::to_color(l, chipset, mode));
+                }
+                return strips::encode_strips_dpf_ocs(
+                    *image,
+                    static_cast<int>(image->width()),
+                    static_cast<int>(image->height()),
+                    options.lock_color0,
+                    strips_dith,
+                    options.strips_debug,
+                    static_cast<std::size_t>(options.copper_changes),
+                    options.palette_diversity,
+                    options.on_progress,
+                    options.best,
+                    options.sliced_spread_radius,
+                    options.sliced_spread_decay,
+                    options.sliced_vertical_dither,
+                    strips_user_pal_span,
+                    strips_dpf_reserves,
+                    strips_dpf_locks);
+            }();
         if (!strips_res) return std::unexpected{strips_res.error()};
 
         PipelineResult result;
@@ -3804,24 +3855,102 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto lock_zero = !user_pal && options.lock_color0 &&
                         (has_transparency || !is_atari);
 
+    // OCS DPF exposes the user-facing 16-entry CLUT view for
+    // --reserve-range / --lock-index / --pin-index-at: CLUT 0/8 → PF2
+    // idx 0, CLUT 9..15 → PF2 idx 1..7, CLUT 1..7 = PF1 territory
+    // (silently dropped). Translate before feeding validate / quantise
+    // / assemble / apply_pins so the encoder sees only PF2-base
+    // indices. Stays in lockstep with main.cpp's CLI path (the
+    // api-equiv-dpf-* ctests pin both ends).
+    bool dpf_clut_indexing = use_dpf && chipset != amiga::Chipset::aga;
+    auto dpf_clut_to_pf2 = [&](int user_idx) -> std::optional<int> {
+        if (user_idx < 0) return std::nullopt;
+        auto i = static_cast<std::size_t>(user_idx);
+        if (i == 0 || i == 8) return 0;
+        if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
+        return std::nullopt;
+    };
+    auto translate_dpf_reserves =
+        [&](std::span<const ReserveSpec> raw) {
+            std::vector<ReserveSpec> out;
+            out.reserve(raw.size());
+            if (!dpf_clut_indexing) {
+                out.assign(raw.begin(), raw.end());
+                return out;
+            }
+            bool slot0_emitted = false;
+            for (auto& r : raw) {
+                auto pf2_idx = dpf_clut_to_pf2(r.index);
+                if (!pf2_idx) continue;
+                if (*pf2_idx == 0) {
+                    if (lock_zero) continue;
+                    if (slot0_emitted) continue;
+                    slot0_emitted = true;
+                }
+                out.push_back({*pf2_idx, r.r, r.g, r.b});
+            }
+            return out;
+        };
+    auto translate_dpf_locks =
+        [&](std::span<const LockSpec> raw) {
+            std::vector<LockSpec> out;
+            out.reserve(raw.size());
+            if (!dpf_clut_indexing) {
+                out.assign(raw.begin(), raw.end());
+                return out;
+            }
+            bool slot0_emitted = false;
+            for (auto& l : raw) {
+                auto pf2_idx = dpf_clut_to_pf2(l.index);
+                if (!pf2_idx) continue;
+                if (*pf2_idx == 0) {
+                    if (slot0_emitted) continue;
+                    slot0_emitted = true;
+                }
+                out.push_back({*pf2_idx, l.r, l.g, l.b});
+            }
+            return out;
+        };
+    auto translate_dpf_pins =
+        [&](std::span<const PinSpec> raw) {
+            std::vector<PinSpec> out;
+            out.reserve(raw.size());
+            if (!dpf_clut_indexing) {
+                out.assign(raw.begin(), raw.end());
+                return out;
+            }
+            for (auto& p : raw) {
+                auto pf2_idx = dpf_clut_to_pf2(p.index);
+                if (!pf2_idx) continue;
+                out.push_back({*pf2_idx, p.x, p.y});
+            }
+            return out;
+        };
+    std::vector<ReserveSpec> effective_reserves =
+        translate_dpf_reserves(options.reserves);
+    std::vector<LockSpec> effective_locks =
+        translate_dpf_locks(options.locks);
+    std::vector<PinSpec> effective_pins =
+        translate_dpf_pins(options.pins);
+
     // Validate locks/pins (no-op for HAM/copper paths above which return earlier).
     // Locks override the implicit reserve-zero rule when index 0 is locked.
-    if (auto v = palette_locks::validate_locks(options.locks, max_colors); !v)
+    if (auto v = palette_locks::validate_locks(effective_locks, max_colors); !v)
         return std::unexpected{v.error()};
-    if (auto v = palette_locks::validate_pins(options.pins, options.locks,
-                                              options.reserves, max_colors,
+    if (auto v = palette_locks::validate_pins(effective_pins, effective_locks,
+                                              effective_reserves, max_colors,
                                               image->width(), image->height(),
                                               lock_zero); !v)
         return std::unexpected{v.error()};
     auto reserves_in_pal = palette_locks::validate_reserves(
-        options.reserves, options.locks, max_colors, lock_zero);
+        effective_reserves, effective_locks, max_colors, lock_zero);
     if (!reserves_in_pal) return std::unexpected{reserves_in_pal.error()};
     std::size_t reserve_count = *reserves_in_pal;
     // Build a reserved_mask the dither path uses to exclude these slots
     // from the candidate set (locks DON'T appear here — they remain
     // valid dither targets per their lock-not-reserve semantics).
     std::vector<bool> reserved_mask(max_colors, false);
-    for (auto& r : options.reserves) {
+    for (auto& r : effective_reserves) {
         auto i = static_cast<std::size_t>(r.index);
         if (r.index >= 0 && i < max_colors) reserved_mask[i] = true;
     }
@@ -3921,7 +4050,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto_dith, options.palette_diversity, options.refine_iterations,
             options.lock_color0, has_transparency, use_dpf,
             options.match_range,
-            options.locks, options.reserves, options.pins, tmask);
+            effective_locks, effective_reserves, effective_pins, tmask);
         if (!trial) return std::unexpected{trial.error()};
         std::vector<Color3f> used_palette(
             trial->pal.colors.begin(),

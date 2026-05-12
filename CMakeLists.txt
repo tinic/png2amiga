@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.85.1 LANGUAGES C CXX)
+project(png2amiga VERSION 1.86.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -1542,6 +1542,18 @@ else()
             --in "${CMAKE_SOURCE_DIR}/examples/asterix.png"
             --mode lores --depth 5)
 
+    # --print-palette-json pins[] round-trip: emit JSON with --pin-index-at,
+    # re-load it via --palette FILE.json, re-emit JSON, and assert the
+    # pins[] section matches the original input. Pins the JSON writer ↔
+    # parser contract so a regression in either side (writer drops the
+    # field, parser silently ignores it, CLI load skips the merge step)
+    # fails immediately.
+    add_test(NAME "palette-json-pin-roundtrip"
+        COMMAND ${PNG2AMIGA_PYTHON}
+            "${CMAKE_SOURCE_DIR}/tools/check_palette_json_roundtrip.py"
+            --bin $<TARGET_FILE:png2amiga>
+            --in "${CMAKE_SOURCE_DIR}/examples/asterix.png")
+
     # Lores 5bpp: reserving 1-31 leaves only slot 0 (= black). Output
     # must be all-black.
     add_test(NAME "reserve-render-lores-all-locked-is-black"
@@ -1778,14 +1790,48 @@ else()
     # only; CPU sum in fixed pixel-index order). Now byte-equivalent.
     add_test(NAME "api-equiv-vga-13h-plain"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode vga-13h)
-    # DPF + reserves: PF1 is zeroed in the current implementation, so a
-    # reserve on the depth-3/4 base palette IS a PF2 reserve.
+    # DPF + reserves / locks / pins: --reserve-range, --lock-index, and
+    # --pin-index-at all use the 16-entry CLUT view (CLUT[0..7] = PF1
+    # zeros, CLUT[8..15] = PF2). The encoder internally translates
+    # CLUT 9..15 → PF2 idx 1..7 (slots 0/8 → PF2 idx 0, slots 1..7 =
+    # PF1 = silent no-op). The api-equiv check below pins CLI ↔ API
+    # parity so both sides apply identical translations.
     add_test(NAME "api-equiv-dpf"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode lores --dpf)
     add_test(NAME "api-equiv-dpf-reserve"
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}
-            -- --mode lores --dpf --reserve-range 7 ff0000)
+            -- --mode lores --dpf --reserve-range 15 ff0000)
+    add_test(NAME "api-equiv-dpf-lock"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dpf --lock-index 15 00ff00)
+    add_test(NAME "api-equiv-dpf-pin"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --dpf --pin-index-at 15 0 0)
+
+    # DPF + --lock-index actually pins palette[15]: covers plain --dpf
+    # AND --dpf --strips so a regression in either path's lock translation
+    # surfaces (strips DPF previously had no lock plumbing — locks
+    # showed the 🔒 marker in the dump but didn't override the slot's
+    # encoded colour). Plain DPF uses IFF CMAP; strips DPF can only
+    # output .png/.h/.cpp so we read its palette via --print-palette-json.
+    add_test(NAME "dpf-lock-cmap-15-green"
+        COMMAND ${_check_pal}
+            --in ${_pal_makena_in}
+            --out ${CMAKE_BINARY_DIR}/test_dpf_lock_15.iff
+            --expect 15=00ff00
+            --
+            --mode lores --dpf --lock-index 15 00ff00)
+    add_test(NAME "dpf-strips-lock-slot-15-green"
+        COMMAND ${PNG2AMIGA_PYTHON}
+            "${CMAKE_SOURCE_DIR}/tools/check_palette_slot.py"
+            --bin $<TARGET_FILE:png2amiga>
+            --in ${_pal_makena_in}
+            --expect 15=00ff00
+            --
+            --mode lores --dpf --strips --lock-index 15 00ff00)
     # Coverage gaps surfaced after the api hires palette_diversity bump
     # broke api-equiv-hires-sliced-reserve: each of these exercises a
     # path the prior 51-test set didn't pin.

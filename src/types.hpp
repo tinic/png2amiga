@@ -180,6 +180,13 @@ struct Palette {
     std::vector<int> locked_indices{};
     std::vector<int> reserved_indices{};
 
+    // Optional pin entries from --pin-index-at, serialised in the
+    // JSON dump's pins:[{idx, x, y}, ...] array. Empty for formats
+    // that don't carry pins. Merged into config.pins at the CLI load
+    // site (CLI --pin-index-at takes precedence per (idx)).
+    struct PinEntry { int idx; int x; int y; };
+    std::vector<PinEntry> pins{};
+
     [[nodiscard]] std::span<const Color3f> as_span() const noexcept {
         return colors;
     }

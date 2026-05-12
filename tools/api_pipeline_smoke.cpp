@@ -151,6 +151,26 @@ int main(int argc, char** argv) {
                 r.index = j;
                 opts.reserves.push_back(r);
             }
+        }
+        else if (a == "--lock-index") {
+            auto idx_s = next(a);
+            auto color = next(a);
+            int idx = std::atoi(std::string(idx_s).c_str());
+            api::ReserveSpec tmp;
+            if (!parse_hex(color, tmp)) {
+                std::println(stderr, "bad hex: {}", color);
+                return 2;
+            }
+            opts.locks.push_back({idx, tmp.r, tmp.g, tmp.b});
+        }
+        else if (a == "--pin-index-at") {
+            auto idx_s = next(a);
+            auto x_s   = next(a);
+            auto y_s   = next(a);
+            opts.pins.push_back({
+                std::atoi(std::string(idx_s).c_str()),
+                std::atoi(std::string(x_s).c_str()),
+                std::atoi(std::string(y_s).c_str())});
         } else if (in_path.empty()) {
             in_path = std::string(a);
         } else if (out_path.empty()) {

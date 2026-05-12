@@ -280,7 +280,26 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        float sliced_spread_decay = -1.0f,
                                        bool sliced_vertical_dither = false,
                                        std::span<const Color3f>
-                                           external_palette = {});
+                                           external_palette = {},
+                                       // --reserve-range: PF2-base slot
+                                       // indices (0..7) locked to a fixed
+                                       // colour. Forwarded to encode_copper
+                                       // as locked + dither excluded, AND the
+                                       // strips swap planner avoids them so
+                                       // mid-line MOVEs can't overwrite the
+                                       // reserved colour.
+                                       const std::vector<std::pair<std::size_t, Color3f>>&
+                                           reserved_slots = {},
+                                       // --lock-index: like reserved_slots,
+                                       // but image pixels MAY still route
+                                       // through these slots (dither picks
+                                       // them normally). The colour is
+                                       // pinned (encode_copper's `locked`),
+                                       // and the strips planner skips them
+                                       // so mid-line MOVEs can't overwrite
+                                       // the locked colour.
+                                       const std::vector<std::pair<std::size_t, Color3f>>&
+                                           locked_slots = {});
 
 // ---------------------------------------------------------------------------
 // strips for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived

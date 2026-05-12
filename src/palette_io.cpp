@@ -421,14 +421,17 @@ Result<Palette> parse_ocs_binary(std::span<const std::uint8_t> data) {
 //        "pixels": N},
 //       ...
 //     ],
+//     "pins": [ {"idx": N, "x": N, "y": N}, ... ],
 //     "depth": N, "chipset": "ocs|aga", "mode": "lores|..."
 //   }
 //
 // We consume `palette[].rgb` (required) and `palette[].locked` /
 // `palette[].reserved` (optional). Slot index = array order; the
-// `idx` field is informational. Other top-level fields are passed
-// through but not enforced — depth/chipset/mode the caller's CLI
-// flags supersede.
+// `idx` field is informational. The optional `pins` array maps slot
+// indices to pixel coordinates (read into Palette::pins; merged into
+// config.pins at the CLI load site). Other top-level fields are
+// passed through but not enforced — depth/chipset/mode the caller's
+// CLI flags supersede.
 // ---------------------------------------------------------------------------
 Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
     Palette pal;
@@ -497,6 +500,37 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
             ErrorCode::invalid_png,
             "JSON palette: \"palette\" array is empty",
         }};
+    }
+    // Optional pins[]: round-trips --pin-index-at entries. Missing or
+    // empty array is fine. We validate types here so a malformed pin
+    // surfaces a clean error rather than silent drop.
+    if (doc.contains("pins")) {
+        if (!doc["pins"].is_array()) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_png,
+                "JSON palette: \"pins\" field must be an array",
+            }};
+        }
+        int pin_slot = 0;
+        for (const auto& pin : doc["pins"]) {
+            if (!pin.is_object() ||
+                !pin.contains("idx") || !pin["idx"].is_number_integer() ||
+                !pin.contains("x")   || !pin["x"].is_number_integer() ||
+                !pin.contains("y")   || !pin["y"].is_number_integer()) {
+                return std::unexpected{Error{
+                    ErrorCode::invalid_png,
+                    std::string{"JSON palette: pin "} +
+                        std::to_string(pin_slot) +
+                        " requires integer idx/x/y",
+                }};
+            }
+            pal.pins.push_back({
+                pin["idx"].get<int>(),
+                pin["x"].get<int>(),
+                pin["y"].get<int>(),
+            });
+            ++pin_slot;
+        }
     }
     return pal;
 }

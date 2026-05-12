@@ -540,7 +540,11 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                                        float sliced_spread_decay,
                                        bool sliced_vertical_dither,
                                        std::span<const Color3f>
-                                           external_palette) {
+                                           external_palette,
+                                       const std::vector<std::pair<std::size_t, Color3f>>&
+                                           reserved_slots,
+                                       const std::vector<std::pair<std::size_t, Color3f>>&
+                                           locked_slots) {
     // --best: multi-restart with varied palette_diversity + dither
     // strength. The strips planner is deterministic for a given input, so
     // varying these knobs is the only way to sample different
@@ -560,7 +564,8 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                     d, debug_overlay, copper_changes_override, div,
                     /*on_progress=*/{}, /*enable_best=*/false,
                     sliced_spread_radius, sliced_spread_decay,
-                    sliced_vertical_dither, external_palette);
+                    sliced_vertical_dither, external_palette,
+                    reserved_slots, locked_slots);
             },
             [](const ScapResult& r) -> const Image& { return r.rendered; },
             on_progress,
@@ -662,13 +667,41 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
         dpf_user_pal.assign(external_palette.begin(), external_palette.end());
         if (dpf_user_pal.size() > 8) dpf_user_pal.resize(8);
     }
+    // --reserve-range + --lock-index plumbing: both pin a PF2 slot's
+    // colour. Differences:
+    //   * reserves are dither_excluded — image pixels never route there.
+    //   * locks are NOT excluded — dither picks them normally; only the
+    //     slot's colour is fixed.
+    // Both feed encode_copper's `locked` (sliced never re-emits the
+    // slot), and both flag the strips swap planner mask so mid-line
+    // MOVEs can't overwrite the pinned colour.
+    std::array<bool, 8> reserved_mask_dpf{};
+    std::vector<std::size_t> dpf_dither_excluded;
+    dpf_dither_excluded.reserve(reserved_slots.size());
+    for (auto& [idx, _] : reserved_slots) {
+        if (idx < 8) {
+            reserved_mask_dpf[idx] = true;
+            dpf_dither_excluded.push_back(idx);
+        }
+    }
+    for (auto& [idx, _] : locked_slots) {
+        if (idx < 8) reserved_mask_dpf[idx] = true;
+    }
+    // Combined locked list for encode_copper. Reserves and locks both
+    // pin colours; only the dither_excluded vector distinguishes them.
+    std::vector<std::pair<std::size_t, Color3f>> copper_locked;
+    copper_locked.reserve(reserved_slots.size() + locked_slots.size());
+    copper_locked.insert(copper_locked.end(),
+        reserved_slots.begin(), reserved_slots.end());
+    copper_locked.insert(copper_locked.end(),
+        locked_slots.begin(), locked_slots.end());
     auto copper_result = copper::encode_copper(
         src, /*depth=*/3, dither_settings,
         amiga::Chipset::ocs,
         sliced_share,
         dpf_user_pal.empty() ? nullptr : &dpf_user_pal,
         lock_color0,
-        /*locked=*/{},
+        copper_locked,
         palette_diversity,
         /*skip_initial_swap_rows=*/0,
         /*is_lace=*/false,
@@ -678,7 +711,8 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
             ? static_cast<std::size_t>(sliced_spread_radius)
             : std::numeric_limits<std::size_t>::max(),
         sliced_spread_decay >= 0.0f ? sliced_spread_decay : -1.0f,
-        sliced_vertical_dither);
+        sliced_vertical_dither,
+        dpf_dither_excluded);
     if (!copper_result) return std::unexpected{copper_result.error()};
     auto& sliced_palettes = copper_result->scanline_palettes;
     auto& base_palette_vec = copper_result->base_palette;
@@ -1133,6 +1167,9 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
 
                 auto& soa_pixels = strip_pixels_soa[s + 1];
                 for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                    // --reserve-range: skip locked PF2 slots so the mid-line
+                    // strips planner can't overwrite the user's fixed colour.
+                    if (reserved_mask_dpf[k]) continue;
                     reset_pixel_min(tl_pixel_min_dpf, soa_pixels);
                     for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
                         if (k2 == k) continue;
