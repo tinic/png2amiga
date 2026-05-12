@@ -435,10 +435,14 @@ const reservablePaletteSize = computed(() => {
 const reservesSupported = computed(() => {
   const m = options.mode
   if (isHamMode(m)) return false
-  if (options.dualPlayfield) return false
   if (isGenesisMode(m) || isSnesMode(m)) return false
   if (isC64Mode(m)) return false
   if (isCgaMode(m) || isCgaText(m)) return false
+  // DPF and DPF+sliced: the CLI gate at main.cpp:5704 explicitly
+  // allows reserves through ("PF1 is zeroed in the current
+  // implementation, so reserves on the depth-3/4 base palette ARE
+  // PF2 reserves"), and copper.cpp's find_best_swap already rejects
+  // OCS-snapping onto reserved colours. No special-case needed.
   return true
 })
 const numReserveRows = computed(() => {
