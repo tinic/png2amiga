@@ -122,7 +122,7 @@ cmake --build build-wasm
 cd web && npm install && npm run dev
 
 # Production web bundle (writes to docs/)
-./build-web.sh
+./tools/build-web.sh
 ```
 
 Pre-built Linux / macOS / Windows binaries are attached to each

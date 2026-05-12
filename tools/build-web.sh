@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# Anchor at repo root so this works whether invoked as tools/build-web.sh
+# from the repo root or directly via its absolute path.
+cd "$(cd "$(dirname "$0")/.." && pwd)"
+
 echo "Building WASM..."
 emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release .
 cmake --build build-wasm

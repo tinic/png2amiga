@@ -9,7 +9,7 @@ on:
       - "service/nginx.conf"
       - ".github/workflows/web-ci.yml"
       - "CMakeLists.txt"
-      - "build-web.sh"
+      - "tools/build-web.sh"
   pull_request:
     paths:
       - "web/**"
@@ -17,7 +17,7 @@ on:
       - "service/nginx.conf"
       - ".github/workflows/web-ci.yml"
       - "CMakeLists.txt"
-      - "build-web.sh"
+      - "tools/build-web.sh"
   workflow_dispatch:
 
 # Least-privilege.
@@ -75,7 +75,7 @@ jobs:
         working-directory: web
         run: npm ci --no-audit --no-fund
 
-      # Runs the same 7-gate pipeline as build-web.sh:
+      # Runs the same 7-gate pipeline as tools/build-web.sh:
       #   check:bindings → vue-tsc → eslint → audit:prod → vitest → vite → check:size
       - name: Build (full pipeline)
         working-directory: web
