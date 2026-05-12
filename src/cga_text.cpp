@@ -16,7 +16,6 @@
 #ifndef __EMSCRIPTEN__
 #include <thread>
 #endif
-#include <unordered_map>
 #include <utility>
 
 namespace png2amiga::cga_text {
@@ -322,19 +321,29 @@ encode(const Image& image, amiga::Mode mode,
     if (on_progress) on_progress(0.0f, "cga-text");
 
     for (std::size_t offset = offset_start; offset < offset_end; ++offset) {
-        // Dedupe candidate glyphs by their cell-h scanline pattern. Many
-        // glyphs share the same top-of-cell bit pattern — e.g., at offset 0
-        // with cell_h=1, most lowercase letters and punctuation have a blank
-        // top scanline, so the "pattern = 0" cluster collapses from dozens
-        // of glyphs down to a single representative. The inner brute-force
-        // (16 fg × 16 bg × 8*cell_h pixels) then runs once per *distinct
-        // pattern*, not once per char. The only output difference is which
-        // representative char code we emit for a given pattern; any char
-        // mapped to that pattern produces identical pixels on screen.
+        // Dedupe candidate glyphs by their cell-h scanline pattern AND by
+        // inversion symmetry — (G, fg=A, bg=B) renders identical pixels to
+        // (~G, fg=B, bg=A), and the per-cell search iterates all 16×16
+        // (fg, bg) pairs anyway, so keeping both class representatives is
+        // wasted work. Glyphs reduce to a `canonical_key` = min(key, ~key)
+        // bucket; we keep the lowest-numbered char per bucket.
         //
-        // We also precompute the 8*cell_h-bit fg_mask once per candidate
-        // here, outside the per-cell loop — the old code rebuilt it per
-        // (cell × glyph), which dominated the constant factor.
+        // For the standard CGA font + 0..255 candidate set, the dedup
+        // collapses 256 chars down to roughly:
+        //     cell_h=1 → 19..42, cell_h=2 → 65..134,
+        //     cell_h=4 → 164..216, cell_h=8 → 249.
+        // (counts vary with `offset`). The inner brute-force (16 fg ×
+        // 16 bg × 8*cell_h pixels) then runs once per *distinct
+        // pattern class*, not once per char.
+        //
+        // Fast path: for the bundled CGA font and the full 0..255
+        // candidate set (the common case from api.cpp / main.cpp), the
+        // canonical bitmap is precomputed at compile time in
+        // `kCgaCanonicalBitmaps` — no per-encode hashmap construction.
+        // Slow path (different font or caller-supplied `restrict_chars`):
+        // recompute the canonical-key buckets inline using the same
+        // constexpr helpers, with a stack-allocated linear-search "seen"
+        // set since n ≤ 256.
         struct Candidate {
             std::uint8_t ch;        // a representative char for this pattern
             std::uint64_t fg_mask;  // bit i set = pixel i is fg (else bg)
@@ -342,28 +351,36 @@ encode(const Image& image, amiga::Mode mode,
         };
         std::vector<Candidate> candidates;
         candidates.reserve(std::min<std::size_t>(chars.size(), 256));
-        // Key packs cell_h scanline bytes into the low bytes — u64 holds
-        // up to 8 scanlines (cell_h ≤ 8; covers 80x100 / 80x50 / 80x25).
-        std::unordered_map<std::uint64_t, std::size_t> pattern_to_idx;
-        pattern_to_idx.reserve(chars.size() * 2);
-        for (auto ch : chars) {
-            std::array<std::uint8_t, kMaxCellH> pat{};
-            for (std::size_t line = 0; line < cell_h; ++line)
-                pat[line] = palette::font_scanline(font, ch, offset + line);
-            std::uint64_t key = 0;
-            for (std::size_t line = 0; line < cell_h; ++line)
-                key |= static_cast<std::uint64_t>(pat[line]) << (line * 8);
-            if (pattern_to_idx.contains(key)) continue;
-            std::uint64_t fg_mask = 0;
-            for (std::size_t line = 0; line < cell_h; ++line) {
-                auto sl = pat[line];
-                for (std::size_t px = 0; px < 8; ++px) {
-                    if (sl & (0x80u >> px))
-                        fg_mask |= (std::uint64_t{1} << (line * 8 + px));
-                }
+
+        const bool use_precomputed = (font.data == palette::kFontCga8x8.data)
+                                      && (font.glyph_height ==
+                                          palette::kFontCga8x8.glyph_height)
+                                      && restrict_chars.empty();
+        if (use_precomputed) {
+            const auto& bitmap = palette::kCgaCanonicalBitmaps
+                [palette::cga_cell_h_index(cell_h)][offset];
+            for (int i = 0; i < 256; ++i) {
+                auto ch = static_cast<std::uint8_t>(i);
+                if (!bitmap.test(ch)) continue;
+                if (is_excluded_glyph(mode, ch)) continue;
+                candidates.push_back({ch,
+                    palette::glyph_fg_mask(font, ch, cell_h, offset)});
             }
-            pattern_to_idx.emplace(key, candidates.size());
-            candidates.push_back({ch, fg_mask});
+        } else {
+            std::array<std::uint64_t, 256> seen_keys{};
+            std::size_t n_seen = 0;
+            for (auto ch : chars) {
+                auto key = palette::glyph_pattern_key(font, ch, cell_h, offset);
+                auto canon = palette::glyph_canonical_key(key, cell_h);
+                bool dup = false;
+                for (std::size_t k = 0; k < n_seen; ++k) {
+                    if (seen_keys[k] == canon) { dup = true; break; }
+                }
+                if (dup) continue;
+                seen_keys[n_seen++] = canon;
+                candidates.push_back({ch,
+                    palette::glyph_fg_mask(font, ch, cell_h, offset)});
+            }
         }
 
     CgaTextResult result;

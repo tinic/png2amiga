@@ -104,7 +104,14 @@ if(EMSCRIPTEN)
     # cores reported by navigator.hardwareConcurrency, allocated lazily.
     target_compile_options(png2amiga_wasm PRIVATE
         -O3 -msimd128 -flto
-        -pthread)
+        -pthread
+        # cga_font.hpp's `kCgaCanonicalBitmaps` consteval table calls
+        # `make_glyph_canonical_bitmap` 32 times, each running a 256-step
+        # inner loop. Emscripten's clang caps constexpr evaluation at
+        # 1,048,576 steps by default — bump it so the table can be
+        # generated at compile time. GCC's limit is much higher; this
+        # flag is harmless on builds that don't need it.
+        -fconstexpr-steps=10000000)
     target_link_options(png2amiga_wasm PRIVATE
         --bind
         -O3
