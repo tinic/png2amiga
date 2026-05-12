@@ -9712,7 +9712,51 @@ int run_main(int argc, char* argv[]) {
     return exit_code::ok;
 }
 
+// AVX2 startup gate (x86 only). The build is compiled with /arch:AVX2
+// (or -mavx2), so the binary contains vzeroupper / vfmaddXXX / etc.
+// from the very first SIMD call. Running it on a pre-Haswell CPU
+// would trap on the first AVX/AVX2 instruction — which usually shows
+// up as a confusing "0xc000001d" illegal-instruction abort with no
+// hint as to why. Detect once at startup via CPUID and print a
+// concrete message instead. The CPUID instruction itself is i486+,
+// so this check is safe to execute on any host the binary will run
+// on. ARM64 / Apple Silicon uses NEON, no gate needed there.
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
+namespace {
+inline bool cpu_supports_avx2() noexcept {
+#if defined(_MSC_VER)
+    int regs[4];
+    __cpuid(regs, 0);
+    if (regs[0] < 7) return false;            // structured-feature leaf missing
+    __cpuidex(regs, 7, 0);
+    return (regs[1] & (1 << 5)) != 0;          // EBX bit 5 = AVX2
+#else
+    unsigned eax, ebx, ecx, edx;
+    if (!__get_cpuid_max(0, nullptr)) return false;
+    if (!__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) return false;
+    return (ebx & (1u << 5)) != 0;
+#endif
+}
+} // namespace
+#endif
+
 int main(int argc, char* argv[]) {
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+    if (!cpu_supports_avx2()) {
+        std::fprintf(stderr,
+            "png2amiga: this build requires AVX2 (Intel Haswell 2013+ "
+            "or AMD Zen 2017+).\n"
+            "Your CPU does not advertise AVX2 via CPUID. Exiting "
+            "instead of crashing on the first SIMD instruction.\n");
+        return 1;
+    }
+#endif
+
     // --profile <N>: re-run the full encoding pipeline N times so sampling
     // profilers (AMDuProf, VTune, perf) get a workable number of samples on
     // images that complete in milliseconds. Pre-scan argv (rather than
