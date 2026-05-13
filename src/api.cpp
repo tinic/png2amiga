@@ -293,6 +293,50 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     }
     free_raw();
 
+    // Source orientation: kingcon-compatible flip + rotate, applied to
+    // the loaded pixel + alpha buffers before any crop/scale/encode work.
+    // Order matches kingcon: flip-x, then flip-y, then rotate clockwise.
+    auto rotate_quarters = ((options.rotate_quarters % 4) + 4) % 4;
+    bool any_orient = options.flip_x || options.flip_y || rotate_quarters != 0;
+    if (any_orient) {
+        auto remap = [&](auto& buf) {
+            std::vector<typename std::remove_reference_t<decltype(buf)>::value_type>
+                tmp(buf.size());
+            std::size_t src_w = width, src_h = height;
+            for (std::size_t y = 0; y < src_h; ++y) {
+                for (std::size_t x = 0; x < src_w; ++x) {
+                    std::size_t sx = options.flip_x ? (src_w - 1 - x) : x;
+                    std::size_t sy = options.flip_y ? (src_h - 1 - y) : y;
+                    std::size_t dx = x, dy = y;
+                    std::size_t dw = src_w;
+                    switch (rotate_quarters) {
+                        case 1:   // 90° CW:  (x,y) → (h-1-y, x), new w=h, new h=w
+                            dx = src_h - 1 - y; dy = x;
+                            dw = src_h;
+                            break;
+                        case 2:   // 180°
+                            dx = src_w - 1 - x; dy = src_h - 1 - y;
+                            break;
+                        case 3:   // 270° CW
+                            dx = y; dy = src_w - 1 - x;
+                            dw = src_h;
+                            break;
+                        default: break;
+                    }
+                    tmp[dy * dw + dx] = buf[sy * src_w + sx];
+                }
+            }
+            buf = std::move(tmp);
+        };
+        remap(pixels);
+        if (any_transparent) remap(src_alpha);
+        if (rotate_quarters == 1 || rotate_quarters == 3) {
+            std::swap(width, height);
+            std::swap(w, h);
+        }
+        pixel_count = width * height;
+    }
+
     // Determine the effective source crop region up front so we can sample
     // the transparency mask from the cropped region rather than the full
     // source image. crop and tmask have to agree, otherwise the mask

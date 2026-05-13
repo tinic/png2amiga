@@ -506,7 +506,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.87.0.1060
+png2amiga 1.87.1.1064
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -574,6 +574,8 @@ Image processing:
   --match-range                   Stretch source chroma per-(L, hue) onto palette gamut
   --crop <x,y,w,h>                Manual crop region (pixels)
   --crop-auto                     Auto-crop to mode aspect ratio
+  --flip-x, --flip-y              Mirror over Y / X axis
+  --rotate <0|1|2|3|0|90|180|270> Rotate clockwise before crop/scale
 
 Transparency:
   --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)
@@ -588,6 +590,10 @@ Transparency:
   --mask <file>                   Export transparency mask
                                   (.png/.iff/.raw/.h by extension)
   --mask-invert                   Invert mask polarity
+  --mask-layout <which>           Embed mask in .bpl/.raw/.bin output:
+                                  appended | replicated. Mask is drawn
+                                  from alpha; for opaque sources pair
+                                  with --transparent-color RRGGBB.
 
 Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):
   --sliced                        Per-scanline palette swaps
@@ -647,7 +653,8 @@ Output:
       .h                            C header (Amiga UWORD bitplane arrays)
       .cpp / .c                     Amiga cpp viewer (build-amiga.sh);
                                     DOS C viewer with PC modes (ia16-elf-gcc)
-      .raw / .bin                   Raw interleaved bitplanes (writes .pal sibling)
+      .raw / .bin / .bpl            Raw bitplanes (writes .pal sibling;
+                                    embeds mask if --mask-layout set)
       .pal                          OCS palette only (big-endian 0x0RGB words)
       .idx                          Raw chunky indices (1 byte/pixel, scan order);
                                     also via --output-indexed / --output-each .idx
@@ -675,6 +682,7 @@ Build integration:
 
 Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
+
 ```
 
 ## License

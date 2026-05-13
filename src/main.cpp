@@ -1084,12 +1084,31 @@ struct Config {
     std::string mask_path;             // output path for transparency mask
     bool mask_invert = false;          // invert mask polarity
 
+    // Embedded mask in .bpl/.raw/.bin output. Layout values:
+    //   ""           — no embedded mask (default)
+    //   "appended"   — mask is appended once per row group as plane N+1
+    //                  in the interleaved layout, or as a trailing plane
+    //                  in the standard layout. Total bytes (N+1)*H*bpr.
+    //   "replicated" — mask repeated after every bitplane row inside the
+    //                  interleaved stream so the Amiga blitter can read it
+    //                  through B alongside A via matched moduli. Total
+    //                  bytes 2*N*H*bpr. Matches kingcon `-Interleaved -Mask`.
+    // Mask bits are derived from the transparency_mask (alpha-driven). For
+    // color-keyed sources without alpha, pair with --transparent-color
+    // RRGGBB to mark the background color as alpha=0 before quantization.
+    std::string mask_layout;
+
     // Cropping
     int crop_x = 0;
     int crop_y = 0;
     int crop_w = 0;                    // 0 = no crop
     int crop_h = 0;
     bool crop_auto = false;            // auto-crop to mode aspect ratio
+
+    // kingcon-style source orientation: applied before crop/scale.
+    bool flip_x = false;
+    bool flip_y = false;
+    int rotate_quarters = 0;           // 0/1/2/3 = 0/90/180/270 CW
 
     // Output
     bool print_palette = false;        // dump CMAP as idx=#rrggbb to stderr
@@ -1187,6 +1206,8 @@ void print_usage() {
         "  --match-range                   Stretch source chroma per-(L, hue) onto palette gamut\n"
         "  --crop <x,y,w,h>                Manual crop region (pixels)\n"
         "  --crop-auto                     Auto-crop to mode aspect ratio\n"
+        "  --flip-x, --flip-y              Mirror over Y / X axis\n"
+        "  --rotate <0|1|2|3|0|90|180|270> Rotate clockwise before crop/scale\n"
         "\n"
         "Transparency:\n"
         "  --alpha-threshold <-0.5..0.5>   Offset from 0.5 midpoint (default: 0)\n"
@@ -1201,6 +1222,10 @@ void print_usage() {
         "  --mask <file>                   Export transparency mask\n"
         "                                  (.png/.iff/.raw/.h by extension)\n"
         "  --mask-invert                   Invert mask polarity\n"
+        "  --mask-layout <which>           Embed mask in .bpl/.raw/.bin output:\n"
+        "                                  appended | replicated. Mask is drawn\n"
+        "                                  from alpha; for opaque sources pair\n"
+        "                                  with --transparent-color RRGGBB.\n"
         "\n"
         "Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):\n"
         "  --sliced                        Per-scanline palette swaps\n"
@@ -1260,7 +1285,8 @@ void print_usage() {
         "      .h                            C header (Amiga UWORD bitplane arrays)\n"
         "      .cpp / .c                     Amiga cpp viewer (build-amiga.sh);\n"
         "                                    DOS C viewer with PC modes (ia16-elf-gcc)\n"
-        "      .raw / .bin                   Raw interleaved bitplanes (writes .pal sibling)\n"
+        "      .raw / .bin / .bpl            Raw bitplanes (writes .pal sibling;\n"
+        "                                    embeds mask if --mask-layout set)\n"
         "      .pal                          OCS palette only (big-endian 0x0RGB words)\n"
         "      .idx                          Raw chunky indices (1 byte/pixel, scan order);\n"
         "                                    also via --output-indexed / --output-each .idx\n"
@@ -1599,6 +1625,50 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--mask-invert") {
             config.mask_invert = true;
+            continue;
+        }
+
+        if (arg == "--mask-layout" && i + 1 < argc) {
+            auto v = std::string(argv[++i]);
+            if (v == "none" || v == "off" || v.empty()) {
+                config.mask_layout.clear();
+            } else if (v == "appended" || v == "replicated") {
+                config.mask_layout = v;
+            } else {
+                return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                    std::format("Unknown --mask-layout '{}' "
+                                "(use appended or replicated)", v)}};
+            }
+            continue;
+        }
+
+        if (arg == "--flip-x" || arg == "--flipx" || arg == "--fx") {
+            config.flip_x = true;
+            continue;
+        }
+        if (arg == "--flip-y" || arg == "--flipy" || arg == "--fy") {
+            config.flip_y = true;
+            continue;
+        }
+        if (arg == "--rotate" && i + 1 < argc) {
+            auto v = std::string(argv[++i]);
+            int q = -1;
+            try {
+                long n = std::stol(v);
+                switch (n) {
+                    case 0: case 360: q = 0; break;
+                    case 1: case 90:  q = 1; break;
+                    case 2: case 180: q = 2; break;
+                    case 3: case 270: q = 3; break;
+                    default: break;
+                }
+            } catch (...) {}
+            if (q < 0) {
+                return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                    std::format("--rotate expects 0/1/2/3 or 0/90/180/270 "
+                                "(got '{}')", v)}};
+            }
+            config.rotate_quarters = q;
             continue;
         }
 
@@ -2670,6 +2740,9 @@ api::Options make_api_options(const Config& cfg) {
     opts.crop_w = cfg.crop_w;
     opts.crop_h = cfg.crop_h;
     opts.crop_auto = cfg.crop_auto;
+    opts.flip_x = cfg.flip_x;
+    opts.flip_y = cfg.flip_y;
+    opts.rotate_quarters = cfg.rotate_quarters;
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
     opts.cga_text_kernel = cfg.cga_text_kernel;
@@ -2931,77 +3004,182 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
     }
 }
 
-// Save preview PNG with pixel aspect scaling and optional transparency
-// Display preview in terminal and optionally save to file
-// Save raw bitplane data + palette + copper changes to a binary file.
+// Build a 1-bitplane mask row buffer matching the bitplane geometry of
+// `planes`. `tmask` is alpha-derived per-pixel: true = transparent.
+// Output convention: bit=1 means OPAQUE (blitter B-source convention),
+// flip via `invert`. Bytes are MSB-first, word-aligned per row to match
+// `planes.bytes_per_row`.
+std::vector<std::uint8_t> build_mask_plane(const std::vector<bool>& tmask,
+                                           std::size_t width,
+                                           std::size_t height,
+                                           std::size_t bytes_per_row,
+                                           bool invert) {
+    std::vector<std::uint8_t> mask(height * bytes_per_row, 0);
+    for (std::size_t y = 0; y < height; ++y) {
+        for (std::size_t x = 0; x < width; ++x) {
+            std::size_t idx = y * width + x;
+            bool transparent = idx < tmask.size() && tmask[idx];
+            bool opaque = !transparent;
+            bool bit = invert ? !opaque : opaque;
+            if (bit) {
+                mask[y * bytes_per_row + (x >> 3)] |=
+                    static_cast<std::uint8_t>(0x80 >> (x & 7));
+            }
+        }
+    }
+    return mask;
+}
+
+// Save bitplane data to <path>, sibling palette to <path-stem>.pal, and
+// optional copper-change table to <path-stem>.cop. Drop-in compatible
+// with kingcon: `.bpl` produces pure bitplane bytes (plus the embedded
+// mask, when --mask-layout is set).
 void save_raw(std::string_view path,
               const bitplane::BitplaneData& planes,
               std::span<const Color3f> palette,
               amiga::Chipset chipset,
               const std::vector<std::vector<copper::CopperChange>>* copper = nullptr,
-              std::size_t cpl = 0) {
+              std::size_t cpl = 0,
+              const std::vector<bool>& tmask = {},
+              std::string_view mask_layout = {},
+              bool mask_invert = false) {
     bool aga = (chipset == amiga::Chipset::aga);
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
     if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
 
-    // Bitplanes
-    file.write(reinterpret_cast<const char*>(planes.data.data()),
-               static_cast<std::streamsize>(planes.data.size()));
+    const auto rows = planes.height;
+    const auto bpr  = planes.bytes_per_row;
+    const auto depth = planes.depth;
 
-    // Palette (big-endian 0x0RGB)
-    for (auto& c : palette) {
-        auto hi = aga ? palette::linear_to_aga_hilo(c).hi : palette::linear_to_ocs(c);
-        auto buf = std::array<std::uint8_t, 2>{
-            static_cast<std::uint8_t>(hi >> 8), static_cast<std::uint8_t>(hi & 0xFF)};
-        file.write(reinterpret_cast<const char*>(buf.data()), 2);
-    }
-    if (aga) {
-        for (auto& c : palette) {
-            auto lo = palette::linear_to_aga_hilo(c).lo;
-            auto buf = std::array<std::uint8_t, 2>{
-                static_cast<std::uint8_t>(lo >> 8), static_cast<std::uint8_t>(lo & 0xFF)};
-            file.write(reinterpret_cast<const char*>(buf.data()), 2);
-        }
+    // Mask plane bytes, if requested AND we have something to derive it
+    // from. `appended` extends every row group with one mask row; the
+    // mask becomes plane N+1 of the interleaved stream (or the single
+    // trailing plane of a standard-layout stream). `replicated` writes
+    // one mask copy per bitplane row inside interleaved output —
+    // matches kingcon -Interleaved -Mask so the blitter can pull mask
+    // through B alongside A with matched moduli.
+    bool want_mask = !mask_layout.empty() && !tmask.empty() && rows > 0 && bpr > 0;
+    std::vector<std::uint8_t> mask_bytes;
+    if (want_mask) {
+        mask_bytes = build_mask_plane(tmask, planes.width, rows, bpr, mask_invert);
     }
 
-    // Copper changes (UWORD reg + UWORD color per entry, cpl entries per line)
-    if (copper && !copper->empty()) {
-        for (auto& line : *copper) {
-            for (std::size_t s = 0; s < cpl; ++s) {
-                std::array<std::uint8_t, 4> buf;
-                if (s < line.size()) {
-                    auto hi = aga ? palette::linear_to_aga_hilo(line[s].color).hi
-                                  : palette::linear_to_ocs(line[s].color);
-                    buf = {0, line[s].reg,
-                           static_cast<std::uint8_t>(hi >> 8),
-                           static_cast<std::uint8_t>(hi & 0xFF)};
-                } else {
-                    buf = {0xFF, 0xFF, 0x00, 0x00};
-                }
-                file.write(reinterpret_cast<const char*>(buf.data()), 4);
+    auto write_plane_row = [&](std::size_t plane, std::size_t row) {
+        auto off = planes.plane_row_offset(plane, row);
+        file.write(reinterpret_cast<const char*>(planes.data.data() + off),
+                   static_cast<std::streamsize>(bpr));
+    };
+    auto write_mask_row = [&](std::size_t row) {
+        file.write(reinterpret_cast<const char*>(mask_bytes.data() + row * bpr),
+                   static_cast<std::streamsize>(bpr));
+    };
+
+    if (!want_mask) {
+        // Plain bitplane bytes in their native layout.
+        file.write(reinterpret_cast<const char*>(planes.data.data()),
+                   static_cast<std::streamsize>(planes.data.size()));
+    } else if (planes.layout == bitplane::Layout::interleaved) {
+        bool replicate = (mask_layout == "replicated");
+        for (std::size_t row = 0; row < rows; ++row) {
+            for (std::size_t p = 0; p < depth; ++p) {
+                write_plane_row(p, row);
+                if (replicate) write_mask_row(row);
             }
+            if (!replicate) write_mask_row(row);
+        }
+    } else {
+        // standard / word-interleaved: emit native layout first, then
+        // append the mask plane (replicated has no meaningful shape
+        // outside interleaved — degrades to appended).
+        file.write(reinterpret_cast<const char*>(planes.data.data()),
+                   static_cast<std::streamsize>(planes.data.size()));
+        for (std::size_t row = 0; row < rows; ++row) write_mask_row(row);
+    }
+
+    auto raw_bytes = static_cast<std::size_t>(file.tellp());
+    file.close();
+    cli_status("Raw:      {} ({} bytes{})",
+               path, raw_bytes,
+               want_mask ? std::format(", incl. {} mask",
+                                       mask_layout == "replicated"
+                                           ? "replicated" : "appended")
+                         : "");
+
+    // Sibling .pal (big-endian 0x0RGB; AGA appends 0x0RGB low halves).
+    std::filesystem::path pal_path{path_str};
+    pal_path.replace_extension(".pal");
+    std::ofstream pf(pal_path, std::ios::binary);
+    if (!pf) {
+        std::println(stderr, "Failed to open: {}", pal_path.string());
+    } else {
+        for (auto& c : palette) {
+            auto hi = aga ? palette::linear_to_aga_hilo(c).hi : palette::linear_to_ocs(c);
+            std::array<std::uint8_t, 2> buf{
+                static_cast<std::uint8_t>(hi >> 8),
+                static_cast<std::uint8_t>(hi & 0xFF)};
+            pf.write(reinterpret_cast<const char*>(buf.data()), 2);
         }
         if (aga) {
+            for (auto& c : palette) {
+                auto lo = palette::linear_to_aga_hilo(c).lo;
+                std::array<std::uint8_t, 2> buf{
+                    static_cast<std::uint8_t>(lo >> 8),
+                    static_cast<std::uint8_t>(lo & 0xFF)};
+                pf.write(reinterpret_cast<const char*>(buf.data()), 2);
+            }
+        }
+        auto pal_bytes = static_cast<std::size_t>(pf.tellp());
+        cli_status("Pal:      {} ({} colors, {} bytes)",
+                   pal_path.string(), palette.size(), pal_bytes);
+    }
+
+    // Sibling .cop with copper changes (UWORD reg + UWORD color per
+    // entry, cpl entries per line). Only emitted when the encoder
+    // actually produced per-line MOVEs.
+    if (copper && !copper->empty() && cpl > 0) {
+        std::filesystem::path cop_path{path_str};
+        cop_path.replace_extension(".cop");
+        std::ofstream cf(cop_path, std::ios::binary);
+        if (!cf) {
+            std::println(stderr, "Failed to open: {}", cop_path.string());
+        } else {
             for (auto& line : *copper) {
                 for (std::size_t s = 0; s < cpl; ++s) {
                     std::array<std::uint8_t, 4> buf;
                     if (s < line.size()) {
-                        auto lo = palette::linear_to_aga_hilo(line[s].color).lo;
+                        auto hi = aga ? palette::linear_to_aga_hilo(line[s].color).hi
+                                      : palette::linear_to_ocs(line[s].color);
                         buf = {0, line[s].reg,
-                               static_cast<std::uint8_t>(lo >> 8),
-                               static_cast<std::uint8_t>(lo & 0xFF)};
+                               static_cast<std::uint8_t>(hi >> 8),
+                               static_cast<std::uint8_t>(hi & 0xFF)};
                     } else {
                         buf = {0xFF, 0xFF, 0x00, 0x00};
                     }
-                    file.write(reinterpret_cast<const char*>(buf.data()), 4);
+                    cf.write(reinterpret_cast<const char*>(buf.data()), 4);
                 }
             }
+            if (aga) {
+                for (auto& line : *copper) {
+                    for (std::size_t s = 0; s < cpl; ++s) {
+                        std::array<std::uint8_t, 4> buf;
+                        if (s < line.size()) {
+                            auto lo = palette::linear_to_aga_hilo(line[s].color).lo;
+                            buf = {0, line[s].reg,
+                                   static_cast<std::uint8_t>(lo >> 8),
+                                   static_cast<std::uint8_t>(lo & 0xFF)};
+                        } else {
+                            buf = {0xFF, 0xFF, 0x00, 0x00};
+                        }
+                        cf.write(reinterpret_cast<const char*>(buf.data()), 4);
+                    }
+                }
+            }
+            auto cop_bytes = static_cast<std::size_t>(cf.tellp());
+            cli_status("Cop:      {} ({} bytes)",
+                       cop_path.string(), cop_bytes);
         }
     }
-
-    auto total = static_cast<std::size_t>(file.tellp());
-    cli_status("Raw:      {} ({} bytes)", path, total);
 }
 
 // CGA raw output: hardware-layout memory dump (16384 bytes total).
@@ -3412,6 +3590,14 @@ struct AmigaOutputBundle {
     bool allow_raw = true;
     bool allow_pal = true;
     std::string disallow_message;  // shown when a disallowed branch is hit
+
+    // Mask embedding for .bpl/.raw/.bin output (CLI: --mask-layout).
+    // "" = no embedded mask; "appended" = mask as extra plane in the
+    // chosen layout; "replicated" = kingcon-style per-plane mask copies
+    // woven into the interleaved stream. Mask bits come from
+    // transparency_mask (alpha-driven).
+    std::string mask_layout;
+    bool mask_invert = false;
 };
 
 // Returns 0 on success, exit_code::* on failure (cant_create / usage).
@@ -3509,10 +3695,12 @@ int write_amiga_output(AmigaOutputBundle& out) {
         return 0;
     }
 
-    if (ends_with(path, ".raw")) {
-        if (!out.allow_raw) return disallow(".raw");
+    if (ends_with(path, ".raw") || ends_with(path, ".bin") ||
+        ends_with(path, ".bpl")) {
+        if (!out.allow_raw) return disallow(".raw/.bin/.bpl");
         save_raw(path, out.planes, out.cmap_palette, out.chipset,
-                 out.scanline_changes, out.changes_per_line);
+                 out.scanline_changes, out.changes_per_line,
+                 out.transparency_mask, out.mask_layout, out.mask_invert);
         return 0;
     }
 
@@ -7361,6 +7549,8 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.mask_layout = config->mask_layout;
+            out.mask_invert = config->mask_invert;
             // HAM+sliced: per-line palette evolution attached to IFF/cheader.
             if (!st.scanline_palettes.empty())
                 out.scanline_palettes = &st.scanline_palettes;
@@ -7575,6 +7765,8 @@ int run_main(int argc, char* argv[]) {
                 out.output_path = config->output_path;
                 out.symbol_override = config->symbol_name;
                 out.fade_in = config->fade_in;
+                out.mask_layout = config->mask_layout;
+                out.mask_invert = config->mask_invert;
                 out.scanline_changes = &copper_result->scanline_changes;
                 out.scanline_palettes = &copper_result->scanline_palettes;
                 out.changes_per_line = copper_result->changes_per_line;
@@ -7724,6 +7916,8 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.mask_layout = config->mask_layout;
+            out.mask_invert = config->mask_invert;
             // EHB --fade-to: 32-slot per-frame palette MOVEs for viewer.
             if (!fade_sequence.empty() && !config->interlace) {
                 out.fade_per_frame_values = fade_compute_viewer_values_global(
@@ -8118,6 +8312,8 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.mask_layout = config->mask_layout;
+            out.mask_invert = config->mask_invert;
             out.scanline_changes = &copper_result->scanline_changes;
             out.scanline_palettes = &copper_result->scanline_palettes;
             out.changes_per_line = copper_result->changes_per_line;
@@ -8270,6 +8466,8 @@ int run_main(int argc, char* argv[]) {
             out.transparency_mask = transparency_mask;
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
+            out.mask_layout = config->mask_layout;
+            out.mask_invert = config->mask_invert;
             out.strips_line_moves = &st.strips_line_moves;
             out.strips_label = strips_ehb ? "strips_ehb_ocs" : "strips_dpf_ocs";
             auto& table = strips_ehb ? strips::kStrips6bplEhb
@@ -9145,6 +9343,8 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.mask_layout = config->mask_layout;
+            out.mask_invert = config->mask_invert;
             // --fade-to: per-frame palette MOVEs for the .cpp/.c viewer.
             if (!fade_sequence.empty() && !config->interlace) {
                 out.fade_per_frame_values = fade_compute_viewer_values_global(

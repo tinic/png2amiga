@@ -265,6 +265,13 @@ struct Options {
     int crop_h = 0;
     bool crop_auto = false;             // auto-crop to mode aspect ratio (center)
 
+    // Source-pixel orientation (applied before crop/scale/encode). Matches
+    // kingcon's -FlipX / -Rotate semantics so .bpl / .pal outputs drop into
+    // kingcon-fed projects unchanged.
+    bool flip_x = false;                // mirror over the Y axis
+    bool flip_y = false;                // mirror over the X axis
+    int rotate_quarters = 0;            // 0/1/2/3 = 0°/90°/180°/270° clockwise
+
     // Advanced
     bool lock_color0 = true;         // reserve index 0 for black (border/background)
 
