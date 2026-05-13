@@ -43,6 +43,26 @@ Algorithm resolve_algorithm(amiga::Mode mode, amiga::Chipset chipset,
 
 } // namespace png2amiga::quantize
 
+// SIMD backend selection — gate kmeans_refine's argmin loop on the
+// wide-ISA targets where manual SIMD beats the compiler's auto-vec:
+// x86_64 AVX2 (8-wide) and WASM SIMD (4-wide). ARM64 GCC -O3 already
+// auto-vectorizes the analytic scalar form competitively for this
+// shape; manual NEON adds SoA-build overhead without a payoff (-25 %
+// on Mac M-series in a Kodak-20 VGA-13h sweep). See memory:
+// feedback_simd_target_arch.
+#if defined(__wasm_simd128__)
+    #include <wasm_simd128.h>
+    #define PNG2AMIGA_QUANT_SIMD_AVX2 0
+    #define PNG2AMIGA_QUANT_SIMD_WASM 1
+#elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define PNG2AMIGA_QUANT_SIMD_AVX2 1
+    #define PNG2AMIGA_QUANT_SIMD_WASM 0
+#else
+    #define PNG2AMIGA_QUANT_SIMD_AVX2 0
+    #define PNG2AMIGA_QUANT_SIMD_WASM 0
+#endif
+
 namespace {
 using OKLab = png2amiga::color_space::OKLab;
 
@@ -52,6 +72,143 @@ inline float oklab_dist_sq(OKLab a, OKLab b) noexcept {
     float db = (a.b - b.b) * png2amiga::color_space::WEIGHT_B;
     return png2amiga::color_space::fma_dist_sq(dL, da, db);
 }
+
+// Structure-of-arrays palette for SIMD-friendly argmin over centroids.
+// L/a/b are pre-multiplied by the OKLab axis weights so the per-iter
+// kernel doesn't need to redo it. Fixed 256-entry stack capacity —
+// enough for every indexed mode we support (max d=8 chunky VGA).
+constexpr std::size_t kQuantSoAMaxN = 256;
+struct QuantPaletteSoA {
+    alignas(32) std::array<float, kQuantSoAMaxN> wL;
+    alignas(32) std::array<float, kQuantSoAMaxN> wa;
+    alignas(32) std::array<float, kQuantSoAMaxN> wb;
+    std::size_t n;       // real entry count
+    std::size_t padded;  // padded up to SIMD width
+};
+
+inline void fill_quant_soa(std::span<const OKLab> pal,
+                           QuantPaletteSoA& s) noexcept {
+#if PNG2AMIGA_QUANT_SIMD_AVX2
+    constexpr std::size_t W = 8;
+#else
+    constexpr std::size_t W = 4;
+#endif
+    s.n = pal.size();
+    s.padded = std::min(((s.n + W - 1) / W) * W, kQuantSoAMaxN);
+    const float wL = png2amiga::color_space::WEIGHT_L;
+    const float wa = png2amiga::color_space::WEIGHT_A;
+    const float wb = png2amiga::color_space::WEIGHT_B;
+    for (std::size_t i = 0; i < s.padded; ++i) {
+        if (i < s.n) {
+            s.wL[i] = pal[i].L * wL;
+            s.wa[i] = pal[i].a * wa;
+            s.wb[i] = pal[i].b * wb;
+        } else {
+            // Padding sentinel: huge weighted L so argmin can't pick it.
+            s.wL[i] = 1e30f;
+            s.wa[i] = 0.0f;
+            s.wb[i] = 0.0f;
+        }
+    }
+}
+
+// SIMD argmin over the SoA palette for a single sample. Returns
+// (best_index, best_dist²). Weighted by the same WEIGHT_L/A/B as
+// scalar oklab_dist_sq — weights are pre-applied to the SoA, so the
+// sample is pre-multiplied here too and the kernel is plain (sub,
+// mul, add, fmadd, compare, blend).
+struct ArgminResult { std::size_t index; float dist_sq; };
+inline ArgminResult argmin_quant_soa(OKLab px,
+                                     const QuantPaletteSoA& s) noexcept {
+    const std::size_t n = s.padded;
+    if (n == 0) return {0, 0.0f};
+    const float wL = png2amiga::color_space::WEIGHT_L;
+    const float wa = png2amiga::color_space::WEIGHT_A;
+    const float wb = png2amiga::color_space::WEIGHT_B;
+    const float pxL = px.L * wL;
+    const float pxa = px.a * wa;
+    const float pxb = px.b * wb;
+
+#if PNG2AMIGA_QUANT_SIMD_AVX2
+    const __m256 pL = _mm256_set1_ps(pxL);
+    const __m256 pa = _mm256_set1_ps(pxa);
+    const __m256 pb = _mm256_set1_ps(pxb);
+    __m256 best_d = _mm256_set1_ps(std::numeric_limits<float>::max());
+    __m256i best_i = _mm256_setzero_si256();
+    const __m256i k01234567 = _mm256_setr_epi32(0,1,2,3,4,5,6,7);
+    for (std::size_t i = 0; i < n; i += 8) {
+        __m256 cL = _mm256_load_ps(s.wL.data() + i);
+        __m256 ca = _mm256_load_ps(s.wa.data() + i);
+        __m256 cb = _mm256_load_ps(s.wb.data() + i);
+        __m256 dL = _mm256_sub_ps(pL, cL);
+        __m256 da = _mm256_sub_ps(pa, ca);
+        __m256 db = _mm256_sub_ps(pb, cb);
+        __m256 d  = _mm256_fmadd_ps(db, db,
+                       _mm256_fmadd_ps(da, da, _mm256_mul_ps(dL, dL)));
+        __m256 lt = _mm256_cmp_ps(d, best_d, _CMP_LT_OQ);
+        best_d = _mm256_blendv_ps(best_d, d, lt);
+        __m256i cur_i = _mm256_add_epi32(k01234567,
+                          _mm256_set1_epi32(static_cast<int>(i)));
+        best_i = _mm256_castps_si256(
+            _mm256_blendv_ps(_mm256_castsi256_ps(best_i),
+                             _mm256_castsi256_ps(cur_i), lt));
+    }
+    alignas(32) float dd[8]; alignas(32) std::int32_t ii[8];
+    _mm256_store_ps(dd, best_d);
+    _mm256_store_si256(reinterpret_cast<__m256i*>(ii), best_i);
+    int bk = 0; float bd = dd[0];
+    for (int k = 1; k < 8; ++k)
+        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+    auto bi = static_cast<std::size_t>(ii[bk]);
+    if (bi >= s.n) bi = s.n - 1;
+    return {bi, bd};
+#elif PNG2AMIGA_QUANT_SIMD_WASM
+    const v128_t pL = wasm_f32x4_splat(pxL);
+    const v128_t pa = wasm_f32x4_splat(pxa);
+    const v128_t pb = wasm_f32x4_splat(pxb);
+    v128_t       best_d = wasm_f32x4_splat(std::numeric_limits<float>::max());
+    v128_t       best_i = wasm_i32x4_splat(0);
+    const v128_t k0123 = wasm_i32x4_make(0, 1, 2, 3);
+    for (std::size_t i = 0; i < n; i += 4) {
+        v128_t cL = wasm_v128_load(s.wL.data() + i);
+        v128_t ca = wasm_v128_load(s.wa.data() + i);
+        v128_t cb = wasm_v128_load(s.wb.data() + i);
+        v128_t dL = wasm_f32x4_sub(pL, cL);
+        v128_t da = wasm_f32x4_sub(pa, ca);
+        v128_t db = wasm_f32x4_sub(pb, cb);
+        v128_t d  = wasm_f32x4_add(
+                        wasm_f32x4_mul(dL, dL),
+                        wasm_f32x4_add(wasm_f32x4_mul(da, da),
+                                       wasm_f32x4_mul(db, db)));
+        v128_t cur_i = wasm_i32x4_add(k0123,
+                          wasm_i32x4_splat(static_cast<std::int32_t>(i)));
+        v128_t lt = wasm_f32x4_lt(d, best_d);
+        best_d = wasm_v128_bitselect(d, best_d, lt);
+        best_i = wasm_v128_bitselect(cur_i, best_i, lt);
+    }
+    alignas(16) float dd[4]; alignas(16) std::int32_t ii[4];
+    wasm_v128_store(dd, best_d); wasm_v128_store(ii, best_i);
+    int bk = 0; float bd = dd[0];
+    for (int k = 1; k < 4; ++k)
+        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+    auto bi = static_cast<std::size_t>(ii[bk]);
+    if (bi >= s.n) bi = s.n - 1;
+    return {bi, bd};
+#else
+    float bd = std::numeric_limits<float>::max();
+    std::size_t bk = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        float dL = pxL - s.wL[i];
+        float da = pxa - s.wa[i];
+        float db = pxb - s.wb[i];
+        float d  = dL*dL + da*da + db*db;
+        if (d < bd) { bd = d; bk = i; }
+    }
+    if (bk >= s.n) bk = s.n - 1;
+    return {bk, bd};
+#endif
+}
+
 } // namespace
 
 #include <algorithm>
@@ -998,6 +1155,14 @@ std::vector<color_space::OKLab> kmeans_refine(
         for (auto& ca : chunk_accs) {
             ca.assign(n, Acc{});
         }
+        // SIMD argmin over centroids — pre-build a weighted SoA from
+        // the current centroids once per iteration. The scalar inner
+        // loop scanned N centroids per sample (8 ns × N × ns ≈ 0.5 s
+        // for VGA-13h 256-color × 64 K samples); SoA SIMD drops the
+        // per-sample scan to N/8 (AVX2) or N/4 (NEON/WASM) FMAs.
+        QuantPaletteSoA pal_soa{};
+        fill_quant_soa(std::span<const OKLab>(centroids.data(), n),
+                       pal_soa);
         // Fused per-sample assignment + per-chunk accumulation. We
         // skip the explicit assignments[] vector since the body
         // computes the cluster index and immediately accumulates.
@@ -1006,12 +1171,7 @@ std::vector<color_space::OKLab> kmeans_refine(
             const std::size_t lo = t * step;
             const std::size_t hi = std::min(lo + step, ns);
             for (std::size_t i = lo; i < hi; ++i) {
-                float best = std::numeric_limits<float>::max();
-                std::size_t bk = 0;
-                for (std::size_t k = 0; k < n; ++k) {
-                    float d = oklab_dist_sq(samples_lab[i], centroids[k]);
-                    if (d < best) { best = d; bk = k; }
-                }
+                auto bk = argmin_quant_soa(samples_lab[i], pal_soa).index;
                 auto& A = chunk[bk];
                 A.L += static_cast<double>(samples_lab[i].L);
                 A.a += static_cast<double>(samples_lab[i].a);
@@ -1224,11 +1384,10 @@ void apply_palette_diversity(Palette& palette,
         if (!find_worst_cluster_centroid(reseed)) break;
         candidate[ib] = reseed[0];
 
-        // Re-converge with k-means (3 iterations starting from a
-        // near-optimal palette — measured equivalent S2 to the prior
-        // 5-iter run and ~40 % cheaper per-attempt; the swap budget is
-        // the upper bound on how many of these we run).
-        auto refined = kmeans_refine(samples_lab, candidate, 3);
+        // Re-converge with k-means (5 iterations is plenty when starting
+        // from a near-optimal palette). Tested 3 iters — dropped EHB +
+        // STF-low ctest thresholds by 1+ S2, so 5 it is.
+        auto refined = kmeans_refine(samples_lab, candidate, 5);
 
         // Optionally snap each entry to OCS precision for OCS modes, so the
         // SSE we measure reflects what the hardware will actually display.

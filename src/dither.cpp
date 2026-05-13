@@ -753,8 +753,47 @@ NearestResult find_nearest_oklab_soa(OKLab px,
     if (bi >= pal.n) bi = pal.n - 1;
     float bd = _mm_cvtss_f32(_mm256_castps256_ps128(mglobal));
     return {bi, OKLab{pal.L[bi], pal.a[bi], pal.b[bi]}, bd};
+#elif PNG2AMIGA_DITHER_SIMD_WASM
+    // WASM SIMD: 4-lane f32x4. Same pattern as NEON — track best_d
+    // and best_i in lane vectors, reduce at the end.
+    const v128_t pL = wasm_f32x4_splat(px.L);
+    const v128_t pa = wasm_f32x4_splat(px.a);
+    const v128_t pb = wasm_f32x4_splat(px.b);
+    v128_t       best_d = wasm_f32x4_splat(std::numeric_limits<float>::max());
+    v128_t       best_i = wasm_i32x4_splat(0);
+    const v128_t k0123  = wasm_i32x4_make(0, 1, 2, 3);
+    for (std::size_t i = 0; i < n; i += 4) {
+        v128_t cL = wasm_v128_load(pal.L.data() + i);
+        v128_t ca = wasm_v128_load(pal.a.data() + i);
+        v128_t cb = wasm_v128_load(pal.b.data() + i);
+        v128_t dL = wasm_f32x4_sub(pL, cL);
+        v128_t da = wasm_f32x4_sub(pa, ca);
+        v128_t db = wasm_f32x4_sub(pb, cb);
+        v128_t d  = wasm_f32x4_add(
+                        wasm_f32x4_mul(dL, dL),
+                        wasm_f32x4_add(wasm_f32x4_mul(da, da),
+                                       wasm_f32x4_mul(db, db)));
+        v128_t cur_i = wasm_i32x4_add(k0123,
+                          wasm_i32x4_splat(static_cast<std::int32_t>(i)));
+        v128_t lt = wasm_f32x4_lt(d, best_d);
+        best_d = wasm_v128_bitselect(d, best_d, lt);
+        best_i = wasm_v128_bitselect(cur_i, best_i, lt);
+    }
+    // Reduce 4 lanes to 1 (scalar — 3 compares is cheaper than a
+    // shuffle dance at this width).
+    alignas(16) float dd[4]; alignas(16) std::int32_t ii[4];
+    wasm_v128_store(dd, best_d); wasm_v128_store(ii, best_i);
+    int   bk = 0;
+    float bd = dd[0];
+    for (int k = 1; k < 4; ++k)
+        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+    std::size_t bi = static_cast<std::size_t>(ii[bk]);
+    if (bi >= pal.n) bi = pal.n - 1;
+    return {bi,
+            OKLab{pal.L[bi], pal.a[bi], pal.b[bi]},
+            bd};
 #else
-    // WASM SIMD or scalar fallback.
+    // Scalar fallback (no SIMD ISA detected).
     float best_dist = std::numeric_limits<float>::max();
     std::size_t best_idx = 0;
     for (std::size_t i = 0; i < n; ++i) {
