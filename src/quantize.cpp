@@ -219,9 +219,7 @@ inline ArgminResult argmin_quant_soa(OKLab px,
 #include <limits>
 #include <numeric>
 #include <span>
-#ifndef __EMSCRIPTEN__
 #include <thread>
-#endif
 #include <vector>
 
 namespace png2amiga::quantize {
@@ -375,12 +373,8 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
     // WASM pthread shim is gated separately) and parallel_for runs
     // serially anyway, so a single-chunk sweep matches the original
     // serial behavior on the web.
-#ifdef __EMSCRIPTEN__
-    constexpr unsigned nchunks = 1;
-#else
     const unsigned nchunks = std::max<unsigned>(
         1, std::thread::hardware_concurrency());
-#endif
     const std::uint16_t step = static_cast<std::uint16_t>(
         (4096u + nchunks - 1u) / nchunks);
     std::vector<LocalBest> locals(nchunks);
@@ -712,29 +706,53 @@ Palette median_cut(std::span<const Color3f> colors,
     std::vector<std::size_t> assignments(work.size());
     std::vector<float> pixel_errors(work.size());
 
-    for (int iter = 0; iter < kmeans_max_iter; ++iter) {
-        // Assign each sample to nearest centroid
-        for (std::size_t i = 0; i < work.size(); ++i) {
-            float best_d = std::numeric_limits<float>::max();
-            std::size_t best_k = 0;
-            for (std::size_t k = 0; k < n_colors; ++k) {
-                float d = oklab_dist_sq(samples_lab[i], centroids[k]);
-                if (d < best_d) { best_d = d; best_k = k; }
-            }
-            assignments[i] = best_k;
-            pixel_errors[i] = best_d;
-        }
+    // Chunked + SIMD inner loop. The assignment scan is the single
+    // largest CPU sink for VGA-13h (256 centroids × 64 K samples × 40
+    // iters ≈ 640 M dist evals). SoA SIMD reduces per-sample inner-k
+    // loop to N/8 (AVX2) / N/4 (WASM SIMD) FMAs; parallel_for over
+    // chunks lets the pthread pool / native jthreads carry it across
+    // cores. Per-chunk accumulators are reduced after the scan.
+    struct Acc { double L{}, a{}, b{}; std::size_t n{}; double total_err{}; };
+    const unsigned nchunks_mc = (work.size() < 4096)
+        ? 1u
+        : std::max<unsigned>(1, std::thread::hardware_concurrency());
+    const std::size_t step_mc = (work.size() + nchunks_mc - 1) / nchunks_mc;
+    std::vector<std::vector<Acc>> chunk_accs_mc(nchunks_mc);
 
-        // Accumulate per-cluster stats
-        struct Acc { double L{}, a{}, b{}; std::size_t n{}; double total_err{}; };
+    for (int iter = 0; iter < kmeans_max_iter; ++iter) {
+        // Build SoA palette from current centroids (once per iter).
+        QuantPaletteSoA pal_soa_mc{};
+        fill_quant_soa(std::span<const OKLab>(centroids.data(), n_colors),
+                       pal_soa_mc);
+
+        // Assign + accumulate fused per chunk.
+        for (auto& ca : chunk_accs_mc) ca.assign(n_colors, Acc{});
+        pipeline::parallel_for(nchunks_mc, [&](std::size_t t) {
+            auto& chunk = chunk_accs_mc[t];
+            const std::size_t lo = t * step_mc;
+            const std::size_t hi = std::min(lo + step_mc, work.size());
+            for (std::size_t i = lo; i < hi; ++i) {
+                auto r = argmin_quant_soa(samples_lab[i], pal_soa_mc);
+                assignments[i] = r.index;
+                pixel_errors[i] = r.dist_sq;
+                auto& A = chunk[r.index];
+                A.L += static_cast<double>(samples_lab[i].L);
+                A.a += static_cast<double>(samples_lab[i].a);
+                A.b += static_cast<double>(samples_lab[i].b);
+                ++A.n;
+                A.total_err += static_cast<double>(r.dist_sq);
+            }
+        });
+        // Reduce per-chunk accumulators.
         std::vector<Acc> acc(n_colors);
-        for (std::size_t i = 0; i < work.size(); ++i) {
-            auto k = assignments[i];
-            acc[k].L += static_cast<double>(samples_lab[i].L);
-            acc[k].a += static_cast<double>(samples_lab[i].a);
-            acc[k].b += static_cast<double>(samples_lab[i].b);
-            acc[k].n++;
-            acc[k].total_err += static_cast<double>(pixel_errors[i]);
+        for (auto& ca : chunk_accs_mc) {
+            for (std::size_t k = 0; k < n_colors; ++k) {
+                acc[k].L += ca[k].L;
+                acc[k].a += ca[k].a;
+                acc[k].b += ca[k].b;
+                acc[k].n += ca[k].n;
+                acc[k].total_err += ca[k].total_err;
+            }
         }
 
         // Recompute centroids; handle empty clusters
@@ -1103,12 +1121,8 @@ float palette_total_sse(
         }
         return total;
     }
-#ifdef __EMSCRIPTEN__
-    constexpr unsigned nchunks = 1;
-#else
     const unsigned nchunks = std::max<unsigned>(
         1, std::thread::hardware_concurrency());
-#endif
     const std::size_t step = (n + nchunks - 1) / nchunks;
     std::vector<float> chunk_totals(nchunks, 0.0f);
     pipeline::parallel_for(nchunks, [&](std::size_t t) {
@@ -1141,13 +1155,9 @@ std::vector<color_space::OKLab> kmeans_refine(
     const std::size_t ns = samples_lab.size();
     struct Acc { double L{}, a{}, b{}; std::size_t n{}; };
 
-#ifdef __EMSCRIPTEN__
-    constexpr unsigned nchunks = 1;
-#else
     const unsigned nchunks = (ns < 4096)
         ? 1u
         : std::max<unsigned>(1, std::thread::hardware_concurrency());
-#endif
     const std::size_t step = (ns + nchunks - 1) / nchunks;
     std::vector<std::vector<Acc>> chunk_accs(nchunks);
 
@@ -1254,13 +1264,9 @@ void apply_palette_diversity(Palette& palette,
     auto find_worst_cluster_centroid = [&](std::vector<color_space::OKLab>& out_centroid) -> bool {
         struct Acc { double L{}, a{}, b{}, err{}; std::size_t n{}; };
         const std::size_t ns = samples_lab.size();
-#ifdef __EMSCRIPTEN__
-        constexpr unsigned nchunks = 1;
-#else
         const unsigned nchunks = (ns < 4096)
             ? 1u
             : std::max<unsigned>(1, std::thread::hardware_concurrency());
-#endif
         const std::size_t step = (ns + nchunks - 1) / nchunks;
         // Phase 1: parallel per-sample assignment + per-chunk
         // accumulation (L, a, b, err, count).
