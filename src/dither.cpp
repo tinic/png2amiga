@@ -3732,4 +3732,96 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
     }
 }
 
+// ----------------------------------------------------------------------
+// Canonical string ↔ Method table — see dither.hpp for rationale.
+// ADD NEW METHODS HERE; main.cpp / api.cpp / web pick them up.
+// ----------------------------------------------------------------------
+namespace {
+struct MethodNameRow {
+    std::string_view name;
+    Method method;
+};
+// Order doesn't matter; we walk the array linearly for both directions.
+// 70 entries — vector small enough that linear is fine vs a hash map.
+constexpr MethodNameRow kMethodNames[] = {
+    {"none", Method::none},
+    {"bayer2x2", Method::bayer2x2},
+    {"bayer4x4", Method::bayer4x4},
+    {"bayer8x8", Method::bayer8x8},
+    {"bayer3x3", Method::bayer3x3},
+    {"bayer5x5", Method::bayer5x5},
+    {"bayer6x6", Method::bayer6x6},
+    {"bayer7x7", Method::bayer7x7},
+    {"checker", Method::checker},
+    {"h2x4", Method::h2x4},
+    {"clustered-dot", Method::clustered_dot},
+    {"line2", Method::line2},
+    {"line-checker", Method::line_checker},
+    {"line4", Method::line4},
+    {"line8", Method::line8},
+    {"v4x2", Method::v4x2},
+    {"bayer4x2", Method::bayer4x2},
+    {"bayer2x4", Method::bayer2x4},
+    {"vline2", Method::vline2},
+    {"vline-checker", Method::vline_checker},
+    {"vline4", Method::vline4},
+    {"vline8", Method::vline8},
+    {"halftone8x8", Method::halftone8x8},
+    {"diagonal8x8", Method::diagonal8x8},
+    {"spiral5x5", Method::spiral5x5},
+    {"hex8x8", Method::hex8x8},
+    {"hex5x5", Method::hex5x5},
+    {"blue-noise", Method::blue_noise},
+    {"void-cluster", Method::void_cluster},
+    {"cluster-noise", Method::cluster_noise},
+    {"fractal16", Method::fractal16},
+    {"floyd-steinberg", Method::floyd_steinberg},
+    {"atkinson", Method::atkinson},
+    {"sierra-lite", Method::sierra_lite},
+    {"stucki", Method::stucki},
+    {"jarvis", Method::jarvis},
+    {"dbs", Method::dbs},
+    {"gilbert", Method::gilbert},
+    {"riemersma", Method::riemersma},
+    {"structure-fs", Method::structure_fs},
+    {"contrast-fs", Method::contrast_fs},
+    {"zhoufang", Method::zhoufang},
+    {"yliluoma", Method::yliluoma},
+    {"yliluoma2", Method::yliluoma2},
+    {"opt-checker", Method::opt_checker},
+    {"knoll", Method::knoll},
+    {"tri-tone", Method::tri_tone},
+    {"yliluoma1", Method::yliluoma1},
+    {"opt-line", Method::opt_line},
+    {"opt-line-checker", Method::opt_line_checker},
+    {"opt-vline", Method::opt_vline},
+    {"opt-vline-checker", Method::opt_vline_checker},
+    {"aseprite-old", Method::aseprite_old},
+    {"libcaca3", Method::libcaca_3x3},
+    {"libcaca6", Method::libcaca_6x6},
+    {"pegasus", Method::pegasus_8x8},
+    {"cranley-bayer", Method::cranley_bayer},
+    {"quasicrystal", Method::quasicrystal},
+    {"truchet", Method::truchet},
+    {"ign", Method::ign},
+    {"ign-tri", Method::ign_triangle},
+    {"white-noise", Method::white_noise},
+    {"r2", Method::r2_sequence},
+    {"r2-tri", Method::r2_triangle},
+    {"crosshatch", Method::crosshatch},
+    {"radial", Method::radial},
+    {"value-noise", Method::value_noise},
+};
+} // namespace
+
+std::string_view method_name(Method m) noexcept {
+    for (auto& row : kMethodNames) if (row.method == m) return row.name;
+    return "";  // caller treats empty as "unknown"; should be unreachable.
+}
+
+std::optional<Method> parse_method_or_null(std::string_view s) noexcept {
+    for (auto& row : kMethodNames) if (row.name == s) return row.method;
+    return std::nullopt;
+}
+
 } // namespace png2amiga::dither

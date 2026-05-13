@@ -6,7 +6,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::dither {
@@ -434,5 +436,28 @@ std::uint8_t pick_yliluoma1_index(
     const png2amiga::color_space::OKLab& target,
     std::span<const png2amiga::color_space::OKLab> palette_lab,
     std::size_t x, std::size_t y, float strength);
+
+// ----------------------------------------------------------------------
+// Canonical string ↔ Method registry.
+//
+// One source of truth for the dither name table. Previously this lived
+// in three places — main.cpp's parse_dither_method, main.cpp's two
+// method_to_name functions, and api.cpp's parse_dither — and adding a
+// new method silently broke at any of them that wasn't updated. The
+// vline / vline-checker miss landed because api.cpp's parse_dither is
+// an `if`-chain, not a switch, so the compiler couldn't flag the
+// missing entries.
+//
+// `method_name` returns the canonical CLI / option string for `m`
+// (matches the historical names exactly). `parse_method_or_null` is
+// the lookup half — empty optional on unknown name. Both walk the same
+// constexpr-defined table; the only error policy difference between
+// main.cpp (returns Result) and api.cpp (falls back to FS) is the
+// wrapper's choice.
+//
+// To add a new method: add a single row to `kMethodNames` in dither.cpp
+// and everything else picks it up automatically.
+std::string_view method_name(Method m) noexcept;
+std::optional<Method> parse_method_or_null(std::string_view s) noexcept;
 
 } // namespace png2amiga::dither
