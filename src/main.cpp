@@ -1109,6 +1109,8 @@ struct Config {
     bool flip_x = false;
     bool flip_y = false;
     int rotate_quarters = 0;           // 0/1/2/3 = 0/90/180/270 CW
+    // Auto-crop to non-transparent content bbox (kingcon -Trim).
+    bool trim = false;
 
     // Output
     bool print_palette = false;        // dump CMAP as idx=#rrggbb to stderr
@@ -1206,6 +1208,9 @@ void print_usage() {
         "  --match-range                   Stretch source chroma per-(L, hue) onto palette gamut\n"
         "  --crop <x,y,w,h>                Manual crop region (pixels)\n"
         "  --crop-auto                     Auto-crop to mode aspect ratio\n"
+        "  --trim                          Auto-crop to non-transparent bbox\n"
+        "                                  (pair with --transparent-color for\n"
+        "                                  opaque sources)\n"
         "  --flip-x, --flip-y              Mirror over Y / X axis\n"
         "  --rotate <0|1|2|3|0|90|180|270> Rotate clockwise before crop/scale\n"
         "\n"
@@ -1642,6 +1647,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--trim") {
+            config.trim = true;
+            continue;
+        }
         if (arg == "--flip-x" || arg == "--flipx" || arg == "--fx") {
             config.flip_x = true;
             continue;
@@ -2743,6 +2752,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.flip_x = cfg.flip_x;
     opts.flip_y = cfg.flip_y;
     opts.rotate_quarters = cfg.rotate_quarters;
+    opts.trim = cfg.trim;
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
     opts.cga_text_kernel = cfg.cga_text_kernel;
@@ -5858,6 +5868,60 @@ int run_main(int argc, char* argv[]) {
         return exit_code::no_input;
     }
 
+    // --trim: shrink crop region to the non-transparent bbox before
+    // run_pipeline computes target_w / target_h. Mask source is alpha
+    // (preferred) plus any --transparent-color RRGGBB sentinels.
+    // Implemented as sugar over the existing --crop pipeline so target
+    // size, scaling, and mask sampling all inherit from the bbox.
+    if (config->trim) {
+        const auto iw = image->width();
+        const auto ih = image->height();
+        auto matches_sentinel = [&](Color3f c) {
+            for (auto& tc : config->transparent_colors) {
+                auto rf = static_cast<float>(tc[0]) / 255.0f;
+                auto gf = static_cast<float>(tc[1]) / 255.0f;
+                auto bf = static_cast<float>(tc[2]) / 255.0f;
+                auto srgb = color_space::linear_to_srgb(c);
+                if (std::abs(srgb.r - rf) < 1.0f/512.0f &&
+                    std::abs(srgb.g - gf) < 1.0f/512.0f &&
+                    std::abs(srgb.b - bf) < 1.0f/512.0f) return true;
+            }
+            return false;
+        };
+        std::size_t min_x = iw, min_y = ih, max_x = 0, max_y = 0;
+        bool found = false;
+        for (std::size_t y = 0; y < ih; ++y) {
+            for (std::size_t x = 0; x < iw; ++x) {
+                bool transparent =
+                    (image->has_alpha() && image->alpha_at(x, y) <= 0.0f) ||
+                    matches_sentinel((*image)[x, y]);
+                if (!transparent) {
+                    min_x = std::min(min_x, x);
+                    min_y = std::min(min_y, y);
+                    max_x = std::max(max_x, x);
+                    max_y = std::max(max_y, y);
+                    found = true;
+                }
+            }
+        }
+        if (!found) {
+            std::println(stderr,
+                "Trim:     entire image is transparent — leaving uncropped");
+        } else if (min_x == 0 && min_y == 0 &&
+                   max_x == iw - 1 && max_y == ih - 1) {
+            cli_status("Trim:     no transparent borders found");
+        } else {
+            auto cw = max_x - min_x + 1;
+            auto ch = max_y - min_y + 1;
+            cli_status("Trim:     {}x{} -> {}x{} (+{},{})",
+                       iw, ih, cw, ch, min_x, min_y);
+            config->crop_x = static_cast<int>(min_x);
+            config->crop_y = static_cast<int>(min_y);
+            config->crop_w = static_cast<int>(cw);
+            config->crop_h = static_cast<int>(ch);
+        }
+    }
+
     // Joint-palette mode: when `--joint-input` is repeated, train
     // the palette on the union of (positional input + every
     // --joint-input) pixels, then dither each input independently
@@ -6235,10 +6299,18 @@ int run_main(int argc, char* argv[]) {
         }
     }
 
-    // Compute target dimensions from source aspect ratio
+    // Compute target dimensions from source aspect ratio. When --trim
+    // (or any explicit --crop) is active, treat the crop bbox as the
+    // effective source so --no-scale lands on a tight bbox-sized output
+    // rather than re-stretching the cropped pixels to the full file
+    // dimensions.
     auto params = amiga::get_mode_params(config->mode);
     auto src_w = image->width();
     auto src_h = image->height();
+    if (config->crop_w > 0 && config->crop_h > 0) {
+        src_w = static_cast<std::size_t>(config->crop_w);
+        src_h = static_cast<std::size_t>(config->crop_h);
+    }
     auto src_aspect = static_cast<double>(src_w) / static_cast<double>(src_h);
 
     bool interlace = config->interlace || params.is_interlaced;

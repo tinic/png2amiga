@@ -506,7 +506,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.87.1.1064
+png2amiga 1.87.1.1065
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -574,6 +574,9 @@ Image processing:
   --match-range                   Stretch source chroma per-(L, hue) onto palette gamut
   --crop <x,y,w,h>                Manual crop region (pixels)
   --crop-auto                     Auto-crop to mode aspect ratio
+  --trim                          Auto-crop to non-transparent bbox
+                                  (pair with --transparent-color for
+                                  opaque sources)
   --flip-x, --flip-y              Mirror over Y / X axis
   --rotate <0|1|2|3|0|90|180|270> Rotate clockwise before crop/scale
 

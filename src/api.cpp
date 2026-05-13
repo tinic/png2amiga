@@ -337,6 +337,12 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         pixel_count = width * height;
     }
 
+    // --trim is implemented at the CLI level as sugar that sets
+    // crop_x/y/w/h to the non-transparent bbox before run_pipeline is
+    // called, so target_w / target_h end up derived from the trimmed
+    // dimensions. The Options::trim flag is carried for symmetry but
+    // not acted on here.
+
     // Determine the effective source crop region up front so we can sample
     // the transparency mask from the cropped region rather than the full
     // source image. crop and tmask have to agree, otherwise the mask
@@ -1154,10 +1160,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
     }
 
+    // When an explicit --crop / --trim region is active, derive target
+    // dims from the crop (post-orientation) source rather than the raw
+    // file dims, so --no-scale + --trim produces a tight bbox-sized
+    // output instead of re-stretching to the un-cropped source size.
+    auto src_w_eff = static_cast<std::size_t>(peek_w);
+    auto src_h_eff = static_cast<std::size_t>(peek_h);
+    if (options.crop_w > 0 && options.crop_h > 0) {
+        src_w_eff = static_cast<std::size_t>(options.crop_w);
+        src_h_eff = static_cast<std::size_t>(options.crop_h);
+    }
     auto [target_w, target_h] = compute_target_dims(
-        static_cast<std::size_t>(peek_w),
-        static_cast<std::size_t>(peek_h),
-        options, mode);
+        src_w_eff, src_h_eff, options, mode);
 
     auto depth = static_cast<std::size_t>(
         std::clamp(options.depth, 1, 8));

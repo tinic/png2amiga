@@ -538,6 +538,207 @@ else()
     )
     set_tests_properties("raw-output-exists" PROPERTIES DEPENDS "raw-output")
 
+    # --- kingcon-compat raw outputs: .bpl alias, --mask-layout, --rotate,
+    # --flip-x/y, --trim. lovers.jpg is 320×256, 5 bitplanes by default,
+    # so raw size = 320/8 × 256 × 5 = 51200 bytes. The mask-layout tests
+    # use logo.png because lovers has no transparency.
+
+    # Synthetic 64×32 (width-aligned, transparent border): the explicit
+    # dims keep every size-based assertion below predictable regardless
+    # of what's in examples/.
+    add_test(
+        NAME "kingcon-synth-input"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "from PIL import Image
+img=Image.new('RGBA',(64,32),(255,255,255,0))
+for y in range(8,24):
+    for x in range(16,48):
+        img.putpixel((x,y),(255,0,0,255))
+img.save('${CMAKE_BINARY_DIR}/kc.png')"
+    )
+
+    # 64×32, 4 planes: bpr=8 (4 words × 2), total=32*8*4=1024 bytes.
+    # Sibling .pal = 16 colors × 2 = 32 bytes.
+    add_test(
+        NAME "bpl-extension"
+        COMMAND png2amiga --no-scale --depth 4
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc.bpl
+    )
+    set_tests_properties("bpl-extension" PROPERTIES DEPENDS "kingcon-synth-input")
+    add_test(
+        NAME "bpl-extension-size"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "import os,sys; s=os.path.getsize('${CMAKE_BINARY_DIR}/kc.bpl'); sys.exit(0 if s==1024 else (print(f'expected 1024, got {s}') or 1))"
+    )
+    set_tests_properties("bpl-extension-size" PROPERTIES DEPENDS "bpl-extension")
+
+    # .bpl writes a sibling .pal automatically (16 colors × 2 bytes).
+    add_test(
+        NAME "bpl-sibling-pal"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "import os,sys; s=os.path.getsize('${CMAKE_BINARY_DIR}/kc.pal'); sys.exit(0 if s==32 else (print(f'expected 32-byte sibling .pal, got {s}') or 1))"
+    )
+    set_tests_properties("bpl-sibling-pal" PROPERTIES DEPENDS "bpl-extension")
+
+    # --rotate 90: 64×32 -> 32×64. bpr=4 (2 words × 2). 64×4×4 planes = 1024.
+    add_test(
+        NAME "rotate-90"
+        COMMAND png2amiga --no-scale --depth 4 --rotate 90
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_r90.bpl
+    )
+    set_tests_properties("rotate-90" PROPERTIES DEPENDS "kingcon-synth-input")
+    add_test(
+        NAME "rotate-90-size"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "import os,sys; s=os.path.getsize('${CMAKE_BINARY_DIR}/kc_r90.bpl'); sys.exit(0 if s==1024 else (print(f'expected 1024, got {s}') or 1))"
+    )
+    set_tests_properties("rotate-90-size" PROPERTIES DEPENDS "rotate-90")
+
+    # --rotate 180: same dims as input.
+    add_test(
+        NAME "rotate-180"
+        COMMAND png2amiga --no-scale --depth 4 --rotate 180
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_r180.bpl
+    )
+    set_tests_properties("rotate-180" PROPERTIES DEPENDS "kingcon-synth-input")
+
+    # --rotate 1 accepts the quarters form (= 90°).
+    add_test(
+        NAME "rotate-quarters-form"
+        COMMAND png2amiga --no-scale --depth 4 --rotate 1
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_r1.bpl
+    )
+    set_tests_properties("rotate-quarters-form" PROPERTIES DEPENDS "kingcon-synth-input")
+
+    # Invalid rotate values are rejected.
+    add_test(
+        NAME "rotate-rejects-bad-arg"
+        COMMAND png2amiga --rotate 45
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_bad.bpl
+    )
+    set_tests_properties("rotate-rejects-bad-arg" PROPERTIES
+        DEPENDS "kingcon-synth-input"
+        WILL_FAIL TRUE)
+
+    add_test(
+        NAME "flip-x"
+        COMMAND png2amiga --no-scale --depth 4 --flip-x
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_fx.bpl
+    )
+    set_tests_properties("flip-x" PROPERTIES DEPENDS "kingcon-synth-input")
+    add_test(
+        NAME "flip-y"
+        COMMAND png2amiga --no-scale --depth 4 --flip-y
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_fy.bpl
+    )
+    set_tests_properties("flip-y" PROPERTIES DEPENDS "kingcon-synth-input")
+
+    # --mask-layout against the synthetic 64×32 (RGBA alpha = 0 border).
+    # 4 planes, bpr=8. Plain raw = 32*8*4 = 1024 bytes (bpl-extension-size
+    # checks this). With mask appended = 32*8*(4+1) = 1280. With mask
+    # replicated = 32*8*4*2 = 2048 (kingcon -Interleaved -Mask).
+    add_test(
+        NAME "mask-layout-appended"
+        COMMAND png2amiga --no-scale --depth 4 --mask-layout appended
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_mask_app.bpl
+    )
+    set_tests_properties("mask-layout-appended" PROPERTIES DEPENDS "kingcon-synth-input")
+    add_test(
+        NAME "mask-layout-appended-size"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "import os,sys; s=os.path.getsize('${CMAKE_BINARY_DIR}/kc_mask_app.bpl'); sys.exit(0 if s==1280 else (print(f'expected 1280, got {s}') or 1))"
+    )
+    set_tests_properties("mask-layout-appended-size" PROPERTIES DEPENDS "mask-layout-appended")
+
+    add_test(
+        NAME "mask-layout-replicated"
+        COMMAND png2amiga --no-scale --depth 4 --mask-layout replicated
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/kc_mask_rep.bpl
+    )
+    set_tests_properties("mask-layout-replicated" PROPERTIES DEPENDS "kingcon-synth-input")
+    add_test(
+        NAME "mask-layout-replicated-size"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "import os,sys; s=os.path.getsize('${CMAKE_BINARY_DIR}/kc_mask_rep.bpl'); sys.exit(0 if s==2048 else (print(f'expected 2048, got {s}') or 1))"
+    )
+    set_tests_properties("mask-layout-replicated-size" PROPERTIES DEPENDS "mask-layout-replicated")
+
+    # --mask-layout rejects unknown values.
+    add_test(
+        NAME "mask-layout-rejects-bad-arg"
+        COMMAND png2amiga --mask-layout bogus
+                ${CMAKE_BINARY_DIR}/kc.png
+                ${CMAKE_BINARY_DIR}/mask-bad.bpl
+    )
+    set_tests_properties("mask-layout-rejects-bad-arg" PROPERTIES
+        DEPENDS "kingcon-synth-input"
+        WILL_FAIL TRUE)
+
+    # --trim shrinks the bbox to the non-transparent content. Synthesize a
+    # 64×64 PNG with a known 20×10 red region on white at (10,20) and
+    # convert with --transparent-color FFFFFF --trim, then check size.
+    add_test(
+        NAME "trim-synth-input"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "from PIL import Image
+img=Image.new('RGB',(64,64),(255,255,255))
+for y in range(20,30):
+    for x in range(10,30):
+        img.putpixel((x,y),(255,0,0))
+img.save('${CMAKE_BINARY_DIR}/trim_in.png')"
+    )
+    add_test(
+        NAME "trim-encode"
+        COMMAND png2amiga --no-scale --depth 4
+                --transparent-color FFFFFF --trim
+                ${CMAKE_BINARY_DIR}/trim_in.png
+                ${CMAKE_BINARY_DIR}/trim_out.bpl
+    )
+    set_tests_properties("trim-encode" PROPERTIES DEPENDS "trim-synth-input")
+    add_test(
+        NAME "trim-encode-size"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "import os,sys
+# Trim shrinks 64×64 -> 20×10 (the red block). 20 px -> 2 words = 4 B/row,
+# 10 rows × 4 planes × 4 B = 160 bytes (no embedded mask).
+expect=10*4*4
+got=os.path.getsize('${CMAKE_BINARY_DIR}/trim_out.bpl')
+sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
+    )
+    set_tests_properties("trim-encode-size" PROPERTIES DEPENDS "trim-encode")
+
+    # --trim with no transparency is a friendly no-op (returns 0, output
+    # matches the un-trimmed bytes exactly).
+    add_test(
+        NAME "trim-no-transparency-noop"
+        COMMAND png2amiga --no-scale --depth 5 --trim
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/trim_noop.bpl
+    )
+    add_test(
+        NAME "trim-no-transparency-noop-matches-baseline"
+        COMMAND ${CMAKE_COMMAND} -E compare_files
+                ${CMAKE_BINARY_DIR}/trim_noop.bpl
+                ${CMAKE_BINARY_DIR}/trim_baseline.bpl
+    )
+    add_test(
+        NAME "trim-no-transparency-baseline"
+        COMMAND png2amiga --no-scale --depth 5
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/trim_baseline.bpl
+    )
+    set_tests_properties("trim-no-transparency-noop-matches-baseline"
+        PROPERTIES DEPENDS "trim-no-transparency-noop;trim-no-transparency-baseline")
+
     # --- Palette output (.pal) ---
     add_test(
         NAME "pal-output"

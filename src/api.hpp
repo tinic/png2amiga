@@ -272,6 +272,12 @@ struct Options {
     bool flip_y = false;                // mirror over the X axis
     int rotate_quarters = 0;            // 0/1/2/3 = 0°/90°/180°/270° clockwise
 
+    // Auto-trim to content bounding box (kingcon -Trim). Strips fully
+    // transparent rows/columns from every edge. No-op when the source
+    // has no transparency — pair with --transparent-color RRGGBB for
+    // opaque sources that encode the background as a sentinel color.
+    bool trim = false;
+
     // Advanced
     bool lock_color0 = true;         // reserve index 0 for black (border/background)
 
