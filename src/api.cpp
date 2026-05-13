@@ -828,6 +828,52 @@ Result<PlainAutoTrial> encode_plain_auto(
     bool is_atari_local = amiga::is_atari(mode);
     bool lock_zero = lock_color0 && (has_transparency || !is_atari_local);
 
+    // 1bpp short-circuit: a 2-centroid quantizer on natural images
+    // picks two near-midtones, which crushes contrast and yields the
+    // S2≈-65 disaster everyone sees at --depth 1. Force {black, white}
+    // and let the ditherer span the full luminance range. Skipped when
+    // the user explicitly placed locks or reserves — they take control
+    // of the slot contents and the regular path honours that.
+    if (max_colors == 2 && locks.empty() && reserves.empty()) {
+        PlainAutoTrial out;
+        out.pal.name   = "bw";
+        out.pal.colors = {Color3f{0.0f, 0.0f, 0.0f}, Color3f{1.0f, 1.0f, 1.0f}};
+        out.pal_size   = 2;
+        out.locked_mask = {true, true};
+        auto dr = dither::apply(img,
+            std::span<const Color3f>(out.pal.colors), dith);
+        if (has_transparency) {
+            for (std::size_t i = 0;
+                 i < tmask.size() && i < dr.indices.size(); ++i)
+                if (tmask[i]) dr.indices[i] = 0;
+        }
+        out.indices = std::move(dr.indices);
+        out.total_error = dr.total_error;
+        if (!pins.empty()) {
+            auto pin_result = palette_locks::apply_pins(
+                out.pal, out.indices, out.locked_mask, pins,
+                img.width(), img.height());
+            if (!pin_result) return std::unexpected{pin_result.error()};
+        }
+        bool dos_planar_bw = (amiga::is_ega(mode) || amiga::is_vga(mode))
+                             && !amiga::is_chunky(mode);
+        auto bp_layout_bw = is_atari_local
+            ? bitplane::Layout::word_interleaved
+            : dos_planar_bw ? bitplane::Layout::standard
+                            : bitplane::Layout::interleaved;
+        auto bp_res = bitplane::encode(out.indices,
+            img.width(), img.height(), depth, bp_layout_bw);
+        if (!bp_res) return std::unexpected{bp_res.error()};
+        out.planes = *std::move(bp_res);
+        std::vector<Color3f> pal_view(out.pal.colors.begin(),
+                                      out.pal.colors.end());
+        auto pv = pipeline::render_preview(out.planes, pal_view,
+            /*is_ham=*/false, /*is_lace=*/false, chipset);
+        if (!pv) return std::unexpected{pv.error()};
+        out.rendered = *std::move(pv);
+        return out;
+    }
+
     // Reserve-count + reserved_mask (caller may pass zero reserves).
     auto reserves_in_pal = palette_locks::validate_reserves(
         reserves, locks, max_colors, lock_zero);
@@ -3648,6 +3694,43 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         base_dith.method = parse_dither(options.dither);
         base_dith.strength = options.dither_strength;
         base_dith.error_clamp = options.error_clamp;
+
+        // 1bpp short-circuit: skip pop_search and best_sweep entirely.
+        // The palette is fixed to {black, white} (no basin to optimise),
+        // so every trial would render identically. encode_plain_auto's
+        // own bypass produces the b/w trial in one shot.
+        if (max_colors == 2 && options.locks.empty() &&
+            options.reserves.empty()) {
+            auto trial = encode_plain_auto(
+                *image, depth, max_colors, mode, chipset,
+                base_dith, options.palette_diversity,
+                options.refine_iterations,
+                options.lock_color0, has_transparency,
+                /*use_dpf=*/false,
+                /*match_range=*/options.match_range,
+                options.locks, options.reserves, options.pins, tmask);
+            if (!trial) return std::unexpected{trial.error()};
+            if (options.on_progress) options.on_progress(1.0f, "done");
+            std::vector<Color3f> used_pal(
+                trial->pal.colors.begin(),
+                trial->pal.colors.begin() +
+                    static_cast<std::ptrdiff_t>(trial->pal_size));
+            PipelineResult result;
+            result.rendered = std::move(trial->rendered);
+            result.planes   = std::move(trial->planes);
+            result.palette  = std::move(used_pal);
+            result.indices  = std::move(trial->indices);
+            result.mode     = mode;
+            result.hires    = compound_hires ||
+                              amiga::get_mode_params(mode).is_hires;
+            result.interlace = options.interlace;
+            result.dpf      = false;
+            result.aga      = is_aga;
+            result.has_transparency = has_transparency;
+            if (has_transparency) result.transparency_mask = tmask;
+            result.finalize_psnr(*image, trial->total_error);
+            return result;
+        }
 
         // Pop-search-only path: at lores OCS d ∈ [1,5], best_sweep
         // is dominated by pop search every test we've run — and the

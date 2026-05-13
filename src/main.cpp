@@ -8771,6 +8771,11 @@ int run_main(int argc, char* argv[]) {
         pal.colors = st.palette;
         pal.name = st.base_palette_quantizer.empty()
                    ? std::string{"best"} : st.base_palette_quantizer;
+        // 1bpp bypass: api.cpp short-circuits the --best sweep when
+        // max_colors==2 (palette fixed to {black, white}), so reflect
+        // that in the status line instead of the generic "best".
+        if (max_colors == 2 && pal.colors.size() == 2)
+            pal.name = "bw";
         used_palette = st.palette;
         dither_result.indices = st.indices;
         dither_result.total_error = static_cast<float>(st.quant_error);
@@ -8969,6 +8974,17 @@ int run_main(int argc, char* argv[]) {
         for (auto hex : palette::kCgaHw)
             pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
         cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
+        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+    } else if (max_colors == 2 &&
+               pf2_locks.empty() && pf2_reserves.empty()) {
+        // 1bpp: skip the quantizer — a 2-centroid median-cut on natural
+        // images picks two near-midtones and crushes contrast. Force
+        // {black, white} so the dither spans the full luminance range.
+        // User locks/reserves take precedence; if either is set, fall
+        // through to the regular quantize path.
+        pal.colors = {Color3f{0.0f, 0.0f, 0.0f}, Color3f{1.0f, 1.0f, 1.0f}};
+        std_locked = {true, true};
+        cli_status("Palette:  2 colors (b/w, 1bpp)");
         cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
     } else {
         // Slot-budget for the quantizer. See palette_locks::QuantCounts
