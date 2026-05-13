@@ -484,54 +484,104 @@ export const CGA_TEXT_DEFAULTS = {
   cgaTextKernel: 'auto',
 }
 
-// Default Amiga example set — shared by every chipset except the ones
-// with a bespoke list in EXAMPLES_BY_CHIPSET below.
-const DEFAULT_EXAMPLES: Example[] = [
-  { name: 'makena',       file: 'makena.jpg',          opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', ditherStrength: 0.5 } },
-  { name: 'fantasy',      file: 'fantasy.jpg',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
-  { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'ehb', dither: 'sierra-lite', copper: true, scap: true } },
-  { name: 'logo',         file: 'logo.png',           opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', alphaThreshold: 0 } },
-  { name: 'space',        file: 'space3.jpg',         opts: { mode: 'lores', depth: 5, dither: 'opt-checker' } },
-  { name: 'photo',        file: 'photo.jpg',          opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
-  { name: 'grungy',       file: 'grungy.jpg',         opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
-  { name: 'fantasy1',     file: 'fantasy1.jpg',       opts: { mode: 'lores', depth: 3, dither: 'floyd-steinberg', copper: true } },
-  { name: 'fromthe',      file: 'fromthe.jpg',        opts: { mode: 'lores', depth: 3, dither: 'opt-checker', dualPlayfield: true, scap: true } },
-  { name: 'asterix',      file: 'asterix.jpg',        opts: { mode: 'cga-text80x100', chipset: 'cga', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
+// Platform-grouped example sets. Each chipset within a platform group
+// shares the same physical image files but each set tags its examples
+// with mode + chipset appropriate to that group. Same source assets
+// are reused across Amiga / Atari / IBM PC for now; c64 has its own
+// curated pack.
+
+// Amiga (ocs + aga) — copper / sliced / HAM modes valid for both.
+const AMIGA_EXAMPLES: Example[] = [
+  { name: 'makena',   file: 'makena.jpg',   opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', ditherStrength: 0.5 } },
+  { name: 'fantasy',  file: 'fantasy.jpg',  opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
+  { name: 'lovers',   file: 'lovers.jpg',   opts: { mode: 'ehb', dither: 'sierra-lite', copper: true, scap: true } },
+  { name: 'logo',     file: 'logo.png',     opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', alphaThreshold: 0 } },
+  { name: 'space',    file: 'space3.jpg',   opts: { mode: 'lores', depth: 5, dither: 'opt-checker' } },
+  { name: 'photo',    file: 'photo.jpg',    opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
+  { name: 'grungy',   file: 'grungy.jpg',   opts: { mode: 'lores', depth: 3, dither: 'sierra-lite', ditherStrength: 0.9, brightness: -0.05, contrast: 0.9, gamma: 1, copper: true } },
+  { name: 'fantasy1', file: 'fantasy1.jpg', opts: { mode: 'lores', depth: 3, dither: 'floyd-steinberg', copper: true } },
+  { name: 'fromthe',  file: 'fromthe.jpg',  opts: { mode: 'lores', depth: 3, dither: 'opt-checker', dualPlayfield: true, scap: true } },
+  { name: 'asterix',  file: 'asterix.jpg',  opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg' } },
 ]
 
-// Per-chipset overrides. Chipsets absent from this map fall back to
-// DEFAULT_EXAMPLES via examplesForChipset(). c64 has its own block-art
-// sample pack since the Amiga photos don't represent VIC-II content
-// (low-resolution sprite art / pixel game scenes look much more like
-// the c64 mode's natural output).
-// c64 settings mirror png2c64's EXAMPLES list (sister project) — same
-// images, same per-image gamma / contrast / sharpen / saturation /
-// matchRange / metric tuning. ostromoukhov (used by png2c64's `alien`)
-// was removed from png2amiga in v1.58, so we substitute floyd-steinberg.
-const EXAMPLES_BY_CHIPSET: Partial<Record<Chipset, Example[]>> = {
-  c64: [
-    { name: 'alien',    file: 'c64/alien.png',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, contrast: 1.5, dither: 'floyd-steinberg', ditherStrength: 1, matchRange: false } },
-    { name: 'dog',      file: 'c64/dog.png',       opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1 } },
-    { name: 'dragon',   file: 'c64/dragon.png',    opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1, matchRange: true } },
-    { name: 'face',     file: 'c64/face.png',      opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 3, ditherStrength: 1, sharpen: -0.5, saturation: 0.5 } },
-    { name: 'fantasy',  file: 'c64/fantasy.png',   opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, ditherStrength: 1, matchRange: true } },
-    { name: 'game',     file: 'c64/game.png',      opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 2, ditherStrength: 1 } },
-    { name: 'golden',   file: 'c64/golden3.jpeg',  opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, contrast: 1.5, ditherStrength: 1, matchRange: true } },
-    { name: 'head',     file: 'c64/head.png',      opts: { chipset: 'c64', mode: 'c64-petscii',    gamma: 2, ditherStrength: 1, blackPoint: 0.09, whitePoint: 0.06, c64Metric: 'blur', c64PetsciiGraphicsOnly: true } },
-    { name: 'monster',  file: 'c64/monster.jpeg',  opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 3, ditherStrength: 1 } },
-    { name: 'ship',     file: 'c64/ship.jpeg',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 2, ditherStrength: 1, matchRange: true } },
-  ],
+// Atari (stf + ste) — same source files; mixes stf-low (9-bit palette)
+// with ste-low (12-bit), plus a stf-med entry for the high-res 4-color
+// mode. Clicking flips chipset to whatever the example specifies;
+// users can manually flip stf↔ste after picking an image to compare
+// palette precision.
+const ATARI_EXAMPLES: Example[] = [
+  { name: 'makena',   file: 'makena.jpg',   opts: { chipset: 'stf', mode: 'stf-low' } },
+  { name: 'fantasy',  file: 'fantasy.jpg',  opts: { chipset: 'ste', mode: 'ste-low' } },
+  { name: 'lovers',   file: 'lovers.jpg',   opts: { chipset: 'ste', mode: 'ste-low' } },
+  { name: 'logo',     file: 'logo.png',     opts: { chipset: 'stf', mode: 'stf-low', alphaThreshold: 0 } },
+  { name: 'space',    file: 'space3.jpg',   opts: { chipset: 'stf', mode: 'stf-low' } },
+  { name: 'photo',    file: 'photo.jpg',    opts: { chipset: 'ste', mode: 'ste-low' } },
+  { name: 'grungy',   file: 'grungy.jpg',   opts: { chipset: 'stf', mode: 'stf-med' } },
+  { name: 'fantasy1', file: 'fantasy1.jpg', opts: { chipset: 'stf', mode: 'stf-low' } },
+  { name: 'fromthe',  file: 'fromthe.jpg',  opts: { chipset: 'ste', mode: 'ste-low' } },
+]
+
+// IBM PC (vga + ega + cga) — mix of VGA (256 / 16 color planar), EGA
+// (16-of-64), CGA-320 (4-color), CGA-composite (NTSC artifacts), and
+// CGA text-mode graphics (80×100 super-chunky). Each example targets a
+// mode that fits its content: photos → VGA-13h, low-color art → CGA,
+// classic monochrome → CGA-text. Brightness/contrast/gamma tuning
+// carries over from the original asterix entry for the CGA-text cases.
+const IBM_EXAMPLES: Example[] = [
+  { name: 'makena',   file: 'makena.jpg',   opts: { chipset: 'vga', mode: 'vga-13h' } },
+  { name: 'fantasy',  file: 'fantasy.jpg',  opts: { chipset: 'ega', mode: 'ega-320' } },
+  { name: 'lovers',   file: 'lovers.jpg',   opts: { chipset: 'vga', mode: 'vga-13h' } },
+  { name: 'logo',     file: 'logo.png',     opts: { chipset: 'ega', mode: 'ega-320', alphaThreshold: 0 } },
+  { name: 'space',    file: 'space3.jpg',   opts: { chipset: 'vga', mode: 'vga-10h' } },
+  { name: 'photo',    file: 'photo.jpg',    opts: { chipset: 'vga', mode: 'vga-13h' } },
+  { name: 'grungy',   file: 'grungy.jpg',   opts: { chipset: 'cga', mode: 'cga-composite' } },
+  { name: 'fantasy1', file: 'fantasy1.jpg', opts: { chipset: 'cga', mode: 'cga-320' } },
+  { name: 'fromthe',  file: 'fromthe.jpg',  opts: { chipset: 'ega', mode: 'ega-hi' } },
+  { name: 'asterix',  file: 'asterix.jpg',  opts: { chipset: 'cga', mode: 'cga-text80x100', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
+]
+
+// c64 — own block-art sample pack (low-resolution sprite art / pixel
+// game scenes represent VIC-II's natural output better than the Amiga
+// photos). Per-image tuning mirrors png2c64's EXAMPLES list.
+// ostromoukhov (used by png2c64's `alien`) was removed from png2amiga
+// in v1.58, so we substitute floyd-steinberg.
+const C64_EXAMPLES: Example[] = [
+  { name: 'alien',    file: 'c64/alien.png',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, contrast: 1.5, dither: 'floyd-steinberg', ditherStrength: 1, matchRange: false } },
+  { name: 'dog',      file: 'c64/dog.png',       opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1 } },
+  { name: 'dragon',   file: 'c64/dragon.png',    opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1, matchRange: true } },
+  { name: 'face',     file: 'c64/face.png',      opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 3, ditherStrength: 1, sharpen: -0.5, saturation: 0.5 } },
+  { name: 'fantasy',  file: 'c64/fantasy.png',   opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, ditherStrength: 1, matchRange: true } },
+  { name: 'game',     file: 'c64/game.png',      opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 2, ditherStrength: 1 } },
+  { name: 'golden',   file: 'c64/golden3.jpeg',  opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, contrast: 1.5, ditherStrength: 1, matchRange: true } },
+  { name: 'head',     file: 'c64/head.png',      opts: { chipset: 'c64', mode: 'c64-petscii',    gamma: 2, ditherStrength: 1, blackPoint: 0.09, whitePoint: 0.06, c64Metric: 'blur', c64PetsciiGraphicsOnly: true } },
+  { name: 'monster',  file: 'c64/monster.jpeg',  opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 3, ditherStrength: 1 } },
+  { name: 'ship',     file: 'c64/ship.jpeg',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 2, ditherStrength: 1, matchRange: true } },
+]
+
+// Map every chipset to its set. SNES + Genesis fall through to the
+// Amiga set for now (no curated console images yet).
+const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
+  ocs:     AMIGA_EXAMPLES,
+  aga:     AMIGA_EXAMPLES,
+  stf:     ATARI_EXAMPLES,
+  ste:     ATARI_EXAMPLES,
+  vga:     IBM_EXAMPLES,
+  ega:     IBM_EXAMPLES,
+  cga:     IBM_EXAMPLES,
+  c64:     C64_EXAMPLES,
+  snes:    AMIGA_EXAMPLES,
+  genesis: AMIGA_EXAMPLES,
 }
 
 export function examplesForChipset(chipset: Chipset): Example[] {
-  return EXAMPLES_BY_CHIPSET[chipset] ?? DEFAULT_EXAMPLES
+  return EXAMPLES_BY_CHIPSET[chipset]
 }
 
-// Kept as the default OCS list — used by the initial-load watcher in
-// Converter.vue (loads EXAMPLES[0] on first mount, before the user has
-// chosen a chipset). Switching chipsets after that goes through
-// examplesForChipset() to surface the right set.
-export const EXAMPLES: Example[] = DEFAULT_EXAMPLES
+// Legacy alias — the Amiga set is what main.ts / Converter.vue used to
+// reach for via the unconditional `EXAMPLES[0]` initial loader; kept
+// exported so `typeof EXAMPLES[number]` still types loadExample()'s
+// parameter without churning that signature.
+export const EXAMPLES: Example[] = AMIGA_EXAMPLES
 
 // Hostname-driven chipset default. png2c64.app is an alias of
 // png2amiga.app pointing at the same static bundle, so the UI inspects
