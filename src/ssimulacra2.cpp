@@ -231,11 +231,16 @@ void blur_h_pass_row(const AlignedFloatVec& in,
 #if PNG2AMIGA_BACKEND_AVX2
             __m256 acc = _mm256_setzero_ps();
             apply_h_taps_avx2(acc, row, x, k, kTapSeq);
-            // Store is aligned: trow base is 32-byte aligned (tmp is
-            // AlignedFloatVec) and x is a multiple of 8. The kernel's
-            // 11-tap horizontal loads up in apply_h_taps_avx2 remain
+            // Store must be unaligned: x starts at bx_lo = min(kBlurHalf, w)
+            // which is 5 on every realistic width — NOT a multiple of 8 —
+            // so `trow + x` is 20 bytes past the 32-byte-aligned base.
+            // VMOVAPS would #GP-fault here on Linux x86_64 (Windows CI
+            // happened to land in a path that avoided the crash; the
+            // original ship of the alignment commit broke every test
+            // except --help, see v1.87.0 Release CI). The kernel's
+            // 11-tap horizontal loads in apply_h_taps_avx2 are also
             // unaligned by design (sliding window).
-            _mm256_store_ps(trow + x, acc);
+            _mm256_storeu_ps(trow + x, acc);
 #elif PNG2AMIGA_BACKEND_NEON
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 float32x4_t acc = vdupq_n_f32(0.0f);
@@ -339,8 +344,9 @@ void gaussian_blur(const AlignedFloatVec& in,
                         acc);
                 }
             }
-            // Aligned: orow is AlignedFloatVec.data() and x is mul of 8.
-            _mm256_store_ps(orow + x, acc);
+            // Unaligned: x starts at bx_lo = 5, not a multiple of 8.
+            // Same VMOVAPS hazard as blur_h_pass_row above.
+            _mm256_storeu_ps(orow + x, acc);
 #elif PNG2AMIGA_BACKEND_NEON
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 float32x4_t acc = vdupq_n_f32(0.0f);
