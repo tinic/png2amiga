@@ -534,6 +534,26 @@ encode(const Image& image, amiga::Mode mode,
             tap_w[p][k] = kernel_taps[p][k].w;
         }
     }
+    // Dense kernel matrix, transposed: kernel_T[q][p] = sum of weights
+    // mapping source pixel q to output pixel p. Sparse-25-taps form is
+    // ~25 µops per pixel × per-candidate scalar gather (still 79 % CPU
+    // even after the branchless rewrite — MSVC can't fold variable-
+    // index gathers into vector ops). Dense form turns the per-pixel
+    // tap loop into a single 64-wide mat-vec column-update per candidate:
+    //   a[p] = Σ_q kernel_T[q][p] * fg_bits_f[q]
+    // For each q with fg_bits_f[q]==1, accumulate kernel_T[q][:] into
+    // a[:]. SIMD-friendly: 8-wide AVX2 / 4-wide WASM SIMD over the p
+    // axis, broadcast fg_bits_f[q], FMA. No gather, no branch. Multiple
+    // taps targeting the same q get folded into kernel_T[q][p] (each
+    // pixel has multiple kernel weights from clipped edge taps that
+    // alias).
+    constexpr std::size_t kCellNMax = 64;
+    alignas(32) std::array<std::array<float, kCellNMax>, kCellNMax> kernel_T{};
+    for (std::size_t p = 0; p < cell_n; ++p) {
+        for (std::size_t k = 0; k < kKernTapN; ++k) {
+            kernel_T[tap_q[p][k]][p] += tap_w[p][k];
+        }
+    }
 
     // Pre-compute palette dot products and norms (used in the closed-form
     // per-pair error formula below).
@@ -636,29 +656,34 @@ encode(const Image& image, amiga::Mode mode,
             K0 += color_space::fma_dist_sq(b.L, b.a, b.b);
         }
         CellPick best{0, 15, 0, 0, std::numeric_limits<float>::infinity()};
-        // Pre-converted fg_mask: 64 floats (1.0f if bit set, 0.0f else).
-        // Hoisted out of the candidate loop body so each candidate
-        // pays a one-time bit-scan cost (~64 shifts) instead of paying
-        // the bit test 64 × 25 = 1600 times in the inner loop.
-        alignas(32) std::array<float, 64> fg_bits_f;
+        // Per-candidate scratch: a[p] = active foreground area at pixel p.
+        // Computed via dense kernel mat-vec instead of the per-pixel tap
+        // loop — see kernel_T construction comment above.
+        alignas(32) std::array<float, kCellNMax> a_arr{};
         for (auto& cand : candidates) {
             auto fg_mask = cand.fg_mask;
-            for (std::size_t i = 0; i < 64; ++i)
-                fg_bits_f[i] = static_cast<float>((fg_mask >> i) & 1u);
+            // a[p] = Σ_q kernel_T[q][p] * fg_bit(q). Iterate ONLY over
+            // q's where fg_bit is set — bit scan via `m & -m`. Each
+            // set bit broadcasts and FMAs kernel_T[q][:] into a_arr[:].
+            // For typical glyphs ~half the bits are set, so this is
+            // ~32 FMA-vectors per candidate vs the ~25 scalar gathers
+            // per pixel × 64 pixels = 1600 scalar ops the old path did.
+            std::memset(a_arr.data(), 0, sizeof(float) * kCellNMax);
+            {
+                std::uint64_t m = fg_mask;
+                while (m) {
+                    auto q = static_cast<std::size_t>(std::countr_zero(m));
+                    m &= m - 1;
+                    const float* col = kernel_T[q].data();
+                    for (std::size_t p = 0; p < kCellNMax; ++p)
+                        a_arr[p] += col[p];
+                }
+            }
             color_space::OKLab K1{0, 0, 0};
             color_space::OKLab K2{0, 0, 0};
             float K3 = 0, K4 = 0, K5 = 0;
             for (std::size_t p = 0; p < cell_n; ++p) {
-                // Branchless tap accumulation: a = sum_k(w[k] * fg_bits[q[k]]).
-                // MSVC's branch on (fg_mask >> q & 1) was the single biggest
-                // CPU sink in cga-text80x100 (138 s / 174 s = 79 % per
-                // uProf). Replacing with a gather-via-fg_bits + FMA lets
-                // the vectoriser unroll the fixed 25-tap loop.
-                const std::uint8_t* qs = tap_q[p].data();
-                const float* ws = tap_w[p].data();
-                float a = 0.0f;
-                for (std::size_t k = 0; k < kKernTapN; ++k)
-                    a = std::fma(fg_bits_f[qs[k]], ws[k], a);
+                float a = a_arr[p];
                 float ma = 1.0f - a;
                 K1.L += blurred[p].L * a;
                 K1.a += blurred[p].a * a;
