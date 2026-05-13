@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -330,20 +331,39 @@ std::optional<T> best_sweep(
             : jittered[static_cast<std::size_t>(t.jitter_seed)];
         auto retry = encode_fn(trial_input, t.settings, t.diversity);
         auto n_done = done.fetch_add(1) + 1;
+        float label_best = -1.0f;
+        bool have_best = false;
+        if (retry) {
+            const Image& rendered = rendered_fn(*retry);
+            float score = ssimulacra2::compute(
+                source.pixels(), rendered.pixels(),
+                source.width(), source.height());
+            std::lock_guard lk(best_mu);
+            if (!best.has_value() || score > best_psnr) {
+                best = std::move(*retry);
+                best_psnr = score;
+            }
+            label_best = best_psnr;
+            have_best = true;
+        } else {
+            std::lock_guard lk(best_mu);
+            if (best.has_value()) {
+                label_best = best_psnr;
+                have_best = true;
+            }
+        }
         if (on_progress) {
+            char label[48];
+            if (have_best) {
+                std::snprintf(label, sizeof(label),
+                              "best  S2=%.2f",
+                              static_cast<double>(label_best));
+            } else {
+                std::snprintf(label, sizeof(label), "best");
+            }
             on_progress(static_cast<float>(n_done) /
                         static_cast<float>(total),
-                        "best");
-        }
-        if (!retry) return;
-        const Image& rendered = rendered_fn(*retry);
-        float score = ssimulacra2::compute(
-            source.pixels(), rendered.pixels(),
-            source.width(), source.height());
-        std::lock_guard lk(best_mu);
-        if (!best.has_value() || score > best_psnr) {
-            best = std::move(*retry);
-            best_psnr = score;
+                        label);
         }
     });
     if (on_progress) on_progress(1.0f, "done");

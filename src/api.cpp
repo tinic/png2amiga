@@ -3660,11 +3660,30 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             !mp_curr.is_hires &&
             depth >= 1 && depth <= 5;
         if (pop_only) {
+            // Plain lores OCS --best runs pop search and best_sweep
+            // sequentially. Split the user-visible bar in half so the
+            // user sees one 0→100% progress, not two reset-to-zero
+            // sweeps. pop_phase reports to 0–50%, sweep_phase to
+            // 50–100%; pop's intermediate "done" (if any) is swallowed
+            // so only sweep's "done" terminates the line.
+            auto pop_phase_progress = options.on_progress
+                ? std::function<void(float, std::string_view)>(
+                    [op = options.on_progress](float p, std::string_view s) {
+                        if (s == "done") return;
+                        op(0.5f * std::clamp(p, 0.0f, 1.0f), s);
+                    })
+                : std::function<void(float, std::string_view)>{};
+            auto sweep_phase_progress = options.on_progress
+                ? std::function<void(float, std::string_view)>(
+                    [op = options.on_progress](float p, std::string_view s) {
+                        op(0.5f + 0.5f * std::clamp(p, 0.0f, 1.0f), s);
+                    })
+                : std::function<void(float, std::string_view)>{};
             palette_search::PopSearchOptions pso;
             pso.pop_size      = 128;
             pso.generations   = 64;
             pso.stale_limit   = 32;
-            pso.on_progress   = options.on_progress;
+            pso.on_progress   = pop_phase_progress;
 
             // When reserves or transparency are present, run
             // encode_plain_auto once at diversity=0 to produce a
@@ -3779,7 +3798,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 [](const PlainAutoTrial& t) -> const Image& {
                     return t.rendered;
                 },
-                options.on_progress, /*jitter_amplitude=*/1.0f);
+                sweep_phase_progress, /*jitter_amplitude=*/1.0f);
 
             // Score helper — masks transparent pixels to black on
             // both sides so SSIMULACRA2 doesn't penalise the ignored
