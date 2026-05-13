@@ -516,6 +516,24 @@ encode(const Image& image, amiga::Mode mode,
             }
         }
     }
+    // SoA copy + pre-built mask layout for the per-candidate K-build hot
+    // loop. The inner branch `if ((fg_mask >> tap.q) & 1u) a += tap.w`
+    // showed 138 s / 174 s of CPU (79 %) on AMD uProf for cga-text80x100
+    // — MSVC's branch predictor + non-vectorised conditional add was
+    // dominating everything else. SoA lets the inner reduce to a
+    // branchless FMA: `a = fma(fg_bits[q] ? 1 : 0, w, a)`, expressed
+    // here as a precomputed float-per-bit lookup so each candidate only
+    // converts its 64-bit fg_mask to a 64-float array once and the
+    // per-pixel inner is then 25 contiguous loads + 25 FMAs that the
+    // vectoriser handles cleanly.
+    std::vector<std::array<std::uint8_t, kKernTapN>> tap_q(cell_n);
+    std::vector<std::array<float,        kKernTapN>> tap_w(cell_n);
+    for (std::size_t p = 0; p < cell_n; ++p) {
+        for (std::size_t k = 0; k < kKernTapN; ++k) {
+            tap_q[p][k] = kernel_taps[p][k].q;
+            tap_w[p][k] = kernel_taps[p][k].w;
+        }
+    }
 
     // Pre-compute palette dot products and norms (used in the closed-form
     // per-pair error formula below).
@@ -618,16 +636,29 @@ encode(const Image& image, amiga::Mode mode,
             K0 += color_space::fma_dist_sq(b.L, b.a, b.b);
         }
         CellPick best{0, 15, 0, 0, std::numeric_limits<float>::infinity()};
+        // Pre-converted fg_mask: 64 floats (1.0f if bit set, 0.0f else).
+        // Hoisted out of the candidate loop body so each candidate
+        // pays a one-time bit-scan cost (~64 shifts) instead of paying
+        // the bit test 64 × 25 = 1600 times in the inner loop.
+        alignas(32) std::array<float, 64> fg_bits_f;
         for (auto& cand : candidates) {
             auto fg_mask = cand.fg_mask;
+            for (std::size_t i = 0; i < 64; ++i)
+                fg_bits_f[i] = static_cast<float>((fg_mask >> i) & 1u);
             color_space::OKLab K1{0, 0, 0};
             color_space::OKLab K2{0, 0, 0};
             float K3 = 0, K4 = 0, K5 = 0;
             for (std::size_t p = 0; p < cell_n; ++p) {
-                float a = 0;
-                for (auto& tap : kernel_taps[p]) {
-                    if ((fg_mask >> tap.q) & 1u) a += tap.w;
-                }
+                // Branchless tap accumulation: a = sum_k(w[k] * fg_bits[q[k]]).
+                // MSVC's branch on (fg_mask >> q & 1) was the single biggest
+                // CPU sink in cga-text80x100 (138 s / 174 s = 79 % per
+                // uProf). Replacing with a gather-via-fg_bits + FMA lets
+                // the vectoriser unroll the fixed 25-tap loop.
+                const std::uint8_t* qs = tap_q[p].data();
+                const float* ws = tap_w[p].data();
+                float a = 0.0f;
+                for (std::size_t k = 0; k < kKernTapN; ++k)
+                    a = std::fma(fg_bits_f[qs[k]], ws[k], a);
                 float ma = 1.0f - a;
                 K1.L += blurred[p].L * a;
                 K1.a += blurred[p].a * a;
