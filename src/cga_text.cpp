@@ -16,6 +16,23 @@
 #include <thread>
 #include <utility>
 
+// SIMD gate — AVX2 (Windows MSVC / Linux GCC x86_64) + WASM SIMD only.
+// ARM64 GCC -O3 auto-vectorises the scalar loop competitively; manual
+// NEON regresses Mac M-series here too (see memory
+// feedback_simd_target_arch).
+#if defined(__wasm_simd128__)
+    #include <wasm_simd128.h>
+    #define PNG2AMIGA_CGA_TEXT_SIMD_AVX2 0
+    #define PNG2AMIGA_CGA_TEXT_SIMD_WASM 1
+#elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define PNG2AMIGA_CGA_TEXT_SIMD_AVX2 1
+    #define PNG2AMIGA_CGA_TEXT_SIMD_WASM 0
+#else
+    #define PNG2AMIGA_CGA_TEXT_SIMD_AVX2 0
+    #define PNG2AMIGA_CGA_TEXT_SIMD_WASM 0
+#endif
+
 namespace png2amiga::cga_text {
 
 namespace {
@@ -513,6 +530,18 @@ encode(const Image& image, amiga::Mode mode,
                 pi.L, pj.L, pi.a, pj.a, pi.b, pj.b);
         }
     }
+    // SoA palette LAB — 16 colors in three parallel f32 arrays. Used by
+    // the SIMD'd dot_K1 / dot_K2 build inside encode_cell_blur (each
+    // candidate hits these 16×3 floats; AoS pal.lab forces a strided
+    // gather that 8-wide AVX2 can't load efficiently).
+    alignas(32) std::array<float, 16> pal_lab_L{};
+    alignas(32) std::array<float, 16> pal_lab_a{};
+    alignas(32) std::array<float, 16> pal_lab_b{};
+    for (std::size_t i = 0; i < 16; ++i) {
+        pal_lab_L[i] = pal.lab[i].L;
+        pal_lab_a[i] = pal.lab[i].a;
+        pal_lab_b[i] = pal.lab[i].b;
+    }
 
     // Per-cell brute force shared by parallel and sequential paths.
     // Inputs:  cell_lab — 8×cell_h source OKLab values
@@ -610,7 +639,59 @@ encode(const Image& image, amiga::Mode mode,
                 K4 += a * a;
                 K5 += ma * ma;
             }
-            std::array<float, 16> dot_K1, dot_K2;
+            // dot_K1 / dot_K2 build: 16 colors × 3-float dot with K1/K2.
+            // SIMD: 2 chunks of 8-wide (AVX2) or 4 chunks of 4-wide (WASM)
+            // over the SoA palette, FMA the three channel products.
+            alignas(32) std::array<float, 16> dot_K1, dot_K2;
+#if PNG2AMIGA_CGA_TEXT_SIMD_AVX2
+            {
+                const __m256 vK1L = _mm256_set1_ps(K1.L);
+                const __m256 vK1a = _mm256_set1_ps(K1.a);
+                const __m256 vK1b = _mm256_set1_ps(K1.b);
+                const __m256 vK2L = _mm256_set1_ps(K2.L);
+                const __m256 vK2a = _mm256_set1_ps(K2.a);
+                const __m256 vK2b = _mm256_set1_ps(K2.b);
+                for (std::size_t base = 0; base < 16; base += 8) {
+                    __m256 pL = _mm256_load_ps(pal_lab_L.data() + base);
+                    __m256 pa = _mm256_load_ps(pal_lab_a.data() + base);
+                    __m256 pb = _mm256_load_ps(pal_lab_b.data() + base);
+                    __m256 d1 = _mm256_fmadd_ps(vK1b, pb,
+                                  _mm256_fmadd_ps(vK1a, pa,
+                                    _mm256_mul_ps(vK1L, pL)));
+                    __m256 d2 = _mm256_fmadd_ps(vK2b, pb,
+                                  _mm256_fmadd_ps(vK2a, pa,
+                                    _mm256_mul_ps(vK2L, pL)));
+                    _mm256_store_ps(dot_K1.data() + base, d1);
+                    _mm256_store_ps(dot_K2.data() + base, d2);
+                }
+            }
+#elif PNG2AMIGA_CGA_TEXT_SIMD_WASM
+            {
+                const v128_t vK1L = wasm_f32x4_splat(K1.L);
+                const v128_t vK1a = wasm_f32x4_splat(K1.a);
+                const v128_t vK1b = wasm_f32x4_splat(K1.b);
+                const v128_t vK2L = wasm_f32x4_splat(K2.L);
+                const v128_t vK2a = wasm_f32x4_splat(K2.a);
+                const v128_t vK2b = wasm_f32x4_splat(K2.b);
+                for (std::size_t base = 0; base < 16; base += 4) {
+                    v128_t pL = wasm_v128_load(pal_lab_L.data() + base);
+                    v128_t pa = wasm_v128_load(pal_lab_a.data() + base);
+                    v128_t pb = wasm_v128_load(pal_lab_b.data() + base);
+                    v128_t d1 = wasm_f32x4_add(
+                                  wasm_f32x4_mul(vK1L, pL),
+                                  wasm_f32x4_add(
+                                    wasm_f32x4_mul(vK1a, pa),
+                                    wasm_f32x4_mul(vK1b, pb)));
+                    v128_t d2 = wasm_f32x4_add(
+                                  wasm_f32x4_mul(vK2L, pL),
+                                  wasm_f32x4_add(
+                                    wasm_f32x4_mul(vK2a, pa),
+                                    wasm_f32x4_mul(vK2b, pb)));
+                    wasm_v128_store(dot_K1.data() + base, d1);
+                    wasm_v128_store(dot_K2.data() + base, d2);
+                }
+            }
+#else
             for (std::size_t c = 0; c < 16; ++c) {
                 auto& pl = pal.lab[c];
                 dot_K1[c] = color_space::fma_dot3(
@@ -618,16 +699,131 @@ encode(const Image& image, amiga::Mode mode,
                 dot_K2[c] = color_space::fma_dot3(
                     K2.L, pl.L, K2.a, pl.a, K2.b, pl.b);
             }
+#endif
+
             // Hoist (fg, bg) pair-search invariants. Original inner did
             // ~11 FLOPs per pair (256 pairs × 2.8k ops); the form below
             // pre-builds A[bg] = -2·dot_K2[bg] + K5·pal_norm[bg] (16
             // entries) and C[fg] = K0 - 2·dot_K1[fg] + K4·pal_norm[fg]
             // outside the bg loop, leaving 1 FMA + 2 adds inside.
-            // AMDuProf showed this lambda at 95 % of cga-text80x100 CPU.
-            std::array<float, 16> A;
+            // AMDuProf showed this lambda at 95 % of cga-text80x100 CPU
+            // pre-SIMD; the SIMD rewrite below batches the 16×16 inner
+            // pair-min over 8-lane (AVX2) / 4-lane (WASM) bg vectors.
+            alignas(32) std::array<float, 16> A;
             for (std::size_t c = 0; c < 16; ++c)
                 A[c] = std::fma(K5, pal_norm[c], -2.0f * dot_K2[c]);
             const float K3_x2 = 2.0f * K3;
+
+#if PNG2AMIGA_CGA_TEXT_SIMD_AVX2
+            {
+                // Track best across all 16×16 pairs in lane-parallel
+                // vectors; horizontal reduce once at the end. Avoids
+                // 16 reductions (one per fg) that a per-fg argmin
+                // would require.
+                const __m256 vK3_x2 = _mm256_set1_ps(K3_x2);
+                const __m256 vA_lo = _mm256_load_ps(A.data() + 0);
+                const __m256 vA_hi = _mm256_load_ps(A.data() + 8);
+                const __m256i lane_bg_lo = _mm256_setr_epi32(0,1,2,3,4,5,6,7);
+                const __m256i lane_bg_hi = _mm256_setr_epi32(8,9,10,11,12,13,14,15);
+                __m256  best_err_v = _mm256_set1_ps(best.err);
+                __m256i best_fgbg_v = _mm256_setzero_si256();
+                for (std::uint8_t fg = 0; fg < 16; ++fg) {
+                    const float C_fg = std::fma(K4, pal_norm[fg],
+                                                K0 - 2.0f * dot_K1[fg]);
+                    const __m256 vC_fg = _mm256_set1_ps(C_fg);
+                    const auto& pal_dot_fg = pal_dot[fg];
+                    const __m256i fg_lane = _mm256_set1_epi32(fg << 8);
+                    // bg 0..7
+                    {
+                        __m256 pd = _mm256_load_ps(pal_dot_fg.data() + 0);
+                        __m256 err = _mm256_fmadd_ps(vK3_x2, pd,
+                                       _mm256_add_ps(vC_fg, vA_lo));
+                        __m256 lt = _mm256_cmp_ps(err, best_err_v, _CMP_LT_OQ);
+                        __m256i cur_fgbg = _mm256_or_si256(fg_lane, lane_bg_lo);
+                        best_err_v = _mm256_blendv_ps(best_err_v, err, lt);
+                        best_fgbg_v = _mm256_castps_si256(_mm256_blendv_ps(
+                            _mm256_castsi256_ps(best_fgbg_v),
+                            _mm256_castsi256_ps(cur_fgbg), lt));
+                    }
+                    // bg 8..15
+                    {
+                        __m256 pd = _mm256_load_ps(pal_dot_fg.data() + 8);
+                        __m256 err = _mm256_fmadd_ps(vK3_x2, pd,
+                                       _mm256_add_ps(vC_fg, vA_hi));
+                        __m256 lt = _mm256_cmp_ps(err, best_err_v, _CMP_LT_OQ);
+                        __m256i cur_fgbg = _mm256_or_si256(fg_lane, lane_bg_hi);
+                        best_err_v = _mm256_blendv_ps(best_err_v, err, lt);
+                        best_fgbg_v = _mm256_castps_si256(_mm256_blendv_ps(
+                            _mm256_castsi256_ps(best_fgbg_v),
+                            _mm256_castsi256_ps(cur_fgbg), lt));
+                    }
+                }
+                // Horizontal min across 8 lanes; pull the matching index.
+                alignas(32) float ee[8];
+                alignas(32) std::int32_t ii[8];
+                _mm256_store_ps(ee, best_err_v);
+                _mm256_store_si256(reinterpret_cast<__m256i*>(ii), best_fgbg_v);
+                int bk = 0; float bd = ee[0];
+                for (int k = 1; k < 8; ++k)
+                    if (ee[k] < bd) { bd = ee[k]; bk = k; }
+                if (bd < best.err) {
+                    best.err = bd;
+                    best.ch = cand.ch;
+                    best.fg = static_cast<std::uint8_t>((ii[bk] >> 8) & 0xFF);
+                    best.bg = static_cast<std::uint8_t>(ii[bk] & 0xFF);
+                    best.fg_mask = fg_mask;
+                }
+            }
+#elif PNG2AMIGA_CGA_TEXT_SIMD_WASM
+            {
+                const v128_t vK3_x2 = wasm_f32x4_splat(K3_x2);
+                const v128_t vA0 = wasm_v128_load(A.data() + 0);
+                const v128_t vA4 = wasm_v128_load(A.data() + 4);
+                const v128_t vA8 = wasm_v128_load(A.data() + 8);
+                const v128_t vA12 = wasm_v128_load(A.data() + 12);
+                const v128_t lane_bg0 = wasm_i32x4_make(0, 1, 2, 3);
+                const v128_t lane_bg4 = wasm_i32x4_make(4, 5, 6, 7);
+                const v128_t lane_bg8 = wasm_i32x4_make(8, 9, 10, 11);
+                const v128_t lane_bg12 = wasm_i32x4_make(12, 13, 14, 15);
+                v128_t best_err_v = wasm_f32x4_splat(best.err);
+                v128_t best_fgbg_v = wasm_i32x4_splat(0);
+                auto step = [&](v128_t pd, v128_t vA, v128_t lane_bg,
+                                v128_t vC_fg, v128_t fg_lane) {
+                    v128_t e = wasm_f32x4_add(
+                                wasm_f32x4_mul(vK3_x2, pd),
+                                wasm_f32x4_add(vC_fg, vA));
+                    v128_t lt = wasm_f32x4_lt(e, best_err_v);
+                    v128_t cur = wasm_v128_or(fg_lane, lane_bg);
+                    best_err_v = wasm_v128_bitselect(e, best_err_v, lt);
+                    best_fgbg_v = wasm_v128_bitselect(cur, best_fgbg_v, lt);
+                };
+                for (std::uint8_t fg = 0; fg < 16; ++fg) {
+                    const float C_fg = std::fma(K4, pal_norm[fg],
+                                                K0 - 2.0f * dot_K1[fg]);
+                    const v128_t vC_fg = wasm_f32x4_splat(C_fg);
+                    const auto& pal_dot_fg = pal_dot[fg];
+                    const v128_t fg_lane = wasm_i32x4_splat(fg << 8);
+                    step(wasm_v128_load(pal_dot_fg.data() + 0),  vA0,  lane_bg0,  vC_fg, fg_lane);
+                    step(wasm_v128_load(pal_dot_fg.data() + 4),  vA4,  lane_bg4,  vC_fg, fg_lane);
+                    step(wasm_v128_load(pal_dot_fg.data() + 8),  vA8,  lane_bg8,  vC_fg, fg_lane);
+                    step(wasm_v128_load(pal_dot_fg.data() + 12), vA12, lane_bg12, vC_fg, fg_lane);
+                }
+                alignas(16) float ee[4];
+                alignas(16) std::int32_t ii[4];
+                wasm_v128_store(ee, best_err_v);
+                wasm_v128_store(ii, best_fgbg_v);
+                int bk = 0; float bd = ee[0];
+                for (int k = 1; k < 4; ++k)
+                    if (ee[k] < bd) { bd = ee[k]; bk = k; }
+                if (bd < best.err) {
+                    best.err = bd;
+                    best.ch = cand.ch;
+                    best.fg = static_cast<std::uint8_t>((ii[bk] >> 8) & 0xFF);
+                    best.bg = static_cast<std::uint8_t>(ii[bk] & 0xFF);
+                    best.fg_mask = fg_mask;
+                }
+            }
+#else
             for (std::uint8_t fg = 0; fg < 16; ++fg) {
                 const float C_fg = std::fma(K4, pal_norm[fg],
                                             K0 - 2.0f * dot_K1[fg]);
@@ -644,6 +840,7 @@ encode(const Image& image, amiga::Mode mode,
                     }
                 }
             }
+#endif
         }
         return best;
     };
