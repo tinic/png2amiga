@@ -13,9 +13,7 @@
 #include <format>
 #include <limits>
 #include <mutex>
-#ifndef __EMSCRIPTEN__
 #include <thread>
-#endif
 #include <utility>
 
 namespace png2amiga::cga_text {
@@ -712,15 +710,11 @@ encode(const Image& image, amiga::Mode mode,
             }
         }
     };
-#ifdef __EMSCRIPTEN__
-    worker();
-#else
     auto n = std::max<unsigned>(1, std::thread::hardware_concurrency());
     std::vector<std::jthread> threads;
     threads.reserve(n);
     for (unsigned i = 0; i < n; ++i) threads.emplace_back(worker);
     threads.clear();
-#endif
 
     result.total_error = static_cast<float>(atomic_err.load());
     for (std::size_t i = 0; i < 16; ++i) result.palette[i] = pal.rgb[i];

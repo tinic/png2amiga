@@ -1108,17 +1108,18 @@ float palette_total_sse(
     std::span<const color_space::OKLab> pal_lab) {
 
     const std::size_t n = samples_lab.size();
+
+    // Build SIMD-friendly SoA palette once. The argmin uses the same
+    // kernel as kmeans_refine's inner loop — AVX2 / WASM SIMD 4–8-wide
+    // dist evaluation with horizontal reduce.
+    QuantPaletteSoA soa{};
+    fill_quant_soa(pal_lab, soa);
+
     // Small inputs: skip threading overhead.
     if (n < 4096) {
         float total = 0.0f;
-        for (auto& s : samples_lab) {
-            float best = std::numeric_limits<float>::max();
-            for (auto& pc : pal_lab) {
-                float d = oklab_dist_sq(s, pc);
-                if (d < best) best = d;
-            }
-            total += best;
-        }
+        for (auto& s : samples_lab)
+            total += argmin_quant_soa(s, soa).dist_sq;
         return total;
     }
     const unsigned nchunks = std::max<unsigned>(
@@ -1129,14 +1130,8 @@ float palette_total_sse(
         const std::size_t lo = t * step;
         const std::size_t hi = std::min(lo + step, n);
         float local = 0.0f;
-        for (std::size_t i = lo; i < hi; ++i) {
-            float best = std::numeric_limits<float>::max();
-            for (auto& pc : pal_lab) {
-                float d = oklab_dist_sq(samples_lab[i], pc);
-                if (d < best) best = d;
-            }
-            local += best;
-        }
+        for (std::size_t i = lo; i < hi; ++i)
+            local += argmin_quant_soa(samples_lab[i], soa).dist_sq;
         chunk_totals[t] = local;
     });
     float total = 0.0f;
@@ -1268,6 +1263,11 @@ void apply_palette_diversity(Palette& palette,
             ? 1u
             : std::max<unsigned>(1, std::thread::hardware_concurrency());
         const std::size_t step = (ns + nchunks - 1) / nchunks;
+        // Build SIMD SoA palette once per call. Both phase 1 (per-
+        // sample argmin + accumulate) and phase 2 (farthest sample
+        // in worst cluster) reuse the same kernel.
+        QuantPaletteSoA pal_soa{};
+        fill_quant_soa(pal_lab, pal_soa);
         // Phase 1: parallel per-sample assignment + per-chunk
         // accumulation (L, a, b, err, count).
         std::vector<std::vector<Acc>> chunk_accs(nchunks);
@@ -1278,17 +1278,12 @@ void apply_palette_diversity(Palette& palette,
             const std::size_t hi = std::min(lo + step, ns);
             for (std::size_t i = lo; i < hi; ++i) {
                 const auto& s = samples_lab[i];
-                float best = std::numeric_limits<float>::max();
-                std::size_t bk = 0;
-                for (std::size_t k = 0; k < pal_lab.size(); ++k) {
-                    float d = oklab_dist_sq(s, pal_lab[k]);
-                    if (d < best) { best = d; bk = k; }
-                }
-                auto& A = chunk[bk];
+                auto r = argmin_quant_soa(s, pal_soa);
+                auto& A = chunk[r.index];
                 A.L += static_cast<double>(s.L);
                 A.a += static_cast<double>(s.a);
                 A.b += static_cast<double>(s.b);
-                A.err += static_cast<double>(best);
+                A.err += static_cast<double>(r.dist_sq);
                 ++A.n;
             }
         });
@@ -1319,13 +1314,10 @@ void apply_palette_diversity(Palette& palette,
             const std::size_t hi = std::min(lo + step, ns);
             float fd = -1.0f; std::size_t fi = 0;
             for (std::size_t i = lo; i < hi; ++i) {
-                float bd = std::numeric_limits<float>::max();
-                std::size_t bk = 0;
-                for (std::size_t k = 0; k < pal_lab.size(); ++k) {
-                    float d = oklab_dist_sq(samples_lab[i], pal_lab[k]);
-                    if (d < bd) { bd = d; bk = k; }
+                auto r = argmin_quant_soa(samples_lab[i], pal_soa);
+                if (r.index == worst_k && r.dist_sq > fd) {
+                    fd = r.dist_sq; fi = i;
                 }
-                if (bk == worst_k && bd > fd) { fd = bd; fi = i; }
             }
             chunk_hits[t] = {fd, fi};
         });
