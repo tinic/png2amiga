@@ -506,7 +506,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.86.0.1035
+png2amiga 1.87.0.1060
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 

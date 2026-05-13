@@ -1341,6 +1341,8 @@ Result<dither::Method> parse_dither_method(std::string_view s) {
     if (s == "yliluoma1") return dither::Method::yliluoma1;
     if (s == "opt-line") return dither::Method::opt_line;
     if (s == "opt-line-checker") return dither::Method::opt_line_checker;
+    if (s == "opt-vline") return dither::Method::opt_vline;
+    if (s == "opt-vline-checker") return dither::Method::opt_vline_checker;
     if (s == "aseprite-old") return dither::Method::aseprite_old;
     if (s == "libcaca3") return dither::Method::libcaca_3x3;
     if (s == "libcaca6") return dither::Method::libcaca_6x6;
@@ -2627,6 +2629,8 @@ const char* dither_name(dither::Method m) {
     case dither::Method::yliluoma1: return "yliluoma1";
     case dither::Method::opt_line: return "opt-line";
     case dither::Method::opt_line_checker: return "opt-line-checker";
+    case dither::Method::opt_vline: return "opt-vline";
+    case dither::Method::opt_vline_checker: return "opt-vline-checker";
     case dither::Method::aseprite_old: return "aseprite-old";
     case dither::Method::libcaca_3x3: return "libcaca3";
     case dither::Method::libcaca_6x6: return "libcaca6";
@@ -2756,6 +2760,8 @@ std::string_view dither_to_options_string(dither::Method m) {
     case dither::Method::yliluoma1:       return "yliluoma1";
     case dither::Method::opt_line:        return "opt-line";
     case dither::Method::opt_line_checker:return "opt-line-checker";
+    case dither::Method::opt_vline:       return "opt-vline";
+    case dither::Method::opt_vline_checker:return "opt-vline-checker";
     case dither::Method::aseprite_old:    return "aseprite-old";
     case dither::Method::libcaca_3x3:     return "libcaca3";
     case dither::Method::libcaca_6x6:     return "libcaca6";
@@ -5302,7 +5308,8 @@ int run_main(int argc, char* argv[]) {
         cli_status("png2amiga {} — dither methods:", png2amiga::version);
         cli_status("  ED:        floyd-steinberg (default), atkinson, sierra-lite,");
         cli_status("             stucki, jarvis, gilbert, riemersma");
-        cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker, tri-tone,");
+        cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker,");
+        cli_status("             opt-vline, opt-vline-checker, tri-tone,");
         cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
         cli_status("  DBS:       dbs (perceptual optimum, slow)");
         cli_status("  Structure: structure-fs, contrast-fs, zhoufang");

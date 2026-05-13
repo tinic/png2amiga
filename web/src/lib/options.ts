@@ -328,6 +328,8 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'opt-checker',     label: 'Optimal\nChecker' },
     { value: 'opt-line',        label: 'Optimal\nLine' },
     { value: 'opt-line-checker',label: 'Optimal\nLine-Chk' },
+    { value: 'opt-vline',       label: 'Optimal\nVLine' },
+    { value: 'opt-vline-checker',label: 'Optimal\nVLine-Chk' },
     { value: 'tri-tone',        label: 'Tri-tone' },
     { value: 'knoll',           label: 'Knoll' },
     // Naming aligns with Yliluoma's article: Algorithm 1 is the exhaustive

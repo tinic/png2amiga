@@ -1486,6 +1486,10 @@ std::uint8_t pick_yliluoma_family_index(
         return pick_opt_line_index(target, palette_lab, x, y, strength);
     case Method::opt_line_checker:
         return pick_opt_line_checker_index(target, palette_lab, x, y, strength);
+    case Method::opt_vline:
+        return pick_opt_vline_index(target, palette_lab, x, y, strength);
+    case Method::opt_vline_checker:
+        return pick_opt_vline_checker_index(target, palette_lab, x, y, strength);
     case Method::knoll:
         return pick_knoll_index(target, palette_lab, x, y, strength);
     case Method::tri_tone:
@@ -1757,7 +1761,8 @@ bool is_yliluoma(Method method) {
     return method == Method::yliluoma || method == Method::yliluoma2 ||
            method == Method::opt_checker || method == Method::knoll ||
            method == Method::tri_tone || method == Method::yliluoma1 ||
-           method == Method::opt_line || method == Method::opt_line_checker;
+           method == Method::opt_line || method == Method::opt_line_checker ||
+           method == Method::opt_vline || method == Method::opt_vline_checker;
 }
 
 bool needs_discrete_palette(Method method) {
@@ -1870,15 +1875,24 @@ std::uint8_t pick_opt_line_index(
                          static_cast<int>(y & 1u), strength);
 }
 
-std::uint8_t pick_opt_line_checker_index(
+std::uint8_t pick_opt_vline_index(
     const color_space::OKLab& target,
     std::span<const color_space::OKLab> palette_lab,
     std::size_t x, std::size_t y, float strength) {
-    // 4-step greedy plan (tri-tone-style) with line_checker phase index:
-    // line_checker_mat has 4 distinct thresholds per 2×2 cell (-0.35,
-    // -0.15, +0.15, +0.35). Map to plan indices 0..3 by the threshold
-    // ordering — line dominance (rows) plus subtle column variation
-    // gives a 4-color line-tinted pattern, not just a 2-tone line.
+    (void)y;
+    return opt_pair_pick(target, palette_lab,
+                         static_cast<int>(x & 1u), strength);
+}
+
+// 4-step greedy plan for a 2×2 dither cell, parametrised by the per-
+// cell threshold supplied by the caller. line_checker and vline_checker
+// variants only differ in which 2×2 matrix produces `thr`
+// (line_checker_mat is row-dominant, vline_checker_mat is the transpose
+// / column-dominant), so factor the plan logic here.
+static std::uint8_t opt_plan4_pick_by_threshold(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    float thr, float strength) {
     constexpr std::size_t PLAN_SIZE = 4;
     const std::size_t P = palette_lab.size();
     if (P == 0) return 0;
@@ -1920,8 +1934,7 @@ std::uint8_t pick_opt_line_checker_index(
             --j;
         }
     }
-    // Map line_checker threshold (-0.35..+0.35) → plan index 0..3.
-    float thr = line_checker_mat[y % 2][x % 2];
+    // Map threshold (-0.35..+0.35) → plan index 0..3.
     int b = static_cast<int>((thr + 0.5f) * static_cast<float>(PLAN_SIZE));
     if (b < 0) b = 0;
     if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
@@ -1930,6 +1943,26 @@ std::uint8_t pick_opt_line_checker_index(
     if (adjusted < 0) adjusted = 0;
     if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
     return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
+}
+
+std::uint8_t pick_opt_line_checker_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength) {
+    // 2×2 cell, row-dominant: large threshold difference between rows
+    // and a subtle column shift → 4-color line-tinted pattern.
+    return opt_plan4_pick_by_threshold(target, palette_lab,
+                                       line_checker_mat[y % 2][x % 2], strength);
+}
+
+std::uint8_t pick_opt_vline_checker_index(
+    const color_space::OKLab& target,
+    std::span<const color_space::OKLab> palette_lab,
+    std::size_t x, std::size_t y, float strength) {
+    // Same algorithm as opt_line_checker, transposed onto vline_checker_mat
+    // (column-dominant). Visually preferred on tall pixels / hires modes.
+    return opt_plan4_pick_by_threshold(target, palette_lab,
+                                       vline_checker_mat[y % 2][x % 2], strength);
 }
 
 namespace { // reopen anon namespace for the apply_* helpers below
@@ -3100,6 +3133,44 @@ DitherResult apply(const Image& image,
             for (std::size_t x = 0; x < w; ++x) {
                 auto t = color_space::linear_to_oklab(image[x, y]);
                 auto idx = pick_opt_line_checker_index(t, pal_span, x, y, settings.strength);
+                r.indices[y * w + x] = idx;
+                float dL = t.L - pal_span[idx].L;
+                float da = t.a - pal_span[idx].a;
+                float db = t.b - pal_span[idx].b;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
+            }
+        }
+        return r;
+    }
+    case Method::opt_vline: {
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto t = color_space::linear_to_oklab(image[x, y]);
+                auto idx = pick_opt_vline_index(t, pal_span, x, y, settings.strength);
+                r.indices[y * w + x] = idx;
+                float dL = t.L - pal_span[idx].L;
+                float da = t.a - pal_span[idx].a;
+                float db = t.b - pal_span[idx].b;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
+            }
+        }
+        return r;
+    }
+    case Method::opt_vline_checker: {
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto t = color_space::linear_to_oklab(image[x, y]);
+                auto idx = pick_opt_vline_checker_index(t, pal_span, x, y, settings.strength);
                 r.indices[y * w + x] = idx;
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
