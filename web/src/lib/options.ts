@@ -533,10 +533,30 @@ export function examplesForChipset(chipset: Chipset): Example[] {
 // examplesForChipset() to surface the right set.
 export const EXAMPLES: Example[] = DEFAULT_EXAMPLES
 
+// Hostname-driven chipset default. png2c64.app is an alias of
+// png2amiga.app pointing at the same static bundle, so the UI inspects
+// window.location.hostname at boot and lands on the c64 chipset there.
+// Guarded for non-browser contexts (vitest jsdom defaults to localhost
+// which falls through to 'ocs', matching the production amiga site).
+export function detectDefaultChipset(): Chipset {
+  // location may be missing under non-DOM test runners (vitest's default
+  // node env). Cast through a permissive shape so the lookup is safe
+  // and the production browser path still goes through unchanged.
+  const g = globalThis as { location?: { hostname?: string } }
+  const host = g.location?.hostname ?? ''
+  if (host === 'png2c64.app' || host === 'www.png2c64.app') return 'c64'
+  return 'ocs'
+}
+
 export function defaultOptions(): Options {
+  const chipset = detectDefaultChipset()
+  // c64 mode list doesn't include 'lores'; the chipset watcher would
+  // otherwise rewrite mode on first paint. Seed the c64 default mode
+  // directly so the initial encode runs against a valid pairing.
+  const mode = chipset === 'c64' ? 'c64-multicolor' : 'lores'
   const opts: Options = {
-    mode: 'lores',
-    chipset: 'ocs',
+    mode,
+    chipset,
     depth: 5,
     interlace: false,
     copper: false,

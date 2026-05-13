@@ -63,10 +63,14 @@ const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uplo
 
 const showUploadHint = ref(true)
 
-// Load first example by default once WASM is ready
+// Load first example by default once WASM is ready. Use the per-chipset
+// list (driven by hostname via detectDefaultChipset / defaultOptions) so
+// png2c64.app boots onto a c64 image, png2amiga.app onto an Amiga one.
+// Default-tuning suffices for the initial frame — user-clicked examples
+// pull in per-image opts via loadExample().
 watch(wasmLoading, async (loading) => {
   if (loading || wasmError.value || imageBytes.value) return
-  const example = EXAMPLES[0]
+  const example = examplesForChipset(options.chipset)[0]
   if (!example) return
   try {
     const r = await fetch(`/examples/${example.file}`)
