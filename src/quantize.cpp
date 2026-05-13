@@ -1055,6 +1055,15 @@ void apply_palette_diversity(Palette& palette,
 
     if (diversity_level <= 0 || palette.colors.size() < 3 || pixels.empty())
         return;
+    // Chunky / large palettes: the swap loop is O(N²) per attempt
+    // (find_closest_pair) + O(N · samples · 5) per attempt (kmeans).
+    // At 256 colors with a 64K-sample subsample the total exceeds 50 B
+    // ops — dwarfing the rest of the encode pipeline. Diversity's
+    // motivation is centroid duplication at small palette sizes; at
+    // 128+ colors the centroids are already well-spread and the
+    // merge/reseed swap converges to near-zero improvement on natural
+    // images. Skip outright for chunky VGA / 256-color modes.
+    if (palette.colors.size() >= 128) return;
 
     // Subsample large images for responsiveness
     std::vector<Color3f> work(pixels.begin(), pixels.end());
@@ -1215,9 +1224,11 @@ void apply_palette_diversity(Palette& palette,
         if (!find_worst_cluster_centroid(reseed)) break;
         candidate[ib] = reseed[0];
 
-        // Re-converge with k-means (5 iterations is plenty when starting
-        // from a near-optimal palette).
-        auto refined = kmeans_refine(samples_lab, candidate, 5);
+        // Re-converge with k-means (3 iterations starting from a
+        // near-optimal palette — measured equivalent S2 to the prior
+        // 5-iter run and ~40 % cheaper per-attempt; the swap budget is
+        // the upper bound on how many of these we run).
+        auto refined = kmeans_refine(samples_lab, candidate, 3);
 
         // Optionally snap each entry to OCS precision for OCS modes, so the
         // SSE we measure reflects what the hardware will actually display.
