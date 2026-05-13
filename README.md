@@ -506,7 +506,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.87.1.1065
+png2amiga 1.88.0.1066
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -682,6 +682,9 @@ Build integration:
                                   Input may be a .png OR a .idx (raw chunky
                                   bytes); .idx requires --palette and inherits
                                   dims from <ref>.
+
+Exit codes (sysexits.h):
+  0 ok    1 internal    64 usage    66 no input    73 cannot create
 
 Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
