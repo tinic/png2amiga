@@ -738,29 +738,35 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (has_copper) {
         auto cpl = options.copper_changes_per_line;
 
-        // For interlace, we rebuild the per-row change lists: each field
-        // visits every other row (field 1: 0,2,4,...; field 2: 1,3,5,...),
-        // so row y's effective transition is from row y-2 — not the default
-        // row y-1 sequential encoding. We pick the K registers whose color
-        // magnitude differs most between scanline_palettes[y-2] and [y].
+        // Whenever scanline_palettes is provided, rebuild the per-row
+        // change lists by diffing consecutive palettes. encode_copper's
+        // own scanline_changes are computed before any downstream per-row
+        // refine (EHB+sliced's pair-aware refine modifies the palette
+        // post-encode), so trusting them verbatim would leave the
+        // emulator's copper applying stale colors while the preview
+        // shows refined ones. Stride is 2 for interlace (each field
+        // skips a row — row y's effective transition is from y-2) and
+        // 1 otherwise.
         std::vector<std::vector<copper::CopperChange>> lace_changes;
         const std::vector<std::vector<copper::CopperChange>>* changes_ptr =
             options.copper_changes;
-        if (is_lace && options.copper_scanline_palettes
+        if (options.copper_scanline_palettes
                 && !options.copper_scanline_palettes->empty()) {
             auto& pals = *options.copper_scanline_palettes;
             auto H = pals.size();
             lace_changes.resize(H);
-            // Base palette (written at frame start for both fields).
+            // Base palette (written at frame start; for interlace this
+            // is both fields' starting palette before per-row diffs).
             std::vector<Color3f> base_pal(palette.begin(), palette.end());
+            const std::size_t stride = is_lace ? 2 : 1;
             for (std::size_t y = 0; y < H; ++y) {
-                // For each field's pre-display:
-                //   Field 1 loads base palette then applies row 0's diffs.
-                //   Field 2 loads base palette then applies row 1's diffs.
-                // So rows 0 and 1 both diff against the base palette.
-                // Rows >=2 diff against row y-2 (the previous row in the same
-                // field — field 1: 0,2,4,...; field 2: 1,3,5,...).
-                const auto& pal_prev = (y < 2) ? base_pal : pals[y - 2];
+                // Non-lace: y < 1 diffs against base_pal, y >= 1 against
+                //   scanline_palettes[y-1].
+                // Lace: y < 2 diff against base_pal (each field's first
+                //   displayed row), y >= 2 against scanline_palettes[y-2]
+                //   (the previous row in the same field — field 1:
+                //   0,2,4,...; field 2: 1,3,5,...).
+                const auto& pal_prev = (y < stride) ? base_pal : pals[y - stride];
                 auto& pal_cur = pals[y];
                 auto n_regs = std::min(pal_prev.size(), pal_cur.size());
                 // Candidates: every register whose color changed.
