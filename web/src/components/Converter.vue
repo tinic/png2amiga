@@ -13,7 +13,7 @@ import Panel from 'primevue/panel'
 import type { CrtRenderer } from '../lib/crt.js'
 import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
-  SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES,
+  SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
   isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
@@ -829,6 +829,12 @@ const bestEligible = computed(() => {
 
 // Available modes for current chipset
 const availableModes = computed(() => modesForChipset(options.chipset))
+
+// Per-chipset example thumbnails. c64 ships with its own block-art
+// sample pack; every other chipset falls back to the DEFAULT_EXAMPLES
+// Amiga set (per options.ts). Switching chipset only swaps the example
+// strip — the loaded image is preserved.
+const availableExamples = computed(() => examplesForChipset(options.chipset))
 
 // Current depth max for the slider
 const depthMax = computed(() => maxDepth(options.mode, options.chipset))
@@ -2361,7 +2367,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <label class="block text-xs text-color-secondary font-semibold mb-2">Examples</label>
               <div class="flex flex-wrap gap-1">
                 <div
-                  v-for="ex in EXAMPLES" :key="ex.name"
+                  v-for="ex in availableExamples" :key="ex.name"
                   role="button" tabindex="0"
                   class="example-thumb cursor-pointer border-round overflow-hidden"
                   :class="{ 'ring-1 ring-primary': imageName === ex.file }"

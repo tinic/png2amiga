@@ -484,7 +484,9 @@ export const CGA_TEXT_DEFAULTS = {
   cgaTextKernel: 'auto',
 }
 
-export const EXAMPLES: Example[] = [
+// Default Amiga example set — shared by every chipset except the ones
+// with a bespoke list in EXAMPLES_BY_CHIPSET below.
+const DEFAULT_EXAMPLES: Example[] = [
   { name: 'makena',       file: 'makena.jpg',          opts: { mode: 'lores', depth: 5, dither: 'floyd-steinberg', ditherStrength: 0.5 } },
   { name: 'fantasy',      file: 'fantasy.jpg',        opts: { mode: 'ham6', dither: 'atkinson', copper: true } },
   { name: 'lovers',       file: 'lovers.jpg',         opts: { mode: 'ehb', dither: 'sierra-lite', copper: true, scap: true } },
@@ -496,6 +498,40 @@ export const EXAMPLES: Example[] = [
   { name: 'fromthe',      file: 'fromthe.jpg',        opts: { mode: 'lores', depth: 3, dither: 'opt-checker', dualPlayfield: true, scap: true } },
   { name: 'asterix',      file: 'asterix.jpg',        opts: { mode: 'cga-text80x100', chipset: 'cga', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
 ]
+
+// Per-chipset overrides. Chipsets absent from this map fall back to
+// DEFAULT_EXAMPLES via examplesForChipset(). c64 has its own block-art
+// sample pack since the Amiga photos don't represent VIC-II content
+// (low-resolution sprite art / pixel game scenes look much more like
+// the c64 mode's natural output).
+// c64 settings mirror png2c64's EXAMPLES list (sister project) — same
+// images, same per-image gamma / contrast / sharpen / saturation /
+// matchRange / metric tuning. ostromoukhov (used by png2c64's `alien`)
+// was removed from png2amiga in v1.58, so we substitute floyd-steinberg.
+const EXAMPLES_BY_CHIPSET: Partial<Record<Chipset, Example[]>> = {
+  c64: [
+    { name: 'alien',    file: 'c64/alien.png',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, contrast: 1.5, dither: 'floyd-steinberg', ditherStrength: 1, matchRange: false } },
+    { name: 'dog',      file: 'c64/dog.png',       opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1 } },
+    { name: 'dragon',   file: 'c64/dragon.png',    opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1, matchRange: true } },
+    { name: 'face',     file: 'c64/face.png',      opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 3, ditherStrength: 1, sharpen: -0.5, saturation: 0.5 } },
+    { name: 'fantasy',  file: 'c64/fantasy.png',   opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, ditherStrength: 1, matchRange: true } },
+    { name: 'game',     file: 'c64/game.png',      opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 2, ditherStrength: 1 } },
+    { name: 'golden',   file: 'c64/golden3.jpeg',  opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, contrast: 1.5, ditherStrength: 1, matchRange: true } },
+    { name: 'head',     file: 'c64/head.png',      opts: { chipset: 'c64', mode: 'c64-petscii',    gamma: 2, ditherStrength: 1, blackPoint: 0.09, whitePoint: 0.06, c64Metric: 'blur', c64PetsciiGraphicsOnly: true } },
+    { name: 'monster',  file: 'c64/monster.jpeg',  opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 3, ditherStrength: 1 } },
+    { name: 'ship',     file: 'c64/ship.jpeg',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 2, ditherStrength: 1, matchRange: true } },
+  ],
+}
+
+export function examplesForChipset(chipset: Chipset): Example[] {
+  return EXAMPLES_BY_CHIPSET[chipset] ?? DEFAULT_EXAMPLES
+}
+
+// Kept as the default OCS list — used by the initial-load watcher in
+// Converter.vue (loads EXAMPLES[0] on first mount, before the user has
+// chosen a chipset). Switching chipsets after that goes through
+// examplesForChipset() to surface the right set.
+export const EXAMPLES: Example[] = DEFAULT_EXAMPLES
 
 export function defaultOptions(): Options {
   const opts: Options = {
