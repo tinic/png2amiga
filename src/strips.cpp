@@ -6,6 +6,7 @@
 #include "copper.hpp"
 #include "dither.hpp"
 #include "ham.hpp"
+#include "oklab_simd.hpp"
 #include "palette.hpp"
 #include "palette_locks.hpp"
 #include "pipeline.hpp"
@@ -2011,27 +2012,21 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
         // typically very different — frame-init bindings make the strips
         // cluster planner score against stale clusters and pick swaps
         // that hurt the actual rendered output (the gap was -10
-        // SSIMULACRA2 on saturated content vs EHB+sliced). Cost: 320 × 64
-        // distance comparisons per row, cheap.
+        // SSIMULACRA2 on saturated content vs EHB+sliced). 320 × 64
+        // dist evals per row × ~200 rows = ~4 M per encode; SoA SIMD
+        // argmin over the 64-entry effective palette amortises the
+        // per-row SoA build across all width pixels.
+        oklab_simd::PaletteSoA row_soa{};
+        {
+            std::vector<bool> excl(kEffective, false);
+            for (std::size_t k = 0; k < kEffective; ++k)
+                excl[k] = reserved_mask_ehb[k & (kBaseColors - 1)];
+            oklab_simd::fill(P_eff_lab, excl, row_soa);
+        }
         for (std::size_t x = 0; x < width; ++x) {
             auto& tgt = img_lab[y * width + x];
-            std::size_t best_k = 0;
-            float best_d = std::numeric_limits<float>::max();
-            for (std::size_t k = 0; k < kEffective; ++k) {
-                // Skip reserved base slots AND their half-brite siblings —
-                // the encoder must never bind a pixel to a reserved index,
-                // else cluster centroids and per-strip dither score against
-                // the reserve color and the planner's swap choices become
-                // color-dependent.
-                std::size_t base_k = k & (kBaseColors - 1);
-                if (reserved_mask_ehb[base_k]) continue;
-                float dL = tgt.L - P_eff_lab[k].L;
-                float da = tgt.a - P_eff_lab[k].a;
-                float db = tgt.b - P_eff_lab[k].b;
-                float d = color_space::fma_dist_sq(dL, da, db);
-                if (d < best_d) { best_d = d; best_k = k; }
-            }
-            base_index[y * width + x] = static_cast<std::uint8_t>(best_k);
+            base_index[y * width + x] = static_cast<std::uint8_t>(
+                oklab_simd::argmin(tgt, row_soa).index);
         }
 
         // 1. Per-line sliced MOVEs: diff vs the ACTUAL hardware register

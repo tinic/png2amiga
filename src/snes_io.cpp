@@ -3,6 +3,7 @@
 #include "pipeline.hpp"
 #include "console_color.hpp"
 #include "dither.hpp"
+#include "oklab_simd.hpp"
 #include "quantize.hpp"
 
 #include <algorithm>
@@ -596,6 +597,15 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     auto byte_to_lab = [&](std::uint8_t b) -> color_space::OKLab {
         return direct_color ? unpack_direct(b) : pal_lab[b];
     };
+    // SoA palette for SIMD argmin. Rebuilt whenever pal_lab changes
+    // (initial build below + after the palette-retraining step at the
+    // top of each outer iteration). 256-palette is ~512K argmins per
+    // SNES-Mode-7 encode — the inner was the dominant scalar cost.
+    oklab_simd::PaletteSoA pal_soa{};
+    auto rebuild_soa = [&]() {
+        if (!direct_color) oklab_simd::fill(pal_lab, pal_soa);
+    };
+    rebuild_soa();
     auto lab_to_byte = [&](color_space::OKLab lab) -> std::uint8_t {
         if (direct_color) {
             // Re-quantise the OKLab mean to a BBGGGRRR byte (3+3+2).
@@ -606,17 +616,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             int b2 = console_color::quantise_srgb_to_int(srgb.b, 2);
             return static_cast<std::uint8_t>((b2 << 6) | (g3 << 3) | r3);
         }
-        // 256-palette: nearest entry in OKLab space.
-        std::size_t best = 0;
-        float best_d = std::numeric_limits<float>::max();
-        for (std::size_t i = 0; i < pal_lab.size(); ++i) {
-            float dL = lab.L - pal_lab[i].L;
-            float da = lab.a - pal_lab[i].a;
-            float db = lab.b - pal_lab[i].b;
-            float d = color_space::fma_dist_sq(dL, da, db);
-            if (d < best_d) { best_d = d; best = i; }
-        }
-        return static_cast<std::uint8_t>(best);
+        return static_cast<std::uint8_t>(oklab_simd::argmin(lab, pal_soa).index);
     };
 
     // Inner Lloyd iterations per outer pass. Empirically converges in
@@ -677,19 +677,13 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
 
                 // Remap a byte from old-palette index → new-palette
                 // index by finding the new entry nearest the byte's
-                // OLD displayed color.
+                // OLD displayed color. SoA SIMD argmin built once,
+                // amortised across 256 × 64 = 16 K remap calls.
+                oklab_simd::PaletteSoA new_pal_soa{};
+                oklab_simd::fill(new_pal_lab, new_pal_soa);
                 auto remap = [&](std::uint8_t b) -> std::uint8_t {
-                    auto cur = pal_lab[b];
-                    std::size_t best = 0;
-                    float best_d = std::numeric_limits<float>::max();
-                    for (std::size_t k = 0; k < new_pal_lab.size(); ++k) {
-                        float dL = cur.L - new_pal_lab[k].L;
-                        float da = cur.a - new_pal_lab[k].a;
-                        float db = cur.b - new_pal_lab[k].b;
-                        float d = color_space::fma_dist_sq(dL, da, db);
-                        if (d < best_d) { best_d = d; best = k; }
-                    }
-                    return static_cast<std::uint8_t>(best);
+                    return static_cast<std::uint8_t>(
+                        oklab_simd::argmin(pal_lab[b], new_pal_soa).index);
                 };
                 // Both the tile bytes AND the chunky source need to
                 // be remapped — the next Lloyd round looks up cell
@@ -702,6 +696,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
 
                 out.palette = std::move(new_palette);
                 pal_lab = std::move(new_pal_lab);
+                rebuild_soa();
             }
         }
 
