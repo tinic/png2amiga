@@ -1,0 +1,6 @@
+# Format-only commits to skip when chasing line authorship.
+# Enable per-clone with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: clang-format pass over all src/ files (67 files, +19k/-18k)
+cee5502

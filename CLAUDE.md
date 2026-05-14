@@ -43,15 +43,15 @@ cmake --build build --target lint   # via cmake
 A `.clang-format` lives at repo root documenting the house style:
 LLVM-based, `IndentWidth: 4`, `ColumnLimit: 100`, attached K&R braces,
 `PointerAlignment: Left`, `BinPackArguments: false`, `SortIncludes: false`.
-**Not retroactively applied.** Existing files don't conform to the
-rule set (touching every file would be ~10k-line churn and conflicts
-with manual signature-wrapping in places). Use it for new code:
+Applied across `src/` in a single sweeping commit (cee5502) — every
+file conforms today. New code should match; CI doesn't enforce it,
+but `clang-format -i path/to/file.cpp` keeps the diff clean. To
+preserve original authorship through `git blame`, add the format
+commit SHA to `.git-blame-ignore-revs` (lives at repo root) and run:
 ```bash
-git clang-format            # format the staged diff only
-clang-format -i src/foo.cpp # format one file
+git config blame.ignoreRevsFile .git-blame-ignore-revs
 ```
-Don't run `clang-format -i src/**/*.cpp` — it'll touch nearly every
-line in the tree.
+Once configured, `git blame` automatically skips the reformat pass.
 
 - Requires GCC 15 (`g++-15`, installed via Homebrew at `/opt/homebrew/bin/g++-15`)
 - Uses `-std=c++2c` (C++26 draft), strict warnings-as-errors
