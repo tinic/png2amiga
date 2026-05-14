@@ -129,6 +129,19 @@ if(EMSCRIPTEN)
         -sENVIRONMENT=web,worker,node
         -sNO_FILESYSTEM=1
         -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency
+        # Per-pthread + main-thread stack sizes. Emscripten's defaults
+        # are 64 KB which our deeper nested std::vector / std::array
+        # locals in quantize / cga_text / c64 routinely blow, producing
+        # "memory access out of bounds" at WASM offset ~0x2bd93 (the
+        # post-stack-grow guard region — symbolicated to a stack-overflow
+        # abort with -sSTACK_OVERFLOW_CHECK=2). DEFAULT_PTHREAD_STACK_SIZE
+        # alone isn't enough because the pre-allocated pthread pool
+        # (PTHREAD_POOL_SIZE > 0) uses STACK_SIZE for its workers, not
+        # the runtime pthread_create default. Need both. 2 MB × pool size
+        # ≈ 16 MB of additional address space which ALLOW_MEMORY_GROWTH
+        # absorbs at module init.
+        -sDEFAULT_PTHREAD_STACK_SIZE=2097152
+        -sSTACK_SIZE=2097152
     )
     set_target_properties(png2amiga_wasm PROPERTIES OUTPUT_NAME "png2amiga")
 else()
