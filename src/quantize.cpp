@@ -27,6 +27,11 @@ Algorithm resolve_algorithm(amiga::Mode mode, amiga::Chipset chipset,
     //   - SNES Mode 7 256: median-cut (Lloyd retraining absorbs gains)
     //   - Atari STF/STE: brute-force over the 9-bit/12-bit gamut
     //   - EGA/CGA: median-cut (gamut-snap fixes the rest)
+    // When Metal isn't available (Linux/Windows/headless mac CI), the
+    // continuous-gamut path falls back to PNN rather than median-cut —
+    // PNN's Ward-anchor seeding gives +3 S2 over median-cut on
+    // makena/Kodak photos, restoring the quality the diversity-gate
+    // optimization (commit 961be7a) traded away on this path.
     if (amiga::is_atari(mode))    return Algorithm::ocs_bruteforce;
     if (amiga::is_ega(mode))      return Algorithm::median_cut;
     if (amiga::is_cga(mode))      return Algorithm::median_cut;
@@ -36,7 +41,7 @@ Algorithm resolve_algorithm(amiga::Mode mode, amiga::Chipset chipset,
     }
     if (amiga::is_vga(mode) || chipset == amiga::Chipset::aga) {
         return metal_available() ? Algorithm::gpu_restart
-                                  : Algorithm::median_cut;
+                                  : Algorithm::pnn;
     }
     return Algorithm::ocs_bruteforce;  // OCS lores/hires/EHB
 }
