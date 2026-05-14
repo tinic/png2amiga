@@ -583,22 +583,6 @@ constexpr OKLab oklab_add(OKLab a, OKLab b) noexcept {
     return {a.L + b.L, a.a + b.a, a.b + b.b};
 }
 
-constexpr OKLab oklab_sub(OKLab a, OKLab b) noexcept {
-    return {a.L - b.L, a.a - b.a, a.b - b.b};
-}
-
-constexpr OKLab oklab_scale(OKLab v, float s) noexcept {
-    return {v.L * s, v.a * s, v.b * s};
-}
-
-constexpr OKLab oklab_clamp(OKLab e, float max_mag) noexcept {
-    return {
-        std::clamp(e.L, -max_mag, max_mag),
-        std::clamp(e.a, -max_mag, max_mag),
-        std::clamp(e.b, -max_mag, max_mag),
-    };
-}
-
 // ===========================================================================
 // Precompute palette in OKLab space
 // ===========================================================================
@@ -2361,31 +2345,6 @@ namespace {
 constexpr float kHvsKernel[5] = {
     0.012144f, 0.215441f, 0.544830f, 0.215441f, 0.012144f
 };
-
-// Evaluate the HVS-blurred OKLab value at a single pixel position by
-// running the separable kernel against the surrounding palette colors.
-// Edge clamp (replicate) — keeps cost evaluation bounded near borders.
-inline OKLab hvs_blur_at(
-    std::span<const OKLab> blurred_h,  // horizontal-pass result, w*h
-    std::span<const std::uint8_t> /*indices*/,
-    std::span<const OKLab> /*palette_lab*/,
-    std::size_t x, std::size_t y,
-    std::size_t w, std::size_t h) {
-
-    OKLab acc{};
-    for (int dy = -2; dy <= 2; ++dy) {
-        std::ptrdiff_t yy = static_cast<std::ptrdiff_t>(y) + dy;
-        if (yy < 0) yy = 0;
-        if (yy >= static_cast<std::ptrdiff_t>(h))
-            yy = static_cast<std::ptrdiff_t>(h) - 1;
-        float kw = kHvsKernel[dy + 2];
-        const auto& s = blurred_h[static_cast<std::size_t>(yy) * w + x];
-        acc.L += s.L * kw;
-        acc.a += s.a * kw;
-        acc.b += s.b * kw;
-    }
-    return acc;
-}
 
 // Build the horizontal-pass blur of `field` (an OKLab image stored as
 // w*h). Output[y*w+x] = Σ_dx kHvs[dx+2] * field[y*w + clamp(x+dx)].

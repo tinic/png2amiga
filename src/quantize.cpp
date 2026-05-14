@@ -1733,7 +1733,9 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             for (auto p : picked) {
                 if (p == i) { min_d = 0; break; }
                 auto& a = gamut_lab[i]; auto& b = gamut_lab[p];
-                double dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
+                double dL = static_cast<double>(a.L) - static_cast<double>(b.L);
+                double da = static_cast<double>(a.a) - static_cast<double>(b.a);
+                double db = static_cast<double>(a.b) - static_cast<double>(b.b);
                 double d = dL*dL + da*da + db*db;
                 if (d < min_d) min_d = d;
             }

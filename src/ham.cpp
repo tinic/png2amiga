@@ -49,30 +49,7 @@ HamPrecomp::HamPrecomp(std::span<const Color3f> palette, std::size_t db)
 namespace {
 
 // ===========================================================================
-// OKLab helpers (mirroring dither.cpp's internal helpers)
-// ===========================================================================
-
 using OKLab = color_space::OKLab;
-
-constexpr OKLab oklab_add(OKLab a, OKLab b) noexcept {
-    return {a.L + b.L, a.a + b.a, a.b + b.b};
-}
-
-constexpr OKLab oklab_sub(OKLab a, OKLab b) noexcept {
-    return {a.L - b.L, a.a - b.a, a.b - b.b};
-}
-
-constexpr OKLab oklab_scale(OKLab v, float s) noexcept {
-    return {v.L * s, v.a * s, v.b * s};
-}
-
-constexpr OKLab oklab_clamp(OKLab e, float max_mag) noexcept {
-    return {
-        std::clamp(e.L, -max_mag, max_mag),
-        std::clamp(e.a, -max_mag, max_mag),
-        std::clamp(e.b, -max_mag, max_mag),
-    };
-}
 
 // ===========================================================================
 // Error diffusion kernels (same as dither.cpp)
@@ -711,18 +688,6 @@ void expand_ham_t(
 // inside refine_triple's window beam — funnel through this. Inlines to a
 // single template call once the caller's metric is known at compile
 // time.) Default keeps the new sRGB-MSE behavior.
-inline void expand_ham(
-    SRGBColor prev,
-    OKLab target_lab,
-    SRGBColor target_srgb,
-    float prev_error,
-    std::uint16_t parent_idx,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::vector<BeamState>& candidates) {
-    expand_ham_t<HamMetric::srgb_mse>(prev, target_lab, target_srgb,
-        prev_error, parent_idx, pre, base_srgb, candidates);
-}
 
 // Prune candidates to the top beam_width by cumulative error. Writes the
 // result into `beam` (cleared first). The caller passes &beam_history[x]

@@ -190,9 +190,9 @@ void apply_v_taps_avx2(__m256& acc, const float* tmp_base, int y,
                  & static_cast<int>(kRingMask)) * w + x),
          acc)), ...);
 }
-#endif
 
 constexpr auto kTapSeq = std::make_index_sequence<kBlurSize>{};
+#endif
 
 // Per-row horizontal pass into the L1 ring buffer slot (sy & kRingMask).
 // Hoisted out of gaussian_blur as a forceinlined helper because MSVC

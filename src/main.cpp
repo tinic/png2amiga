@@ -94,18 +94,6 @@ bool g_json  = false;
 
 bool is_quiet() { return g_quiet; }
 
-// Encode-result snapshot for JSON status output. Populated lazily by
-// the per-mode branches as soon as the relevant numbers are known so
-// the end-of-main JSON emitter can produce a single object without
-// re-parsing internal state. Floats default to NaN to mark "not set".
-struct JsonResult {
-    int   width  = 0;
-    int   height = 0;
-    int   depth  = 0;
-    int   colors = 0;
-    float psnr   = std::numeric_limits<float>::quiet_NaN();
-} g_json_result;
-
 // Wrapper around std::println for human status output to stdout. No-op
 // when --quiet / --json is set. Errors should NOT use this — they go
 // straight to stderr regardless of flag state.
@@ -134,29 +122,6 @@ std::string fmt_size(int bytes) {
 // OCS: each MOVE = 4 B (one 32-bit copper instruction). AGA: each
 // 24-bit color update = 2 MOVEs (HI + LO mux), so 8 B per slot
 // change. WAIT word = 4 B once per row per frame.
-inline int fade_actual_bytes(
-        const std::vector<std::vector<std::vector<Color3f>>>& seq,
-        std::size_t budget,
-        amiga::Chipset chipset) {
-    if (seq.size() < 2) return 0;
-    int aga_mul = (chipset == amiga::Chipset::aga) ? 2 : 1;
-    std::size_t total_words = 0;
-    for (std::size_t f = 1; f < seq.size(); ++f) {
-        for (std::size_t y = 0; y < seq[f].size(); ++y) {
-            auto& cur = seq[f][y];
-            auto& prev = seq[f - 1][y];
-            std::size_t n = std::min(cur.size(), prev.size());
-            std::size_t diffs = 0;
-            for (std::size_t k = 0; k < n; ++k)
-                if (cur[k] != prev[k]) ++diffs;
-            std::size_t clipped = std::min(diffs, budget);
-            if (clipped > 0)
-                total_words += 1 + clipped * static_cast<std::size_t>(aga_mul);
-        }
-    }
-    return static_cast<int>(total_words) * 4;
-}
-
 inline int fade_actual_bytes(
         const std::vector<std::vector<Color3f>>& seq,
         std::size_t budget,
