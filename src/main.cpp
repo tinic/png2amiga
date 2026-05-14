@@ -3532,10 +3532,43 @@ Result<void> save_preview(std::string_view path, const Image& preview,
     return png_io::save(path, scaled);
 }
 
-// Show preview in terminal (iTerm2 inline image protocol)
+// Composite preview onto an 8×8 checkerboard background wherever the
+// mask flags a pixel as transparent. Matches the web's preview-canvas
+// background: light tile #c0c0c0, dark tile #808080, 8-pixel squares
+// (sRGB; converted to linear here since Image stores linear RGB).
+Image composite_on_checkerboard(const Image& preview,
+                                const std::vector<bool>& mask) {
+    constexpr int kTile = 8;
+    static const auto kLight = color_space::srgb_to_linear(
+        Color3f{0xC0/255.0f, 0xC0/255.0f, 0xC0/255.0f});
+    static const auto kDark  = color_space::srgb_to_linear(
+        Color3f{0x80/255.0f, 0x80/255.0f, 0x80/255.0f});
+    auto w = preview.width(), h = preview.height();
+    Image out = preview;
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            if (y * w + x >= mask.size() || !mask[y * w + x]) continue;
+            bool dark = ((x / kTile) + (y / kTile)) & 1;
+            out[x, y] = dark ? kDark : kLight;
+        }
+    }
+    return out;
+}
+
+// Show preview in terminal (iTerm2 inline image protocol). When the
+// encoder reports transparency, composite onto a checkerboard so the
+// terminal preview matches what the web shows through alpha=0 pixels.
 void show_terminal_preview(const Image& preview, amiga::Mode mode,
-                           bool hires = false, bool interlace = false) {
-    iterm2_display(scale_for_display(preview, mode, hires, interlace));
+                           bool hires = false, bool interlace = false,
+                           bool has_trans = false,
+                           const std::vector<bool>& mask = {}) {
+    auto scaled = scale_for_display(preview, mode, hires, interlace);
+    if (has_trans && !mask.empty()) {
+        auto scaled_mask = scale_mask_for_display(
+            mask, preview.width(), preview.height(), mode, hires, interlace);
+        scaled = composite_on_checkerboard(scaled, scaled_mask);
+    }
+    iterm2_display(scaled);
 }
 
 // ---------------------------------------------------------------------------
@@ -6815,7 +6848,8 @@ int run_main(int argc, char* argv[]) {
             st.psnr, st.ssimulacra2_score);
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
-                                  /*hires=*/false, /*interlace=*/false);
+                                  /*hires=*/false, /*interlace=*/false,
+                                  st.has_transparency, st.transparency_mask);
         if (config->output_path.empty()) {
             // No -o given (e.g. `--preview` only, or scoring run).
             // Skip all output writing.
@@ -6988,7 +7022,8 @@ int run_main(int argc, char* argv[]) {
 
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
-                                  /*hires=*/false, /*interlace=*/false);
+                                  /*hires=*/false, /*interlace=*/false,
+                                  st.has_transparency, st.transparency_mask);
 
         if (config->output_path.empty()) {
             // No -o (e.g. `--preview` only). Skip output writing.
@@ -7175,7 +7210,8 @@ int run_main(int argc, char* argv[]) {
 
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
-                                  /*hires=*/false, /*interlace=*/false);
+                                  /*hires=*/false, /*interlace=*/false,
+                                  st.has_transparency, st.transparency_mask);
 
         if (config->output_path.empty()) {
             // No -o (e.g. `--preview` only). Skip output writing.
@@ -7483,11 +7519,20 @@ int run_main(int argc, char* argv[]) {
         }
 
         if (config->preview) {
+            // Composite onto the same checkerboard the web shows when
+            // the source had alpha. CGA-text's freeform path skips
+            // scale_for_display, so we composite manually before
+            // iterm2_display; the canonical path goes through
+            // show_terminal_preview which handles it.
             if (freeform) {
-                // Same rule as save: no PAR / sy=2 stretch in preview.
-                iterm2_display(preview);
+                Image composited = preview;
+                if (has_transparency)
+                    composited = composite_on_checkerboard(
+                        composited, transparency_mask);
+                iterm2_display(composited);
             } else {
-                show_terminal_preview(preview, config->mode, false, false);
+                show_terminal_preview(preview, config->mode, false, false,
+                                      has_transparency, transparency_mask);
             }
         }
         return 0;
@@ -7604,7 +7649,8 @@ int run_main(int argc, char* argv[]) {
 
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
-                                  config->hires, config->interlace);
+                                  config->hires, config->interlace,
+                                  st.has_transparency, st.transparency_mask);
 
         // Output
         if (!config->output_path.empty()) {
@@ -7818,7 +7864,8 @@ int run_main(int argc, char* argv[]) {
 
             if (config->preview)
                 show_terminal_preview(rendered, config->mode,
-                                      config->hires, config->interlace);
+                                      config->hires, config->interlace,
+                                      has_transparency, transparency_mask);
 
             // Use base palette for CMAP
             std::vector<Color3f> cmap_palette = copper_result->base_palette;
@@ -7965,7 +8012,9 @@ int run_main(int argc, char* argv[]) {
                                       config->hires, config->interlace);
             } else {
                 show_terminal_preview(st.rendered, config->mode,
-                                      config->hires, config->interlace);
+                                      config->hires, config->interlace,
+                                      st.has_transparency,
+                                      st.transparency_mask);
             }
         }
 
@@ -8366,7 +8415,9 @@ int run_main(int argc, char* argv[]) {
             static_cast<double>(copper_result->total_error), cop_psnr, cop_s2);
 
         if (config->preview)
-            show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+            show_terminal_preview(*preview, config->mode, config->hires,
+                                  config->interlace,
+                                  has_transparency, transparency_mask);
 
         // Output
         if (!config->output_path.empty()) {
@@ -8522,7 +8573,8 @@ int run_main(int argc, char* argv[]) {
 
         if (config->preview)
             show_terminal_preview(st.rendered, config->mode,
-                                  config->hires, config->interlace);
+                                  config->hires, config->interlace,
+                                  st.has_transparency, st.transparency_mask);
 
         if (!config->output_path.empty()) {
             AmigaOutputBundle out;
@@ -9395,9 +9447,12 @@ int run_main(int argc, char* argv[]) {
             // process), so control never returns here.
         } else if (config->tile) {
             auto tiled = tile_3x3_for_preview(*preview);
-            show_terminal_preview(tiled, config->mode, config->hires, config->interlace);
+            show_terminal_preview(tiled, config->mode, config->hires,
+                                  config->interlace);
         } else {
-            show_terminal_preview(*preview, config->mode, config->hires, config->interlace);
+            show_terminal_preview(*preview, config->mode, config->hires,
+                                  config->interlace,
+                                  has_transparency, transparency_mask);
         }
     }
 
