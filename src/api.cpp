@@ -2281,7 +2281,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto encode_once = [&](const Image& img,
                                    const dither::Settings& d,
                                    int diversity,
-                                   bool beam_on) -> Result<EhbSlicedTrial> {
+                                   bool beam_on,
+                                   std::function<void(float, std::string_view)>
+                                       inner_progress = {}) -> Result<EhbSlicedTrial> {
                 // Pre-build the global base palette ourselves with
                 // PNN + pair-aware refinement (and 1-opt on --best),
                 // then hand it to encode_copper as the line-0 seed.
@@ -2383,7 +2385,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     ehb_sliced_locked, diversity,
                     skip_initial, options.interlace,
                     /*is_ehb=*/true,
-                    /*on_progress=*/{},
+                    std::move(inner_progress),
                     // Forward the sentinel when the CLI flag wasn't set
                     // so encode_copper picks its depth/is_ehb-aware default.
                     options.sliced_spread_radius >= 0
@@ -2595,7 +2597,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (!winner.has_value()) {
                 auto r = encode_once(*image, dith,
                                      options.palette_diversity,
-                                     options.sliced_beam);
+                                     options.sliced_beam,
+                                     options.on_progress);
                 if (!r) return std::unexpected{r.error()};
                 winner = std::move(*r);
                 if (options.on_progress) options.on_progress(1.0f, "done");
@@ -3276,7 +3279,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             ? options.sliced_spread_decay : -1.0f;
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d, int diversity,
-                               bool beam_on) {
+                               bool beam_on,
+                               std::function<void(float, std::string_view)>
+                                   inner_progress = {}) {
             return copper::encode_copper(
                 img, depth, d, chipset,
                 static_cast<std::size_t>(options.copper_changes),
@@ -3285,7 +3290,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 diversity,
                 skip_initial_lace, options.interlace,
                 /*is_ehb=*/false,
-                /*on_progress=*/{},
+                std::move(inner_progress),
                 spread_r, spread_d,
                 options.sliced_vertical_dither,
                 sliced_excluded,
@@ -3362,7 +3367,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         } else {
             copper_result = encode_once(*image, dith,
                                         options.palette_diversity,
-                                        options.sliced_beam);
+                                        options.sliced_beam,
+                                        options.on_progress);
             if (options.on_progress) options.on_progress(1.0f, "done");
         }
         if (!copper_result) return std::unexpected{copper_result.error()};
