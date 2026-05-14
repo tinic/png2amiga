@@ -38,6 +38,21 @@ cmake --build build --target lint   # via cmake
 - cppcheck runs at `--enable=warning,performance,portability` with a small list of file-level suppressions for known false positives (uninitMemberVar on the trivially-default-constructible `SRGBColor`, embind-required pass-by-value, etc.).
 - Returns non-zero on any finding — wire into your pre-commit / pre-push hook locally.
 
+## Format (`.clang-format`)
+
+A `.clang-format` lives at repo root documenting the house style:
+LLVM-based, `IndentWidth: 4`, `ColumnLimit: 100`, attached K&R braces,
+`PointerAlignment: Left`, `BinPackArguments: false`, `SortIncludes: false`.
+**Not retroactively applied.** Existing files don't conform to the
+rule set (touching every file would be ~10k-line churn and conflicts
+with manual signature-wrapping in places). Use it for new code:
+```bash
+git clang-format            # format the staged diff only
+clang-format -i src/foo.cpp # format one file
+```
+Don't run `clang-format -i src/**/*.cpp` — it'll touch nearly every
+line in the tree.
+
 - Requires GCC 15 (`g++-15`, installed via Homebrew at `/opt/homebrew/bin/g++-15`)
 - Uses `-std=c++2c` (C++26 draft), strict warnings-as-errors
 - Warning flags in `cmake/CompilerWarnings.cmake`

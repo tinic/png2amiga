@@ -1,0 +1,79 @@
+# png2amiga code style.
+#
+# 4-space indent, K&R braces, ~100-col, args wrapped under the open
+# paren. Closest preset is LLVM (which defaults to 2-space — we
+# override). NOT applied retroactively by CI; this file documents the
+# style and lets editors / `git clang-format` auto-format new code.
+#
+# To format a single file manually:
+#   clang-format -i src/foo.cpp
+# To format just the staged diff:
+#   git clang-format
+---
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+NamespaceIndentation: None
+IndentCaseLabels: false
+IndentPPDirectives: None
+
+# Column width — comments and string literals routinely run wider in
+# this codebase, but new code should aim for 100.
+ColumnLimit: 100
+
+# Braces and breaking
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: Inline
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+PackConstructorInitializers: NextLine
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignTrailingComments: true
+AlignOperands: Align
+
+# Pointers and references
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
+
+# Spaces
+SpaceBeforeParens: ControlStatements
+SpaceAfterTemplateKeyword: false
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceInEmptyParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpacesBeforeTrailingComments: 2
+
+# Includes — DO NOT auto-reorder. Manual grouping is intentional in
+# several files (e.g. quantize.cpp's Metal headers, wasm_bindings.cpp's
+# embind-before-api.hpp order).
+SortIncludes: false
+SortUsingDeclarations: false
+
+# Penalties tuned so we don't break long function-call arg lists when
+# they could fit by wrapping after the open paren.
+PenaltyBreakAssignment: 100
+PenaltyBreakBeforeFirstCallParameter: 20
+PenaltyReturnTypeOnItsOwnLine: 1000
