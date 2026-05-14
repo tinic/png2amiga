@@ -15,9 +15,154 @@
 #include <limits>
 #include <vector>
 
+// SIMD gate — same pattern as quantize.cpp / cga_text.cpp. AVX2
+// (x86_64 / Windows MSVC) and WASM SIMD only; ARM64 auto-vec wins on
+// these shapes per the feedback_simd_target_arch memory.
+#if defined(__wasm_simd128__)
+    #include <wasm_simd128.h>
+    #define PNG2AMIGA_COPPER_SIMD_AVX2 0
+    #define PNG2AMIGA_COPPER_SIMD_WASM 1
+#elif defined(__AVX2__)
+    #include <immintrin.h>
+    #define PNG2AMIGA_COPPER_SIMD_AVX2 1
+    #define PNG2AMIGA_COPPER_SIMD_WASM 0
+#else
+    #define PNG2AMIGA_COPPER_SIMD_AVX2 0
+    #define PNG2AMIGA_COPPER_SIMD_WASM 0
+#endif
+
 namespace png2amiga::copper {
 
 namespace {
+
+// Structure-of-arrays palette for the inner nearest-color argmin in
+// build_swap_scratch / refresh_swap_scratch. The scalar form was
+// ~110 M dist evaluations per AGA d=8 sliced encode and showed as the
+// dominant CPU cost. Unweighted OKLab distance (matches what the
+// surrounding scalar code does — distinct from the weighted
+// QuantPaletteSoA in quantize.cpp). Fixed 256-entry capacity covers
+// every chipset we run through encode_copper.
+constexpr std::size_t kCopperPalMaxN = 256;
+struct CopperPaletteSoA {
+    alignas(32) std::array<float, kCopperPalMaxN> L{};
+    alignas(32) std::array<float, kCopperPalMaxN> a{};
+    alignas(32) std::array<float, kCopperPalMaxN> b{};
+    std::size_t n{};
+    std::size_t padded{};
+};
+
+inline void fill_copper_soa(
+    std::span<const color_space::OKLab> pal,
+    const std::vector<bool>& excluded,
+    CopperPaletteSoA& s) noexcept {
+#if PNG2AMIGA_COPPER_SIMD_AVX2
+    constexpr std::size_t W = 8;
+#else
+    constexpr std::size_t W = 4;
+#endif
+    s.n = pal.size();
+    s.padded = std::min(((s.n + W - 1) / W) * W, kCopperPalMaxN);
+    for (std::size_t i = 0; i < s.padded; ++i) {
+        if (i < s.n && (excluded.empty() || !excluded[i])) {
+            s.L[i] = pal[i].L;
+            s.a[i] = pal[i].a;
+            s.b[i] = pal[i].b;
+        } else {
+            // Sentinel — huge L pushes the lane out of contention so
+            // padding + excluded slots are never picked.
+            s.L[i] = 1e30f;
+            s.a[i] = 0.0f;
+            s.b[i] = 0.0f;
+        }
+    }
+}
+
+struct CopperArgmin { std::size_t index; float dist_sq; };
+
+inline CopperArgmin argmin_copper_soa(color_space::OKLab px,
+                                      const CopperPaletteSoA& s) noexcept {
+    const std::size_t n = s.padded;
+    if (n == 0) return {0, 0.0f};
+#if PNG2AMIGA_COPPER_SIMD_AVX2
+    const __m256 pL = _mm256_set1_ps(px.L);
+    const __m256 pa = _mm256_set1_ps(px.a);
+    const __m256 pb = _mm256_set1_ps(px.b);
+    __m256 best_d = _mm256_set1_ps(std::numeric_limits<float>::max());
+    __m256i best_i = _mm256_setzero_si256();
+    const __m256i k01234567 = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    for (std::size_t i = 0; i < n; i += 8) {
+        __m256 cL = _mm256_load_ps(s.L.data() + i);
+        __m256 ca = _mm256_load_ps(s.a.data() + i);
+        __m256 cb = _mm256_load_ps(s.b.data() + i);
+        __m256 dL = _mm256_sub_ps(pL, cL);
+        __m256 da = _mm256_sub_ps(pa, ca);
+        __m256 db = _mm256_sub_ps(pb, cb);
+        __m256 d  = _mm256_fmadd_ps(db, db,
+                       _mm256_fmadd_ps(da, da, _mm256_mul_ps(dL, dL)));
+        __m256 lt = _mm256_cmp_ps(d, best_d, _CMP_LT_OQ);
+        best_d = _mm256_blendv_ps(best_d, d, lt);
+        __m256i cur_i = _mm256_add_epi32(k01234567,
+                          _mm256_set1_epi32(static_cast<int>(i)));
+        best_i = _mm256_castps_si256(_mm256_blendv_ps(
+            _mm256_castsi256_ps(best_i),
+            _mm256_castsi256_ps(cur_i), lt));
+    }
+    alignas(32) float dd[8]; alignas(32) std::int32_t ii[8];
+    _mm256_store_ps(dd, best_d);
+    _mm256_store_si256(reinterpret_cast<__m256i*>(ii), best_i);
+    int bk = 0; float bd = dd[0];
+    for (int k = 1; k < 8; ++k)
+        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+    auto bi = static_cast<std::size_t>(ii[bk]);
+    if (bi >= s.n) bi = s.n - 1;
+    return {bi, bd};
+#elif PNG2AMIGA_COPPER_SIMD_WASM
+    const v128_t pL = wasm_f32x4_splat(px.L);
+    const v128_t pa = wasm_f32x4_splat(px.a);
+    const v128_t pb = wasm_f32x4_splat(px.b);
+    v128_t       best_d = wasm_f32x4_splat(std::numeric_limits<float>::max());
+    v128_t       best_i = wasm_i32x4_splat(0);
+    const v128_t k0123 = wasm_i32x4_make(0, 1, 2, 3);
+    for (std::size_t i = 0; i < n; i += 4) {
+        v128_t cL = wasm_v128_load(s.L.data() + i);
+        v128_t ca = wasm_v128_load(s.a.data() + i);
+        v128_t cb = wasm_v128_load(s.b.data() + i);
+        v128_t dL = wasm_f32x4_sub(pL, cL);
+        v128_t da = wasm_f32x4_sub(pa, ca);
+        v128_t db = wasm_f32x4_sub(pb, cb);
+        v128_t d  = wasm_f32x4_add(
+                        wasm_f32x4_mul(dL, dL),
+                        wasm_f32x4_add(wasm_f32x4_mul(da, da),
+                                       wasm_f32x4_mul(db, db)));
+        v128_t cur_i = wasm_i32x4_add(k0123,
+                          wasm_i32x4_splat(static_cast<std::int32_t>(i)));
+        v128_t lt = wasm_f32x4_lt(d, best_d);
+        best_d = wasm_v128_bitselect(d, best_d, lt);
+        best_i = wasm_v128_bitselect(cur_i, best_i, lt);
+    }
+    alignas(16) float dd[4]; alignas(16) std::int32_t ii[4];
+    wasm_v128_store(dd, best_d);
+    wasm_v128_store(ii, best_i);
+    int bk = 0; float bd = dd[0];
+    for (int k = 1; k < 4; ++k)
+        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+    auto bi = static_cast<std::size_t>(ii[bk]);
+    if (bi >= s.n) bi = s.n - 1;
+    return {bi, bd};
+#else
+    float bd = std::numeric_limits<float>::max();
+    std::size_t bk = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        float dL = px.L - s.L[i];
+        float da = px.a - s.a[i];
+        float db = px.b - s.b[i];
+        float d  = dL*dL + da*da + db*db;
+        if (d < bd) { bd = d; bk = i; }
+    }
+    if (bk >= s.n) bk = s.n - 1;
+    return {bk, bd};
+#endif
+}
 
 // Find the color in the row that has the highest error against the palette,
 // and return the ideal replacement color (the row pixel's nearest unused hue).
@@ -72,32 +217,29 @@ void build_swap_scratch(
     sc.pixel_weights.assign(total_pixels, 0.0f);
     sc.best_dist.assign(total_pixels, 0.0f);
 
+    // SoA SIMD argmin — 8-wide AVX2 / 4-wide WASM SIMD over the
+    // palette, broadcast pixel, FMA distances, blend min/index. Built
+    // once per call from the current palette + exclusion mask;
+    // amortised across all `total_pixels` argmin evaluations.
+    CopperPaletteSoA pal_soa{};
+    fill_copper_soa(current_lab, excluded, pal_soa);
     for (std::size_t r = 0; r < rows_lab.size(); ++r) {
         auto row_w = weights[r];
         auto& rl = rows_lab[r];
         auto base = r * width;
         for (std::size_t x = 0; x < width; ++x) {
-            float best_d = std::numeric_limits<float>::max();
-            std::size_t best_k = 0;
-            for (std::size_t k = 0; k < num_colors; ++k) {
-                if (!excluded.empty() && excluded[k]) continue;
-                float dL = rl[x].L - current_lab[k].L;
-                float da = rl[x].a - current_lab[k].a;
-                float db = rl[x].b - current_lab[k].b;
-                float d = color_space::fma_dist_sq(dL, da, db);
-                if (d < best_d) { best_d = d; best_k = k; }
-            }
+            auto am = argmin_copper_soa(rl[x], pal_soa);
             float col_w = column_weights.empty() ? 1.0f : column_weights[x];
             float w = row_w * col_w;
             auto wd = static_cast<double>(w);
-            sc.assignments[base + x] = static_cast<std::uint8_t>(best_k);
+            sc.assignments[base + x] = static_cast<std::uint8_t>(am.index);
             sc.pixel_weights[base + x] = w;
-            sc.best_dist[base + x] = best_d;
-            auto& s = sc.stats[best_k];
+            sc.best_dist[base + x] = am.dist_sq;
+            auto& s = sc.stats[am.index];
             s.sum_L += static_cast<double>(rl[x].L) * wd;
             s.sum_a += static_cast<double>(rl[x].a) * wd;
             s.sum_b += static_cast<double>(rl[x].b) * wd;
-            s.total_error += static_cast<double>(best_d) * wd;
+            s.total_error += static_cast<double>(am.dist_sq) * wd;
             s.count += wd;
         }
     }
@@ -122,6 +264,12 @@ void refresh_swap_scratch(
 
     auto num_colors = current_lab.size();
     auto& new_lab = current_lab[changed_slot];
+
+    // Hoist SoA palette build out of the per-pixel inner — current_lab
+    // doesn't change inside this call. Used in the was_in_changed
+    // branch below to argmin against the full updated palette.
+    CopperPaletteSoA pal_soa{};
+    fill_copper_soa(current_lab, excluded, pal_soa);
 
     for (std::size_t r = 0; r < rows_lab.size(); ++r) {
         auto& rl = rows_lab[r];
@@ -158,14 +306,10 @@ void refresh_swap_scratch(
             float best_d = std::numeric_limits<float>::max();
             std::size_t best_k = 0;
             if (was_in_changed) {
-                for (std::size_t k = 0; k < num_colors; ++k) {
-                    if (!excluded.empty() && excluded[k]) continue;
-                    float dL = rl[x].L - current_lab[k].L;
-                    float da = rl[x].a - current_lab[k].a;
-                    float db = rl[x].b - current_lab[k].b;
-                    float d = color_space::fma_dist_sq(dL, da, db);
-                    if (d < best_d) { best_d = d; best_k = k; }
-                }
+                auto am = argmin_copper_soa(rl[x], pal_soa);
+                best_d = am.dist_sq;
+                best_k = am.index;
+                (void)num_colors;
             } else {
                 // The new color beats the old assignment.
                 best_d = d_to_new;
@@ -432,10 +576,30 @@ Result<CopperResult> encode_copper(const Image& image,
     //   d8:   same as d7 (8 banks, K<=B unsaturated)
     // OCS base K=14 already saturates the budget (1 MOVE per change), no room.
     if (override_changes == 0 && chipset == amiga::Chipset::aga) {
+        // Silence progress on the speculative stretch passes — each
+        // bump fires its own 0→100% "done" cycle on the way to the
+        // accepted K, which made AGA sliced print 4 progress lines
+        // (K+3 → overshoot → K+2 → overshoot → K+1 → overshoot → base).
+        // The accepted call below fires the single visible progress.
         for (std::size_t bump = 3; bump >= 1; --bump) {
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
+                                         stretch_k, user_palette, lock_color0,
+                                         locked, palette_diversity,
+                                         skip_initial_swap_rows, is_lace, is_ehb,
+                                         /*on_progress=*/{}, neighbor_radius,
+                                         neighbor_decay, vertical_dither,
+                                         dither_excluded,
+                                         /*quantizer_override=*/std::nullopt,
+                                         sliced_beam);
+            if (!stretch) return std::unexpected{stretch.error()};
+            if (stretch->max_moves_per_line <= move_budget) {
+                // Replay the accepted K with progress wired so the
+                // user sees one clean 0→100% bar — the stretch above
+                // was speculative and silent.
+                if (on_progress) {
+                    return encode_copper(image, depth, dither_settings, chipset,
                                          stretch_k, user_palette, lock_color0,
                                          locked, palette_diversity,
                                          skip_initial_swap_rows, is_lace, is_ehb,
@@ -444,8 +608,9 @@ Result<CopperResult> encode_copper(const Image& image,
                                          dither_excluded,
                                          /*quantizer_override=*/std::nullopt,
                                          sliced_beam);
-            if (!stretch) return std::unexpected{stretch.error()};
-            if (stretch->max_moves_per_line <= move_budget) return stretch;
+                }
+                return stretch;
+            }
             // Stretch overshot — try the next-smaller bump, or fall through.
         }
     }
