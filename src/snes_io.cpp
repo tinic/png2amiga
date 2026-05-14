@@ -33,7 +33,10 @@ using Pattern64 = std::array<std::uint8_t, 64>;
 struct PatternHash {
     std::size_t operator()(const Pattern64& a) const noexcept {
         std::uint64_t h = 0xCBF29CE484222325ULL;
-        for (auto b : a) { h ^= b; h *= 0x100000001B3ULL; }
+        for (auto b : a) {
+            h ^= b;
+            h *= 0x100000001B3ULL;
+        }
         return static_cast<std::size_t>(h);
     }
 };
@@ -44,31 +47,32 @@ struct Slot {
     bool alive = true;
 };
 
-} // namespace
+}  // namespace
 
 Result<Mode7PackResult> pack_snes_mode7_frame(
     std::span<const std::uint8_t> pixels,
-    std::size_t width, std::size_t height,
-    std::function<float(std::span<const std::uint8_t> a,
-                        std::span<const std::uint8_t> b)> distance,
+    std::size_t width,
+    std::size_t height,
+    std::function<float(std::span<const std::uint8_t> a, std::span<const std::uint8_t> b)> distance,
     CachedDistance cached_distance,
     ProgressCb on_progress,
-    float progress_lo, float progress_hi) {
+    float progress_lo,
+    float progress_hi) {
 
     auto report = [&](float local, std::string_view stage) {
         if (on_progress)
-            on_progress(progress_lo + (progress_hi - progress_lo) *
-                        std::clamp(local, 0.0f, 1.0f), stage);
+            on_progress(progress_lo + (progress_hi - progress_lo) * std::clamp(local, 0.0f, 1.0f),
+                        stage);
     };
 
     if (pixels.size() != width * height) {
-        return std::unexpected{Error{ErrorCode::invalid_png,
-            "pack_snes_mode7_frame: pixels size != width × height"}};
+        return std::unexpected{
+            Error{ErrorCode::invalid_png, "pack_snes_mode7_frame: pixels size != width × height"}};
     }
     constexpr std::size_t kTile = 8;
     constexpr std::size_t kMaxTiles = 256;
     constexpr std::size_t kVirtualSide = 128;  // 128×128 tilemap canvas
-    auto tiles_x = (width  + kTile - 1) / kTile;
+    auto tiles_x = (width + kTile - 1) / kTile;
     auto tiles_y = (height + kTile - 1) / kTile;
     auto num_cells = tiles_x * tiles_y;
 
@@ -81,9 +85,8 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
                 for (std::size_t col = 0; col < kTile; ++col) {
                     auto px = tx * kTile + col;
                     auto py = ty * kTile + row;
-                    p[row * kTile + col] =
-                        (px < width && py < height)
-                            ? pixels[py * width + px] : 0;
+                    p[row * kTile + col] = (px < width && py < height) ? pixels[py * width + px]
+                                                                       : 0;
                 }
             }
         }
@@ -116,10 +119,14 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
     if (slots.size() > kMaxTiles) {
         std::vector<std::size_t> alive;
         alive.reserve(slots.size());
-        for (std::size_t i = 0; i < slots.size(); ++i) alive.push_back(i);
+        for (std::size_t i = 0; i < slots.size(); ++i)
+            alive.push_back(i);
         auto merges_needed = alive.size() - kMaxTiles;
 
-        struct Pair { std::size_t a, b; float distance; };
+        struct Pair {
+            std::size_t a, b;
+            float distance;
+        };
         const std::size_t Na = alive.size();
         const auto num_pairs = Na * (Na - 1) / 2;
         std::vector<Pair> pairs(num_pairs);
@@ -138,8 +145,7 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
         if (use_cache) {
             slot_pre.resize(Na);
             pipeline::parallel_for(Na, [&](std::size_t i) {
-                slot_pre[i] = cached_distance.prepare(
-                    slots[alive[i]].pattern);
+                slot_pre[i] = cached_distance.prepare(slots[alive[i]].pattern);
             });
         }
         report(0.0f, "merging tiles");
@@ -147,17 +153,18 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
             pipeline::parallel_for(Na, [&](std::size_t i) {
                 const std::size_t base = i * (2 * Na - i - 1) / 2;
                 for (std::size_t j = i + 1; j < Na; ++j) {
-                    pairs[base + (j - i - 1)] = {alive[i], alive[j],
-                        cached_distance.score(slot_pre[i], slot_pre[j])};
+                    pairs[base + (j - i - 1)] = {
+                        alive[i], alive[j], cached_distance.score(slot_pre[i], slot_pre[j])};
                 }
             });
         } else {
             pipeline::parallel_for(Na, [&](std::size_t i) {
                 const std::size_t base = i * (2 * Na - i - 1) / 2;
                 for (std::size_t j = i + 1; j < Na; ++j) {
-                    pairs[base + (j - i - 1)] = {alive[i], alive[j],
-                        distance(slots[alive[i]].pattern,
-                                  slots[alive[j]].pattern)};
+                    pairs[base + (j - i - 1)] = {
+                        alive[i],
+                        alive[j],
+                        distance(slots[alive[i]].pattern, slots[alive[j]].pattern)};
                 }
             });
         }
@@ -174,8 +181,7 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
             // Keep the slot with more cells; reassign discard's cells
             // to keep, then mark discard dead.
             auto keep = p.a, discard = p.b;
-            if (slots[keep].cell_indices.size() <
-                slots[discard].cell_indices.size())
+            if (slots[keep].cell_indices.size() < slots[discard].cell_indices.size())
                 std::swap(keep, discard);
             for (auto ci : slots[discard].cell_indices) {
                 cell_to_slot[ci] = keep;
@@ -191,15 +197,13 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
 
     // 4. Compact the alive slots into the output tile array; remap
     //    cell_to_slot through the compaction.
-    std::vector<std::size_t> slot_to_tile(slots.size(),
-                                            static_cast<std::size_t>(-1));
+    std::vector<std::size_t> slot_to_tile(slots.size(), static_cast<std::size_t>(-1));
     res.tile_bytes.reserve(kMaxTiles * 64);
     for (std::size_t i = 0; i < slots.size(); ++i) {
         if (!slots[i].alive) continue;
         slot_to_tile[i] = res.tile_bytes.size() / 64;
-        res.tile_bytes.insert(res.tile_bytes.end(),
-                              slots[i].pattern.begin(),
-                              slots[i].pattern.end());
+        res.tile_bytes.insert(
+            res.tile_bytes.end(), slots[i].pattern.begin(), slots[i].pattern.end());
     }
     res.unique_after_merge = res.tile_bytes.size() / 64;
 
@@ -210,8 +214,7 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
         for (std::size_t tx = 0; tx < tiles_x; ++tx) {
             auto cell_idx = ty * tiles_x + tx;
             auto tile_idx = slot_to_tile[cell_to_slot[cell_idx]];
-            res.tilemap[ty * kVirtualSide + tx] =
-                static_cast<std::uint8_t>(tile_idx);
+            res.tilemap[ty * kVirtualSide + tx] = static_cast<std::uint8_t>(tile_idx);
         }
     }
     return res;
@@ -227,21 +230,21 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
 // hardware would actually display.
 // ---------------------------------------------------------------------------
 
-Result<Mode7EncodedFrame> encode_snes_mode7(
-    const Image& source, bool direct_color,
-    const dither::Settings& dither_settings, int palette_diversity,
-    ProgressCb on_progress) {
+Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
+                                            bool direct_color,
+                                            const dither::Settings& dither_settings,
+                                            int palette_diversity,
+                                            ProgressCb on_progress) {
 
     // Stage budgets (sum to 1.0). The Lloyd phase dominates total
     // wall-clock for content with > 256 unique tiles, so it gets the
     // lion's share. Numbers tuned empirically on photo+logo content.
-    constexpr float kStageQuant   = 0.05f;  // 0% → 5%
-    constexpr float kStagePack    = 0.20f;  // 5% → 25%
-    constexpr float kStageLloyd   = 0.70f;  // 25% → 95%
-    constexpr float kStageRender  = 0.05f;  // 95% → 100%
+    constexpr float kStageQuant = 0.05f;   // 0% → 5%
+    constexpr float kStagePack = 0.20f;    // 5% → 25%
+    constexpr float kStageLloyd = 0.70f;   // 25% → 95%
+    constexpr float kStageRender = 0.05f;  // 95% → 100%
     auto report = [&](float frac, std::string_view stage) {
-        if (on_progress)
-            on_progress(std::clamp(frac, 0.0f, 1.0f), stage);
+        if (on_progress) on_progress(std::clamp(frac, 0.0f, 1.0f), stage);
     };
     report(0.0f, "starting Mode 7 encode");
 
@@ -278,7 +281,8 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                     for (std::size_t lx = 0; lx < kTS; ++lx) {
                         std::size_t sx_l = (bx == 1) ? lx : (kTS - 1 - lx);
                         // Filled per-cell by the loops below — see usage.
-                        (void)sy_l; (void)sx_l;
+                        (void)sy_l;
+                        (void)sx_l;
                     }
                 }
             }
@@ -314,24 +318,21 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                         for (std::size_t ly = 0; ly < kTS; ++ly) {
                             std::size_t sy_l = (by == 1) ? ly : (kTS - 1 - ly);
                             for (std::size_t lx = 0; lx < kTS; ++lx) {
-                                std::size_t sx_l =
-                                    (bx == 1) ? lx : (kTS - 1 - lx);
-                                std::size_t sx = std::min(
-                                    tx * kTS + sx_l, w - 1);
-                                std::size_t sy = std::min(
-                                    ty * kTS + sy_l, h - 1);
-                                block[bx * kTS + lx, by * kTS + ly] =
-                                    source[sx, sy];
+                                std::size_t sx_l = (bx == 1) ? lx : (kTS - 1 - lx);
+                                std::size_t sx = std::min(tx * kTS + sx_l, w - 1);
+                                std::size_t sy = std::min(ty * kTS + sy_l, h - 1);
+                                block[bx * kTS + lx, by * kTS + ly] = source[sx, sy];
                             }
                         }
                     }
                 }
-                std::fill(block_byte.begin(), block_byte.end(),
-                          std::uint8_t{0});
+                std::fill(block_byte.begin(), block_byte.end(), std::uint8_t{0});
                 out.quant_error += dither::diffuse_raw_buffer(
-                    block, dither_settings,
+                    block,
+                    dither_settings,
                     [&](const color_space::OKLab& target,
-                        std::size_t bxp, std::size_t byp) -> dither::PickResult {
+                        std::size_t bxp,
+                        std::size_t byp) -> dither::PickResult {
                         float bd = std::numeric_limits<float>::max();
                         std::size_t bi = 0;
                         for (std::size_t i = 0; i < pal_lab_pre.size(); ++i) {
@@ -340,10 +341,12 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                             float da = target.a - cl.a;
                             float db = target.b - cl.b;
                             float d = color_space::fma_dist_sq(dL, da, db);
-                            if (d < bd) { bd = d; bi = i; }
+                            if (d < bd) {
+                                bd = d;
+                                bi = i;
+                            }
                         }
-                        block_byte[byp * k3T + bxp] =
-                            static_cast<std::uint8_t>(bi);
+                        block_byte[byp * k3T + bxp] = static_cast<std::uint8_t>(bi);
                         return {pal_lab_pre[bi], 0.5f};
                     });
                 for (std::size_t ly = 0; ly < kTS; ++ly) {
@@ -351,8 +354,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                         auto x = tx * kTS + lx;
                         auto y = ty * kTS + ly;
                         if (x >= w || y >= h) continue;
-                        chunky[y * w + x] =
-                            block_byte[(kTS + ly) * k3T + (kTS + lx)];
+                        chunky[y * w + x] = block_byte[(kTS + ly) * k3T + (kTS + lx)];
                     }
                 }
             }
@@ -375,32 +377,29 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                         for (std::size_t ly = 0; ly < kTS; ++ly) {
                             std::size_t sy_l = (by == 1) ? ly : (kTS - 1 - ly);
                             for (std::size_t lx = 0; lx < kTS; ++lx) {
-                                std::size_t sx_l =
-                                    (bx == 1) ? lx : (kTS - 1 - lx);
-                                std::size_t sx = std::min(
-                                    tx * kTS + sx_l, w - 1);
-                                std::size_t sy = std::min(
-                                    ty * kTS + sy_l, h - 1);
-                                block[bx * kTS + lx, by * kTS + ly] =
-                                    source[sx, sy];
+                                std::size_t sx_l = (bx == 1) ? lx : (kTS - 1 - lx);
+                                std::size_t sx = std::min(tx * kTS + sx_l, w - 1);
+                                std::size_t sy = std::min(ty * kTS + sy_l, h - 1);
+                                block[bx * kTS + lx, by * kTS + ly] = source[sx, sy];
                             }
                         }
                     }
                 }
-                std::fill(block_byte.begin(), block_byte.end(),
-                          std::uint8_t{0});
+                std::fill(block_byte.begin(), block_byte.end(), std::uint8_t{0});
                 out.quant_error += dither::diffuse_raw_buffer(
-                    block, dither_settings,
+                    block,
+                    dither_settings,
                     [&](const color_space::OKLab& target,
-                        std::size_t bxp, std::size_t byp) -> dither::PickResult {
+                        std::size_t bxp,
+                        std::size_t byp) -> dither::PickResult {
                         auto snapped = console_color::rgb332_quantize(
                             color_space::oklab_to_linear(target));
                         auto srgb = color_space::linear_to_srgb(snapped);
                         int r3 = console_color::quantise_srgb_to_int(srgb.r, 3);
                         int g3 = console_color::quantise_srgb_to_int(srgb.g, 3);
                         int b2 = console_color::quantise_srgb_to_int(srgb.b, 2);
-                        block_byte[byp * k3T + bxp] = static_cast<std::uint8_t>(
-                            (b2 << 6) | (g3 << 3) | r3);
+                        block_byte[byp * k3T + bxp] = static_cast<std::uint8_t>((b2 << 6) |
+                                                                                (g3 << 3) | r3);
                         return {color_space::linear_to_oklab(snapped), 0.5f};
                     });
                 for (std::size_t ly = 0; ly < kTS; ++ly) {
@@ -408,8 +407,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                         auto x = tx * kTS + lx;
                         auto y = ty * kTS + ly;
                         if (x >= w || y >= h) continue;
-                        chunky[y * w + x] =
-                            block_byte[(kTS + ly) * k3T + (kTS + lx)];
+                        chunky[y * w + x] = block_byte[(kTS + ly) * k3T + (kTS + lx)];
                     }
                 }
             }
@@ -443,16 +441,12 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         int g3 = (b >> 3) & 0x07;
         int b2 = (b >> 6) & 0x03;
         Color3f srgb{
-            console_color::quantise_srgb_to_bits(
-                static_cast<float>(r3) / 7.0f, 3),
-            console_color::quantise_srgb_to_bits(
-                static_cast<float>(g3) / 7.0f, 3),
-            console_color::quantise_srgb_to_bits(
-                static_cast<float>(b2) / 3.0f, 2),
+            console_color::quantise_srgb_to_bits(static_cast<float>(r3) / 7.0f, 3),
+            console_color::quantise_srgb_to_bits(static_cast<float>(g3) / 7.0f, 3),
+            console_color::quantise_srgb_to_bits(static_cast<float>(b2) / 3.0f, 2),
         };
-        direct_lab_lut[static_cast<std::size_t>(b)] =
-            color_space::linear_to_oklab(
-                color_space::srgb_to_linear(srgb));
+        direct_lab_lut[static_cast<std::size_t>(b)] = color_space::linear_to_oklab(
+            color_space::srgb_to_linear(srgb));
     }
     auto unpack_direct = [&](std::uint8_t b) -> color_space::OKLab {
         return direct_lab_lut[b];
@@ -470,8 +464,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     // edge fidelity. This captures most of what a learned LPIPS-style
     // metric would deliver, at zero binary cost and minimal CPU
     // overhead (the blur is a 3-tap separable kernel applied once).
-    auto blur_3x3 = [](std::span<const color_space::OKLab> in,
-                       std::span<color_space::OKLab> dst) {
+    auto blur_3x3 = [](std::span<const color_space::OKLab> in, std::span<color_space::OKLab> dst) {
         // 8×8 fixed-size blur with edge-clamp. Separable horizontal +
         // vertical box-3 filter (cheap and good enough for 8×8).
         std::array<color_space::OKLab, 64> tmp{};
@@ -483,9 +476,8 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                 auto& a = in[r * 8 + cl];
                 auto& b = in[r * 8 + c];
                 auto& d = in[r * 8 + cr];
-                tmp[r * 8 + c] = {(a.L + b.L + d.L) / 3.0f,
-                                  (a.a + b.a + d.a) / 3.0f,
-                                  (a.b + b.b + d.b) / 3.0f};
+                tmp[r * 8 + c] = {
+                    (a.L + b.L + d.L) / 3.0f, (a.a + b.a + d.a) / 3.0f, (a.b + b.b + d.b) / 3.0f};
             }
         }
         // Vertical.
@@ -496,14 +488,13 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                 auto& a = tmp[rt * 8 + c];
                 auto& b = tmp[r * 8 + c];
                 auto& d = tmp[rb * 8 + c];
-                dst[r * 8 + c] = {(a.L + b.L + d.L) / 3.0f,
-                                  (a.a + b.a + d.a) / 3.0f,
-                                  (a.b + b.b + d.b) / 3.0f};
+                dst[r * 8 + c] = {
+                    (a.L + b.L + d.L) / 3.0f, (a.a + b.a + d.a) / 3.0f, (a.b + b.b + d.b) / 3.0f};
             }
         }
     };
     auto distance_fn = [&](std::span<const std::uint8_t> a,
-                            std::span<const std::uint8_t> b) -> float {
+                           std::span<const std::uint8_t> b) -> float {
         std::array<color_space::OKLab, 64> a_lab, b_lab;
         for (std::size_t i = 0; i < 64; ++i) {
             a_lab[i] = direct_color ? unpack_direct(a[i]) : pal_lab[a[i]];
@@ -541,8 +532,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     cached.prepare = [&](std::span<const std::uint8_t> pat) -> SlotPre {
         SlotPre sp;
         for (std::size_t i = 0; i < 64; ++i) {
-            sp.lab[i] = direct_color ? unpack_direct(pat[i])
-                                      : pal_lab[pat[i]];
+            sp.lab[i] = direct_color ? unpack_direct(pat[i]) : pal_lab[pat[i]];
         }
         blur_3x3(sp.lab, sp.blur);
         return sp;
@@ -551,22 +541,23 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
         float per_pixel = 0.0f;
         for (std::size_t i = 0; i < 64; ++i) {
             per_pixel += color_space::fma_dist_sq(
-                a.lab[i].L - b.lab[i].L,
-                a.lab[i].a - b.lab[i].a,
-                a.lab[i].b - b.lab[i].b);
+                a.lab[i].L - b.lab[i].L, a.lab[i].a - b.lab[i].a, a.lab[i].b - b.lab[i].b);
         }
         float coarse = 0.0f;
         for (std::size_t i = 0; i < 64; ++i) {
             coarse += color_space::fma_dist_sq(
-                a.blur[i].L - b.blur[i].L,
-                a.blur[i].a - b.blur[i].a,
-                a.blur[i].b - b.blur[i].b);
+                a.blur[i].L - b.blur[i].L, a.blur[i].a - b.blur[i].a, a.blur[i].b - b.blur[i].b);
         }
         return 0.6f * per_pixel + 0.4f * coarse;
     };
-    auto packed = pack_snes_mode7_frame(chunky, w, h, distance_fn,
-        cached,  // copy — Lloyd refinement below also uses cached
-        on_progress, kStageQuant, kStageQuant + kStagePack);
+    auto packed = pack_snes_mode7_frame(chunky,
+                                        w,
+                                        h,
+                                        distance_fn,
+                                        cached,  // copy — Lloyd refinement below also uses cached
+                                        on_progress,
+                                        kStageQuant,
+                                        kStageQuant + kStagePack);
     if (!packed) return std::unexpected{packed.error()};
     report(kStageQuant + kStagePack, "merged");
 
@@ -637,8 +628,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     int lloyd_step = 0;
     auto lloyd_progress = [&](std::string_view stage) {
         if (!on_progress) return;
-        float local = static_cast<float>(lloyd_step) /
-                      static_cast<float>(total_lloyd_steps);
+        float local = static_cast<float>(lloyd_step) / static_cast<float>(total_lloyd_steps);
         report(kStageQuant + kStagePack + kStageLloyd * local, stage);
     };
 
@@ -656,24 +646,22 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             // pal_lab table.
             std::vector<Color3f> displayed;
             displayed.reserve(num_tiles * 64);
-            for (auto byte : tiles) displayed.push_back(out.palette[byte]);
+            for (auto byte : tiles)
+                displayed.push_back(out.palette[byte]);
 
             const std::size_t disp_count = displayed.size();
             Image disp_img(disp_count, 1, std::move(displayed));
             auto new_pal = quantize::quantize(
-                disp_img, 256, quantize::Algorithm::median_cut,
-                palette_diversity);
+                disp_img, 256, quantize::Algorithm::median_cut, palette_diversity);
             if (new_pal) {
                 std::vector<Color3f> new_palette = new_pal->colors;
                 for (auto& c : new_palette)
                     c = console_color::bgr555_quantize(c);
 
                 // Build new pal_lab.
-                std::vector<color_space::OKLab> new_pal_lab(
-                    new_palette.size());
+                std::vector<color_space::OKLab> new_pal_lab(new_palette.size());
                 for (std::size_t i = 0; i < new_palette.size(); ++i)
-                    new_pal_lab[i] = color_space::linear_to_oklab(
-                        new_palette[i]);
+                    new_pal_lab[i] = color_space::linear_to_oklab(new_palette[i]);
 
                 // Remap a byte from old-palette index → new-palette
                 // index by finding the new entry nearest the byte's
@@ -691,8 +679,10 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                 // tile patterns under the new pal_lab. Without
                 // remapping chunky, the distance metric reads stale
                 // colors and PSNR collapses.
-                for (auto& byte : tiles) byte = remap(byte);
-                for (auto& byte : chunky) byte = remap(byte);
+                for (auto& byte : tiles)
+                    byte = remap(byte);
+                for (auto& byte : chunky)
+                    byte = remap(byte);
 
                 out.palette = std::move(new_palette);
                 pal_lab = std::move(new_pal_lab);
@@ -700,218 +690,225 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
             }
         }
 
-    for (int iter = 0; iter < kRefineIters; ++iter) {
-        lloyd_progress("Lloyd refinement");
-        // ---- 2b.a: synthesise centroids.
-        // Per-tile, per-position OKLab accumulators. Indexed
-        // [tile_idx*64 + pos].
-        std::vector<color_space::OKLab> sums(num_tiles * 64, {0,0,0});
-        std::vector<std::size_t> counts(num_tiles, 0);
+        for (int iter = 0; iter < kRefineIters; ++iter) {
+            lloyd_progress("Lloyd refinement");
+            // ---- 2b.a: synthesise centroids.
+            // Per-tile, per-position OKLab accumulators. Indexed
+            // [tile_idx*64 + pos].
+            std::vector<color_space::OKLab> sums(num_tiles * 64, {0, 0, 0});
+            std::vector<std::size_t> counts(num_tiles, 0);
 
-        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-                auto t = tilemap[ty * kVirtualSide + tx];
-                ++counts[t];
+            for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+                for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+                    auto t = tilemap[ty * kVirtualSide + tx];
+                    ++counts[t];
+                    for (std::size_t row = 0; row < kTile; ++row) {
+                        for (std::size_t col = 0; col < kTile; ++col) {
+                            auto px = tx * kTile + col;
+                            auto py = ty * kTile + row;
+                            if (px >= w || py >= h) continue;
+                            auto byte = chunky[py * w + px];
+                            auto lab = byte_to_lab(byte);
+                            auto& acc = sums[t * 64 + row * kTile + col];
+                            acc.L += lab.L;
+                            acc.a += lab.a;
+                            acc.b += lab.b;
+                        }
+                    }
+                }
+            }
+
+            // Build new tile bytes from per-position means; clusters of 1
+            // cell are left exactly equal to their original (mean of a
+            // single sample IS the sample).
+            std::vector<std::uint8_t> new_tiles = tiles;
+            for (std::size_t t = 0; t < num_tiles; ++t) {
+                if (counts[t] <= 1) continue;
+                float n = static_cast<float>(counts[t]);
+                for (std::size_t pos = 0; pos < 64; ++pos) {
+                    auto& s = sums[t * 64 + pos];
+                    color_space::OKLab mean{s.L / n, s.a / n, s.b / n};
+                    new_tiles[t * 64 + pos] = lab_to_byte(mean);
+                }
+            }
+            tiles = std::move(new_tiles);
+
+            // ---- 2b.b: reassign each cell to nearest centroid.
+            // ---- 2b.b: reassign cells to nearest centroid + track per-cell
+            //   error so we can split overloaded clusters in step 2b.c.
+            // Pre-compute SlotPre for tiles (rebuilt this iter) and for all
+            // cells (cells don't change between iterations — could be
+            // hoisted outside the iter loop, but doing it per-iter keeps
+            // the change minimal). Cell loop is then parallel.
+            const std::size_t live_cells = tiles_y * tiles_x;
+            std::vector<SlotPre> tile_pre(num_tiles);
+            pipeline::parallel_for(num_tiles, [&](std::size_t t) {
+                std::span<const std::uint8_t> tile_span(tiles.data() + t * 64, 64);
+                tile_pre[t] = cached.prepare(tile_span);
+            });
+            std::vector<SlotPre> cell_pre(live_cells);
+            std::vector<std::array<std::uint8_t, 64>> cell_pats(live_cells);
+            pipeline::parallel_for(live_cells, [&](std::size_t lin) {
+                const std::size_t ty = lin / tiles_x;
+                const std::size_t tx = lin % tiles_x;
+                auto& cp = cell_pats[lin];
                 for (std::size_t row = 0; row < kTile; ++row) {
                     for (std::size_t col = 0; col < kTile; ++col) {
                         auto px = tx * kTile + col;
                         auto py = ty * kTile + row;
-                        if (px >= w || py >= h) continue;
-                        auto byte = chunky[py * w + px];
-                        auto lab = byte_to_lab(byte);
-                        auto& acc = sums[t * 64 + row * kTile + col];
-                        acc.L += lab.L; acc.a += lab.a; acc.b += lab.b;
+                        cp[row * kTile + col] = (px < w && py < h) ? chunky[py * w + px] : 0;
                     }
                 }
-            }
-        }
+                cell_pre[lin] = cached.prepare(std::span<const std::uint8_t>(cp));
+            });
 
-        // Build new tile bytes from per-position means; clusters of 1
-        // cell are left exactly equal to their original (mean of a
-        // single sample IS the sample).
-        std::vector<std::uint8_t> new_tiles = tiles;
-        for (std::size_t t = 0; t < num_tiles; ++t) {
-            if (counts[t] <= 1) continue;
-            float n = static_cast<float>(counts[t]);
-            for (std::size_t pos = 0; pos < 64; ++pos) {
-                auto& s = sums[t * 64 + pos];
-                color_space::OKLab mean{s.L / n, s.a / n, s.b / n};
-                new_tiles[t * 64 + pos] = lab_to_byte(mean);
-            }
-        }
-        tiles = std::move(new_tiles);
-
-        // ---- 2b.b: reassign each cell to nearest centroid.
-        // ---- 2b.b: reassign cells to nearest centroid + track per-cell
-        //   error so we can split overloaded clusters in step 2b.c.
-        // Pre-compute SlotPre for tiles (rebuilt this iter) and for all
-        // cells (cells don't change between iterations — could be
-        // hoisted outside the iter loop, but doing it per-iter keeps
-        // the change minimal). Cell loop is then parallel.
-        const std::size_t live_cells = tiles_y * tiles_x;
-        std::vector<SlotPre> tile_pre(num_tiles);
-        pipeline::parallel_for(num_tiles, [&](std::size_t t) {
-            std::span<const std::uint8_t> tile_span(
-                tiles.data() + t * 64, 64);
-            tile_pre[t] = cached.prepare(tile_span);
-        });
-        std::vector<SlotPre> cell_pre(live_cells);
-        std::vector<std::array<std::uint8_t, 64>> cell_pats(live_cells);
-        pipeline::parallel_for(live_cells, [&](std::size_t lin) {
-            const std::size_t ty = lin / tiles_x;
-            const std::size_t tx = lin % tiles_x;
-            auto& cp = cell_pats[lin];
-            for (std::size_t row = 0; row < kTile; ++row) {
-                for (std::size_t col = 0; col < kTile; ++col) {
-                    auto px = tx * kTile + col;
-                    auto py = ty * kTile + row;
-                    cp[row * kTile + col] =
-                        (px < w && py < h) ? chunky[py * w + px] : 0;
+            bool changed = false;
+            std::vector<float> cell_error(live_cells, 0.0f);
+            std::vector<std::size_t> cell_assignment(live_cells, 0);
+            std::atomic<bool> changed_atomic{false};
+            pipeline::parallel_for(live_cells, [&](std::size_t lin) {
+                std::size_t best = 0;
+                float best_d = std::numeric_limits<float>::max();
+                for (std::size_t t = 0; t < num_tiles; ++t) {
+                    float d = cached.score(cell_pre[lin], tile_pre[t]);
+                    if (d < best_d) {
+                        best_d = d;
+                        best = t;
+                    }
                 }
-            }
-            cell_pre[lin] = cached.prepare(std::span<const std::uint8_t>(cp));
-        });
-
-        bool changed = false;
-        std::vector<float> cell_error(live_cells, 0.0f);
-        std::vector<std::size_t> cell_assignment(live_cells, 0);
-        std::atomic<bool> changed_atomic{false};
-        pipeline::parallel_for(live_cells, [&](std::size_t lin) {
-            std::size_t best = 0;
-            float best_d = std::numeric_limits<float>::max();
-            for (std::size_t t = 0; t < num_tiles; ++t) {
-                float d = cached.score(cell_pre[lin], tile_pre[t]);
-                if (d < best_d) { best_d = d; best = t; }
-            }
-            cell_error[lin] = best_d;
-            cell_assignment[lin] = best;
-            const std::size_t ty = lin / tiles_x;
-            const std::size_t tx = lin % tiles_x;
-            auto& cell = tilemap[ty * kVirtualSide + tx];
-            if (cell != best) {
-                cell = static_cast<std::uint8_t>(best);
-                changed_atomic.store(true, std::memory_order_relaxed);
-            }
-        });
-        changed = changed_atomic.load();
-
-        // ---- 2b.c: empty-cluster splitting (PG-k-means / ISODATA).
-        //   When reassignment orphans a tile slot (no cells map to it),
-        //   re-seed that slot by stealing the WORST-ERROR cell from the
-        //   most-overloaded cluster. This recovers a wasted tile slot
-        //   and naturally splits clusters that span too much variation
-        //   for one centroid to represent.
-        std::vector<std::size_t> new_counts(num_tiles, 0);
-        std::vector<float> total_err(num_tiles, 0.0f);
-        for (std::size_t i = 0; i < cell_assignment.size(); ++i) {
-            ++new_counts[cell_assignment[i]];
-            total_err[cell_assignment[i]] += cell_error[i];
-        }
-        // Helper: re-seed tile slot `victim` from the worst-fitting
-        // cell of the highest-error cluster (must have ≥ 2 cells).
-        // Returns true if a split happened.
-        auto split_into = [&](std::size_t victim) -> bool {
-            std::size_t worst_t = 0;
-            float worst_total = -1.0f;
-            for (std::size_t k = 0; k < num_tiles; ++k) {
-                if (k == victim || new_counts[k] < 2) continue;
-                if (total_err[k] > worst_total) {
-                    worst_total = total_err[k];
-                    worst_t = k;
+                cell_error[lin] = best_d;
+                cell_assignment[lin] = best;
+                const std::size_t ty = lin / tiles_x;
+                const std::size_t tx = lin % tiles_x;
+                auto& cell = tilemap[ty * kVirtualSide + tx];
+                if (cell != best) {
+                    cell = static_cast<std::uint8_t>(best);
+                    changed_atomic.store(true, std::memory_order_relaxed);
                 }
-            }
-            if (worst_total <= 0.0f) return false;
-            std::size_t worst_cell = 0;
-            float worst_cell_err = -1.0f;
+            });
+            changed = changed_atomic.load();
+
+            // ---- 2b.c: empty-cluster splitting (PG-k-means / ISODATA).
+            //   When reassignment orphans a tile slot (no cells map to it),
+            //   re-seed that slot by stealing the WORST-ERROR cell from the
+            //   most-overloaded cluster. This recovers a wasted tile slot
+            //   and naturally splits clusters that span too much variation
+            //   for one centroid to represent.
+            std::vector<std::size_t> new_counts(num_tiles, 0);
+            std::vector<float> total_err(num_tiles, 0.0f);
             for (std::size_t i = 0; i < cell_assignment.size(); ++i) {
-                if (cell_assignment[i] != worst_t) continue;
-                if (cell_error[i] > worst_cell_err) {
-                    worst_cell_err = cell_error[i];
-                    worst_cell = i;
-                }
+                ++new_counts[cell_assignment[i]];
+                total_err[cell_assignment[i]] += cell_error[i];
             }
-            std::size_t cy = worst_cell / tiles_x;
-            std::size_t cx = worst_cell % tiles_x;
-            for (std::size_t row = 0; row < kTile; ++row) {
-                for (std::size_t col = 0; col < kTile; ++col) {
-                    auto px = cx * kTile + col;
-                    auto py = cy * kTile + row;
-                    tiles[victim * 64 + row * kTile + col] =
-                        (px < w && py < h) ? chunky[py * w + px] : 0;
-                }
-            }
-            tilemap[cy * kVirtualSide + cx] = static_cast<std::uint8_t>(victim);
-            cell_assignment[worst_cell] = victim;
-            new_counts[victim] = 1;
-            new_counts[worst_t]--;
-            total_err[worst_t] -= cell_error[worst_cell];
-            total_err[victim] = 0.0f;
-            cell_error[worst_cell] = 0.0f;
-            return true;
-        };
-
-        // 2b.c.1: re-seed any orphans (count==0).
-        for (std::size_t t = 0; t < num_tiles; ++t) {
-            if (new_counts[t] != 0) continue;
-            if (split_into(t)) changed = true;
-        }
-
-        // 2b.c.2: redundancy collapse. If two surviving tiles ended up
-        //   with very similar patterns (the tilemap rarely picks one
-        //   over the other → wasted slot), collapse the less-used one
-        //   and split a high-error cluster into the freed slot. We do
-        //   this once per iteration to keep the cost bounded.
-        //
-        //   Heuristic: find the smallest-cluster tile whose centroid is
-        //   < eps from another tile. Steal it. eps tuned at 1.5× the
-        //   median cluster's mean per-cell error so we only collapse
-        //   genuinely redundant slots.
-        if (iter < kRefineIters - 1) {
-            std::vector<std::size_t> sorted_by_count(num_tiles);
-            for (std::size_t i = 0; i < num_tiles; ++i) sorted_by_count[i] = i;
-            std::sort(sorted_by_count.begin(), sorted_by_count.end(),
-                [&](std::size_t a, std::size_t b) {
-                    return new_counts[a] < new_counts[b];
-                });
-            // Median cluster's mean per-cell error sets the redundancy
-            // threshold — too-low redundancy clusters are noisy edges
-            // that we shouldn't collapse.
-            float median_total = 0.0f;
-            std::size_t median_idx = num_tiles / 2;
-            if (median_idx < sorted_by_count.size()) {
-                auto t = sorted_by_count[median_idx];
-                if (new_counts[t] > 0)
-                    median_total = total_err[t] / static_cast<float>(new_counts[t]);
-            }
-            float eps = 1.5f * median_total;
-            for (auto victim : sorted_by_count) {
-                if (new_counts[victim] == 0) continue;
-                if (new_counts[victim] > 4) break;  // skip popular tiles
-                // Find another tile with similar centroid.
-                std::span<const std::uint8_t> v_span(
-                    tiles.data() + victim * 64, 64);
-                bool redundant = false;
+            // Helper: re-seed tile slot `victim` from the worst-fitting
+            // cell of the highest-error cluster (must have ≥ 2 cells).
+            // Returns true if a split happened.
+            auto split_into = [&](std::size_t victim) -> bool {
+                std::size_t worst_t = 0;
+                float worst_total = -1.0f;
                 for (std::size_t k = 0; k < num_tiles; ++k) {
-                    if (k == victim) continue;
-                    std::span<const std::uint8_t> k_span(
-                        tiles.data() + k * 64, 64);
-                    if (distance_fn(v_span, k_span) < eps) {
-                        redundant = true; break;
+                    if (k == victim || new_counts[k] < 2) continue;
+                    if (total_err[k] > worst_total) {
+                        worst_total = total_err[k];
+                        worst_t = k;
                     }
                 }
-                if (redundant) {
-                    if (split_into(victim)) { changed = true; break; }
+                if (worst_total <= 0.0f) return false;
+                std::size_t worst_cell = 0;
+                float worst_cell_err = -1.0f;
+                for (std::size_t i = 0; i < cell_assignment.size(); ++i) {
+                    if (cell_assignment[i] != worst_t) continue;
+                    if (cell_error[i] > worst_cell_err) {
+                        worst_cell_err = cell_error[i];
+                        worst_cell = i;
+                    }
+                }
+                std::size_t cy = worst_cell / tiles_x;
+                std::size_t cx = worst_cell % tiles_x;
+                for (std::size_t row = 0; row < kTile; ++row) {
+                    for (std::size_t col = 0; col < kTile; ++col) {
+                        auto px = cx * kTile + col;
+                        auto py = cy * kTile + row;
+                        tiles[victim * 64 + row * kTile + col] = (px < w && py < h)
+                                                                     ? chunky[py * w + px]
+                                                                     : 0;
+                    }
+                }
+                tilemap[cy * kVirtualSide + cx] = static_cast<std::uint8_t>(victim);
+                cell_assignment[worst_cell] = victim;
+                new_counts[victim] = 1;
+                new_counts[worst_t]--;
+                total_err[worst_t] -= cell_error[worst_cell];
+                total_err[victim] = 0.0f;
+                cell_error[worst_cell] = 0.0f;
+                return true;
+            };
+
+            // 2b.c.1: re-seed any orphans (count==0).
+            for (std::size_t t = 0; t < num_tiles; ++t) {
+                if (new_counts[t] != 0) continue;
+                if (split_into(t)) changed = true;
+            }
+
+            // 2b.c.2: redundancy collapse. If two surviving tiles ended up
+            //   with very similar patterns (the tilemap rarely picks one
+            //   over the other → wasted slot), collapse the less-used one
+            //   and split a high-error cluster into the freed slot. We do
+            //   this once per iteration to keep the cost bounded.
+            //
+            //   Heuristic: find the smallest-cluster tile whose centroid is
+            //   < eps from another tile. Steal it. eps tuned at 1.5× the
+            //   median cluster's mean per-cell error so we only collapse
+            //   genuinely redundant slots.
+            if (iter < kRefineIters - 1) {
+                std::vector<std::size_t> sorted_by_count(num_tiles);
+                for (std::size_t i = 0; i < num_tiles; ++i)
+                    sorted_by_count[i] = i;
+                std::sort(
+                    sorted_by_count.begin(),
+                    sorted_by_count.end(),
+                    [&](std::size_t a, std::size_t b) { return new_counts[a] < new_counts[b]; });
+                // Median cluster's mean per-cell error sets the redundancy
+                // threshold — too-low redundancy clusters are noisy edges
+                // that we shouldn't collapse.
+                float median_total = 0.0f;
+                std::size_t median_idx = num_tiles / 2;
+                if (median_idx < sorted_by_count.size()) {
+                    auto t = sorted_by_count[median_idx];
+                    if (new_counts[t] > 0)
+                        median_total = total_err[t] / static_cast<float>(new_counts[t]);
+                }
+                float eps = 1.5f * median_total;
+                for (auto victim : sorted_by_count) {
+                    if (new_counts[victim] == 0) continue;
+                    if (new_counts[victim] > 4) break;  // skip popular tiles
+                    // Find another tile with similar centroid.
+                    std::span<const std::uint8_t> v_span(tiles.data() + victim * 64, 64);
+                    bool redundant = false;
+                    for (std::size_t k = 0; k < num_tiles; ++k) {
+                        if (k == victim) continue;
+                        std::span<const std::uint8_t> k_span(tiles.data() + k * 64, 64);
+                        if (distance_fn(v_span, k_span) < eps) {
+                            redundant = true;
+                            break;
+                        }
+                    }
+                    if (redundant) {
+                        if (split_into(victim)) {
+                            changed = true;
+                            break;
+                        }
+                    }
                 }
             }
-        }
 
-        ++lloyd_step;
-        if (!changed) {
-            // Skip ahead — early-converged inner pass.
-            lloyd_step += (kRefineIters - 1 - iter);
-            break;
+            ++lloyd_step;
+            if (!changed) {
+                // Skip ahead — early-converged inner pass.
+                lloyd_step += (kRefineIters - 1 - iter);
+                break;
+            }
         }
-    }
     }  // end outer loop
     report(kStageQuant + kStagePack + kStageLloyd, "rendering preview");
 
@@ -919,11 +916,9 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     //   the preview from the post-merge tilemap+tiles+palette so the
     //   user sees what real hardware would actually display.
     out.packed_bytes.reserve(packed->tilemap.size() + packed->tile_bytes.size());
-    out.packed_bytes.insert(out.packed_bytes.end(),
-                            packed->tilemap.begin(), packed->tilemap.end());
-    out.packed_bytes.insert(out.packed_bytes.end(),
-                            packed->tile_bytes.begin(),
-                            packed->tile_bytes.end());
+    out.packed_bytes.insert(out.packed_bytes.end(), packed->tilemap.begin(), packed->tilemap.end());
+    out.packed_bytes.insert(
+        out.packed_bytes.end(), packed->tile_bytes.begin(), packed->tile_bytes.end());
 
     for (std::size_t ty = 0; ty < tiles_y; ++ty) {
         for (std::size_t tx = 0; tx < tiles_x; ++tx) {
@@ -941,12 +936,9 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
                         int g3 = (byte >> 3) & 0x07;
                         int b2 = (byte >> 6) & 0x03;
                         Color3f srgb{
-                            console_color::quantise_srgb_to_bits(
-                                static_cast<float>(r3) / 7.0f, 3),
-                            console_color::quantise_srgb_to_bits(
-                                static_cast<float>(g3) / 7.0f, 3),
-                            console_color::quantise_srgb_to_bits(
-                                static_cast<float>(b2) / 3.0f, 2),
+                            console_color::quantise_srgb_to_bits(static_cast<float>(r3) / 7.0f, 3),
+                            console_color::quantise_srgb_to_bits(static_cast<float>(g3) / 7.0f, 3),
+                            console_color::quantise_srgb_to_bits(static_cast<float>(b2) / 3.0f, 2),
                         };
                         rgb = color_space::srgb_to_linear(srgb);
                     } else {
@@ -965,4 +957,4 @@ Result<Mode7EncodedFrame> encode_snes_mode7(
     return out;
 }
 
-} // namespace png2amiga::snes_io
+}  // namespace png2amiga::snes_io

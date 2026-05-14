@@ -21,12 +21,10 @@ using namespace png2amiga::api;
 namespace {
 val g_progress_cb = val::null();
 std::atomic<bool> g_progress_active{false};
-}
+}  // namespace
 
-extern "C" void EMSCRIPTEN_KEEPALIVE
-main_thread_progress_tick(float p) {
-    if (g_progress_active.load(std::memory_order_acquire) &&
-        !g_progress_cb.isNull()) {
+extern "C" void EMSCRIPTEN_KEEPALIVE main_thread_progress_tick(float p) {
+    if (g_progress_active.load(std::memory_order_acquire) && !g_progress_cb.isNull()) {
         // Stage label is dropped on the proxy path — only the float
         // is cheap to marshal across the dispatch queue. UI bars use
         // the value alone so the label loss is invisible.
@@ -37,52 +35,32 @@ main_thread_progress_tick(float p) {
 // Convert JS options object to C++ Options
 Options parse_js_options(val js_opts) {
     Options opts;
-    if (js_opts.hasOwnProperty("mode"))
-        opts.mode = js_opts["mode"].as<std::string>();
-    if (js_opts.hasOwnProperty("chipset"))
-        opts.chipset = js_opts["chipset"].as<std::string>();
-    if (js_opts.hasOwnProperty("depth"))
-        opts.depth = js_opts["depth"].as<int>();
-    if (js_opts.hasOwnProperty("interlace"))
-        opts.interlace = js_opts["interlace"].as<bool>();
-    if (js_opts.hasOwnProperty("dither"))
-        opts.dither = js_opts["dither"].as<std::string>();
+    if (js_opts.hasOwnProperty("mode")) opts.mode = js_opts["mode"].as<std::string>();
+    if (js_opts.hasOwnProperty("chipset")) opts.chipset = js_opts["chipset"].as<std::string>();
+    if (js_opts.hasOwnProperty("depth")) opts.depth = js_opts["depth"].as<int>();
+    if (js_opts.hasOwnProperty("interlace")) opts.interlace = js_opts["interlace"].as<bool>();
+    if (js_opts.hasOwnProperty("dither")) opts.dither = js_opts["dither"].as<std::string>();
     if (js_opts.hasOwnProperty("ditherStrength"))
         opts.dither_strength = js_opts["ditherStrength"].as<float>();
-    if (js_opts.hasOwnProperty("errorClamp"))
-        opts.error_clamp = js_opts["errorClamp"].as<float>();
-    if (js_opts.hasOwnProperty("hamTriple"))
-        opts.ham_triple = js_opts["hamTriple"].as<int>();
-    if (js_opts.hasOwnProperty("hamFast"))
-        opts.ham_fast = js_opts["hamFast"].as<bool>();
+    if (js_opts.hasOwnProperty("errorClamp")) opts.error_clamp = js_opts["errorClamp"].as<float>();
+    if (js_opts.hasOwnProperty("hamTriple")) opts.ham_triple = js_opts["hamTriple"].as<int>();
+    if (js_opts.hasOwnProperty("hamFast")) opts.ham_fast = js_opts["hamFast"].as<bool>();
     if (js_opts.hasOwnProperty("quantizer"))
         opts.quantizer = js_opts["quantizer"].as<std::string>();
     if (js_opts.hasOwnProperty("refineIterations"))
         opts.refine_iterations = js_opts["refineIterations"].as<int>();
-    if (js_opts.hasOwnProperty("copper"))
-        opts.copper = js_opts["copper"].as<bool>();
-    if (js_opts.hasOwnProperty("gamma"))
-        opts.gamma = js_opts["gamma"].as<float>();
-    if (js_opts.hasOwnProperty("brightness"))
-        opts.brightness = js_opts["brightness"].as<float>();
-    if (js_opts.hasOwnProperty("contrast"))
-        opts.contrast = js_opts["contrast"].as<float>();
-    if (js_opts.hasOwnProperty("saturation"))
-        opts.saturation = js_opts["saturation"].as<float>();
-    if (js_opts.hasOwnProperty("hueShift"))
-        opts.hue_shift = js_opts["hueShift"].as<float>();
-    if (js_opts.hasOwnProperty("sharpen"))
-        opts.sharpen = js_opts["sharpen"].as<float>();
-    if (js_opts.hasOwnProperty("blackPoint"))
-        opts.black_point = js_opts["blackPoint"].as<float>();
-    if (js_opts.hasOwnProperty("whitePoint"))
-        opts.white_point = js_opts["whitePoint"].as<float>();
-    if (js_opts.hasOwnProperty("matchRange"))
-        opts.match_range = js_opts["matchRange"].as<bool>();
-    if (js_opts.hasOwnProperty("width"))
-        opts.width = js_opts["width"].as<int>();
-    if (js_opts.hasOwnProperty("height"))
-        opts.height = js_opts["height"].as<int>();
+    if (js_opts.hasOwnProperty("copper")) opts.copper = js_opts["copper"].as<bool>();
+    if (js_opts.hasOwnProperty("gamma")) opts.gamma = js_opts["gamma"].as<float>();
+    if (js_opts.hasOwnProperty("brightness")) opts.brightness = js_opts["brightness"].as<float>();
+    if (js_opts.hasOwnProperty("contrast")) opts.contrast = js_opts["contrast"].as<float>();
+    if (js_opts.hasOwnProperty("saturation")) opts.saturation = js_opts["saturation"].as<float>();
+    if (js_opts.hasOwnProperty("hueShift")) opts.hue_shift = js_opts["hueShift"].as<float>();
+    if (js_opts.hasOwnProperty("sharpen")) opts.sharpen = js_opts["sharpen"].as<float>();
+    if (js_opts.hasOwnProperty("blackPoint")) opts.black_point = js_opts["blackPoint"].as<float>();
+    if (js_opts.hasOwnProperty("whitePoint")) opts.white_point = js_opts["whitePoint"].as<float>();
+    if (js_opts.hasOwnProperty("matchRange")) opts.match_range = js_opts["matchRange"].as<bool>();
+    if (js_opts.hasOwnProperty("width")) opts.width = js_opts["width"].as<int>();
+    if (js_opts.hasOwnProperty("height")) opts.height = js_opts["height"].as<int>();
     if (js_opts.hasOwnProperty("paletteFile"))
         opts.palette_file = js_opts["paletteFile"].as<std::string>();
     if (js_opts.hasOwnProperty("paletteData")) {
@@ -98,8 +76,7 @@ Options parse_js_options(val js_opts) {
         opts.copper_changes = js_opts["copperChanges"].as<int>();
     if (js_opts.hasOwnProperty("slicedVerticalDither"))
         opts.sliced_vertical_dither = js_opts["slicedVerticalDither"].as<bool>();
-    if (js_opts.hasOwnProperty("lockColor0"))
-        opts.lock_color0 = js_opts["lockColor0"].as<bool>();
+    if (js_opts.hasOwnProperty("lockColor0")) opts.lock_color0 = js_opts["lockColor0"].as<bool>();
     // reserves: array of { index, r, g, b } objects removing those slots
     // from the dither candidate set. The web Reserve-palette panel posts
     // one entry per swatch the user toggled on. The slot keeps its
@@ -140,26 +117,19 @@ Options parse_js_options(val js_opts) {
             opts.locks.push_back(lk);
         }
     }
-    if (js_opts.hasOwnProperty("cropX"))
-        opts.crop_x = js_opts["cropX"].as<int>();
-    if (js_opts.hasOwnProperty("cropY"))
-        opts.crop_y = js_opts["cropY"].as<int>();
-    if (js_opts.hasOwnProperty("cropW"))
-        opts.crop_w = js_opts["cropW"].as<int>();
-    if (js_opts.hasOwnProperty("cropH"))
-        opts.crop_h = js_opts["cropH"].as<int>();
-    if (js_opts.hasOwnProperty("cropAuto"))
-        opts.crop_auto = js_opts["cropAuto"].as<bool>();
+    if (js_opts.hasOwnProperty("cropX")) opts.crop_x = js_opts["cropX"].as<int>();
+    if (js_opts.hasOwnProperty("cropY")) opts.crop_y = js_opts["cropY"].as<int>();
+    if (js_opts.hasOwnProperty("cropW")) opts.crop_w = js_opts["cropW"].as<int>();
+    if (js_opts.hasOwnProperty("cropH")) opts.crop_h = js_opts["cropH"].as<int>();
+    if (js_opts.hasOwnProperty("cropAuto")) opts.crop_auto = js_opts["cropAuto"].as<bool>();
     if (js_opts.hasOwnProperty("alphaThreshold"))
         opts.alpha_threshold = js_opts["alphaThreshold"].as<float>();
     if (js_opts.hasOwnProperty("alphaDither"))
         opts.alpha_dither = js_opts["alphaDither"].as<std::string>();
     if (js_opts.hasOwnProperty("alphaDitherStrength"))
         opts.alpha_dither_strength = js_opts["alphaDitherStrength"].as<float>();
-    if (js_opts.hasOwnProperty("maskInvert"))
-        opts.mask_invert = js_opts["maskInvert"].as<bool>();
-    if (js_opts.hasOwnProperty("nativePar"))
-        opts.native_par = js_opts["nativePar"].as<bool>();
+    if (js_opts.hasOwnProperty("maskInvert")) opts.mask_invert = js_opts["maskInvert"].as<bool>();
+    if (js_opts.hasOwnProperty("nativePar")) opts.native_par = js_opts["nativePar"].as<bool>();
     if (js_opts.hasOwnProperty("cgaTextMetric"))
         opts.cga_text_metric = js_opts["cgaTextMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("cgaTextKernel"))
@@ -169,22 +139,16 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("c64Metric"))
         opts.c64_metric = js_opts["c64Metric"].as<std::string>();
     if (js_opts.hasOwnProperty("c64PetsciiGraphicsOnly"))
-        opts.c64_petscii_graphics_only =
-            js_opts["c64PetsciiGraphicsOnly"].as<bool>();
+        opts.c64_petscii_graphics_only = js_opts["c64PetsciiGraphicsOnly"].as<bool>();
     if (js_opts.hasOwnProperty("tileBudget"))
-        opts.tile_budget = static_cast<std::size_t>(
-            js_opts["tileBudget"].as<int>());
+        opts.tile_budget = static_cast<std::size_t>(js_opts["tileBudget"].as<int>());
     if (js_opts.hasOwnProperty("tileReserve"))
-        opts.tile_reserve = static_cast<std::size_t>(
-            js_opts["tileReserve"].as<int>());
+        opts.tile_reserve = static_cast<std::size_t>(js_opts["tileReserve"].as<int>());
     if (js_opts.hasOwnProperty("dualPlayfield"))
         opts.dual_playfield = js_opts["dualPlayfield"].as<bool>();
-    if (js_opts.hasOwnProperty("scap"))
-        opts.scap = js_opts["scap"].as<bool>();
-    if (js_opts.hasOwnProperty("scapDebug"))
-        opts.strips_debug = js_opts["scapDebug"].as<bool>();
-    if (js_opts.hasOwnProperty("best"))
-        opts.best = js_opts["best"].as<bool>();
+    if (js_opts.hasOwnProperty("scap")) opts.scap = js_opts["scap"].as<bool>();
+    if (js_opts.hasOwnProperty("scapDebug")) opts.strips_debug = js_opts["scapDebug"].as<bool>();
+    if (js_opts.hasOwnProperty("best")) opts.best = js_opts["best"].as<bool>();
     if (js_opts.hasOwnProperty("onProgress")) {
         // The encoder may call this from worker threads (parallel_for
         // bodies, HAM beam search, best_sweep trials). emscripten
@@ -205,9 +169,7 @@ Options parse_js_options(val js_opts) {
                     cb(p, std::string(stage));
                 } else {
                     emscripten_async_run_in_main_runtime_thread(
-                        EM_FUNC_SIG_VF,
-                        reinterpret_cast<void*>(&main_thread_progress_tick),
-                        p);
+                        EM_FUNC_SIG_VF, reinterpret_cast<void*>(&main_thread_progress_tick), p);
                 }
             };
         }
@@ -239,8 +201,7 @@ val js_convert(val input_array, val js_opts) {
     obj.set("height", result.height);
     obj.set("error", result.error);
 
-    if (!result.data.empty())
-        obj.set("data", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
 
     return obj;
 }
@@ -268,46 +229,37 @@ val js_convert_rgba(val input_array, val js_opts) {
     obj.set("totalColors", result.totalColors);
     obj.set("planeBytes", result.planeBytes);
     obj.set("copperBytes", result.copperBytes);
-    obj.set("diskBytes",  result.diskBytes);
-    obj.set("chipBytes",  result.chipBytes);
+    obj.set("diskBytes", result.diskBytes);
+    obj.set("chipBytes", result.chipBytes);
     obj.set("quantError", result.quantError);
     obj.set("psnr", result.psnr);
     obj.set("s2", result.s2);
     obj.set("hasTransparency", result.hasTransparency);
     obj.set("genesisUniqueTiles", result.genesisUniqueTiles);
-    obj.set("genesisTotalCells",  result.genesisTotalCells);
-    obj.set("tileDataBytes",      result.tileDataBytes);
+    obj.set("genesisTotalCells", result.genesisTotalCells);
+    obj.set("tileDataBytes", result.tileDataBytes);
     if (!result.c64CharsetData.empty()) {
-        obj.set("c64CharsetData",
-                make_uint8_array(result.c64CharsetData));
-        obj.set("c64Mc1",     result.c64Mc1);
-        obj.set("c64Mc2",     result.c64Mc2);
+        obj.set("c64CharsetData", make_uint8_array(result.c64CharsetData));
+        obj.set("c64Mc1", result.c64Mc1);
+        obj.set("c64Mc2", result.c64Mc2);
         obj.set("c64BgColor", result.c64BgColor);
     }
     if (!result.genesisTileBytes.empty()) {
-        obj.set("genesisTileBytes",
-                make_uint8_array(result.genesisTileBytes));
-        obj.set("genesisTilemapBytes",
-                make_uint8_array(result.genesisTilemapBytes));
-        obj.set("genesisPaletteBytes",
-                make_uint8_array(result.genesisPaletteBytes));
+        obj.set("genesisTileBytes", make_uint8_array(result.genesisTileBytes));
+        obj.set("genesisTilemapBytes", make_uint8_array(result.genesisTilemapBytes));
+        obj.set("genesisPaletteBytes", make_uint8_array(result.genesisPaletteBytes));
     }
     if (!result.snesTileBytes.empty()) {
-        obj.set("snesTileBytes",
-                make_uint8_array(result.snesTileBytes));
-        obj.set("snesTilemapBytes",
-                make_uint8_array(result.snesTilemapBytes));
+        obj.set("snesTileBytes", make_uint8_array(result.snesTileBytes));
+        obj.set("snesTilemapBytes", make_uint8_array(result.snesTilemapBytes));
         if (!result.snesPaletteBytes.empty())
-            obj.set("snesPaletteBytes",
-                    make_uint8_array(result.snesPaletteBytes));
+            obj.set("snesPaletteBytes", make_uint8_array(result.snesPaletteBytes));
     }
     if (!result.paletteBytes.empty()) {
-        obj.set("paletteBytes",
-                make_uint8_array(result.paletteBytes));
+        obj.set("paletteBytes", make_uint8_array(result.paletteBytes));
     }
     if (!result.scanlinePaletteBytes.empty()) {
-        obj.set("scanlinePaletteBytes",
-                make_uint8_array(result.scanlinePaletteBytes));
+        obj.set("scanlinePaletteBytes", make_uint8_array(result.scanlinePaletteBytes));
         obj.set("scanlinePaletteSize", result.scanlinePaletteSize);
     }
     // Per-pixel palette index map (non-HAM, non-strips modes only).
@@ -319,8 +271,7 @@ val js_convert_rgba(val input_array, val js_opts) {
     }
     obj.set("error", result.error);
 
-    if (!result.data.empty())
-        obj.set("rgba", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("rgba", make_uint8_array(result.data));
 
     return obj;
 }
@@ -340,13 +291,13 @@ val js_convert_iff(val input_array, val js_opts) {
     obj.set("height", result.height);
     obj.set("error", result.error);
 
-    if (!result.data.empty())
-        obj.set("data", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
 
     return obj;
 }
 
-// JS API: convertHeader(Uint8Array, options, symbolName) -> { data: Uint8Array(text), width, height, error }
+// JS API: convertHeader(Uint8Array, options, symbolName) -> { data: Uint8Array(text), width,
+// height, error }
 val js_convert_header(val input_array, val js_opts, std::string symbol_name) {
     auto length = input_array["length"].as<std::size_t>();
     std::vector<std::uint8_t> input(length);
@@ -354,8 +305,7 @@ val js_convert_header(val input_array, val js_opts, std::string symbol_name) {
     view.call<void>("set", input_array);
 
     auto opts = parse_js_options(js_opts);
-    if (!symbol_name.empty())
-        opts.symbol_name = symbol_name;
+    if (!symbol_name.empty()) opts.symbol_name = symbol_name;
     auto result = convert_cheader(input.data(), input.size(), opts);
 
     val obj = val::object();
@@ -387,8 +337,7 @@ val js_convert_raw(val input_array, val js_opts) {
     obj.set("height", result.height);
     obj.set("error", result.error);
 
-    if (!result.data.empty())
-        obj.set("data", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
 
     return obj;
 }
@@ -408,8 +357,7 @@ val js_convert_prg(val input_array, val js_opts) {
     obj.set("width", result.width);
     obj.set("height", result.height);
     obj.set("error", result.error);
-    if (!result.data.empty())
-        obj.set("data", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
     return obj;
 }
 
@@ -456,13 +404,13 @@ val js_convert_degas(val input_array, val js_opts) {
     obj.set("height", result.height);
     obj.set("error", result.error);
 
-    if (!result.data.empty())
-        obj.set("data", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
 
     return obj;
 }
 
-// JS API: convertViewer(Uint8Array, options) -> { data: Uint8Array(text), header: string, width, height, error }
+// JS API: convertViewer(Uint8Array, options) -> { data: Uint8Array(text), header: string, width,
+// height, error }
 val js_convert_viewer(val input_array, val js_opts) {
     auto length = input_array["length"].as<std::size_t>();
     std::vector<std::uint8_t> input(length);
@@ -502,8 +450,7 @@ val js_convert_mask(val input_array, val js_opts) {
     obj.set("hasTransparency", result.hasTransparency);
     obj.set("error", result.error);
 
-    if (!result.data.empty())
-        obj.set("data", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
 
     return obj;
 }
@@ -524,8 +471,7 @@ val js_convert_mask_raw(val input_array, val js_opts) {
     obj.set("hasTransparency", result.hasTransparency);
     obj.set("error", result.error);
 
-    if (!result.data.empty())
-        obj.set("data", make_uint8_array(result.data));
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
 
     return obj;
 }

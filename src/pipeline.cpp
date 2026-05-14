@@ -22,8 +22,7 @@ namespace png2amiga::api {
 Result<pipeline::PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                               std::size_t input_size,
                                               const Options& options,
-                                              const Image* prepared_image
-                                                  = nullptr);
+                                              const Image* prepared_image = nullptr);
 }  // namespace png2amiga::api
 
 namespace png2amiga::pipeline {
@@ -40,20 +39,17 @@ std::string derive_symbol_name(std::string_view path) {
     result.reserve(path.size());
     for (auto c : path) {
         if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
-            result.push_back(static_cast<char>(
-                std::tolower(static_cast<unsigned char>(c))));
+            result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
         } else {
             result.push_back('_');
         }
     }
     if (result.empty()) return "image";
-    if (std::isdigit(static_cast<unsigned char>(result[0])))
-        result.insert(result.begin(), '_');
+    if (std::isdigit(static_cast<unsigned char>(result[0]))) result.insert(result.begin(), '_');
     return result;
 }
 
-amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested,
-                               amiga::Mode mode) {
+amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested, amiga::Mode mode) {
     auto params = amiga::get_mode_params(mode);
     if (params.bitplane_depth > 6) return amiga::Chipset::aga;
     if (requested.has_value()) return *requested;
@@ -62,24 +58,23 @@ amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested,
 
 amiga::Chipset resolve_chipset(std::string_view requested, amiga::Mode mode) {
     std::optional<amiga::Chipset> req;
-    if (requested == "aga") req = amiga::Chipset::aga;
-    else if (requested == "ocs") req = amiga::Chipset::ocs;
+    if (requested == "aga")
+        req = amiga::Chipset::aga;
+    else if (requested == "ocs")
+        req = amiga::Chipset::ocs;
     return resolve_chipset(req, mode);
 }
 
 void PipelineResult::finalize_psnr(const Image& src, float total_error) {
     quant_error = total_error;
     psnr = color_space::compute_psnr_blurred(
-        src.pixels(), rendered.pixels(),
-        src.width(), src.height());
+        src.pixels(), rendered.pixels(), src.width(), src.height());
     ssimulacra2_score = ssimulacra2::compute(
-        src.pixels(), rendered.pixels(),
-        src.width(), src.height());
+        src.pixels(), rendered.pixels(), src.width(), src.height());
 }
 
 float compute_avg_palette_used_per_line(
-    const Image& rendered,
-    const std::vector<std::vector<Color3f>>& scanline_palettes) noexcept {
+    const Image& rendered, const std::vector<std::vector<Color3f>>& scanline_palettes) noexcept {
     if (scanline_palettes.empty()) return 0.0f;
     const std::size_t W = rendered.width();
     const std::size_t H = rendered.height();
@@ -102,38 +97,37 @@ float compute_avg_palette_used_per_line(
                 float da = px_lab.a - p_lab.a;
                 float db = px_lab.b - p_lab.b;
                 float d = color_space::fma_dist_sq(dL, da, db);
-                if (d < best_d) { best_d = d; best_i = i; }
+                if (d < best_d) {
+                    best_d = d;
+                    best_i = i;
+                }
             }
             used[best_i >> 6] |= std::uint64_t{1} << (best_i & 63);
         }
         std::size_t count = 0;
-        for (auto w : used) count += static_cast<std::size_t>(std::popcount(w));
+        for (auto w : used)
+            count += static_cast<std::size_t>(std::popcount(w));
         sum_used += static_cast<double>(count);
         ++valid_rows;
     }
-    return valid_rows
-        ? static_cast<float>(sum_used / static_cast<double>(valid_rows))
-        : 0.0f;
+    return valid_rows ? static_cast<float>(sum_used / static_cast<double>(valid_rows)) : 0.0f;
 }
 
-Image jitter_image(const Image& source, std::uint32_t seed,
-                   float amplitude) {
+Image jitter_image(const Image& source, std::uint32_t seed, float amplitude) {
     Image j(source.width(), source.height());
     const float amp = amplitude / 255.0f;
     for (std::size_t y = 0; y < source.height(); ++y) {
         for (std::size_t x = 0; x < source.width(); ++x) {
             auto p = source[x, y];
             // Per-pixel hash → ±amplitude/255 nudge per channel.
-            auto h32 = seed * 2654435761u
-                     + static_cast<std::uint32_t>(y) * 0x9E3779B9u
-                     + static_cast<std::uint32_t>(x) * 0x85EBCA6Bu;
+            auto h32 = seed * 2654435761u + static_cast<std::uint32_t>(y) * 0x9E3779B9u +
+                       static_cast<std::uint32_t>(x) * 0x85EBCA6Bu;
             auto nudge = [&](unsigned shift) {
-                return (static_cast<float>((h32 >> shift) & 0xFFu) /
-                        255.0f - 0.5f) * amp;
+                return (static_cast<float>((h32 >> shift) & 0xFFu) / 255.0f - 0.5f) * amp;
             };
             j[x, y] = Color3f{
-                std::clamp(p.r + nudge(0),  0.0f, 1.0f),
-                std::clamp(p.g + nudge(8),  0.0f, 1.0f),
+                std::clamp(p.r + nudge(0), 0.0f, 1.0f),
+                std::clamp(p.g + nudge(8), 0.0f, 1.0f),
                 std::clamp(p.b + nudge(16), 0.0f, 1.0f),
             };
         }
@@ -149,8 +143,7 @@ Image jitter_image(const Image& source, std::uint32_t seed,
 // inner calls see it set and run serially.
 thread_local bool t_in_parallel_for = false;
 
-void parallel_for(std::size_t n,
-                  std::function<void(std::size_t)> body) {
+void parallel_for(std::size_t n, std::function<void(std::size_t)> body) {
     if (n == 0) return;
     if (t_in_parallel_for) {
         // Already inside a parallel_for on this thread — run serially
@@ -158,15 +151,16 @@ void parallel_for(std::size_t n,
         // hardware-concurrency over-subscription. WASM: avoids
         // pthread-pool exhaustion when an outer dispatch already
         // saturated the pool.
-        for (std::size_t i = 0; i < n; ++i) body(i);
+        for (std::size_t i = 0; i < n; ++i)
+            body(i);
         return;
     }
-    auto n_threads = std::max<unsigned>(1,
-        std::thread::hardware_concurrency());
+    auto n_threads = std::max<unsigned>(1, std::thread::hardware_concurrency());
     n_threads = std::min(n_threads, static_cast<unsigned>(n));
     if (n_threads == 1) {
         // Skip thread overhead on single-core hosts.
-        for (std::size_t i = 0; i < n; ++i) body(i);
+        for (std::size_t i = 0; i < n; ++i)
+            body(i);
         return;
     }
     std::atomic<std::size_t> next{0};
@@ -186,14 +180,13 @@ void parallel_for(std::size_t n,
     threads.clear();  // join on destruction
 }
 
-Result<Image> render_preview(
-    const bitplane::BitplaneData& planes,
-    std::span<const Color3f> base_palette,
-    bool is_ham,
-    bool is_lace,
-    amiga::Chipset chipset,
-    const std::vector<std::vector<Color3f>>* scanline_palettes,
-    std::size_t sliced_changes_per_line) {
+Result<Image> render_preview(const bitplane::BitplaneData& planes,
+                             std::span<const Color3f> base_palette,
+                             bool is_ham,
+                             bool is_lace,
+                             amiga::Chipset chipset,
+                             const std::vector<std::vector<Color3f>>* scanline_palettes,
+                             std::size_t sliced_changes_per_line) {
     bool has_scanline_pal = scanline_palettes && !scanline_palettes->empty();
     Result<Image> r = [&]() -> Result<Image> {
         if (is_ham) {
@@ -204,9 +197,12 @@ Result<Image> render_preview(
             return ham::render_ham(planes, base_palette, data_bits);
         }
         if (has_scanline_pal) {
-            return copper::render_copper_capped(
-                planes, *scanline_palettes, base_palette,
-                sliced_changes_per_line, is_lace, chipset);
+            return copper::render_copper_capped(planes,
+                                                *scanline_palettes,
+                                                base_palette,
+                                                sliced_changes_per_line,
+                                                is_lace,
+                                                chipset);
         }
         return bitplane::render(planes, base_palette);
     }();
@@ -219,7 +215,8 @@ Result<Image> render_preview(
     // is a no-op there and a fix for the HAM / plain-bitplane paths.
     // No-op for AGA (24-bit native).
     if (chipset != amiga::Chipset::aga) {
-        for (auto& p : r->pixels()) p = palette::quantize_to_ocs(p);
+        for (auto& p : r->pixels())
+            p = palette::quantize_to_ocs(p);
         // Defense in depth: every emitted pixel must be a 12-bit OCS
         // color (nibble-replicated 8-bit sRGB byte). The snap above
         // guarantees this, but past regressions in render_copper_capped
@@ -230,8 +227,7 @@ Result<Image> render_preview(
         for (const auto& p : r->pixels()) {
             auto srgb = color_space::linear_to_srgb(p).clamped();
             auto check = [](float v) {
-                int b = std::clamp(
-                    static_cast<int>(std::lround(v * 255.0f)), 0, 255);
+                int b = std::clamp(static_cast<int>(std::lround(v * 255.0f)), 0, 255);
                 return ((b >> 4) & 0xF) == (b & 0xF);
             };
             if (!check(srgb.r) || !check(srgb.g) || !check(srgb.b)) ++bad;
@@ -239,8 +235,9 @@ Result<Image> render_preview(
 #ifndef __EMSCRIPTEN__
         if (bad > 0) {
             std::println(stderr,
-                "warning: render_preview emitted {} non-OCS pixels "
-                "(snap regression?)", bad);
+                         "warning: render_preview emitted {} non-OCS pixels "
+                         "(snap regression?)",
+                         bad);
         }
 #endif
     }
@@ -256,9 +253,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
 cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base) {
     cheader::CHeaderOptions ch;
-    ch.symbol_name = base.symbol_override.empty()
-        ? derive_symbol_name(base.output_path)
-        : std::string(base.symbol_override);
+    ch.symbol_name = base.symbol_override.empty() ? derive_symbol_name(base.output_path)
+                                                  : std::string(base.symbol_override);
     ch.hires = base.hires;
     ch.interlace = base.interlace;
     ch.aga = base.aga;

@@ -84,7 +84,8 @@ using OKLab = color_space::OKLab;
 // remaining low bits. Holds for HAM6 (planes 4-5 control, 0-3 data) and
 // HAM8 (planes 6-7 control, 0-5 data) — the chip and every standard
 // reader (DPaint, ViewTek, RECOIL) interpret it this way.
-constexpr std::uint8_t make_ham_value(std::uint8_t control, std::uint8_t data,
+constexpr std::uint8_t make_ham_value(std::uint8_t control,
+                                      std::uint8_t data,
                                       std::size_t data_bits) noexcept {
     return static_cast<std::uint8_t>((control << data_bits) | data);
 }
@@ -92,8 +93,8 @@ constexpr std::uint8_t make_ham_value(std::uint8_t control, std::uint8_t data,
 // Extract control and data from a HAM value (inverse of make_ham_value):
 // control = top 2 bits, data = low data_bits bits. Same convention for
 // HAM6 (data_bits=4) and HAM8 (data_bits=6).
-constexpr std::pair<std::uint8_t, std::uint8_t>
-split_ham_value(std::uint8_t value, std::size_t data_bits) noexcept {
+constexpr std::pair<std::uint8_t, std::uint8_t> split_ham_value(std::uint8_t value,
+                                                                std::size_t data_bits) noexcept {
     auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1u);
     return {static_cast<std::uint8_t>(value >> data_bits),
             static_cast<std::uint8_t>(value & data_mask)};
@@ -126,12 +127,11 @@ inline float score_oklab2(const OKLab& a, const OKLab& b) {
     return color_space::fma_dist_sq(dL, da, db_);
 }
 
-template <HamMetric M>
-HamPixelResult encode_ham_pixel_t(
-    SRGBColor prev,
-    Color3f target,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb) {
+template<HamMetric M>
+HamPixelResult encode_ham_pixel_t(SRGBColor prev,
+                                  Color3f target,
+                                  const HamPrecomp& pre,
+                                  std::span<const SRGBColor> base_srgb) {
 
     auto data_bits = pre.data_bits;
 
@@ -140,18 +140,16 @@ HamPixelResult encode_ham_pixel_t(
 
     auto target_srgb = linear_to_srgb8(target);
     [[maybe_unused]] OKLab target_lab;
-    if constexpr (M == HamMetric::oklab2)
-        target_lab = color_space::linear_to_oklab(target);
+    if constexpr (M == HamMetric::oklab2) target_lab = color_space::linear_to_oklab(target);
 
-    auto score = [&](SRGBColor out, std::size_t pal_idx_for_set,
-                     bool is_set) -> float {
+    auto score = [&](SRGBColor out, std::size_t pal_idx_for_set, bool is_set) -> float {
         if constexpr (M == HamMetric::srgb_mse) {
-            (void)pal_idx_for_set; (void)is_set;
+            (void)pal_idx_for_set;
+            (void)is_set;
             return score_srgb_mse(target_srgb, out);
         } else {
             if (is_set) return score_oklab2(target_lab, pre.palette_lab[pal_idx_for_set]);
-            return score_oklab2(target_lab,
-                color_space::linear_to_oklab(srgb8_to_linear(out)));
+            return score_oklab2(target_lab, color_space::linear_to_oklab(srgb8_to_linear(out)));
         }
     };
 
@@ -208,12 +206,11 @@ HamPixelResult encode_ham_pixel_t(
 }
 
 // Backward-compat non-templated wrapper (defaults to sRGB-MSE).
-inline HamPixelResult encode_ham_pixel_impl(
-    SRGBColor prev,
-    Color3f target,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    HamMetric metric = HamMetric::srgb_mse) {
+inline HamPixelResult encode_ham_pixel_impl(SRGBColor prev,
+                                            Color3f target,
+                                            const HamPrecomp& pre,
+                                            std::span<const SRGBColor> base_srgb,
+                                            HamMetric metric = HamMetric::srgb_mse) {
     if (metric == HamMetric::oklab2)
         return encode_ham_pixel_t<HamMetric::oklab2>(prev, target, pre, base_srgb);
     return encode_ham_pixel_t<HamMetric::srgb_mse>(prev, target, pre, base_srgb);
@@ -223,7 +220,8 @@ inline HamPixelResult encode_ham_pixel_impl(
 // Choose a base palette for HAM from the image
 // ---------------------------------------------------------------------------
 
-Palette choose_ham_palette(const Image& image, std::size_t num_colors,
+Palette choose_ham_palette(const Image& image,
+                           std::size_t num_colors,
                            amiga::Chipset chipset,
                            int palette_diversity,
                            std::string_view quantizer) {
@@ -239,41 +237,45 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     // palette. resolve_algorithm() returns PNN for AGA HAM and
     // median-cut for OCS HAM by default; user can override via
     // --quantizer.
-    auto ham_mode = (chipset == amiga::Chipset::aga)
-        ? amiga::Mode::ham8 : amiga::Mode::ham6;
+    auto ham_mode = (chipset == amiga::Chipset::aga) ? amiga::Mode::ham8 : amiga::Mode::ham6;
     auto algo = quantize::resolve_algorithm(ham_mode, chipset, quantizer);
     bool is_ocs = (chipset != amiga::Chipset::aga);
 
-    auto run_quantizer =
-        [&](std::size_t k) -> Result<Palette> {
+    auto run_quantizer = [&](std::size_t k) -> Result<Palette> {
         Palette p;
         switch (algo) {
         case quantize::Algorithm::pnn:
-            p = quantize::pnn_quantize(image.pixels(), k,
+            p = quantize::pnn_quantize(image.pixels(),
+                                       k,
                                        /*palette_diversity=*/0);
             break;
         case quantize::Algorithm::gpu_restart: {
-            auto r = quantize::gpu_restart_quantize(image, k,
+            auto r = quantize::gpu_restart_quantize(image,
+                                                    k,
                                                     /*restarts=*/32,
                                                     /*iterations=*/20);
-            if (r) p = std::move(*r);
-            else   p = quantize::pnn_quantize(image.pixels(), k,
-                                              /*palette_diversity=*/0);
+            if (r)
+                p = std::move(*r);
+            else
+                p = quantize::pnn_quantize(image.pixels(),
+                                           k,
+                                           /*palette_diversity=*/0);
             break;
         }
         case quantize::Algorithm::ocs_bruteforce:
         case quantize::Algorithm::median_cut:
         default:
-            p = quantize::median_cut(image.pixels(), k,
+            p = quantize::median_cut(image.pixels(),
+                                     k,
                                      /*palette_diversity=*/0);
             break;
         }
         if (is_ocs) {
-            for (auto& c : p.colors) c = palette::quantize_to_ocs(c);
+            for (auto& c : p.colors)
+                c = palette::quantize_to_ocs(c);
         }
         if (palette_diversity > 0) {
-            quantize::diversify_palette(p, image.pixels(),
-                                        palette_diversity, is_ocs);
+            quantize::diversify_palette(p, image.pixels(), palette_diversity, is_ocs);
         }
         return p;
     };
@@ -281,7 +283,8 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
     auto pal_r = palette_locks::two_pass_quantize(
         run_quantizer, kfirst, num_colors, /*lock_color0=*/true);
     Palette pal = pal_r ? std::move(*pal_r) : Palette{};
-    palette_locks::finalize_palette(pal.colors, num_colors,
+    palette_locks::finalize_palette(pal.colors,
+                                    num_colors,
                                     /*lock_color0=*/true);
     return pal;
 }
@@ -296,10 +299,10 @@ Palette choose_ham_palette(const Image& image, std::size_t num_colors,
 // ===========================================================================
 
 struct BeamState {
-    SRGBColor color;            // output sRGB color after this pixel
-    float cumulative_error;     // total error from scanline start up to here
-    std::uint8_t ham_value;     // the HAM value chosen at the current pixel
-    std::uint16_t parent_idx;   // index into previous beam's state array
+    SRGBColor color;           // output sRGB color after this pixel
+    float cumulative_error;    // total error from scanline start up to here
+    std::uint8_t ham_value;    // the HAM value chosen at the current pixel
+    std::uint16_t parent_idx;  // index into previous beam's state array
 };
 
 // Per-thread scratch buffers for the HAM scanline encoders. Profiling
@@ -330,9 +333,7 @@ struct ErrIdx {
 // <…lambda_1>`; named struct lets the compiler see the comparator
 // is pure.
 struct ErrIdxLess {
-    bool operator()(const ErrIdx& a, const ErrIdx& b) const noexcept {
-        return a.err < b.err;
-    }
+    bool operator()(const ErrIdx& a, const ErrIdx& b) const noexcept { return a.err < b.err; }
 };
 
 // Replace heap[0] with `new_val` and restore the max-heap invariant
@@ -342,15 +343,13 @@ struct ErrIdxLess {
 // of HAM6+strips CPU after the heap-of-K switch. log2(16) = 4
 // levels max, branchless inner step.
 [[gnu::always_inline]]
-inline void max_heap_replace_top(ErrIdx* heap, std::size_t n,
-                                 ErrIdx new_val) noexcept {
+inline void max_heap_replace_top(ErrIdx* heap, std::size_t n, ErrIdx new_val) noexcept {
     std::size_t i = 0;
     for (;;) {
         std::size_t left = 2 * i + 1;
         if (left >= n) break;
         std::size_t right = left + 1;
-        std::size_t larger =
-            (right < n && heap[right].err > heap[left].err) ? right : left;
+        std::size_t larger = (right < n && heap[right].err > heap[left].err) ? right : left;
         if (!(new_val.err < heap[larger].err)) break;
         heap[i] = heap[larger];
         i = larger;
@@ -360,17 +359,17 @@ inline void max_heap_replace_top(ErrIdx* heap, std::size_t n,
 
 struct HamScratch {
     // DP encoder per-row buffers
-    std::vector<OKLab>                     row_lab;
-    std::vector<SRGBColor>                 row_srgb;
-    std::vector<BeamState>                 candidates;
-    std::vector<BeamState>                 prev_beam;        // x=0 seed only
-    std::vector<std::vector<BeamState>>    beam_history;
-    std::vector<ErrIdx>                    err_idx;
+    std::vector<OKLab> row_lab;
+    std::vector<SRGBColor> row_srgb;
+    std::vector<BeamState> candidates;
+    std::vector<BeamState> prev_beam;  // x=0 seed only
+    std::vector<std::vector<BeamState>> beam_history;
+    std::vector<ErrIdx> err_idx;
     // refine_triple per-row buffers
-    std::vector<SRGBColor>                 states;
-    std::vector<BeamState>                 window_candidates;
-    std::vector<BeamState>                 window_prev_beam; // p=0 seed only
-    std::vector<BeamState>                 window_hist[3];
+    std::vector<SRGBColor> states;
+    std::vector<BeamState> window_candidates;
+    std::vector<BeamState> window_prev_beam;  // p=0 seed only
+    std::vector<BeamState> window_hist[3];
 };
 
 inline HamScratch& thread_scratch() {
@@ -384,23 +383,26 @@ inline HamScratch& thread_scratch() {
 // 64 b values over multiple beam states), so caching skips a large
 // fraction of cbrt + matrix multiplies.
 constexpr std::size_t kHamOklabCacheSize = 2048;
-struct HamOklabCacheEntry { std::uint32_t key; std::uint32_t gen; OKLab lab; };
+struct HamOklabCacheEntry {
+    std::uint32_t key;
+    std::uint32_t gen;
+    OKLab lab;
+};
 
-thread_local std::vector<HamOklabCacheEntry>
-    g_ham_oklab_cache(kHamOklabCacheSize, {0, 0, {}});
+thread_local std::vector<HamOklabCacheEntry> g_ham_oklab_cache(kHamOklabCacheSize, {0, 0, {}});
 thread_local std::uint32_t g_ham_oklab_gen = 0;
 
 inline void bump_ham_oklab_cache_gen() {
     if (++g_ham_oklab_gen == 0) {
-        for (auto& e : g_ham_oklab_cache) e.gen = 0;
+        for (auto& e : g_ham_oklab_cache)
+            e.gen = 0;
         g_ham_oklab_gen = 1;
     }
 }
 
 inline OKLab cached_srgb_to_oklab(SRGBColor c) {
     std::uint32_t key = (static_cast<std::uint32_t>(c.r) << 16) |
-                        (static_cast<std::uint32_t>(c.g) << 8) |
-                        static_cast<std::uint32_t>(c.b);
+                        (static_cast<std::uint32_t>(c.g) << 8) | static_cast<std::uint32_t>(c.b);
     std::uint32_t slot = (key * 2654435761u) & (kHamOklabCacheSize - 1);
     auto& e = g_ham_oklab_cache[slot];
     if (e.gen == g_ham_oklab_gen && e.key == key) return e.lab;
@@ -410,7 +412,6 @@ inline OKLab cached_srgb_to_oklab(SRGBColor c) {
     e.lab = lab;
     return lab;
 }
-
 
 // Expand all reasonable HAM operations from a given previous color state.
 // MODIFY ops are restricted to a window of data values around the target's
@@ -427,16 +428,15 @@ constexpr int kModifyDpRadius = 2;
 // zero metric-dispatch overhead — both specializations are fully
 // inlined hot loops. Caller picks the specialization once per scanline
 // (not per pixel, not per candidate).
-template <HamMetric M>
-void expand_ham_t(
-    SRGBColor prev,
-    OKLab target_lab,
-    SRGBColor target_srgb,
-    float prev_error,
-    std::uint16_t parent_idx,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::vector<BeamState>& candidates) {
+template<HamMetric M>
+void expand_ham_t(SRGBColor prev,
+                  OKLab target_lab,
+                  SRGBColor target_srgb,
+                  float prev_error,
+                  std::uint16_t parent_idx,
+                  const HamPrecomp& pre,
+                  std::span<const SRGBColor> base_srgb,
+                  std::vector<BeamState>& candidates) {
 
     auto data_bits = pre.data_bits;
     auto num_data_values = pre.num_data_values;
@@ -459,10 +459,10 @@ void expand_ham_t(
     int hi_g = std::min(nmax, static_cast<int>(tgv) + kModifyDpRadius + 1);
 
     auto n_set = pre.palette_lab.size();
-    auto n_b   = static_cast<std::size_t>(hi_b - lo_b);
-    auto n_r   = static_cast<std::size_t>(hi_r - lo_r);
-    auto n_g   = static_cast<std::size_t>(hi_g - lo_g);
-    auto base  = candidates.size();
+    auto n_b = static_cast<std::size_t>(hi_b - lo_b);
+    auto n_r = static_cast<std::size_t>(hi_r - lo_r);
+    auto n_g = static_cast<std::size_t>(hi_g - lo_g);
+    auto base = candidates.size();
     candidates.resize(base + n_set + n_b + n_r + n_g);
     BeamState* out = candidates.data() + base;
     std::size_t oi = 0;
@@ -509,23 +509,18 @@ void expand_ham_t(
     // MODIFY BLUE (control = 01) — varying byte at offset 16
     {
         [[maybe_unused]] color_space::f32x4 rg_lms;
-        if constexpr (M == HamMetric::oklab2)
-            rg_lms = lms_prev_r + lms_prev_g;
-        const std::uint32_t prev_rg_pack =
-            static_cast<std::uint32_t>(prev.r) |
-            (static_cast<std::uint32_t>(prev.g) << 8);
-        const std::uint8_t  ham_op = make_ham_value(
+        if constexpr (M == HamMetric::oklab2) rg_lms = lms_prev_r + lms_prev_g;
+        const std::uint32_t prev_rg_pack = static_cast<std::uint32_t>(prev.r) |
+                                           (static_cast<std::uint32_t>(prev.g) << 8);
+        const std::uint8_t ham_op = make_ham_value(
             0b01, 0, data_bits);  // op-only; data bits OR'd per iter
         // commit_one stores one candidate's result. Body shared between
         // the 4-wide batch path and the scalar tail.
         auto commit_one = [&](std::uint8_t b8, int bv, float err) {
-            const std::uint32_t color_raw = prev_rg_pack |
-                (static_cast<std::uint32_t>(b8) << 16);
-            std::memcpy(static_cast<void*>(&out[oi].color),
-                        &color_raw, sizeof(color_raw));
+            const std::uint32_t color_raw = prev_rg_pack | (static_cast<std::uint32_t>(b8) << 16);
+            std::memcpy(static_cast<void*>(&out[oi].color), &color_raw, sizeof(color_raw));
             out[oi].cumulative_error = prev_error + err;
-            out[oi].ham_value = static_cast<std::uint8_t>(
-                ham_op | static_cast<std::uint8_t>(bv));
+            out[oi].ham_value = static_cast<std::uint8_t>(ham_op | static_cast<std::uint8_t>(bv));
             out[oi].parent_idx = parent_idx;
             ++oi;
         };
@@ -573,20 +568,15 @@ void expand_ham_t(
     // MODIFY RED (control = 10) — varying byte at offset 0
     {
         [[maybe_unused]] color_space::f32x4 gb_lms;
-        if constexpr (M == HamMetric::oklab2)
-            gb_lms = lms_prev_g + lms_prev_b;
-        const std::uint32_t prev_gb_pack =
-            (static_cast<std::uint32_t>(prev.g) << 8) |
-            (static_cast<std::uint32_t>(prev.b) << 16);
-        const std::uint8_t  ham_op = make_ham_value(0b10, 0, data_bits);
+        if constexpr (M == HamMetric::oklab2) gb_lms = lms_prev_g + lms_prev_b;
+        const std::uint32_t prev_gb_pack = (static_cast<std::uint32_t>(prev.g) << 8) |
+                                           (static_cast<std::uint32_t>(prev.b) << 16);
+        const std::uint8_t ham_op = make_ham_value(0b10, 0, data_bits);
         auto commit_one = [&](std::uint8_t r8, int rv, float err) {
-            const std::uint32_t color_raw = prev_gb_pack |
-                static_cast<std::uint32_t>(r8);
-            std::memcpy(static_cast<void*>(&out[oi].color),
-                        &color_raw, sizeof(color_raw));
+            const std::uint32_t color_raw = prev_gb_pack | static_cast<std::uint32_t>(r8);
+            std::memcpy(static_cast<void*>(&out[oi].color), &color_raw, sizeof(color_raw));
             out[oi].cumulative_error = prev_error + err;
-            out[oi].ham_value = static_cast<std::uint8_t>(
-                ham_op | static_cast<std::uint8_t>(rv));
+            out[oi].ham_value = static_cast<std::uint8_t>(ham_op | static_cast<std::uint8_t>(rv));
             out[oi].parent_idx = parent_idx;
             ++oi;
         };
@@ -629,20 +619,15 @@ void expand_ham_t(
     // MODIFY GREEN (control = 11) — varying byte at offset 8
     {
         [[maybe_unused]] color_space::f32x4 rb_lms;
-        if constexpr (M == HamMetric::oklab2)
-            rb_lms = lms_prev_r + lms_prev_b;
-        const std::uint32_t prev_rb_pack =
-            static_cast<std::uint32_t>(prev.r) |
-            (static_cast<std::uint32_t>(prev.b) << 16);
-        const std::uint8_t  ham_op = make_ham_value(0b11, 0, data_bits);
+        if constexpr (M == HamMetric::oklab2) rb_lms = lms_prev_r + lms_prev_b;
+        const std::uint32_t prev_rb_pack = static_cast<std::uint32_t>(prev.r) |
+                                           (static_cast<std::uint32_t>(prev.b) << 16);
+        const std::uint8_t ham_op = make_ham_value(0b11, 0, data_bits);
         auto commit_one = [&](std::uint8_t g8, int gv, float err) {
-            const std::uint32_t color_raw = prev_rb_pack |
-                (static_cast<std::uint32_t>(g8) << 8);
-            std::memcpy(static_cast<void*>(&out[oi].color),
-                        &color_raw, sizeof(color_raw));
+            const std::uint32_t color_raw = prev_rb_pack | (static_cast<std::uint32_t>(g8) << 8);
+            std::memcpy(static_cast<void*>(&out[oi].color), &color_raw, sizeof(color_raw));
             out[oi].cumulative_error = prev_error + err;
-            out[oi].ham_value = static_cast<std::uint8_t>(
-                ham_op | static_cast<std::uint8_t>(gv));
+            out[oi].ham_value = static_cast<std::uint8_t>(ham_op | static_cast<std::uint8_t>(gv));
             out[oi].parent_idx = parent_idx;
             ++oi;
         };
@@ -699,7 +684,7 @@ void prune_beam(std::vector<BeamState>& candidates,
                 std::size_t beam_width,
                 std::vector<ErrIdx>& scratch) {
     if (candidates.size() <= beam_width) {
-        beam = candidates;     // small copy; this branch is rare
+        beam = candidates;  // small copy; this branch is rare
         return;
     }
 
@@ -719,8 +704,7 @@ void prune_beam(std::vector<BeamState>& candidates,
     const std::size_t n = candidates.size();
     // Phase 1: seed heap with first K candidates.
     for (std::size_t i = 0; i < beam_width; ++i) {
-        scratch.push_back(ErrIdx{candidates[i].cumulative_error,
-                                 static_cast<std::uint32_t>(i)});
+        scratch.push_back(ErrIdx{candidates[i].cumulative_error, static_cast<std::uint32_t>(i)});
     }
     std::make_heap(scratch.begin(), scratch.end(), ErrIdxLess{});
     // Phase 2: stream remaining candidates; replace heap top when
@@ -732,8 +716,7 @@ void prune_beam(std::vector<BeamState>& candidates,
     for (std::size_t i = beam_width; i < n; ++i) {
         const float ce = candidates[i].cumulative_error;
         if (ce < heap_data[0].err) {
-            max_heap_replace_top(heap_data, beam_width,
-                ErrIdx{ce, static_cast<std::uint32_t>(i)});
+            max_heap_replace_top(heap_data, beam_width, ErrIdx{ce, static_cast<std::uint32_t>(i)});
         }
     }
 
@@ -750,7 +733,7 @@ void prune_beam(std::vector<BeamState>& candidates,
 // rolling state crosses strip boundaries unchanged — only the palette
 // consulted by expand_ham swaps. Used by strips HAM6 to drive row-level
 // DP beam search with mid-line palette swaps.
-template <HamMetric M>
+template<HamMetric M>
 ScanlineResult encode_scanline_dp_per_strip_t(
     std::span<const Color3f> target_row,
     SRGBColor start_color,
@@ -787,22 +770,26 @@ ScanlineResult encode_scanline_dp_per_strip_t(
         if (si >= pres.size()) si = pres.size() - 1;
         for (std::size_t s = 0; s < prev.size(); ++s) {
             auto parent_idx = static_cast<std::uint16_t>(s);
-            expand_ham_t<M>(prev[s].color, sc.row_lab[x], sc.row_srgb[x],
-                       prev[s].cumulative_error, parent_idx,
-                       pres[si], base_srgbs[si], sc.candidates);
+            expand_ham_t<M>(prev[s].color,
+                            sc.row_lab[x],
+                            sc.row_srgb[x],
+                            prev[s].cumulative_error,
+                            parent_idx,
+                            pres[si],
+                            base_srgbs[si],
+                            sc.candidates);
         }
         prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
     }
 
     auto& final_beam = sc.beam_history[width - 1];
-    auto best_it = std::min_element(final_beam.begin(), final_beam.end(),
-        [](const BeamState& a, const BeamState& b) {
+    auto best_it = std::min_element(
+        final_beam.begin(), final_beam.end(), [](const BeamState& a, const BeamState& b) {
             return a.cumulative_error < b.cumulative_error;
         });
     float total_error = best_it->cumulative_error;
     std::vector<std::uint8_t> values(width);
-    auto state_idx = static_cast<std::size_t>(
-        std::distance(final_beam.begin(), best_it));
+    auto state_idx = static_cast<std::size_t>(std::distance(final_beam.begin(), best_it));
     for (auto x = static_cast<std::ptrdiff_t>(width) - 1; x >= 0; --x) {
         auto ux = static_cast<std::size_t>(x);
         auto& state = sc.beam_history[ux][state_idx];
@@ -812,13 +799,12 @@ ScanlineResult encode_scanline_dp_per_strip_t(
     return {std::move(values), total_error};
 }
 
-template <HamMetric M>
-ScanlineResult encode_scanline_dp_t(
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::size_t beam_width) {
+template<HamMetric M>
+ScanlineResult encode_scanline_dp_t(std::span<const Color3f> target_row,
+                                    SRGBColor start_color,
+                                    const HamPrecomp& pre,
+                                    std::span<const SRGBColor> base_srgb,
+                                    std::size_t beam_width) {
 
     auto width = target_row.size();
     if (width == 0) return {{}, 0.0f};
@@ -849,9 +835,14 @@ ScanlineResult encode_scanline_dp_t(
         sc.candidates.clear();
         for (std::size_t s = 0; s < prev.size(); ++s) {
             auto parent_idx = static_cast<std::uint16_t>(s);
-            expand_ham_t<M>(prev[s].color, sc.row_lab[x], sc.row_srgb[x],
-                       prev[s].cumulative_error, parent_idx,
-                       pre, base_srgb, sc.candidates);
+            expand_ham_t<M>(prev[s].color,
+                            sc.row_lab[x],
+                            sc.row_srgb[x],
+                            prev[s].cumulative_error,
+                            parent_idx,
+                            pre,
+                            base_srgb,
+                            sc.candidates);
         }
 
         prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
@@ -859,8 +850,8 @@ ScanlineResult encode_scanline_dp_t(
 
     // Find the best final state
     auto& final_beam = sc.beam_history[width - 1];
-    auto best_it = std::min_element(final_beam.begin(), final_beam.end(),
-        [](const BeamState& a, const BeamState& b) {
+    auto best_it = std::min_element(
+        final_beam.begin(), final_beam.end(), [](const BeamState& a, const BeamState& b) {
             return a.cumulative_error < b.cumulative_error;
         });
 
@@ -868,8 +859,7 @@ ScanlineResult encode_scanline_dp_t(
 
     // Trace back the path to reconstruct HAM values
     std::vector<std::uint8_t> values(width);
-    auto state_idx = static_cast<std::size_t>(
-        std::distance(final_beam.begin(), best_it));
+    auto state_idx = static_cast<std::size_t>(std::distance(final_beam.begin(), best_it));
 
     for (auto x = static_cast<std::ptrdiff_t>(width) - 1; x >= 0; --x) {
         auto ux = static_cast<std::size_t>(x);
@@ -884,13 +874,12 @@ ScanlineResult encode_scanline_dp_t(
 // Runtime-dispatched wrappers — pick the metric specialization once
 // per call and forward into the templated implementations. The hot
 // inner loops have zero metric-related overhead.
-ScanlineResult encode_scanline_dp(
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::size_t beam_width,
-    HamMetric metric = HamMetric::srgb_mse) {
+ScanlineResult encode_scanline_dp(std::span<const Color3f> target_row,
+                                  SRGBColor start_color,
+                                  const HamPrecomp& pre,
+                                  std::span<const SRGBColor> base_srgb,
+                                  std::size_t beam_width,
+                                  HamMetric metric = HamMetric::srgb_mse) {
     if (metric == HamMetric::oklab2)
         return encode_scanline_dp_t<HamMetric::oklab2>(
             target_row, start_color, pre, base_srgb, beam_width);
@@ -908,11 +897,9 @@ ScanlineResult encode_scanline_dp_per_strip_impl(
     HamMetric metric) {
     if (metric == HamMetric::oklab2)
         return encode_scanline_dp_per_strip_t<HamMetric::oklab2>(
-            target_row, start_color, pres, base_srgbs, strip_for_x,
-            beam_width);
+            target_row, start_color, pres, base_srgbs, strip_for_x, beam_width);
     return encode_scanline_dp_per_strip_t<HamMetric::srgb_mse>(
-        target_row, start_color, pres, base_srgbs, strip_for_x,
-        beam_width);
+        target_row, start_color, pres, base_srgbs, strip_for_x, beam_width);
 }
 
 // ---------------------------------------------------------------------------
@@ -932,14 +919,13 @@ ScanlineResult encode_scanline_dp_per_strip_impl(
 // edge of one window can propagate to the next.
 // ---------------------------------------------------------------------------
 
-template <HamMetric M>
-void refine_triple_t(
-    std::vector<std::uint8_t>& values,
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::size_t beam_k) {
+template<HamMetric M>
+void refine_triple_t(std::vector<std::uint8_t>& values,
+                     std::span<const Color3f> target_row,
+                     SRGBColor start_color,
+                     const HamPrecomp& pre,
+                     std::span<const SRGBColor> base_srgb,
+                     std::size_t beam_k) {
 
     auto width = values.size();
     if (width < 3) return;
@@ -954,10 +940,18 @@ void refine_triple_t(
         auto prev = sc.states[x];
         SRGBColor out = prev;
         switch (ctrl) {
-        case 0b00:  out = base_srgb[data]; break;
-        case 0b01:  out = {prev.r, prev.g, pre.expand_lut[data]}; break;
-        case 0b10:  out = {pre.expand_lut[data], prev.g, prev.b}; break;
-        case 0b11:  out = {prev.r, pre.expand_lut[data], prev.b}; break;
+        case 0b00:
+            out = base_srgb[data];
+            break;
+        case 0b01:
+            out = {prev.r, prev.g, pre.expand_lut[data]};
+            break;
+        case 0b10:
+            out = {pre.expand_lut[data], prev.g, prev.b};
+            break;
+        case 0b11:
+            out = {prev.r, pre.expand_lut[data], prev.b};
+            break;
         }
         sc.states[x + 1] = out;
     }
@@ -981,28 +975,35 @@ void refine_triple_t(
     // Helper to compute the error of a single op against the target.
     // Score matches expand_ham's metric (compile-time M) so this post-pass
     // re-ranks consistently with the beam DP's choice.
-    auto op_error = [&](SRGBColor prev, std::uint8_t ham_value,
+    auto op_error = [&](SRGBColor prev,
+                        std::uint8_t ham_value,
                         [[maybe_unused]] OKLab target_lab,
-                        [[maybe_unused]] SRGBColor target_srgb)
-                        -> std::pair<float, SRGBColor> {
+                        [[maybe_unused]] SRGBColor target_srgb) -> std::pair<float, SRGBColor> {
         auto [ctrl, data] = split_ham_value(ham_value, pre.data_bits);
         SRGBColor out = prev;
         switch (ctrl) {
-        case 0b00: out = base_srgb[data]; break;
-        case 0b01: out = {prev.r, prev.g, pre.expand_lut[data]}; break;
-        case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
-        case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
+        case 0b00:
+            out = base_srgb[data];
+            break;
+        case 0b01:
+            out = {prev.r, prev.g, pre.expand_lut[data]};
+            break;
+        case 0b10:
+            out = {pre.expand_lut[data], prev.g, prev.b};
+            break;
+        case 0b11:
+            out = {prev.r, pre.expand_lut[data], prev.b};
+            break;
         }
         if constexpr (M == HamMetric::srgb_mse) {
-            return { score_srgb_mse(target_srgb, out), out };
+            return {score_srgb_mse(target_srgb, out), out};
         } else {
-            return { score_oklab2(target_lab, cached_oklab(out)), out };
+            return {score_oklab2(target_lab, cached_oklab(out)), out};
         }
     };
 
     auto ops_per_state = pre.palette_lab.size() + 3 * pre.num_data_values;
     sc.window_candidates.reserve(beam_k * ops_per_state);
-
 
     // Cheap early-skip threshold: if every pixel in a window is already
     // within this squared error, the window is "tight" and triple
@@ -1037,8 +1038,7 @@ void refine_triple_t(
         float cur_err = e0_cur + e1_cur + e2_cur;
 
         // Skip windows where all three pixels are already near-perfect.
-        if (e0_cur < skip_threshold_per_pixel &&
-            e1_cur < skip_threshold_per_pixel &&
+        if (e0_cur < skip_threshold_per_pixel && e1_cur < skip_threshold_per_pixel &&
             e2_cur < skip_threshold_per_pixel) {
             continue;
         }
@@ -1069,17 +1069,19 @@ void refine_triple_t(
 
         for (std::size_t p = 0; p < 3; ++p) {
             OKLab tgt = (p == 0) ? tgt0 : (p == 1) ? tgt1 : tgt2;
-            const auto& prev = (p == 0) ? sc.window_prev_beam
-                                        : sc.window_hist[p - 1];
+            const auto& prev = (p == 0) ? sc.window_prev_beam : sc.window_hist[p - 1];
             sc.window_candidates.clear();
             for (std::size_t s = 0; s < prev.size(); ++s) {
-                expand_ham_t<M>(prev[s].color, tgt, tgt_srgb[p],
-                           prev[s].cumulative_error,
-                           static_cast<std::uint16_t>(s),
-                           pre, base_srgb, sc.window_candidates);
+                expand_ham_t<M>(prev[s].color,
+                                tgt,
+                                tgt_srgb[p],
+                                prev[s].cumulative_error,
+                                static_cast<std::uint16_t>(s),
+                                pre,
+                                base_srgb,
+                                sc.window_candidates);
             }
-            prune_beam(sc.window_candidates, sc.window_hist[p], beam_k,
-                       sc.err_idx);
+            prune_beam(sc.window_candidates, sc.window_hist[p], beam_k, sc.err_idx);
         }
 
         // Find the best window sequence (with the continuation penalty).
@@ -1091,8 +1093,7 @@ void refine_triple_t(
         for (std::size_t j = 0; j < last.size(); ++j) {
             float total = last[j].cumulative_error;
             if (has_next) {
-                auto [e3, _] = op_error(last[j].color, values[i + 3],
-                                        tgt3, tgts3);
+                auto [e3, _] = op_error(last[j].color, values[i + 3], tgt3, tgts3);
                 total += e3;
             }
             if (total < best_total) {
@@ -1110,12 +1111,13 @@ void refine_triple_t(
                 new_ops[p] = sc.window_hist[static_cast<std::size_t>(p)][idx].ham_value;
                 idx = sc.window_hist[static_cast<std::size_t>(p)][idx].parent_idx;
             }
-            for (std::size_t p = 0; p < 3; ++p) values[i + p] = new_ops[p];
+            for (std::size_t p = 0; p < 3; ++p)
+                values[i + p] = new_ops[p];
 
             // Recompute states inside (and just after) the window.
-            auto [_e0, ns0] = op_error(prev_state, values[i],     tgt0, tgts0);
-            auto [_e1, ns1] = op_error(ns0,        values[i + 1], tgt1, tgts1);
-            auto [_e2, ns2] = op_error(ns1,        values[i + 2], tgt2, tgts2);
+            auto [_e0, ns0] = op_error(prev_state, values[i], tgt0, tgts0);
+            auto [_e1, ns1] = op_error(ns0, values[i + 1], tgt1, tgts1);
+            auto [_e2, ns2] = op_error(ns1, values[i + 2], tgt2, tgts2);
             sc.states[i + 1] = ns0;
             sc.states[i + 2] = ns1;
             sc.states[i + 3] = ns2;
@@ -1125,20 +1127,18 @@ void refine_triple_t(
 
 // Runtime dispatcher for refine_triple — picks the metric template
 // once per scanline, forwards into refine_triple_t.
-inline void refine_triple(
-    std::vector<std::uint8_t>& values,
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb,
-    std::size_t beam_k,
-    HamMetric metric = HamMetric::srgb_mse) {
+inline void refine_triple(std::vector<std::uint8_t>& values,
+                          std::span<const Color3f> target_row,
+                          SRGBColor start_color,
+                          const HamPrecomp& pre,
+                          std::span<const SRGBColor> base_srgb,
+                          std::size_t beam_k,
+                          HamMetric metric = HamMetric::srgb_mse) {
     if (metric == HamMetric::oklab2)
-        refine_triple_t<HamMetric::oklab2>(values, target_row, start_color,
-                                           pre, base_srgb, beam_k);
+        refine_triple_t<HamMetric::oklab2>(values, target_row, start_color, pre, base_srgb, beam_k);
     else
-        refine_triple_t<HamMetric::srgb_mse>(values, target_row, start_color,
-                                             pre, base_srgb, beam_k);
+        refine_triple_t<HamMetric::srgb_mse>(
+            values, target_row, start_color, pre, base_srgb, beam_k);
 }
 
 // Per-strip variant of refine_triple. Each pixel's HAM op is scored
@@ -1146,15 +1146,14 @@ inline void refine_triple(
 // expansion uses the strip palette of the pixel being expanded — so a
 // triple straddling a strip boundary picks ops valid for each pixel's
 // own palette.
-template <HamMetric M>
-void refine_triple_per_strip_t(
-    std::vector<std::uint8_t>& values,
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    std::span<const HamPrecomp> pres,
-    std::span<const std::span<const SRGBColor>> base_srgbs,
-    std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_k) {
+template<HamMetric M>
+void refine_triple_per_strip_t(std::vector<std::uint8_t>& values,
+                               std::span<const Color3f> target_row,
+                               SRGBColor start_color,
+                               std::span<const HamPrecomp> pres,
+                               std::span<const std::span<const SRGBColor>> base_srgbs,
+                               std::span<const std::uint16_t> strip_for_x,
+                               std::size_t beam_k) {
 
     auto width = values.size();
     if (width < 3) return;
@@ -1178,10 +1177,18 @@ void refine_triple_per_strip_t(
         auto prev = sc.states[x];
         SRGBColor out = prev;
         switch (ctrl) {
-        case 0b00: if (data < base_srgb.size()) out = base_srgb[data]; break;
-        case 0b01: out = {prev.r, prev.g, pre.expand_lut[data]}; break;
-        case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
-        case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
+        case 0b00:
+            if (data < base_srgb.size()) out = base_srgb[data];
+            break;
+        case 0b01:
+            out = {prev.r, prev.g, pre.expand_lut[data]};
+            break;
+        case 0b10:
+            out = {pre.expand_lut[data], prev.g, prev.b};
+            break;
+        case 0b11:
+            out = {prev.r, pre.expand_lut[data], prev.b};
+            break;
         }
         sc.states[x + 1] = out;
     }
@@ -1197,29 +1204,36 @@ void refine_triple_per_strip_t(
     auto cached_oklab = [](SRGBColor c) -> OKLab {
         return cached_srgb_to_oklab(c);
     };
-    auto op_error = [&](SRGBColor prev, std::uint8_t ham_value,
-                        std::size_t pixel_x)
-        -> std::pair<float, SRGBColor> {
+    auto op_error = [&](SRGBColor prev,
+                        std::uint8_t ham_value,
+                        std::size_t pixel_x) -> std::pair<float, SRGBColor> {
         auto si = strip_at(pixel_x);
         auto& pre = pres[si];
         auto base_srgb = base_srgbs[si];
         auto [ctrl, data] = split_ham_value(ham_value, pre.data_bits);
         SRGBColor out = prev;
         switch (ctrl) {
-        case 0b00: if (data < base_srgb.size()) out = base_srgb[data]; break;
-        case 0b01: out = {prev.r, prev.g, pre.expand_lut[data]}; break;
-        case 0b10: out = {pre.expand_lut[data], prev.g, prev.b}; break;
-        case 0b11: out = {prev.r, pre.expand_lut[data], prev.b}; break;
+        case 0b00:
+            if (data < base_srgb.size()) out = base_srgb[data];
+            break;
+        case 0b01:
+            out = {prev.r, prev.g, pre.expand_lut[data]};
+            break;
+        case 0b10:
+            out = {pre.expand_lut[data], prev.g, prev.b};
+            break;
+        case 0b11:
+            out = {prev.r, pre.expand_lut[data], prev.b};
+            break;
         }
         if constexpr (M == HamMetric::srgb_mse) {
-            return { score_srgb_mse(sc.row_srgb[pixel_x], out), out };
+            return {score_srgb_mse(sc.row_srgb[pixel_x], out), out};
         } else {
-            return { score_oklab2(sc.row_lab[pixel_x], cached_oklab(out)), out };
+            return {score_oklab2(sc.row_lab[pixel_x], cached_oklab(out)), out};
         }
     };
 
-    auto ops_per_state = pres[0].palette_lab.size()
-        + 3 * pres[0].num_data_values;
+    auto ops_per_state = pres[0].palette_lab.size() + 3 * pres[0].num_data_values;
     sc.window_candidates.reserve(beam_k * ops_per_state);
 
     constexpr float skip_threshold_per_pixel = 5e-5f;
@@ -1236,8 +1250,7 @@ void refine_triple_per_strip_t(
         auto [e2_cur, s2_cur] = op_error(s1_cur, values[i + 2], i + 2);
         float cur_err = e0_cur + e1_cur + e2_cur;
 
-        if (e0_cur < skip_threshold_per_pixel &&
-            e1_cur < skip_threshold_per_pixel &&
+        if (e0_cur < skip_threshold_per_pixel && e1_cur < skip_threshold_per_pixel &&
             e2_cur < skip_threshold_per_pixel) {
             continue;
         }
@@ -1254,23 +1267,27 @@ void refine_triple_per_strip_t(
         sc.window_prev_beam.push_back({prev_state, 0.0f, 0, 0});
 
         SRGBColor tgt_srgb[3] = {
-            sc.row_srgb[i], sc.row_srgb[i + 1], sc.row_srgb[i + 2],
+            sc.row_srgb[i],
+            sc.row_srgb[i + 1],
+            sc.row_srgb[i + 2],
         };
 
         for (std::size_t p = 0; p < 3; ++p) {
             OKLab tgt = (p == 0) ? tgt0 : (p == 1) ? tgt1 : tgt2;
             auto si = strip_at(i + p);
-            const auto& prev = (p == 0) ? sc.window_prev_beam
-                                        : sc.window_hist[p - 1];
+            const auto& prev = (p == 0) ? sc.window_prev_beam : sc.window_hist[p - 1];
             sc.window_candidates.clear();
             for (std::size_t s = 0; s < prev.size(); ++s) {
-                expand_ham_t<M>(prev[s].color, tgt, tgt_srgb[p],
-                           prev[s].cumulative_error,
-                           static_cast<std::uint16_t>(s),
-                           pres[si], base_srgbs[si], sc.window_candidates);
+                expand_ham_t<M>(prev[s].color,
+                                tgt,
+                                tgt_srgb[p],
+                                prev[s].cumulative_error,
+                                static_cast<std::uint16_t>(s),
+                                pres[si],
+                                base_srgbs[si],
+                                sc.window_candidates);
             }
-            prune_beam(sc.window_candidates, sc.window_hist[p], beam_k,
-                       sc.err_idx);
+            prune_beam(sc.window_candidates, sc.window_hist[p], beam_k, sc.err_idx);
         }
 
         std::size_t best_idx = 0;
@@ -1279,8 +1296,7 @@ void refine_triple_per_strip_t(
         for (std::size_t j = 0; j < last.size(); ++j) {
             float total = last[j].cumulative_error;
             if (has_next) {
-                auto [e3, _] = op_error(last[j].color, values[i + 3],
-                                        i + 3);
+                auto [e3, _] = op_error(last[j].color, values[i + 3], i + 3);
                 total += e3;
             }
             if (total < best_total) {
@@ -1296,11 +1312,12 @@ void refine_triple_per_strip_t(
                 new_ops[p] = sc.window_hist[static_cast<std::size_t>(p)][idx].ham_value;
                 idx = sc.window_hist[static_cast<std::size_t>(p)][idx].parent_idx;
             }
-            for (std::size_t p = 0; p < 3; ++p) values[i + p] = new_ops[p];
+            for (std::size_t p = 0; p < 3; ++p)
+                values[i + p] = new_ops[p];
 
-            auto [_e0, ns0] = op_error(prev_state, values[i],     i);
-            auto [_e1, ns1] = op_error(ns0,        values[i + 1], i + 1);
-            auto [_e2, ns2] = op_error(ns1,        values[i + 2], i + 2);
+            auto [_e0, ns0] = op_error(prev_state, values[i], i);
+            auto [_e1, ns1] = op_error(ns0, values[i + 1], i + 1);
+            auto [_e2, ns2] = op_error(ns1, values[i + 2], i + 2);
             sc.states[i + 1] = ns0;
             sc.states[i + 2] = ns1;
             sc.states[i + 3] = ns2;
@@ -1308,34 +1325,30 @@ void refine_triple_per_strip_t(
     }
 }
 
-inline void refine_triple_per_strip(
-    std::vector<std::uint8_t>& values,
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    std::span<const HamPrecomp> pres,
-    std::span<const std::span<const SRGBColor>> base_srgbs,
-    std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_k,
-    HamMetric metric) {
+inline void refine_triple_per_strip(std::vector<std::uint8_t>& values,
+                                    std::span<const Color3f> target_row,
+                                    SRGBColor start_color,
+                                    std::span<const HamPrecomp> pres,
+                                    std::span<const std::span<const SRGBColor>> base_srgbs,
+                                    std::span<const std::uint16_t> strip_for_x,
+                                    std::size_t beam_k,
+                                    HamMetric metric) {
     if (metric == HamMetric::oklab2)
         refine_triple_per_strip_t<HamMetric::oklab2>(
-            values, target_row, start_color, pres, base_srgbs,
-            strip_for_x, beam_k);
+            values, target_row, start_color, pres, base_srgbs, strip_for_x, beam_k);
     else
         refine_triple_per_strip_t<HamMetric::srgb_mse>(
-            values, target_row, start_color, pres, base_srgbs,
-            strip_for_x, beam_k);
+            values, target_row, start_color, pres, base_srgbs, strip_for_x, beam_k);
 }
 
 // ---------------------------------------------------------------------------
 // Greedy scanline encoder (generic)
 // ---------------------------------------------------------------------------
 
-ScanlineResult encode_scanline_greedy(
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    const HamPrecomp& pre,
-    std::span<const SRGBColor> base_srgb) {
+ScanlineResult encode_scanline_greedy(std::span<const Color3f> target_row,
+                                      SRGBColor start_color,
+                                      const HamPrecomp& pre,
+                                      std::span<const SRGBColor> base_srgb) {
 
     auto width = target_row.size();
     std::vector<std::uint8_t> values(width);
@@ -1343,8 +1356,7 @@ ScanlineResult encode_scanline_greedy(
     SRGBColor prev = start_color;
 
     for (std::size_t x = 0; x < width; ++x) {
-        HamPixelResult result = encode_ham_pixel_impl(
-            prev, target_row[x], pre, base_srgb);
+        HamPixelResult result = encode_ham_pixel_impl(prev, target_row[x], pre, base_srgb);
 
         values[x] = result.value;
         prev = result.result_color;
@@ -1360,12 +1372,11 @@ ScanlineResult encode_scanline_greedy(
 // Generic HAM encoder (works for any depth 4-8)
 // ---------------------------------------------------------------------------
 
-Result<HamResult> encode_ham_generic(
-    const Image& image,
-    std::size_t num_base_colors,
-    std::size_t num_bitplanes,
-    amiga::Chipset chipset,
-    const HamOptions& opts) {
+Result<HamResult> encode_ham_generic(const Image& image,
+                                     std::size_t num_base_colors,
+                                     std::size_t num_bitplanes,
+                                     amiga::Chipset chipset,
+                                     const HamOptions& opts) {
 
     auto w = image.width();
     auto h = image.height();
@@ -1390,13 +1401,12 @@ Result<HamResult> encode_ham_generic(
         // Trim or pad to exactly num_base_colors entries (pad with black).
         base_pal.name = "user";
         base_pal.colors = opts.external_palette;
-        if (base_pal.colors.size() > num_base_colors)
-            base_pal.colors.resize(num_base_colors);
+        if (base_pal.colors.size() > num_base_colors) base_pal.colors.resize(num_base_colors);
         while (base_pal.colors.size() < num_base_colors)
             base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
     } else {
-        base_pal = choose_ham_palette(image, num_base_colors, chipset,
-                                      opts.palette_diversity, opts.quantizer);
+        base_pal = choose_ham_palette(
+            image, num_base_colors, chipset, opts.palette_diversity, opts.quantizer);
     }
 
     // Refinement only helps HAM6 (many pixels use SET due to 4-bit modify
@@ -1404,8 +1414,7 @@ Result<HamResult> encode_ham_generic(
     // drops to a small biased sample, and refinement actively hurts quality.
     // Skip refinement entirely when the user supplied an external palette —
     // they explicitly told us what to use; don't second-guess.
-    int ham_refine_iters = (!opts.external_palette.empty()) ? 0
-                         : (data_bits <= 4) ? 2 : 0;
+    int ham_refine_iters = (!opts.external_palette.empty()) ? 0 : (data_bits <= 4) ? 2 : 0;
     auto data_mask = static_cast<std::uint8_t>((1u << data_bits) - 1);
     for (int ri = 0; ri < ham_refine_iters; ++ri) {
         std::vector<SRGBColor> ref_srgb(base_pal.size());
@@ -1414,7 +1423,10 @@ Result<HamResult> encode_ham_generic(
         HamPrecomp ref_pre{std::span<const Color3f>{base_pal.colors}, data_bits};
 
         // Per-slot accumulators for SET targets
-        struct SetAcc { double L{}, a{}, b{}; double count{}; };
+        struct SetAcc {
+            double L{}, a{}, b{};
+            double count{};
+        };
         std::vector<SetAcc> acc(num_base_colors);
 
         for (std::size_t y = 0; y < h; ++y) {
@@ -1439,15 +1451,14 @@ Result<HamResult> encode_ham_generic(
         bool changed = false;
         for (std::size_t k = 1; k < num_base_colors; ++k) {
             if (acc[k].count < 1.0) continue;
-            auto new_lab = color_space::OKLab{
-                static_cast<float>(acc[k].L / acc[k].count),
-                static_cast<float>(acc[k].a / acc[k].count),
-                static_cast<float>(acc[k].b / acc[k].count)};
+            auto new_lab = color_space::OKLab{static_cast<float>(acc[k].L / acc[k].count),
+                                              static_cast<float>(acc[k].a / acc[k].count),
+                                              static_cast<float>(acc[k].b / acc[k].count)};
             auto new_color_linear = color_space::oklab_to_linear(new_lab).clamped();
             // Match base palette precision: OCS for HAM6, AGA for HAM8
             auto new_color = (chipset != amiga::Chipset::aga)
-                ? palette::quantize_to_ocs(new_color_linear)
-                : new_color_linear;
+                                 ? palette::quantize_to_ocs(new_color_linear)
+                                 : new_color_linear;
             if (new_color != base_pal.colors[k]) {
                 base_pal.colors[k] = new_color;
                 changed = true;
@@ -1492,8 +1503,7 @@ Result<HamResult> encode_ham_generic(
 
                 for (std::size_t x = 0; x < w; ++x) {
                     auto lab = color_space::linear_to_oklab(row[x]);
-                    float threshold = dither::ordered_threshold(
-                        opts.dither_method, x, y);
+                    float threshold = dither::ordered_threshold(opts.dither_method, x, y);
                     lab.L += threshold * strength * 0.15f;
                     lab.a += threshold * strength * 0.03f;
                     lab.b += threshold * strength * 0.03f;
@@ -1507,13 +1517,18 @@ Result<HamResult> encode_ham_generic(
 
                 std::span<const Color3f> dithered_span{dithered_row};
                 auto scanline = encode_scanline_dp(
-                    dithered_span, start, pre, srgb_span, opts.beam_width,
-                    opts.metric);
+                    dithered_span, start, pre, srgb_span, opts.beam_width, opts.metric);
                 if (opts.triple_beam > 0) {
-                    refine_triple(scanline.values, dithered_span, start, pre,
-                                  srgb_span, opts.triple_beam, opts.metric);
+                    refine_triple(scanline.values,
+                                  dithered_span,
+                                  start,
+                                  pre,
+                                  srgb_span,
+                                  opts.triple_beam,
+                                  opts.metric);
                 }
-                std::copy(scanline.values.begin(), scanline.values.end(),
+                std::copy(scanline.values.begin(),
+                          scanline.values.end(),
                           ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
                 double old = atomic_err.load(std::memory_order_relaxed);
                 while (!atomic_err.compare_exchange_weak(
@@ -1521,8 +1536,7 @@ Result<HamResult> encode_ham_generic(
             }
         };
 
-        auto n_threads = std::max<unsigned>(1,
-            std::thread::hardware_concurrency());
+        auto n_threads = std::max<unsigned>(1, std::thread::hardware_concurrency());
         if (n_threads > h) n_threads = static_cast<unsigned>(h);
         if (n_threads == 1) {
             worker();
@@ -1551,9 +1565,9 @@ Result<HamResult> encode_ham_generic(
             .serpentine = true,
         };
         dither::diffuse_raw_buffer(
-            image, d_settings,
-            [&](const OKLab& target,
-                std::size_t x, std::size_t y) -> dither::PickResult {
+            image,
+            d_settings,
+            [&](const OKLab& target, std::size_t x, std::size_t y) -> dither::PickResult {
                 auto adjusted = color_space::oklab_to_linear(target);
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
@@ -1564,12 +1578,9 @@ Result<HamResult> encode_ham_generic(
                 // what gives the ditherer something to diffuse — the
                 // earlier OCS-only quantization no-op'd on AGA.
                 auto srgb_adj = linear_to_srgb8(adjusted);
-                srgb_adj.r = expand_to_8bit(
-                    reduce_to_bits(srgb_adj.r, data_bits), data_bits);
-                srgb_adj.g = expand_to_8bit(
-                    reduce_to_bits(srgb_adj.g, data_bits), data_bits);
-                srgb_adj.b = expand_to_8bit(
-                    reduce_to_bits(srgb_adj.b, data_bits), data_bits);
+                srgb_adj.r = expand_to_8bit(reduce_to_bits(srgb_adj.r, data_bits), data_bits);
+                srgb_adj.g = expand_to_8bit(reduce_to_bits(srgb_adj.g, data_bits), data_bits);
+                srgb_adj.b = expand_to_8bit(reduce_to_bits(srgb_adj.b, data_bits), data_bits);
                 auto quantized = srgb8_to_linear(srgb_adj);
                 dithered_image[x, y] = quantized;
                 return {color_space::linear_to_oklab(quantized), 0.5f};
@@ -1586,15 +1597,15 @@ Result<HamResult> encode_ham_generic(
                 SRGBColor start = base_srgb[0];
                 auto row = dithered_image.row(y);
                 auto scanline = opts.greedy
-                    ? encode_scanline_greedy(row, start, pre, srgb_span)
-                    : encode_scanline_dp(row, start, pre,
-                                         srgb_span, opts.beam_width,
-                                         opts.metric);
+                                    ? encode_scanline_greedy(row, start, pre, srgb_span)
+                                    : encode_scanline_dp(
+                                          row, start, pre, srgb_span, opts.beam_width, opts.metric);
                 if (!opts.greedy && opts.triple_beam > 0) {
-                    refine_triple(scanline.values, row, start, pre,
-                                  srgb_span, opts.triple_beam, opts.metric);
+                    refine_triple(
+                        scanline.values, row, start, pre, srgb_span, opts.triple_beam, opts.metric);
                 }
-                std::copy(scanline.values.begin(), scanline.values.end(),
+                std::copy(scanline.values.begin(),
+                          scanline.values.end(),
                           ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
                 double old = atomic_err_ed.load(std::memory_order_relaxed);
                 while (!atomic_err_ed.compare_exchange_weak(
@@ -1627,15 +1638,15 @@ Result<HamResult> encode_ham_generic(
                 SRGBColor start = base_srgb[0];
                 auto row = image.row(y);
                 auto scanline = opts.greedy
-                    ? encode_scanline_greedy(row, start, pre, srgb_span)
-                    : encode_scanline_dp(row, start, pre,
-                                         srgb_span, opts.beam_width,
-                                         opts.metric);
+                                    ? encode_scanline_greedy(row, start, pre, srgb_span)
+                                    : encode_scanline_dp(
+                                          row, start, pre, srgb_span, opts.beam_width, opts.metric);
                 if (!opts.greedy && opts.triple_beam > 0) {
-                    refine_triple(scanline.values, row, start, pre,
-                                  srgb_span, opts.triple_beam, opts.metric);
+                    refine_triple(
+                        scanline.values, row, start, pre, srgb_span, opts.triple_beam, opts.metric);
                 }
-                std::copy(scanline.values.begin(), scanline.values.end(),
+                std::copy(scanline.values.begin(),
+                          scanline.values.end(),
                           ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
                 double old = atomic_err.load(std::memory_order_relaxed);
                 while (!atomic_err.compare_exchange_weak(
@@ -1643,8 +1654,7 @@ Result<HamResult> encode_ham_generic(
             }
         };
 
-        auto n_threads = std::max<unsigned>(1,
-            std::thread::hardware_concurrency());
+        auto n_threads = std::max<unsigned>(1, std::thread::hardware_concurrency());
         if (n_threads > h) n_threads = static_cast<unsigned>(h);
         if (n_threads == 1) {
             worker();
@@ -1708,7 +1718,7 @@ std::vector<HamSwap> find_ham_swaps(
     // since 0.8.1 to reduce per-line palette flicker. Caller passes
     // {prev,curr,next} with weights {decay,1.0,decay}.
     std::span<const std::span<const Color3f>> extra_rows,
-    std::span<const float>                    extra_weights) {
+    std::span<const float> extra_weights) {
 
     auto w = row.size();
     std::vector<HamSwap> swaps;
@@ -1724,8 +1734,7 @@ std::vector<HamSwap> find_ham_swaps(
             SRGBColor p = ps.empty() ? SRGBColor{0, 0, 0} : ps[0];
             float err = 0.0f;
             for (auto x : r) {
-                auto res = encode_ham_pixel_impl(p, x, pre,
-                                            std::span<const SRGBColor>{ps});
+                auto res = encode_ham_pixel_impl(p, x, pre, std::span<const SRGBColor>{ps});
                 err += res.error;
                 p = res.result_color;
             }
@@ -1759,22 +1768,19 @@ std::vector<HamSwap> find_ham_swaps(
             for (std::size_t i = 0; i < num_base_colors; ++i)
                 pal_srgb[i] = linear_to_srgb8(current_pal[i]);
 
-            SRGBColor prev = pal_srgb.empty()
-                ? SRGBColor{0, 0, 0} : pal_srgb[0];
+            SRGBColor prev = pal_srgb.empty() ? SRGBColor{0, 0, 0} : pal_srgb[0];
 
             std::vector<std::size_t> set_count(num_base_colors, 0);
             float worst_pixel_error = 0.0f;
             Color3f worst_pixel_target{};
             float base_err = 0.0f;
 
-            HamPrecomp swap_pre{
-                std::span<const Color3f>{current_pal.data(), num_base_colors},
-                data_bits};
+            HamPrecomp swap_pre{std::span<const Color3f>{current_pal.data(), num_base_colors},
+                                data_bits};
 
             for (std::size_t x = 0; x < w; ++x) {
                 auto result = encode_ham_pixel_impl(
-                    prev, row[x], swap_pre,
-                    std::span<const SRGBColor>{pal_srgb});
+                    prev, row[x], swap_pre, std::span<const SRGBColor>{pal_srgb});
                 auto [control, data_idx] = split_ham_value(result.value, data_bits);
                 if (control == 0) set_count[data_idx]++;
                 if (result.error > worst_pixel_error) {
@@ -1797,8 +1803,8 @@ std::vector<HamSwap> find_ham_swaps(
             }
 
             auto new_color = (chipset != amiga::Chipset::aga)
-                ? palette::quantize_to_ocs(worst_pixel_target)
-                : worst_pixel_target;
+                                 ? palette::quantize_to_ocs(worst_pixel_target)
+                                 : worst_pixel_target;
 
             auto old_color = current_pal[min_slot];
             current_pal[min_slot] = new_color;
@@ -1823,24 +1829,24 @@ std::vector<HamSwap> find_ham_swaps(
         for (std::size_t i = 0; i < num_base_colors; ++i)
             pal_srgb[i] = linear_to_srgb8(current_pal[i]);
 
-        SRGBColor prev = pal_srgb.empty()
-            ? SRGBColor{0, 0, 0} : pal_srgb[0];
+        SRGBColor prev = pal_srgb.empty() ? SRGBColor{0, 0, 0} : pal_srgb[0];
 
         std::vector<std::size_t> set_count(num_base_colors, 0);
         float base_err = 0.0f;
 
-        HamPrecomp swap_pre{
-            std::span<const Color3f>{current_pal.data(), num_base_colors},
-            data_bits};
+        HamPrecomp swap_pre{std::span<const Color3f>{current_pal.data(), num_base_colors},
+                            data_bits};
 
         // Track per-pixel error for top-K worst-pixel candidate selection.
-        struct PxErr { float err; std::size_t x; };
+        struct PxErr {
+            float err;
+            std::size_t x;
+        };
         std::vector<PxErr> px_errs(w);
 
         for (std::size_t x = 0; x < w; ++x) {
             auto result = encode_ham_pixel_impl(
-                prev, row[x], swap_pre,
-                std::span<const SRGBColor>{pal_srgb});
+                prev, row[x], swap_pre, std::span<const SRGBColor>{pal_srgb});
             auto [control, data_idx] = split_ham_value(result.value, data_bits);
             if (control == 0) set_count[data_idx]++;
             base_err += result.error;
@@ -1853,11 +1859,10 @@ std::vector<HamSwap> find_ham_swaps(
         // the K worst pixels. Centroid often beats any single pixel when a
         // smooth high-error region (skin, sky band) needs a fresh anchor.
         constexpr std::size_t kTopK = 16;
-        std::partial_sort(
-            px_errs.begin(),
-            px_errs.begin() + static_cast<std::ptrdiff_t>(std::min(kTopK, w)),
-            px_errs.end(),
-            [](const PxErr& a, const PxErr& b) { return a.err > b.err; });
+        std::partial_sort(px_errs.begin(),
+                          px_errs.begin() + static_cast<std::ptrdiff_t>(std::min(kTopK, w)),
+                          px_errs.end(),
+                          [](const PxErr& a, const PxErr& b) { return a.err > b.err; });
         if (px_errs.empty() || px_errs[0].err < 1e-6f) break;
 
         std::vector<Color3f> cands;
@@ -1870,8 +1875,7 @@ std::vector<HamSwap> find_ham_swaps(
             return static_cast<std::size_t>((r << 8) | (g << 4) | b);
         };
         auto add_cand = [&](Color3f c) {
-            auto cs = (chipset != amiga::Chipset::aga)
-                ? palette::quantize_to_ocs(c) : c;
+            auto cs = (chipset != amiga::Chipset::aga) ? palette::quantize_to_ocs(c) : c;
             auto key = ocs_key(cs);
             if (chipset == amiga::Chipset::aga || !seen[key]) {
                 if (chipset != amiga::Chipset::aga) seen[key] = true;
@@ -1889,10 +1893,9 @@ std::vector<HamSwap> find_ham_swaps(
             sumb += static_cast<double>(lab.b);
         }
         if (topk_used > 0) {
-            OKLab centroid{
-                static_cast<float>(sumL / static_cast<double>(topk_used)),
-                static_cast<float>(suma / static_cast<double>(topk_used)),
-                static_cast<float>(sumb / static_cast<double>(topk_used))};
+            OKLab centroid{static_cast<float>(sumL / static_cast<double>(topk_used)),
+                           static_cast<float>(suma / static_cast<double>(topk_used)),
+                           static_cast<float>(sumb / static_cast<double>(topk_used))};
             add_cand(color_space::oklab_to_linear(centroid).clamped());
         }
 
@@ -1905,11 +1908,9 @@ std::vector<HamSwap> find_ham_swaps(
         slot_order.reserve(num_base_colors - 1);
         for (std::size_t k = 1; k < num_base_colors; ++k)
             slot_order.push_back(k);
-        std::sort(
-            slot_order.begin(), slot_order.end(),
-            [&](std::size_t a, std::size_t b) {
-                return set_count[a] < set_count[b];
-            });
+        std::sort(slot_order.begin(), slot_order.end(), [&](std::size_t a, std::size_t b) {
+            return set_count[a] < set_count[b];
+        });
         std::size_t slot_trials = slot_order.size();
 
         // Parallelise the candidate × slot search. Each trial is
@@ -1920,8 +1921,8 @@ std::vector<HamSwap> find_ham_swaps(
         // = ~1.8M row encodes), so parallelising here lifts the whole
         // HAM6+sliced+best path from single-thread to N-core.
         struct TrialResult {
-            float    err = std::numeric_limits<float>::max();
-            Color3f  color{};
+            float err = std::numeric_limits<float>::max();
+            Color3f color{};
             std::size_t slot = 0;
         };
         std::size_t total_trials = cands.size() * slot_trials;
@@ -1930,12 +1931,10 @@ std::vector<HamSwap> find_ham_swaps(
             std::size_t ci = idx / slot_trials;
             std::size_t si = idx % slot_trials;
             auto slot = slot_order[si];
-            std::vector<Color3f> local_pal(current_pal.begin(),
-                                            current_pal.end());
+            std::vector<Color3f> local_pal(current_pal.begin(), current_pal.end());
             local_pal[slot] = cands[ci];
             float trial = measure_row_error(
-                std::span<const Color3f>{local_pal.data(),
-                                         num_base_colors});
+                std::span<const Color3f>{local_pal.data(), num_base_colors});
             trials[idx] = {trial, cands[ci], slot};
         });
         float best_trial = base_err;
@@ -1959,14 +1958,13 @@ std::vector<HamSwap> find_ham_swaps(
     return swaps;
 }
 
-Result<HamResult> encode_ham_copper_generic(
-    const Image& image,
-    std::size_t num_base_colors,
-    std::size_t num_bitplanes,
-    amiga::Chipset chipset,
-    bool is_hires,
-    const HamOptions& opts,
-    std::size_t override_changes) {
+Result<HamResult> encode_ham_copper_generic(const Image& image,
+                                            std::size_t num_base_colors,
+                                            std::size_t num_bitplanes,
+                                            amiga::Chipset chipset,
+                                            bool is_hires,
+                                            const HamOptions& opts,
+                                            std::size_t override_changes) {
 
     auto w = image.width();
     auto h = image.height();
@@ -1984,8 +1982,7 @@ Result<HamResult> encode_ham_copper_generic(
         changes_per_line = override_changes;
     } else {
         changes_per_line = copper::max_changes_per_line(
-            num_bitplanes, true, is_hires, chipset,
-            opts.skip_initial_swap_rows > 0);
+            num_bitplanes, true, is_hires, chipset, opts.skip_initial_swap_rows > 0);
     }
 
     // Global base palette. User-supplied via --palette takes precedence
@@ -1994,11 +1991,10 @@ Result<HamResult> encode_ham_copper_generic(
     if (!opts.external_palette.empty()) {
         base_pal.name = "user";
         base_pal.colors = opts.external_palette;
-        if (base_pal.colors.size() > num_base_colors)
-            base_pal.colors.resize(num_base_colors);
+        if (base_pal.colors.size() > num_base_colors) base_pal.colors.resize(num_base_colors);
     } else {
-        base_pal = choose_ham_palette(image, num_base_colors, chipset,
-                                      opts.palette_diversity, opts.quantizer);
+        base_pal = choose_ham_palette(
+            image, num_base_colors, chipset, opts.palette_diversity, opts.quantizer);
     }
     while (base_pal.colors.size() < num_base_colors) {
         base_pal.colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
@@ -2027,15 +2023,16 @@ Result<HamResult> encode_ham_copper_generic(
             .serpentine = true,
         };
         dither::diffuse_raw_buffer(
-            image, d_settings,
-            [&](const OKLab& target,
-                std::size_t x, std::size_t y) -> dither::PickResult {
+            image,
+            d_settings,
+            [&](const OKLab& target, std::size_t x, std::size_t y) -> dither::PickResult {
                 auto adjusted = color_space::oklab_to_linear(target);
                 adjusted.r = std::clamp(adjusted.r, 0.0f, 1.0f);
                 adjusted.g = std::clamp(adjusted.g, 0.0f, 1.0f);
                 adjusted.b = std::clamp(adjusted.b, 0.0f, 1.0f);
                 auto quantized = (chipset != amiga::Chipset::aga)
-                    ? palette::quantize_to_ocs(adjusted) : adjusted;
+                                     ? palette::quantize_to_ocs(adjusted)
+                                     : adjusted;
                 dithered_image[x, y] = quantized;
                 return {color_space::linear_to_oklab(quantized), 0.5f};
             });
@@ -2067,11 +2064,9 @@ Result<HamResult> encode_ham_copper_generic(
     constexpr float kPass1Weight = 0.05f;
     constexpr float kPass2Weight = 0.95f;
     constexpr int kSlicedBestRefineIters = 4;
-    float run_passes_count = opts.best
-        ? static_cast<float>(1 + kSlicedBestRefineIters) : 1.0f;
-    float total_units = run_passes_count *
-        (kPass1Weight * static_cast<float>(h) +
-         kPass2Weight * static_cast<float>(h));
+    float run_passes_count = opts.best ? static_cast<float>(1 + kSlicedBestRefineIters) : 1.0f;
+    float total_units = run_passes_count * (kPass1Weight * static_cast<float>(h) +
+                                            kPass2Weight * static_cast<float>(h));
     std::atomic<float> work_done{0.0f};
     auto add_work = [&](float weight) {
         // Lock-free float accumulate: load → add → CAS-with-retry.
@@ -2123,14 +2118,11 @@ Result<HamResult> encode_ham_copper_generic(
         // structure preserved for future experimentation.
         constexpr float kHamNeighbourDecay = 0.0f;
         std::array<std::span<const Color3f>, 2> neighbour_rows;
-        std::array<float, 2> neighbour_weights = {kHamNeighbourDecay,
-                                                  kHamNeighbourDecay};
+        std::array<float, 2> neighbour_weights = {kHamNeighbourDecay, kHamNeighbourDecay};
         for (std::size_t y = 0; y < h; ++y) {
             auto row = encode_image.row(y);
-            auto& pal_for_row = (is_lace && (y & 1))
-                ? current_pal_f2 : current_pal;
-            auto row_k = (y < opts.skip_initial_swap_rows)
-                ? std::size_t{0} : changes_per_line;
+            auto& pal_for_row = (is_lace && (y & 1)) ? current_pal_f2 : current_pal;
+            auto row_k = (y < opts.skip_initial_swap_rows) ? std::size_t{0} : changes_per_line;
             std::size_t nb_count = 0;
             if (y > 0) {
                 neighbour_rows[nb_count] = encode_image.row(y - 1);
@@ -2142,19 +2134,21 @@ Result<HamResult> encode_ham_copper_generic(
                 neighbour_weights[nb_count] = kHamNeighbourDecay;
                 ++nb_count;
             }
-            std::span<const std::span<const Color3f>> rows_view(
-                neighbour_rows.data(), nb_count);
-            std::span<const float> weights_view(
-                neighbour_weights.data(), nb_count);
-            auto swaps = find_ham_swaps(row, pal_for_row, num_base_colors,
-                                        data_bits, row_k, chipset,
+            std::span<const std::span<const Color3f>> rows_view(neighbour_rows.data(), nb_count);
+            std::span<const float> weights_view(neighbour_weights.data(), nb_count);
+            auto swaps = find_ham_swaps(row,
+                                        pal_for_row,
+                                        num_base_colors,
+                                        data_bits,
+                                        row_k,
+                                        chipset,
                                         opts.best,
-                                        rows_view, weights_view);
+                                        rows_view,
+                                        weights_view);
             std::vector<copper::CopperChange> line_changes;
             line_changes.reserve(swaps.size());
             for (auto& [slot, color] : swaps) {
-                line_changes.push_back({
-                    static_cast<std::uint8_t>(slot), color});
+                line_changes.push_back({static_cast<std::uint8_t>(slot), color});
             }
             out.all_changes[y] = std::move(line_changes);
             out.scanline_palettes[y] = pal_for_row;
@@ -2178,21 +2172,17 @@ Result<HamResult> encode_ham_copper_generic(
                     pal_srgb[i] = linear_to_srgb8(pal_for_row[i]);
                 }
                 std::span<const SRGBColor> srgb_span{pal_srgb};
-                SRGBColor start = pal_srgb.empty()
-                    ? SRGBColor{0, 0, 0} : pal_srgb[0];
+                SRGBColor start = pal_srgb.empty() ? SRGBColor{0, 0, 0} : pal_srgb[0];
 
-                HamPrecomp line_pre{
-                    std::span<const Color3f>{pal_for_row.data(),
-                                             num_base_colors},
-                    data_bits};
+                HamPrecomp line_pre{std::span<const Color3f>{pal_for_row.data(), num_base_colors},
+                                    data_bits};
 
                 float err;
                 if (use_ordered) {
                     std::vector<Color3f> dithered_row(w);
                     for (std::size_t x = 0; x < w; ++x) {
                         auto lab = color_space::linear_to_oklab(row[x]);
-                        float threshold = dither::ordered_threshold(
-                            opts.dither_method, x, y);
+                        float threshold = dither::ordered_threshold(opts.dither_method, x, y);
                         lab.L += threshold * opts.dither_strength * 0.15f;
                         lab.a += threshold * opts.dither_strength * 0.03f;
                         lab.b += threshold * opts.dither_strength * 0.03f;
@@ -2204,45 +2194,47 @@ Result<HamResult> encode_ham_copper_generic(
                         };
                     }
                     std::span<const Color3f> dr{dithered_row};
-                    auto scanline = encode_scanline_dp(dr, start, line_pre,
-                                                       srgb_span,
-                                                       beam_width,
-                                                       opts.metric);
+                    auto scanline = encode_scanline_dp(
+                        dr, start, line_pre, srgb_span, beam_width, opts.metric);
                     if (opts.triple_beam > 0) {
-                        refine_triple(scanline.values, dr, start, line_pre,
-                                      srgb_span, opts.triple_beam,
+                        refine_triple(scanline.values,
+                                      dr,
+                                      start,
+                                      line_pre,
+                                      srgb_span,
+                                      opts.triple_beam,
                                       opts.metric);
                     }
-                    std::copy(scanline.values.begin(), scanline.values.end(),
-                              out.ham_values.begin() +
-                                  static_cast<std::ptrdiff_t>(y * w));
+                    std::copy(scanline.values.begin(),
+                              scanline.values.end(),
+                              out.ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
                     err = scanline.error;
                 } else {
-                    auto scanline = encode_scanline_dp(row, start, line_pre,
-                                                       srgb_span,
-                                                       beam_width,
-                                                       opts.metric);
+                    auto scanline = encode_scanline_dp(
+                        row, start, line_pre, srgb_span, beam_width, opts.metric);
                     if (opts.triple_beam > 0) {
-                        refine_triple(scanline.values, row, start, line_pre,
-                                      srgb_span, opts.triple_beam,
+                        refine_triple(scanline.values,
+                                      row,
+                                      start,
+                                      line_pre,
+                                      srgb_span,
+                                      opts.triple_beam,
                                       opts.metric);
                     }
-                    std::copy(scanline.values.begin(), scanline.values.end(),
-                              out.ham_values.begin() +
-                                  static_cast<std::ptrdiff_t>(y * w));
+                    std::copy(scanline.values.begin(),
+                              scanline.values.end(),
+                              out.ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
                     err = scanline.error;
                 }
                 double old = atomic_err.load(std::memory_order_relaxed);
-                while (!atomic_err.compare_exchange_weak(
-                    old, old + static_cast<double>(err))) {}
+                while (!atomic_err.compare_exchange_weak(old, old + static_cast<double>(err))) {}
                 rows_done.fetch_add(1);
                 add_work(kPass2Weight);
                 report_global(stage);
             }
         };
 
-        auto n_threads = std::max<unsigned>(1,
-            std::thread::hardware_concurrency());
+        auto n_threads = std::max<unsigned>(1, std::thread::hardware_concurrency());
         if (n_threads > h) n_threads = static_cast<unsigned>(h);
         if (n_threads == 1) {
             worker();
@@ -2284,23 +2276,20 @@ Result<HamResult> encode_ham_copper_generic(
         for (std::size_t k = 1; k < num_base_colors; ++k) {
             double sumL = 0.0, suma = 0.0, sumb = 0.0;
             for (std::size_t y = 0; y < h; ++y) {
-                auto lab = color_space::linear_to_oklab(
-                    src.scanline_palettes[y][k]);
+                auto lab = color_space::linear_to_oklab(src.scanline_palettes[y][k]);
                 sumL += static_cast<double>(lab.L);
                 suma += static_cast<double>(lab.a);
                 sumb += static_cast<double>(lab.b);
             }
             auto inv = 1.0 / static_cast<double>(h);
-            OKLab centroid{
-                static_cast<float>(sumL * inv),
-                static_cast<float>(suma * inv),
-                static_cast<float>(sumb * inv)};
+            OKLab centroid{static_cast<float>(sumL * inv),
+                           static_cast<float>(suma * inv),
+                           static_cast<float>(sumb * inv)};
             auto lin = color_space::oklab_to_linear(centroid);
             lin.r = std::clamp(lin.r, 0.0f, 1.0f);
             lin.g = std::clamp(lin.g, 0.0f, 1.0f);
             lin.b = std::clamp(lin.b, 0.0f, 1.0f);
-            refined[k] = (chipset != amiga::Chipset::aga)
-                ? palette::quantize_to_ocs(lin) : lin;
+            refined[k] = (chipset != amiga::Chipset::aga) ? palette::quantize_to_ocs(lin) : lin;
         }
         return refined;
     };
@@ -2324,11 +2313,9 @@ Result<HamResult> encode_ham_copper_generic(
             // each slot near its centroid, big enough to break ties at
             // the per-row swap-pick step.
             for (std::size_t k = 1; k < pal.size(); ++k) {
-                auto h32 = seed * 2654435761u +
-                           static_cast<std::uint32_t>(k) * 0x9E3779B9u;
+                auto h32 = seed * 2654435761u + static_cast<std::uint32_t>(k) * 0x9E3779B9u;
                 auto unit = [&](unsigned shift) {
-                    return (static_cast<float>((h32 >> shift) & 0xFFFFu) /
-                            65535.0f - 0.5f) * 0.04f;
+                    return (static_cast<float>((h32 >> shift) & 0xFFFFu) / 65535.0f - 0.5f) * 0.04f;
                 };
                 auto lab = color_space::linear_to_oklab(pal[k]);
                 lab.L += unit(0);
@@ -2338,22 +2325,19 @@ Result<HamResult> encode_ham_copper_generic(
                 lin.r = std::clamp(lin.r, 0.0f, 1.0f);
                 lin.g = std::clamp(lin.g, 0.0f, 1.0f);
                 lin.b = std::clamp(lin.b, 0.0f, 1.0f);
-                pal[k] = (chipset != amiga::Chipset::aga)
-                    ? palette::quantize_to_ocs(lin) : lin;
+                pal[k] = (chipset != amiga::Chipset::aga) ? palette::quantize_to_ocs(lin) : lin;
             }
         };
 
         PassResult latest = best;  // copy — must not move-from best
-                                    // (retry may never improve and we'd
-                                    // be left with empty vectors).
+                                   // (retry may never improve and we'd
+                                   // be left with empty vectors).
         for (int iter = 0; iter < kSlicedBestRefineIters; ++iter) {
             auto refined = centroid_refine(latest);
             // Odd iters: jitter (escape fixed point). Even iters: pure
             // centroid (consolidate after the perturbation).
-            if (iter & 1)
-                jitter(refined, static_cast<std::uint32_t>(iter + 1));
-            auto retry = run_passes(refined, "refining",
-                                    refine_beam);
+            if (iter & 1) jitter(refined, static_cast<std::uint32_t>(iter + 1));
+            auto retry = run_passes(refined, "refining", refine_beam);
             if (retry.total_error < best.total_error) {
                 best = retry;  // copy: still need retry as next `latest`
             }
@@ -2376,48 +2360,47 @@ Result<HamResult> encode_ham_copper_generic(
     };
 }
 
-} // namespace
+}  // namespace
 
 // Public forwarders — declared in ham.hpp.
 HamPixelResult encode_ham_pixel(SRGBColor prev,
-                                 Color3f target,
-                                 const HamPrecomp& pre,
-                                 std::span<const SRGBColor> base_srgb) {
+                                Color3f target,
+                                const HamPrecomp& pre,
+                                std::span<const SRGBColor> base_srgb) {
     return encode_ham_pixel_impl(prev, target, pre, base_srgb);
 }
 
-ScanlineResult encode_scanline_dp_per_strip(
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    std::span<const HamPrecomp> pres,
-    std::span<const std::span<const SRGBColor>> base_srgbs,
-    std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_width,
-    HamMetric metric) {
+ScanlineResult encode_scanline_dp_per_strip(std::span<const Color3f> target_row,
+                                            SRGBColor start_color,
+                                            std::span<const HamPrecomp> pres,
+                                            std::span<const std::span<const SRGBColor>> base_srgbs,
+                                            std::span<const std::uint16_t> strip_for_x,
+                                            std::size_t beam_width,
+                                            HamMetric metric) {
     return encode_scanline_dp_per_strip_impl(
-        target_row, start_color, pres, base_srgbs,
-        strip_for_x, beam_width, metric);
+        target_row, start_color, pres, base_srgbs, strip_for_x, beam_width, metric);
 }
 
-void refine_scanline_triple_per_strip(
-    std::vector<std::uint8_t>& values,
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    std::span<const HamPrecomp> pres,
-    std::span<const std::span<const SRGBColor>> base_srgbs,
-    std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_k,
-    HamMetric metric) {
-    refine_triple_per_strip(values, target_row, start_color,
-                            pres, base_srgbs, strip_for_x, beam_k, metric);
+void refine_scanline_triple_per_strip(std::vector<std::uint8_t>& values,
+                                      std::span<const Color3f> target_row,
+                                      SRGBColor start_color,
+                                      std::span<const HamPrecomp> pres,
+                                      std::span<const std::span<const SRGBColor>> base_srgbs,
+                                      std::span<const std::uint16_t> strip_for_x,
+                                      std::size_t beam_k,
+                                      HamMetric metric) {
+    refine_triple_per_strip(
+        values, target_row, start_color, pres, base_srgbs, strip_for_x, beam_k, metric);
 }
 
 // ===========================================================================
 // Public API: Generic HAM encoding
 // ===========================================================================
 
-Result<HamResult> encode_ham(const Image& image, amiga::Mode mode,
-                             amiga::Chipset chipset, const HamOptions& opts) {
+Result<HamResult> encode_ham(const Image& image,
+                             amiga::Mode mode,
+                             amiga::Chipset chipset,
+                             const HamOptions& opts) {
     auto params = amiga::get_mode_params(mode);
     if (!params.is_ham) {
         return std::unexpected{Error{
@@ -2427,16 +2410,14 @@ Result<HamResult> encode_ham(const Image& image, amiga::Mode mode,
     }
     auto num_base_colors = params.max_colors;
     auto num_bitplanes = params.bitplane_depth;
-    return encode_ham_generic(image, num_base_colors, num_bitplanes,
-                              chipset, opts);
+    return encode_ham_generic(image, num_base_colors, num_bitplanes, chipset, opts);
 }
 
 // ===========================================================================
 // Public API: HAM6 encoding (convenience wrapper)
 // ===========================================================================
 
-Result<HamResult> encode_ham6(const Image& image, amiga::Chipset chipset,
-                              const HamOptions& opts) {
+Result<HamResult> encode_ham6(const Image& image, amiga::Chipset chipset, const HamOptions& opts) {
     return encode_ham(image, amiga::Mode::ham6, chipset, opts);
 }
 
@@ -2452,7 +2433,8 @@ Result<HamResult> encode_ham8(const Image& image, const HamOptions& opts) {
 // Public API: Copper HAM encoding (per-scanline base palettes)
 // ===========================================================================
 
-Result<HamResult> encode_ham_copper(const Image& image, amiga::Mode mode,
+Result<HamResult> encode_ham_copper(const Image& image,
+                                    amiga::Mode mode,
                                     amiga::Chipset chipset,
                                     const HamOptions& opts,
                                     bool is_hires,
@@ -2464,9 +2446,8 @@ Result<HamResult> encode_ham_copper(const Image& image, amiga::Mode mode,
             "Mode is not a HAM mode",
         }};
     }
-    return encode_ham_copper_generic(image, params.max_colors,
-                                     params.bitplane_depth, chipset, is_hires,
-                                     opts, override_changes);
+    return encode_ham_copper_generic(
+        image, params.max_colors, params.bitplane_depth, chipset, is_hires, opts, override_changes);
 }
 
 // ===========================================================================
@@ -2492,8 +2473,7 @@ Result<Image> render_ham(const bitplane::BitplaneData& planes,
 
     for (std::size_t y = 0; y < h; ++y) {
         // Each scanline starts with palette[0]
-        SRGBColor prev = base_srgb.empty()
-            ? SRGBColor{0, 0, 0} : base_srgb[0];
+        SRGBColor prev = base_srgb.empty() ? SRGBColor{0, 0, 0} : base_srgb[0];
 
         for (std::size_t x = 0; x < w; ++x) {
             auto raw = (*decoded)[y * w + x];
@@ -2509,16 +2489,13 @@ Result<Image> render_ham(const bitplane::BitplaneData& planes,
                 }
                 break;
             case 0b01:  // MODIFY BLUE
-                pixel = SRGBColor{prev.r, prev.g,
-                    expand_to_8bit(data_val, data_bits)};
+                pixel = SRGBColor{prev.r, prev.g, expand_to_8bit(data_val, data_bits)};
                 break;
             case 0b10:  // MODIFY RED
-                pixel = SRGBColor{expand_to_8bit(data_val, data_bits),
-                    prev.g, prev.b};
+                pixel = SRGBColor{expand_to_8bit(data_val, data_bits), prev.g, prev.b};
                 break;
             case 0b11:  // MODIFY GREEN
-                pixel = SRGBColor{prev.r,
-                    expand_to_8bit(data_val, data_bits), prev.b};
+                pixel = SRGBColor{prev.r, expand_to_8bit(data_val, data_bits), prev.b};
                 break;
             }
 
@@ -2534,10 +2511,9 @@ Result<Image> render_ham(const bitplane::BitplaneData& planes,
 // Public API: Render copper HAM (per-scanline base palettes)
 // ===========================================================================
 
-Result<Image> render_ham_copper(
-    const bitplane::BitplaneData& planes,
-    const std::vector<std::vector<Color3f>>& scanline_palettes,
-    std::size_t data_bits) {
+Result<Image> render_ham_copper(const bitplane::BitplaneData& planes,
+                                const std::vector<std::vector<Color3f>>& scanline_palettes,
+                                std::size_t data_bits) {
 
     auto decoded = bitplane::decode(planes);
     if (!decoded) return std::unexpected{decoded.error()};
@@ -2548,15 +2524,13 @@ Result<Image> render_ham_copper(
 
     for (std::size_t y = 0; y < h; ++y) {
         // Get this scanline's base palette
-        auto& pal = (y < scanline_palettes.size())
-            ? scanline_palettes[y] : scanline_palettes[0];
+        auto& pal = (y < scanline_palettes.size()) ? scanline_palettes[y] : scanline_palettes[0];
         std::vector<SRGBColor> pal_srgb(pal.size());
         for (std::size_t i = 0; i < pal.size(); ++i) {
             pal_srgb[i] = linear_to_srgb8(pal[i]);
         }
 
-        SRGBColor prev = pal_srgb.empty()
-            ? SRGBColor{0, 0, 0} : pal_srgb[0];
+        SRGBColor prev = pal_srgb.empty() ? SRGBColor{0, 0, 0} : pal_srgb[0];
 
         for (std::size_t x = 0; x < w; ++x) {
             auto raw = (*decoded)[y * w + x];
@@ -2565,8 +2539,7 @@ Result<Image> render_ham_copper(
             SRGBColor pixel{};
             switch (control) {
             case 0b00:
-                pixel = (data_val < pal_srgb.size())
-                    ? pal_srgb[data_val] : SRGBColor{0, 0, 0};
+                pixel = (data_val < pal_srgb.size()) ? pal_srgb[data_val] : SRGBColor{0, 0, 0};
                 break;
             case 0b01:
                 pixel = {prev.r, prev.g, expand_to_8bit(data_val, data_bits)};
@@ -2587,4 +2560,4 @@ Result<Image> render_ham_copper(
     return image;
 }
 
-} // namespace png2amiga::ham
+}  // namespace png2amiga::ham

@@ -16,8 +16,7 @@ namespace png2amiga::cga_text {
 // Progress callback. fraction ∈ [0, 1]; stage is a short label
 // ("cga-text" during the per-cell brute force, "done" on terminal
 // tick). Pass `{}` / nullptr to silence.
-using ProgressCb =
-    std::function<void(float fraction, std::string_view stage_name)>;
+using ProgressCb = std::function<void(float fraction, std::string_view stage_name)>;
 
 // Per-cell error metric driving the brute-force glyph + (fg, bg) search.
 //
@@ -55,8 +54,14 @@ enum class Metric : std::uint8_t { mse, blur };
 //   wide77      — 7×7 wider symmetric Gaussian σ≈1.5 (best on 8×4 /
 //                 8×8 cells if you want max SSIMULACRA2).
 enum class Kernel : std::uint8_t {
-    auto_per_mode, binomial, aniso53, aniso73, aniso35, aniso37,
-    wide55, wide77,
+    auto_per_mode,
+    binomial,
+    aniso53,
+    aniso73,
+    aniso35,
+    aniso37,
+    wide55,
+    wide77,
 };
 Kernel parse_kernel(std::string_view s) noexcept;
 std::string_view kernel_name(Kernel k) noexcept;
@@ -105,20 +110,20 @@ struct CgaTextResult {
 // quantize::ega_histogram); the encoder treats fg/bg attribute nibbles
 // as indices into this palette, and the picked colors are returned in
 // the `palette` field of the result for ATC palette-register load-up.
-Result<CgaTextResult>
-encode(const Image& image, amiga::Mode mode,
-       std::span<const std::uint8_t> restrict_chars = {},
-       std::span<const Color3f> palette16 = {},
-       int fixed_offset = -1,        // -1 = search all offsets (best quality);
-                                     //  ≥0 = force this scanline_offset (use when
-                                     //       target hardware can't shift ROM font —
-                                     //       e.g. CGA, which has no custom-font
-                                     //       slot like EGA/VGA).
-       Metric metric = Metric::blur, // see Metric enum above.
-       Kernel kernel = Kernel::auto_per_mode,  // see Kernel enum above.
-       ProgressCb on_progress = nullptr);
+Result<CgaTextResult> encode(const Image& image,
+                             amiga::Mode mode,
+                             std::span<const std::uint8_t> restrict_chars = {},
+                             std::span<const Color3f> palette16 = {},
+                             int fixed_offset = -1,  // -1 = search all offsets (best quality);
+                                                     //  ≥0 = force this scanline_offset (use when
+                                                     //       target hardware can't shift ROM font —
+                                                     //       e.g. CGA, which has no custom-font
+                                                     //       slot like EGA/VGA).
+                             Metric metric = Metric::blur,           // see Metric enum above.
+                             Kernel kernel = Kernel::auto_per_mode,  // see Kernel enum above.
+                             ProgressCb on_progress = nullptr);
 
 // Render a CgaTextResult back to an RGB image for preview.
 Image render(const CgaTextResult& r);
 
-} // namespace png2amiga::cga_text
+}  // namespace png2amiga::cga_text

@@ -12,17 +12,15 @@
 
 namespace png2amiga::palette_locks {
 
-using LockSpec    = api::LockSpec;
-using PinSpec     = api::PinSpec;
+using LockSpec = api::LockSpec;
+using PinSpec = api::PinSpec;
 using ReserveSpec = api::ReserveSpec;
 
 // ---------------------------------------------------------------------------
 // Convert a LockSpec (sRGB 0-255) into a linear Color3f, snapped to the
 // chipset/mode precision (OCS 12-bit nibble replication, STF 9-bit, AGA raw).
 // ---------------------------------------------------------------------------
-Color3f to_color(const LockSpec& lock,
-                 amiga::Chipset chipset,
-                 amiga::Mode mode);
+Color3f to_color(const LockSpec& lock, amiga::Chipset chipset, amiga::Mode mode);
 
 // ---------------------------------------------------------------------------
 // Validate locks against the palette size. Errors:
@@ -30,8 +28,7 @@ Color3f to_color(const LockSpec& lock,
 //  - duplicate indices
 //  - color components out of range
 // ---------------------------------------------------------------------------
-Result<void> validate_locks(const std::vector<LockSpec>& locks,
-                            std::size_t max_colors);
+Result<void> validate_locks(const std::vector<LockSpec>& locks, std::size_t max_colors);
 
 // ---------------------------------------------------------------------------
 // Validate reserves: in-range, no duplicates, no overlap with locks
@@ -40,11 +37,10 @@ Result<void> validate_locks(const std::vector<LockSpec>& locks,
 // from open-end ranges may have been parsed beyond max_colors and
 // are silently clipped here).
 // ---------------------------------------------------------------------------
-Result<std::size_t> validate_reserves(
-    const std::vector<ReserveSpec>& reserves,
-    const std::vector<LockSpec>& locks,
-    std::size_t max_colors,
-    bool lock_zero_black);
+Result<std::size_t> validate_reserves(const std::vector<ReserveSpec>& reserves,
+                                      const std::vector<LockSpec>& locks,
+                                      std::size_t max_colors,
+                                      bool lock_zero_black);
 
 // ---------------------------------------------------------------------------
 // Validate pins against the palette size and image bounds. Errors:
@@ -133,9 +129,7 @@ AssembledPalette assemble_locked_palette(
 // Caller is expected to ask the quantizer for at least num_colors
 // candidates so the dedupe in (1) has a spare to substitute.
 // ---------------------------------------------------------------------------
-void finalize_palette(std::vector<Color3f>& colors,
-                      std::size_t num_colors,
-                      bool lock_color0);
+void finalize_palette(std::vector<Color3f>& colors, std::size_t num_colors, bool lock_color0);
 
 // True if the palette contains a bit-exact black entry. Used inside
 // two_pass_quantize() below; exposed because some sites need to peek
@@ -162,11 +156,10 @@ bool contains_locked_black(const Palette& palette);
 //     chipset/mode gamut and diversified (caller-side concern)
 // The returned Palette is then ready for `finalize_palette()` or
 // `assemble_locked_palette()` as appropriate.
-Result<Palette> two_pass_quantize(
-    const std::function<Result<Palette>(std::size_t)>& quantize_fn,
-    std::size_t kfirst,
-    std::size_t kfallback,
-    bool lock_color0);
+Result<Palette> two_pass_quantize(const std::function<Result<Palette>(std::size_t)>& quantize_fn,
+                                  std::size_t kfirst,
+                                  std::size_t kfallback,
+                                  bool lock_color0);
 
 // ---------------------------------------------------------------------------
 // Apply pin-index swaps after dithering. Mutates the palette colors,
@@ -229,14 +222,13 @@ QuantCounts quant_counts_for_assemble(std::size_t max_colors,
 // (palette_locks::to_color), so the placed colors match what the
 // hardware can actually display.
 // ---------------------------------------------------------------------------
-AssembledPalette assemble_with_reserves(
-    const Palette& quantized,
-    const std::vector<LockSpec>& locks,
-    const std::vector<ReserveSpec>& reserves,
-    std::size_t max_colors,
-    bool lock_zero_black,
-    amiga::Chipset chipset,
-    amiga::Mode mode);
+AssembledPalette assemble_with_reserves(const Palette& quantized,
+                                        const std::vector<LockSpec>& locks,
+                                        const std::vector<ReserveSpec>& reserves,
+                                        std::size_t max_colors,
+                                        bool lock_zero_black,
+                                        amiga::Chipset chipset,
+                                        amiga::Mode mode);
 
 // ---------------------------------------------------------------------------
 // Sort an indexed palette's unlocked entries by perceptual brightness
@@ -258,4 +250,4 @@ void sort_by_brightness(std::vector<Color3f>& palette,
                         std::size_t sort_n,
                         bool hb_mirror = false);
 
-} // namespace png2amiga::palette_locks
+}  // namespace png2amiga::palette_locks

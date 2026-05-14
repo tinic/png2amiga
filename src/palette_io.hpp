@@ -40,10 +40,8 @@ Result<Palette> load_palette_from_memory(std::span<const std::uint8_t> data);
 // 2 bytes per color, suitable for direct hardware register loading.
 // ---------------------------------------------------------------------------
 
-Result<void> save_ocs_palette(std::string_view path,
-                              std::span<const Color3f> palette);
+Result<void> save_ocs_palette(std::string_view path, std::span<const Color3f> palette);
 
-Result<std::vector<std::uint8_t>> encode_ocs_palette(
-    std::span<const Color3f> palette);
+Result<std::vector<std::uint8_t>> encode_ocs_palette(std::span<const Color3f> palette);
 
-} // namespace png2amiga::palette_io
+}  // namespace png2amiga::palette_io

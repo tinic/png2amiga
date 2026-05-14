@@ -1,7 +1,7 @@
 #include "ssimulacra2.hpp"
 
 #include "aligned_vector.hpp"  // AlignedFloatVec (32-byte aligned for AVX2)
-#include "color_space.hpp"  // PNG2AMIGA_INLINE_HOT
+#include "color_space.hpp"     // PNG2AMIGA_INLINE_HOT
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12,22 +12,22 @@
 // x86_64 → AVX2+FMA (256-bit, 8 lanes); AArch64 → NEON (128-bit, 4 lanes);
 // Emscripten → WASM SIMD (128-bit, 4 lanes). No scalar fallback.
 #if defined(__wasm_simd128__)
-    #include <wasm_simd128.h>
-    #define PNG2AMIGA_BACKEND_WASM_SIMD 1
-    #define PNG2AMIGA_BACKEND_AVX2      0
-    #define PNG2AMIGA_BACKEND_NEON      0
+#include <wasm_simd128.h>
+#define PNG2AMIGA_BACKEND_WASM_SIMD 1
+#define PNG2AMIGA_BACKEND_AVX2 0
+#define PNG2AMIGA_BACKEND_NEON 0
 #elif defined(__AVX2__)
-    #include <immintrin.h>
-    #define PNG2AMIGA_BACKEND_AVX2      1
-    #define PNG2AMIGA_BACKEND_WASM_SIMD 0
-    #define PNG2AMIGA_BACKEND_NEON      0
+#include <immintrin.h>
+#define PNG2AMIGA_BACKEND_AVX2 1
+#define PNG2AMIGA_BACKEND_WASM_SIMD 0
+#define PNG2AMIGA_BACKEND_NEON 0
 #elif defined(__ARM_NEON) || defined(__aarch64__)
-    #include <arm_neon.h>
-    #define PNG2AMIGA_BACKEND_NEON      1
-    #define PNG2AMIGA_BACKEND_AVX2      0
-    #define PNG2AMIGA_BACKEND_WASM_SIMD 0
+#include <arm_neon.h>
+#define PNG2AMIGA_BACKEND_NEON 1
+#define PNG2AMIGA_BACKEND_AVX2 0
+#define PNG2AMIGA_BACKEND_WASM_SIMD 0
 #else
-    #error "ssimulacra2.cpp requires AVX2 (x86), NEON (ARM64), or WASM SIMD."
+#error "ssimulacra2.cpp requires AVX2 (x86), NEON (ARM64), or WASM SIMD."
 #endif
 
 namespace png2amiga::ssimulacra2 {
@@ -66,7 +66,10 @@ inline float fast_cbrt(float x) noexcept {
     // Halley-style update y' = y * (2*y^3 + x) / (y^3 + 2*x)
     // tighten to ~5e-7. Two iters is the sweet spot — one is too
     // loose (~5e-3), three has no measurable accuracy gain.
-    union { float f; std::uint32_t i; } u{x};
+    union {
+        float f;
+        std::uint32_t i;
+    } u{x};
     u.i = u.i / 3 + 0x2A510554u;
     float y = u.f;
     // y_new = (2*y + x / y^2) / 3
@@ -127,11 +130,11 @@ const std::array<float, kBlurSize>& blur_kernel() {
         float sum = 0.0f;
         for (int i = 0; i < kBlurSize; ++i) {
             float x = static_cast<float>(i - kBlurHalf);
-            kernel[static_cast<std::size_t>(i)] =
-                std::exp(-0.5f * x * x / (sigma * sigma));
+            kernel[static_cast<std::size_t>(i)] = std::exp(-0.5f * x * x / (sigma * sigma));
             sum += kernel[static_cast<std::size_t>(i)];
         }
-        for (auto& v : kernel) v /= sum;
+        for (auto& v : kernel)
+            v /= sum;
         return kernel;
     }();
     return k;
@@ -154,7 +157,7 @@ const std::array<float, kBlurSize>& blur_kernel() {
 // Caller pre-allocates once per compute() and reuses across the
 // 108 blur calls, same as the prior contract.
 constexpr std::size_t kRingRowsP2 = 16;  // next pow-2 ≥ kBlurSize=11
-constexpr std::size_t kRingMask   = kRingRowsP2 - 1;
+constexpr std::size_t kRingMask = kRingRowsP2 - 1;
 
 // ---- Fully-unrolled tap application via std::index_sequence ----
 // MSVC partially unrolled the inner kernel-tap loop in the original
@@ -165,30 +168,35 @@ constexpr std::size_t kRingMask   = kRingRowsP2 - 1;
 // fold guarantees a fully-unrolled instantiation: 11 vfmadd231ps in a
 // row, no loop counter, all kernel values broadcast once into registers.
 #if PNG2AMIGA_BACKEND_AVX2
-template <std::size_t... Is>
-PNG2AMIGA_INLINE_HOT
-void apply_h_taps_avx2(__m256& acc, const float* row, std::size_t x,
-                       const std::array<float, kBlurSize>& k,
-                       std::index_sequence<Is...>) noexcept {
-    ((acc = _mm256_fmadd_ps(
-         _mm256_set1_ps(k[Is]),
-         _mm256_loadu_ps(row + x +
-             static_cast<std::ptrdiff_t>(Is) - kBlurHalf),
-         acc)), ...);
+template<std::size_t... Is>
+PNG2AMIGA_INLINE_HOT void apply_h_taps_avx2(__m256& acc,
+                                            const float* row,
+                                            std::size_t x,
+                                            const std::array<float, kBlurSize>& k,
+                                            std::index_sequence<Is...>) noexcept {
+    ((acc = _mm256_fmadd_ps(_mm256_set1_ps(k[Is]),
+                            _mm256_loadu_ps(row + x + static_cast<std::ptrdiff_t>(Is) - kBlurHalf),
+                            acc)),
+     ...);
 }
-template <std::size_t... Is>
-PNG2AMIGA_INLINE_HOT
-void apply_v_taps_avx2(__m256& acc, const float* tmp_base, int y,
-                       std::size_t w, std::size_t x,
-                       const std::array<float, kBlurSize>& k,
-                       std::index_sequence<Is...>) noexcept {
+template<std::size_t... Is>
+PNG2AMIGA_INLINE_HOT void apply_v_taps_avx2(__m256& acc,
+                                            const float* tmp_base,
+                                            int y,
+                                            std::size_t w,
+                                            std::size_t x,
+                                            const std::array<float, kBlurSize>& k,
+                                            std::index_sequence<Is...>) noexcept {
     // Caller guarantees no clipping needed (full kernel in-bounds).
     ((acc = _mm256_fmadd_ps(
-         _mm256_set1_ps(k[Is]),
-         _mm256_loadu_ps(tmp_base +
-             static_cast<std::size_t>((y + static_cast<int>(Is) - kBlurHalf)
-                 & static_cast<int>(kRingMask)) * w + x),
-         acc)), ...);
+          _mm256_set1_ps(k[Is]),
+          _mm256_loadu_ps(tmp_base +
+                          static_cast<std::size_t>((y + static_cast<int>(Is) - kBlurHalf) &
+                                                   static_cast<int>(kRingMask)) *
+                              w +
+                          x),
+          acc)),
+     ...);
 }
 
 constexpr auto kTapSeq = std::make_index_sequence<kBlurSize>{};
@@ -203,93 +211,92 @@ PNG2AMIGA_INLINE_HOT
 void blur_h_pass_row(const AlignedFloatVec& in,
                      AlignedFloatVec& tmp,
                      const std::array<float, kBlurSize>& k,
-                     int sy, int W,
-                     std::size_t w, std::size_t bx_lo,
-                     std::size_t bx_hi, std::size_t simd_end) {
-    const float* row  = in.data()  +
-        static_cast<std::size_t>(sy) * w;
-    float*       trow = tmp.data() +
-        static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w;
-        // Left boundary: scalar with bounds check.
-        for (std::size_t x = 0; x < bx_lo; ++x) {
-            float s = 0.0f;
-            for (int i = 0; i < kBlurSize; ++i) {
-                int sx = static_cast<int>(x) + i - kBlurHalf;
-                if (sx < 0 || sx >= W) continue;
-                s += k[static_cast<std::size_t>(i)] *
-                     row[static_cast<std::size_t>(sx)];
-            }
-            trow[x] = s;
+                     int sy,
+                     int W,
+                     std::size_t w,
+                     std::size_t bx_lo,
+                     std::size_t bx_hi,
+                     std::size_t simd_end) {
+    const float* row = in.data() + static_cast<std::size_t>(sy) * w;
+    float* trow = tmp.data() + static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w;
+    // Left boundary: scalar with bounds check.
+    for (std::size_t x = 0; x < bx_lo; ++x) {
+        float s = 0.0f;
+        for (int i = 0; i < kBlurSize; ++i) {
+            int sx = static_cast<int>(x) + i - kBlurHalf;
+            if (sx < 0 || sx >= W) continue;
+            s += k[static_cast<std::size_t>(i)] * row[static_cast<std::size_t>(sx)];
         }
-        // Interior: branch-free SIMD across 8 columns. AVX2 uses the
-        // fully-unrolled fold (MSVC partially unrolled the loop and
-        // left a hot `cmp` for taps 8-10); NEON / WASM keep the loop
-        // form where the compiler schedules better with the natural
-        // loop structure.
-        std::size_t x = bx_lo;
-        for (; x < simd_end; x += 8) {
+        trow[x] = s;
+    }
+    // Interior: branch-free SIMD across 8 columns. AVX2 uses the
+    // fully-unrolled fold (MSVC partially unrolled the loop and
+    // left a hot `cmp` for taps 8-10); NEON / WASM keep the loop
+    // form where the compiler schedules better with the natural
+    // loop structure.
+    std::size_t x = bx_lo;
+    for (; x < simd_end; x += 8) {
 #if PNG2AMIGA_BACKEND_AVX2
-            __m256 acc = _mm256_setzero_ps();
-            apply_h_taps_avx2(acc, row, x, k, kTapSeq);
-            // Store must be unaligned: x starts at bx_lo = min(kBlurHalf, w)
-            // which is 5 on every realistic width — NOT a multiple of 8 —
-            // so `trow + x` is 20 bytes past the 32-byte-aligned base.
-            // VMOVAPS would #GP-fault here on Linux x86_64 (Windows CI
-            // happened to land in a path that avoided the crash; the
-            // original ship of the alignment commit broke every test
-            // except --help, see v1.87.0 Release CI). The kernel's
-            // 11-tap horizontal loads in apply_h_taps_avx2 are also
-            // unaligned by design (sliding window).
-            _mm256_storeu_ps(trow + x, acc);
+        __m256 acc = _mm256_setzero_ps();
+        apply_h_taps_avx2(acc, row, x, k, kTapSeq);
+        // Store must be unaligned: x starts at bx_lo = min(kBlurHalf, w)
+        // which is 5 on every realistic width — NOT a multiple of 8 —
+        // so `trow + x` is 20 bytes past the 32-byte-aligned base.
+        // VMOVAPS would #GP-fault here on Linux x86_64 (Windows CI
+        // happened to land in a path that avoided the crash; the
+        // original ship of the alignment commit broke every test
+        // except --help, see v1.87.0 Release CI). The kernel's
+        // 11-tap horizontal loads in apply_h_taps_avx2 are also
+        // unaligned by design (sliding window).
+        _mm256_storeu_ps(trow + x, acc);
 #elif PNG2AMIGA_BACKEND_NEON
-            for (std::size_t lane = 0; lane < 8; lane += 4) {
-                float32x4_t acc = vdupq_n_f32(0.0f);
-                for (int i = 0; i < kBlurSize; ++i) {
-                    float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
-                    float32x4_t v  = vld1q_f32(row + x + lane + i - kBlurHalf);
-                    acc = vfmaq_f32(acc, kv, v);
-                }
-                vst1q_f32(trow + x + lane, acc);
+        for (std::size_t lane = 0; lane < 8; lane += 4) {
+            float32x4_t acc = vdupq_n_f32(0.0f);
+            for (int i = 0; i < kBlurSize; ++i) {
+                float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
+                float32x4_t v = vld1q_f32(row + x + lane + i - kBlurHalf);
+                acc = vfmaq_f32(acc, kv, v);
             }
+            vst1q_f32(trow + x + lane, acc);
+        }
 #else  // WASM SIMD
-            for (std::size_t lane = 0; lane < 8; lane += 4) {
-                v128_t acc = wasm_f32x4_const_splat(0.0f);
-                for (int i = 0; i < kBlurSize; ++i) {
-                    v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
-                    v128_t v  = wasm_v128_load(row + x + lane + i - kBlurHalf);
-                    acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
-                }
-                wasm_v128_store(trow + x + lane, acc);
+        for (std::size_t lane = 0; lane < 8; lane += 4) {
+            v128_t acc = wasm_f32x4_const_splat(0.0f);
+            for (int i = 0; i < kBlurSize; ++i) {
+                v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
+                v128_t v = wasm_v128_load(row + x + lane + i - kBlurHalf);
+                acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
             }
+            wasm_v128_store(trow + x + lane, acc);
+        }
 #endif
+    }
+    // Interior tail (< 8 left).
+    for (; x < bx_hi; ++x) {
+        float s = 0.0f;
+        for (int i = 0; i < kBlurSize; ++i) {
+            s += k[static_cast<std::size_t>(i)] *
+                 row[x + static_cast<std::size_t>(i) - static_cast<std::size_t>(kBlurHalf)];
         }
-        // Interior tail (< 8 left).
-        for (; x < bx_hi; ++x) {
-            float s = 0.0f;
-            for (int i = 0; i < kBlurSize; ++i) {
-                s += k[static_cast<std::size_t>(i)] *
-                     row[x + static_cast<std::size_t>(i)
-                           - static_cast<std::size_t>(kBlurHalf)];
-            }
-            trow[x] = s;
+        trow[x] = s;
+    }
+    // Right boundary.
+    for (; x < w; ++x) {
+        float s = 0.0f;
+        for (int i = 0; i < kBlurSize; ++i) {
+            int sx = static_cast<int>(x) + i - kBlurHalf;
+            if (sx < 0 || sx >= W) continue;
+            s += k[static_cast<std::size_t>(i)] * row[static_cast<std::size_t>(sx)];
         }
-        // Right boundary.
-        for (; x < w; ++x) {
-            float s = 0.0f;
-            for (int i = 0; i < kBlurSize; ++i) {
-                int sx = static_cast<int>(x) + i - kBlurHalf;
-                if (sx < 0 || sx >= W) continue;
-                s += k[static_cast<std::size_t>(i)] *
-                     row[static_cast<std::size_t>(sx)];
-            }
-            trow[x] = s;
-        }
+        trow[x] = s;
+    }
 }
 
 void gaussian_blur(const AlignedFloatVec& in,
                    AlignedFloatVec& out,
                    AlignedFloatVec& tmp,
-                   std::size_t w, std::size_t h) {
+                   std::size_t w,
+                   std::size_t h) {
     auto& k = blur_kernel();
     if (tmp.size() < kRingRowsP2 * w) tmp.resize(kRingRowsP2 * w);
     if (out.size() < w * h) out.resize(w * h);
@@ -297,11 +304,8 @@ void gaussian_blur(const AlignedFloatVec& in,
     const int H = static_cast<int>(h);
 
     const std::size_t bx_lo = std::min<std::size_t>(kBlurHalf, w);
-    const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf))
-                                  ? (w - kBlurHalf) : bx_lo;
-    const std::size_t simd_end = (bx_hi > bx_lo)
-                                     ? (bx_lo + ((bx_hi - bx_lo) & ~7u))
-                                     : bx_lo;
+    const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf)) ? (w - kBlurHalf) : bx_lo;
+    const std::size_t simd_end = (bx_hi > bx_lo) ? (bx_lo + ((bx_hi - bx_lo) & ~7u)) : bx_lo;
     const std::size_t simd_w_end = w & ~7u;
 
     // Prime the ring with rows [0, kBlurHalf-1]. Earlier rows
@@ -316,9 +320,7 @@ void gaussian_blur(const AlignedFloatVec& in,
         // row y + kBlurHalf. (For y < H - kBlurHalf this is in range;
         // beyond that we run out of input rows and the V pass clips.)
         int sy_new = y + kBlurHalf;
-        if (sy_new < H)
-            blur_h_pass_row(in, tmp, k, sy_new, W, w,
-                            bx_lo, bx_hi, simd_end);
+        if (sy_new < H) blur_h_pass_row(in, tmp, k, sy_new, W, w, bx_lo, bx_hi, simd_end);
 
         // V pass for output row y, reading the ring's relevant 11 rows.
         // Hoist the boundary check (`clip`) out of the inner loop so the
@@ -339,7 +341,8 @@ void gaussian_blur(const AlignedFloatVec& in,
                     if (sy < 0 || sy >= H) continue;
                     acc = _mm256_fmadd_ps(
                         _mm256_set1_ps(k[static_cast<std::size_t>(i)]),
-                        _mm256_loadu_ps(tmp.data() +
+                        _mm256_loadu_ps(
+                            tmp.data() +
                             static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x),
                         acc);
                 }
@@ -354,7 +357,8 @@ void gaussian_blur(const AlignedFloatVec& in,
                     int sy = y + i - kBlurHalf;
                     if (clip && (sy < 0 || sy >= H)) continue;
                     float32x4_t kv = vdupq_n_f32(k[static_cast<std::size_t>(i)]);
-                    float32x4_t v  = vld1q_f32(tmp.data() +
+                    float32x4_t v = vld1q_f32(
+                        tmp.data() +
                         static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane);
                     acc = vfmaq_f32(acc, kv, v);
                 }
@@ -367,7 +371,8 @@ void gaussian_blur(const AlignedFloatVec& in,
                     int sy = y + i - kBlurHalf;
                     if (clip && (sy < 0 || sy >= H)) continue;
                     v128_t kv = wasm_f32x4_splat(k[static_cast<std::size_t>(i)]);
-                    v128_t v  = wasm_v128_load(tmp.data() +
+                    v128_t v = wasm_v128_load(
+                        tmp.data() +
                         static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w + x + lane);
                     acc = wasm_f32x4_add(acc, wasm_f32x4_mul(kv, v));
                 }
@@ -392,9 +397,11 @@ void gaussian_blur(const AlignedFloatVec& in,
 // Box-average 2× downsample on linear-RGB planes. Matches reference
 // Downsample(in, 2, 2) in linear space.
 void downsample_2x_linear(const std::vector<Color3f>& src,
-                          std::size_t sw, std::size_t sh,
+                          std::size_t sw,
+                          std::size_t sh,
                           std::vector<Color3f>& dst,
-                          std::size_t& dw, std::size_t& dh) {
+                          std::size_t& dw,
+                          std::size_t& dh) {
     dw = (sw + 1) / 2;
     dh = (sh + 1) / 2;
     if (dst.size() < dw * dh) dst.resize(dw * dh);
@@ -407,7 +414,9 @@ void downsample_2x_linear(const std::vector<Color3f>& src,
                     auto sx = std::min(x * 2 + ix, sw - 1);
                     auto sy = std::min(y * 2 + iy, sh - 1);
                     auto& c = src[sy * sw + sx];
-                    r += c.r; g += c.g; b += c.b;
+                    r += c.r;
+                    g += c.g;
+                    b += c.b;
                 }
             }
             dst[y * dw + x] = {r * 0.25f, g * 0.25f, b * 0.25f};
@@ -425,9 +434,10 @@ inline float32x4_t fast_cbrt_v(float32x4_t x) noexcept {
     // outside the SIMD pipe.)
     alignas(16) std::uint32_t bits[4];
     vst1q_u32(bits, xi);
-    for (unsigned int & bit : bits) bit = bit / 3u + 0x2A510554u;
+    for (unsigned int& bit : bits)
+        bit = bit / 3u + 0x2A510554u;
     float32x4_t y = vreinterpretq_f32_u32(vld1q_u32(bits));
-    const float32x4_t v_two       = vdupq_n_f32(2.0f);
+    const float32x4_t v_two = vdupq_n_f32(2.0f);
     const float32x4_t v_one_third = vdupq_n_f32(1.0f / 3.0f);
     for (int it = 0; it < 2; ++it) {
         float32x4_t yy = vmulq_f32(y, y);
@@ -459,16 +469,14 @@ inline __m256 fast_cbrt_v(__m256 x) noexcept {
     for (int j = 0; j < 8; ++j) {
         bits[j] = bits[j] / 3u + 0x2A510554u;
     }
-    __m256 y = _mm256_castsi256_ps(_mm256_load_si256(
-        reinterpret_cast<const __m256i*>(bits)));
+    __m256 y = _mm256_castsi256_ps(_mm256_load_si256(reinterpret_cast<const __m256i*>(bits)));
     // y = (2*y + x / y^2) / 3, twice.
-    const __m256 v_two       = _mm256_set1_ps(2.0f);
+    const __m256 v_two = _mm256_set1_ps(2.0f);
     const __m256 v_one_third = _mm256_set1_ps(1.0f / 3.0f);
     for (int it = 0; it < 2; ++it) {
         __m256 yy = _mm256_mul_ps(y, y);
         __m256 xydiv = _mm256_div_ps(x, yy);
-        y = _mm256_mul_ps(_mm256_add_ps(_mm256_mul_ps(v_two, y), xydiv),
-                          v_one_third);
+        y = _mm256_mul_ps(_mm256_add_ps(_mm256_mul_ps(v_two, y), xydiv), v_one_third);
     }
     return y;
 }
@@ -484,8 +492,10 @@ inline __m256 fast_cbrt_v(__m256 x) noexcept {
 // the 3 dot-products in parallel, batched-cbrts via fast_cbrt_v,
 // applies make_positive in SIMD, scatter-stores into X/Y/B.
 void to_xyb_planes(const std::vector<Color3f>& src,
-                   std::size_t w, std::size_t h,
-                   AlignedFloatVec& X, AlignedFloatVec& Y,
+                   std::size_t w,
+                   std::size_t h,
+                   AlignedFloatVec& X,
+                   AlignedFloatVec& Y,
                    AlignedFloatVec& B) {
     auto n = w * h;
     if (X.size() < n) X.resize(n);
@@ -516,35 +526,44 @@ void to_xyb_planes(const std::vector<Color3f>& src,
     const __m256 c_S_g = _mm256_set1_ps(0.204162f);
     const __m256 c_S_b = _mm256_set1_ps(0.552416f);
     const __m256 v_half = _mm256_set1_ps(0.5f);
-    const __m256 v_55   = _mm256_set1_ps(0.55f);
-    const __m256 v_14   = _mm256_set1_ps(14.0f);
-    const __m256 v_42   = _mm256_set1_ps(0.42f);
-    const __m256 v_01   = _mm256_set1_ps(0.01f);
+    const __m256 v_55 = _mm256_set1_ps(0.55f);
+    const __m256 v_14 = _mm256_set1_ps(14.0f);
+    const __m256 v_42 = _mm256_set1_ps(0.42f);
+    const __m256 v_01 = _mm256_set1_ps(0.01f);
     const std::size_t simd_end = n & ~7u;
     for (; i < simd_end; i += 8) {
-        __m256 r = _mm256_setr_ps(
-            ps[i+0].r, ps[i+1].r, ps[i+2].r, ps[i+3].r,
-            ps[i+4].r, ps[i+5].r, ps[i+6].r, ps[i+7].r);
-        __m256 g = _mm256_setr_ps(
-            ps[i+0].g, ps[i+1].g, ps[i+2].g, ps[i+3].g,
-            ps[i+4].g, ps[i+5].g, ps[i+6].g, ps[i+7].g);
-        __m256 b = _mm256_setr_ps(
-            ps[i+0].b, ps[i+1].b, ps[i+2].b, ps[i+3].b,
-            ps[i+4].b, ps[i+5].b, ps[i+6].b, ps[i+7].b);
+        __m256 r = _mm256_setr_ps(ps[i + 0].r,
+                                  ps[i + 1].r,
+                                  ps[i + 2].r,
+                                  ps[i + 3].r,
+                                  ps[i + 4].r,
+                                  ps[i + 5].r,
+                                  ps[i + 6].r,
+                                  ps[i + 7].r);
+        __m256 g = _mm256_setr_ps(ps[i + 0].g,
+                                  ps[i + 1].g,
+                                  ps[i + 2].g,
+                                  ps[i + 3].g,
+                                  ps[i + 4].g,
+                                  ps[i + 5].g,
+                                  ps[i + 6].g,
+                                  ps[i + 7].g);
+        __m256 b = _mm256_setr_ps(ps[i + 0].b,
+                                  ps[i + 1].b,
+                                  ps[i + 2].b,
+                                  ps[i + 3].b,
+                                  ps[i + 4].b,
+                                  ps[i + 5].b,
+                                  ps[i + 6].b,
+                                  ps[i + 7].b);
         // L,M,S mix (libjxl OpsinAbsorbance).
-        __m256 L = _mm256_fmadd_ps(c_L_b, b,
-                   _mm256_fmadd_ps(c_L_g, g, _mm256_mul_ps(c_L_r, r)));
-        __m256 M = _mm256_fmadd_ps(c_M_b, b,
-                   _mm256_fmadd_ps(c_M_g, g, _mm256_mul_ps(c_M_r, r)));
-        __m256 S = _mm256_fmadd_ps(c_S_b, b,
-                   _mm256_fmadd_ps(c_S_g, g, _mm256_mul_ps(c_S_r, r)));
+        __m256 L = _mm256_fmadd_ps(c_L_b, b, _mm256_fmadd_ps(c_L_g, g, _mm256_mul_ps(c_L_r, r)));
+        __m256 M = _mm256_fmadd_ps(c_M_b, b, _mm256_fmadd_ps(c_M_g, g, _mm256_mul_ps(c_M_r, r)));
+        __m256 S = _mm256_fmadd_ps(c_S_b, b, _mm256_fmadd_ps(c_S_g, g, _mm256_mul_ps(c_S_r, r)));
         // cbrt(x + bias) - kBiasCbrt.
-        __m256 Lp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(L, v_kBias)),
-                                  v_kBiasCbrt);
-        __m256 Mp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(M, v_kBias)),
-                                  v_kBiasCbrt);
-        __m256 Sp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(S, v_kBias)),
-                                  v_kBiasCbrt);
+        __m256 Lp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(L, v_kBias)), v_kBiasCbrt);
+        __m256 Mp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(M, v_kBias)), v_kBiasCbrt);
+        __m256 Sp = _mm256_sub_ps(fast_cbrt_v(_mm256_add_ps(S, v_kBias)), v_kBiasCbrt);
         // XYB: X = (L'-M')/2, Y = (L'+M')/2, B = S'.
         __m256 vx = _mm256_mul_ps(_mm256_sub_ps(Lp, Mp), v_half);
         __m256 vy = _mm256_mul_ps(_mm256_add_ps(Lp, Mp), v_half);
@@ -563,7 +582,7 @@ void to_xyb_planes(const std::vector<Color3f>& src,
     // vld3q_f32 loads 3*4 floats and returns them as {r4, g4, b4}.
     // Apple M3 does this in 1-2 cycles per load — much cleaner than
     // the AVX2 setr_ps shuffle dance.
-    const float32x4_t v_kBias     = vdupq_n_f32(kBias);
+    const float32x4_t v_kBias = vdupq_n_f32(kBias);
     const float32x4_t v_kBiasCbrt = vdupq_n_f32(kBiasCbrt);
     const float32x4_t c_L_r = vdupq_n_f32(0.30f);
     const float32x4_t c_L_g = vdupq_n_f32(0.622f);
@@ -575,10 +594,10 @@ void to_xyb_planes(const std::vector<Color3f>& src,
     const float32x4_t c_S_g = vdupq_n_f32(0.204162f);
     const float32x4_t c_S_b = vdupq_n_f32(0.552416f);
     const float32x4_t v_half = vdupq_n_f32(0.5f);
-    const float32x4_t v_55   = vdupq_n_f32(0.55f);
-    const float32x4_t v_14   = vdupq_n_f32(14.0f);
-    const float32x4_t v_42   = vdupq_n_f32(0.42f);
-    const float32x4_t v_01   = vdupq_n_f32(0.01f);
+    const float32x4_t v_55 = vdupq_n_f32(0.55f);
+    const float32x4_t v_14 = vdupq_n_f32(14.0f);
+    const float32x4_t v_42 = vdupq_n_f32(0.42f);
+    const float32x4_t v_01 = vdupq_n_f32(0.01f);
     const std::size_t simd_end = n & ~3u;
     const float* psf = reinterpret_cast<const float*>(ps);
     for (; i < simd_end; i += 4) {
@@ -622,7 +641,10 @@ constexpr float kC2 = 0.0009f;
 
 // SSIM' map (no double-gamma correction term, see reference comment).
 // Returns {1-norm, 4-norm} aggregated over the plane.
-struct AvgPair { double mean1; double mean4; };
+struct AvgPair {
+    double mean1;
+    double mean4;
+};
 
 // Hand-SIMD (8-lane AVX2 / 4-lane NEON / 4-lane WASM SIMD).
 // fp64 accumulators kept for sum precision (68k pixels × values up to
@@ -636,7 +658,8 @@ AvgPair ssim_plane(const AlignedFloatVec& mu1,
                    const AlignedFloatVec& s11,
                    const AlignedFloatVec& s22,
                    const AlignedFloatVec& s12,
-                   std::size_t w, std::size_t h) {
+                   std::size_t w,
+                   std::size_t h) {
     double inv_n = 1.0 / static_cast<double>(w * h);
     const std::size_t n = w * h;
     const float* p_m1 = mu1.data();
@@ -661,15 +684,13 @@ AvgPair ssim_plane(const AlignedFloatVec& mu1,
         __m256 m11 = _mm256_mul_ps(m1, m1);
         __m256 m22 = _mm256_mul_ps(m2, m2);
         __m256 m12 = _mm256_mul_ps(m1, m2);
-        __m256 dm  = _mm256_sub_ps(m1, m2);
+        __m256 dm = _mm256_sub_ps(m1, m2);
         __m256 num_m = _mm256_sub_ps(v_one, _mm256_mul_ps(dm, dm));
-        __m256 num_s = _mm256_add_ps(_mm256_mul_ps(v_two,
-                            _mm256_sub_ps(_mm256_load_ps(p_s12 + i), m12)),
-                        v_kC2);
-        __m256 denom_s = _mm256_add_ps(
-            _mm256_add_ps(_mm256_sub_ps(_mm256_load_ps(p_s11 + i), m11),
-                          _mm256_sub_ps(_mm256_load_ps(p_s22 + i), m22)),
-            v_kC2);
+        __m256 num_s = _mm256_add_ps(
+            _mm256_mul_ps(v_two, _mm256_sub_ps(_mm256_load_ps(p_s12 + i), m12)), v_kC2);
+        __m256 denom_s = _mm256_add_ps(_mm256_add_ps(_mm256_sub_ps(_mm256_load_ps(p_s11 + i), m11),
+                                                     _mm256_sub_ps(_mm256_load_ps(p_s22 + i), m22)),
+                                       v_kC2);
         __m256 t = _mm256_div_ps(_mm256_mul_ps(num_m, num_s), denom_s);
         __m256 d = _mm256_max_ps(_mm256_sub_ps(v_one, t), v_zero);
         // Accumulate sum1 += d, sum4 += d^4 in fp64 to preserve sum precision.
@@ -688,7 +709,10 @@ AvgPair ssim_plane(const AlignedFloatVec& mu1,
     _mm256_store_pd(tmp1h, acc1_hi);
     _mm256_store_pd(tmp4, acc4_lo);
     _mm256_store_pd(tmp4h, acc4_hi);
-    for (int j = 0; j < 4; ++j) { sum1 += tmp1[j] + tmp1h[j]; sum4 += tmp4[j] + tmp4h[j]; }
+    for (int j = 0; j < 4; ++j) {
+        sum1 += tmp1[j] + tmp1h[j];
+        sum4 += tmp4[j] + tmp4h[j];
+    }
 #endif
     for (; i < n; ++i) {
         float m1 = p_m1[i], m2 = p_m2[i];
@@ -706,13 +730,17 @@ AvgPair ssim_plane(const AlignedFloatVec& mu1,
 
 // Edge-diff: ringing (distorted has edge where original is smooth) and
 // blurring (original has edge where distorted is smooth). Asymmetric.
-struct EdgeDiff { AvgPair ring; AvgPair blur; };
+struct EdgeDiff {
+    AvgPair ring;
+    AvgPair blur;
+};
 
 EdgeDiff edgediff_plane(const AlignedFloatVec& img1,
                         const AlignedFloatVec& mu1,
                         const AlignedFloatVec& img2,
                         const AlignedFloatVec& mu2,
-                        std::size_t w, std::size_t h) {
+                        std::size_t w,
+                        std::size_t h) {
     double inv_n = 1.0 / static_cast<double>(w * h);
     const std::size_t n = w * h;
     const float* p_i1 = img1.data();
@@ -739,11 +767,11 @@ EdgeDiff edgediff_plane(const AlignedFloatVec& img1,
         __m256 a1 = _mm256_and_ps(_mm256_sub_ps(i1, m1v), v_abs);
         __m256 a2 = _mm256_and_ps(_mm256_sub_ps(i2, m2v), v_abs);
         // d1 = (1+a2) / (1+a1) - 1 = (a2 - a1) / (1 + a1)
-        __m256 num   = _mm256_sub_ps(a2, a1);
+        __m256 num = _mm256_sub_ps(a2, a1);
         __m256 denom = _mm256_add_ps(v_one, a1);
         __m256 d1 = _mm256_div_ps(num, denom);
-        __m256 art   = _mm256_max_ps(d1, v_zero);
-        __m256 lost  = _mm256_max_ps(_mm256_sub_ps(v_zero, d1), v_zero);
+        __m256 art = _mm256_max_ps(d1, v_zero);
+        __m256 lost = _mm256_max_ps(_mm256_sub_ps(v_zero, d1), v_zero);
         // Widen + accumulate.
         auto wide_acc = [](__m256d& alo, __m256d& ahi, __m256d& a4lo, __m256d& a4hi, __m256 v) {
             __m256d lo = _mm256_cvtps_pd(_mm256_castps256_ps128(v));
@@ -762,7 +790,7 @@ EdgeDiff edgediff_plane(const AlignedFloatVec& img1,
         alignas(32) double t[4], u[4];
         _mm256_store_pd(t, a);
         _mm256_store_pd(u, b);
-        return t[0]+t[1]+t[2]+t[3]+u[0]+u[1]+u[2]+u[3];
+        return t[0] + t[1] + t[2] + t[3] + u[0] + u[1] + u[2] + u[3];
     };
     r1 = hsum(acc_r1_lo, acc_r1_hi);
     r4 = hsum(acc_r4_lo, acc_r4_hi);
@@ -771,7 +799,7 @@ EdgeDiff edgediff_plane(const AlignedFloatVec& img1,
 #endif
     for (; i < n; ++i) {
         double d1 = (1.0 + std::abs(static_cast<double>(p_i2[i] - p_m2[i]))) /
-                    (1.0 + std::abs(static_cast<double>(p_i1[i] - p_m1[i]))) -
+                        (1.0 + std::abs(static_cast<double>(p_i1[i] - p_m1[i]))) -
                     1.0;
         double artifact = std::max(d1, 0.0);
         r1 += artifact;
@@ -794,14 +822,12 @@ EdgeDiff edgediff_plane(const AlignedFloatVec& img1,
 // /arch:AVX2 alone didn't trigger it. AMD uProf showed multiply at
 // 6.78s of 35.18s total CPU on EPYC, ~19%; SIMDing it directly drops
 // that to bandwidth-bound (one mulps + load/store per 8 floats).
-void multiply(const AlignedFloatVec& a,
-              const AlignedFloatVec& b,
-              AlignedFloatVec& out) {
+void multiply(const AlignedFloatVec& a, const AlignedFloatVec& b, AlignedFloatVec& out) {
     const std::size_t n = a.size();
     if (out.size() < n) out.resize(n);
     const float* pa = a.data();
     const float* pb = b.data();
-    float*       po = out.data();
+    float* po = out.data();
     std::size_t i = 0;
 #if PNG2AMIGA_BACKEND_AVX2
     const std::size_t simd_end = n & ~7u;
@@ -826,12 +852,13 @@ void multiply(const AlignedFloatVec& a,
         wasm_v128_store(po + i, wasm_f32x4_mul(va, vb));
     }
 #endif
-    for (; i < n; ++i) po[i] = pa[i] * pb[i];
+    for (; i < n; ++i)
+        po[i] = pa[i] * pb[i];
 }
 
 // One scale's 18 raw norms: 3 channels × {ssim, ringing, blurring} × {1n, 4n}.
 struct ScaleScores {
-    std::array<double, 6>  ssim_pair{};      // [c*2 + n] for c=0..2, n=0..1
+    std::array<double, 6> ssim_pair{};       // [c*2 + n] for c=0..2, n=0..1
     std::array<double, 12> edgediff_pair{};  // [c*4 + {ring1n,ring4n,blur1n,blur4n}]
 };
 
@@ -849,7 +876,7 @@ struct Scratch {
         if (s22.size() < n) s22.resize(n);
         if (s12.size() < n) s12.resize(n);
         if (prod.size() < n) prod.resize(n);
-        if (tmp.size()  < n) tmp.resize(n);
+        if (tmp.size() < n) tmp.resize(n);
     }
 };
 
@@ -859,7 +886,8 @@ ScaleScores compute_one_scale(const AlignedFloatVec& X1,
                               const AlignedFloatVec& X2,
                               const AlignedFloatVec& Y2,
                               const AlignedFloatVec& B2,
-                              std::size_t w, std::size_t h,
+                              std::size_t w,
+                              std::size_t h,
                               Scratch& sc) {
     ScaleScores out{};
     std::array<const AlignedFloatVec*, 3> p1{&X1, &Y1, &B1};
@@ -1010,21 +1038,17 @@ double final_score(const std::vector<ScaleScores>& scales) {
     double ssim = 0.0;
     std::size_t i = 0;
     for (std::size_t c = 0; c < 3; ++c) {
-        for (const auto & scale : scales) {
+        for (const auto& scale : scales) {
             for (std::size_t n = 0; n < 2; ++n) {
-                ssim += kWeights[i++] *
-                        std::abs(scale.ssim_pair[c * 2 + n]);
-                ssim += kWeights[i++] *
-                        std::abs(scale.edgediff_pair[c * 4 + n]);
-                ssim += kWeights[i++] *
-                        std::abs(scale.edgediff_pair[c * 4 + n + 2]);
+                ssim += kWeights[i++] * std::abs(scale.ssim_pair[c * 2 + n]);
+                ssim += kWeights[i++] * std::abs(scale.edgediff_pair[c * 4 + n]);
+                ssim += kWeights[i++] * std::abs(scale.edgediff_pair[c * 4 + n + 2]);
             }
         }
     }
     ssim *= 0.9562382616834844;
-    ssim = 2.326765642916932 * ssim
-           - 0.020884521182843837 * ssim * ssim
-           + 6.248496625763138e-05 * ssim * ssim * ssim;
+    ssim = 2.326765642916932 * ssim - 0.020884521182843837 * ssim * ssim +
+           6.248496625763138e-05 * ssim * ssim * ssim;
     if (ssim > 0)
         ssim = 100.0 - 10.0 * std::pow(ssim, 0.6276336467831387);
     else
@@ -1053,11 +1077,8 @@ float compute(std::span<const Color3f> orig,
     thread_local std::vector<Color3f> lin1, lin2;
     if (lin1.size() < n) lin1.resize(n);
     if (lin2.size() < n) lin2.resize(n);
-    std::copy(orig.begin(), orig.begin() + static_cast<std::ptrdiff_t>(n),
-              lin1.begin());
-    std::copy(distorted.begin(),
-              distorted.begin() + static_cast<std::ptrdiff_t>(n),
-              lin2.begin());
+    std::copy(orig.begin(), orig.begin() + static_cast<std::ptrdiff_t>(n), lin1.begin());
+    std::copy(distorted.begin(), distorted.begin() + static_cast<std::ptrdiff_t>(n), lin2.begin());
     std::size_t w = width, h = height;
     std::vector<ScaleScores> per_scale;
     per_scale.reserve(kNumScales);
@@ -1075,8 +1096,16 @@ float compute(std::span<const Color3f> orig,
     thread_local Scratch sc;
     sc.reserve_to(w * h);
     thread_local AlignedFloatVec X1, Y1, B1, X2, Y2, B2;
-    if (X1.size() < w * h) { X1.resize(w * h); Y1.resize(w * h); B1.resize(w * h); }
-    if (X2.size() < w * h) { X2.resize(w * h); Y2.resize(w * h); B2.resize(w * h); }
+    if (X1.size() < w * h) {
+        X1.resize(w * h);
+        Y1.resize(w * h);
+        B1.resize(w * h);
+    }
+    if (X2.size() < w * h) {
+        X2.resize(w * h);
+        Y2.resize(w * h);
+        B2.resize(w * h);
+    }
     // next1/next2 are also thread_local so their capacity persists
     // across compute() calls. Size them to n up front; the swap-based
     // double-buffer below keeps capacity constant (only `size()`

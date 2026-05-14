@@ -10,7 +10,6 @@ namespace png2amiga::scale {
 // aliasing of under-filtered bicubic, and acceptable on upscales too.
 // No knobs — the encoder's dither + palette quantisation downstream
 // hides the small amount of ringing Lanczos can introduce.
-Result<Image> resample(const Image& src, std::size_t dst_width,
-                       std::size_t dst_height);
+Result<Image> resample(const Image& src, std::size_t dst_width, std::size_t dst_height);
 
-} // namespace png2amiga::scale
+}  // namespace png2amiga::scale

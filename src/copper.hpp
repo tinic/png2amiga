@@ -36,8 +36,8 @@ namespace png2amiga::copper {
 
 // A single copper register change: set palette[reg] = color
 struct CopperChange {
-    std::uint8_t reg;       // palette register index (0..N-1)
-    Color3f color;          // new color value
+    std::uint8_t reg;  // palette register index (0..N-1)
+    Color3f color;     // new color value
 
     // Nibble-skip optimization for AGA: when the new color shares its high
     // (or low) 4-bit nibble (per channel) with the slot's previous value,
@@ -69,9 +69,9 @@ struct CopperResult {
     // Full effective palette per scanline (for preview rendering / COPL)
     std::vector<std::vector<Color3f>> scanline_palettes;
 
-    std::size_t num_colors{};           // palette size (2^depth)
-    std::size_t changes_per_line{};     // K budget (max per line)
-    float avg_changes_per_line{};       // actual average changes made
+    std::size_t num_colors{};        // palette size (2^depth)
+    std::size_t changes_per_line{};  // K budget (max per line)
+    float avg_changes_per_line{};    // actual average changes made
     float total_error{};
 
     // Worst-case copper MOVE instructions emitted per scanline (post-clustering).
@@ -120,9 +120,9 @@ inline constexpr std::size_t MOVE_BUDGET_PER_LINE_LACE = COPPER_SLOTS_PER_LINE -
 //   AGA <=32 colors:      K_hi + 2 + K_lo  (hi loop + LOCT on/off + lo loop)
 //   AGA bank-switching:   (B_hi + K_hi) + (B_lo + K_lo)
 // ---------------------------------------------------------------------------
-constexpr std::size_t moves_for_line(
-    const std::vector<CopperChange>& changes,
-    bool aga, bool aga_banks) noexcept {
+constexpr std::size_t moves_for_line(const std::vector<CopperChange>& changes,
+                                     bool aga,
+                                     bool aga_banks) noexcept {
     if (changes.empty()) return 0;
     if (!aga) return changes.size();  // OCS: K MOVEs
 
@@ -145,14 +145,20 @@ constexpr std::size_t moves_for_line(
     for (auto& ch : changes) {
         if (ch.skip_hi) continue;
         int b = ch.reg / 32;
-        if (b != prev_bank_hi) { ++banks_hi; prev_bank_hi = b; }
+        if (b != prev_bank_hi) {
+            ++banks_hi;
+            prev_bank_hi = b;
+        }
     }
     int prev_bank_lo = -1;
     std::size_t banks_lo = 0;
     for (auto& ch : changes) {
         if (ch.skip_lo) continue;
         int b = ch.reg / 32;
-        if (b != prev_bank_lo) { ++banks_lo; prev_bank_lo = b; }
+        if (b != prev_bank_lo) {
+            ++banks_lo;
+            prev_bank_lo = b;
+        }
     }
     return banks_hi + k_hi + banks_lo + k_lo;
 }
@@ -171,12 +177,11 @@ constexpr std::size_t moves_for_line(
 // for deep modes. Users can override via --copper-changes.
 // ---------------------------------------------------------------------------
 
-constexpr std::size_t max_changes_per_line(
-    [[maybe_unused]] std::size_t depth,
-    [[maybe_unused]] bool is_ham,
-    [[maybe_unused]] bool is_hires,
-    amiga::Chipset chipset,
-    bool is_lace = false) noexcept {
+constexpr std::size_t max_changes_per_line([[maybe_unused]] std::size_t depth,
+                                           [[maybe_unused]] bool is_ham,
+                                           [[maybe_unused]] bool is_hires,
+                                           amiga::Chipset chipset,
+                                           bool is_lace = false) noexcept {
     if (chipset == amiga::Chipset::aga) return 3;
     // OCS: 14 MOVEs/line normally; interlace loses ~1.5 CCK of post-display
     // gap because the per-line WAIT is pushed to HPOS 226 (vs 220), so one
@@ -193,100 +198,98 @@ constexpr std::size_t max_changes_per_line(
 // chipset:         determines changes_per_line
 // ---------------------------------------------------------------------------
 
-Result<CopperResult> encode_copper(const Image& image,
-                                   std::size_t depth,
-                                   const dither::Settings& dither_settings,
-                                   amiga::Chipset chipset = amiga::Chipset::ocs,
-                                   std::size_t override_changes = 0,  // 0 = auto
-                                   const std::vector<Color3f>* user_palette = nullptr,
-                                   bool lock_color0 = true,
-                                   // Locked palette slots: fixed colors that copper
-                                   // must never swap (e.g., for blitter objects).
-                                   const std::vector<std::pair<std::size_t, Color3f>>& locked = {},
-                                   int palette_diversity = 0,
-                                   // Number of initial rows that display with
-                                   // base palette only (no swaps). Needed for
-                                   // interlace: row 0 and row 1 are each field's
-                                   // first visible line with no prior scanline
-                                   // to schedule a pre-display WAIT on.
-                                   std::size_t skip_initial_swap_rows = 0,
-                                   // Interlace: reduces per-line MOVE budget by
-                                   // 1 (HP=226 vs 220 → less post-display gap).
-                                   bool is_lace = false,
-                                   // EHB-aware mode: depth must be 5 (32 base
-                                   // colors). The planner scores swaps against
-                                   // the 64-effective palette (32 base + 32
-                                   // hardware half-brite). A swap on base slot
-                                   // k automatically also updates effective
-                                   // slot k+32 = halve(base[k]). Without this
-                                   // flag, sliced+EHB optimises a 32-color
-                                   // objective while rendering hits 64 — for
-                                   // high-dynamic-range images the 32-color
-                                   // planner picks middle-tone bases and
-                                   // 64-effective ends up covering neither
-                                   // very-dark nor very-bright gamut ends.
-                                   bool is_ehb = false,
-                                   // Progress callback. Called periodically
-                                   // with (progress 0..1, stage label).
-                                   // Must be thread-safe — encoder may
-                                   // invoke from worker contexts.
-                                   std::function<void(float, std::string_view)>
-                                       on_progress = {},
-                                   // Per-line palette planner neighbor-row
-                                   // smoothing. SIZE_MAX / -1.0f means
-                                   // "use the depth/is_ehb-aware default";
-                                   // explicit values from the CLI flags
-                                   // --slice-spread-radius / --slice-spread-decay
-                                   // override that derivation. The
-                                   // depth-conditional defaults come from
-                                   // a 25-config A/B sweep on FS encodes:
-                                   //   is_ehb (EHB+sliced):     r=4, d=0.3
-                                   //   depth=3 (DPF):        r=3, d=0.85
-                                   //   depth=5 (lores+sliced):  r=2, d=0.85
-                                   //   else (HAM6+sliced/strips): r=4, d=0.85
-                                   // Net wins of +0.5–1.2 dB on plain
-                                   // sliced modes, marginal elsewhere.
-                                   std::size_t neighbor_radius =
-                                       std::numeric_limits<std::size_t>::max(),
-                                   float neighbor_decay = -1.0f,
-                                   // Per-register vertical palette dithering:
-                                   // 1-D Bayer alternation in the per-line
-                                   // palette evolution that spreads copper
-                                   // transitions across N rows to mitigate
-                                   // visible horizontal bands at low depth.
-                                   // Off by default (better S2/PSNR); opt in
-                                   // via --sliced-vertical-dither when CRT
-                                   // banding artefacts are visible.
-                                   bool vertical_dither = false,
-                                   // Slots the dither pass must never pick.
-                                   // Used by --reserve-range: those slots
-                                   // hold a fixed user color (also locked
-                                   // via `locked`), and image content must
-                                   // route around them across all scanlines.
-                                   const std::vector<std::size_t>& dither_excluded = {},
-                                   // Quantizer choice for the auto-built
-                                   // base palette. nullopt = chipset-aware
-                                   // default (gpu_restart for AGA when
-                                   // Metal is up, median_cut otherwise;
-                                   // ocs_bruteforce for OCS). Ignored
-                                   // when user_palette is supplied.
-                                   std::optional<quantize::Algorithm>
-                                       quantizer_override = std::nullopt,
-                                   // Forward-look beam: phase B scavenges
-                                   // unused palette slots on rows where the
-                                   // greedy planner under-fills the swap
-                                   // budget. Scored against a 4-row forward
-                                   // window; only accepted swaps that reduce
-                                   // window OKLab² error are applied. Helps
-                                   // diverse content (ocs_4096 +10 S2,
-                                   // electrichues02 +5, makena +4) and stays
-                                   // out of the way on smooth images (the
-                                   // empty-slot-half gate + window scoring
-                                   // both reject unhelpful swaps). For images
-                                   // where the heuristic still loses, --best
-                                   // sweeps beam=off and beam=on and the
-                                   // S2-ranked sweep picks per image.
-                                   bool sliced_beam = false);
+Result<CopperResult> encode_copper(
+    const Image& image,
+    std::size_t depth,
+    const dither::Settings& dither_settings,
+    amiga::Chipset chipset = amiga::Chipset::ocs,
+    std::size_t override_changes = 0,  // 0 = auto
+    const std::vector<Color3f>* user_palette = nullptr,
+    bool lock_color0 = true,
+    // Locked palette slots: fixed colors that copper
+    // must never swap (e.g., for blitter objects).
+    const std::vector<std::pair<std::size_t, Color3f>>& locked = {},
+    int palette_diversity = 0,
+    // Number of initial rows that display with
+    // base palette only (no swaps). Needed for
+    // interlace: row 0 and row 1 are each field's
+    // first visible line with no prior scanline
+    // to schedule a pre-display WAIT on.
+    std::size_t skip_initial_swap_rows = 0,
+    // Interlace: reduces per-line MOVE budget by
+    // 1 (HP=226 vs 220 → less post-display gap).
+    bool is_lace = false,
+    // EHB-aware mode: depth must be 5 (32 base
+    // colors). The planner scores swaps against
+    // the 64-effective palette (32 base + 32
+    // hardware half-brite). A swap on base slot
+    // k automatically also updates effective
+    // slot k+32 = halve(base[k]). Without this
+    // flag, sliced+EHB optimises a 32-color
+    // objective while rendering hits 64 — for
+    // high-dynamic-range images the 32-color
+    // planner picks middle-tone bases and
+    // 64-effective ends up covering neither
+    // very-dark nor very-bright gamut ends.
+    bool is_ehb = false,
+    // Progress callback. Called periodically
+    // with (progress 0..1, stage label).
+    // Must be thread-safe — encoder may
+    // invoke from worker contexts.
+    std::function<void(float, std::string_view)> on_progress = {},
+    // Per-line palette planner neighbor-row
+    // smoothing. SIZE_MAX / -1.0f means
+    // "use the depth/is_ehb-aware default";
+    // explicit values from the CLI flags
+    // --slice-spread-radius / --slice-spread-decay
+    // override that derivation. The
+    // depth-conditional defaults come from
+    // a 25-config A/B sweep on FS encodes:
+    //   is_ehb (EHB+sliced):     r=4, d=0.3
+    //   depth=3 (DPF):        r=3, d=0.85
+    //   depth=5 (lores+sliced):  r=2, d=0.85
+    //   else (HAM6+sliced/strips): r=4, d=0.85
+    // Net wins of +0.5–1.2 dB on plain
+    // sliced modes, marginal elsewhere.
+    std::size_t neighbor_radius = std::numeric_limits<std::size_t>::max(),
+    float neighbor_decay = -1.0f,
+    // Per-register vertical palette dithering:
+    // 1-D Bayer alternation in the per-line
+    // palette evolution that spreads copper
+    // transitions across N rows to mitigate
+    // visible horizontal bands at low depth.
+    // Off by default (better S2/PSNR); opt in
+    // via --sliced-vertical-dither when CRT
+    // banding artefacts are visible.
+    bool vertical_dither = false,
+    // Slots the dither pass must never pick.
+    // Used by --reserve-range: those slots
+    // hold a fixed user color (also locked
+    // via `locked`), and image content must
+    // route around them across all scanlines.
+    const std::vector<std::size_t>& dither_excluded = {},
+    // Quantizer choice for the auto-built
+    // base palette. nullopt = chipset-aware
+    // default (gpu_restart for AGA when
+    // Metal is up, median_cut otherwise;
+    // ocs_bruteforce for OCS). Ignored
+    // when user_palette is supplied.
+    std::optional<quantize::Algorithm> quantizer_override = std::nullopt,
+    // Forward-look beam: phase B scavenges
+    // unused palette slots on rows where the
+    // greedy planner under-fills the swap
+    // budget. Scored against a 4-row forward
+    // window; only accepted swaps that reduce
+    // window OKLab² error are applied. Helps
+    // diverse content (ocs_4096 +10 S2,
+    // electrichues02 +5, makena +4) and stays
+    // out of the way on smooth images (the
+    // empty-slot-half gate + window scoring
+    // both reject unhelpful swaps). For images
+    // where the heuristic still loses, --best
+    // sweeps beam=off and beam=on and the
+    // S2-ranked sweep picks per image.
+    bool sliced_beam = false);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.
@@ -317,4 +320,4 @@ Result<Image> render_copper_capped(const bitplane::BitplaneData& planes,
                                    bool is_lace,
                                    amiga::Chipset chipset);
 
-} // namespace png2amiga::copper
+}  // namespace png2amiga::copper

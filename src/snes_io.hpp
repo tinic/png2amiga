@@ -36,7 +36,7 @@ namespace png2amiga::snes_io {
 // ---------------------------------------------------------------------------
 
 struct Mode7EncodedFrame {
-    std::vector<std::uint8_t> packed_bytes; // 16 KB tilemap + ≤ 16 KB tiles
+    std::vector<std::uint8_t> packed_bytes;  // 16 KB tilemap + ≤ 16 KB tiles
     std::vector<Color3f> palette;            // 256 mode only; empty for Direct
     Image rendered;                          // post-merge preview
     float quant_error;                       // sum of squared OKLab error
@@ -49,13 +49,13 @@ struct Mode7EncodedFrame {
 // the encode pipeline so long-running runs (Lloyd refinement +
 // pairwise distance for content with > 256 unique tiles) can drive a
 // progress bar. Fraction is in [0, 1]. Pass nullptr to disable.
-using ProgressCb =
-    std::function<void(float, std::string_view)>;
+using ProgressCb = std::function<void(float, std::string_view)>;
 
-Result<Mode7EncodedFrame> encode_snes_mode7(
-    const Image& source, bool direct_color,
-    const dither::Settings& dither, int palette_diversity,
-    ProgressCb on_progress = nullptr);
+Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
+                                            bool direct_color,
+                                            const dither::Settings& dither,
+                                            int palette_diversity,
+                                            ProgressCb on_progress = nullptr);
 
 // ---------------------------------------------------------------------------
 // SNES Mode 7 packer (low-level, used by encode_snes_mode7).
@@ -109,11 +109,12 @@ struct CachedDistance {
 
 Result<Mode7PackResult> pack_snes_mode7_frame(
     std::span<const std::uint8_t> pixels,
-    std::size_t width, std::size_t height,
-    std::function<float(std::span<const std::uint8_t> a,
-                        std::span<const std::uint8_t> b)> distance,
+    std::size_t width,
+    std::size_t height,
+    std::function<float(std::span<const std::uint8_t> a, std::span<const std::uint8_t> b)> distance,
     CachedDistance cached_distance = {},
     ProgressCb on_progress = nullptr,
-    float progress_lo = 0.0f, float progress_hi = 1.0f);
+    float progress_lo = 0.0f,
+    float progress_hi = 1.0f);
 
-} // namespace png2amiga::snes_io
+}  // namespace png2amiga::snes_io

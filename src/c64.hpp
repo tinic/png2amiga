@@ -26,8 +26,7 @@ namespace png2amiga::c64 {
 // per-cell brute-force loops in the slower c64 encoders (PETSCII,
 // charset-hires, charset-multicolor). Optional — pass `{}` / `nullptr`
 // to silence.
-using ProgressCb =
-    std::function<void(float fraction, std::string_view stage_name)>;
+using ProgressCb = std::function<void(float fraction, std::string_view stage_name)>;
 
 // Available VIC-II palettes. The C64's analogue composite output doesn't
 // have a unique sRGB ground-truth; pick the one whose look you prefer.
@@ -57,28 +56,28 @@ Metric parse_metric(std::string_view s) noexcept;
 std::string_view metric_name(Metric m) noexcept;
 
 struct EncodeResult {
-    Image rendered;                              // logical preview at the
-                                                 // user-chosen W×H. For
-                                                 // charset modes pixels
-                                                 // are reconstructed from
-                                                 // the dedup'd glyph table
-                                                 // — what the hardware will
-                                                 // actually display.
-    std::vector<std::uint8_t> bitmap;            // bitmap modes: cells × 8.
-                                                 // charset modes: charset
-                                                 // data, unique_glyphs × 8.
-    std::vector<std::uint8_t> screen_ram;        // 1 byte per cell. For
-                                                 // charset modes this is
-                                                 // the glyph index (0..255).
-    std::vector<std::uint8_t> color_ram;         // 1 byte per cell.
-    std::uint8_t bg_color = 0;                   // shared background 0..15.
+    Image rendered;                        // logical preview at the
+                                           // user-chosen W×H. For
+                                           // charset modes pixels
+                                           // are reconstructed from
+                                           // the dedup'd glyph table
+                                           // — what the hardware will
+                                           // actually display.
+    std::vector<std::uint8_t> bitmap;      // bitmap modes: cells × 8.
+                                           // charset modes: charset
+                                           // data, unique_glyphs × 8.
+    std::vector<std::uint8_t> screen_ram;  // 1 byte per cell. For
+                                           // charset modes this is
+                                           // the glyph index (0..255).
+    std::vector<std::uint8_t> color_ram;   // 1 byte per cell.
+    std::uint8_t bg_color = 0;             // shared background 0..15.
 
     // Tilemap dims + dedup stats. Set for charset modes; bitmap modes
     // leave at 0 (locked to the hardware screen).
-    std::size_t cols = 0;            // tilemap width in cells
-    std::size_t rows = 0;            // tilemap height in cells
-    std::size_t unique_glyphs = 0;   // distinct patterns post-dedup +
-                                     // Hamming merge.
+    std::size_t cols = 0;           // tilemap width in cells
+    std::size_t rows = 0;           // tilemap height in cells
+    std::size_t unique_glyphs = 0;  // distinct patterns post-dedup +
+                                    // Hamming merge.
     // charset-multicolor only.
     std::uint8_t mc1 = 0;
     std::uint8_t mc2 = 0;
@@ -91,11 +90,10 @@ struct EncodeResult {
 // the per-cell 4-color palette through diffuse_raw_buffer with the
 // full dither suite (FS-family, gilbert, riemersma,
 // structure-fs, ordered, knoll, opt-checker, yliluoma).
-Result<EncodeResult> encode_multicolor(
-    const Image& image,
-    Palette pal = Palette::colodore,
-    const dither::Settings& settings = {},
-    Metric metric = Metric::blur);
+Result<EncodeResult> encode_multicolor(const Image& image,
+                                       Palette pal = Palette::colodore,
+                                       const dither::Settings& settings = {},
+                                       Metric metric = Metric::blur);
 
 // Encode a 320×200 image to c64-hires. 8×8 cells, 2 colors per cell
 // (no shared bg). Per-cell brute force is C(16, 2) = 120 pairs.
@@ -104,11 +102,10 @@ Result<EncodeResult> encode_multicolor(
 //   bitmap     8000 bytes (40 cols × 25 rows × 8)
 //   screen_ram 1000 bytes (upper nibble = c1 / fg, lower = c0 / bg)
 //   color_ram  empty (hires uses only screen RAM)
-Result<EncodeResult> encode_hires(
-    const Image& image,
-    Palette pal = Palette::colodore,
-    const dither::Settings& settings = {},
-    Metric metric = Metric::blur);
+Result<EncodeResult> encode_hires(const Image& image,
+                                  Palette pal = Palette::colodore,
+                                  const dither::Settings& settings = {},
+                                  Metric metric = Metric::blur);
 
 // Encode a 160×200 image to c64-FLI (Flexible Line Interpretation):
 // multicolor with per-row (c1, c2) screen colors within each 4×8
@@ -127,11 +124,10 @@ Result<EncodeResult> encode_hires(
 // 8 × 105 ≈ 13 K row evaluations per cell. ~13 M for a 1000-cell
 // image. Bg is fixed to 0 for the proof-of-fit; a global sweep is
 // future work.
-Result<EncodeResult> encode_fli(
-    const Image& image,
-    Palette pal = Palette::colodore,
-    const dither::Settings& settings = {},
-    Metric metric = Metric::blur);
+Result<EncodeResult> encode_fli(const Image& image,
+                                Palette pal = Palette::colodore,
+                                const dither::Settings& settings = {},
+                                Metric metric = Metric::blur);
 
 // Encode a 320×200 image to c64-AFLI: hires with per-row (c0, c1)
 // pair within each 8×8 cell. The per-row pair lives in the same
@@ -143,11 +139,10 @@ Result<EncodeResult> encode_fli(
 //   bitmap      8000 bytes
 //   screen_ram  8000 bytes (8 screen RAMs)
 //   color_ram   empty
-Result<EncodeResult> encode_afli(
-    const Image& image,
-    Palette pal = Palette::colodore,
-    const dither::Settings& settings = {},
-    Metric metric = Metric::blur);
+Result<EncodeResult> encode_afli(const Image& image,
+                                 Palette pal = Palette::colodore,
+                                 const dither::Settings& settings = {},
+                                 Metric metric = Metric::blur);
 
 // Encode a 320×200 image to c64-PETSCII: text-mode glyph match.
 // 40×25 cells, each 8×8. Per cell: pick (char, fg) ∈ 256 ROM glyphs
@@ -164,13 +159,12 @@ Result<EncodeResult> encode_afli(
 //
 // `dither::Settings` is currently ignored — PETSCII picks per cell
 // without ED.
-Result<EncodeResult> encode_petscii(
-    const Image& image,
-    Palette pal = Palette::colodore,
-    const dither::Settings& settings = {},
-    Metric metric = Metric::blur,
-    bool graphics_only = false,
-    ProgressCb on_progress = nullptr);
+Result<EncodeResult> encode_petscii(const Image& image,
+                                    Palette pal = Palette::colodore,
+                                    const dither::Settings& settings = {},
+                                    Metric metric = Metric::blur,
+                                    bool graphics_only = false,
+                                    ProgressCb on_progress = nullptr);
 
 // Encode an arbitrary-size image (W % 8 == 0, H % 8 == 0) to a c64
 // hires charset. Per-cell brute force picks the best 2-color pair
@@ -183,26 +177,24 @@ Result<EncodeResult> encode_petscii(
 // even when budget > 256 (multi-bank work is the runtime's job).
 // `tile_reserve` (default 0) reserves N slots so the dedup pass
 // merges down to (budget - reserve).
-Result<EncodeResult> encode_charset_hires(
-    const Image& image,
-    Palette pal = Palette::colodore,
-    const dither::Settings& settings = {},
-    Metric metric = Metric::mse,
-    std::size_t tile_budget = 256,
-    std::size_t tile_reserve = 0);
+Result<EncodeResult> encode_charset_hires(const Image& image,
+                                          Palette pal = Palette::colodore,
+                                          const dither::Settings& settings = {},
+                                          Metric metric = Metric::mse,
+                                          std::size_t tile_budget = 256,
+                                          std::size_t tile_reserve = 0);
 
 // Encode an arbitrary-size image (W % 4 == 0, H % 8 == 0) to a c64
 // multicolor charset. 4×8 cells with shared bg + mc1 + mc2 + per-cell
 // fg. bg fixed at 0; (mc1, mc2) brute-forced globally; per-cell fg
 // picks best of 16. Dedup + Hamming-merge to ≤ (budget - reserve).
 // EncodeResult exposes mc1/mc2 alongside cols/rows/unique_glyphs.
-Result<EncodeResult> encode_charset_multicolor(
-    const Image& image,
-    Palette pal = Palette::colodore,
-    const dither::Settings& settings = {},
-    Metric metric = Metric::mse,
-    std::size_t tile_budget = 256,
-    std::size_t tile_reserve = 0);
+Result<EncodeResult> encode_charset_multicolor(const Image& image,
+                                               Palette pal = Palette::colodore,
+                                               const dither::Settings& settings = {},
+                                               Metric metric = Metric::mse,
+                                               std::size_t tile_budget = 256,
+                                               std::size_t tile_reserve = 0);
 
 // Generate a C header describing a charset EncodeResult. Includes:
 //   - <NAME>_GLYPHS, <NAME>_COLS, <NAME>_ROWS, <NAME>_BG_COLOR
@@ -213,10 +205,9 @@ Result<EncodeResult> encode_charset_multicolor(
 //   - <name>_palette[] — 16 OCS-format 12-bit RGB values
 // The `multicolor` flag controls whether MC1/MC2 are emitted and
 // whether <name>_color stores per-cell fg or hires-style nibble pair.
-Result<std::string> charset_header(
-    const EncodeResult& enc,
-    std::string_view symbol_name,
-    bool multicolor,
-    Palette pal = Palette::colodore);
+Result<std::string> charset_header(const EncodeResult& enc,
+                                   std::string_view symbol_name,
+                                   bool multicolor,
+                                   Palette pal = Palette::colodore);
 
 }  // namespace png2amiga::c64

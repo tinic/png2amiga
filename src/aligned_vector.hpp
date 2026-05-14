@@ -7,7 +7,7 @@
 #include <vector>
 
 #if defined(_MSC_VER)
-#include <malloc.h>     // _aligned_malloc / _aligned_free
+#include <malloc.h>  // _aligned_malloc / _aligned_free
 #endif
 
 namespace png2amiga {
@@ -20,7 +20,7 @@ namespace png2amiga {
 // Stateless and trivially-copyable so vector copy/move are cheap; the
 // equality operators return true unconditionally as required for any
 // stateless allocator.
-template <typename T, std::size_t N>
+template<typename T, std::size_t N>
 struct aligned_allocator {
     using value_type = T;
     using size_type = std::size_t;
@@ -33,11 +33,13 @@ struct aligned_allocator {
     // rebind mechanism uses class-template pattern matching that breaks
     // when the allocator has a non-type template parameter (N here),
     // so spell the legacy `rebind` member out explicitly.
-    template <typename U>
-    struct rebind { using other = aligned_allocator<U, N>; };
+    template<typename U>
+    struct rebind {
+        using other = aligned_allocator<U, N>;
+    };
 
     aligned_allocator() noexcept = default;
-    template <typename U>
+    template<typename U>
     constexpr aligned_allocator(const aligned_allocator<U, N>&) noexcept {}
 
     [[nodiscard]] T* allocate(std::size_t n) {
@@ -63,18 +65,16 @@ struct aligned_allocator {
     }
 };
 
-template <typename T, std::size_t N, typename U>
-constexpr bool operator==(const aligned_allocator<T, N>&,
-                          const aligned_allocator<U, N>&) noexcept {
+template<typename T, std::size_t N, typename U>
+constexpr bool operator==(const aligned_allocator<T, N>&, const aligned_allocator<U, N>&) noexcept {
     return true;
 }
-template <typename T, std::size_t N, typename U>
-constexpr bool operator!=(const aligned_allocator<T, N>&,
-                          const aligned_allocator<U, N>&) noexcept {
+template<typename T, std::size_t N, typename U>
+constexpr bool operator!=(const aligned_allocator<T, N>&, const aligned_allocator<U, N>&) noexcept {
     return false;
 }
 
 // AVX2 cacheline-friendly float buffer: base aligned to 32 bytes.
 using AlignedFloatVec = std::vector<float, aligned_allocator<float, 32>>;
 
-} // namespace png2amiga
+}  // namespace png2amiga

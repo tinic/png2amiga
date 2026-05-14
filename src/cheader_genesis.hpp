@@ -22,14 +22,14 @@
 namespace png2amiga::cheader_genesis {
 
 struct GenesisHeaderOptions {
-    std::span<const std::uint8_t> tile_bytes;   // unique_tiles * 32 bytes
-    std::span<const std::uint16_t> tilemap;     // tilemap cells (W/8 × H/8)
-    std::span<const std::uint16_t> palette;     // 64 BGR333 words (4 lines × 16)
+    std::span<const std::uint8_t> tile_bytes;  // unique_tiles * 32 bytes
+    std::span<const std::uint16_t> tilemap;    // tilemap cells (W/8 × H/8)
+    std::span<const std::uint16_t> palette;    // 64 BGR333 words (4 lines × 16)
     std::size_t width_pixels;
     std::size_t height_pixels;
-    std::string symbol;                          // base symbol name (no suffix)
+    std::string symbol;  // base symbol name (no suffix)
 };
 
 Result<std::vector<std::uint8_t>> generate(const GenesisHeaderOptions& opts);
 
-} // namespace png2amiga::cheader_genesis
+}  // namespace png2amiga::cheader_genesis

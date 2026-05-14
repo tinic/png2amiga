@@ -21,12 +21,11 @@ using OKLab = color_space::OKLab;
 // distinct palettes. Cheap and good enough for k=4.
 struct TileFingerprint {
     OKLab centroid{};
-    float spread = 0.0f;     // sum of |pixel - centroid|² in OKLab
+    float spread = 0.0f;  // sum of |pixel - centroid|² in OKLab
     std::size_t pixel_count = 0;
 };
 
-TileFingerprint fingerprint_tile(const Image& img,
-                                 std::size_t tx0, std::size_t ty0) {
+TileFingerprint fingerprint_tile(const Image& img, std::size_t tx0, std::size_t ty0) {
     TileFingerprint fp{};
     auto w = img.width();
     auto h = img.height();
@@ -45,9 +44,9 @@ TileFingerprint fingerprint_tile(const Image& img,
         }
     }
     if (n == 0) return fp;
-    fp.centroid = OKLab{ acc.L / static_cast<float>(n),
-                         acc.a / static_cast<float>(n),
-                         acc.b / static_cast<float>(n) };
+    fp.centroid = OKLab{acc.L / static_cast<float>(n),
+                        acc.a / static_cast<float>(n),
+                        acc.b / static_cast<float>(n)};
     fp.pixel_count = n;
     float spread = 0.0f;
     for (std::size_t y = ty0; y < y_end; ++y) {
@@ -65,8 +64,7 @@ TileFingerprint fingerprint_tile(const Image& img,
 
 // Simple k-means in OKLab with farthest-point seeding. Returns cluster
 // assignment per tile (size = n_tiles).
-std::vector<std::uint8_t> kmeans_tiles(
-    std::span<const TileFingerprint> tiles, std::uint32_t seed) {
+std::vector<std::uint8_t> kmeans_tiles(std::span<const TileFingerprint> tiles, std::uint32_t seed) {
 
     constexpr std::size_t K = kPaletteCount;
     std::vector<std::uint8_t> assign(tiles.size(), 0);
@@ -95,7 +93,10 @@ std::vector<std::uint8_t> kmeans_tiles(
                 float d = sq_dist(tiles[i].centroid, centroids[kk]);
                 if (d < min_d) min_d = d;
             }
-            if (min_d > best_d) { best_d = min_d; best_i = i; }
+            if (min_d > best_d) {
+                best_d = min_d;
+                best_i = i;
+            }
         }
         centroids[k] = tiles[best_i].centroid;
         centroid_set[k] = true;
@@ -110,16 +111,25 @@ std::vector<std::uint8_t> kmeans_tiles(
         // Assign step.
         for (std::size_t i = 0; i < tiles.size(); ++i) {
             if (tiles[i].pixel_count == 0) {
-                if (assign[i] != 0) { assign[i] = 0; changed = true; }
+                if (assign[i] != 0) {
+                    assign[i] = 0;
+                    changed = true;
+                }
                 continue;
             }
             float best_d = std::numeric_limits<float>::max();
             std::uint8_t best_k = 0;
             for (std::size_t k = 0; k < K; ++k) {
                 float d = sq_dist(tiles[i].centroid, centroids[k]);
-                if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
+                if (d < best_d) {
+                    best_d = d;
+                    best_k = static_cast<std::uint8_t>(k);
+                }
             }
-            if (assign[i] != best_k) { assign[i] = best_k; changed = true; }
+            if (assign[i] != best_k) {
+                assign[i] = best_k;
+                changed = true;
+            }
         }
         if (!changed && iter > 0) break;
 
@@ -156,7 +166,7 @@ std::vector<std::uint8_t> kmeans_tiles(
     return assign;
 }
 
-} // namespace
+}  // namespace
 
 namespace {
 
@@ -164,11 +174,13 @@ namespace {
 // to it. Median-cut on the union, then BGR333-snap each entry. Backdrop
 // (index 0) gets the cluster mean — purely cosmetic since opaque pixels
 // never pick 0.
-void build_palette_line(
-    const Image& image, std::size_t tiles_x, std::size_t tiles_y,
-    std::span<const std::uint8_t> tile_palette,
-    std::uint8_t k, float palette_diversity,
-    std::vector<Color3f>& out) {
+void build_palette_line(const Image& image,
+                        std::size_t tiles_x,
+                        std::size_t tiles_y,
+                        std::span<const std::uint8_t> tile_palette,
+                        std::uint8_t k,
+                        float palette_diversity,
+                        std::vector<Color3f>& out) {
 
     auto w = image.width();
     auto h = image.height();
@@ -190,29 +202,32 @@ void build_palette_line(
 
     const std::size_t n_pixels = pixels.size();
     Image cluster_img(n_pixels, 1, std::move(pixels));
-    auto pal = quantize::quantize(cluster_img, kColorsPerPalette - 1,
-                                   quantize::Algorithm::median_cut,
-                                   static_cast<int>(palette_diversity));
+    auto pal = quantize::quantize(cluster_img,
+                                  kColorsPerPalette - 1,
+                                  quantize::Algorithm::median_cut,
+                                  static_cast<int>(palette_diversity));
     if (!pal) return;
-    for (std::size_t i = 0; i < pal->colors.size() &&
-                            i + 1 < kColorsPerPalette; ++i) {
+    for (std::size_t i = 0; i < pal->colors.size() && i + 1 < kColorsPerPalette; ++i) {
         out[i + 1] = console_color::bgr333_quantize(pal->colors[i]);
     }
     Color3f mean{0, 0, 0};
     for (auto& c : pal->colors) {
-        mean.r += c.r; mean.g += c.g; mean.b += c.b;
+        mean.r += c.r;
+        mean.g += c.g;
+        mean.b += c.b;
     }
     if (!pal->colors.empty()) {
         float n = static_cast<float>(pal->colors.size());
-        mean.r /= n; mean.g /= n; mean.b /= n;
+        mean.r /= n;
+        mean.g /= n;
+        mean.b /= n;
         out[0] = console_color::bgr333_quantize(mean);
     }
 }
 
-} // namespace
+}  // namespace
 
-GenesisResult cluster_tiles_into_palettes(
-    const Image& image, float palette_diversity) {
+GenesisResult cluster_tiles_into_palettes(const Image& image, float palette_diversity) {
 
     GenesisResult res;
     auto w = image.width();
@@ -230,16 +245,19 @@ GenesisResult cluster_tiles_into_palettes(
     std::vector<TileFingerprint> fps(n_tiles);
     for (std::size_t ty = 0; ty < tiles_y; ++ty) {
         for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-            fps[ty * tiles_x + tx] =
-                fingerprint_tile(image, tx * kTileSide, ty * kTileSide);
+            fps[ty * tiles_x + tx] = fingerprint_tile(image, tx * kTileSide, ty * kTileSide);
         }
     }
     res.tile_palette = kmeans_tiles(fps, 0);
 
     // 2. Build initial palette lines from the centroid-clustering.
     for (std::size_t k = 0; k < kPaletteCount; ++k) {
-        build_palette_line(image, tiles_x, tiles_y, res.tile_palette,
-                           static_cast<std::uint8_t>(k), palette_diversity,
+        build_palette_line(image,
+                           tiles_x,
+                           tiles_y,
+                           res.tile_palette,
+                           static_cast<std::uint8_t>(k),
+                           palette_diversity,
                            res.palette_lines[k]);
     }
 
@@ -270,8 +288,7 @@ std::vector<Color3f> shadow_palette_line(std::span<const Color3f> base) {
     return out;
 }
 
-GenesisResult cluster_tiles_into_palettes_sh(
-    const Image& image, float palette_diversity) {
+GenesisResult cluster_tiles_into_palettes_sh(const Image& image, float palette_diversity) {
 
     // 1. Same base clustering as the non-S/H path.
     auto res = cluster_tiles_into_palettes(image, palette_diversity);
@@ -283,12 +300,12 @@ GenesisResult cluster_tiles_into_palettes_sh(
 
     // 2. Pre-compute the shadowed view of each palette line + Lab variants.
     std::array<std::vector<Color3f>, kPaletteCount> shadow_lines;
-    std::array<std::array<color_space::OKLab, kColorsPerPalette>,
-               kPaletteCount> base_lab, shadow_lab;
+    std::array<std::array<color_space::OKLab, kColorsPerPalette>, kPaletteCount> base_lab,
+        shadow_lab;
     for (std::size_t k = 0; k < kPaletteCount; ++k) {
         shadow_lines[k] = shadow_palette_line(res.palette_lines[k]);
         for (std::size_t i = 0; i < kColorsPerPalette; ++i) {
-            base_lab[k][i]   = color_space::linear_to_oklab(res.palette_lines[k][i]);
+            base_lab[k][i] = color_space::linear_to_oklab(res.palette_lines[k][i]);
             shadow_lab[k][i] = color_space::linear_to_oklab(shadow_lines[k][i]);
         }
     }
@@ -299,8 +316,8 @@ GenesisResult cluster_tiles_into_palettes_sh(
     //    aware) but since the choice is BINARY per tile (not which of 4
     //    palettes), it's much less prone to the oscillation that bit
     //    the Lloyd-style refinement attempt.
-    auto score_against = [&](std::span<const color_space::OKLab> pl_lab,
-                             std::size_t tx, std::size_t ty) -> float {
+    auto score_against =
+        [&](std::span<const color_space::OKLab> pl_lab, std::size_t tx, std::size_t ty) -> float {
         auto x0 = tx * kTileSide, y0 = ty * kTileSide;
         auto x_end = std::min(x0 + kTileSide, w);
         auto y_end = std::min(y0 + kTileSide, h);
@@ -329,8 +346,7 @@ GenesisResult cluster_tiles_into_palettes_sh(
             std::span<const color_space::OKLab> shad{shadow_lab[k]};
             float base_err = score_against(base, tx, ty);
             float shad_err = score_against(shad, tx, ty);
-            res.tile_shadow[ty * tiles_x + tx] =
-                (shad_err < base_err) ? 1 : 0;
+            res.tile_shadow[ty * tiles_x + tx] = (shad_err < base_err) ? 1 : 0;
         }
     }
     return res;
@@ -339,8 +355,9 @@ GenesisResult cluster_tiles_into_palettes_sh(
 namespace {
 
 // Apply an H or V flip (or both) to a 64-entry 8×8 nibble pattern.
-std::array<std::uint8_t, 64> flip_tile(
-    const std::array<std::uint8_t, 64>& src, bool h, bool v) noexcept {
+std::array<std::uint8_t, 64> flip_tile(const std::array<std::uint8_t, 64>& src,
+                                       bool h,
+                                       bool v) noexcept {
     std::array<std::uint8_t, 64> out{};
     for (std::size_t y = 0; y < kTileSide; ++y) {
         std::size_t sy = v ? (kTileSide - 1 - y) : y;
@@ -354,28 +371,27 @@ std::array<std::uint8_t, 64> flip_tile(
 
 // Encode a 64-entry nibble pattern straight to 32 VRAM bytes — used by
 // dedup before the dictionary lookup.
-std::array<std::uint8_t, 32> pack_pattern(
-    const std::array<std::uint8_t, 64>& p) noexcept {
+std::array<std::uint8_t, 32> pack_pattern(const std::array<std::uint8_t, 64>& p) noexcept {
     std::array<std::uint8_t, 32> bytes{};
     for (std::size_t row = 0; row < kTileSide; ++row) {
         for (std::size_t pair = 0; pair < 4; ++pair) {
-            std::uint8_t left  = p[row * kTileSide + pair * 2]     & 0x0F;
+            std::uint8_t left = p[row * kTileSide + pair * 2] & 0x0F;
             std::uint8_t right = p[row * kTileSide + pair * 2 + 1] & 0x0F;
-            bytes[row * 4 + pair] =
-                static_cast<std::uint8_t>((left << 4) | right);
+            bytes[row * 4 + pair] = static_cast<std::uint8_t>((left << 4) | right);
         }
     }
     return bytes;
 }
 
-} // namespace
+}  // namespace
 
 DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
                         std::span<const std::uint8_t> tile_palette,
-                        std::size_t width, std::size_t height) {
+                        std::size_t width,
+                        std::size_t height) {
 
     DedupResult res;
-    auto tiles_x = (width  + kTileSide - 1) / kTileSide;
+    auto tiles_x = (width + kTileSide - 1) / kTileSide;
     auto tiles_y = (height + kTileSide - 1) / kTileSide;
     res.tilemap.assign(tiles_x * tiles_y, TilemapCell{});
 
@@ -392,8 +408,7 @@ DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
             return static_cast<std::size_t>(h);
         }
     };
-    std::unordered_map<std::array<std::uint8_t, 32>, std::uint16_t,
-                       ArrayHash> dict;
+    std::unordered_map<std::array<std::uint8_t, 32>, std::uint16_t, ArrayHash> dict;
 
     for (std::size_t ty = 0; ty < tiles_y; ++ty) {
         for (std::size_t tx = 0; tx < tiles_x; ++tx) {
@@ -404,10 +419,9 @@ DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
                 for (std::size_t col = 0; col < kTileSide; ++col) {
                     auto px = x0 + col;
                     auto py = y0 + row;
-                    raw[row * kTileSide + col] =
-                        (px < width && py < height)
-                            ? (pixel_index[py * width + px] & 0x0F)
-                            : 0;
+                    raw[row * kTileSide + col] = (px < width && py < height)
+                                                     ? (pixel_index[py * width + px] & 0x0F)
+                                                     : 0;
                 }
             }
 
@@ -419,8 +433,8 @@ DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
             TilemapCell cell{};
             cell.palette_line = tile_palette[ty * tiles_x + tx];
             bool found = false;
-            std::array<std::pair<bool, bool>, 4> orients{{
-                {false, false}, {true, false}, {false, true}, {true, true}}};
+            std::array<std::pair<bool, bool>, 4> orients{
+                {{false, false}, {true, false}, {false, true}, {true, true}}};
             for (auto [h, v] : orients) {
                 auto flipped = (h || v) ? flip_tile(raw, h, v) : raw;
                 auto bytes = pack_pattern(flipped);
@@ -429,8 +443,10 @@ DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
                     cell.tile_index = it->second;
                     cell.h_flip = h;
                     cell.v_flip = v;
-                    if (h || v) ++res.flipped_dedupes;
-                    else        ++res.identical_dedupes;
+                    if (h || v)
+                        ++res.flipped_dedupes;
+                    else
+                        ++res.identical_dedupes;
                     found = true;
                     break;
                 }
@@ -448,8 +464,7 @@ DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
     return res;
 }
 
-std::array<std::uint8_t, 32> encode_4bpp_tile(
-    std::span<const std::uint8_t> pixel_indices) {
+std::array<std::uint8_t, 32> encode_4bpp_tile(std::span<const std::uint8_t> pixel_indices) {
 
     std::array<std::uint8_t, 32> tile{};
     // Genesis VRAM tile: 8 rows × 4 bytes; each byte = 2 pixels packed
@@ -458,17 +473,16 @@ std::array<std::uint8_t, 32> encode_4bpp_tile(
         for (std::size_t pair = 0; pair < 4; ++pair) {
             std::size_t left_x = pair * 2;
             std::size_t right_x = left_x + 1;
-            std::uint8_t left =
-                (row * 8 + left_x  < pixel_indices.size())
-                    ? (pixel_indices[row * 8 + left_x]  & 0x0F) : 0;
-            std::uint8_t right =
-                (row * 8 + right_x < pixel_indices.size())
-                    ? (pixel_indices[row * 8 + right_x] & 0x0F) : 0;
-            tile[row * 4 + pair] =
-                static_cast<std::uint8_t>((left << 4) | right);
+            std::uint8_t left = (row * 8 + left_x < pixel_indices.size())
+                                    ? (pixel_indices[row * 8 + left_x] & 0x0F)
+                                    : 0;
+            std::uint8_t right = (row * 8 + right_x < pixel_indices.size())
+                                     ? (pixel_indices[row * 8 + right_x] & 0x0F)
+                                     : 0;
+            tile[row * 4 + pair] = static_cast<std::uint8_t>((left << 4) | right);
         }
     }
     return tile;
 }
 
-} // namespace png2amiga::genesis
+}  // namespace png2amiga::genesis

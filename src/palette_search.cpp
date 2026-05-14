@@ -24,7 +24,9 @@ namespace png2amiga::palette_search {
 namespace {
 
 Color3f snap_color_ocs(const Color3f& c) {
-    auto srgb_l = [](float x) { return color_space::linear_to_srgb(x); };
+    auto srgb_l = [](float x) {
+        return color_space::linear_to_srgb(x);
+    };
     float r = std::clamp(srgb_l(c.r), 0.0f, 1.0f);
     float g = std::clamp(srgb_l(c.g), 0.0f, 1.0f);
     float b = std::clamp(srgb_l(c.b), 0.0f, 1.0f);
@@ -34,21 +36,22 @@ Color3f snap_color_ocs(const Color3f& c) {
     auto r8 = (r4 << 4) | r4;
     auto g8 = (g4 << 4) | g4;
     auto b8 = (b4 << 4) | b4;
-    return color_space::srgb_to_linear(Color3f{
-        static_cast<float>(r8) / 255.0f,
-        static_cast<float>(g8) / 255.0f,
-        static_cast<float>(b8) / 255.0f});
+    return color_space::srgb_to_linear(Color3f{static_cast<float>(r8) / 255.0f,
+                                               static_cast<float>(g8) / 255.0f,
+                                               static_cast<float>(b8) / 255.0f});
 }
 
 void snap_palette_ocs(std::vector<Color3f>& pal) {
-    for (auto& c : pal) c = snap_color_ocs(c);
+    for (auto& c : pal)
+        c = snap_color_ocs(c);
 }
 
 // Mutate non-locked slots in `pal`. `locked` (if non-empty) flags
 // slots that must not change; lock_color0 implicitly locks slot 0
 // when locked is empty. Slots flagged as locked stay at their input
 // color after this call.
-void mutate(std::vector<Color3f>& pal, std::mt19937& rng,
+void mutate(std::vector<Color3f>& pal,
+            std::mt19937& rng,
             bool lock_color0,
             const std::vector<bool>& locked = {}) {
     if (pal.empty()) return;
@@ -93,8 +96,8 @@ std::vector<Color3f> crossover(const std::vector<Color3f>& a,
     if (lock_color0) child[0] = Color3f{0, 0, 0};
     std::uniform_int_distribution<int> coin(0, 1);
     for (std::size_t k = 0; k < a.size(); ++k) {
-        bool is_locked = (!locked.empty() && k < locked.size() && locked[k])
-                         || (lock_color0 && k == 0);
+        bool is_locked = (!locked.empty() && k < locked.size() && locked[k]) ||
+                         (lock_color0 && k == 0);
         if (is_locked) {
             // Use parent A's value (caller seeds A's locked slots
             // with the user-supplied reserve color; B may have
@@ -127,9 +130,8 @@ float cpu_fitness(const Image& source,
                   const std::vector<bool>& tmask = {}) {
     const std::size_t W = source.width();
     const std::size_t H = source.height();
-    const bool has_excl =
-        std::any_of(dither_exclude_mask.begin(), dither_exclude_mask.end(),
-                    [](bool b) { return b; });
+    const bool has_excl = std::any_of(
+        dither_exclude_mask.begin(), dither_exclude_mask.end(), [](bool b) { return b; });
     const bool has_trans = !tmask.empty();
 
     // Pop search calls this 2560×/run; W*H ≈ 64K pixels here means
@@ -138,7 +140,7 @@ float cpu_fitness(const Image& source,
     // scratch (each parallel_for worker has its own TLS).
     thread_local Image rendered_tls(0, 0);
     thread_local Image src_masked_tls(0, 0);
-    thread_local std::vector<Color3f>      cand_pal_tls;
+    thread_local std::vector<Color3f> cand_pal_tls;
     thread_local std::vector<std::uint8_t> cand_to_full_tls;
     if (rendered_tls.width() != W || rendered_tls.height() != H) {
         rendered_tls = Image(W, H);
@@ -155,19 +157,17 @@ float cpu_fitness(const Image& source,
         cand_to_full_tls.reserve(palette.size());
         for (std::size_t i = 0; i < palette.size(); ++i) {
             if (has_trans && i == 0) continue;
-            if (i < dither_exclude_mask.size() && dither_exclude_mask[i])
-                continue;
+            if (i < dither_exclude_mask.size() && dither_exclude_mask[i]) continue;
             cand_pal_tls.push_back(palette[i]);
             cand_to_full_tls.push_back(static_cast<std::uint8_t>(i));
         }
         if (cand_pal_tls.empty()) cand_pal_tls.push_back(Color3f{0, 0, 0});
-        dr = dither::apply(source,
-            std::span<const Color3f>(cand_pal_tls.data(), cand_pal_tls.size()),
-            dith);
-        for (auto& idx : dr.indices) idx = cand_to_full_tls[idx];
+        dr = dither::apply(
+            source, std::span<const Color3f>(cand_pal_tls.data(), cand_pal_tls.size()), dith);
+        for (auto& idx : dr.indices)
+            idx = cand_to_full_tls[idx];
         if (has_trans) {
-            for (std::size_t i = 0;
-                 i < tmask.size() && i < dr.indices.size(); ++i)
+            for (std::size_t i = 0; i < tmask.size() && i < dr.indices.size(); ++i)
                 if (tmask[i]) dr.indices[i] = 0;
         }
     } else {
@@ -195,36 +195,31 @@ float cpu_fitness(const Image& source,
                 src_px[i] = orig_px[i];
             }
         }
-        return ssimulacra2::compute(src_masked_tls.pixels(),
-                                     rendered_tls.pixels(), W, H);
+        return ssimulacra2::compute(src_masked_tls.pixels(), rendered_tls.pixels(), W, H);
     }
-    return ssimulacra2::compute(source.pixels(), rendered_tls.pixels(),
-                                 W, H);
+    return ssimulacra2::compute(source.pixels(), rendered_tls.pixels(), W, H);
 }
 
-} // namespace
+}  // namespace
 
-Result<PopSearchResult> run_population_search(
-    const Image&            source,
-    int                     depth,
-    std::size_t             max_colors,
-    amiga::Mode             /*mode*/,
-    amiga::Chipset          chipset,
-    const dither::Settings& dith,
-    bool                    lock_color0,
-    const PopSearchOptions& opts) noexcept
-{
+Result<PopSearchResult> run_population_search(const Image& source,
+                                              int depth,
+                                              std::size_t max_colors,
+                                              amiga::Mode /*mode*/,
+                                              amiga::Chipset chipset,
+                                              const dither::Settings& dith,
+                                              bool lock_color0,
+                                              const PopSearchOptions& opts) noexcept {
     if (source.width() == 0 || source.height() == 0) {
-        return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                                      "empty image"}};
+        return std::unexpected{Error{ErrorCode::invalid_dimensions, "empty image"}};
     }
     if (chipset != amiga::Chipset::ocs) {
-        return std::unexpected{Error{ErrorCode::unsupported_mode,
-                                      "pop search is OCS-only for now"}};
+        return std::unexpected{
+            Error{ErrorCode::unsupported_mode, "pop search is OCS-only for now"}};
     }
     if (depth < 1 || depth > 5) {
-        return std::unexpected{Error{ErrorCode::unsupported_mode,
-                                      "pop search applies to d ∈ [1,5]"}};
+        return std::unexpected{
+            Error{ErrorCode::unsupported_mode, "pop search applies to d ∈ [1,5]"}};
     }
 
     // Capture lock + transparency context. When the caller supplies
@@ -235,25 +230,22 @@ Result<PopSearchResult> run_population_search(
     // know about reserves; gate that case on the locked_mask being
     // empty.
     const auto& locked_mask = opts.locked_mask;
-    const bool  has_locked  =
-        std::any_of(locked_mask.begin(), locked_mask.end(),
-                    [](bool b) { return b; });
+    const bool has_locked = std::any_of(
+        locked_mask.begin(), locked_mask.end(), [](bool b) { return b; });
 
-    auto enforce_locks = [&](std::vector<Color3f>& p,
-                              const std::vector<Color3f>* lock_src) {
+    auto enforce_locks = [&](std::vector<Color3f>& p, const std::vector<Color3f>* lock_src) {
         // Restore locked-slot colors from the seed (or an explicit
         // template). Called after any mutation that might have
         // touched a locked slot via the rng.
         for (std::size_t k = 0; k < p.size() && k < locked_mask.size(); ++k) {
-            if (locked_mask[k] && lock_src && k < lock_src->size())
-                p[k] = (*lock_src)[k];
+            if (locked_mask[k] && lock_src && k < lock_src->size()) p[k] = (*lock_src)[k];
         }
     };
 
-    auto add_pal = [&](std::vector<Color3f> p,
-                       std::vector<std::vector<Color3f>>& pop) {
+    auto add_pal = [&](std::vector<Color3f> p, std::vector<std::vector<Color3f>>& pop) {
         if (p.size() > max_colors) p.resize(max_colors);
-        while (p.size() < max_colors) p.push_back(Color3f{0, 0, 0});
+        while (p.size() < max_colors)
+            p.push_back(Color3f{0, 0, 0});
         snap_palette_ocs(p);
         if (lock_color0) p[0] = Color3f{0, 0, 0};
         // The locked-slot enforcement happens via enforce_locks at
@@ -267,7 +259,8 @@ Result<PopSearchResult> run_population_search(
     // Caller-provided seed palettes (e.g. --best winner). When the
     // caller threaded reserves through, the first seed already has
     // them slotted in.
-    for (const auto& sp : opts.seed_palettes) add_pal(sp.colors, population);
+    for (const auto& sp : opts.seed_palettes)
+        add_pal(sp.colors, population);
 
     // Internal k-means seeding. SKIPPED when the caller has reserves
     // — the k-means path doesn't know about reserve slots and would
@@ -277,17 +270,16 @@ Result<PopSearchResult> run_population_search(
         int n_kmeans = std::max(4, opts.pop_size / 8);
         for (int s = 0; s < n_kmeans; ++s) {
             int diversity = 1 + (s % 5);
-            auto q = quantize::quantize(source, max_colors,
-                                         quantize::Algorithm::ocs_bruteforce,
-                                         diversity);
+            auto q = quantize::quantize(
+                source, max_colors, quantize::Algorithm::ocs_bruteforce, diversity);
             if (q) add_pal(std::move(q->colors), population);
         }
     }
     if (population.empty()) {
         return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                                      "no seeds available — caller must "
-                                      "supply seed_palettes when reserves "
-                                      "are present"}};
+                                     "no seeds available — caller must "
+                                     "supply seed_palettes when reserves "
+                                     "are present"}};
     }
 
     // Fill remainder with mutated copies of the first seed. Each
@@ -325,24 +317,29 @@ Result<PopSearchResult> run_population_search(
                 // (cheap: half_brite is a per-channel ×0.5 in sRGB).
                 auto full = palette::make_ehb_palette(population[i]);
                 scores[i] = cpu_fitness(source,
-                    std::span<const Color3f>(full.colors), dith,
-                    opts.dither_exclude_mask, opts.tmask);
+                                        std::span<const Color3f>(full.colors),
+                                        dith,
+                                        opts.dither_exclude_mask,
+                                        opts.tmask);
             } else {
                 scores[i] = cpu_fitness(source,
-                    std::span<const Color3f>(population[i]), dith,
-                    opts.dither_exclude_mask, opts.tmask);
+                                        std::span<const Color3f>(population[i]),
+                                        dith,
+                                        opts.dither_exclude_mask,
+                                        opts.tmask);
             }
         });
     };
 
     auto report = [&](int gen, float best) {
         if (!opts.on_progress) return;
-        float frac = static_cast<float>(gen) /
-                     static_cast<float>(opts.generations);
+        float frac = static_cast<float>(gen) / static_cast<float>(opts.generations);
         char label[64];
-        std::snprintf(label, sizeof(label),
+        std::snprintf(label,
+                      sizeof(label),
                       "pop search gen %d/%d  best=%.2f",
-                      gen, opts.generations,
+                      gen,
+                      opts.generations,
                       static_cast<double>(best));
         opts.on_progress(frac, label);
     };
@@ -350,19 +347,18 @@ Result<PopSearchResult> run_population_search(
     score_all();
 
     float prev_best = *std::max_element(scores.begin(), scores.end());
-    int   stale_gens = 0;
+    int stale_gens = 0;
     report(0, prev_best);
 
     for (int gen = 1; gen <= opts.generations; ++gen) {
         std::vector<std::size_t> idx(population.size());
         std::iota(idx.begin(), idx.end(), std::size_t{0});
-        std::sort(idx.begin(), idx.end(),
-                  [&](std::size_t a, std::size_t b) {
-                      return scores[a] > scores[b];
-                  });
+        std::sort(idx.begin(), idx.end(), [&](std::size_t a, std::size_t b) {
+            return scores[a] > scores[b];
+        });
         int n_keep = std::max(2, opts.pop_size / 4);
         std::vector<std::vector<Color3f>> new_pop;
-        std::vector<float>                new_scores;
+        std::vector<float> new_scores;
         new_pop.reserve(static_cast<std::size_t>(opts.pop_size));
         new_scores.reserve(static_cast<std::size_t>(opts.pop_size));
         // Top n_keep survive verbatim — carry their scores forward.
@@ -384,8 +380,7 @@ Result<PopSearchResult> run_population_search(
                 enforce_locks(child, &seed0);
                 new_pop.push_back(std::move(child));
             } else {
-                auto child =
-                    new_pop[static_cast<std::size_t>(parent_pick(rng))];
+                auto child = new_pop[static_cast<std::size_t>(parent_pick(rng))];
                 for (int m = 0; m < 3; ++m)
                     mutate(child, rng, lock_color0, locked_mask);
                 enforce_locks(child, &seed0);
@@ -394,9 +389,10 @@ Result<PopSearchResult> run_population_search(
             new_scores.push_back(0.0f);  // placeholder, will be filled
         }
         population = std::move(new_pop);
-        scores     = std::move(new_scores);
+        scores = std::move(new_scores);
         needs_score.assign(population.size(), true);
-        for (int i = 0; i < n_keep; ++i) needs_score[static_cast<std::size_t>(i)] = false;
+        for (int i = 0; i < n_keep; ++i)
+            needs_score[static_cast<std::size_t>(i)] = false;
         score_all();
 
         float cur_best = *std::max_element(scores.begin(), scores.end());
@@ -405,13 +401,12 @@ Result<PopSearchResult> run_population_search(
             if (++stale_gens >= opts.stale_limit) break;
         } else {
             stale_gens = 0;
-            prev_best  = cur_best;
+            prev_best = cur_best;
         }
     }
 
     auto winner_it = std::max_element(scores.begin(), scores.end());
-    std::size_t winner = static_cast<std::size_t>(
-        winner_it - scores.begin());
+    std::size_t winner = static_cast<std::size_t>(winner_it - scores.begin());
 
     // Final dither via the canonical CPU path so the result is
     // exactly what the encoder will produce. For EHB the indices
@@ -427,35 +422,32 @@ Result<PopSearchResult> run_population_search(
     Palette ehb_full;
     std::span<const Color3f> dither_pal = pal_vec;
     if (opts.ehb_expand) {
-        ehb_full   = palette::make_ehb_palette(pal_vec);
+        ehb_full = palette::make_ehb_palette(pal_vec);
         dither_pal = std::span<const Color3f>(ehb_full.colors);
     }
-    const bool has_excl =
-        std::any_of(opts.dither_exclude_mask.begin(),
-                    opts.dither_exclude_mask.end(),
-                    [](bool b) { return b; });
+    const bool has_excl = std::any_of(
+        opts.dither_exclude_mask.begin(), opts.dither_exclude_mask.end(), [](bool b) { return b; });
     const bool has_trans = !opts.tmask.empty();
 
     dither::DitherResult dr;
     if (has_excl || has_trans) {
-        std::vector<Color3f>      cand_pal;
+        std::vector<Color3f> cand_pal;
         std::vector<std::uint8_t> cand_to_full;
         cand_pal.reserve(dither_pal.size());
         cand_to_full.reserve(dither_pal.size());
         for (std::size_t i = 0; i < dither_pal.size(); ++i) {
             if (has_trans && i == 0) continue;
-            if (i < opts.dither_exclude_mask.size() &&
-                opts.dither_exclude_mask[i]) continue;
+            if (i < opts.dither_exclude_mask.size() && opts.dither_exclude_mask[i]) continue;
             cand_pal.push_back(dither_pal[i]);
             cand_to_full.push_back(static_cast<std::uint8_t>(i));
         }
         if (cand_pal.empty()) cand_pal.push_back(Color3f{0, 0, 0});
-        dr = dither::apply(source,
-            std::span<const Color3f>(cand_pal.data(), cand_pal.size()), dith);
-        for (auto& idx : dr.indices) idx = cand_to_full[idx];
+        dr = dither::apply(
+            source, std::span<const Color3f>(cand_pal.data(), cand_pal.size()), dith);
+        for (auto& idx : dr.indices)
+            idx = cand_to_full[idx];
         if (has_trans) {
-            for (std::size_t i = 0;
-                 i < opts.tmask.size() && i < dr.indices.size(); ++i)
+            for (std::size_t i = 0; i < opts.tmask.size() && i < dr.indices.size(); ++i)
                 if (opts.tmask[i]) dr.indices[i] = 0;
         }
     } else {
@@ -470,12 +462,12 @@ Result<PopSearchResult> run_population_search(
     }
 
     PopSearchResult out;
-    out.palette.name   = opts.ehb_expand ? "ehb-pop-base" : "pop";
+    out.palette.name = opts.ehb_expand ? "ehb-pop-base" : "pop";
     out.palette.colors = std::move(pal_vec);
-    out.indices        = std::move(dr.indices);
-    out.rendered       = std::move(rendered);
-    out.total_error    = dr.total_error;
+    out.indices = std::move(dr.indices);
+    out.rendered = std::move(rendered);
+    out.total_error = dr.total_error;
     return out;
 }
 
-} // namespace png2amiga::palette_search
+}  // namespace png2amiga::palette_search

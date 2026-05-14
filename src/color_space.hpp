@@ -13,14 +13,14 @@
 // Emscripten, NEON on AArch64, SSE2 on x86 (covers both MSVC and x86
 // GCC/Clang). Scalar fallback covers everything else.
 #if defined(__wasm_simd128__)
-    #include <wasm_simd128.h>
-    #define PNG2AMIGA_CBRT_BACKEND_WASM 1
+#include <wasm_simd128.h>
+#define PNG2AMIGA_CBRT_BACKEND_WASM 1
 #elif defined(__ARM_NEON) || defined(__aarch64__) || defined(_M_ARM64)
-    #include <arm_neon.h>
-    #define PNG2AMIGA_CBRT_BACKEND_NEON 1
+#include <arm_neon.h>
+#define PNG2AMIGA_CBRT_BACKEND_NEON 1
 #elif defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
-    #include <immintrin.h>
-    #define PNG2AMIGA_CBRT_BACKEND_SSE2 1
+#include <immintrin.h>
+#define PNG2AMIGA_CBRT_BACKEND_SSE2 1
 #endif
 
 // Portable force-inline. MSVC ignores [[gnu::always_inline]] silently
@@ -30,9 +30,9 @@
 // `[[msvc::forceinline]]` when it isn't itself MSVC, so we can't use
 // the attribute syntax portably.
 #if defined(_MSC_VER) && !defined(__clang__)
-    #define PNG2AMIGA_INLINE_HOT __forceinline
+#define PNG2AMIGA_INLINE_HOT __forceinline
 #else
-    #define PNG2AMIGA_INLINE_HOT inline __attribute__((always_inline))
+#define PNG2AMIGA_INLINE_HOT inline __attribute__((always_inline))
 #endif
 
 namespace png2amiga::color_space {
@@ -89,16 +89,14 @@ constexpr Color3f linear_to_srgb(Color3f linear) noexcept {
 constexpr auto make_srgb_lut() noexcept {
     std::array<float, 256> lut{};
     for (int i = 0; i < 256; ++i) {
-        lut[static_cast<std::size_t>(i)] =
-            srgb_to_linear(static_cast<float>(i) / 255.0f);
+        lut[static_cast<std::size_t>(i)] = srgb_to_linear(static_cast<float>(i) / 255.0f);
     }
     return lut;
 }
 
 inline constexpr auto srgb_lut = make_srgb_lut();
 
-constexpr Color3f srgb_u8_to_linear(std::uint8_t r, std::uint8_t g,
-                                     std::uint8_t b) noexcept {
+constexpr Color3f srgb_u8_to_linear(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept {
     return {srgb_lut[r], srgb_lut[g], srgb_lut[b]};
 }
 #else
@@ -107,20 +105,17 @@ inline const std::array<float, 256>& get_srgb_lut() noexcept {
     static const auto lut = [] {
         std::array<float, 256> l{};
         for (int i = 0; i < 256; ++i)
-            l[static_cast<std::size_t>(i)] =
-                srgb_to_linear(static_cast<float>(i) / 255.0f);
+            l[static_cast<std::size_t>(i)] = srgb_to_linear(static_cast<float>(i) / 255.0f);
         return l;
     }();
     return lut;
 }
 
-inline Color3f srgb_u8_to_linear(std::uint8_t r, std::uint8_t g,
-                                  std::uint8_t b) noexcept {
+inline Color3f srgb_u8_to_linear(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept {
     auto& lut = get_srgb_lut();
     return {lut[r], lut[g], lut[b]};
 }
 #endif
-
 
 // Convert sRGB hex (0xRRGGBB) to linear Color3f
 PNG2AMIGA_LUT_CONSTEXPR Color3f srgb_hex_to_linear(std::uint32_t hex) noexcept {
@@ -167,7 +162,7 @@ constexpr float c6 = -2.2409846367e+00f;
 constexpr float c7 = +1.7148746033e+00f;
 constexpr float c8 = -7.5960070594e-01f;
 constexpr float c9 = +1.4666385867e-01f;
-}
+}  // namespace pow24_fixed
 
 // ---------------------------------------------------------------------------
 // SIMD sRGB → linear for the dither hot loop.
@@ -193,29 +188,24 @@ namespace detail {
 PNG2AMIGA_INLINE_HOT __m128 sleef_lnf_sse4(__m128 d) noexcept {
     __m128 d_scaled = _mm_mul_ps(d, _mm_set1_ps(4.0f / 3.0f));
     __m128i e_int = _mm_sub_epi32(
-        _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(d_scaled), 23),
-                       _mm_set1_epi32(0xFF)),
+        _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(d_scaled), 23), _mm_set1_epi32(0xFF)),
         _mm_set1_epi32(127));
     __m128 e = _mm_cvtepi32_ps(e_int);
-    __m128i m_bits = _mm_sub_epi32(_mm_castps_si128(d),
-                                     _mm_slli_epi32(e_int, 23));
+    __m128i m_bits = _mm_sub_epi32(_mm_castps_si128(d), _mm_slli_epi32(e_int, 23));
     __m128 m = _mm_castsi128_ps(m_bits);
-    __m128 x  = _mm_div_ps(_mm_sub_ps(m, _mm_set1_ps(1.0f)),
-                            _mm_add_ps(m, _mm_set1_ps(1.0f)));
+    __m128 x = _mm_div_ps(_mm_sub_ps(m, _mm_set1_ps(1.0f)), _mm_add_ps(m, _mm_set1_ps(1.0f)));
     __m128 x2 = _mm_mul_ps(x, x);
     __m128 t = _mm_set1_ps(0.2392828464508056640625f);
     t = _mm_fmadd_ps(t, x2, _mm_set1_ps(0.28518211841583251953125f));
     t = _mm_fmadd_ps(t, x2, _mm_set1_ps(0.400005877017974853515625f));
     t = _mm_fmadd_ps(t, x2, _mm_set1_ps(0.666666686534881591796875f));
     t = _mm_fmadd_ps(t, x2, _mm_set1_ps(2.0f));
-    return _mm_fmadd_ps(e, _mm_set1_ps(0.693147180559945286226764f),
-                         _mm_mul_ps(x, t));
+    return _mm_fmadd_ps(e, _mm_set1_ps(0.693147180559945286226764f), _mm_mul_ps(x, t));
 }
 
 PNG2AMIGA_INLINE_HOT __m128 sleef_expf_sse4(__m128 d) noexcept {
-    __m128 q_f = _mm_round_ps(
-        _mm_mul_ps(d, _mm_set1_ps(1.4426950408889634f)),
-        _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    __m128 q_f = _mm_round_ps(_mm_mul_ps(d, _mm_set1_ps(1.4426950408889634f)),
+                              _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
     __m128i q = _mm_cvtps_epi32(q_f);
     __m128 s = _mm_fmadd_ps(q_f, _mm_set1_ps(-0.693145751953125f), d);
     s = _mm_fmadd_ps(q_f, _mm_set1_ps(-1.4286067653e-06f), s);
@@ -225,10 +215,8 @@ PNG2AMIGA_INLINE_HOT __m128 sleef_expf_sse4(__m128 d) noexcept {
     u = _mm_fmadd_ps(u, s, _mm_set1_ps(0.0416664853692054748535156f));
     u = _mm_fmadd_ps(u, s, _mm_set1_ps(0.166666671633720397949219f));
     u = _mm_fmadd_ps(u, s, _mm_set1_ps(0.5f));
-    u = _mm_add_ps(_mm_set1_ps(1.0f),
-        _mm_fmadd_ps(_mm_mul_ps(s, s), u, s));
-    __m128i shifted = _mm_slli_epi32(
-        _mm_add_epi32(q, _mm_set1_epi32(127)), 23);
+    u = _mm_add_ps(_mm_set1_ps(1.0f), _mm_fmadd_ps(_mm_mul_ps(s, s), u, s));
+    __m128i shifted = _mm_slli_epi32(_mm_add_epi32(q, _mm_set1_epi32(127)), 23);
     return _mm_mul_ps(u, _mm_castsi128_ps(shifted));
 }
 
@@ -237,8 +225,7 @@ PNG2AMIGA_INLINE_HOT __m128 sleef_expf_sse4(__m128 d) noexcept {
 PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     __m128 s = _mm_setr_ps(c.r, c.g, c.b, 0.0f);
     __m128 lin = _mm_mul_ps(s, _mm_set1_ps(1.0f / 12.92f));
-    __m128 base = _mm_mul_ps(_mm_add_ps(s, _mm_set1_ps(0.055f)),
-                              _mm_set1_ps(1.0f / 1.055f));
+    __m128 base = _mm_mul_ps(_mm_add_ps(s, _mm_set1_ps(0.055f)), _mm_set1_ps(1.0f / 1.055f));
     __m128 ln_b = detail::sleef_lnf_sse4(base);
     __m128 pw = detail::sleef_expf_sse4(_mm_mul_ps(_mm_set1_ps(2.4f), ln_b));
     __m128 mask = _mm_cmple_ps(s, _mm_set1_ps(0.04045f));
@@ -256,26 +243,22 @@ namespace detail {
 PNG2AMIGA_INLINE_HOT __m128 fast_cbrt_m128_sse4(__m128 vf) noexcept {
     __m128i v = _mm_castps_si128(vf);
     __m128i sign_mask = _mm_set1_epi32(static_cast<int>(0x80000000));
-    __m128i sign    = _mm_and_si128(v, sign_mask);
+    __m128i sign = _mm_and_si128(v, sign_mask);
     __m128i absbits = _mm_andnot_si128(sign_mask, v);
-    __m128i t = _mm_add_epi32(_mm_srli_epi32(absbits, 2),
-                                _mm_srli_epi32(absbits, 4));
+    __m128i t = _mm_add_epi32(_mm_srli_epi32(absbits, 2), _mm_srli_epi32(absbits, 4));
     t = _mm_add_epi32(t, _mm_srli_epi32(t, 4));
     t = _mm_add_epi32(t, _mm_srli_epi32(t, 8));
     __m128i seed = _mm_add_epi32(_mm_set1_epi32(0x2a5137a0), t);
     __m128 absx = _mm_castsi128_ps(absbits);
-    __m128 y    = _mm_castsi128_ps(seed);
+    __m128 y = _mm_castsi128_ps(seed);
     __m128 third = _mm_set1_ps(0.33333333f);
-    __m128 two   = _mm_set1_ps(2.0f);
+    __m128 two = _mm_set1_ps(2.0f);
     __m128 yy = _mm_mul_ps(y, y);
-    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y),
-                                      _mm_div_ps(absx, yy)));
+    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y), _mm_div_ps(absx, yy)));
     yy = _mm_mul_ps(y, y);
-    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y),
-                                      _mm_div_ps(absx, yy)));
+    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y), _mm_div_ps(absx, yy)));
     __m128i nonzero = _mm_cmpgt_epi32(absbits, _mm_setzero_si128());
-    __m128i out_bits = _mm_or_si128(
-        _mm_and_si128(_mm_castps_si128(y), nonzero), sign);
+    __m128i out_bits = _mm_or_si128(_mm_and_si128(_mm_castps_si128(y), nonzero), sign);
     return _mm_castsi128_ps(out_bits);
 }
 
@@ -305,20 +288,14 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c1));
     p = _mm_fmadd_ps(p, srgb, _mm_set1_ps(pow24_fixed::c0));
     __m128 mask = _mm_cmple_ps(srgb, _mm_set1_ps(0.04045f));
-    __m128 lin  = _mm_blendv_ps(p, lin_branch, mask);
+    __m128 lin = _mm_blendv_ps(p, lin_branch, mask);
     // 2) Linear → LMS via 3 broadcast + FMA.
     __m128 r_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(0, 0, 0, 0));
     __m128 g_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(1, 1, 1, 1));
     __m128 b_b = _mm_shuffle_ps(lin, lin, _MM_SHUFFLE(2, 2, 2, 2));
-    __m128 lms = _mm_mul_ps(
-        _mm_setr_ps(0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f),
-        r_b);
-    lms = _mm_fmadd_ps(
-        _mm_setr_ps(0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f),
-        g_b, lms);
-    lms = _mm_fmadd_ps(
-        _mm_setr_ps(0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f),
-        b_b, lms);
+    __m128 lms = _mm_mul_ps(_mm_setr_ps(0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f), r_b);
+    lms = _mm_fmadd_ps(_mm_setr_ps(0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f), g_b, lms);
+    lms = _mm_fmadd_ps(_mm_setr_ps(0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f), b_b, lms);
     // 3) cbrt (4-wide, lane 3 padding).
     __m128 lmsc = detail::fast_cbrt_m128_sse4(lms);
     // 4) Final OKLab matrix — 3 dot products. Scalar tail since the
@@ -327,9 +304,9 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     _mm_store_ps(out, lmsc);
     float l = out[0], m = out[1], s = out[2];
     return {
-        std::fma( 0.2104542553f, l, std::fma( 0.7936177850f, m, -0.0040720468f * s)),
-        std::fma( 1.9779984951f, l, std::fma(-2.4285922050f, m,  0.4505937099f * s)),
-        std::fma( 0.0259040371f, l, std::fma( 0.7827717662f, m, -0.8086757660f * s)),
+        std::fma(0.2104542553f, l, std::fma(0.7936177850f, m, -0.0040720468f * s)),
+        std::fma(1.9779984951f, l, std::fma(-2.4285922050f, m, 0.4505937099f * s)),
+        std::fma(0.0259040371f, l, std::fma(0.7827717662f, m, -0.8086757660f * s)),
     };
 }
 
@@ -341,23 +318,19 @@ namespace detail {
 PNG2AMIGA_INLINE_HOT float32x4_t sleef_lnf_neon(float32x4_t d) noexcept {
     float32x4_t d_scaled = vmulq_n_f32(d, 4.0f / 3.0f);
     int32x4_t e_int = vsubq_s32(
-        vandq_s32(vshrq_n_s32(vreinterpretq_s32_f32(d_scaled), 23),
-                   vdupq_n_s32(0xFF)),
+        vandq_s32(vshrq_n_s32(vreinterpretq_s32_f32(d_scaled), 23), vdupq_n_s32(0xFF)),
         vdupq_n_s32(127));
     float32x4_t e = vcvtq_f32_s32(e_int);
-    int32x4_t m_bits = vsubq_s32(vreinterpretq_s32_f32(d),
-                                   vshlq_n_s32(e_int, 23));
+    int32x4_t m_bits = vsubq_s32(vreinterpretq_s32_f32(d), vshlq_n_s32(e_int, 23));
     float32x4_t m = vreinterpretq_f32_s32(m_bits);
-    float32x4_t x  = vdivq_f32(vsubq_f32(m, vdupq_n_f32(1.0f)),
-                                 vaddq_f32(m, vdupq_n_f32(1.0f)));
+    float32x4_t x = vdivq_f32(vsubq_f32(m, vdupq_n_f32(1.0f)), vaddq_f32(m, vdupq_n_f32(1.0f)));
     float32x4_t x2 = vmulq_f32(x, x);
     float32x4_t t = vdupq_n_f32(0.2392828464508056640625f);
     t = vfmaq_f32(vdupq_n_f32(0.28518211841583251953125f), t, x2);
     t = vfmaq_f32(vdupq_n_f32(0.400005877017974853515625f), t, x2);
     t = vfmaq_f32(vdupq_n_f32(0.666666686534881591796875f), t, x2);
     t = vfmaq_f32(vdupq_n_f32(2.0f), t, x2);
-    return vfmaq_f32(vmulq_f32(x, t), e,
-                      vdupq_n_f32(0.693147180559945286226764f));
+    return vfmaq_f32(vmulq_f32(x, t), e, vdupq_n_f32(0.693147180559945286226764f));
 }
 
 PNG2AMIGA_INLINE_HOT float32x4_t sleef_expf_neon(float32x4_t d) noexcept {
@@ -368,11 +341,10 @@ PNG2AMIGA_INLINE_HOT float32x4_t sleef_expf_neon(float32x4_t d) noexcept {
     float32x4_t u = vdupq_n_f32(0.000198527617612853646278381f);
     u = vfmaq_f32(vdupq_n_f32(0.00139304355252534151077271f), u, s);
     u = vfmaq_f32(vdupq_n_f32(0.00833336077630519866943359f), u, s);
-    u = vfmaq_f32(vdupq_n_f32(0.0416664853692054748535156f),  u, s);
-    u = vfmaq_f32(vdupq_n_f32(0.166666671633720397949219f),   u, s);
-    u = vfmaq_f32(vdupq_n_f32(0.5f),                          u, s);
-    u = vaddq_f32(vdupq_n_f32(1.0f),
-        vfmaq_f32(s, vmulq_f32(s, s), u));
+    u = vfmaq_f32(vdupq_n_f32(0.0416664853692054748535156f), u, s);
+    u = vfmaq_f32(vdupq_n_f32(0.166666671633720397949219f), u, s);
+    u = vfmaq_f32(vdupq_n_f32(0.5f), u, s);
+    u = vaddq_f32(vdupq_n_f32(1.0f), vfmaq_f32(s, vmulq_f32(s, s), u));
     int32x4_t shifted = vshlq_n_s32(vaddq_s32(q, vdupq_n_s32(127)), 23);
     return vmulq_f32(u, vreinterpretq_f32_s32(shifted));
 }
@@ -382,13 +354,12 @@ PNG2AMIGA_INLINE_HOT float32x4_t sleef_expf_neon(float32x4_t d) noexcept {
 PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
     float32x4_t s = vld1q_f32(in);
-    float32x4_t lin  = vmulq_n_f32(s, 1.0f / 12.92f);
-    float32x4_t base = vmulq_n_f32(vaddq_f32(s, vdupq_n_f32(0.055f)),
-                                     1.0f / 1.055f);
+    float32x4_t lin = vmulq_n_f32(s, 1.0f / 12.92f);
+    float32x4_t base = vmulq_n_f32(vaddq_f32(s, vdupq_n_f32(0.055f)), 1.0f / 1.055f);
     float32x4_t ln_b = detail::sleef_lnf_neon(base);
-    float32x4_t pw   = detail::sleef_expf_neon(vmulq_n_f32(ln_b, 2.4f));
-    uint32x4_t  mask = vcleq_f32(s, vdupq_n_f32(0.04045f));
-    float32x4_t r    = vbslq_f32(mask, lin, pw);
+    float32x4_t pw = detail::sleef_expf_neon(vmulq_n_f32(ln_b, 2.4f));
+    uint32x4_t mask = vcleq_f32(s, vdupq_n_f32(0.04045f));
+    float32x4_t r = vbslq_f32(mask, lin, pw);
     alignas(16) float out[4];
     vst1q_f32(out, r);
     return Color3f{out[0], out[1], out[2]};
@@ -399,26 +370,22 @@ namespace detail {
 PNG2AMIGA_INLINE_HOT float32x4_t fast_cbrt_neon(float32x4_t vf) noexcept {
     uint32x4_t v = vreinterpretq_u32_f32(vf);
     uint32x4_t sign_mask = vdupq_n_u32(0x80000000u);
-    uint32x4_t sign    = vandq_u32(v, sign_mask);
+    uint32x4_t sign = vandq_u32(v, sign_mask);
     uint32x4_t absbits = vbicq_u32(v, sign_mask);
-    uint32x4_t t = vaddq_u32(vshrq_n_u32(absbits, 2),
-                              vshrq_n_u32(absbits, 4));
+    uint32x4_t t = vaddq_u32(vshrq_n_u32(absbits, 2), vshrq_n_u32(absbits, 4));
     t = vaddq_u32(t, vshrq_n_u32(t, 4));
     t = vaddq_u32(t, vshrq_n_u32(t, 8));
     uint32x4_t seed = vaddq_u32(vdupq_n_u32(0x2a5137a0u), t);
     float32x4_t absx = vreinterpretq_f32_u32(absbits);
-    float32x4_t y    = vreinterpretq_f32_u32(seed);
+    float32x4_t y = vreinterpretq_f32_u32(seed);
     float32x4_t third = vdupq_n_f32(0.33333333f);
-    float32x4_t two   = vdupq_n_f32(2.0f);
+    float32x4_t two = vdupq_n_f32(2.0f);
     float32x4_t yy = vmulq_f32(y, y);
-    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y),
-                                    vdivq_f32(absx, yy)));
+    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y), vdivq_f32(absx, yy)));
     yy = vmulq_f32(y, y);
-    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y),
-                                    vdivq_f32(absx, yy)));
+    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y), vdivq_f32(absx, yy)));
     uint32x4_t nonzero = vcgtq_u32(absbits, vdupq_n_u32(0));
-    uint32x4_t out_bits = vorrq_u32(
-        vandq_u32(vreinterpretq_u32_f32(y), nonzero), sign);
+    uint32x4_t out_bits = vorrq_u32(vandq_u32(vreinterpretq_u32_f32(y), nonzero), sign);
     return vreinterpretq_f32_u32(out_bits);
 }
 
@@ -439,18 +406,15 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c2), p, srgb);
     p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c1), p, srgb);
     p = vfmaq_f32(vdupq_n_f32(pow24_fixed::c0), p, srgb);
-    uint32x4_t  mask = vcleq_f32(srgb, vdupq_n_f32(0.04045f));
-    float32x4_t lin  = vbslq_f32(mask, lin_branch, p);
+    uint32x4_t mask = vcleq_f32(srgb, vdupq_n_f32(0.04045f));
+    float32x4_t lin = vbslq_f32(mask, lin_branch, p);
     // 2) Linear → LMS via 3 broadcast + FMA.
     float32x4_t r_b = vdupq_laneq_f32(lin, 0);
     float32x4_t g_b = vdupq_laneq_f32(lin, 1);
     float32x4_t b_b = vdupq_laneq_f32(lin, 2);
-    alignas(16) const float col_r[4] = {
-        0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f};
-    alignas(16) const float col_g[4] = {
-        0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f};
-    alignas(16) const float col_b[4] = {
-        0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f};
+    alignas(16) const float col_r[4] = {0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f};
+    alignas(16) const float col_g[4] = {0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f};
+    alignas(16) const float col_b[4] = {0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f};
     float32x4_t lms = vmulq_f32(vld1q_f32(col_r), r_b);
     lms = vfmaq_f32(lms, vld1q_f32(col_g), g_b);
     lms = vfmaq_f32(lms, vld1q_f32(col_b), b_b);
@@ -461,9 +425,9 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     vst1q_f32(out, lmsc);
     float l = out[0], m = out[1], s = out[2];
     return {
-        std::fma( 0.2104542553f, l, std::fma( 0.7936177850f, m, -0.0040720468f * s)),
-        std::fma( 1.9779984951f, l, std::fma(-2.4285922050f, m,  0.4505937099f * s)),
-        std::fma( 0.0259040371f, l, std::fma( 0.7827717662f, m, -0.8086757660f * s)),
+        std::fma(0.2104542553f, l, std::fma(0.7936177850f, m, -0.0040720468f * s)),
+        std::fma(1.9779984951f, l, std::fma(-2.4285922050f, m, 0.4505937099f * s)),
+        std::fma(0.0259040371f, l, std::fma(0.7827717662f, m, -0.8086757660f * s)),
     };
 }
 
@@ -476,50 +440,36 @@ namespace detail {
 inline v128_t sleef_lnf_wasm(v128_t d) noexcept {
     v128_t d_scaled = wasm_f32x4_mul(d, wasm_f32x4_splat(4.0f / 3.0f));
     v128_t e_int = wasm_i32x4_sub(
-        wasm_v128_and(wasm_u32x4_shr(d_scaled, 23),
-                       wasm_i32x4_splat(0xFF)),
-        wasm_i32x4_splat(127));
+        wasm_v128_and(wasm_u32x4_shr(d_scaled, 23), wasm_i32x4_splat(0xFF)), wasm_i32x4_splat(127));
     v128_t e = wasm_f32x4_convert_i32x4(e_int);
     v128_t m = wasm_i32x4_sub(d, wasm_i32x4_shl(e_int, 23));
-    v128_t x  = wasm_f32x4_div(wasm_f32x4_sub(m, wasm_f32x4_splat(1.0f)),
-                                 wasm_f32x4_add(m, wasm_f32x4_splat(1.0f)));
+    v128_t x = wasm_f32x4_div(wasm_f32x4_sub(m, wasm_f32x4_splat(1.0f)),
+                              wasm_f32x4_add(m, wasm_f32x4_splat(1.0f)));
     v128_t x2 = wasm_f32x4_mul(x, x);
     v128_t t = wasm_f32x4_splat(0.2392828464508056640625f);
-    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2),
-        wasm_f32x4_splat(0.28518211841583251953125f));
-    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2),
-        wasm_f32x4_splat(0.400005877017974853515625f));
-    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2),
-        wasm_f32x4_splat(0.666666686534881591796875f));
+    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2), wasm_f32x4_splat(0.28518211841583251953125f));
+    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2), wasm_f32x4_splat(0.400005877017974853515625f));
+    t = wasm_f32x4_add(wasm_f32x4_mul(t, x2), wasm_f32x4_splat(0.666666686534881591796875f));
     t = wasm_f32x4_add(wasm_f32x4_mul(t, x2), wasm_f32x4_splat(2.0f));
-    return wasm_f32x4_add(
-        wasm_f32x4_mul(e, wasm_f32x4_splat(0.693147180559945286226764f)),
-        wasm_f32x4_mul(x, t));
+    return wasm_f32x4_add(wasm_f32x4_mul(e, wasm_f32x4_splat(0.693147180559945286226764f)),
+                          wasm_f32x4_mul(x, t));
 }
 
 [[gnu::always_inline]]
 inline v128_t sleef_expf_wasm(v128_t d) noexcept {
-    v128_t q_f = wasm_f32x4_nearest(wasm_f32x4_mul(d,
-        wasm_f32x4_splat(1.4426950408889634f)));
+    v128_t q_f = wasm_f32x4_nearest(wasm_f32x4_mul(d, wasm_f32x4_splat(1.4426950408889634f)));
     v128_t q = wasm_i32x4_trunc_sat_f32x4(q_f);
-    v128_t s = wasm_f32x4_add(
-        wasm_f32x4_mul(q_f, wasm_f32x4_splat(-0.693145751953125f)), d);
-    s = wasm_f32x4_add(
-        wasm_f32x4_mul(q_f, wasm_f32x4_splat(-1.4286067653e-06f)), s);
+    v128_t s = wasm_f32x4_add(wasm_f32x4_mul(q_f, wasm_f32x4_splat(-0.693145751953125f)), d);
+    s = wasm_f32x4_add(wasm_f32x4_mul(q_f, wasm_f32x4_splat(-1.4286067653e-06f)), s);
     v128_t u = wasm_f32x4_splat(0.000198527617612853646278381f);
-    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
-        wasm_f32x4_splat(0.00139304355252534151077271f));
-    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
-        wasm_f32x4_splat(0.00833336077630519866943359f));
-    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
-        wasm_f32x4_splat(0.0416664853692054748535156f));
-    u = wasm_f32x4_add(wasm_f32x4_mul(u, s),
-        wasm_f32x4_splat(0.166666671633720397949219f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s), wasm_f32x4_splat(0.00139304355252534151077271f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s), wasm_f32x4_splat(0.00833336077630519866943359f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s), wasm_f32x4_splat(0.0416664853692054748535156f));
+    u = wasm_f32x4_add(wasm_f32x4_mul(u, s), wasm_f32x4_splat(0.166666671633720397949219f));
     u = wasm_f32x4_add(wasm_f32x4_mul(u, s), wasm_f32x4_splat(0.5f));
     u = wasm_f32x4_add(wasm_f32x4_splat(1.0f),
-        wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_mul(s, s), u), s));
-    v128_t shifted = wasm_i32x4_shl(
-        wasm_i32x4_add(q, wasm_i32x4_splat(127)), 23);
+                       wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_mul(s, s), u), s));
+    v128_t shifted = wasm_i32x4_shl(wasm_i32x4_add(q, wasm_i32x4_splat(127)), 23);
     return wasm_f32x4_mul(u, shifted);
 }
 
@@ -527,16 +477,14 @@ inline v128_t sleef_expf_wasm(v128_t d) noexcept {
 
 PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
-    v128_t s    = wasm_v128_load(in);
-    v128_t lin  = wasm_f32x4_mul(s, wasm_f32x4_splat(1.0f / 12.92f));
-    v128_t base = wasm_f32x4_mul(
-        wasm_f32x4_add(s, wasm_f32x4_splat(0.055f)),
-        wasm_f32x4_splat(1.0f / 1.055f));
+    v128_t s = wasm_v128_load(in);
+    v128_t lin = wasm_f32x4_mul(s, wasm_f32x4_splat(1.0f / 12.92f));
+    v128_t base = wasm_f32x4_mul(wasm_f32x4_add(s, wasm_f32x4_splat(0.055f)),
+                                 wasm_f32x4_splat(1.0f / 1.055f));
     v128_t ln_b = detail::sleef_lnf_wasm(base);
-    v128_t pw   = detail::sleef_expf_wasm(wasm_f32x4_mul(ln_b,
-        wasm_f32x4_splat(2.4f)));
+    v128_t pw = detail::sleef_expf_wasm(wasm_f32x4_mul(ln_b, wasm_f32x4_splat(2.4f)));
     v128_t mask = wasm_f32x4_le(s, wasm_f32x4_splat(0.04045f));
-    v128_t r    = wasm_v128_bitselect(lin, pw, mask);
+    v128_t r = wasm_v128_bitselect(lin, pw, mask);
     alignas(16) float out[4];
     wasm_v128_store(out, r);
     return Color3f{out[0], out[1], out[2]};
@@ -546,25 +494,20 @@ namespace detail {
 
 PNG2AMIGA_INLINE_HOT v128_t fast_cbrt_wasm(v128_t vf) noexcept {
     v128_t sign_mask = wasm_i32x4_splat(static_cast<int32_t>(0x80000000u));
-    v128_t sign    = wasm_v128_and(vf, sign_mask);
+    v128_t sign = wasm_v128_and(vf, sign_mask);
     v128_t absbits = wasm_v128_andnot(vf, sign_mask);
-    v128_t t = wasm_i32x4_add(wasm_u32x4_shr(absbits, 2),
-                              wasm_u32x4_shr(absbits, 4));
+    v128_t t = wasm_i32x4_add(wasm_u32x4_shr(absbits, 2), wasm_u32x4_shr(absbits, 4));
     t = wasm_i32x4_add(t, wasm_u32x4_shr(t, 4));
     t = wasm_i32x4_add(t, wasm_u32x4_shr(t, 8));
     v128_t seed = wasm_i32x4_add(wasm_i32x4_splat(0x2a5137a0), t);
     v128_t absx = absbits;
-    v128_t y    = seed;
+    v128_t y = seed;
     v128_t third = wasm_f32x4_splat(0.33333333f);
-    v128_t two   = wasm_f32x4_splat(2.0f);
+    v128_t two = wasm_f32x4_splat(2.0f);
     v128_t yy = wasm_f32x4_mul(y, y);
-    y = wasm_f32x4_mul(third,
-        wasm_f32x4_add(wasm_f32x4_mul(two, y),
-                       wasm_f32x4_div(absx, yy)));
+    y = wasm_f32x4_mul(third, wasm_f32x4_add(wasm_f32x4_mul(two, y), wasm_f32x4_div(absx, yy)));
     yy = wasm_f32x4_mul(y, y);
-    y = wasm_f32x4_mul(third,
-        wasm_f32x4_add(wasm_f32x4_mul(two, y),
-                       wasm_f32x4_div(absx, yy)));
+    y = wasm_f32x4_mul(third, wasm_f32x4_add(wasm_f32x4_mul(two, y), wasm_f32x4_div(absx, yy)));
     v128_t nonzero = wasm_i32x4_gt(absbits, wasm_i32x4_splat(0));
     v128_t out_bits = wasm_v128_or(wasm_v128_and(y, nonzero), sign);
     return out_bits;
@@ -576,11 +519,9 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     alignas(16) float in[4] = {c.r, c.g, c.b, 0.0f};
     v128_t srgb = wasm_v128_load(in);
     // 1) sRGB → linear (fixed-2.4 degree-9 polynomial, branchless).
-    v128_t lin_branch = wasm_f32x4_mul(srgb,
-        wasm_f32x4_splat(1.0f / 12.92f));
+    v128_t lin_branch = wasm_f32x4_mul(srgb, wasm_f32x4_splat(1.0f / 12.92f));
     auto madd = [&](v128_t prev, float k) {
-        return wasm_f32x4_add(wasm_f32x4_mul(prev, srgb),
-                               wasm_f32x4_splat(k));
+        return wasm_f32x4_add(wasm_f32x4_mul(prev, srgb), wasm_f32x4_splat(k));
     };
     v128_t p = wasm_f32x4_splat(pow24_fixed::c9);
     p = madd(p, pow24_fixed::c8);
@@ -593,17 +534,14 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     p = madd(p, pow24_fixed::c1);
     p = madd(p, pow24_fixed::c0);
     v128_t mask = wasm_f32x4_le(srgb, wasm_f32x4_splat(0.04045f));
-    v128_t lin  = wasm_v128_bitselect(lin_branch, p, mask);
+    v128_t lin = wasm_v128_bitselect(lin_branch, p, mask);
     // 2) Linear → LMS via 3 broadcast + FMA.
     v128_t r_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 0));
     v128_t g_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 1));
     v128_t b_b = wasm_f32x4_splat(wasm_f32x4_extract_lane(lin, 2));
-    alignas(16) const float col_r[4] = {
-        0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f};
-    alignas(16) const float col_g[4] = {
-        0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f};
-    alignas(16) const float col_b[4] = {
-        0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f};
+    alignas(16) const float col_r[4] = {0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f};
+    alignas(16) const float col_g[4] = {0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f};
+    alignas(16) const float col_b[4] = {0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f};
     v128_t lms = wasm_f32x4_mul(wasm_v128_load(col_r), r_b);
     lms = wasm_f32x4_add(wasm_f32x4_mul(wasm_v128_load(col_g), g_b), lms);
     lms = wasm_f32x4_add(wasm_f32x4_mul(wasm_v128_load(col_b), b_b), lms);
@@ -614,9 +552,9 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     wasm_v128_store(out, lmsc);
     float l = out[0], m = out[1], s = out[2];
     return {
-        std::fma( 0.2104542553f, l, std::fma( 0.7936177850f, m, -0.0040720468f * s)),
-        std::fma( 1.9779984951f, l, std::fma(-2.4285922050f, m,  0.4505937099f * s)),
-        std::fma( 0.0259040371f, l, std::fma( 0.7827717662f, m, -0.8086757660f * s)),
+        std::fma(0.2104542553f, l, std::fma(0.7936177850f, m, -0.0040720468f * s)),
+        std::fma(1.9779984951f, l, std::fma(-2.4285922050f, m, 0.4505937099f * s)),
+        std::fma(0.0259040371f, l, std::fma(0.7827717662f, m, -0.8086757660f * s)),
     };
 }
 
@@ -662,11 +600,9 @@ inline double fma_dist_sq(double dx, double dy, double dz) noexcept {
 // 3 mul + 2 add = 5 ops; same throughput on FMA hardware but tighter
 // rounding and better port pressure.
 [[gnu::always_inline]]
-inline float fma_dot3(float c0, float x0, float c1, float x1,
-                      float c2, float x2) noexcept {
+inline float fma_dot3(float c0, float x0, float c1, float x1, float c2, float x2) noexcept {
     return std::fma(c0, x0, std::fma(c1, x1, c2 * x2));
 }
-
 
 // 4-lane cube root for OKLab LMS conversion (lane 3 is padding).
 //
@@ -707,7 +643,9 @@ constexpr f32x4 operator+(f32x4 a, f32x4 b) noexcept {
 constexpr f32x4 operator*(f32x4 a, float s) noexcept {
     return {{a[0] * s, a[1] * s, a[2] * s, a[3] * s}};
 }
-constexpr f32x4 operator*(float s, f32x4 a) noexcept { return a * s; }
+constexpr f32x4 operator*(float s, f32x4 a) noexcept {
+    return a * s;
+}
 #endif
 
 // Helper: load 4 floats from f32x4 (vector_size or struct) into a typed
@@ -737,30 +675,25 @@ inline f32x4 fast_cbrt4(f32x4 x) noexcept {
     // is free (just a type-system pun, no instruction).
     v128_t v = wasm_v128_load(fast_cbrt4_data(x));
     v128_t sign_mask = wasm_i32x4_splat(static_cast<int32_t>(0x80000000u));
-    v128_t sign    = wasm_v128_and(v, sign_mask);
+    v128_t sign = wasm_v128_and(v, sign_mask);
     v128_t absbits = wasm_v128_andnot(v, sign_mask);
 
-    v128_t t = wasm_i32x4_add(wasm_u32x4_shr(absbits, 2),
-                              wasm_u32x4_shr(absbits, 4));
+    v128_t t = wasm_i32x4_add(wasm_u32x4_shr(absbits, 2), wasm_u32x4_shr(absbits, 4));
     t = wasm_i32x4_add(t, wasm_u32x4_shr(t, 4));
     t = wasm_i32x4_add(t, wasm_u32x4_shr(t, 8));
     v128_t seed = wasm_i32x4_add(wasm_i32x4_splat(0x2a5137a0), t);
 
-    v128_t absx = absbits;       // bit-equivalent reinterpret
-    v128_t y    = seed;
+    v128_t absx = absbits;  // bit-equivalent reinterpret
+    v128_t y = seed;
     v128_t third = wasm_f32x4_splat(0.33333333f);
-    v128_t two   = wasm_f32x4_splat(2.0f);
+    v128_t two = wasm_f32x4_splat(2.0f);
 
     // Newton iter 1: y <- (2y + absx / y^2) / 3
     v128_t yy = wasm_f32x4_mul(y, y);
-    y = wasm_f32x4_mul(third,
-            wasm_f32x4_add(wasm_f32x4_mul(two, y),
-                           wasm_f32x4_div(absx, yy)));
+    y = wasm_f32x4_mul(third, wasm_f32x4_add(wasm_f32x4_mul(two, y), wasm_f32x4_div(absx, yy)));
     // Newton iter 2
     yy = wasm_f32x4_mul(y, y);
-    y = wasm_f32x4_mul(third,
-            wasm_f32x4_add(wasm_f32x4_mul(two, y),
-                           wasm_f32x4_div(absx, yy)));
+    y = wasm_f32x4_mul(third, wasm_f32x4_add(wasm_f32x4_mul(two, y), wasm_f32x4_div(absx, yy)));
 
     // Zero-input mask: cmp_gt over signed i32 since absbits >= 0.
     v128_t nonzero = wasm_i32x4_gt(absbits, wasm_i32x4_splat(0));
@@ -779,30 +712,26 @@ inline f32x4 fast_cbrt4(f32x4 x) noexcept {
     uint32x4_t sign = vandq_u32(v, sign_mask);
     uint32x4_t absbits = vbicq_u32(v, sign_mask);
 
-    uint32x4_t t = vaddq_u32(vshrq_n_u32(absbits, 2),
-                             vshrq_n_u32(absbits, 4));
+    uint32x4_t t = vaddq_u32(vshrq_n_u32(absbits, 2), vshrq_n_u32(absbits, 4));
     t = vaddq_u32(t, vshrq_n_u32(t, 4));
     t = vaddq_u32(t, vshrq_n_u32(t, 8));
     uint32x4_t seed = vaddq_u32(vdupq_n_u32(0x2a5137a0u), t);
 
     float32x4_t absx = vreinterpretq_f32_u32(absbits);
-    float32x4_t y    = vreinterpretq_f32_u32(seed);
+    float32x4_t y = vreinterpretq_f32_u32(seed);
     float32x4_t third = vdupq_n_f32(0.33333333f);
-    float32x4_t two   = vdupq_n_f32(2.0f);
+    float32x4_t two = vdupq_n_f32(2.0f);
 
     // Newton iter 1: y <- (2y + absx / y^2) / 3
     float32x4_t yy = vmulq_f32(y, y);
-    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y),
-                                   vdivq_f32(absx, yy)));
+    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y), vdivq_f32(absx, yy)));
     // Newton iter 2
     yy = vmulq_f32(y, y);
-    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y),
-                                   vdivq_f32(absx, yy)));
+    y = vmulq_f32(third, vaddq_f32(vmulq_f32(two, y), vdivq_f32(absx, yy)));
 
     // Zero-input mask: cmp_gt over the unsigned absbits.
     uint32x4_t nonzero = vcgtq_u32(absbits, vdupq_n_u32(0));
-    uint32x4_t out_bits = vorrq_u32(
-        vandq_u32(vreinterpretq_u32_f32(y), nonzero), sign);
+    uint32x4_t out_bits = vorrq_u32(vandq_u32(vreinterpretq_u32_f32(y), nonzero), sign);
 
     alignas(16) float buf[4];
     vst1q_f32(buf, vreinterpretq_f32_u32(out_bits));
@@ -816,32 +745,28 @@ inline f32x4 fast_cbrt4(f32x4 x) noexcept {
     __m128 vf = _mm_loadu_ps(fast_cbrt4_data(x));
     __m128i v = _mm_castps_si128(vf);
     __m128i sign_mask = _mm_set1_epi32(static_cast<int>(0x80000000));
-    __m128i sign    = _mm_and_si128(v, sign_mask);
+    __m128i sign = _mm_and_si128(v, sign_mask);
     __m128i absbits = _mm_andnot_si128(sign_mask, v);
 
-    __m128i t = _mm_add_epi32(_mm_srli_epi32(absbits, 2),
-                              _mm_srli_epi32(absbits, 4));
+    __m128i t = _mm_add_epi32(_mm_srli_epi32(absbits, 2), _mm_srli_epi32(absbits, 4));
     t = _mm_add_epi32(t, _mm_srli_epi32(t, 4));
     t = _mm_add_epi32(t, _mm_srli_epi32(t, 8));
     __m128i seed = _mm_add_epi32(_mm_set1_epi32(0x2a5137a0), t);
 
     __m128 absx = _mm_castsi128_ps(absbits);
-    __m128 y    = _mm_castsi128_ps(seed);
+    __m128 y = _mm_castsi128_ps(seed);
     __m128 third = _mm_set1_ps(0.33333333f);
-    __m128 two   = _mm_set1_ps(2.0f);
+    __m128 two = _mm_set1_ps(2.0f);
 
     // Newton iter 1: y <- (2y + absx / y^2) / 3
     __m128 yy = _mm_mul_ps(y, y);
-    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y),
-                                     _mm_div_ps(absx, yy)));
+    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y), _mm_div_ps(absx, yy)));
     // Newton iter 2
     yy = _mm_mul_ps(y, y);
-    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y),
-                                     _mm_div_ps(absx, yy)));
+    y = _mm_mul_ps(third, _mm_add_ps(_mm_mul_ps(two, y), _mm_div_ps(absx, yy)));
 
     __m128i nonzero = _mm_cmpgt_epi32(absbits, _mm_setzero_si128());
-    __m128i out_bits = _mm_or_si128(
-        _mm_and_si128(_mm_castps_si128(y), nonzero), sign);
+    __m128i out_bits = _mm_or_si128(_mm_and_si128(_mm_castps_si128(y), nonzero), sign);
 
     alignas(16) float buf[4];
     _mm_storeu_ps(buf, _mm_castsi128_ps(out_bits));
@@ -879,10 +804,9 @@ inline OKLab lms_cbrt_to_oklab(f32x4 lms_) noexcept;
 inline OKLab linear_to_oklab(Color3f c) noexcept {
     // LMS matrix applied as column-vec linear combinations of (r, g, b).
     // Pack LMS into a single f32x4 (lane 3 ignored) so the cbrt can SIMD.
-    f32x4 lms =
-        f32x4{0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f} * c.r +
-        f32x4{0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f} * c.g +
-        f32x4{0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f} * c.b;
+    f32x4 lms = f32x4{0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f} * c.r +
+                f32x4{0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f} * c.g +
+                f32x4{0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f} * c.b;
     return lms_cbrt_to_oklab(fast_cbrt4(lms));
 }
 
@@ -908,12 +832,9 @@ inline const std::array<std::array<f32x4, 256>, 3>& srgb_lms_lut() noexcept {
         for (int i = 0; i < 256; ++i) {
             float linear = srgb_to_linear(static_cast<float>(i) / 255.0f);
             auto idx = static_cast<std::size_t>(i);
-            t[0][idx] = f32x4{0.4122214708f, 0.2119034982f,
-                              0.0883024619f, 0.0f} * linear;
-            t[1][idx] = f32x4{0.5363325363f, 0.6806995451f,
-                              0.2817188376f, 0.0f} * linear;
-            t[2][idx] = f32x4{0.0514459929f, 0.1073969566f,
-                              0.6299787005f, 0.0f} * linear;
+            t[0][idx] = f32x4{0.4122214708f, 0.2119034982f, 0.0883024619f, 0.0f} * linear;
+            t[1][idx] = f32x4{0.5363325363f, 0.6806995451f, 0.2817188376f, 0.0f} * linear;
+            t[2][idx] = f32x4{0.0514459929f, 0.1073969566f, 0.6299787005f, 0.0f} * linear;
         }
         return t;
     }();
@@ -924,8 +845,7 @@ inline const std::array<std::array<f32x4, 256>, 3>& srgb_lms_lut() noexcept {
 // LMS (as f32x4, lane 3 unused) for an 8-bit sRGB color. Splits per channel
 // so callers with one varying channel can cache the other two.
 [[gnu::always_inline]]
-inline f32x4 srgb8_to_lms(std::uint8_t r, std::uint8_t g,
-                          std::uint8_t b) noexcept {
+inline f32x4 srgb8_to_lms(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept {
     auto& t = detail::srgb_lms_lut();
     return t[0][r] + t[1][g] + t[2][b];
 }
@@ -934,15 +854,14 @@ inline f32x4 srgb8_to_lms(std::uint8_t r, std::uint8_t g,
 [[gnu::always_inline]]
 inline OKLab lms_cbrt_to_oklab(f32x4 lms_) noexcept {
     return {
-        fma_dot3( 0.2104542553f, lms_[0],  0.7936177850f, lms_[1], -0.0040720468f, lms_[2]),
-        fma_dot3( 1.9779984951f, lms_[0], -2.4285922050f, lms_[1],  0.4505937099f, lms_[2]),
-        fma_dot3( 0.0259040371f, lms_[0],  0.7827717662f, lms_[1], -0.8086757660f, lms_[2]),
+        fma_dot3(0.2104542553f, lms_[0], 0.7936177850f, lms_[1], -0.0040720468f, lms_[2]),
+        fma_dot3(1.9779984951f, lms_[0], -2.4285922050f, lms_[1], 0.4505937099f, lms_[2]),
+        fma_dot3(0.0259040371f, lms_[0], 0.7827717662f, lms_[1], -0.8086757660f, lms_[2]),
     };
 }
 
 [[gnu::always_inline]]
-inline OKLab srgb8_to_oklab(std::uint8_t r, std::uint8_t g,
-                            std::uint8_t b) noexcept {
+inline OKLab srgb8_to_oklab(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept {
     return lms_cbrt_to_oklab(fast_cbrt4(srgb8_to_lms(r, g, b)));
 }
 
@@ -962,15 +881,9 @@ inline OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
     OKLabBatch4 out;
     for (int i = 0; i < 4; ++i) {
         out.labs[i] = {
-            fma_dot3( 0.2104542553f, cL[i],
-                      0.7936177850f, cM[i],
-                     -0.0040720468f, cS[i]),
-            fma_dot3( 1.9779984951f, cL[i],
-                     -2.4285922050f, cM[i],
-                      0.4505937099f, cS[i]),
-            fma_dot3( 0.0259040371f, cL[i],
-                      0.7827717662f, cM[i],
-                     -0.8086757660f, cS[i]),
+            fma_dot3(0.2104542553f, cL[i], 0.7936177850f, cM[i], -0.0040720468f, cS[i]),
+            fma_dot3(1.9779984951f, cL[i], -2.4285922050f, cM[i], 0.4505937099f, cS[i]),
+            fma_dot3(0.0259040371f, cL[i], 0.7827717662f, cM[i], -0.8086757660f, cS[i]),
         };
     }
     return out;
@@ -978,21 +891,18 @@ inline OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
 
 inline Color3f oklab_to_linear(OKLab lab) noexcept {
     // Inverse OKLab matrix: L + c1*a + c2*b shape, fold via nested fma.
-    float l_ = std::fma(0.3963377774f, lab.a,
-                std::fma(0.2158037573f, lab.b, lab.L));
-    float m_ = std::fma(-0.1055613458f, lab.a,
-                std::fma(-0.0638541728f, lab.b, lab.L));
-    float s_ = std::fma(-0.0894841775f, lab.a,
-                std::fma(-1.2914855480f, lab.b, lab.L));
+    float l_ = std::fma(0.3963377774f, lab.a, std::fma(0.2158037573f, lab.b, lab.L));
+    float m_ = std::fma(-0.1055613458f, lab.a, std::fma(-0.0638541728f, lab.b, lab.L));
+    float s_ = std::fma(-0.0894841775f, lab.a, std::fma(-1.2914855480f, lab.b, lab.L));
 
     float l = l_ * l_ * l_;
     float m = m_ * m_ * m_;
     float s = s_ * s_ * s_;
 
     return {
-        fma_dot3( 4.0767416621f, l, -3.3077115913f, m,  0.2309699292f, s),
-        fma_dot3(-1.2684380046f, l,  2.6097574011f, m, -0.3413193965f, s),
-        fma_dot3(-0.0041960863f, l, -0.7034186147f, m,  1.7076147010f, s),
+        fma_dot3(4.0767416621f, l, -3.3077115913f, m, 0.2309699292f, s),
+        fma_dot3(-1.2684380046f, l, 2.6097574011f, m, -0.3413193965f, s),
+        fma_dot3(-0.0041960863f, l, -0.7034186147f, m, 1.7076147010f, s),
     };
 }
 
@@ -1004,8 +914,8 @@ inline Color3f oklab_to_linear(OKLab lab) noexcept {
 // color variation in the palette. Optimized on fantasy.png lores 5bpl.
 // Use --weight-l/--weight-a/--weight-b CLI flags to experiment.
 inline float WEIGHT_L = 0.85f;
-inline float WEIGHT_A = 1.05f;   // red-green axis
-inline float WEIGHT_B = 1.0f;    // blue-yellow axis
+inline float WEIGHT_A = 1.05f;  // red-green axis
+inline float WEIGHT_B = 1.0f;   // blue-yellow axis
 
 inline float perceptual_distance_sq(Color3f a, Color3f b) noexcept {
     auto la = linear_to_oklab(a);
@@ -1023,12 +933,11 @@ inline float perceptual_distance_sq(Color3f a, Color3f b) noexcept {
 // original.  Plain PSNR would punish the deliberate dither noise.
 // Returns dB (higher is better); +inf for identical images.
 inline float compute_psnr_blurred(std::span<const Color3f> original,
-                                   std::span<const Color3f> rendered,
-                                   std::size_t width,
-                                   std::size_t height) noexcept {
+                                  std::span<const Color3f> rendered,
+                                  std::size_t width,
+                                  std::size_t height) noexcept {
     auto n = width * height;
-    if (n == 0 || original.size() < n || rendered.size() < n)
-        return 0.0f;
+    if (n == 0 || original.size() < n || rendered.size() < n) return 0.0f;
 
     // 7-tap Gaussian, σ=1.5
     constexpr std::array<float, 7> kernel = {
@@ -1053,7 +962,9 @@ inline float compute_psnr_blurred(std::span<const Color3f> original,
                     acc.b += p.b * w;
                     wsum += w;
                 }
-                acc.r /= wsum; acc.g /= wsum; acc.b /= wsum;
+                acc.r /= wsum;
+                acc.g /= wsum;
+                acc.b /= wsum;
                 tmp[y * width + x] = acc;
             }
         }
@@ -1073,7 +984,9 @@ inline float compute_psnr_blurred(std::span<const Color3f> original,
                     acc.b += p.b * w;
                     wsum += w;
                 }
-                acc.r /= wsum; acc.g /= wsum; acc.b /= wsum;
+                acc.r /= wsum;
+                acc.g /= wsum;
+                acc.b /= wsum;
                 dst[y * width + x] = acc;
             }
         }
@@ -1097,4 +1010,4 @@ inline float compute_psnr_blurred(std::span<const Color3f> original,
     return static_cast<float>(10.0 * std::log10(255.0 * 255.0 / mse));
 }
 
-} // namespace png2amiga::color_space
+}  // namespace png2amiga::color_space

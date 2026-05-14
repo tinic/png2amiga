@@ -46,8 +46,7 @@ void write_u8(std::vector<std::uint8_t>& out, std::uint8_t val) {
 }
 
 // Patch a 32-bit value at a specific offset (for updating chunk sizes)
-void patch_u32(std::vector<std::uint8_t>& out, std::size_t offset,
-               std::uint32_t val) {
+void patch_u32(std::vector<std::uint8_t>& out, std::size_t offset, std::uint32_t val) {
     out[offset + 0] = static_cast<std::uint8_t>((val >> 24) & 0xFF);
     out[offset + 1] = static_cast<std::uint8_t>((val >> 16) & 0xFF);
     out[offset + 2] = static_cast<std::uint8_t>((val >> 8) & 0xFF);
@@ -63,8 +62,7 @@ void patch_u32(std::vector<std::uint8_t>& out, std::size_t offset,
 //   n = -128: no-op
 // ---------------------------------------------------------------------------
 
-std::vector<std::uint8_t> byterun1_compress(
-    const std::uint8_t* data, std::size_t length) {
+std::vector<std::uint8_t> byterun1_compress(const std::uint8_t* data, std::size_t length) {
     std::vector<std::uint8_t> out;
     out.reserve(length + length / 128 + 1);
 
@@ -90,8 +88,7 @@ std::vector<std::uint8_t> byterun1_compress(
             auto lit_start = pos;
             while (pos < length && pos - lit_start < 128) {
                 // Check if a worthwhile run starts here
-                if (pos + 2 < length && data[pos] == data[pos + 1] &&
-                    data[pos] == data[pos + 2]) {
+                if (pos + 2 < length && data[pos] == data[pos + 1] && data[pos] == data[pos + 2]) {
                     break;
                 }
                 ++pos;
@@ -117,25 +114,24 @@ std::vector<std::uint8_t> byterun1_compress(
 std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) {
     std::uint32_t camg = 0;
     auto params = amiga::get_mode_params(mode);
-    if (hires)       camg |= 0x8000;  // HIRES
+    if (hires) camg |= 0x8000;          // HIRES
     if (params.is_ham) camg |= 0x0800;  // HAM
     if (params.is_ehb) camg |= 0x0080;  // EXTRA_HALFBRITE
-    if (interlace)   camg |= 0x0004;  // LACE
-    if (dpf)         camg |= 0x0400;  // DBLPF (dual playfield)
+    if (interlace) camg |= 0x0004;      // LACE
+    if (dpf) camg |= 0x0400;            // DBLPF (dual playfield)
     return camg;
 }
 
-} // namespace
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Write IFF ILBM
 // ---------------------------------------------------------------------------
 
-Result<std::vector<std::uint8_t>> write_ilbm(
-    const bitplane::BitplaneData& planes,
-    std::span<const Color3f> palette,
-    amiga::Mode mode,
-    const IffOptions& options) {
+Result<std::vector<std::uint8_t>> write_ilbm(const bitplane::BitplaneData& planes,
+                                             std::span<const Color3f> palette,
+                                             amiga::Mode mode,
+                                             const IffOptions& options) {
     std::vector<std::uint8_t> out;
     out.reserve(planes.total_bytes() + 256);  // rough estimate
 
@@ -151,17 +147,18 @@ Result<std::vector<std::uint8_t>> write_ilbm(
 
     write_u16(out, static_cast<std::uint16_t>(planes.width));
     write_u16(out, static_cast<std::uint16_t>(planes.height));
-    write_u16(out, 0);  // x origin
-    write_u16(out, 0);  // y origin
+    write_u16(out, 0);                                       // x origin
+    write_u16(out, 0);                                       // y origin
     write_u8(out, static_cast<std::uint8_t>(planes.depth));  // numPlanes
-    write_u8(out, static_cast<std::uint8_t>(
-        options.has_transparency ? 2 : 0));   // masking: 0=none, 2=transparent color
+    write_u8(out,
+             static_cast<std::uint8_t>(
+                 options.has_transparency ? 2 : 0));  // masking: 0=none, 2=transparent color
     write_u8(out, static_cast<std::uint8_t>(options.compression));  // compression
-    write_u8(out, 0);   // pad
-    write_u16(out, 0);  // transparent color (always index 0)
-    write_u8(out, 10);  // x aspect (square pixels)
-    write_u8(out, 10);  // y aspect (square pixels)
-    write_u16(out, static_cast<std::uint16_t>(planes.width));   // page width
+    write_u8(out, 0);                                               // pad
+    write_u16(out, 0);                                         // transparent color (always index 0)
+    write_u8(out, 10);                                         // x aspect (square pixels)
+    write_u8(out, 10);                                         // y aspect (square pixels)
+    write_u16(out, static_cast<std::uint16_t>(planes.width));  // page width
     write_u16(out, static_cast<std::uint16_t>(planes.height));  // page height
 
     // --- CMAP chunk ---
@@ -176,10 +173,9 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     // --best's joint base-palette refinement, where base_palette
     // is the OKLab centroid of all rows, not row 0 specifically)
     // produce wrong colors via every IFF reader.
-    auto pchg_pal0 = (options.scanline_palettes &&
-                      !options.scanline_palettes->empty())
-        ? std::span<const Color3f>(*(options.scanline_palettes->data()))
-        : palette;
+    auto pchg_pal0 = (options.scanline_palettes && !options.scanline_palettes->empty())
+                         ? std::span<const Color3f>(*(options.scanline_palettes->data()))
+                         : palette;
     auto cmap_colors = pchg_pal0;
     if (mode == amiga::Mode::ehb && cmap_colors.size() > 32) {
         cmap_colors = cmap_colors.first(32);
@@ -224,8 +220,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
     // scanline is diffed against the CMAP (which stores line 0's
     // palette). Only changed registers are written, keeping the chunk
     // compact even with per-line full-palette swaps.
-    if (options.scanline_palettes &&
-        !options.scanline_palettes->empty()) {
+    if (options.scanline_palettes && !options.scanline_palettes->empty()) {
         auto& scan_pals = *options.scanline_palettes;
         auto height = planes.height;
         auto colors_per_line = scan_pals[0].size();
@@ -243,15 +238,19 @@ Result<std::vector<std::uint8_t>> write_ilbm(
         auto pchg_start = out.size();
 
         if (use_big) {
-            struct Rgb8 { std::uint8_t r, g, b; };
+            struct Rgb8 {
+                std::uint8_t r, g, b;
+            };
             auto to_rgb8 = [](Color3f c) {
                 auto srgb = color_space::linear_to_srgb(c).clamped();
-                return Rgb8{
-                    static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f)),
-                    static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f)),
-                    static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f))};
+                return Rgb8{static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f)),
+                            static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f)),
+                            static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f))};
             };
-            struct Change { std::uint16_t reg; std::uint8_t r, g, b; };
+            struct Change {
+                std::uint16_t reg;
+                std::uint8_t r, g, b;
+            };
             std::vector<std::vector<Change>> line_changes(height);
             std::vector<Rgb8> prev(colors_per_line);
             auto& pal0 = scan_pals[0];
@@ -263,22 +262,20 @@ Result<std::vector<std::uint8_t>> write_ilbm(
             std::uint16_t max_per_line = 0;
             std::uint32_t total = 0;
             for (std::size_t y = 0; y < height; ++y) {
-                auto& pal = (y < scan_pals.size()) ? scan_pals[y]
-                                                   : scan_pals[0];
+                auto& pal = (y < scan_pals.size()) ? scan_pals[y] : scan_pals[0];
                 auto& chgs = line_changes[y];
                 for (std::size_t i = 0; i < colors_per_line; ++i) {
                     auto rgb = to_rgb8((i < pal.size()) ? pal[i] : Color3f{});
                     auto& p = prev[i];
                     if (rgb.r != p.r || rgb.g != p.g || rgb.b != p.b) {
-                        chgs.push_back({static_cast<std::uint16_t>(i),
-                                        rgb.r, rgb.g, rgb.b});
+                        chgs.push_back({static_cast<std::uint16_t>(i), rgb.r, rgb.g, rgb.b});
                         p = rgb;
                     }
                 }
                 if (!chgs.empty()) {
                     ++changed_lines;
                     if (chgs.front().reg < min_reg) min_reg = chgs.front().reg;
-                    if (chgs.back().reg  > max_reg) max_reg  = chgs.back().reg;
+                    if (chgs.back().reg > max_reg) max_reg = chgs.back().reg;
                     auto sz = static_cast<std::uint16_t>(chgs.size());
                     if (sz > max_per_line) max_per_line = sz;
                     total += static_cast<std::uint32_t>(chgs.size());
@@ -287,9 +284,9 @@ Result<std::vector<std::uint8_t>> write_ilbm(
             if (min_reg == 0xFFFF) min_reg = 0;
 
             // PCHGHeader (20 bytes)
-            write_u16(out, 0);                              // Compression
-            write_u16(out, 2);                              // Flags = PCHGF_32BIT
-            write_u16(out, 0);                              // StartLine
+            write_u16(out, 0);  // Compression
+            write_u16(out, 2);  // Flags = PCHGF_32BIT
+            write_u16(out, 0);  // StartLine
             write_u16(out, static_cast<std::uint16_t>(height));
             write_u16(out, static_cast<std::uint16_t>(changed_lines));
             write_u16(out, min_reg);
@@ -304,7 +301,8 @@ Result<std::vector<std::uint8_t>> write_ilbm(
                     mask[y / 32] |= (1u << (31 - (y % 32)));
                 }
             }
-            for (auto w : mask) write_u32(out, w);
+            for (auto w : mask)
+                write_u32(out, w);
 
             // BigLineChanges per changed line:
             //   UWORD ChangeCount
@@ -316,14 +314,17 @@ Result<std::vector<std::uint8_t>> write_ilbm(
                 write_u16(out, static_cast<std::uint16_t>(chgs.size()));
                 for (auto& c : chgs) {
                     write_u16(out, c.reg);
-                    write_u8(out, 0);      // Alpha
+                    write_u8(out, 0);  // Alpha
                     write_u8(out, c.r);
-                    write_u8(out, c.b);    // ARBG, not ARGB
+                    write_u8(out, c.b);  // ARBG, not ARGB
                     write_u8(out, c.g);
                 }
             }
         } else {
-            struct Change { std::uint8_t reg; std::uint16_t rgb12; };
+            struct Change {
+                std::uint8_t reg;
+                std::uint16_t rgb12;
+            };
             std::vector<std::vector<Change>> line_changes(height);
             std::vector<std::uint16_t> prev(colors_per_line);
             auto& pal0 = scan_pals[0];
@@ -336,8 +337,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
             std::uint16_t max_per_line = 0;
             std::uint32_t total = 0;
             for (std::size_t y = 0; y < height; ++y) {
-                auto& pal = (y < scan_pals.size()) ? scan_pals[y]
-                                                   : scan_pals[0];
+                auto& pal = (y < scan_pals.size()) ? scan_pals[y] : scan_pals[0];
                 auto& chgs = line_changes[y];
                 for (std::size_t i = 0; i < colors_per_line; ++i) {
                     auto c = (i < pal.size()) ? pal[i] : Color3f{};
@@ -350,7 +350,7 @@ Result<std::vector<std::uint8_t>> write_ilbm(
                 if (!chgs.empty()) {
                     ++changed_lines;
                     if (chgs.front().reg < min_reg) min_reg = chgs.front().reg;
-                    if (chgs.back().reg  > max_reg) max_reg  = chgs.back().reg;
+                    if (chgs.back().reg > max_reg) max_reg = chgs.back().reg;
                     auto sz = static_cast<std::uint16_t>(chgs.size());
                     if (sz > max_per_line) max_per_line = sz;
                     total += static_cast<std::uint32_t>(chgs.size());
@@ -359,9 +359,9 @@ Result<std::vector<std::uint8_t>> write_ilbm(
             if (min_reg == 0xFFFF) min_reg = 0;
 
             // PCHGHeader (20 bytes)
-            write_u16(out, 0);                              // Compression
-            write_u16(out, 1);                              // Flags = PCHGF_12BIT
-            write_u16(out, 0);                              // StartLine
+            write_u16(out, 0);  // Compression
+            write_u16(out, 1);  // Flags = PCHGF_12BIT
+            write_u16(out, 0);  // StartLine
             write_u16(out, static_cast<std::uint16_t>(height));
             write_u16(out, static_cast<std::uint16_t>(changed_lines));
             write_u16(out, min_reg);
@@ -376,7 +376,8 @@ Result<std::vector<std::uint8_t>> write_ilbm(
                     mask[y / 32] |= (1u << (31 - (y % 32)));
                 }
             }
-            for (auto w : mask) write_u32(out, w);
+            for (auto w : mask)
+                write_u32(out, w);
 
             // SmallLineChanges per changed line: count16, count32, then
             // entries grouped 0..15 / 16..31. Each entry = 4-bit reg-in-group
@@ -386,22 +387,23 @@ Result<std::vector<std::uint8_t>> write_ilbm(
                 if (chgs.empty()) continue;
                 std::uint8_t count16 = 0, count32 = 0;
                 for (auto& c : chgs) {
-                    if (c.reg < 16) ++count16;
-                    else if (c.reg < 32) ++count32;
+                    if (c.reg < 16)
+                        ++count16;
+                    else if (c.reg < 32)
+                        ++count32;
                 }
                 write_u8(out, count16);
                 write_u8(out, count32);
                 for (auto& c : chgs) {
                     if (c.reg >= 16) continue;
-                    std::uint16_t entry = static_cast<std::uint16_t>(
-                        (c.reg << 12) | (c.rgb12 & 0x0FFF));
+                    std::uint16_t entry = static_cast<std::uint16_t>((c.reg << 12) |
+                                                                     (c.rgb12 & 0x0FFF));
                     write_u16(out, entry);
                 }
                 for (auto& c : chgs) {
                     if (c.reg < 16 || c.reg >= 32) continue;
                     std::uint16_t entry = static_cast<std::uint16_t>(
-                        (static_cast<std::uint16_t>(c.reg - 16) << 12) |
-                        (c.rgb12 & 0x0FFF));
+                        (static_cast<std::uint16_t>(c.reg - 16) << 12) | (c.rgb12 & 0x0FFF));
                     write_u16(out, entry);
                 }
             }
@@ -425,7 +427,8 @@ Result<std::vector<std::uint8_t>> write_ilbm(
                 auto offset = planes.plane_row_offset(p, y);
                 out.insert(out.end(),
                            planes.data.begin() + static_cast<std::ptrdiff_t>(offset),
-                           planes.data.begin() + static_cast<std::ptrdiff_t>(offset + planes.bytes_per_row));
+                           planes.data.begin() +
+                               static_cast<std::ptrdiff_t>(offset + planes.bytes_per_row));
             }
         }
     } else {
@@ -433,8 +436,8 @@ Result<std::vector<std::uint8_t>> write_ilbm(
         for (std::size_t y = 0; y < planes.height; ++y) {
             for (std::size_t p = 0; p < planes.depth; ++p) {
                 auto offset = planes.plane_row_offset(p, y);
-                auto compressed = byterun1_compress(
-                    planes.data.data() + offset, planes.bytes_per_row);
+                auto compressed = byterun1_compress(planes.data.data() + offset,
+                                                    planes.bytes_per_row);
                 out.insert(out.end(), compressed.begin(), compressed.end());
             }
         }
@@ -487,4 +490,4 @@ Result<void> save_ilbm(std::string_view path,
     return {};
 }
 
-} // namespace png2amiga::iff
+}  // namespace png2amiga::iff

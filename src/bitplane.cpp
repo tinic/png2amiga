@@ -25,8 +25,10 @@ namespace png2amiga::bitplane {
 // ---------------------------------------------------------------------------
 
 Result<BitplaneData> encode(const std::vector<std::uint8_t>& pixel_indices,
-                            std::size_t width, std::size_t height,
-                            std::size_t depth, Layout layout) {
+                            std::size_t width,
+                            std::size_t height,
+                            std::size_t depth,
+                            Layout layout) {
     if (depth == 0 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -44,8 +46,7 @@ Result<BitplaneData> encode(const std::vector<std::uint8_t>& pixel_indices,
     if (pixel_indices.size() < width * height) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
-            std::format("Expected {} pixel indices, got {}",
-                        width * height, pixel_indices.size()),
+            std::format("Expected {} pixel indices, got {}", width * height, pixel_indices.size()),
         }};
     }
 
@@ -75,13 +76,12 @@ Result<BitplaneData> encode(const std::vector<std::uint8_t>& pixel_indices,
                 auto bit_in_word = 15u - (x % 16);  // MSB first
                 for (std::size_t plane = 0; plane < depth; ++plane) {
                     if ((index >> plane) & 1u) {
-                        auto word_off = y * words_per_row * depth
-                                      + word_group * depth + plane;
-                        // Big-endian: bits 15-8 in high byte (offset 0), bits 7-0 in low byte (offset 1)
+                        auto word_off = y * words_per_row * depth + word_group * depth + plane;
+                        // Big-endian: bits 15-8 in high byte (offset 0), bits 7-0 in low byte
+                        // (offset 1)
                         auto byte_off = word_off * 2 + (bit_in_word >= 8 ? 0 : 1);
                         auto bit = bit_in_word >= 8 ? (bit_in_word - 8) : bit_in_word;
-                        result.data[byte_off] |=
-                            static_cast<std::uint8_t>(1u << bit);
+                        result.data[byte_off] |= static_cast<std::uint8_t>(1u << bit);
                     }
                 }
             }
@@ -96,8 +96,7 @@ Result<BitplaneData> encode(const std::vector<std::uint8_t>& pixel_indices,
                         auto offset = result.plane_row_offset(plane, y);
                         auto byte_idx = x / 8;
                         auto bit_idx = 7u - (x % 8);  // MSB first
-                        result.data[offset + byte_idx] |=
-                            static_cast<std::uint8_t>(1u << bit_idx);
+                        result.data[offset + byte_idx] |= static_cast<std::uint8_t>(1u << bit_idx);
                     }
                 }
             }
@@ -129,8 +128,8 @@ Result<std::vector<std::uint8_t>> decode(const BitplaneData& planes) {
                 auto word_group = x / 16;
                 auto bit_in_word = 15u - (x % 16);
                 for (std::size_t plane = 0; plane < planes.depth; ++plane) {
-                    auto word_off = y * words_per_row * planes.depth
-                                  + word_group * planes.depth + plane;
+                    auto word_off = y * words_per_row * planes.depth + word_group * planes.depth +
+                                    plane;
                     auto byte_off = word_off * 2 + (bit_in_word >= 8 ? 0 : 1);
                     auto bit = bit_in_word >= 8 ? (bit_in_word - 8) : bit_in_word;
                     if ((planes.data[byte_off] >> bit) & 1u) {
@@ -164,8 +163,10 @@ Result<std::vector<std::uint8_t>> decode(const BitplaneData& planes) {
 // Encode an Image directly to bitplane data
 // ---------------------------------------------------------------------------
 
-Result<EncodeResult> encode_image(const Image& image, const Palette& pal,
-                                  std::size_t depth, Layout layout) {
+Result<EncodeResult> encode_image(const Image& image,
+                                  const Palette& pal,
+                                  std::size_t depth,
+                                  Layout layout) {
     if (depth == 0 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -191,8 +192,7 @@ Result<EncodeResult> encode_image(const Image& image, const Palette& pal,
             auto pixel = image[x, y];
             auto best = palette::find_nearest(pixel, pal_span);
             indices[y * w + x] = static_cast<std::uint8_t>(best);
-            total_error += color_space::perceptual_distance_sq(
-                pixel, pal_span[best]);
+            total_error += color_space::perceptual_distance_sq(pixel, pal_span[best]);
         }
     }
 
@@ -225,8 +225,7 @@ Result<BitplaneData> expand_to_dpf_pf2(const BitplaneData& src) {
     if (src.depth == 0 || src.depth > 4) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
-            std::format("DPF expansion expects 1-4 source planes, got {}",
-                        src.depth),
+            std::format("DPF expansion expects 1-4 source planes, got {}", src.depth),
         }};
     }
     if (src.layout != Layout::interleaved) {
@@ -249,16 +248,14 @@ Result<BitplaneData> expand_to_dpf_pf2(const BitplaneData& src) {
             auto src_off = src.plane_row_offset(p, y);
             // Map source plane p -> destination plane 2*p + 1 (PF2 slot).
             auto dst_off = dst.plane_row_offset(p * 2 + 1, y);
-            std::copy_n(src.data.data() + src_off, src.bytes_per_row,
-                        dst.data.data() + dst_off);
+            std::copy_n(src.data.data() + src_off, src.bytes_per_row, dst.data.data() + dst_off);
         }
     }
 
     return dst;
 }
 
-Result<Image> render(const BitplaneData& planes,
-                     std::span<const Color3f> pal) {
+Result<Image> render(const BitplaneData& planes, std::span<const Color3f> pal) {
     auto decoded = decode(planes);
     if (!decoded) return std::unexpected{decoded.error()};
 
@@ -278,4 +275,4 @@ Result<Image> render(const BitplaneData& planes,
     return image;
 }
 
-} // namespace png2amiga::bitplane
+}  // namespace png2amiga::bitplane

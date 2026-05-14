@@ -43,11 +43,11 @@ namespace png2amiga::api {
 //   max_moves      — worst-case copper MOVEs/line (chip RAM uses this
 //                    to budget the per-line WAIT+MOVEs slot).
 struct SizeBreakdown {
-    int plane_bytes{};      // bitplane data
-    int palette_bytes{};    // palette in .raw / .pal layout
-    int copper_bytes{};     // sliced grid + strips per-line ops
-    int disk_bytes{};       // .raw total = planes + palette + copper
-    int chip_bytes{};       // worst-case Amiga chip-RAM
+    int plane_bytes{};    // bitplane data
+    int palette_bytes{};  // palette in .raw / .pal layout
+    int copper_bytes{};   // sliced grid + strips per-line ops
+    int disk_bytes{};     // .raw total = planes + palette + copper
+    int chip_bytes{};     // worst-case Amiga chip-RAM
 };
 
 constexpr int kCopperInitSetupBytes = 80;
@@ -57,23 +57,23 @@ inline SizeBreakdown compute_size_breakdown(
     int plane_bytes,
     int palette_size,
     bool aga,
-    int sliced_grid_entries,    // height × cpl (sliced .raw grid)
-    int strips_op_count,       // sum of strips_line_moves[*].size()
+    int sliced_grid_entries,  // height × cpl (sliced .raw grid)
+    int strips_op_count,      // sum of strips_line_moves[*].size()
     int height,
     int max_moves) {
     SizeBreakdown s;
     s.plane_bytes = plane_bytes;
     s.palette_bytes = palette_size * (aga ? 4 : 2);
     int sliced_bytes = sliced_grid_entries * (aga ? 8 : 4);  // 4 B/word, AGA = hi+lo
-    int strips_bytes = strips_op_count * 4;                // 4 B per WAIT/MOVE word
+    int strips_bytes = strips_op_count * 4;                  // 4 B per WAIT/MOVE word
     s.copper_bytes = sliced_bytes + strips_bytes;
     s.disk_bytes = s.plane_bytes + s.palette_bytes + s.copper_bytes;
     int has_copper = (s.copper_bytes > 0) ? 1 : 0;
     int pal_setup = palette_size * (aga ? 8 : 4);
     int per_line_words = 1 + max_moves;
     int cop_list_bytes = has_copper ? (height * per_line_words * 4) : 0;
-    s.chip_bytes = s.plane_bytes + kCopperInitSetupBytes + pal_setup +
-                   cop_list_bytes + kCopperEndMarkerBytes;
+    s.chip_bytes = s.plane_bytes + kCopperInitSetupBytes + pal_setup + cop_list_bytes +
+                   kCopperEndMarkerBytes;
     return s;
 }
 
@@ -85,13 +85,11 @@ inline SizeBreakdown compute_size_breakdown(
 // call this before encoding starts so the silent fall-through is
 // caught at the dispatch boundary.
 struct Options;  // forward decl
-Result<void> check_best_supported(const Options& options,
-                                  amiga::Mode mode,
-                                  bool has_transparency);
+Result<void> check_best_supported(const Options& options, amiga::Mode mode, bool has_transparency);
 
 struct LockSpec {
-    int index;       // palette slot, 0..max_colors-1
-    int r, g, b;     // sRGB 0-255
+    int index;    // palette slot, 0..max_colors-1
+    int r, g, b;  // sRGB 0-255
 };
 
 // Reserve a palette slot from the quantizer entirely. Differs from
@@ -101,8 +99,8 @@ struct LockSpec {
 // it. Useful for sprite-color slots, runtime palette regions, EHB
 // upper-bank carve-outs, etc.
 struct ReserveSpec {
-    int index;       // palette slot, 0..max_colors-1
-    int r, g, b;     // sRGB 0-255 default color for the slot
+    int index;    // palette slot, 0..max_colors-1
+    int r, g, b;  // sRGB 0-255 default color for the slot
 };
 
 // Pin a palette slot to whatever color the source pixel at (x, y) ends up
@@ -110,8 +108,8 @@ struct ReserveSpec {
 // the index pixel(x,y) holds is swapped (palette + index map) with `index`.
 // Pin targets must NOT be locked. Has no effect on HAM/copper modes.
 struct PinSpec {
-    int index;       // target palette slot
-    int x, y;        // source pixel coordinates
+    int index;  // target palette slot
+    int x, y;   // source pixel coordinates
 };
 
 // Canonical encoder schema. Every parameter the pipeline (preprocess →
@@ -121,10 +119,10 @@ struct PinSpec {
 // JS. New encoder knobs should land here FIRST, then the bridge picks
 // them up — see REFACTOR_PLAN.md target #5.
 struct Options {
-    std::string mode = "lores";         // lores, hires, ham6, ham8, ehb
-    std::string chipset;                // "ocs", "aga", or "" for auto
-    int depth = 5;                      // bitplane depth (1-8, mode-dependent)
-    bool interlace = false;             // set LACE bit in CAMG
+    std::string mode = "lores";  // lores, hires, ham6, ham8, ehb
+    std::string chipset;         // "ocs", "aga", or "" for auto
+    int depth = 5;               // bitplane depth (1-8, mode-dependent)
+    bool interlace = false;      // set LACE bit in CAMG
     float gamma = 1.0f;
     float brightness = 0.0f;
     float contrast = 1.0f;
@@ -134,19 +132,19 @@ struct Options {
     float black_point = 0.0f;
     float white_point = 0.0f;
     bool match_range = false;
-    int width = 0;                      // override output width (0 = mode default)
-    int height = 0;                     // override output height (0 = mode default)
+    int width = 0;   // override output width (0 = mode default)
+    int height = 0;  // override output height (0 = mode default)
 
     // Dithering
     std::string dither = "floyd-steinberg";
-                                            // (mean PSNR across 10 images × 6
-                                            // modes). Other ED options:
-                                            // sierra-lite, atkinson, jarvis,
-                                            // floyd-steinberg, stucki, gilbert,
-                                            // riemersma. Plus ordered methods
-                                            // (bayer*, checker, line*, etc.)
-                                            // and palette-aware (yliluoma*,
-                                            // knoll, opt-*, tri-tone).
+    // (mean PSNR across 10 images × 6
+    // modes). Other ED options:
+    // sierra-lite, atkinson, jarvis,
+    // floyd-steinberg, stucki, gilbert,
+    // riemersma. Plus ordered methods
+    // (bayer*, checker, line*, etc.)
+    // and palette-aware (yliluoma*,
+    // knoll, opt-*, tri-tone).
     // -1.0f sentinel = auto-tune via dither_tuning::defaults_for(ctx)
     // inside run_pipeline. The encoder is the single location where this
     // lookup lives. Callers (web, CLI, library) leave the field at -1.0f
@@ -159,12 +157,12 @@ struct Options {
     float error_clamp = -1.0f;
 
     // Palette
-    std::string palette_file;           // load palette from file (empty = auto)
-    std::vector<std::uint8_t> palette_data; // inline palette data (empty = auto)
-    int palette_diversity = 4;          // 0 = off, 1-5 = remove near-duplicate
-                                        // colors, re-seed from worst-served pixels
-    std::string quantizer;              // "", "auto" = auto-select, or
-                                        // "median-cut", "ocs-bruteforce", "pnn"
+    std::string palette_file;                // load palette from file (empty = auto)
+    std::vector<std::uint8_t> palette_data;  // inline palette data (empty = auto)
+    int palette_diversity = 4;               // 0 = off, 1-5 = remove near-duplicate
+                                             // colors, re-seed from worst-served pixels
+    std::string quantizer;                   // "", "auto" = auto-select, or
+                                             // "median-cut", "ocs-bruteforce", "pnn"
 
     // HAM greedy encoder (realtime profile)
     bool ham_fast = false;
@@ -176,9 +174,9 @@ struct Options {
     int refine_iterations = 4;
 
     // HAM encoding
-    int ham_beam = 16;                   // beam width for DP search (1-256)
-    int ham_triple = 16;                 // triple-pixel refinement post-pass
-                                         // beam width (0 = off, 16 default)
+    int ham_beam = 16;    // beam width for DP search (1-256)
+    int ham_triple = 16;  // triple-pixel refinement post-pass
+                          // beam width (0 = off, 16 default)
 
     // HAM op-selection metric. "oklab2" (default) uses perceptually-
     // uniform OKLab² distance — measured ~+9 SSIMULACRA2 points and
@@ -188,14 +186,14 @@ struct Options {
     // PSNR is the literal goal. Compile-time dispatched.
     std::string ham_metric = "oklab2";
 
-    bool best = false;               // multi-candidate sliced planner +
-                                         // joint base-palette refinement.
-                                         // HAM6 + copper and HAM8 + copper
-                                         // only — indexed copper modes
-                                         // ignore this flag (their planner
-                                         // is already mature and refinement
-                                         // gives ≤+0.10 dB).
-                                         // ~4-5× cost, +0.5..4 dB PSNR
+    bool best = false;  // multi-candidate sliced planner +
+                        // joint base-palette refinement.
+                        // HAM6 + copper and HAM8 + copper
+                        // only — indexed copper modes
+                        // ignore this flag (their planner
+                        // is already mature and refinement
+                        // gives ≤+0.10 dB).
+                        // ~4-5× cost, +0.5..4 dB PSNR
 
     // Optional progress callback. Called periodically with (progress 0..1,
     // stage label). Currently emitted by HAM6+sliced encoders. Callback may
@@ -203,8 +201,8 @@ struct Options {
     std::function<void(float, std::string_view)> on_progress;
 
     // Copper palette (per-scanline palette changes)
-    bool copper = false;                // use per-scanline copper palettes
-    int copper_changes = 0;             // override changes/line (0 = auto)
+    bool copper = false;     // use per-scanline copper palettes
+    int copper_changes = 0;  // override changes/line (0 = auto)
     // Per-line palette planner neighbor-row smoothing. -1 means use the
     // encode_copper default (radius=4, decay=0.85). Exposed for sweep
     // tooling (--slice-spread-radius / --slice-spread-decay on the CLI).
@@ -230,9 +228,9 @@ struct Options {
     bool sliced_beam = false;
 
     // Transparency
-    float alpha_threshold = 0.0f;       // offset from 0.5 midpoint (-0.5..0.5)
-    std::string alpha_dither;           // alpha dither method (empty = hard threshold)
-    float alpha_dither_strength = 1.0f; // dither pattern intensity
+    float alpha_threshold = 0.0f;        // offset from 0.5 midpoint (-0.5..0.5)
+    std::string alpha_dither;            // alpha dither method (empty = hard threshold)
+    float alpha_dither_strength = 1.0f;  // dither pattern intensity
     // RGB-as-transparent: every pixel whose 8-bit sRGB exactly matches
     // one of these triplets is treated as alpha=0 before quantization.
     // Useful for atlases that encode transparency via a sentinel color
@@ -253,24 +251,24 @@ struct Options {
     int transparent_output_slot = 0;
 
     // C header output
-    std::string symbol_name;            // base name for C symbols (default: "image")
+    std::string symbol_name;  // base name for C symbols (default: "image")
 
     // Mask export
-    bool mask_invert = false;           // invert mask polarity (default: 1=opaque, 0=transparent)
+    bool mask_invert = false;  // invert mask polarity (default: 1=opaque, 0=transparent)
 
     // Cropping
     int crop_x = 0;
     int crop_y = 0;
-    int crop_w = 0;                     // 0 = no crop
+    int crop_w = 0;  // 0 = no crop
     int crop_h = 0;
-    bool crop_auto = false;             // auto-crop to mode aspect ratio (center)
+    bool crop_auto = false;  // auto-crop to mode aspect ratio (center)
 
     // Source-pixel orientation (applied before crop/scale/encode). Matches
     // kingcon's -FlipX / -Rotate semantics so .bpl / .pal outputs drop into
     // kingcon-fed projects unchanged.
-    bool flip_x = false;                // mirror over the Y axis
-    bool flip_y = false;                // mirror over the X axis
-    int rotate_quarters = 0;            // 0/1/2/3 = 0°/90°/180°/270° clockwise
+    bool flip_x = false;      // mirror over the Y axis
+    bool flip_y = false;      // mirror over the X axis
+    int rotate_quarters = 0;  // 0/1/2/3 = 0°/90°/180°/270° clockwise
 
     // Auto-trim to content bounding box (kingcon -Trim). Strips fully
     // transparent rows/columns from every edge. No-op when the source
@@ -279,7 +277,7 @@ struct Options {
     bool trim = false;
 
     // Advanced
-    bool lock_color0 = true;         // reserve index 0 for black (border/background)
+    bool lock_color0 = true;  // reserve index 0 for black (border/background)
 
     // Amiga dual playfield. When true, encode the image as PF2 of a
     // dual-playfield display: bitplane depth is forced to 3 (OCS, 8 colors)
@@ -384,46 +382,47 @@ struct Options {
 
     // Palette index manipulation (lores/hires/EHB/Atari only)
     std::vector<LockSpec> locks;
-    std::vector<PinSpec>  pins;
+    std::vector<PinSpec> pins;
     std::vector<ReserveSpec> reserves;
 };
 
 struct ConvertResult {
-    std::vector<std::uint8_t> data;     // output file bytes (IFF or PNG)
+    std::vector<std::uint8_t> data;  // output file bytes (IFF or PNG)
     int width{};
     int height{};
-    int depth{};                        // bitplane depth
-    int colors{};                       // number of palette colors
-    float copperChanges{};              // avg actual color changes per line (0 if no copper)
-    float avgPaletteUsedPerLine{};      // avg distinct palette indices touched per scanline
-                                        // (sliced / strips diagnostic; 0 if mode has no
-                                        // per-line palette). Pair with the per-row palette
-                                        // size to see how saturated the line palette is.
-    int totalColors{};                  // unique colors in rendered output
-    int planeBytes{};                   // raw bitplane data size
-    int copperBytes{};                  // copper-list bytes total (sliced scanline_changes
-                                        // + strips per-line moves, 4 B per word).
-                                        // 0 if mode has no copper. Use this for chip-RAM
-                                        // / disk-cost reporting — call sites must NOT
-                                        // re-derive size from {scanlines, cpl} because new
-                                        // modes (DPF/EHB+strips) carry extra data they'd miss.
-    int diskBytes{};                    // .raw file size: bitplanes + palette + copper data.
-                                        // Computed centrally in make_result so call sites
-                                        // can't drift stale as new modes are added.
-    int chipBytes{};                    // worst-case chip-RAM cost: bitplanes + copper list
-                                        // (init MOVEs + per-line WAIT+MOVEs at max_moves_per_line)
-                                        // + palette setup. Same single-source-of-truth rule
-                                        // as diskBytes.
-    int changesPerLine{};               // K used by encoder (post auto-stretch)
-    int maxMovesPerLine{};              // worst-case copper MOVEs per scanline
-    bool aga{};                         // chipset is AGA (true ⇒ palette has hi+lo halves)
-    float quantError{};                 // perceptual encoding error (OKLab ΔE² sum)
-    float psnr{};                       // PSNR in dB (Gaussian-blurred sRGB)
-    float s2{};                         // SSIMULACRA2 score (Cloudinary 2022)
-    int genesisUniqueTiles{};           // Tiled modes: unique tiles in VRAM
-    int genesisTotalCells{};             // Tiled modes: tilemap cells (W/8 × H/8); 0 = not tiled
-    int tileDataBytes{};                 // Tiled modes: unique × bytes-per-tile (32 for Genesis 4bpp, 64 for SNES Mode 7 8bpp)
-    bool hasTransparency{};             // source image had alpha channel
+    int depth{};                    // bitplane depth
+    int colors{};                   // number of palette colors
+    float copperChanges{};          // avg actual color changes per line (0 if no copper)
+    float avgPaletteUsedPerLine{};  // avg distinct palette indices touched per scanline
+                                    // (sliced / strips diagnostic; 0 if mode has no
+                                    // per-line palette). Pair with the per-row palette
+                                    // size to see how saturated the line palette is.
+    int totalColors{};              // unique colors in rendered output
+    int planeBytes{};               // raw bitplane data size
+    int copperBytes{};              // copper-list bytes total (sliced scanline_changes
+                                    // + strips per-line moves, 4 B per word).
+                                    // 0 if mode has no copper. Use this for chip-RAM
+                                    // / disk-cost reporting — call sites must NOT
+                                    // re-derive size from {scanlines, cpl} because new
+                                    // modes (DPF/EHB+strips) carry extra data they'd miss.
+    int diskBytes{};                // .raw file size: bitplanes + palette + copper data.
+                                    // Computed centrally in make_result so call sites
+                                    // can't drift stale as new modes are added.
+    int chipBytes{};                // worst-case chip-RAM cost: bitplanes + copper list
+                                    // (init MOVEs + per-line WAIT+MOVEs at max_moves_per_line)
+                                    // + palette setup. Same single-source-of-truth rule
+                                    // as diskBytes.
+    int changesPerLine{};           // K used by encoder (post auto-stretch)
+    int maxMovesPerLine{};          // worst-case copper MOVEs per scanline
+    bool aga{};                     // chipset is AGA (true ⇒ palette has hi+lo halves)
+    float quantError{};             // perceptual encoding error (OKLab ΔE² sum)
+    float psnr{};                   // PSNR in dB (Gaussian-blurred sRGB)
+    float s2{};                     // SSIMULACRA2 score (Cloudinary 2022)
+    int genesisUniqueTiles{};       // Tiled modes: unique tiles in VRAM
+    int genesisTotalCells{};        // Tiled modes: tilemap cells (W/8 × H/8); 0 = not tiled
+    int tileDataBytes{};  // Tiled modes: unique × bytes-per-tile (32 for Genesis 4bpp, 64 for SNES
+                          // Mode 7 8bpp)
+    bool hasTransparency{};  // source image had alpha channel
 
     // Final per-palette-entry sRGB bytes (3 per entry). Used by the web
     // tool to draw a palette swatch grid. Empty when the mode has no
@@ -454,29 +453,30 @@ struct ConvertResult {
     //   then  cols*rows                — color_ram (per-cell color)
     // Empty for non-charset runs.
     std::vector<std::uint8_t> c64CharsetData;
-    int c64Mc1{};                        // multicolor: shared mc1 (0..15)
-    int c64Mc2{};                        // multicolor: shared mc2 (0..15)
-    int c64BgColor{};                    // shared bg (0..15)
+    int c64Mc1{};      // multicolor: shared mc1 (0..15)
+    int c64Mc2{};      // multicolor: shared mc2 (0..15)
+    int c64BgColor{};  // shared bg (0..15)
 
     // Genesis tile diagnostic — same idea as c64CharsetData but with
     // 4bpp 8×8 tiles and a 4-line palette structure. Empty for
     // non-Genesis runs.
-    std::vector<std::uint8_t> genesisTileBytes;       // unique × 32
-    std::vector<std::uint8_t> genesisTilemapBytes;    // cells × 2 (u16 LE)
-    std::vector<std::uint8_t> genesisPaletteBytes;    // 4 × 16 × 2 (BGR333 LE)
+    std::vector<std::uint8_t> genesisTileBytes;     // unique × 32
+    std::vector<std::uint8_t> genesisTilemapBytes;  // cells × 2 (u16 LE)
+    std::vector<std::uint8_t> genesisPaletteBytes;  // 4 × 16 × 2 (BGR333 LE)
 
     // SNES Mode 7 tile diagnostic. snesPaletteBytes is empty for the
     // Direct Color variant (BBGGGRRR pixel bytes expand inline).
-    std::vector<std::uint8_t> snesTileBytes;          // unique × 64
-    std::vector<std::uint8_t> snesTilemapBytes;       // 128×128 (16384)
-    std::vector<std::uint8_t> snesPaletteBytes;       // 256 × 3 RGB (256-mode only)
+    std::vector<std::uint8_t> snesTileBytes;     // unique × 64
+    std::vector<std::uint8_t> snesTilemapBytes;  // 128×128 (16384)
+    std::vector<std::uint8_t> snesPaletteBytes;  // 256 × 3 RGB (256-mode only)
 
-    std::string error;                  // error message (empty on success)
+    std::string error;  // error message (empty on success)
 };
 
 // Convert raw image data (PNG/JPEG bytes) to Amiga format.
 // Returns PNG bytes of the converted (preview) image.
-ConvertResult convert(const std::uint8_t* input_data, std::size_t input_size,
+ConvertResult convert(const std::uint8_t* input_data,
+                      std::size_t input_size,
                       const Options& options);
 
 // Convert raw image data and return IFF ILBM bytes.
@@ -572,13 +572,13 @@ DitherDefaults dither_defaults_for(const Options& options);
 // non-sliced modes, strips_line_moves stays empty for non-strips modes, etc.
 // ---------------------------------------------------------------------------
 struct EncodeState {
-    Image rendered;                                       // preview (palette-applied RGB)
-    bitplane::BitplaneData planes;                        // raw bitplane data
-    std::vector<Color3f> palette;                         // base palette (linear RGB)
-    std::vector<std::uint8_t> indices;                    // per-pixel palette indices
-                                                          // (non-sliced modes only; empty
-                                                          // for HAM and sliced since their
-                                                          // palette varies per pixel/row)
+    Image rendered;                     // preview (palette-applied RGB)
+    bitplane::BitplaneData planes;      // raw bitplane data
+    std::vector<Color3f> palette;       // base palette (linear RGB)
+    std::vector<std::uint8_t> indices;  // per-pixel palette indices
+                                        // (non-sliced modes only; empty
+                                        // for HAM and sliced since their
+                                        // palette varies per pixel/row)
     amiga::Mode mode{};
     bool aga = false;
     bool hires = false;
@@ -590,7 +590,7 @@ struct EncodeState {
     std::vector<bool> transparency_mask;
     std::vector<std::vector<Color3f>> scanline_palettes;  // sliced/strips per-line palettes
     std::vector<std::vector<copper::CopperChange>> scanline_changes;  // sliced per-line MOVEs
-    std::vector<std::vector<strips::ScapMove>> strips_line_moves;         // strips per-line ops
+    std::vector<std::vector<strips::ScapMove>> strips_line_moves;     // strips per-line ops
     std::size_t copper_num_colors{};
     std::size_t changes_per_line{};
     std::size_t max_moves_per_line{};
@@ -632,7 +632,7 @@ struct EncodeState {
     std::size_t genesis_total_cells = 0;
     std::size_t tile_data_bytes = 0;
     // Genesis split byte streams (used by the SGDK header generator).
-    std::vector<std::uint8_t>  genesis_tile_bytes;
+    std::vector<std::uint8_t> genesis_tile_bytes;
     std::vector<std::uint16_t> genesis_tilemap_cells;
     std::vector<std::uint16_t> genesis_palette_words;
 
@@ -675,7 +675,6 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
 // width/height options are ignored; the image's actual dimensions are
 // used as the target. Crop / scale / preprocess options are ignored too;
 // the caller has already applied them.
-EncodeStateOrError encode_state_image(const Image& image,
-                                       const Options& options);
+EncodeStateOrError encode_state_image(const Image& image, const Options& options);
 
-} // namespace png2amiga::api
+}  // namespace png2amiga::api

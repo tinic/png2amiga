@@ -62,8 +62,7 @@ constexpr int quantise_srgb_to_int(float srgb_v, int bits) noexcept {
 // Snap a linear-RGB sample to a per-channel-bit grid in sRGB space.
 // Returns the snapped color in linear RGB.
 // ---------------------------------------------------------------------------
-inline Color3f quantise_per_channel(Color3f linear,
-                                    int r_bits, int g_bits, int b_bits) noexcept {
+inline Color3f quantise_per_channel(Color3f linear, int r_bits, int g_bits, int b_bits) noexcept {
     auto srgb = color_space::linear_to_srgb(linear);
     Color3f q{
         quantise_srgb_to_bits(srgb.r, r_bits),
@@ -75,8 +74,7 @@ inline Color3f quantise_per_channel(Color3f linear,
 
 // Convenience wrappers — symmetric depths (most common case).
 inline Color3f quantise_uniform(Color3f linear, int bits_per_channel) noexcept {
-    return quantise_per_channel(linear, bits_per_channel,
-                                bits_per_channel, bits_per_channel);
+    return quantise_per_channel(linear, bits_per_channel, bits_per_channel, bits_per_channel);
 }
 
 // ---------------------------------------------------------------------------
@@ -91,22 +89,18 @@ inline Color3f quantise_uniform(Color3f linear, int bits_per_channel) noexcept {
 // Genesis CRAM (each channel sits in the upper 3 bits of a 4-bit nibble),
 // false for SNES BGR555 (channels packed end-to-end).
 // ---------------------------------------------------------------------------
-inline std::uint16_t pack_word_bgr(Color3f linear,
-                                   int r_bits, int g_bits, int b_bits,
-                                   bool pad_zero_lsb = false) noexcept {
+inline std::uint16_t pack_word_bgr(
+    Color3f linear, int r_bits, int g_bits, int b_bits, bool pad_zero_lsb = false) noexcept {
     auto srgb = color_space::linear_to_srgb(linear);
     int r = quantise_srgb_to_int(srgb.r, r_bits);
     int g = quantise_srgb_to_int(srgb.g, g_bits);
     int b = quantise_srgb_to_int(srgb.b, b_bits);
     if (pad_zero_lsb) {
         // Each channel left-shifted by 1 (Genesis: 0bbb0ggg0rrr in a u16).
-        return static_cast<std::uint16_t>(
-            ((b << 1) << ((r_bits + 1) + (g_bits + 1))) |
-            ((g << 1) << (r_bits + 1)) |
-            (r << 1));
+        return static_cast<std::uint16_t>(((b << 1) << ((r_bits + 1) + (g_bits + 1))) |
+                                          ((g << 1) << (r_bits + 1)) | (r << 1));
     }
-    return static_cast<std::uint16_t>(
-        (b << (r_bits + g_bits)) | (g << r_bits) | r);
+    return static_cast<std::uint16_t>((b << (r_bits + g_bits)) | (g << r_bits) | r);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,4 +154,4 @@ inline std::uint16_t to_bgr333_word(Color3f linear) noexcept {
     return pack_word_bgr(linear, 3, 3, 3, /*pad_zero_lsb=*/true);
 }
 
-} // namespace png2amiga::console_color
+}  // namespace png2amiga::console_color

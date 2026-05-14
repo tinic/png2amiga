@@ -59,8 +59,7 @@ struct OcsOklabTable {
             auto r8 = static_cast<std::uint8_t>((r4 << 4) | r4);
             auto g8 = static_cast<std::uint8_t>((g4 << 4) | g4);
             auto b8 = static_cast<std::uint8_t>((b4 << 4) | b4);
-            oklab[code] = color_space::linear_to_oklab(
-                color_space::srgb_u8_to_linear(r8, g8, b8));
+            oklab[code] = color_space::linear_to_oklab(color_space::srgb_u8_to_linear(r8, g8, b8));
         }
     }
 };
@@ -75,7 +74,7 @@ inline const OcsOklabTable& ocs_oklab_table() {
 struct OcsCandTable {
     const std::uint32_t* offsets;
     const std::uint16_t* codes;
-    std::size_t          codes_size;
+    std::size_t codes_size;
 };
 const OcsCandTable& ocs_cand_table() noexcept;
 }  // namespace detail
@@ -101,14 +100,20 @@ inline std::uint16_t linear_to_ocs(Color3f color) noexcept {
         float da = t.a - e.a;
         float db = t.b - e.b;
         float d = color_space::fma_dist_sq(dL, da, db);
-        if (d < best_d) { best_d = d; best = *p; }
+        if (d < best_d) {
+            best_d = d;
+            best = *p;
+        }
     }
     return best;
 }
 
 // AGA 24-bit: split into high and low nibble words for LOCT register.
 // hi = upper 4 bits per channel (0x0RGB), lo = lower 4 bits (0x0RGB).
-struct AGA_HiLo { std::uint16_t hi; std::uint16_t lo; };
+struct AGA_HiLo {
+    std::uint16_t hi;
+    std::uint16_t lo;
+};
 constexpr AGA_HiLo linear_to_aga_hilo(Color3f color) noexcept {
     auto srgb = color_space::linear_to_srgb(color).clamped();
     auto r8 = static_cast<int>(srgb.r * 255.0f + 0.5f) & 0xFF;
@@ -137,12 +142,9 @@ PNG2AMIGA_LUT_CONSTEXPR Color3f stf_to_linear(std::uint16_t rgb9) noexcept {
 
 constexpr std::uint16_t linear_to_stf(Color3f color) noexcept {
     auto srgb = color_space::linear_to_srgb(color).clamped();
-    auto r3 = static_cast<std::uint16_t>(
-        static_cast<int>(srgb.r * 7.0f + 0.5f) & 0x7);
-    auto g3 = static_cast<std::uint16_t>(
-        static_cast<int>(srgb.g * 7.0f + 0.5f) & 0x7);
-    auto b3 = static_cast<std::uint16_t>(
-        static_cast<int>(srgb.b * 7.0f + 0.5f) & 0x7);
+    auto r3 = static_cast<std::uint16_t>(static_cast<int>(srgb.r * 7.0f + 0.5f) & 0x7);
+    auto g3 = static_cast<std::uint16_t>(static_cast<int>(srgb.g * 7.0f + 0.5f) & 0x7);
+    auto b3 = static_cast<std::uint16_t>(static_cast<int>(srgb.b * 7.0f + 0.5f) & 0x7);
     return static_cast<std::uint16_t>((r3 << 8) | (g3 << 4) | b3);
 }
 
@@ -163,58 +165,142 @@ PNG2AMIGA_LUT_CONSTEXPR Color3f quantize_to_stf(Color3f color) noexcept {
 // Pepto (Philip "Pepto" Timmermann, 2001) — pepto.de/projects/colorvic/.
 // Default; widely accepted reference.
 inline constexpr std::array<std::uint32_t, 16> kC64Pepto = {
-    0x000000, 0xFFFFFF, 0x68372B, 0x70A4B2,
-    0x6F3D86, 0x588D43, 0x352879, 0xB8C76F,
-    0x6F4F25, 0x433900, 0x9A6759, 0x444444,
-    0x6C6C6C, 0x9AD284, 0x6C5EB5, 0x959595,
+    0x000000,
+    0xFFFFFF,
+    0x68372B,
+    0x70A4B2,
+    0x6F3D86,
+    0x588D43,
+    0x352879,
+    0xB8C76F,
+    0x6F4F25,
+    0x433900,
+    0x9A6759,
+    0x444444,
+    0x6C6C6C,
+    0x9AD284,
+    0x6C5EB5,
+    0x959595,
 };
 
 // VICE emulator default palette.
 inline constexpr std::array<std::uint32_t, 16> kC64Vice = {
-    0x000000, 0xFDFEFC, 0xBE1A24, 0x30E6C6,
-    0xB41AE2, 0x1FD21E, 0x211BAE, 0xDFF60A,
-    0xB84104, 0x6A3304, 0xFE4A57, 0x424540,
-    0x70746F, 0x59FE59, 0x5F53FE, 0xA4A7A2,
+    0x000000,
+    0xFDFEFC,
+    0xBE1A24,
+    0x30E6C6,
+    0xB41AE2,
+    0x1FD21E,
+    0x211BAE,
+    0xDFF60A,
+    0xB84104,
+    0x6A3304,
+    0xFE4A57,
+    0x424540,
+    0x70746F,
+    0x59FE59,
+    0x5F53FE,
+    0xA4A7A2,
 };
 
 // Colodore (Colodore project — colodore.com — measurement-based).
 inline constexpr std::array<std::uint32_t, 16> kC64Colodore = {
-    0x000000, 0xFFFFFF, 0x813338, 0x75CEC8,
-    0x8E3C97, 0x56AC4D, 0x2E2C9B, 0xEDF171,
-    0x8E5029, 0x553800, 0xC46C71, 0x4A4A4A,
-    0x7B7B7B, 0xA9FF9F, 0x706DEB, 0xB2B2B2,
+    0x000000,
+    0xFFFFFF,
+    0x813338,
+    0x75CEC8,
+    0x8E3C97,
+    0x56AC4D,
+    0x2E2C9B,
+    0xEDF171,
+    0x8E5029,
+    0x553800,
+    0xC46C71,
+    0x4A4A4A,
+    0x7B7B7B,
+    0xA9FF9F,
+    0x706DEB,
+    0xB2B2B2,
 };
 
 // Deekay (Deekay/Crest, widely-used demoscene standard).
 inline constexpr std::array<std::uint32_t, 16> kC64Deekay = {
-    0x000000, 0xFFFFFF, 0x882000, 0x68D0A8,
-    0xA838A0, 0x50B818, 0x181090, 0xF0E858,
-    0xA04800, 0x472B1B, 0xC87870, 0x484848,
-    0x808080, 0x98FF98, 0x5090D0, 0xB8B8B8,
+    0x000000,
+    0xFFFFFF,
+    0x882000,
+    0x68D0A8,
+    0xA838A0,
+    0x50B818,
+    0x181090,
+    0xF0E858,
+    0xA04800,
+    0x472B1B,
+    0xC87870,
+    0x484848,
+    0x808080,
+    0x98FF98,
+    0x5090D0,
+    0xB8B8B8,
 };
 
 // Godot (Godot paint program, godot64.de).
 inline constexpr std::array<std::uint32_t, 16> kC64Godot = {
-    0x000000, 0xFFFFFF, 0x880000, 0xAAFFEE,
-    0xCC44CC, 0x00CC55, 0x0000AA, 0xEEEE77,
-    0xDD8855, 0x664400, 0xFF7777, 0x333333,
-    0x777777, 0xAAFF66, 0x0088FF, 0xBBBBBB,
+    0x000000,
+    0xFFFFFF,
+    0x880000,
+    0xAAFFEE,
+    0xCC44CC,
+    0x00CC55,
+    0x0000AA,
+    0xEEEE77,
+    0xDD8855,
+    0x664400,
+    0xFF7777,
+    0x333333,
+    0x777777,
+    0xAAFF66,
+    0x0088FF,
+    0xBBBBBB,
 };
 
 // C64 Wiki "raw" palette — c64-wiki.com/wiki/Color.
 inline constexpr std::array<std::uint32_t, 16> kC64Wiki = {
-    0x000000, 0xFFFFFF, 0x880000, 0xAAFFEE,
-    0xCC44CC, 0x00CC55, 0x0000AA, 0xEEEE77,
-    0xDD8855, 0x664400, 0xFF7777, 0x333333,
-    0x777777, 0xAAFF66, 0x0088FF, 0xBBBBBB,
+    0x000000,
+    0xFFFFFF,
+    0x880000,
+    0xAAFFEE,
+    0xCC44CC,
+    0x00CC55,
+    0x0000AA,
+    0xEEEE77,
+    0xDD8855,
+    0x664400,
+    0xFF7777,
+    0x333333,
+    0x777777,
+    0xAAFF66,
+    0x0088FF,
+    0xBBBBBB,
 };
 
 // Levy — adjusted Pepto used by some modern tools.
 inline constexpr std::array<std::uint32_t, 16> kC64Levy = {
-    0x000000, 0xFFFFFF, 0x68372B, 0x70A4B2,
-    0x6F3D86, 0x588D43, 0x352879, 0xB8C76F,
-    0x6F4F25, 0x433900, 0x9A6759, 0x444444,
-    0x6C6C6C, 0x9AD284, 0x6C5EB5, 0x959595,
+    0x000000,
+    0xFFFFFF,
+    0x68372B,
+    0x70A4B2,
+    0x6F3D86,
+    0x588D43,
+    0x352879,
+    0xB8C76F,
+    0x6F4F25,
+    0x433900,
+    0x9A6759,
+    0x444444,
+    0x6C6C6C,
+    0x9AD284,
+    0x6C5EB5,
+    0x959595,
 };
 
 // ---------------------------------------------------------------------------
@@ -226,10 +312,22 @@ inline constexpr std::array<std::uint32_t, 16> kC64Levy = {
 // yellow, white.
 // ---------------------------------------------------------------------------
 inline constexpr std::array<std::uint32_t, 16> kCgaHw = {
-    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
-    0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
-    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
-    0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+    0x000000,
+    0x0000AA,
+    0x00AA00,
+    0x00AAAA,
+    0xAA0000,
+    0xAA00AA,
+    0xAA5500,
+    0xAAAAAA,
+    0x555555,
+    0x5555FF,
+    0x55FF55,
+    0x55FFFF,
+    0xFF5555,
+    0xFF55FF,
+    0xFFFF55,
+    0xFFFFFF,
 };
 
 // CGA 320x200 4-color fixed palettes.
@@ -241,23 +339,29 @@ inline constexpr std::array<std::uint32_t, 16> kCgaHw = {
 //   1-high:  light cyan (11), light magenta (13), white (15)
 // See: https://en.wikipedia.org/wiki/Color_Graphics_Adapter
 enum class CgaPalette : unsigned char {
-    p0_low, p0_high, p1_low, p1_high,
+    p0_low,
+    p0_high,
+    p1_low,
+    p1_high,
 };
 
 constexpr std::array<std::uint8_t, 3> cga_palette_indices(CgaPalette p) noexcept {
     switch (p) {
-    case CgaPalette::p0_low:  return { 2,  4,  6};
-    case CgaPalette::p0_high: return {10, 12, 14};
-    case CgaPalette::p1_low:  return { 3,  5,  7};
-    case CgaPalette::p1_high: return {11, 13, 15};
+    case CgaPalette::p0_low:
+        return {2, 4, 6};
+    case CgaPalette::p0_high:
+        return {10, 12, 14};
+    case CgaPalette::p1_low:
+        return {3, 5, 7};
+    case CgaPalette::p1_high:
+        return {11, 13, 15};
     }
     return {11, 13, 15};
 }
 
 // Build a 4-color CGA palette as Color3f linear colors.
 // bg_index selects the background color (0..15 in master palette).
-inline std::array<Color3f, 4> cga_build_palette(CgaPalette p,
-                                                std::uint8_t bg_index = 0) {
+inline std::array<Color3f, 4> cga_build_palette(CgaPalette p, std::uint8_t bg_index = 0) {
     auto hw_idx = cga_palette_indices(p);
     std::array<Color3f, 4> pal{};
     pal[0] = color_space::srgb_hex_to_linear(kCgaHw[bg_index & 0xF]);
@@ -299,10 +403,22 @@ inline constexpr std::array<std::uint32_t, 16> kCgaCompositeOld = {
     // Old-CGA composite (pre-1983 IBM 5150/5160). Each 4-bit pattern value
     // (index into this array) is the NTSC-decoded color that pixel-pair
     // pattern produces.
-    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
-    0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
-    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
-    0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+    0x000000,
+    0x0000AA,
+    0x00AA00,
+    0x00AAAA,
+    0xAA0000,
+    0xAA00AA,
+    0xAA5500,
+    0xAAAAAA,
+    0x555555,
+    0x5555FF,
+    0x55FF55,
+    0x55FFFF,
+    0xFF5555,
+    0xFF55FF,
+    0xFFFF55,
+    0xFFFFFF,
 };
 
 // Build the 16-color composite palette as linear Color3f.
@@ -347,12 +463,9 @@ PNG2AMIGA_LUT_CONSTEXPR Color3f ega_to_linear(std::uint8_t rgb6) noexcept {
 
 constexpr std::uint8_t linear_to_ega(Color3f color) noexcept {
     auto srgb = color_space::linear_to_srgb(color).clamped();
-    auto r2 = static_cast<std::uint8_t>(
-        static_cast<int>(srgb.r * 3.0f + 0.5f) & 0x3);
-    auto g2 = static_cast<std::uint8_t>(
-        static_cast<int>(srgb.g * 3.0f + 0.5f) & 0x3);
-    auto b2 = static_cast<std::uint8_t>(
-        static_cast<int>(srgb.b * 3.0f + 0.5f) & 0x3);
+    auto r2 = static_cast<std::uint8_t>(static_cast<int>(srgb.r * 3.0f + 0.5f) & 0x3);
+    auto g2 = static_cast<std::uint8_t>(static_cast<int>(srgb.g * 3.0f + 0.5f) & 0x3);
+    auto b2 = static_cast<std::uint8_t>(static_cast<int>(srgb.b * 3.0f + 0.5f) & 0x3);
     return static_cast<std::uint8_t>((r2 << 4) | (g2 << 2) | b2);
 }
 
@@ -376,19 +489,22 @@ constexpr std::uint8_t ega_to_hw(std::uint8_t rrggbb) noexcept {
         constexpr std::uint8_t k0 = 0;
         constexpr std::uint8_t k1 = 1;
         switch (v) {
-        case 0:  return PB{k0, k0};  // 0x00
-        case 1:  return PB{k0, k1};  // 0x55
-        case 2:  return PB{k1, k0};  // 0xAA
-        default: return PB{k1, k1};  // 0xFF
+        case 0:
+            return PB{k0, k0};  // 0x00
+        case 1:
+            return PB{k0, k1};  // 0x55
+        case 2:
+            return PB{k1, k0};  // 0xAA
+        default:
+            return PB{k1, k1};  // 0xFF
         }
     };
     auto [rp, rs] = map(r2);
     auto [gp, gs] = map(g2);
     auto [bp, bs] = map(b2);
     // IrgbIRGB bit layout (bit 5..0): R' G' B' R G B (R'=secondary red, R=primary)
-    return static_cast<std::uint8_t>(
-        (rs << 5) | (gs << 4) | (bs << 3) |
-        (rp << 2) | (gp << 1) | (bp << 0));
+    return static_cast<std::uint8_t>((rs << 5) | (gs << 4) | (bs << 3) | (rp << 2) | (gp << 1) |
+                                     (bp << 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +602,7 @@ constexpr
 #else
 inline
 #endif
-auto workbench_20_colors() {
+    auto workbench_20_colors() {
     return std::array<Color3f, 4>{
         color_space::srgb_hex_to_linear(0x959595),  // Gray (background)
         color_space::srgb_hex_to_linear(0x000000),  // Black
@@ -501,7 +617,7 @@ constexpr
 #else
 inline
 #endif
-auto boing_ball_colors() {
+    auto boing_ball_colors() {
     return std::array<Color3f, 2>{
         color_space::srgb_hex_to_linear(0xFFFFFF),  // White
         color_space::srgb_hex_to_linear(0xFF0000),  // Red
@@ -528,8 +644,7 @@ inline Palette by_name(std::string_view name) {
 // Find nearest palette color (brute force, perceptual in OKLab)
 // ---------------------------------------------------------------------------
 
-inline std::size_t find_nearest(Color3f color,
-                                std::span<const Color3f> palette) noexcept {
+inline std::size_t find_nearest(Color3f color, std::span<const Color3f> palette) noexcept {
     std::size_t best = 0;
     float best_dist = color_space::perceptual_distance_sq(color, palette[0]);
 
@@ -565,8 +680,8 @@ inline Color3f half_brite(const Color3f& c) {
     auto r4 = static_cast<std::uint16_t>((code >> 8) & 0xF);
     auto g4 = static_cast<std::uint16_t>((code >> 4) & 0xF);
     auto b4 = static_cast<std::uint16_t>(code & 0xF);
-    std::uint16_t halved =
-        static_cast<std::uint16_t>(((r4 >> 1) << 8) | ((g4 >> 1) << 4) | (b4 >> 1));
+    std::uint16_t halved = static_cast<std::uint16_t>(((r4 >> 1) << 8) | ((g4 >> 1) << 4) |
+                                                      (b4 >> 1));
     return ocs_to_linear(halved);
 }
 
@@ -595,20 +710,20 @@ inline Color3f half_brite(const Color3f& c) {
 // is implicit: arithmetic happens in OCS 12-bit nibble space and
 // the result is materialised back to linear via ocs_to_linear.
 inline void dedupe_ehb_halfbrite(std::span<Color3f> base32,
-                                  bool preserve_slot0,
-                                  int max_iters = 4) {
+                                 bool preserve_slot0,
+                                 int max_iters = 4) {
     if (base32.size() < 32) return;
     constexpr std::size_t kBaseN = 32;
 
     std::array<std::uint16_t, kBaseN> codes{};
-    for (std::size_t i = 0; i < kBaseN; ++i) codes[i] = linear_to_ocs(base32[i]);
+    for (std::size_t i = 0; i < kBaseN; ++i)
+        codes[i] = linear_to_ocs(base32[i]);
 
     auto halve_code = [](std::uint16_t c) -> std::uint16_t {
         std::uint16_t r = (c >> 8) & 0xF;
         std::uint16_t g = (c >> 4) & 0xF;
         std::uint16_t b = c & 0xF;
-        return static_cast<std::uint16_t>(
-            ((r >> 1) << 8) | ((g >> 1) << 4) | (b >> 1));
+        return static_cast<std::uint16_t>(((r >> 1) << 8) | ((g >> 1) << 4) | (b >> 1));
     };
     auto can_double = [](std::uint16_t c) -> bool {
         std::uint16_t r = (c >> 8) & 0xF;
@@ -620,8 +735,7 @@ inline void dedupe_ehb_halfbrite(std::span<Color3f> base32,
         std::uint16_t r = (c >> 8) & 0xF;
         std::uint16_t g = (c >> 4) & 0xF;
         std::uint16_t b = c & 0xF;
-        return static_cast<std::uint16_t>(
-            ((r << 1) << 8) | ((g << 1) << 4) | (b << 1));
+        return static_cast<std::uint16_t>(((r << 1) << 8) | ((g << 1) << 4) | (b << 1));
     };
 
     for (int iter = 0; iter < max_iters; ++iter) {
@@ -640,7 +754,8 @@ inline void dedupe_ehb_halfbrite(std::span<Color3f> base32,
                 bool dup_in_base = false;
                 for (std::size_t k = 0; k < kBaseN; ++k) {
                     if (k != j && codes[k] == cand) {
-                        dup_in_base = true; break;
+                        dup_in_base = true;
+                        break;
                     }
                 }
                 if (dup_in_base) continue;
@@ -651,7 +766,8 @@ inline void dedupe_ehb_halfbrite(std::span<Color3f> base32,
         if (!changed) break;
     }
 
-    for (std::size_t i = 0; i < kBaseN; ++i) base32[i] = ocs_to_linear(codes[i]);
+    for (std::size_t i = 0; i < kBaseN; ++i)
+        base32[i] = ocs_to_linear(codes[i]);
 }
 
 inline Palette make_ehb_palette(std::span<const Color3f> base_colors) {
@@ -719,8 +835,10 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
 
     auto build_full = [&](std::span<const Color3f> base) {
         std::array<Color3f, 64> full{};
-        for (std::size_t i = 0; i < kBaseN; ++i) full[i] = base[i];
-        for (std::size_t i = 0; i < kBaseN; ++i) full[kBaseN + i] = half_brite(base[i]);
+        for (std::size_t i = 0; i < kBaseN; ++i)
+            full[i] = base[i];
+        for (std::size_t i = 0; i < kBaseN; ++i)
+            full[kBaseN + i] = half_brite(base[i]);
         return full;
     };
 
@@ -755,7 +873,8 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
     for (int it = 0; it < max_iters; ++it) {
         auto full_pal = build_full(base_colors);
         std::array<color_space::OKLab, 64> full_oklab{};
-        for (std::size_t i = 0; i < 64; ++i) full_oklab[i] = oklab_of(full_pal[i]);
+        for (std::size_t i = 0; i < 64; ++i)
+            full_oklab[i] = oklab_of(full_pal[i]);
 
         // Per-slot OKLab sums and counts for the base bucket B_k
         // (pixels whose nearest is base[k]) and the half-brite bucket
@@ -771,12 +890,15 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
             float best_d = std::numeric_limits<float>::infinity();
             for (std::size_t k = 0; k < 64; ++k) {
                 std::size_t base_k = k & (kBaseN - 1);
-                if (!locked_mask.empty() && base_k < locked_mask.size()
-                    && locked_mask[base_k]) continue;
+                if (!locked_mask.empty() && base_k < locked_mask.size() && locked_mask[base_k])
+                    continue;
                 auto& e = full_oklab[k];
                 float dL = t.L - e.L, da = t.a - e.a, db = t.b - e.b;
-                float d  = color_space::fma_dist_sq(dL, da, db);
-                if (d < best_d) { best_d = d; best = k; }
+                float d = color_space::fma_dist_sq(dL, da, db);
+                if (d < best_d) {
+                    best_d = d;
+                    best = k;
+                }
             }
             auto s = color_space::linear_to_srgb(image_pixel).clamped();
             if (best < kBaseN) {
@@ -801,8 +923,7 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
 
         float drift = 0.0f;
         for (std::size_t k = 0; k < kBaseN; ++k) {
-            if (!locked_mask.empty() && k < locked_mask.size()
-                && locked_mask[k]) continue;
+            if (!locked_mask.empty() && k < locked_mask.size() && locked_mask[k]) continue;
             if (cnt_B[k] + cnt_H[k] == 0) continue;
             Color3f new_lin{};
             if (snap_to_ocs) {
@@ -820,16 +941,17 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
                 for (std::uint16_t code = 0; code < 4096; ++code) {
                     auto& cl = ocs_lab[code];
                     auto& hl = ocs_halve_lab[code];
-                    float cost_B = fcB * (cl.L*cl.L + cl.a*cl.a + cl.b*cl.b)
-                                 - 2.0f * (cl.L*sum_B_lab[k].L
-                                         + cl.a*sum_B_lab[k].a
-                                         + cl.b*sum_B_lab[k].b);
-                    float cost_H = fcH * (hl.L*hl.L + hl.a*hl.a + hl.b*hl.b)
-                                 - 2.0f * (hl.L*sum_H_lab[k].L
-                                         + hl.a*sum_H_lab[k].a
-                                         + hl.b*sum_H_lab[k].b);
+                    float cost_B = fcB * (cl.L * cl.L + cl.a * cl.a + cl.b * cl.b) -
+                                   2.0f * (cl.L * sum_B_lab[k].L + cl.a * sum_B_lab[k].a +
+                                           cl.b * sum_B_lab[k].b);
+                    float cost_H = fcH * (hl.L * hl.L + hl.a * hl.a + hl.b * hl.b) -
+                                   2.0f * (hl.L * sum_H_lab[k].L + hl.a * sum_H_lab[k].a +
+                                           hl.b * sum_H_lab[k].b);
                     float cost = cost_B + cost_H;
-                    if (cost < best_cost) { best_cost = cost; best_code = code; }
+                    if (cost < best_cost) {
+                        best_cost = cost;
+                        best_code = code;
+                    }
                 }
                 new_lin = ocs_to_linear(best_code);
             } else {
@@ -874,15 +996,13 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
 // removal loop is comparatively cheap. `palette_diversity_seed` is
 // only used for tie-break determinism between equal-cost candidates;
 // the search itself is deterministic.
-inline void extra_ehb_optimization(std::span<Color3f> base_colors,
-                                   std::span<const Color3f> image_pixels,
-                                   bool snap_to_ocs,
-                                   int max_passes,
-                                   void(*parallel_for_fn)(std::size_t,
-                                       std::function<void(std::size_t)>) =
-                                           nullptr,
-                                   std::function<void(float,
-                                       std::string_view)> on_progress = {}) {
+inline void extra_ehb_optimization(
+    std::span<Color3f> base_colors,
+    std::span<const Color3f> image_pixels,
+    bool snap_to_ocs,
+    int max_passes,
+    void (*parallel_for_fn)(std::size_t, std::function<void(std::size_t)>) = nullptr,
+    std::function<void(float, std::string_view)> on_progress = {}) {
     if (base_colors.size() < 32 || image_pixels.empty()) return;
     constexpr std::size_t kBaseN = 32;
     auto N = image_pixels.size();
@@ -903,7 +1023,7 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
             for (std::size_t k = 0; k < 64; ++k) {
                 auto& e = full_lab[k];
                 float dL = t.L - e.L, da = t.a - e.a, db = t.b - e.b;
-                float d  = color_space::fma_dist_sq(dL, da, db);
+                float d = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) best_d = d;
             }
             total += static_cast<double>(best_d);
@@ -913,7 +1033,8 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
 
     auto build_full = [&](std::span<const Color3f, kBaseN> base) {
         std::array<Color3f, 64> full{};
-        for (std::size_t i = 0; i < kBaseN; ++i) full[i] = base[i];
+        for (std::size_t i = 0; i < kBaseN; ++i)
+            full[i] = base[i];
         for (std::size_t i = 0; i < kBaseN; ++i)
             full[kBaseN + i] = half_brite(base[i]);
         return full;
@@ -935,27 +1056,28 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
         for (std::size_t i = 0; i < image_pixels.size(); ++i) {
             auto s = snap_one(image_pixels[i]);
             auto srgb = color_space::linear_to_srgb(s).clamped();
-            keys[i] =
-                (static_cast<std::uint32_t>(srgb.r * 255.0f + 0.5f) << 16) |
-                (static_cast<std::uint32_t>(srgb.g * 255.0f + 0.5f) <<  8) |
-                 static_cast<std::uint32_t>(srgb.b * 255.0f + 0.5f);
+            keys[i] = (static_cast<std::uint32_t>(srgb.r * 255.0f + 0.5f) << 16) |
+                      (static_cast<std::uint32_t>(srgb.g * 255.0f + 0.5f) << 8) |
+                      static_cast<std::uint32_t>(srgb.b * 255.0f + 0.5f);
         }
         std::sort(keys.begin(), keys.end());
         std::vector<std::pair<std::uint32_t, std::uint32_t>> hist;  // {key, count}
-        for (std::size_t i = 0; i < keys.size(); ) {
+        for (std::size_t i = 0; i < keys.size();) {
             std::size_t j = i + 1;
-            while (j < keys.size() && keys[j] == keys[i]) ++j;
+            while (j < keys.size() && keys[j] == keys[i])
+                ++j;
             hist.emplace_back(keys[i], static_cast<std::uint32_t>(j - i));
             i = j;
         }
-        std::sort(hist.begin(), hist.end(),
-            [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::sort(hist.begin(), hist.end(), [](const auto& a, const auto& b) {
+            return a.second > b.second;
+        });
         if (hist.size() > kMaxCandidates) hist.resize(kMaxCandidates);
         candidates.reserve(hist.size());
         for (auto& [key, _] : hist) {
             std::uint8_t r = (key >> 16) & 0xFF;
-            std::uint8_t g = (key >>  8) & 0xFF;
-            std::uint8_t b =  key        & 0xFF;
+            std::uint8_t g = (key >> 8) & 0xFF;
+            std::uint8_t b = key & 0xFF;
             candidates.push_back(color_space::srgb_u8_to_linear(r, g, b));
         }
     }
@@ -969,8 +1091,7 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
     // user a roughly monotonic 0..1 readout.
     auto emit_progress = [&](int extra_subiter) {
         if (!on_progress) return;
-        float frac = (static_cast<float>(slot_start) +
-                      0.001f * static_cast<float>(extra_subiter)) /
+        float frac = (static_cast<float>(slot_start) + 0.001f * static_cast<float>(extra_subiter)) /
                      static_cast<float>(kBaseN);
         on_progress(std::clamp(frac, 0.0f, 1.0f), "extra-ehb-opt");
     };
@@ -983,13 +1104,13 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
         int remove_slot = slot_start;
         double remove_err = std::numeric_limits<double>::infinity();
         std::array<Color3f, kBaseN> work{};
-        for (std::size_t i = 0; i < kBaseN; ++i) work[i] = base_colors[i];
+        for (std::size_t i = 0; i < kBaseN; ++i)
+            work[i] = base_colors[i];
         for (int k = slot_start; k < static_cast<int>(kBaseN); ++k) {
             auto orig = work[static_cast<std::size_t>(k)];
             int neigh = (k > slot_start) ? k - 1 : k + 1;
             if (neigh >= static_cast<int>(kBaseN)) neigh = k;
-            work[static_cast<std::size_t>(k)] =
-                work[static_cast<std::size_t>(neigh)];
+            work[static_cast<std::size_t>(k)] = work[static_cast<std::size_t>(neigh)];
             auto full = build_full(std::span<const Color3f, kBaseN>(work));
             auto err = eval_total_error(full);
             work[static_cast<std::size_t>(k)] = orig;
@@ -1001,36 +1122,33 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
 
         // 2. Insertion candidate: try every distinct source color in
         //    the removed slot, pick the one with lowest error.
-        std::vector<double> errs(candidates.size(),
-                                  std::numeric_limits<double>::infinity());
+        std::vector<double> errs(candidates.size(), std::numeric_limits<double>::infinity());
         auto eval_one = [&](std::size_t ci) {
             std::array<Color3f, kBaseN> tw{};
-            for (std::size_t i = 0; i < kBaseN; ++i) tw[i] = base_colors[i];
-            tw[static_cast<std::size_t>(remove_slot)] =
-                snap_one(candidates[ci]);
+            for (std::size_t i = 0; i < kBaseN; ++i)
+                tw[i] = base_colors[i];
+            tw[static_cast<std::size_t>(remove_slot)] = snap_one(candidates[ci]);
             auto full = build_full(std::span<const Color3f, kBaseN>(tw));
             errs[ci] = eval_total_error(full);
         };
         if (parallel_for_fn) {
             parallel_for_fn(candidates.size(), eval_one);
         } else {
-            for (std::size_t ci = 0; ci < candidates.size(); ++ci) eval_one(ci);
+            for (std::size_t ci = 0; ci < candidates.size(); ++ci)
+                eval_one(ci);
         }
         std::size_t best_insert = 0;
         for (std::size_t ci = 1; ci < candidates.size(); ++ci) {
-            if (errs[ci] < errs[best_insert])
-                best_insert = ci;
+            if (errs[ci] < errs[best_insert]) best_insert = ci;
         }
 
         if (best_insert == last_insert) {
             // Slot converged — write its final value, swap to slot_start
             // so the remaining slots make progress, advance slot_start.
-            base_colors[static_cast<std::size_t>(remove_slot)] =
-                snap_one(candidates[best_insert]);
+            base_colors[static_cast<std::size_t>(remove_slot)] = snap_one(candidates[best_insert]);
             if (remove_slot != slot_start) {
-                std::swap(
-                    base_colors[static_cast<std::size_t>(remove_slot)],
-                    base_colors[static_cast<std::size_t>(slot_start)]);
+                std::swap(base_colors[static_cast<std::size_t>(remove_slot)],
+                          base_colors[static_cast<std::size_t>(slot_start)]);
             }
             ++slot_start;
             subiter = 0;
@@ -1039,12 +1157,11 @@ inline void extra_ehb_optimization(std::span<Color3f> base_colors,
             emit_progress(0);
             if (slot_start >= static_cast<int>(kBaseN)) break;
         } else {
-            base_colors[static_cast<std::size_t>(remove_slot)] =
-                snap_one(candidates[best_insert]);
+            base_colors[static_cast<std::size_t>(remove_slot)] = snap_one(candidates[best_insert]);
             last_insert = best_insert;
             emit_progress(++subiter);
         }
     }
 }
 
-} // namespace png2amiga::palette
+}  // namespace png2amiga::palette

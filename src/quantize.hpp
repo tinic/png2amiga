@@ -21,23 +21,27 @@ namespace png2amiga::quantize {
 // ---------------------------------------------------------------------------
 
 enum class Algorithm : unsigned char {
-    median_cut,     // Median-cut: fast, good general quality
-    ocs_bruteforce, // OCS: histogram + k-means over all 4096 OCS colors
-    pnn,            // Pairwise Nearest Neighbor (agglomerative, OKLab)
-    gpu_restart,    // Lloyd k-means in OKLab + parallel restarts on Apple
-                    // GPU. Wins over median_cut by mean ΔS2 ~+3 across
-                    // K ∈ {8..256}; falls back to median_cut at runtime
-                    // when Metal is unavailable. macOS-only build path.
+    median_cut,      // Median-cut: fast, good general quality
+    ocs_bruteforce,  // OCS: histogram + k-means over all 4096 OCS colors
+    pnn,             // Pairwise Nearest Neighbor (agglomerative, OKLab)
+    gpu_restart,     // Lloyd k-means in OKLab + parallel restarts on Apple
+                     // GPU. Wins over median_cut by mean ΔS2 ~+3 across
+                     // K ∈ {8..256}; falls back to median_cut at runtime
+                     // when Metal is unavailable. macOS-only build path.
 };
 
 // String name for an Algorithm — matches the CLI --quantizer values
 // 1:1 so callers can print it directly in status lines.
 inline std::string_view name_of(Algorithm a) noexcept {
     switch (a) {
-    case Algorithm::median_cut:     return "median-cut";
-    case Algorithm::ocs_bruteforce: return "ocs-bruteforce";
-    case Algorithm::pnn:            return "pnn";
-    case Algorithm::gpu_restart:    return "gpu-restart";
+    case Algorithm::median_cut:
+        return "median-cut";
+    case Algorithm::ocs_bruteforce:
+        return "ocs-bruteforce";
+    case Algorithm::pnn:
+        return "pnn";
+    case Algorithm::gpu_restart:
+        return "gpu-restart";
     }
     return "unknown";
 }
@@ -54,7 +58,8 @@ inline std::string_view name_of(Algorithm a) noexcept {
 //   2. CLI legacy alias "fast" = median-cut.
 //   3. Auto ("" / "auto"): chipset- and mode-aware defaults
 //      (see body for the table).
-Algorithm resolve_algorithm(amiga::Mode mode, amiga::Chipset chipset,
+Algorithm resolve_algorithm(amiga::Mode mode,
+                            amiga::Chipset chipset,
                             std::string_view user_choice) noexcept;
 
 // ---------------------------------------------------------------------------
@@ -138,14 +143,13 @@ void diversify_palette(Palette& palette,
 // Locked slots (e.g., color 0 = black) are never moved.
 // ---------------------------------------------------------------------------
 
-Result<Palette> refine_with_dither(
-    const Image& image,
-    const Palette& initial_palette,
-    const dither::Settings& dither_settings,
-    amiga::Chipset chipset,
-    amiga::Mode mode = amiga::Mode::lores,
-    std::size_t max_iterations = 4,
-    const std::vector<bool>& locked = {});
+Result<Palette> refine_with_dither(const Image& image,
+                                   const Palette& initial_palette,
+                                   const dither::Settings& dither_settings,
+                                   amiga::Chipset chipset,
+                                   amiga::Mode mode = amiga::Mode::lores,
+                                   std::size_t max_iterations = 4,
+                                   const std::vector<bool>& locked = {});
 
 // ---------------------------------------------------------------------------
 // EGA histogram quantizer: pick K distinct slots directly from the 64-entry
@@ -156,4 +160,4 @@ Result<Palette> refine_with_dither(
 // ---------------------------------------------------------------------------
 Palette ega_histogram(const Image& image, std::size_t K);
 
-} // namespace png2amiga::quantize
+}  // namespace png2amiga::quantize

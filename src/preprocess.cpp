@@ -49,8 +49,8 @@ void apply_sharpen(Image& image, float strength) {
                         for (int dx = -1; dx <= 1; ++dx) {
                             auto ny = static_cast<int>(y) + dy;
                             auto nx = static_cast<int>(x) + dx;
-                            if (ny >= 0 && static_cast<std::size_t>(ny) < h &&
-                                nx >= 0 && static_cast<std::size_t>(nx) < w) {
+                            if (ny >= 0 && static_cast<std::size_t>(ny) < h && nx >= 0 &&
+                                static_cast<std::size_t>(nx) < w) {
                                 sum += L[static_cast<std::size_t>(ny) * w +
                                          static_cast<std::size_t>(nx)];
                                 count += 1.0f;
@@ -90,7 +90,7 @@ void apply_levels(Image& image, float black_point, float white_point) {
     }
 }
 
-} // namespace
+}  // namespace
 
 void apply(Image& image, const Settings& s) {
     // 1. Gamma
@@ -152,8 +152,10 @@ void apply(Image& image, const Settings& s) {
 // in the signature for ABI compatibility but are unused — both
 // concepts are subsumed by the per-(L, h) 95th-percentile binning
 // and the palette-hull intersection respectively.
-void match_palette_range(Image& image, const Palette& palette,
-                         float /*percentile*/, float /*margin*/) {
+void match_palette_range(Image& image,
+                         const Palette& palette,
+                         float /*percentile*/,
+                         float /*margin*/) {
     if (palette.colors.size() < 2) return;
     auto pixel_count = image.width() * image.height();
     if (pixel_count == 0) return;
@@ -170,8 +172,7 @@ void match_palette_range(Image& image, const Palette& palette,
 
     // Palette LUT.
     for (int Lb = 0; Lb < kL; ++Lb) {
-        const float Lt = static_cast<float>(Lb)
-                       / static_cast<float>(kL - 1);
+        const float Lt = static_cast<float>(Lb) / static_cast<float>(kL - 1);
         std::vector<std::pair<float, float>> cand;
         cand.reserve(pal_lab.size() * pal_lab.size() / 2 + pal_lab.size());
         for (auto& p : pal_lab) {
@@ -187,17 +188,14 @@ void match_palette_range(Image& image, const Palette& palette,
                 const float dL = Lj - Li;
                 if (std::abs(dL) < 1e-6f) continue;
                 const float t = (Lt - Li) / dL;
-                const float a = pal_lab[i].a
-                              + t * (pal_lab[j].a - pal_lab[i].a);
-                const float b = pal_lab[i].b
-                              + t * (pal_lab[j].b - pal_lab[i].b);
+                const float a = pal_lab[i].a + t * (pal_lab[j].a - pal_lab[i].a);
+                const float b = pal_lab[i].b + t * (pal_lab[j].b - pal_lab[i].b);
                 cand.emplace_back(a, b);
             }
         }
         cand.emplace_back(0.0f, 0.0f);
         for (int Hb = 0; Hb < kH; ++Hb) {
-            const float h = (static_cast<float>(Hb)
-                          / static_cast<float>(kH)) * 2.0f * kPi;
+            const float h = (static_cast<float>(Hb) / static_cast<float>(kH)) * 2.0f * kPi;
             const float ch = std::cos(h);
             const float sh = std::sin(h);
             float best = 0.0f;
@@ -205,16 +203,14 @@ void match_palette_range(Image& image, const Palette& palette,
                 const float p = a * ch + b * sh;
                 if (p > best) best = p;
             }
-            c_pal[static_cast<std::size_t>(Lb)]
-                 [static_cast<std::size_t>(Hb)] = best;
+            c_pal[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)] = best;
         }
     }
 
     // Source per-(L, h) chroma bins. Collect chromas, then take the
     // 95th percentile per bin so single-pixel outliers don't blow the
     // scale factor up.
-    std::vector<std::vector<std::vector<float>>>
-        bins(kL, std::vector<std::vector<float>>(kH));
+    std::vector<std::vector<std::vector<float>>> bins(kL, std::vector<std::vector<float>>(kH));
     std::vector<color_space::OKLab> img_lab(pixel_count);
     for (std::size_t y = 0; y < image.height(); ++y) {
         for (std::size_t x = 0; x < image.width(); ++x) {
@@ -224,28 +220,23 @@ void match_palette_range(Image& image, const Palette& palette,
             if (c < 1e-6f) continue;
             float h = std::atan2(lab.b, lab.a);
             if (h < 0) h += 2.0f * kPi;
-            int Lb = std::clamp(static_cast<int>(
-                std::clamp(lab.L, 0.0f, 1.0f)
-                * static_cast<float>(kL - 1)), 0, kL - 1);
-            int Hb = static_cast<int>((h / (2.0f * kPi))
-                                    * static_cast<float>(kH)) % kH;
-            bins[static_cast<std::size_t>(Lb)]
-                [static_cast<std::size_t>(Hb)].push_back(c);
+            int Lb = std::clamp(
+                static_cast<int>(std::clamp(lab.L, 0.0f, 1.0f) * static_cast<float>(kL - 1)),
+                0,
+                kL - 1);
+            int Hb = static_cast<int>((h / (2.0f * kPi)) * static_cast<float>(kH)) % kH;
+            bins[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)].push_back(c);
         }
     }
     Grid c_src{};
     for (int Lb = 0; Lb < kL; ++Lb) {
         for (int Hb = 0; Hb < kH; ++Hb) {
-            auto& v = bins[static_cast<std::size_t>(Lb)]
-                          [static_cast<std::size_t>(Hb)];
+            auto& v = bins[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)];
             if (v.empty()) continue;
-            auto idx = static_cast<std::size_t>(
-                static_cast<float>(v.size()) * 0.95f);
+            auto idx = static_cast<std::size_t>(static_cast<float>(v.size()) * 0.95f);
             if (idx >= v.size()) idx = v.size() - 1;
-            std::nth_element(v.begin(), v.begin()
-                             + static_cast<std::ptrdiff_t>(idx), v.end());
-            c_src[static_cast<std::size_t>(Lb)]
-                 [static_cast<std::size_t>(Hb)] = v[idx];
+            std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(idx), v.end());
+            c_src[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)] = v[idx];
         }
     }
     // Diffuse the c_src grid — bins the source under-sampled (e.g. a
@@ -256,36 +247,38 @@ void match_palette_range(Image& image, const Palette& palette,
         Grid tmp{};
         for (int Lb = 0; Lb < kL; ++Lb) {
             for (int Hb = 0; Hb < kH; ++Hb) {
-                float s = 0; int n = 0;
+                float s = 0;
+                int n = 0;
                 for (int dh = -1; dh <= 1; ++dh) {
                     int Hn = (Hb + dh + kH) % kH;
-                    float v = c_src[static_cast<std::size_t>(Lb)]
-                                   [static_cast<std::size_t>(Hn)];
-                    if (v > 0) { s += v; ++n; }
+                    float v = c_src[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hn)];
+                    if (v > 0) {
+                        s += v;
+                        ++n;
+                    }
                 }
-                tmp[static_cast<std::size_t>(Lb)]
-                   [static_cast<std::size_t>(Hb)] =
-                       n > 0 ? s / static_cast<float>(n)
-                             : c_src[static_cast<std::size_t>(Lb)]
-                                    [static_cast<std::size_t>(Hb)];
+                tmp[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)] =
+                    n > 0 ? s / static_cast<float>(n)
+                          : c_src[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)];
             }
         }
         c_src = tmp;
         Grid tmp2{};
         for (int Lb = 0; Lb < kL; ++Lb) {
             for (int Hb = 0; Hb < kH; ++Hb) {
-                float s = 0; int n = 0;
+                float s = 0;
+                int n = 0;
                 for (int dl = -1; dl <= 1; ++dl) {
                     int Ln = std::clamp(Lb + dl, 0, kL - 1);
-                    float v = c_src[static_cast<std::size_t>(Ln)]
-                                   [static_cast<std::size_t>(Hb)];
-                    if (v > 0) { s += v; ++n; }
+                    float v = c_src[static_cast<std::size_t>(Ln)][static_cast<std::size_t>(Hb)];
+                    if (v > 0) {
+                        s += v;
+                        ++n;
+                    }
                 }
-                tmp2[static_cast<std::size_t>(Lb)]
-                    [static_cast<std::size_t>(Hb)] =
-                        n > 0 ? s / static_cast<float>(n)
-                              : c_src[static_cast<std::size_t>(Lb)]
-                                     [static_cast<std::size_t>(Hb)];
+                tmp2[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)] =
+                    n > 0 ? s / static_cast<float>(n)
+                          : c_src[static_cast<std::size_t>(Lb)][static_cast<std::size_t>(Hb)];
             }
         }
         c_src = tmp2;
@@ -302,10 +295,8 @@ void match_palette_range(Image& image, const Palette& palette,
             float h = std::atan2(lab.b, lab.a);
             if (h < 0) h += 2.0f * kPi;
 
-            const float Lf = std::clamp(lab.L, 0.0f, 1.0f)
-                           * static_cast<float>(kL - 1);
-            const float Hf = (h / (2.0f * kPi))
-                           * static_cast<float>(kH);
+            const float Lf = std::clamp(lab.L, 0.0f, 1.0f) * static_cast<float>(kL - 1);
+            const float Hf = (h / (2.0f * kPi)) * static_cast<float>(kH);
             int L0 = std::clamp(static_cast<int>(Lf), 0, kL - 2);
             int L1 = L0 + 1;
             float Lt = Lf - static_cast<float>(L0);
@@ -314,16 +305,12 @@ void match_palette_range(Image& image, const Palette& palette,
             float Ht = Hf - std::floor(Hf);
 
             auto interp = [&](const Grid& g) {
-                const float v00 = g[static_cast<std::size_t>(L0)]
-                                   [static_cast<std::size_t>(H0)];
-                const float v01 = g[static_cast<std::size_t>(L0)]
-                                   [static_cast<std::size_t>(H1)];
-                const float v10 = g[static_cast<std::size_t>(L1)]
-                                   [static_cast<std::size_t>(H0)];
-                const float v11 = g[static_cast<std::size_t>(L1)]
-                                   [static_cast<std::size_t>(H1)];
-                return (1.0f - Lt) * ((1.0f - Ht) * v00 + Ht * v01)
-                     +         Lt  * ((1.0f - Ht) * v10 + Ht * v11);
+                const float v00 = g[static_cast<std::size_t>(L0)][static_cast<std::size_t>(H0)];
+                const float v01 = g[static_cast<std::size_t>(L0)][static_cast<std::size_t>(H1)];
+                const float v10 = g[static_cast<std::size_t>(L1)][static_cast<std::size_t>(H0)];
+                const float v11 = g[static_cast<std::size_t>(L1)][static_cast<std::size_t>(H1)];
+                return (1.0f - Lt) * ((1.0f - Ht) * v00 + Ht * v01) +
+                       Lt * ((1.0f - Ht) * v10 + Ht * v11);
             };
             const float c_p = interp(c_pal);
             const float c_s = interp(c_src);
@@ -339,4 +326,4 @@ void match_palette_range(Image& image, const Palette& palette,
     }
 }
 
-} // namespace png2amiga::preprocess
+}  // namespace png2amiga::preprocess

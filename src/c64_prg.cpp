@@ -26,18 +26,15 @@ PrgData build_display_prg(const std::uint8_t* displayer,
                           std::uint16_t image_addr) {
     auto disp_data = displayer + 2;
     auto disp_data_size = displayer_size - 2;
-    auto disp_end = static_cast<std::uint16_t>(
-        kDisplayerLoadAddr + disp_data_size);
+    auto disp_end = static_cast<std::uint16_t>(kDisplayerLoadAddr + disp_data_size);
 
-    std::size_t gap = (image_addr > disp_end)
-        ? static_cast<std::size_t>(image_addr - disp_end) : 0;
+    std::size_t gap = (image_addr > disp_end) ? static_cast<std::size_t>(image_addr - disp_end) : 0;
 
     PrgData prg;
     write_le16(prg.bytes, kDisplayerLoadAddr);
     prg.bytes.insert(prg.bytes.end(), disp_data, disp_data + disp_data_size);
     prg.bytes.resize(prg.bytes.size() + gap, 0);
-    prg.bytes.insert(prg.bytes.end(),
-                     image_data.begin(), image_data.end());
+    prg.bytes.insert(prg.bytes.end(), image_data.begin(), image_data.end());
     return prg;
 }
 
@@ -55,8 +52,8 @@ Error wrong_size_error(std::string_view name) {
 // ---------------------------------------------------------------------------
 
 Result<PrgData> koala(const EncodeResult& r) {
-    if (r.screen_ram.size() != kCells || r.color_ram.size() != kCells
-        || r.bitmap.size() != kCells * 8)
+    if (r.screen_ram.size() != kCells || r.color_ram.size() != kCells ||
+        r.bitmap.size() != kCells * 8)
         return std::unexpected{wrong_size_error("Koala")};
 
     // EncodeResult layout for c64-multicolor:
@@ -67,32 +64,26 @@ Result<PrgData> koala(const EncodeResult& r) {
     std::vector<std::uint8_t> image_data;
     image_data.reserve(8000 + 1000 + 1000 + 1);
     image_data.insert(image_data.end(), r.bitmap.begin(), r.bitmap.end());
-    image_data.insert(image_data.end(), r.screen_ram.begin(),
-                      r.screen_ram.end());
-    image_data.insert(image_data.end(), r.color_ram.begin(),
-                      r.color_ram.end());
+    image_data.insert(image_data.end(), r.screen_ram.begin(), r.screen_ram.end());
+    image_data.insert(image_data.end(), r.color_ram.begin(), r.color_ram.end());
     image_data.push_back(r.bg_color & 0x0F);
 
-    return build_display_prg(prg_detail::koala_displayer,
-                             sizeof(prg_detail::koala_displayer),
-                             image_data, 0x2000);
+    return build_display_prg(
+        prg_detail::koala_displayer, sizeof(prg_detail::koala_displayer), image_data, 0x2000);
 }
 
 Result<PrgData> hires_bitmap(const EncodeResult& r) {
-    if (r.screen_ram.size() != kCells
-        || r.bitmap.size() != kCells * 8)
+    if (r.screen_ram.size() != kCells || r.bitmap.size() != kCells * 8)
         return std::unexpected{wrong_size_error("Hires")};
 
     // Hires EncodeResult: screen_ram = upper c1 / lower c0, color_ram unused.
     std::vector<std::uint8_t> image_data;
     image_data.reserve(8000 + 1000);
     image_data.insert(image_data.end(), r.bitmap.begin(), r.bitmap.end());
-    image_data.insert(image_data.end(), r.screen_ram.begin(),
-                      r.screen_ram.end());
+    image_data.insert(image_data.end(), r.screen_ram.begin(), r.screen_ram.end());
 
-    return build_display_prg(prg_detail::hires_displayer,
-                             sizeof(prg_detail::hires_displayer),
-                             image_data, 0x2000);
+    return build_display_prg(
+        prg_detail::hires_displayer, sizeof(prg_detail::hires_displayer), image_data, 0x2000);
 }
 
 // ---------------------------------------------------------------------------
@@ -100,33 +91,29 @@ Result<PrgData> hires_bitmap(const EncodeResult& r) {
 // ---------------------------------------------------------------------------
 
 Result<PrgData> koala_raw(const EncodeResult& r) {
-    if (r.screen_ram.size() != kCells || r.color_ram.size() != kCells
-        || r.bitmap.size() != kCells * 8)
+    if (r.screen_ram.size() != kCells || r.color_ram.size() != kCells ||
+        r.bitmap.size() != kCells * 8)
         return std::unexpected{wrong_size_error("Koala")};
 
     PrgData prg;
     prg.bytes.reserve(2 + 8000 + 1000 + 1000 + 1);
     write_le16(prg.bytes, 0x6000);  // Koala Paint load address
     prg.bytes.insert(prg.bytes.end(), r.bitmap.begin(), r.bitmap.end());
-    prg.bytes.insert(prg.bytes.end(), r.screen_ram.begin(),
-                     r.screen_ram.end());
-    prg.bytes.insert(prg.bytes.end(), r.color_ram.begin(),
-                     r.color_ram.end());
+    prg.bytes.insert(prg.bytes.end(), r.screen_ram.begin(), r.screen_ram.end());
+    prg.bytes.insert(prg.bytes.end(), r.color_ram.begin(), r.color_ram.end());
     prg.bytes.push_back(r.bg_color & 0x0F);
     return prg;
 }
 
 Result<PrgData> hires_raw(const EncodeResult& r) {
-    if (r.screen_ram.size() != kCells
-        || r.bitmap.size() != kCells * 8)
+    if (r.screen_ram.size() != kCells || r.bitmap.size() != kCells * 8)
         return std::unexpected{wrong_size_error("Hires")};
 
     PrgData prg;
     prg.bytes.reserve(2 + 8000 + 1000);
     write_le16(prg.bytes, 0x2000);  // Art Studio load address
     prg.bytes.insert(prg.bytes.end(), r.bitmap.begin(), r.bitmap.end());
-    prg.bytes.insert(prg.bytes.end(), r.screen_ram.begin(),
-                     r.screen_ram.end());
+    prg.bytes.insert(prg.bytes.end(), r.screen_ram.begin(), r.screen_ram.end());
     return prg;
 }
 
@@ -138,18 +125,18 @@ namespace {
 
 // Pad a 1000-byte block to 1024 with zeros.
 void append_padded(std::vector<std::uint8_t>& dst,
-                   const std::uint8_t* src, std::size_t bytes,
+                   const std::uint8_t* src,
+                   std::size_t bytes,
                    std::size_t padded = 1024) {
     dst.insert(dst.end(), src, src + bytes);
-    if (bytes < padded)
-        dst.resize(dst.size() + (padded - bytes), 0);
+    if (bytes < padded) dst.resize(dst.size() + (padded - bytes), 0);
 }
 
 }  // namespace
 
 Result<PrgData> fli(const EncodeResult& r) {
-    if (r.color_ram.size() != kCells || r.bitmap.size() != kCells * 8
-        || r.screen_ram.size() != 8 * kCells)
+    if (r.color_ram.size() != kCells || r.bitmap.size() != kCells * 8 ||
+        r.screen_ram.size() != 8 * kCells)
         return std::unexpected{wrong_size_error("FLI")};
 
     // FLI memory layout from $3C00:
@@ -168,14 +155,12 @@ Result<PrgData> fli(const EncodeResult& r) {
     image_data.push_back(r.bg_color & 0x0F);
     image_data.resize(0x8000 - 0x3C00, 0);
 
-    return build_display_prg(prg_detail::fli_displayer,
-                             sizeof(prg_detail::fli_displayer),
-                             image_data, 0x3C00);
+    return build_display_prg(
+        prg_detail::fli_displayer, sizeof(prg_detail::fli_displayer), image_data, 0x3C00);
 }
 
 Result<PrgData> afli(const EncodeResult& r) {
-    if (r.bitmap.size() != kCells * 8
-        || r.screen_ram.size() != 8 * kCells)
+    if (r.bitmap.size() != kCells * 8 || r.screen_ram.size() != 8 * kCells)
         return std::unexpected{wrong_size_error("AFLI")};
 
     // AFLI memory layout from $4000:
@@ -191,9 +176,8 @@ Result<PrgData> afli(const EncodeResult& r) {
     image_data.push_back(r.bg_color & 0x0F);
     image_data.resize(0x8000 - 0x4000, 0);
 
-    return build_display_prg(prg_detail::afli_displayer,
-                             sizeof(prg_detail::afli_displayer),
-                             image_data, 0x4000);
+    return build_display_prg(
+        prg_detail::afli_displayer, sizeof(prg_detail::afli_displayer), image_data, 0x4000);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,22 +191,20 @@ Result<PrgData> petscii_text(const EncodeResult& r) {
     // PETSCII EncodeResult: screen_ram = char index, color_ram = fg.
     std::vector<std::uint8_t> image_data;
     image_data.reserve(1000 + 1000 + 1);
-    image_data.insert(image_data.end(), r.screen_ram.begin(),
-                      r.screen_ram.end());
-    for (auto c : r.color_ram) image_data.push_back(c & 0x0F);
+    image_data.insert(image_data.end(), r.screen_ram.begin(), r.screen_ram.end());
+    for (auto c : r.color_ram)
+        image_data.push_back(c & 0x0F);
     image_data.push_back(r.bg_color & 0x0F);
 
-    return build_display_prg(prg_detail::petscii_displayer,
-                             sizeof(prg_detail::petscii_displayer),
-                             image_data, 0x2000);
+    return build_display_prg(
+        prg_detail::petscii_displayer, sizeof(prg_detail::petscii_displayer), image_data, 0x2000);
 }
 
 // ---------------------------------------------------------------------------
 
-Result<EncodeResult> unpack_pipeline_raw(
-    amiga::Mode mode,
-    const std::vector<std::uint8_t>& raw,
-    std::uint8_t bg_color) {
+Result<EncodeResult> unpack_pipeline_raw(amiga::Mode mode,
+                                         const std::vector<std::uint8_t>& raw,
+                                         std::uint8_t bg_color) {
     using amiga::Mode;
     std::size_t bitmap_size = 0, screen_size = 0, color_size = 0;
     switch (mode) {
@@ -261,26 +243,28 @@ Result<EncodeResult> unpack_pipeline_raw(
     }
     EncodeResult out;
     out.bg_color = bg_color;
-    out.bitmap.assign(raw.begin(),
-                      raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size));
-    out.screen_ram.assign(
-        raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size),
-        raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size + screen_size));
-    out.color_ram.assign(
-        raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size + screen_size),
-        raw.begin() + static_cast<std::ptrdiff_t>(
-            bitmap_size + screen_size + color_size));
+    out.bitmap.assign(raw.begin(), raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size));
+    out.screen_ram.assign(raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size),
+                          raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size + screen_size));
+    out.color_ram.assign(raw.begin() + static_cast<std::ptrdiff_t>(bitmap_size + screen_size),
+                         raw.begin() +
+                             static_cast<std::ptrdiff_t>(bitmap_size + screen_size + color_size));
     return out;
 }
 
 Result<PrgData> from_mode(amiga::Mode mode, const EncodeResult& r) {
     using amiga::Mode;
     switch (mode) {
-    case Mode::c64_multicolor: return koala(r);
-    case Mode::c64_hires:      return hires_bitmap(r);
-    case Mode::c64_fli:        return fli(r);
-    case Mode::c64_afli:       return afli(r);
-    case Mode::c64_petscii:    return petscii_text(r);
+    case Mode::c64_multicolor:
+        return koala(r);
+    case Mode::c64_hires:
+        return hires_bitmap(r);
+    case Mode::c64_fli:
+        return fli(r);
+    case Mode::c64_afli:
+        return afli(r);
+    case Mode::c64_petscii:
+        return petscii_text(r);
     default:
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,

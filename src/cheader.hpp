@@ -40,13 +40,13 @@ namespace png2amiga::cheader {
 // ---------------------------------------------------------------------------
 
 struct CHeaderOptions {
-    std::string symbol_name = "image";   // base name for symbols
-    bool interleaved = false;            // if true, emit single interleaved array
-    bool hires = false;                  // override HIRES for compound modes (ham8-hires etc.)
-    bool interlace = false;              // set LACE bit in CAMG
-    bool aga = false;                    // AGA chipset (24-bit palette)
-    bool fade_in = false;                // 16-step fade-in from black
-    bool dpf = false;                    // dual playfield (CAMG 0x0400, BPLCON0 DBLPF)
+    std::string symbol_name = "image";  // base name for symbols
+    bool interleaved = false;           // if true, emit single interleaved array
+    bool hires = false;                 // override HIRES for compound modes (ham8-hires etc.)
+    bool interlace = false;             // set LACE bit in CAMG
+    bool aga = false;                   // AGA chipset (24-bit palette)
+    bool fade_in = false;               // 16-step fade-in from black
+    bool dpf = false;                   // dual playfield (CAMG 0x0400, BPLCON0 DBLPF)
 
     // Copper: per-scanline register changes (nullptr = no copper)
     const std::vector<std::vector<copper::CopperChange>>* copper_changes = nullptr;
@@ -105,7 +105,7 @@ struct CHeaderOptions {
     // BPLCON3 bank/LOCT context per MOVE. Caller must guard with that
     // check before populating.
     std::vector<std::vector<std::uint16_t>> fade_per_frame_values;
-    int  fade_frame_hold_vbls = 3;
+    int fade_frame_hold_vbls = 3;
     bool fade_ping_pong = true;  // false → wrap last → first
 };
 
@@ -148,4 +148,4 @@ Result<void> save_viewer(std::string_view path,
                          amiga::Mode mode,
                          const CHeaderOptions& options = {});
 
-} // namespace png2amiga::cheader
+}  // namespace png2amiga::cheader

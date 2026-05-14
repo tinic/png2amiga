@@ -49,13 +49,10 @@ namespace png2amiga::api {
 
 namespace {
 
-
 // Load palette from inline data or file path
 Result<Palette> load_user_palette(const Options& opts) {
-    if (!opts.palette_data.empty())
-        return palette_io::load_palette_from_memory(opts.palette_data);
-    if (!opts.palette_file.empty())
-        return palette_io::load_palette(opts.palette_file);
+    if (!opts.palette_data.empty()) return palette_io::load_palette_from_memory(opts.palette_data);
+    if (!opts.palette_file.empty()) return palette_io::load_palette(opts.palette_file);
     return std::unexpected{Error{ErrorCode::unsupported_mode, "No palette"}};
 }
 
@@ -85,33 +82,32 @@ amiga::Mode parse_mode(const std::string& s) {
     // wired through api.cpp yet.
     if (s == "ega-320") return amiga::Mode::ega_320;
     if (s == "ega-640") return amiga::Mode::ega_640;
-    if (s == "ega-hi")  return amiga::Mode::ega_hi;
+    if (s == "ega-hi") return amiga::Mode::ega_hi;
     if (s == "vga-10h") return amiga::Mode::vga_10h;
     if (s == "vga-12h") return amiga::Mode::vga_12h;
-    if (s == "vga-13h")   return amiga::Mode::vga_13h;
+    if (s == "vga-13h") return amiga::Mode::vga_13h;
     if (s == "cga-320") return amiga::Mode::cga_320;
     if (s == "cga-640") return amiga::Mode::cga_640;
-    if (s == "cga-composite")   return amiga::Mode::cga_composite;
-    if (s == "cga-text80x100")  return amiga::Mode::cga_text80x100;
-    if (s == "cga-text80x50")   return amiga::Mode::cga_text80x50;
-    if (s == "cga-text80x25")   return amiga::Mode::cga_text80x25;
-    if (s == "cga-text80x200")  return amiga::Mode::cga_text80x200;
-    if (s == "cga-text40x200")  return amiga::Mode::cga_text40x200;
-    if (s == "cga-text40x100")  return amiga::Mode::cga_text40x100;
-    if (s == "snes-mode7-256")    return amiga::Mode::snes_mode7_256;
+    if (s == "cga-composite") return amiga::Mode::cga_composite;
+    if (s == "cga-text80x100") return amiga::Mode::cga_text80x100;
+    if (s == "cga-text80x50") return amiga::Mode::cga_text80x50;
+    if (s == "cga-text80x25") return amiga::Mode::cga_text80x25;
+    if (s == "cga-text80x200") return amiga::Mode::cga_text80x200;
+    if (s == "cga-text40x200") return amiga::Mode::cga_text40x200;
+    if (s == "cga-text40x100") return amiga::Mode::cga_text40x100;
+    if (s == "snes-mode7-256") return amiga::Mode::snes_mode7_256;
     if (s == "snes-mode7-direct") return amiga::Mode::snes_mode7_direct;
-    if (s == "genesis-h32")       return amiga::Mode::genesis_h32;
-    if (s == "genesis-h40")       return amiga::Mode::genesis_h40;
-    if (s == "genesis-h32-sh")    return amiga::Mode::genesis_h32_sh;
-    if (s == "genesis-h40-sh")    return amiga::Mode::genesis_h40_sh;
-    if (s == "c64-hires")         return amiga::Mode::c64_hires;
-    if (s == "c64-multicolor")    return amiga::Mode::c64_multicolor;
-    if (s == "c64-fli")           return amiga::Mode::c64_fli;
-    if (s == "c64-afli")          return amiga::Mode::c64_afli;
-    if (s == "c64-petscii")       return amiga::Mode::c64_petscii;
+    if (s == "genesis-h32") return amiga::Mode::genesis_h32;
+    if (s == "genesis-h40") return amiga::Mode::genesis_h40;
+    if (s == "genesis-h32-sh") return amiga::Mode::genesis_h32_sh;
+    if (s == "genesis-h40-sh") return amiga::Mode::genesis_h40_sh;
+    if (s == "c64-hires") return amiga::Mode::c64_hires;
+    if (s == "c64-multicolor") return amiga::Mode::c64_multicolor;
+    if (s == "c64-fli") return amiga::Mode::c64_fli;
+    if (s == "c64-afli") return amiga::Mode::c64_afli;
+    if (s == "c64-petscii") return amiga::Mode::c64_petscii;
     if (s == "c64-charset-hires") return amiga::Mode::c64_charset_hires;
-    if (s == "c64-charset-multicolor")
-        return amiga::Mode::c64_charset_multicolor;
+    if (s == "c64-charset-multicolor") return amiga::Mode::c64_charset_multicolor;
     return amiga::Mode::lores;
 }
 
@@ -126,13 +122,17 @@ quantize::Algorithm quantize_algo(amiga::Chipset chipset, amiga::Mode mode = ami
 
 void snap_to_chipset(Palette& pal, amiga::Chipset chipset, amiga::Mode mode = amiga::Mode::lores) {
     if (amiga::is_stf(mode)) {
-        for (auto& c : pal.colors) c = palette::quantize_to_stf(c);
+        for (auto& c : pal.colors)
+            c = palette::quantize_to_stf(c);
     } else if (amiga::is_ega(mode)) {
-        for (auto& c : pal.colors) c = palette::quantize_to_ega(c);
+        for (auto& c : pal.colors)
+            c = palette::quantize_to_ega(c);
     } else if (amiga::is_vga(mode)) {
-        for (auto& c : pal.colors) c = palette::quantize_to_vga(c);
+        for (auto& c : pal.colors)
+            c = palette::quantize_to_vga(c);
     } else if (chipset != amiga::Chipset::aga) {
-        for (auto& c : pal.colors) c = palette::quantize_to_ocs(c);
+        for (auto& c : pal.colors)
+            c = palette::quantize_to_ocs(c);
     }
 }
 
@@ -140,19 +140,22 @@ dither::Method parse_dither(const std::string& s) {
     // Single source of truth in dither.cpp::kMethodNames. Unknown
     // strings fall back to FS to match historical behaviour (the
     // pre-table api.cpp parser silently fell through to FS).
-    return dither::parse_method_or_null(s).value_or(
-        dither::Method::floyd_steinberg);
+    return dither::parse_method_or_null(s).value_or(dither::Method::floyd_steinberg);
 }
 
 // Crop an image to a sub-region
-Result<Image> crop_image(const Image& src,
-                         std::size_t cx, std::size_t cy,
-                         std::size_t cw, std::size_t ch) {
+Result<Image> crop_image(
+    const Image& src, std::size_t cx, std::size_t cy, std::size_t cw, std::size_t ch) {
     if (cx + cw > src.width() || cy + ch > src.height() || cw == 0 || ch == 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
             std::format("Crop region {}x{}+{}+{} exceeds image {}x{}",
-                        cw, ch, cx, cy, src.width(), src.height()),
+                        cw,
+                        ch,
+                        cx,
+                        cy,
+                        src.width(),
+                        src.height()),
         }};
     }
     Image dst(cw, ch);
@@ -171,21 +174,21 @@ Result<Image> crop_image(const Image& src,
 // If the source has alpha, computes a transparency mask at target resolution
 // using the configured alpha threshold / dither method.
 Result<Image> load_and_preprocess(const std::uint8_t* input_data,
-                                   std::size_t input_size,
-                                   const Options& options,
-                                   std::size_t target_w,
-                                   std::size_t target_h,
-                                   std::vector<bool>* out_tmask = nullptr,
-                                   // When non-null, skip decode + crop + scale +
-                                   // preprocess. Caller has already produced an
-                                   // image at target size with all preprocessing
-                                   // applied. tmask, if needed, must be supplied
-                                   // separately by the caller (out_tmask is left
-                                   // untouched). Used by run_pipeline_image() to
-                                   // bypass the 8-bit PNG round-trip CLI sites
-                                   // had to do to feed pre-decoded float pixels
-                                   // through the bytes-only entry point.
-                                   const Image* prepared_image = nullptr) {
+                                  std::size_t input_size,
+                                  const Options& options,
+                                  std::size_t target_w,
+                                  std::size_t target_h,
+                                  std::vector<bool>* out_tmask = nullptr,
+                                  // When non-null, skip decode + crop + scale +
+                                  // preprocess. Caller has already produced an
+                                  // image at target size with all preprocessing
+                                  // applied. tmask, if needed, must be supplied
+                                  // separately by the caller (out_tmask is left
+                                  // untouched). Used by run_pipeline_image() to
+                                  // bypass the 8-bit PNG round-trip CLI sites
+                                  // had to do to feed pre-decoded float pixels
+                                  // through the bytes-only entry point.
+                                  const Image* prepared_image = nullptr) {
     if (prepared_image) {
         // Build tmask from the prepared image's alpha channel (if
         // any) so encode_state_image callers — chiefly main.cpp's
@@ -214,23 +217,23 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     }
     int w{}, h{};
     // Detect WebP (RIFF...WEBP) and dispatch to libwebp; else use stb_image.
-    bool is_webp_img = input_size >= 12 &&
-        std::memcmp(input_data, "RIFF", 4) == 0 &&
-        std::memcmp(input_data + 8, "WEBP", 4) == 0;
+    bool is_webp_img = input_size >= 12 && std::memcmp(input_data, "RIFF", 4) == 0 &&
+                       std::memcmp(input_data + 8, "WEBP", 4) == 0;
     unsigned char* raw = nullptr;
     if (is_webp_img) {
         raw = WebPDecodeRGBA(input_data, input_size, &w, &h);
     } else {
         int channels{};
-        raw = stbi_load_from_memory(input_data,
-            static_cast<int>(input_size), &w, &h, &channels, 4);
+        raw = stbi_load_from_memory(input_data, static_cast<int>(input_size), &w, &h, &channels, 4);
     }
     auto free_raw = [&]() {
         if (!raw) return;
-        if (is_webp_img) WebPFree(raw); else stbi_image_free(raw);
+        if (is_webp_img)
+            WebPFree(raw);
+        else
+            stbi_image_free(raw);
     };
-    if (!raw)
-        return std::unexpected{Error{ErrorCode::invalid_png, "Failed to decode image"}};
+    if (!raw) return std::unexpected{Error{ErrorCode::invalid_png, "Failed to decode image"}};
 
     // Reject pathological dimensions before they overflow size_t under
     // 32-bit (WASM) or exhaust memory under 64-bit. The per-axis cap is
@@ -246,7 +249,10 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
             ErrorCode::invalid_dimensions,
             std::format("Image dimensions out of range: {}x{} "
                         "(per-axis max {}, total max {} pixels)",
-                        w, h, kMaxDimension, kMaxPixels),
+                        w,
+                        h,
+                        kMaxDimension,
+                        kMaxPixels),
         }};
     }
 
@@ -259,8 +265,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     // see main.cpp for the CLI parallel; both paths are needed because
     // the CLI passes a pre-loaded Image while the WASM/programmatic
     // entry runs from raw bytes).
-    auto matches_sentinel = [&](std::uint8_t r, std::uint8_t g,
-                                 std::uint8_t b) {
+    auto matches_sentinel = [&](std::uint8_t r, std::uint8_t g, std::uint8_t b) {
         for (auto& tc : options.transparent_colors)
             if (tc[0] == r && tc[1] == g && tc[2] == b) return true;
         return false;
@@ -269,7 +274,7 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     for (std::size_t i = 0; i < pixel_count; ++i) {
         if (raw[i * 4 + 3] < 255 ||
             (!options.transparent_colors.empty() &&
-             matches_sentinel(raw[i*4], raw[i*4+1], raw[i*4+2]))) {
+             matches_sentinel(raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2]))) {
             any_transparent = true;
             break;
         }
@@ -281,10 +286,9 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
 
     for (std::size_t i = 0; i < pixel_count; ++i) {
         auto base = i * 4;
-        pixels[i] = color_space::srgb_u8_to_linear(
-            raw[base], raw[base + 1], raw[base + 2]);
+        pixels[i] = color_space::srgb_u8_to_linear(raw[base], raw[base + 1], raw[base + 2]);
         if (any_transparent) {
-            if (matches_sentinel(raw[base], raw[base+1], raw[base+2])) {
+            if (matches_sentinel(raw[base], raw[base + 1], raw[base + 2])) {
                 src_alpha[i] = 0.0f;
             } else {
                 src_alpha[i] = static_cast<float>(raw[base + 3]) / 255.0f;
@@ -300,8 +304,8 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     bool any_orient = options.flip_x || options.flip_y || rotate_quarters != 0;
     if (any_orient) {
         auto remap = [&](auto& buf) {
-            std::vector<typename std::remove_reference_t<decltype(buf)>::value_type>
-                tmp(buf.size());
+            std::vector<typename std::remove_reference_t<decltype(buf)>::value_type> tmp(
+                buf.size());
             std::size_t src_w = width, src_h = height;
             for (std::size_t y = 0; y < src_h; ++y) {
                 for (std::size_t x = 0; x < src_w; ++x) {
@@ -310,18 +314,22 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                     std::size_t dx = x, dy = y;
                     std::size_t dw = src_w;
                     switch (rotate_quarters) {
-                        case 1:   // 90° CW:  (x,y) → (h-1-y, x), new w=h, new h=w
-                            dx = src_h - 1 - y; dy = x;
-                            dw = src_h;
-                            break;
-                        case 2:   // 180°
-                            dx = src_w - 1 - x; dy = src_h - 1 - y;
-                            break;
-                        case 3:   // 270° CW
-                            dx = y; dy = src_w - 1 - x;
-                            dw = src_h;
-                            break;
-                        default: break;
+                    case 1:  // 90° CW:  (x,y) → (h-1-y, x), new w=h, new h=w
+                        dx = src_h - 1 - y;
+                        dy = x;
+                        dw = src_h;
+                        break;
+                    case 2:  // 180°
+                        dx = src_w - 1 - x;
+                        dy = src_h - 1 - y;
+                        break;
+                    case 3:  // 270° CW
+                        dx = y;
+                        dy = src_w - 1 - x;
+                        dw = src_h;
+                        break;
+                    default:
+                        break;
                     }
                     tmp[dy * dw + dx] = buf[sy * src_w + sx];
                 }
@@ -358,11 +366,14 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
             free_raw();
             return std::unexpected{Error{
                 ErrorCode::invalid_dimensions,
-                std::format("Crop region {}x{}+{}+{} exceeds image {}x{}",
-                            cw, ch, cx, cy, width, height),
+                std::format(
+                    "Crop region {}x{}+{}+{} exceeds image {}x{}", cw, ch, cx, cy, width, height),
             }};
         }
-        crop_x = cx; crop_y = cy; crop_w = cw; crop_h = ch;
+        crop_x = cx;
+        crop_y = cy;
+        crop_w = cw;
+        crop_h = ch;
         will_crop = true;
     } else if (options.crop_auto) {
         // Center-crop source to target aspect ratio
@@ -370,12 +381,10 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         auto src_ratio = static_cast<double>(width) / static_cast<double>(height);
         if (src_ratio > target_ratio) {
             crop_h = height;
-            crop_w = static_cast<std::size_t>(
-                static_cast<double>(height) * target_ratio + 0.5);
+            crop_w = static_cast<std::size_t>(static_cast<double>(height) * target_ratio + 0.5);
         } else {
             crop_w = width;
-            crop_h = static_cast<std::size_t>(
-                static_cast<double>(width) / target_ratio + 0.5);
+            crop_h = static_cast<std::size_t>(static_cast<double>(width) / target_ratio + 0.5);
         }
         crop_x = (width - crop_w) / 2;
         crop_y = (height - crop_h) / 2;
@@ -391,11 +400,9 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         auto alpha_dither = parse_dither(options.alpha_dither);
         float cutoff = 0.5f + options.alpha_threshold;
         for (std::size_t y = 0; y < target_h; ++y) {
-            auto sy = std::min(crop_y + y * crop_h / target_h,
-                               crop_y + crop_h - 1);
+            auto sy = std::min(crop_y + y * crop_h / target_h, crop_y + crop_h - 1);
             for (std::size_t x = 0; x < target_w; ++x) {
-                auto sx = std::min(crop_x + x * crop_w / target_w,
-                                   crop_x + crop_w - 1);
+                auto sx = std::min(crop_x + x * crop_w / target_w, crop_x + crop_w - 1);
                 float a = src_alpha[sy * width + sx];
                 // Fully transparent (alpha == 0) and fully opaque
                 // (alpha == 1) pixels are locked regardless of
@@ -408,7 +415,8 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
                     (*out_tmask)[y * target_w + x] = false;
                 } else if (alpha_dither != dither::Method::none) {
                     float thr = dither::ordered_threshold(alpha_dither, x, y);
-                    (*out_tmask)[y * target_w + x] = a < (cutoff + thr * options.alpha_dither_strength);
+                    (*out_tmask)[y * target_w + x] = a <
+                                                     (cutoff + thr * options.alpha_dither_strength);
                 } else {
                     (*out_tmask)[y * target_w + x] = a < cutoff;
                 }
@@ -418,7 +426,9 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
         out_tmask->clear();
     }
 
-    Image image(width, height, std::move(pixels),
+    Image image(width,
+                height,
+                std::move(pixels),
                 any_transparent ? std::move(src_alpha) : std::vector<float>{});
 
     // Apply the crop region we already validated above.
@@ -472,10 +482,15 @@ std::size_t round_height(double v, bool interlace) {
 
 // Compute target dimensions from source image size and user options.
 // Requires loading the source image first to get its dimensions.
-struct TargetDims { std::size_t w; std::size_t h; };
+struct TargetDims {
+    std::size_t w;
+    std::size_t h;
+};
 
-TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
-                               const Options& options, amiga::Mode mode) {
+TargetDims compute_target_dims(std::size_t src_w,
+                               std::size_t src_h,
+                               const Options& options,
+                               amiga::Mode mode) {
     auto params = amiga::get_mode_params(mode);
     auto mode_w = params.screen_width;
     auto src_aspect = static_cast<double>(src_w) / static_cast<double>(src_h);
@@ -504,27 +519,21 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     // many screens. When the user passes --width / --height the
     // encoder receives those (rounded up to 8×8 / 4×8); otherwise the
     // fixed-buf default still applies.
-    bool is_fixed_buf =
-        amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
-        amiga::is_cga(mode)   || amiga::is_cga_text(mode) ||
-        amiga::is_snes(mode)  || amiga::is_genesis(mode) || amiga::is_c64(mode);
+    bool is_fixed_buf = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
+                        amiga::is_cga(mode) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
+                        amiga::is_genesis(mode) || amiga::is_c64(mode);
     // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
     // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
     // convention as c64-charset-hires. No multicolor halving.
-    bool tile_8x8_freeform =
-        (amiga::is_genesis(mode) || amiga::is_snes(mode))
-        && (have_w || have_h);
+    bool tile_8x8_freeform = (amiga::is_genesis(mode) || amiga::is_snes(mode)) &&
+                             (have_w || have_h);
     if (tile_8x8_freeform) {
         constexpr std::size_t kTileSide = 8;
         auto round_up = [](std::size_t v, std::size_t s) {
             return ((v + s - 1) / s) * s;
         };
-        std::size_t tw = have_w
-            ? round_up(static_cast<std::size_t>(options.width), kTileSide)
-            : 0;
-        std::size_t th = have_h
-            ? round_up(static_cast<std::size_t>(options.height), kTileSide)
-            : 0;
+        std::size_t tw = have_w ? round_up(static_cast<std::size_t>(options.width), kTileSide) : 0;
+        std::size_t th = have_h ? round_up(static_cast<std::size_t>(options.height), kTileSide) : 0;
         if (!have_w) {
             auto wf = static_cast<double>(th) * src_aspect;
             tw = round_up(static_cast<std::size_t>(std::lround(wf)), kTileSide);
@@ -541,35 +550,27 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     // canonical 200-line buffer, =4 for any other size). Preserve source
     // aspect (target_h = target_w / src_aspect) — same rule the CLI's
     // main.cpp applies. Pad up to 8×4 alignment so the encoder accepts.
-    bool cga_text_freeform =
-        amiga::is_cga_text(mode) && (have_w || have_h);
+    bool cga_text_freeform = amiga::is_cga_text(mode) && (have_w || have_h);
     if (cga_text_freeform) {
         constexpr std::size_t kCellW = 8;
         constexpr std::size_t kCellH = 4;
         auto round_up = [](std::size_t v, std::size_t s) {
             return ((v + s - 1) / s) * s;
         };
-        std::size_t tw = have_w
-            ? static_cast<std::size_t>(options.width)
-            : 0;
-        std::size_t th = have_h
-            ? static_cast<std::size_t>(options.height)
-            : 0;
+        std::size_t tw = have_w ? static_cast<std::size_t>(options.width) : 0;
+        std::size_t th = have_h ? static_cast<std::size_t>(options.height) : 0;
         if (!have_w) {
-            tw = static_cast<std::size_t>(std::lround(
-                static_cast<double>(th) * src_aspect));
+            tw = static_cast<std::size_t>(std::lround(static_cast<double>(th) * src_aspect));
         }
         if (!have_h) {
-            th = static_cast<std::size_t>(std::lround(
-                static_cast<double>(tw) / src_aspect));
+            th = static_cast<std::size_t>(std::lround(static_cast<double>(tw) / src_aspect));
         }
         if (tw == 0) tw = kCellW;
         if (th == 0) th = kCellH;
         return {round_up(tw, kCellW), round_up(th, kCellH)};
     }
 
-    bool charset_freeform =
-        amiga::is_c64_charset(mode) && (have_w || have_h);
+    bool charset_freeform = amiga::is_c64_charset(mode) && (have_w || have_h);
     if (charset_freeform) {
         // Designer convention: --width / --height refer to *source*
         // pixels, treated 1:1. For charset-hires every 8×8 source block
@@ -583,12 +584,8 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
         auto round_up = [](std::size_t v, std::size_t s) {
             return ((v + s - 1) / s) * s;
         };
-        std::size_t sw = have_w
-            ? round_up(static_cast<std::size_t>(options.width), kSrcStep)
-            : 0;
-        std::size_t sh = have_h
-            ? round_up(static_cast<std::size_t>(options.height), kSrcStep)
-            : 0;
+        std::size_t sw = have_w ? round_up(static_cast<std::size_t>(options.width), kSrcStep) : 0;
+        std::size_t sh = have_h ? round_up(static_cast<std::size_t>(options.height), kSrcStep) : 0;
         if (!have_w) {
             auto wf = static_cast<double>(sh) * src_aspect;
             sw = round_up(static_cast<std::size_t>(std::lround(wf)), kSrcStep);
@@ -604,23 +601,21 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     }
 
     if (have_w && have_h) {
-        return {static_cast<std::size_t>(options.width),
-                static_cast<std::size_t>(options.height)};
+        return {static_cast<std::size_t>(options.width), static_cast<std::size_t>(options.height)};
     }
     if (have_w) {
         auto w = static_cast<std::size_t>(options.width);
         // If width differs from mode default, adjust PAR for the resolution change
         // (e.g. ham6 at 640px = hires HAM, pixels are half-width)
         auto w_par = (w != mode_w && mode_w > 0)
-            ? par * static_cast<double>(mode_w) / static_cast<double>(w)
-            : par;
+                         ? par * static_cast<double>(mode_w) / static_cast<double>(w)
+                         : par;
         auto h = round_height(static_cast<double>(w) * w_par / src_aspect, interlace);
         return {w, h};
     }
     if (have_h) {
         auto h = static_cast<std::size_t>(options.height);
-        auto w = static_cast<std::size_t>(
-            std::lround(static_cast<double>(h) * src_aspect / par));
+        auto w = static_cast<std::size_t>(std::lround(static_cast<double>(h) * src_aspect / par));
         return {w, h};
     }
     // Neither: use mode default width, but don't upscale small images
@@ -634,15 +629,14 @@ TargetDims compute_target_dims(std::size_t src_w, std::size_t src_h,
     auto mode_h = params.screen_height;
     if (mode_h > 0) {
         bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
-                               amiga::is_ega(mode)   || amiga::is_cga(mode) ||
+                               amiga::is_ega(mode) || amiga::is_cga(mode) ||
                                amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                                amiga::is_genesis(mode) || amiga::is_c64(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
             h = mode_h;
-            w = static_cast<std::size_t>(std::lround(
-                static_cast<double>(h) * src_aspect / par));
+            w = static_cast<std::size_t>(std::lround(static_cast<double>(h) * src_aspect / par));
             if (w > params.screen_width) w = params.screen_width;
         }
     }
@@ -660,11 +654,9 @@ Options decompose_mode_options(const Options& opts) {
     // none of those collide today besides c64). Anchor by chipset
     // prefix so non-Amiga modes don't get accidentally rewritten.
     bool is_amiga_compound = s.starts_with("ham") || s.starts_with("lores") ||
-                              s.starts_with("hires") || s.starts_with("ehb");
-    bool has_hires = is_amiga_compound &&
-                     s.find("hires") != std::string::npos;
-    bool has_lace = is_amiga_compound &&
-                    s.size() > 4 && s.find("-lace") != std::string::npos;
+                             s.starts_with("hires") || s.starts_with("ehb");
+    bool has_hires = is_amiga_compound && s.find("hires") != std::string::npos;
+    bool has_lace = is_amiga_compound && s.size() > 4 && s.find("-lace") != std::string::npos;
     // Only override if user didn't already set these
     if (has_hires && o.width == 0) o.width = 640;
     if (has_lace) o.interlace = true;
@@ -704,7 +696,8 @@ static Image tile_replicate_3x3(const Image& src) {
 }
 
 static std::vector<bool> tile_replicate_mask_3x3(const std::vector<bool>& src,
-                                                  std::size_t w, std::size_t h) {
+                                                 std::size_t w,
+                                                 std::size_t h) {
     if (src.empty()) return {};
     std::vector<bool> out(w * 3 * h * 3);
     for (std::size_t ty = 0; ty < 3; ++ty) {
@@ -719,8 +712,7 @@ static std::vector<bool> tile_replicate_mask_3x3(const std::vector<bool>& src,
     return out;
 }
 
-static Image tile_crop_centre_image(const Image& tiled,
-                                     std::size_t w, std::size_t h) {
+static Image tile_crop_centre_image(const Image& tiled, std::size_t w, std::size_t h) {
     Image out(w, h);
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
@@ -730,9 +722,9 @@ static Image tile_crop_centre_image(const Image& tiled,
     return out;
 }
 
-static std::vector<std::uint8_t> tile_crop_centre_indices(
-        const std::vector<std::uint8_t>& tiled,
-        std::size_t w, std::size_t h) {
+static std::vector<std::uint8_t> tile_crop_centre_indices(const std::vector<std::uint8_t>& tiled,
+                                                          std::size_t w,
+                                                          std::size_t h) {
     std::vector<std::uint8_t> out(w * h);
     auto tw = w * 3;
     for (std::size_t y = 0; y < h; ++y) {
@@ -744,7 +736,8 @@ static std::vector<std::uint8_t> tile_crop_centre_indices(
 }
 
 static std::vector<bool> tile_crop_centre_mask(const std::vector<bool>& tiled,
-                                                std::size_t w, std::size_t h) {
+                                               std::size_t w,
+                                               std::size_t h) {
     if (tiled.empty()) return {};
     std::vector<bool> out(w * h);
     auto tw = w * 3;
@@ -760,10 +753,8 @@ static std::vector<bool> tile_crop_centre_mask(const std::vector<bool>& tiled,
 // 3W x 3H replicate. Re-encodes bitplanes from the cropped indices so
 // the .iff/.h/.cpp output paths see the right dimensions and bitplane
 // data without any extra knowledge of the tile mode.
-static Result<void> tile_crop_result(PipelineResult& r,
-                                      std::size_t w, std::size_t h,
-                                      std::size_t depth,
-                                      bitplane::Layout layout) {
+static Result<void> tile_crop_result(
+    PipelineResult& r, std::size_t w, std::size_t h, std::size_t depth, bitplane::Layout layout) {
     r.indices = tile_crop_centre_indices(r.indices, w, h);
     r.rendered = tile_crop_centre_image(r.rendered, w, h);
     if (!r.transparency_mask.empty())
@@ -797,32 +788,31 @@ static Result<void> tile_crop_result(PipelineResult& r,
 // transparency-mask blackout happen post-helper at the call site.
 // ---------------------------------------------------------------------------
 struct PlainAutoTrial {
-    Palette                       pal;          // assembled, snapped, refined
-    std::vector<bool>             locked_mask;  // pal.colors.size() entries
-    std::size_t                   pal_size;     // first N are the live palette
-    std::vector<std::uint8_t>     indices;      // dither_result.indices
-    bitplane::BitplaneData        planes;
-    Image                         rendered;
-    float                         total_error;
+    Palette pal;                        // assembled, snapped, refined
+    std::vector<bool> locked_mask;      // pal.colors.size() entries
+    std::size_t pal_size;               // first N are the live palette
+    std::vector<std::uint8_t> indices;  // dither_result.indices
+    bitplane::BitplaneData planes;
+    Image rendered;
+    float total_error;
 };
 
-Result<PlainAutoTrial> encode_plain_auto(
-    const Image& img,
-    std::size_t depth,
-    std::size_t max_colors,
-    amiga::Mode mode,
-    amiga::Chipset chipset,
-    const dither::Settings& dith,
-    int palette_diversity,
-    int refine_iterations,
-    bool lock_color0,
-    bool has_transparency,
-    bool use_dpf,
-    bool match_range,
-    const std::vector<LockSpec>&    locks,
-    const std::vector<ReserveSpec>& reserves,
-    const std::vector<PinSpec>&     pins,
-    const std::vector<bool>&        tmask) {
+Result<PlainAutoTrial> encode_plain_auto(const Image& img,
+                                         std::size_t depth,
+                                         std::size_t max_colors,
+                                         amiga::Mode mode,
+                                         amiga::Chipset chipset,
+                                         const dither::Settings& dith,
+                                         int palette_diversity,
+                                         int refine_iterations,
+                                         bool lock_color0,
+                                         bool has_transparency,
+                                         bool use_dpf,
+                                         bool match_range,
+                                         const std::vector<LockSpec>& locks,
+                                         const std::vector<ReserveSpec>& reserves,
+                                         const std::vector<PinSpec>& pins,
+                                         const std::vector<bool>& tmask) {
     // Atari uses the full palette (no border slot tied to index 0).
     bool is_atari_local = amiga::is_atari(mode);
     bool lock_zero = lock_color0 && (has_transparency || !is_atari_local);
@@ -835,47 +825,43 @@ Result<PlainAutoTrial> encode_plain_auto(
     // of the slot contents and the regular path honours that.
     if (max_colors == 2 && locks.empty() && reserves.empty()) {
         PlainAutoTrial out;
-        out.pal.name   = "bw";
+        out.pal.name = "bw";
         out.pal.colors = {Color3f{0.0f, 0.0f, 0.0f}, Color3f{1.0f, 1.0f, 1.0f}};
-        out.pal_size   = 2;
+        out.pal_size = 2;
         out.locked_mask = {true, true};
-        auto dr = dither::apply(img,
-            std::span<const Color3f>(out.pal.colors), dith);
+        auto dr = dither::apply(img, std::span<const Color3f>(out.pal.colors), dith);
         if (has_transparency) {
-            for (std::size_t i = 0;
-                 i < tmask.size() && i < dr.indices.size(); ++i)
+            for (std::size_t i = 0; i < tmask.size() && i < dr.indices.size(); ++i)
                 if (tmask[i]) dr.indices[i] = 0;
         }
         out.indices = std::move(dr.indices);
         out.total_error = dr.total_error;
         if (!pins.empty()) {
             auto pin_result = palette_locks::apply_pins(
-                out.pal, out.indices, out.locked_mask, pins,
-                img.width(), img.height());
+                out.pal, out.indices, out.locked_mask, pins, img.width(), img.height());
             if (!pin_result) return std::unexpected{pin_result.error()};
         }
-        bool dos_planar_bw = (amiga::is_ega(mode) || amiga::is_vga(mode))
-                             && !amiga::is_chunky(mode);
-        auto bp_layout_bw = is_atari_local
-            ? bitplane::Layout::word_interleaved
-            : dos_planar_bw ? bitplane::Layout::standard
-                            : bitplane::Layout::interleaved;
-        auto bp_res = bitplane::encode(out.indices,
-            img.width(), img.height(), depth, bp_layout_bw);
+        bool dos_planar_bw = (amiga::is_ega(mode) || amiga::is_vga(mode)) &&
+                             !amiga::is_chunky(mode);
+        auto bp_layout_bw = is_atari_local  ? bitplane::Layout::word_interleaved
+                            : dos_planar_bw ? bitplane::Layout::standard
+                                            : bitplane::Layout::interleaved;
+        auto bp_res = bitplane::encode(out.indices, img.width(), img.height(), depth, bp_layout_bw);
         if (!bp_res) return std::unexpected{bp_res.error()};
         out.planes = *std::move(bp_res);
-        std::vector<Color3f> pal_view(out.pal.colors.begin(),
-                                      out.pal.colors.end());
-        auto pv = pipeline::render_preview(out.planes, pal_view,
-            /*is_ham=*/false, /*is_lace=*/false, chipset);
+        std::vector<Color3f> pal_view(out.pal.colors.begin(), out.pal.colors.end());
+        auto pv = pipeline::render_preview(out.planes,
+                                           pal_view,
+                                           /*is_ham=*/false,
+                                           /*is_lace=*/false,
+                                           chipset);
         if (!pv) return std::unexpected{pv.error()};
         out.rendered = *std::move(pv);
         return out;
     }
 
     // Reserve-count + reserved_mask (caller may pass zero reserves).
-    auto reserves_in_pal = palette_locks::validate_reserves(
-        reserves, locks, max_colors, lock_zero);
+    auto reserves_in_pal = palette_locks::validate_reserves(reserves, locks, max_colors, lock_zero);
     if (!reserves_in_pal) return std::unexpected{reserves_in_pal.error()};
     std::size_t reserve_count = *reserves_in_pal;
     std::vector<bool> reserved_mask(max_colors, false);
@@ -887,8 +873,7 @@ Result<PlainAutoTrial> encode_plain_auto(
     // Quantize + assemble. EGA modes (ega-hi specifically — the 200-line
     // ega_320/640 use kCgaHw and take a separate non-auto path at the
     // call site) go through ega_histogram on a pre-snapped image.
-    auto qc = palette_locks::quant_counts_for_assemble(
-        max_colors, locks, reserve_count, lock_zero);
+    auto qc = palette_locks::quant_counts_for_assemble(max_colors, locks, reserve_count, lock_zero);
     Image ega_snapped;
     const bool is_ega_mode = amiga::is_ega(mode);
     if (is_ega_mode) {
@@ -899,15 +884,11 @@ Result<PlainAutoTrial> encode_plain_auto(
     }
     auto qfn = [&](std::size_t k) -> Result<Palette> {
         if (is_ega_mode) return quantize::ega_histogram(ega_snapped, k);
-        return quantize::quantize(img, k,
-                                  quantize_algo(chipset, mode),
-                                  palette_diversity);
+        return quantize::quantize(img, k, quantize_algo(chipset, mode), palette_diversity);
     };
-    auto quantized = palette_locks::two_pass_quantize(
-        qfn, qc.qcount, qc.kfallback, lock_zero);
+    auto quantized = palette_locks::two_pass_quantize(qfn, qc.qcount, qc.kfallback, lock_zero);
     if (!quantized) return std::unexpected{quantized.error()};
-    if (amiga::is_stf(mode) || amiga::is_vga(mode))
-        snap_to_chipset(*quantized, chipset, mode);
+    if (amiga::is_stf(mode) || amiga::is_vga(mode)) snap_to_chipset(*quantized, chipset, mode);
     auto assembled = palette_locks::assemble_with_reserves(
         *quantized, locks, reserves, max_colors, lock_zero, chipset, mode);
 
@@ -916,23 +897,24 @@ Result<PlainAutoTrial> encode_plain_auto(
     out.locked_mask = std::move(assembled.locked);
     out.pal_size = std::min(out.pal.size(), max_colors);
 
-    if (match_range)
-        preprocess::match_palette_range(const_cast<Image&>(img), out.pal);
+    if (match_range) preprocess::match_palette_range(const_cast<Image&>(img), out.pal);
 
     // Dither-aware refinement (auto-palette only). Same gates as the
     // pre-extraction non-best path. The locked_mask flow keeps slot 0
     // (when lock_color0 is true) at pure black across iterations.
-    if (refine_iterations > 0 &&
-        dith.method != dither::Method::none && reserve_count == 0 &&
-        !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
-        !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
+    if (refine_iterations > 0 && dith.method != dither::Method::none && reserve_count == 0 &&
+        !amiga::is_cga(mode) && !amiga::is_chunky(mode) && !amiga::is_ega(mode) &&
+        !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             img,
-            Palette{"refined", {out.pal.colors.begin(),
-                                out.pal.colors.begin() +
-                                    static_cast<std::ptrdiff_t>(out.pal_size)}},
-            dith, chipset, mode,
-            static_cast<std::size_t>(refine_iterations), out.locked_mask);
+            Palette{"refined",
+                    {out.pal.colors.begin(),
+                     out.pal.colors.begin() + static_cast<std::ptrdiff_t>(out.pal_size)}},
+            dith,
+            chipset,
+            mode,
+            static_cast<std::size_t>(refine_iterations),
+            out.locked_mask);
         if (refined) {
             out.pal.colors = std::move(refined->colors);
             out.pal_size = out.pal.colors.size();
@@ -958,10 +940,10 @@ Result<PlainAutoTrial> encode_plain_auto(
         }
         std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
         dr = dither::apply(img, dither_span, dith);
-        for (auto& idx : dr.indices) idx = cand_to_full[idx];
+        for (auto& idx : dr.indices)
+            idx = cand_to_full[idx];
         if (has_transparency) {
-            for (std::size_t i = 0;
-                 i < tmask.size() && i < dr.indices.size(); ++i)
+            for (std::size_t i = 0; i < tmask.size() && i < dr.indices.size(); ++i)
                 if (tmask[i]) dr.indices[i] = 0;
         }
     } else {
@@ -976,52 +958,45 @@ Result<PlainAutoTrial> encode_plain_auto(
     // doesn't affect ranking — the rendered image is unchanged.
     if (!pins.empty()) {
         auto pin_result = palette_locks::apply_pins(
-            out.pal, out.indices, out.locked_mask, pins,
-            img.width(), img.height());
+            out.pal, out.indices, out.locked_mask, pins, img.width(), img.height());
         if (!pin_result) return std::unexpected{pin_result.error()};
     }
 
     // Sort by perceptual brightness, except for HAM/DPF where palette
     // layout is constrained. Best-path eligibility excludes DPF.
     if (!amiga::is_ham(mode) && !use_dpf) {
-        palette_locks::sort_by_brightness(out.pal.colors, out.locked_mask,
-                                          out.indices,
-                                          out.pal.colors.size());
+        palette_locks::sort_by_brightness(
+            out.pal.colors, out.locked_mask, out.indices, out.pal.colors.size());
     }
 
-    bool dos_planar = (amiga::is_ega(mode) || amiga::is_vga(mode))
-                      && !amiga::is_chunky(mode);
-    auto bp_layout = is_atari_local
-        ? bitplane::Layout::word_interleaved
-        : dos_planar ? bitplane::Layout::standard
-                     : bitplane::Layout::interleaved;
-    auto bp_res = bitplane::encode(out.indices, img.width(), img.height(),
-                                   depth, bp_layout);
+    bool dos_planar = (amiga::is_ega(mode) || amiga::is_vga(mode)) && !amiga::is_chunky(mode);
+    auto bp_layout = is_atari_local ? bitplane::Layout::word_interleaved
+                     : dos_planar   ? bitplane::Layout::standard
+                                    : bitplane::Layout::interleaved;
+    auto bp_res = bitplane::encode(out.indices, img.width(), img.height(), depth, bp_layout);
     if (!bp_res) return std::unexpected{bp_res.error()};
     out.planes = *std::move(bp_res);
 
     auto pal_view = std::vector<Color3f>(
-        out.pal.colors.begin(),
-        out.pal.colors.begin() +
-            static_cast<std::ptrdiff_t>(out.pal_size));
-    auto pv = pipeline::render_preview(out.planes, pal_view,
-                                        /*is_ham=*/false,
-                                        /*is_lace=*/false, chipset);
+        out.pal.colors.begin(), out.pal.colors.begin() + static_cast<std::ptrdiff_t>(out.pal_size));
+    auto pv = pipeline::render_preview(out.planes,
+                                       pal_view,
+                                       /*is_ham=*/false,
+                                       /*is_lace=*/false,
+                                       chipset);
     if (!pv) return std::unexpected{pv.error()};
     out.rendered = *std::move(pv);
     return out;
 }
 
-}  // close anon namespace so run_pipeline gets external linkage and can
+}  // namespace
    // be reached from pipeline.cpp via the api:: forwarder.
 
 // --best eligibility — defined here so run_pipeline (programmatic API)
 // and main.cpp (CLI dispatch) share a single source of truth. main.cpp
 // dispatches most modes through encode_state_image rather than
 // run_pipeline, so the gate has to be reachable from both layers.
-Result<void> check_best_supported(const Options& options,
-                                  amiga::Mode mode,
-                                  bool has_transparency) {
+Result<void> check_best_supported(const Options& options, amiga::Mode mode, bool has_transparency) {
     if (!options.best) return {};
     // has_transparency used to gate EHB --best off (legacy: pop_search
     // for EHB wasn't transparency-aware). Both that and the lores/
@@ -1029,32 +1004,25 @@ Result<void> check_best_supported(const Options& options,
     // stability + the gate's pre-existing call sites.
     (void)has_transparency;
     auto mode_params = amiga::get_mode_params(mode);
-    bool ham_best   = amiga::is_ham(mode) &&
-                      (mode_params.bitplane_depth == 6 ||
-                       mode_params.bitplane_depth == 8);
-    bool ehb_best   = (mode == amiga::Mode::ehb) &&
-                      !has_user_palette(options);
-    bool plain_best = (mode == amiga::Mode::lores ||
-                       mode == amiga::Mode::lores_interlace ||
-                       mode == amiga::Mode::hires ||
-                       mode == amiga::Mode::hires_interlace) &&
-                      !options.copper && !options.scap &&
-                      !options.dual_playfield && !options.tile &&
-                      !has_user_palette(options);
+    bool ham_best = amiga::is_ham(mode) &&
+                    (mode_params.bitplane_depth == 6 || mode_params.bitplane_depth == 8);
+    bool ehb_best = (mode == amiga::Mode::ehb) && !has_user_palette(options);
+    bool plain_best = (mode == amiga::Mode::lores || mode == amiga::Mode::lores_interlace ||
+                       mode == amiga::Mode::hires || mode == amiga::Mode::hires_interlace) &&
+                      !options.copper && !options.scap && !options.dual_playfield &&
+                      !options.tile && !has_user_palette(options);
     bool copper_best = options.copper;
-    bool scap_best   = options.scap;
-    bool snes_best   = (mode == amiga::Mode::snes_mode7_256);
-    if (ham_best || ehb_best || plain_best || copper_best ||
-        scap_best || snes_best) return {};
-    return std::unexpected{Error{
-        ErrorCode::unsupported_mode,
-        "--best is not supported in this configuration. "
-        "Supported: HAM6/HAM8, plain EHB (no user palette), "
-        "plain lores/hires (no --copper, no --scap, no --dpf, "
-        "no --tile, no --palette), sliced (--copper), strips "
-        "(--scap), and snes-mode7-256. Drop --best or change "
-        "one of those "
-        "options."}};
+    bool scap_best = options.scap;
+    bool snes_best = (mode == amiga::Mode::snes_mode7_256);
+    if (ham_best || ehb_best || plain_best || copper_best || scap_best || snes_best) return {};
+    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                 "--best is not supported in this configuration. "
+                                 "Supported: HAM6/HAM8, plain EHB (no user palette), "
+                                 "plain lores/hires (no --copper, no --scap, no --dpf, "
+                                 "no --tile, no --palette), sliced (--copper), strips "
+                                 "(--scap), and snes-mode7-256. Drop --best or change "
+                                 "one of those "
+                                 "options."}};
 }
 
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
@@ -1073,12 +1041,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                     const Image* prepared_image = nullptr) {
     auto options = decompose_mode_options(orig_options);
     auto mode = parse_mode(options.mode);
-    bool compound_hires =
-        (orig_options.mode.starts_with("ham") ||
-         orig_options.mode.starts_with("lores") ||
-         orig_options.mode.starts_with("hires") ||
-         orig_options.mode.starts_with("ehb")) &&
-        orig_options.mode.find("hires") != std::string::npos;
+    bool compound_hires = (orig_options.mode.starts_with("ham") ||
+                           orig_options.mode.starts_with("lores") ||
+                           orig_options.mode.starts_with("hires") ||
+                           orig_options.mode.starts_with("ehb")) &&
+                          orig_options.mode.find("hires") != std::string::npos;
 
     // Hires plain modes prefer one extra reseed pass (palette_diversity=5)
     // over the API default of 4. Mean S2 sweep over the photo example set:
@@ -1097,19 +1064,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // refreshDitherDefaults watcher that mirrored this lookup; now it
     // can leave the fields at sentinel and the encoder handles it.
     if (options.dither_strength < 0.0f || options.error_clamp < 0.0f) {
-        auto chipset_for_tune = (options.chipset == "aga")
-            ? amiga::Chipset::aga : amiga::Chipset::ocs;
+        auto chipset_for_tune = (options.chipset == "aga") ? amiga::Chipset::aga
+                                                           : amiga::Chipset::ocs;
         auto tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = mode,
-            .depth   = std::clamp(options.depth, 1, 8),
-            .dpf     = options.dual_playfield,
-            .scap    = options.scap,
-            .copper  = options.copper,
+            .mode = mode,
+            .depth = std::clamp(options.depth, 1, 8),
+            .dpf = options.dual_playfield,
+            .scap = options.scap,
+            .copper = options.copper,
             .chipset = chipset_for_tune,
-            .method  = parse_dither(options.dither),
+            .method = parse_dither(options.dither),
         });
         if (options.dither_strength < 0.0f) options.dither_strength = tune.strength;
-        if (options.error_clamp     < 0.0f) options.error_clamp     = tune.error_clamp;
+        if (options.error_clamp < 0.0f) options.error_clamp = tune.error_clamp;
     }
 
     if (options.palette_diversity == 4 &&
@@ -1126,24 +1093,25 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // yliluoma family. Web frontend has matching auto-fallback gates
     // (see Converter.vue HAM_INCOMPATIBLE_DITHERS); CLI errors out
     // because scripted callers picked the dither for a reason.
-    if (auto dm = parse_dither(options.dither);
-        dither::needs_discrete_palette(dm)) {
+    if (auto dm = parse_dither(options.dither); dither::needs_discrete_palette(dm)) {
         if (amiga::is_ham(mode)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "Dither '" + options.dither + "' needs a discrete palette "
-                "and silently degenerates in HAM modes (no per-pixel "
-                "palette index — encoder picks SET/MODIFY ops). Use "
-                "atkinson, floyd-steinberg, sierra-lite, jarvis, "
-                "stucki, or an ordered method.",
+                "Dither '" + options.dither +
+                    "' needs a discrete palette "
+                    "and silently degenerates in HAM modes (no per-pixel "
+                    "palette index — encoder picks SET/MODIFY ops). Use "
+                    "atkinson, floyd-steinberg, sierra-lite, jarvis, "
+                    "stucki, or an ordered method.",
             }};
         }
         if (amiga::is_snes_direct(mode) && dither::is_yliluoma(dm)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "Dither '" + options.dither + "' is palette-aware but "
-                "Mode 7 Direct has no palette table. Use a non-yliluoma "
-                "method (atkinson, floyd-steinberg, ordered).",
+                "Dither '" + options.dither +
+                    "' is palette-aware but "
+                    "Mode 7 Direct has no palette table. Use a non-yliluoma "
+                    "method (atkinson, floyd-steinberg, ordered).",
             }};
         }
     }
@@ -1192,16 +1160,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         peek_w = static_cast<int>(prepared_image->width());
         peek_h = static_cast<int>(prepared_image->height());
     } else {
-        bool peek_is_webp = input_size >= 12 &&
-            std::memcmp(input_data, "RIFF", 4) == 0 &&
-            std::memcmp(input_data + 8, "WEBP", 4) == 0;
-        bool peek_ok = peek_is_webp
-            ? (WebPGetInfo(input_data, input_size, &peek_w, &peek_h) != 0)
-            : (stbi_info_from_memory(input_data, static_cast<int>(input_size),
-                                     &peek_w, &peek_h, nullptr) != 0);
+        bool peek_is_webp = input_size >= 12 && std::memcmp(input_data, "RIFF", 4) == 0 &&
+                            std::memcmp(input_data + 8, "WEBP", 4) == 0;
+        bool peek_ok =
+            peek_is_webp
+                ? (WebPGetInfo(input_data, input_size, &peek_w, &peek_h) != 0)
+                : (stbi_info_from_memory(
+                       input_data, static_cast<int>(input_size), &peek_w, &peek_h, nullptr) != 0);
         if (!peek_ok) {
-            return std::unexpected{Error{ErrorCode::invalid_png,
-                "Failed to read image dimensions"}};
+            return std::unexpected{
+                Error{ErrorCode::invalid_png, "Failed to read image dimensions"}};
         }
     }
 
@@ -1215,29 +1183,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         src_w_eff = static_cast<std::size_t>(options.crop_w);
         src_h_eff = static_cast<std::size_t>(options.crop_h);
     }
-    auto [target_w, target_h] = compute_target_dims(
-        src_w_eff, src_h_eff, options, mode);
+    auto [target_w, target_h] = compute_target_dims(src_w_eff, src_h_eff, options, mode);
 
-    auto depth = static_cast<std::size_t>(
-        std::clamp(options.depth, 1, 8));
+    auto depth = static_cast<std::size_t>(std::clamp(options.depth, 1, 8));
     // Atari modes have fixed depth
-    if (amiga::is_atari(mode))
-        depth = amiga::get_mode_params(mode).bitplane_depth;
+    if (amiga::is_atari(mode)) depth = amiga::get_mode_params(mode).bitplane_depth;
     // DOS + SNES + Genesis modes: depth also fixed by the hardware buffer.
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) ||
-        amiga::is_snes(mode) || amiga::is_genesis(mode))
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) || amiga::is_snes(mode) ||
+        amiga::is_genesis(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
 
     // Dual-playfield: encode the image into PF2 only with a constrained
     // sub-depth (3 OCS / 4 AGA). The remaining planes (PF1 = foreground)
     // are zeroed and emitted as part of the final 6 / 8-plane output.
-    bool use_dpf = options.dual_playfield &&
-                   !amiga::is_ham(mode) && mode != amiga::Mode::ehb &&
-                   !amiga::is_atari(mode) && !amiga::is_vga(mode) &&
-                   !amiga::is_ega(mode) && !amiga::is_cga(mode);
+    bool use_dpf = options.dual_playfield && !amiga::is_ham(mode) && mode != amiga::Mode::ehb &&
+                   !amiga::is_atari(mode) && !amiga::is_vga(mode) && !amiga::is_ega(mode) &&
+                   !amiga::is_cga(mode);
     if (use_dpf) {
-        auto cs = (options.chipset == "aga") ? amiga::Chipset::aga
-                                             : amiga::Chipset::ocs;
+        auto cs = (options.chipset == "aga") ? amiga::Chipset::aga : amiga::Chipset::ocs;
         depth = (cs == amiga::Chipset::aga) ? 4 : 3;
     }
 
@@ -1249,26 +1212,25 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     bool tile_active = false;
     std::size_t tile_w = 0, tile_h = 0;
     if (options.tile) {
-        bool tile_mode_ok =
-            mode == amiga::Mode::lores ||
-            mode == amiga::Mode::lores_interlace ||
-            mode == amiga::Mode::hires ||
-            mode == amiga::Mode::hires_interlace ||
-            mode == amiga::Mode::ehb;
+        bool tile_mode_ok = mode == amiga::Mode::lores || mode == amiga::Mode::lores_interlace ||
+                            mode == amiga::Mode::hires || mode == amiga::Mode::hires_interlace ||
+                            mode == amiga::Mode::ehb;
         if (!tile_mode_ok) {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                "--tile is only supported on freeform indexed bitmap modes "
-                "(lores, hires, EHB; with optional --interlace and --dpf). "
-                "HAM, fixed-size, and tile-coded modes are not eligible."}};
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode,
+                      "--tile is only supported on freeform indexed bitmap modes "
+                      "(lores, hires, EHB; with optional --interlace and --dpf). "
+                      "HAM, fixed-size, and tile-coded modes are not eligible."}};
         }
         if (amiga::is_ham(mode)) {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                "--tile is not supported with HAM modes"}};
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode, "--tile is not supported with HAM modes"}};
         }
         if (options.copper || options.scap) {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                "--tile is not yet supported with sliced palette (--copper) "
-                "or strip palette (--scap). Drop those flags or drop --tile."}};
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode,
+                      "--tile is not yet supported with sliced palette (--copper) "
+                      "or strip palette (--scap). Drop those flags or drop --tile."}};
         }
         tile_active = true;
         tile_w = target_w;
@@ -1276,14 +1238,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     std::vector<bool> tmask;
-    auto image = load_and_preprocess(input_data, input_size, options,
-                                      target_w, target_h, &tmask,
-                                      prepared_image);
+    auto image = load_and_preprocess(
+        input_data, input_size, options, target_w, target_h, &tmask, prepared_image);
     if (!image) return std::unexpected{image.error()};
     bool has_transparency = !tmask.empty();
 
-    if (auto bcheck = check_best_supported(options, mode, has_transparency);
-        !bcheck) {
+    if (auto bcheck = check_best_supported(options, mode, has_transparency); !bcheck) {
         return std::unexpected{bcheck.error()};
     }
 
@@ -1293,8 +1253,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // return points below.
     if (tile_active) {
         *image = tile_replicate_3x3(*image);
-        if (has_transparency)
-            tmask = tile_replicate_mask_3x3(tmask, tile_w, tile_h);
+        if (has_transparency) tmask = tile_replicate_mask_3x3(tmask, tile_w, tile_h);
     }
 
     // Fixed-buffer modes (Atari, VGA, EGA, CGA): center the image in the full
@@ -1304,17 +1263,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto mparams = amiga::get_mode_params(mode);
     auto mode_h = mparams.screen_height;
     auto mode_w_fixed = mparams.screen_width;
-    bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
-                           amiga::is_ega(mode)   || amiga::is_cga(mode) ||
-                           amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                               amiga::is_genesis(mode);
+    bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
+                           amiga::is_cga(mode) || amiga::is_cga_text(mode) ||
+                           amiga::is_snes(mode) || amiga::is_genesis(mode);
     // cga-text accepts arbitrary multiples of 8×2 in freeform (--width
     // / --height set). Don't center-pad freeform input up to the
     // canonical 640×200 buffer — that would silently turn a 200×400
     // target back into 640×200 and the encoder would produce 80×100
     // cells instead of the user-typed 25×100.
-    bool cga_text_freeform_skip_pad =
-        amiga::is_cga_text(mode) && (options.width > 0 || options.height > 0);
+    bool cga_text_freeform_skip_pad = amiga::is_cga_text(mode) &&
+                                      (options.width > 0 || options.height > 0);
     if (mode_h > 0 && is_fixed_buffer && !cga_text_freeform_skip_pad &&
         (image->height() < mode_h || image->width() < mode_w_fixed)) {
         auto w = image->width();
@@ -1372,9 +1330,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (std::size_t x = 0; x < image->width(); ++x) {
                     auto a = (*image)[x, y * 2];
                     auto b = (*image)[x, y * 2 + 1];
-                    halved[x, y] = {(a.r + b.r) * 0.5f,
-                                    (a.g + b.g) * 0.5f,
-                                    (a.b + b.b) * 0.5f};
+                    halved[x, y] = {(a.r + b.r) * 0.5f, (a.g + b.g) * 0.5f, (a.b + b.b) * 0.5f};
                 }
             }
             *image = std::move(halved);
@@ -1383,7 +1339,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         {
             constexpr std::size_t cw = 8;
             constexpr std::size_t ch = 2;
-            std::size_t pw = ((image->width()  + cw - 1) / cw) * cw;
+            std::size_t pw = ((image->width() + cw - 1) / cw) * cw;
             std::size_t ph = ((image->height() + ch - 1) / ch) * ch;
             if (pw != image->width() || ph != image->height()) {
                 Image padded(pw, ph);
@@ -1401,38 +1357,36 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         text_pal.reserve(16);
         // All text-graphics modes use kCgaHw (see main.cpp).
         for (std::size_t i = 0; i < 16; ++i) {
-            text_pal.push_back(
-                color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
+            text_pal.push_back(color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
         }
         // Resolve the per-cell metric. `blur` and `pca` need the
         // continuous source (pre-dither would destroy the precision
         // their inner loops rely on); only `mse` benefits from a
         // pre-dithered input.
-        auto cga_metric =
-            options.cga_text_metric == "mse" ? cga_text::Metric::mse
-                                             : cga_text::Metric::blur;
+        auto cga_metric = options.cga_text_metric == "mse" ? cga_text::Metric::mse
+                                                           : cga_text::Metric::blur;
         auto cga_kernel = cga_text::parse_kernel(options.cga_text_kernel);
         auto dith_method = parse_dither(options.dither);
         Image dithered(image->width(), image->height());
-        if (cga_metric != cga_text::Metric::mse ||
-            dith_method == dither::Method::none) {
+        if (cga_metric != cga_text::Metric::mse || dith_method == dither::Method::none) {
             for (std::size_t y = 0; y < image->height(); ++y)
                 for (std::size_t x = 0; x < image->width(); ++x)
                     dithered[x, y] = (*image)[x, y];
         } else {
-            auto dith_result = dither::apply(*image, text_pal, {
-                .method = dith_method,
-                .strength = options.dither_strength,
-                .error_clamp = options.error_clamp,
-                .serpentine = true,
-            });
+            auto dith_result = dither::apply(*image,
+                                             text_pal,
+                                             {
+                                                 .method = dith_method,
+                                                 .strength = options.dither_strength,
+                                                 .error_clamp = options.error_clamp,
+                                                 .serpentine = true,
+                                             });
             for (std::size_t y = 0; y < image->height(); ++y)
                 for (std::size_t x = 0; x < image->width(); ++x)
                     dithered[x, y] = text_pal[dith_result.indices[y * image->width() + x]];
         }
-        auto res = cga_text::encode(dithered, mode, {}, text_pal, -1,
-                                    cga_metric, cga_kernel,
-                                    options.on_progress);
+        auto res = cga_text::encode(
+            dithered, mode, {}, text_pal, -1, cga_metric, cga_kernel, options.on_progress);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
         // No post-double here: result.rendered stays at hardware-pixel
@@ -1453,8 +1407,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.finalize_psnr(*image, res->total_error);
         result.raw_frame = std::move(res->data);
         result.text_scanline_offset = res->scanline_offset;
-        result.text_cell_height =
-            static_cast<std::uint8_t>(res->cell_height_scanlines);
+        result.text_cell_height = static_cast<std::uint8_t>(res->cell_height_scanlines);
         // Surface the cell grid via the genesis-cells field so the web
         // result string can show "cells: 80×100" same way the CLI's
         // Encoded line does. cols = width/8 always; rows is derived as
@@ -1499,10 +1452,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto bank = (y & 1) ? 0x2000u : 0x0000u;
             auto row_off = bank + (y >> 1) * row_bytes;
             for (std::size_t bx = 0; bx < row_bytes; ++bx) {
-                auto p0 = palette::cga_composite_pattern(
-                    dith_result.indices[y * w + bx * 2]);
-                auto p1 = palette::cga_composite_pattern(
-                    dith_result.indices[y * w + bx * 2 + 1]);
+                auto p0 = palette::cga_composite_pattern(dith_result.indices[y * w + bx * 2]);
+                auto p1 = palette::cga_composite_pattern(dith_result.indices[y * w + bx * 2 + 1]);
                 raw[row_off + bx] = static_cast<std::uint8_t>((p0 << 4) | p1);
             }
         }
@@ -1540,13 +1491,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // VGA path silently ignored reserves and the rendered output
         // depended on the reserve color.
         auto reserves_in_pal_vga = palette_locks::validate_reserves(
-            options.reserves, options.locks, max_colors,
-            options.lock_color0);
-        if (!reserves_in_pal_vga)
-            return std::unexpected{reserves_in_pal_vga.error()};
+            options.reserves, options.locks, max_colors, options.lock_color0);
+        if (!reserves_in_pal_vga) return std::unexpected{reserves_in_pal_vga.error()};
         auto qc_vga = palette_locks::quant_counts_for_assemble(
-            max_colors, options.locks, *reserves_in_pal_vga,
-            options.lock_color0);
+            max_colors, options.locks, *reserves_in_pal_vga, options.lock_color0);
         // Match CLI's std-lores resolver: gpu-restart on Apple Metal,
         // median-cut otherwise. The Metal kernel's atomic-float
         // accumulation was the historical non-determinism source —
@@ -1554,19 +1502,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // GPU-argmin + CPU-sum so it's reproducible and matches the
         // CLI bit-for-bit.
         auto qfn = [&](std::size_t k) -> Result<Palette> {
-            auto algo = quantize::resolve_algorithm(mode, chipset,
-                                                     options.quantizer);
-            return quantize::quantize(*image, k, algo,
-                                       options.palette_diversity);
+            auto algo = quantize::resolve_algorithm(mode, chipset, options.quantizer);
+            return quantize::quantize(*image, k, algo, options.palette_diversity);
         };
         auto qr = palette_locks::two_pass_quantize(
             qfn, qc_vga.qcount, qc_vga.kfallback, options.lock_color0);
         if (!qr) return std::unexpected{qr.error()};
         auto assembled = palette_locks::assemble_with_reserves(
-            *qr, options.locks, options.reserves,
-            max_colors, options.lock_color0, chipset, mode);
+            *qr, options.locks, options.reserves, max_colors, options.lock_color0, chipset, mode);
         Palette pal = std::move(assembled.palette);
-        for (auto& c : pal.colors) c = palette::quantize_to_vga(c);
+        for (auto& c : pal.colors)
+            c = palette::quantize_to_vga(c);
         dither::Settings dith;
         dith.method = parse_dither(options.dither);
         dith.strength = options.dither_strength;
@@ -1579,9 +1525,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto i = static_cast<std::size_t>(r.index);
             if (r.index >= 0 && i < max_colors) reserved_mask_vga[i] = true;
         }
-        bool any_excluded_vga = std::any_of(reserved_mask_vga.begin(),
-                                            reserved_mask_vga.end(),
-                                            [](bool b) { return b; });
+        bool any_excluded_vga = std::any_of(
+            reserved_mask_vga.begin(), reserved_mask_vga.end(), [](bool b) { return b; });
         dither::DitherResult dith_result;
         if (any_excluded_vga) {
             std::vector<Color3f> cand;
@@ -1594,7 +1539,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 cand_to_full.push_back(static_cast<std::uint8_t>(i));
             }
             dith_result = dither::apply(*image, cand, dith);
-            for (auto& idx : dith_result.indices) idx = cand_to_full[idx];
+            for (auto& idx : dith_result.indices)
+                idx = cand_to_full[idx];
         } else {
             dith_result = dither::apply(*image, pal.colors, dith);
         }
@@ -1663,11 +1609,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::size_t kCW = cparams.screen_width;
         std::size_t kCH = cparams.screen_height;
         if (amiga::is_c64_charset(mode)) {
-            std::size_t tw_step =
-                (mode == amiga::Mode::c64_charset_multicolor) ? 4 : 8;
+            std::size_t tw_step = (mode == amiga::Mode::c64_charset_multicolor) ? 4 : 8;
             std::size_t th_step = 8;
-            if (image->width()  != 0 && (image->width()  % tw_step) == 0
-                && image->height() != 0 && (image->height() % th_step) == 0) {
+            if (image->width() != 0 && (image->width() % tw_step) == 0 && image->height() != 0 &&
+                (image->height() % th_step) == 0) {
                 kCW = image->width();
                 kCH = image->height();
             }
@@ -1687,13 +1632,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::vector<bool> new_mask(kCW * kCH, true);
                 for (std::size_t y = 0; y < ch; ++y)
                     for (std::size_t x = 0; x < cw; ++x)
-                        new_mask[(oy + y) * kCW + (ox + x)] =
-                            tmask[y * old_w + x];
+                        new_mask[(oy + y) * kCW + (ox + x)] = tmask[y * old_w + x];
                 tmask = std::move(new_mask);
             }
         }
         auto pal_choice = c64::parse_palette(options.c64_palette);
-        auto metric     = c64::parse_metric(options.c64_metric);
+        auto metric = c64::parse_metric(options.c64_metric);
         // match_range: stretch the source's OKLab extent to span the
         // chosen VIC-II palette's extent. Same shape as the EHB /
         // standard-mode preprocessor — pulls highlights / shadows
@@ -1707,10 +1651,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             preprocess::match_palette_range(*image, c64_pal);
         }
         dither::Settings dith;
-        dith.method      = parse_dither(options.dither);
-        dith.strength    = options.dither_strength;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
-        dith.serpentine  = true;
+        dith.serpentine = true;
         Result<c64::EncodeResult> enc = [&] {
             switch (mode) {
             case amiga::Mode::c64_hires:
@@ -1720,22 +1664,23 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             case amiga::Mode::c64_afli:
                 return c64::encode_afli(*image, pal_choice, dith, metric);
             case amiga::Mode::c64_petscii:
-                return c64::encode_petscii(*image, pal_choice, dith, metric,
-                                            options.c64_petscii_graphics_only,
-                                            options.on_progress);
+                return c64::encode_petscii(*image,
+                                           pal_choice,
+                                           dith,
+                                           metric,
+                                           options.c64_petscii_graphics_only,
+                                           options.on_progress);
             case amiga::Mode::c64_charset_hires: {
-                std::size_t budget = options.tile_budget == 0
-                    ? std::size_t{256} : options.tile_budget;
+                std::size_t budget = options.tile_budget == 0 ? std::size_t{256}
+                                                              : options.tile_budget;
                 return c64::encode_charset_hires(
-                    *image, pal_choice, dith, metric,
-                    budget, options.tile_reserve);
+                    *image, pal_choice, dith, metric, budget, options.tile_reserve);
             }
             case amiga::Mode::c64_charset_multicolor: {
-                std::size_t budget = options.tile_budget == 0
-                    ? std::size_t{256} : options.tile_budget;
+                std::size_t budget = options.tile_budget == 0 ? std::size_t{256}
+                                                              : options.tile_budget;
                 return c64::encode_charset_multicolor(
-                    *image, pal_choice, dith, metric,
-                    budget, options.tile_reserve);
+                    *image, pal_choice, dith, metric, budget, options.tile_reserve);
             }
             default:
                 return c64::encode_multicolor(*image, pal_choice, dith, metric);
@@ -1765,16 +1710,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto ren_px = result.rendered.pixels();
             std::size_t n = std::min(src_px.size(), ren_px.size());
             for (std::size_t i = 0; i < n; ++i)
-                te_c64 += color_space::perceptual_distance_sq(
-                    src_px[i], ren_px[i]);
+                te_c64 += color_space::perceptual_distance_sq(src_px[i], ren_px[i]);
         }
         result.finalize_psnr(*image, te_c64);
         // Pack bitmap + screen + color RAM into raw_frame for downstream
         // writers. Order: bitmap + screen + color. Sizes vary by mode
         // (see c64_prg.cpp for the per-mode split).
         std::vector<std::uint8_t> raw;
-        raw.reserve(enc->bitmap.size() + enc->screen_ram.size() +
-                    enc->color_ram.size());
+        raw.reserve(enc->bitmap.size() + enc->screen_ram.size() + enc->color_ram.size());
         raw.insert(raw.end(), enc->bitmap.begin(), enc->bitmap.end());
         raw.insert(raw.end(), enc->screen_ram.begin(), enc->screen_ram.end());
         raw.insert(raw.end(), enc->color_ram.begin(), enc->color_ram.end());
@@ -1815,8 +1758,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         bool direct_color = (mode == amiga::Mode::snes_mode7_direct);
         auto enc = snes_io::encode_snes_mode7(
-            *image, direct_color, dith, options.palette_diversity,
-            options.on_progress);
+            *image, direct_color, dith, options.palette_diversity, options.on_progress);
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;
@@ -1866,33 +1808,27 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // 2. Cluster tiles → 4 palette lines (+ per-tile shadow decision
         //    for S/H modes).
         bool sh_mode = amiga::is_genesis_sh(mode);
-        auto gres = sh_mode
-            ? genesis::cluster_tiles_into_palettes_sh(
-                  snapped, static_cast<float>(options.palette_diversity))
-            : genesis::cluster_tiles_into_palettes(
-                  snapped, static_cast<float>(options.palette_diversity));
+        auto gres = sh_mode ? genesis::cluster_tiles_into_palettes_sh(
+                                  snapped, static_cast<float>(options.palette_diversity))
+                            : genesis::cluster_tiles_into_palettes(
+                                  snapped, static_cast<float>(options.palette_diversity));
         auto tiles_x = (w + genesis::kTileSide - 1) / genesis::kTileSide;
 
         // 3. Pre-convert each palette line to OKLab so the picker is cheap.
         //    For S/H modes also pre-compute the shadowed-palette views so
         //    shadow tiles' picker scores against the correct effective
         //    color set.
-        std::array<std::vector<color_space::OKLab>, genesis::kPaletteCount>
-            palette_lab, shadow_lab;
-        std::array<std::vector<Color3f>, genesis::kPaletteCount>
-            shadow_lines;
+        std::array<std::vector<color_space::OKLab>, genesis::kPaletteCount> palette_lab, shadow_lab;
+        std::array<std::vector<Color3f>, genesis::kPaletteCount> shadow_lines;
         for (std::size_t k = 0; k < genesis::kPaletteCount; ++k) {
             palette_lab[k].resize(genesis::kColorsPerPalette);
             for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i)
-                palette_lab[k][i] = color_space::linear_to_oklab(
-                    gres.palette_lines[k][i]);
+                palette_lab[k][i] = color_space::linear_to_oklab(gres.palette_lines[k][i]);
             if (sh_mode) {
-                shadow_lines[k] = genesis::shadow_palette_line(
-                    gres.palette_lines[k]);
+                shadow_lines[k] = genesis::shadow_palette_line(gres.palette_lines[k]);
                 shadow_lab[k].resize(genesis::kColorsPerPalette);
                 for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i)
-                    shadow_lab[k][i] = color_space::linear_to_oklab(
-                        shadow_lines[k][i]);
+                    shadow_lab[k][i] = color_space::linear_to_oklab(shadow_lines[k][i]);
             }
         }
 
@@ -1909,8 +1845,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::vector<std::uint8_t>& pixel_index = gres.pixel_index;
         const std::vector<std::uint8_t>& tile_pal = gres.tile_palette;
         const std::vector<std::uint8_t>& tile_shadow = gres.tile_shadow;
-        constexpr std::size_t kTS = genesis::kTileSide;       // 8
-        constexpr std::size_t k3T = 3 * kTS;                  // 24
+        constexpr std::size_t kTS = genesis::kTileSide;  // 8
+        constexpr std::size_t k3T = 3 * kTS;             // 24
         Image block(k3T, k3T);
         std::vector<std::uint8_t> block_idx(k3T * k3T, 0);
         std::vector<color_space::OKLab> block_chosen(k3T * k3T);
@@ -1922,17 +1858,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (std::size_t by = 0; by < 3; ++by) {
                     for (std::size_t bx = 0; bx < 3; ++bx) {
                         for (std::size_t ly = 0; ly < kTS; ++ly) {
-                            std::size_t sy_local =
-                                (by == 1) ? ly : (kTS - 1 - ly);
+                            std::size_t sy_local = (by == 1) ? ly : (kTS - 1 - ly);
                             for (std::size_t lx = 0; lx < kTS; ++lx) {
-                                std::size_t sx_local =
-                                    (bx == 1) ? lx : (kTS - 1 - lx);
-                                std::size_t sx = std::min(
-                                    tx * kTS + sx_local, w - 1);
-                                std::size_t sy = std::min(
-                                    ty * kTS + sy_local, h - 1);
-                                block[bx * kTS + lx, by * kTS + ly] =
-                                    (*image)[sx, sy];
+                                std::size_t sx_local = (bx == 1) ? lx : (kTS - 1 - lx);
+                                std::size_t sx = std::min(tx * kTS + sx_local, w - 1);
+                                std::size_t sy = std::min(ty * kTS + sy_local, h - 1);
+                                block[bx * kTS + lx, by * kTS + ly] = (*image)[sx, sy];
                             }
                         }
                     }
@@ -1940,20 +1871,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::size_t cell = ty * tiles_x + tx;
                 std::uint8_t pal = tile_pal[cell];
                 bool shadowed = sh_mode && tile_shadow[cell] != 0;
-                auto& pal_lab_ref = shadowed ? shadow_lab[pal]
-                                              : palette_lab[pal];
-                std::span<const color_space::OKLab> pl_span(pal_lab_ref.data(),
-                                                             pal_lab_ref.size());
+                auto& pal_lab_ref = shadowed ? shadow_lab[pal] : palette_lab[pal];
+                std::span<const color_space::OKLab> pl_span(pal_lab_ref.data(), pal_lab_ref.size());
                 std::fill(block_idx.begin(), block_idx.end(), std::uint8_t{0});
                 te += dither::diffuse_raw_buffer(
-                    block, dith,
+                    block,
+                    dith,
                     [&](const color_space::OKLab& target,
-                        std::size_t bx, std::size_t by) -> dither::PickResult {
+                        std::size_t bx,
+                        std::size_t by) -> dither::PickResult {
                         std::size_t k = 1;
                         color_space::OKLab chosen{};
-                        float thr = dither::pick_palette_index_with_ostro(
-                            dith.method, target, pl_span, bx, by,
-                            dith.strength, /*k_min=*/1, k, chosen);
+                        float thr = dither::pick_palette_index_with_ostro(dith.method,
+                                                                          target,
+                                                                          pl_span,
+                                                                          bx,
+                                                                          by,
+                                                                          dith.strength,
+                                                                          /*k_min=*/1,
+                                                                          k,
+                                                                          chosen);
                         std::size_t bi = by * k3T + bx;
                         block_idx[bi] = static_cast<std::uint8_t>(k);
                         block_chosen[bi] = chosen;
@@ -1968,9 +1905,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         if (x >= w || y >= h) continue;
                         std::uint8_t k = block_idx[bi];
                         pixel_index[y * w + x] = k;
-                        rendered[x, y] = shadowed
-                            ? shadow_lines[pal][k]
-                            : gres.palette_lines[pal][k];
+                        rendered[x, y] = shadowed ? shadow_lines[pal][k]
+                                                  : gres.palette_lines[pal][k];
                     }
                 }
             }
@@ -1983,20 +1919,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         //    same pixel-index pattern share VRAM bytes; per-cell palette
         //    + flips live in the tilemap. Cuts VRAM by ~30-70% on title
         //    art with repeated regions (skies, gradients, decorations).
-        auto dedup = genesis::dedup_tiles(
-            gres.pixel_index, gres.tile_palette, w, h);
+        auto dedup = genesis::dedup_tiles(gres.pixel_index, gres.tile_palette, w, h);
         auto total_cells = tiles_x * tiles_y;
 
         // Build the three byte streams: tile bytes, tilemap cells (u16),
         // palette CRAM words (u16). The single .bin stream concatenates
         // all three; the SGDK C-header generator wants them separately.
-        std::vector<std::uint8_t>  tile_bytes;
+        std::vector<std::uint8_t> tile_bytes;
         std::vector<std::uint16_t> tilemap_cells;
         std::vector<std::uint16_t> palette_words;
         tile_bytes.reserve(dedup.tiles.size() * 32);
         tilemap_cells.reserve(total_cells);
-        palette_words.reserve(genesis::kPaletteCount *
-                              genesis::kColorsPerPalette);
+        palette_words.reserve(genesis::kPaletteCount * genesis::kColorsPerPalette);
         for (auto& bytes : dedup.tiles)
             tile_bytes.insert(tile_bytes.end(), bytes.begin(), bytes.end());
         // Tilemap encoding: for S/H modes the priority bit doubles as
@@ -2013,18 +1947,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 priority = (tile_shadow[i] == 0);
             }
             tilemap_cells.push_back(genesis::encode_tilemap_cell(
-                cell.tile_index, cell.palette_line,
-                cell.h_flip, cell.v_flip, priority));
+                cell.tile_index, cell.palette_line, cell.h_flip, cell.v_flip, priority));
         }
         for (std::size_t k = 0; k < genesis::kPaletteCount; ++k) {
             for (std::size_t i = 0; i < genesis::kColorsPerPalette; ++i) {
-                palette_words.push_back(
-                    console_color::to_bgr333_word(gres.palette_lines[k][i]));
+                palette_words.push_back(console_color::to_bgr333_word(gres.palette_lines[k][i]));
             }
         }
         std::vector<std::uint8_t> raw;
-        raw.reserve(tile_bytes.size() + tilemap_cells.size() * 2 +
-                    palette_words.size() * 2);
+        raw.reserve(tile_bytes.size() + tilemap_cells.size() * 2 + palette_words.size() * 2);
         raw.insert(raw.end(), tile_bytes.begin(), tile_bytes.end());
         for (auto w16 : tilemap_cells) {
             raw.push_back(static_cast<std::uint8_t>(w16 >> 8));
@@ -2038,8 +1969,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Flatten the palette lines into a single 64-entry vector for the
         // result — index = pal*16 + entry.
         std::vector<Color3f> flat_palette;
-        flat_palette.reserve(genesis::kPaletteCount *
-                              genesis::kColorsPerPalette);
+        flat_palette.reserve(genesis::kPaletteCount * genesis::kColorsPerPalette);
         for (std::size_t k = 0; k < genesis::kPaletteCount; ++k)
             for (auto& c : gres.palette_lines[k])
                 flat_palette.push_back(c);
@@ -2080,8 +2010,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
 
         ham::HamOptions ham_opts;
-        ham_opts.beam_width = static_cast<std::size_t>(
-            std::clamp(options.ham_beam, 1, 256));
+        ham_opts.beam_width = static_cast<std::size_t>(std::clamp(options.ham_beam, 1, 256));
 
         // Wire dither settings into HAM options. DBS doesn't apply
         // (HAM uses ops, not palette indices) — silently fall back to
@@ -2094,18 +2023,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         ham_opts.error_clamp = options.error_clamp;
         ham_opts.palette_diversity = options.palette_diversity;
         ham_opts.quantizer = options.quantizer;
-        ham_opts.triple_beam = static_cast<std::size_t>(
-            std::clamp(options.ham_triple, 0, 256));
+        ham_opts.triple_beam = static_cast<std::size_t>(std::clamp(options.ham_triple, 0, 256));
         ham_opts.greedy = options.ham_fast;
-        ham_opts.metric = (options.ham_metric == "oklab2")
-            ? ham::HamMetric::oklab2 : ham::HamMetric::srgb_mse;
+        ham_opts.metric = (options.ham_metric == "oklab2") ? ham::HamMetric::oklab2
+                                                           : ham::HamMetric::srgb_mse;
         // best only applies to HAM6 and HAM8 — HAM4/5/7 are skipped
         // because their tiny base palettes (4/8/32 colors) don't benefit
         // from the refined planner enough to justify the cost.
         auto ham_params = amiga::get_mode_params(mode);
-        bool ham_eligible_for_best =
-            (ham_params.bitplane_depth == 6 ||
-             ham_params.bitplane_depth == 8);
+        bool ham_eligible_for_best = (ham_params.bitplane_depth == 6 ||
+                                      ham_params.bitplane_depth == 8);
         ham_opts.best = options.best && ham_eligible_for_best;
         ham_opts.on_progress = options.on_progress;
         ham_opts.skip_initial_swap_rows = options.interlace ? 2 : 0;
@@ -2129,9 +2056,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         Result<ham::HamResult> ham_result;
         std::optional<Image> swept_preview;
         if (options.copper) {
-            ham_result = ham::encode_ham_copper(*image, mode, chipset, ham_opts,
-                                                  compound_hires,
-                                                  static_cast<std::size_t>(options.copper_changes));
+            ham_result = ham::encode_ham_copper(*image,
+                                                mode,
+                                                chipset,
+                                                ham_opts,
+                                                compound_hires,
+                                                static_cast<std::size_t>(options.copper_changes));
         } else if (options.best && ham_eligible_for_best) {
             // Plain HAM6/HAM8 + --best: same multi-restart shape as sliced /
             // strips. Each trial encodes a jittered source under different
@@ -2148,9 +2078,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             dith.method = parse_dither(options.dither);
             dith.strength = options.dither_strength;
             dith.error_clamp = options.error_clamp;
-            auto encode_once = [&](const Image& img,
-                                   const dither::Settings& d,
-                                   int div) -> Result<HamTrial> {
+            auto encode_once =
+                [&](const Image& img, const dither::Settings& d, int div) -> Result<HamTrial> {
                 auto trial_opts = ham_opts;
                 trial_opts.dither_strength = d.strength;
                 trial_opts.error_clamp = d.error_clamp;
@@ -2163,23 +2092,28 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 trial_opts.on_progress = nullptr;
                 auto r = ham::encode_ham(img, mode, chipset, trial_opts);
                 if (!r) return std::unexpected{r.error()};
-                auto p = pipeline::render_preview(
-                    r->planes, r->base_palette, /*is_ham=*/true,
-                    options.interlace, chipset, nullptr);
+                auto p = pipeline::render_preview(r->planes,
+                                                  r->base_palette,
+                                                  /*is_ham=*/true,
+                                                  options.interlace,
+                                                  chipset,
+                                                  nullptr);
                 if (!p) return std::unexpected{p.error()};
                 return HamTrial{*std::move(r), *std::move(p)};
             };
             float amp = (ham_params.bitplane_depth == 8) ? 0.4f : 1.0f;
             auto winner = pipeline::best_sweep<HamTrial>(
-                *image, dith, options.palette_diversity,
+                *image,
+                dith,
+                options.palette_diversity,
                 /*jitter_count=*/8,
                 encode_once,
                 [](const HamTrial& t) -> const Image& { return t.rendered; },
-                options.on_progress, amp);
+                options.on_progress,
+                amp);
             if (!winner) {
-                return std::unexpected{Error{
-                    ErrorCode::unsupported_mode,
-                    "HAM --best sweep produced no result"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode, "HAM --best sweep produced no result"}};
             }
             ham_result = std::move(winner->result);
             swept_preview = std::move(winner->rendered);
@@ -2194,10 +2128,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             preview = std::move(*swept_preview);
         } else {
             preview = pipeline::render_preview(
-                ham_result->planes, ham_result->base_palette,
-                /*is_ham=*/true, options.interlace, chipset,
+                ham_result->planes,
+                ham_result->base_palette,
+                /*is_ham=*/true,
+                options.interlace,
+                chipset,
                 (options.copper && !ham_result->scanline_palettes.empty())
-                    ? &ham_result->scanline_palettes : nullptr);
+                    ? &ham_result->scanline_palettes
+                    : nullptr);
         }
         if (!preview) return std::unexpected{preview.error()};
 
@@ -2216,10 +2154,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.changes_per_line = ham_result->changes_per_line;
             // Compute average actual changes per line
             std::size_t total_ch = 0;
-            for (auto& ch : result.scanline_changes) total_ch += ch.size();
+            for (auto& ch : result.scanline_changes)
+                total_ch += ch.size();
             auto h = image->height();
-            result.copper_changes = h > 0
-                ? static_cast<float>(total_ch) / static_cast<float>(h) : 0.0f;
+            result.copper_changes = h > 0 ? static_cast<float>(total_ch) / static_cast<float>(h)
+                                          : 0.0f;
             // HAM base palette is 2^(depth-2) colors; >32 means bank-switching
             auto ham_base = std::size_t{1} << (depth - 2);
             bool ham_aga_banks = is_aga && ham_base > 32;
@@ -2281,8 +2220,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                    const dither::Settings& d,
                                    int diversity,
                                    bool beam_on,
-                                   std::function<void(float, std::string_view)>
-                                       inner_progress = {}) -> Result<EhbSlicedTrial> {
+                                   std::function<void(float, std::string_view)> inner_progress = {})
+                -> Result<EhbSlicedTrial> {
                 // Pre-build the global base palette ourselves with
                 // PNN + pair-aware refinement (and 1-opt on --best),
                 // then hand it to encode_copper as the line-0 seed.
@@ -2292,9 +2231,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 Palette seed_pal;
                 {
                     auto qfn = [&](std::size_t k) -> Result<Palette> {
-                        auto q = quantize::quantize(img, k,
-                                                    quantize::Algorithm::pnn,
-                                                    diversity);
+                        auto q = quantize::quantize(img, k, quantize::Algorithm::pnn, diversity);
                         if (!q) return std::unexpected{q.error()};
                         Palette p = std::move(*q);
                         snap_to_chipset(p, chipset, mode);
@@ -2307,14 +2244,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     // overwrites darks/mids and the dither's candidate
                     // set ends up bright-only.
                     auto qc = palette_locks::quant_counts_for_assemble(
-                        32, options.locks, options.reserves.size(),
-                        options.lock_color0);
+                        32, options.locks, options.reserves.size(), options.lock_color0);
                     auto sr = palette_locks::two_pass_quantize(
                         qfn, qc.qcount, qc.kfallback, options.lock_color0);
                     if (!sr) return std::unexpected{sr.error()};
-                    auto assembled = palette_locks::assemble_with_reserves(
-                        *sr, options.locks, options.reserves,
-                        32, options.lock_color0, chipset, mode);
+                    auto assembled = palette_locks::assemble_with_reserves(*sr,
+                                                                           options.locks,
+                                                                           options.reserves,
+                                                                           32,
+                                                                           options.lock_color0,
+                                                                           chipset,
+                                                                           mode);
                     seed_pal.colors = std::move(assembled.palette.colors);
                     seed_pal.name = sr->name;
                     // Lock mask: lock_zero + reserves are held fixed during
@@ -2325,17 +2265,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     if (options.lock_color0) ehb_seed_locked[0] = true;
                     for (auto& r : options.reserves) {
                         auto i = static_cast<std::size_t>(r.index);
-                        if (r.index >= 0 && i < ehb_seed_locked.size())
-                            ehb_seed_locked[i] = true;
+                        if (r.index >= 0 && i < ehb_seed_locked.size()) ehb_seed_locked[i] = true;
                     }
-                    palette::refine_ehb_base_palette(
-                        std::span<Color3f>(seed_pal.colors.data(), 32),
-                        img.pixels(),
-                        /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
-                        /*max_iters=*/8,
-                        std::span<const bool>(ehb_seed_locked));
-                    if (options.lock_color0)
-                        seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+                    palette::refine_ehb_base_palette(std::span<Color3f>(seed_pal.colors.data(), 32),
+                                                     img.pixels(),
+                                                     /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                                                     /*max_iters=*/8,
+                                                     std::span<const bool>(ehb_seed_locked));
+                    if (options.lock_color0) seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                     if (options.best) {
                         // Silence per-trial progress: best_sweep parallelises
                         // trials, and N workers all firing options.on_progress
@@ -2346,13 +2283,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             img.pixels(),
                             /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
                             /*max_passes=*/2,
-                            [](std::size_t n,
-                               std::function<void(std::size_t)> f) {
+                            [](std::size_t n, std::function<void(std::size_t)> f) {
                                 pipeline::parallel_for(n, std::move(f));
                             },
                             /*on_progress=*/{});
-                        if (options.lock_color0)
-                            seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+                        if (options.lock_color0) seed_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                     }
                 }
                 // Forward locks + reserves so encode_copper enforces
@@ -2360,31 +2295,35 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // this the seed_pal pins the colors at line 0 only;
                 // copper's MOVE planner is free to swap them out on
                 // subsequent lines.
-                std::vector<std::pair<std::size_t, Color3f>>
-                    ehb_sliced_locked;
-                ehb_sliced_locked.reserve(options.locks.size()
-                    + options.reserves.size());
+                std::vector<std::pair<std::size_t, Color3f>> ehb_sliced_locked;
+                ehb_sliced_locked.reserve(options.locks.size() + options.reserves.size());
                 std::vector<std::size_t> ehb_cap_excluded;
                 for (auto& l : options.locks) {
                     ehb_sliced_locked.emplace_back(l.index,
-                        palette_locks::to_color(l, chipset, mode));
+                                                   palette_locks::to_color(l, chipset, mode));
                 }
                 for (auto& r : options.reserves) {
                     auto i = static_cast<std::size_t>(r.index);
                     if (r.index >= 0 && i < 32) {
-                        ehb_sliced_locked.emplace_back(i,
+                        ehb_sliced_locked.emplace_back(
+                            i,
                             palette_locks::to_color(
-                                LockSpec{r.index, r.r, r.g, r.b},
-                                chipset, mode));
+                                LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
                         ehb_cap_excluded.push_back(i);
                     }
                 }
                 auto cr = copper::encode_copper(
-                    img, 5, d, chipset,
+                    img,
+                    5,
+                    d,
+                    chipset,
                     static_cast<std::size_t>(options.copper_changes),
-                    &seed_pal.colors, options.lock_color0,
-                    ehb_sliced_locked, diversity,
-                    skip_initial, options.interlace,
+                    &seed_pal.colors,
+                    options.lock_color0,
+                    ehb_sliced_locked,
+                    diversity,
+                    skip_initial,
+                    options.interlace,
                     /*is_ehb=*/true,
                     std::move(inner_progress),
                     // Forward the sentinel when the CLI flag wasn't set
@@ -2392,8 +2331,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     options.sliced_spread_radius >= 0
                         ? static_cast<std::size_t>(options.sliced_spread_radius)
                         : std::numeric_limits<std::size_t>::max(),
-                    options.sliced_spread_decay >= 0.0f
-                        ? options.sliced_spread_decay : -1.0f,
+                    options.sliced_spread_decay >= 0.0f ? options.sliced_spread_decay : -1.0f,
                     options.sliced_vertical_dither,
                     ehb_cap_excluded,
                     /*quantizer_override=*/std::nullopt,
@@ -2429,12 +2367,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::array<bool, 32> ehb_per_row_locked{};
                 if (options.lock_color0) ehb_per_row_locked[0] = true;
                 for (auto i : ehb_cap_excluded) {
-                    if (i < ehb_per_row_locked.size())
-                        ehb_per_row_locked[i] = true;
+                    if (i < ehb_per_row_locked.size()) ehb_per_row_locked[i] = true;
                 }
                 for (std::size_t y = 0; y < h; ++y) {
                     auto& base32 = cr->scanline_palettes[y];
-                    while (base32.size() < 32) base32.emplace_back(0.0f, 0.0f, 0.0f);
+                    while (base32.size() < 32)
+                        base32.emplace_back(0.0f, 0.0f, 0.0f);
                     // Pair-aware refinement on the row's base palette
                     // using only that row's pixels — same idea as plain
                     // EHB but per-line, so each scanline's 32 base
@@ -2443,13 +2381,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     // that row.
                     palette::refine_ehb_base_palette(
                         std::span<Color3f>(base32.data(), 32),
-                        std::span<const Color3f>(
-                            img.pixels().data() + y * w, w),
+                        std::span<const Color3f>(img.pixels().data() + y * w, w),
                         /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
                         /*max_iters=*/4,
                         std::span<const bool>(ehb_per_row_locked));
-                    if (options.lock_color0)
-                        base32[0] = Color3f{0.0f, 0.0f, 0.0f};
+                    if (options.lock_color0) base32[0] = Color3f{0.0f, 0.0f, 0.0f};
                     Palette bp;
                     bp.colors.assign(base32.begin(), base32.end());
                     auto ehb64 = palette::make_ehb_palette(bp.colors);
@@ -2461,8 +2397,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     if (ehb_cap_excluded.empty()) {
                         pal_lab_per_row[y].resize(ehb64.colors.size());
                         for (std::size_t i = 0; i < ehb64.colors.size(); ++i)
-                            pal_lab_per_row[y][i] =
-                                color_space::linear_to_oklab(ehb64.colors[i]);
+                            pal_lab_per_row[y][i] = color_space::linear_to_oklab(ehb64.colors[i]);
                     } else {
                         pal_lab_per_row[y].reserve(64);
                         cand_to_full_per_row[y].reserve(64);
@@ -2470,59 +2405,55 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             if (ehb_blocked[i]) continue;
                             pal_lab_per_row[y].push_back(
                                 color_space::linear_to_oklab(ehb64.colors[i]));
-                            cand_to_full_per_row[y].push_back(
-                                static_cast<std::uint8_t>(i));
+                            cand_to_full_per_row[y].push_back(static_cast<std::uint8_t>(i));
                         }
                     }
                 }
 
                 float total_err = dither::diffuse_raw_buffer(
-                    img, d,
+                    img,
+                    d,
                     [&](const color_space::OKLab& target,
-                        std::size_t x, std::size_t y) -> dither::PickResult {
+                        std::size_t x,
+                        std::size_t y) -> dither::PickResult {
                         auto& pal_lab = pal_lab_per_row[y];
                         std::size_t k = 0;
                         color_space::OKLab chosen{};
                         float thr = dither::pick_palette_index_with_ostro(
-                            d.method, target, pal_lab, x, y,
-                            d.strength, /*k_min=*/0, k, chosen);
+                            d.method, target, pal_lab, x, y, d.strength, /*k_min=*/0, k, chosen);
                         all_indices[y * w + x] = ehb_cap_excluded.empty()
-                            ? static_cast<std::uint8_t>(k)
-                            : cand_to_full_per_row[y][k];
+                                                     ? static_cast<std::uint8_t>(k)
+                                                     : cand_to_full_per_row[y][k];
                         return {chosen, thr};
                     });
 
                 if (d.method == dither::Method::dbs) {
                     if (ehb_cap_excluded.empty()) {
-                        dither::apply_dbs_post_pass(
-                            img, all_indices,
-                            [&](std::size_t /*x*/, std::size_t y)
-                                -> std::span<const color_space::OKLab> {
-                                return pal_lab_per_row[y];
-                            });
+                        dither::apply_dbs_post_pass(img,
+                                                    all_indices,
+                                                    [&](std::size_t /*x*/, std::size_t y)
+                                                        -> std::span<const color_space::OKLab> {
+                                                        return pal_lab_per_row[y];
+                                                    });
                     } else {
-                        std::vector<std::vector<std::uint8_t>>
-                            full_to_cand_per_row(h);
+                        std::vector<std::vector<std::uint8_t>> full_to_cand_per_row(h);
                         for (std::size_t y = 0; y < h; ++y) {
                             full_to_cand_per_row[y].assign(64, 255);
                             auto& cand = cand_to_full_per_row[y];
                             for (std::size_t k = 0; k < cand.size(); ++k)
-                                full_to_cand_per_row[y][cand[k]] =
-                                    static_cast<std::uint8_t>(k);
+                                full_to_cand_per_row[y][cand[k]] = static_cast<std::uint8_t>(k);
                         }
                         std::vector<std::uint8_t> cand_indices(all_indices.size());
                         for (std::size_t i = 0; i < all_indices.size(); ++i)
-                            cand_indices[i] =
-                                full_to_cand_per_row[i / w][all_indices[i]];
-                        dither::apply_dbs_post_pass(
-                            img, cand_indices,
-                            [&](std::size_t /*x*/, std::size_t y)
-                                -> std::span<const color_space::OKLab> {
-                                return pal_lab_per_row[y];
-                            });
+                            cand_indices[i] = full_to_cand_per_row[i / w][all_indices[i]];
+                        dither::apply_dbs_post_pass(img,
+                                                    cand_indices,
+                                                    [&](std::size_t /*x*/, std::size_t y)
+                                                        -> std::span<const color_space::OKLab> {
+                                                        return pal_lab_per_row[y];
+                                                    });
                         for (std::size_t i = 0; i < cand_indices.size(); ++i)
-                            all_indices[i] =
-                                cand_to_full_per_row[i / w][cand_indices[i]];
+                            all_indices[i] = cand_to_full_per_row[i / w][cand_indices[i]];
                     }
                 }
 
@@ -2542,8 +2473,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     auto ehb64 = palette::make_ehb_palette(bp.colors);
                     for (std::size_t x = 0; x < w; ++x) {
                         auto idx = all_indices[y * w + x];
-                        if (idx < ehb64.colors.size())
-                            rendered[x, y] = ehb64.colors[idx];
+                        if (idx < ehb64.colors.size()) rendered[x, y] = ehb64.colors[idx];
                     }
                 }
 
@@ -2568,26 +2498,27 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 int sweep_idx = 0;
                 for (bool beam_on : {false, true}) {
                     auto sweep_winner = pipeline::best_sweep<EhbSlicedTrial>(
-                        *image, dith, options.palette_diversity,
+                        *image,
+                        dith,
+                        options.palette_diversity,
                         /*jitter_count=*/8,
                         [&](const Image& jittered_in,
-                            const dither::Settings& d, int div)
-                                -> Result<EhbSlicedTrial> {
+                            const dither::Settings& d,
+                            int div) -> Result<EhbSlicedTrial> {
                             return encode_once(jittered_in, d, div, beam_on);
                         },
-                        [](const EhbSlicedTrial& t) -> const Image& {
-                            return t.rendered;
-                        },
+                        [](const EhbSlicedTrial& t) -> const Image& { return t.rendered; },
                         [&](float p, std::string_view s) {
                             if (s == "done" && sweep_idx == 0) return;
-                            if (options.on_progress) options.on_progress(
-                                (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                            if (options.on_progress)
+                                options.on_progress((static_cast<float>(sweep_idx) + p) * 0.5f, s);
                         },
                         /*jitter_amplitude=*/1.0f);
                     if (!sweep_winner.has_value()) continue;
-                    float s2 = ssimulacra2::compute(
-                        image->pixels(), sweep_winner->rendered.pixels(),
-                        image->width(), image->height());
+                    float s2 = ssimulacra2::compute(image->pixels(),
+                                                    sweep_winner->rendered.pixels(),
+                                                    image->width(),
+                                                    image->height());
                     if (s2 > best_score) {
                         best_score = s2;
                         winner = std::move(sweep_winner);
@@ -2596,7 +2527,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 }
             }
             if (!winner.has_value()) {
-                auto r = encode_once(*image, dith,
+                auto r = encode_once(*image,
+                                     dith,
                                      options.palette_diversity,
                                      options.sliced_beam,
                                      options.on_progress);
@@ -2633,10 +2565,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Validate locks/pins (EHB: targets must be in 0-31, the base palette).
         if (auto v = palette_locks::validate_locks(options.locks, 32); !v)
             return std::unexpected{v.error()};
-        if (auto v = palette_locks::validate_pins(options.pins, options.locks,
-                                                  options.reserves, 32,
-                                                  image->width(), image->height(),
-                                                  has_transparency); !v)
+        if (auto v = palette_locks::validate_pins(options.pins,
+                                                  options.locks,
+                                                  options.reserves,
+                                                  32,
+                                                  image->width(),
+                                                  image->height(),
+                                                  has_transparency);
+            !v)
             return std::unexpected{v.error()};
 
         // Plain EHB --best: multi-restart sweep over (dither_strength ×
@@ -2648,8 +2584,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // free slots vary across restarts. Pins: encode_plain_auto
         // applies the pin swap per trial — visual no-op so ranking
         // isn't affected. User palettes still exclude the sweep.
-        bool ehb_can_sweep = options.best
-                          && !has_user_palette(options);
+        bool ehb_can_sweep = options.best && !has_user_palette(options);
 
         // EHB pop-search path. Same eligibility as the legacy sweep; we
         // gate on chipset==OCS because pop_search.cpp's snap-OCS step
@@ -2657,10 +2592,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // PNN seed (matches the legacy sweep's seeding) → uses that as
         // the seed_palettes for the evolutionary search → ehb_expand
         // makes each candidate score under its 64-entry expansion.
-        bool ehb_pop_eligible = ehb_can_sweep &&
-                                 chipset == amiga::Chipset::ocs &&
-                                 !options.copper && !options.scap &&
-                                 !options.dual_playfield;
+        bool ehb_pop_eligible = ehb_can_sweep && chipset == amiga::Chipset::ocs &&
+                                !options.copper && !options.scap && !options.dual_playfield;
         if (ehb_pop_eligible) {
             // Build enriched-image PNN seed (same recipe as the legacy
             // sweep's encode_once) — gives pop search a high-quality
@@ -2678,20 +2611,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         std::clamp(s.g * 2.0f, 0.0f, 1.0f),
                         std::clamp(s.b * 2.0f, 0.0f, 1.0f),
                     };
-                    enriched[x, image->height() + y] =
-                        color_space::srgb_to_linear(doubled);
+                    enriched[x, image->height() + y] = color_space::srgb_to_linear(doubled);
                 }
             std::vector<Palette> ehb_seeds;
-            if (auto q = quantize::quantize(enriched, 32,
-                    quantize::Algorithm::pnn,
-                    options.palette_diversity); q) {
+            if (auto q = quantize::quantize(
+                    enriched, 32, quantize::Algorithm::pnn, options.palette_diversity);
+                q) {
                 snap_to_chipset(*q, chipset, mode);
-                palette::refine_ehb_base_palette(
-                    std::span<Color3f>(q->colors.data(), 32),
-                    image->pixels(),
-                    /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
-                if (options.lock_color0)
-                    q->colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+                palette::refine_ehb_base_palette(std::span<Color3f>(q->colors.data(), 32),
+                                                 image->pixels(),
+                                                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                if (options.lock_color0) q->colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                 ehb_seeds.push_back(std::move(*q));
             }
 
@@ -2700,12 +2630,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             base_dith.strength = options.dither_strength;
             base_dith.error_clamp = options.error_clamp;
             palette_search::PopSearchOptions pso;
-            pso.pop_size      = 128;
-            pso.generations   = 64;
-            pso.stale_limit   = 32;
-            pso.ehb_expand    = true;
+            pso.pop_size = 128;
+            pso.generations = 64;
+            pso.stale_limit = 32;
+            pso.ehb_expand = true;
             pso.seed_palettes = std::move(ehb_seeds);
-            pso.on_progress   = options.on_progress;
+            pso.on_progress = options.on_progress;
             // Transparency support: pop_search forces tmask pixels
             // to slot 0 post-dither and excludes slot 0 from the
             // dither candidate set / mutate gate. Identical wiring
@@ -2719,34 +2649,37 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 pso.tmask = tmask;
                 std::vector<bool> mask0(32, false);
                 mask0[0] = true;
-                pso.locked_mask         = mask0;
+                pso.locked_mask = mask0;
                 pso.dither_exclude_mask = mask0;
             }
             // Search runs at depth=5 (pop_search internal gate is
             // depth ∈ [1,5]); EHB hardware uses 6 bitplanes but the
             // *base* palette has only 32 entries.
-            auto pop = palette_search::run_population_search(
-                *image, /*depth=*/5, /*max_colors=*/32,
-                mode, chipset, base_dith, options.lock_color0, pso);
+            auto pop = palette_search::run_population_search(*image,
+                                                             /*depth=*/5,
+                                                             /*max_colors=*/32,
+                                                             mode,
+                                                             chipset,
+                                                             base_dith,
+                                                             options.lock_color0,
+                                                             pso);
             if (pop) {
                 // Re-expand to the full 64-entry EHB palette so the
                 // encoder + IFF CMAP write the right thing.
                 auto ehbp = palette::make_ehb_palette(pop->palette.colors);
-                auto enc = bitplane::encode(pop->indices,
-                    image->width(), image->height(), 6);
+                auto enc = bitplane::encode(pop->indices, image->width(), image->height(), 6);
                 if (enc) {
-                    if (options.on_progress)
-                        options.on_progress(1.0f, "done");
+                    if (options.on_progress) options.on_progress(1.0f, "done");
                     PipelineResult result;
-                    result.rendered  = std::move(pop->rendered);
-                    result.planes    = std::move(*enc);
-                    result.palette   = std::move(ehbp.colors);
-                    result.indices   = std::move(pop->indices);
-                    result.mode      = mode;
-                    result.hires     = false;
+                    result.rendered = std::move(pop->rendered);
+                    result.planes = std::move(*enc);
+                    result.palette = std::move(ehbp.colors);
+                    result.indices = std::move(pop->indices);
+                    result.mode = mode;
+                    result.hires = false;
                     result.interlace = options.interlace;
-                    result.dpf       = false;
-                    result.aga       = is_aga;
+                    result.dpf = false;
+                    result.aga = is_aga;
                     result.has_transparency = has_transparency;
                     if (has_transparency) result.transparency_mask = tmask;
                     result.finalize_psnr(*image, pop->total_error);
@@ -2794,8 +2727,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             std::clamp(s.g * 2.0f, 0.0f, 1.0f),
                             std::clamp(s.b * 2.0f, 0.0f, 1.0f),
                         };
-                        enriched[x, img.height() + y] =
-                            color_space::srgb_to_linear(doubled_srgb);
+                        enriched[x, img.height() + y] = color_space::srgb_to_linear(doubled_srgb);
                     }
                 }
                 // PNN (Pairwise Nearest Neighbor agglomerative
@@ -2804,28 +2736,23 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // force on most images — fewer wasted slots in the
                 // dominant cluster, cleaner spread across the gamut.
                 auto qfn = [&](std::size_t k) -> Result<Palette> {
-                    auto q = quantize::quantize(
-                        enriched, k, quantize::Algorithm::pnn, diversity);
+                    auto q = quantize::quantize(enriched, k, quantize::Algorithm::pnn, diversity);
                     if (!q) return std::unexpected{q.error()};
                     Palette p = std::move(*q);
                     snap_to_chipset(p, chipset, mode);
                     return p;
                 };
                 std::size_t k1 = options.lock_color0 ? 31 : 32;
-                auto qr = palette_locks::two_pass_quantize(
-                    qfn, k1, 32, options.lock_color0);
+                auto qr = palette_locks::two_pass_quantize(qfn, k1, 32, options.lock_color0);
                 if (!qr) return std::unexpected{qr.error()};
                 Palette bp = std::move(*qr);
-                palette_locks::finalize_palette(bp.colors, 32,
-                                                 options.lock_color0);
+                palette_locks::finalize_palette(bp.colors, 32, options.lock_color0);
                 // Pair-aware refinement: jointly optimize the 32 base
                 // colors under the hardware-tied half-brite pairing.
-                palette::refine_ehb_base_palette(
-                    std::span<Color3f>(bp.colors.data(), 32),
-                    img.pixels(),
-                    /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
-                if (options.lock_color0)
-                    bp.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+                palette::refine_ehb_base_palette(std::span<Color3f>(bp.colors.data(), 32),
+                                                 img.pixels(),
+                                                 /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                if (options.lock_color0) bp.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
                 auto ehbp = palette::make_ehb_palette(bp.colors);
                 auto dr = dither::apply(img, ehbp.colors, d);
                 // Force transparent pixels (per the outer tmask) to
@@ -2833,71 +2760,69 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // run pop_search, so this is its own opportunity to
                 // honor transparency.
                 if (has_transparency) {
-                    for (std::size_t i = 0;
-                         i < tmask.size() && i < dr.indices.size(); ++i)
+                    for (std::size_t i = 0; i < tmask.size() && i < dr.indices.size(); ++i)
                         if (tmask[i]) dr.indices[i] = 0;
                 }
-                auto bp_res = bitplane::encode(dr.indices,
-                                                img.width(), img.height(), 6);
+                auto bp_res = bitplane::encode(dr.indices, img.width(), img.height(), 6);
                 if (!bp_res) return std::unexpected{bp_res.error()};
-                std::vector<Color3f> full_pal(ehbp.colors.begin(),
-                                              ehbp.colors.end());
+                std::vector<Color3f> full_pal(ehbp.colors.begin(), ehbp.colors.end());
                 auto pv = pipeline::render_preview(
-                    *bp_res, full_pal, /*is_ham=*/false,
-                    options.interlace, chipset);
+                    *bp_res, full_pal, /*is_ham=*/false, options.interlace, chipset);
                 if (!pv) return std::unexpected{pv.error()};
                 return EhbPlainTrial{
-                    std::move(bp), std::move(ehbp), *std::move(bp_res),
-                    std::move(dr.indices), *std::move(pv), dr.total_error,
+                    std::move(bp),
+                    std::move(ehbp),
+                    *std::move(bp_res),
+                    std::move(dr.indices),
+                    *std::move(pv),
+                    dr.total_error,
                 };
             };
             auto winner = pipeline::best_sweep<EhbPlainTrial>(
-                *image, base_dith, options.palette_diversity,
+                *image,
+                base_dith,
+                options.palette_diversity,
                 /*jitter_count=*/8,
                 encode_once,
                 [](const EhbPlainTrial& t) -> const Image& { return t.rendered; },
-                options.on_progress, /*jitter_amplitude=*/1.0f);
+                options.on_progress,
+                /*jitter_amplitude=*/1.0f);
             if (!winner) {
-                return std::unexpected{Error{
-                    ErrorCode::unsupported_mode,
-                    "EHB --best sweep produced no result"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode, "EHB --best sweep produced no result"}};
             }
             // Post-sweep 1-opt local search on the winning palette —
             // takes the multi-restart's best basin and tightens it
             // further. Non-best gets the same step earlier in the
             // pipeline; here we run it once on the sweep winner.
             {
-                std::vector<Color3f> base32(
-                    winner->base_pal.colors.begin(),
-                    winner->base_pal.colors.begin() + 32);
+                std::vector<Color3f> base32(winner->base_pal.colors.begin(),
+                                            winner->base_pal.colors.begin() + 32);
                 palette::extra_ehb_optimization(
                     std::span<Color3f>(base32.data(), 32),
                     image->pixels(),
                     /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
                     /*max_passes=*/2,
-                    [](std::size_t n,
-                       std::function<void(std::size_t)> f) {
+                    [](std::size_t n, std::function<void(std::size_t)> f) {
                         pipeline::parallel_for(n, std::move(f));
                     },
                     options.on_progress);
-                if (options.lock_color0)
-                    base32[0] = Color3f{0.0f, 0.0f, 0.0f};
+                if (options.lock_color0) base32[0] = Color3f{0.0f, 0.0f, 0.0f};
                 winner->base_pal.colors = std::move(base32);
-                winner->ehb_pal = palette::make_ehb_palette(
-                    winner->base_pal.colors);
+                winner->ehb_pal = palette::make_ehb_palette(winner->base_pal.colors);
                 // Re-dither + re-bitplane + re-render with the refined
                 // palette so the result indices/preview reflect it.
                 dither::Settings post_dith = base_dith;
-                auto dr = dither::apply(*image, winner->ehb_pal.colors,
-                                         post_dith);
-                auto bp_res = bitplane::encode(
-                    dr.indices, image->width(), image->height(), 6);
+                auto dr = dither::apply(*image, winner->ehb_pal.colors, post_dith);
+                auto bp_res = bitplane::encode(dr.indices, image->width(), image->height(), 6);
                 if (bp_res) {
                     auto pv = pipeline::render_preview(
-                        *bp_res, std::vector<Color3f>(
-                            winner->ehb_pal.colors.begin(),
-                            winner->ehb_pal.colors.end()),
-                        /*is_ham=*/false, options.interlace, chipset);
+                        *bp_res,
+                        std::vector<Color3f>(winner->ehb_pal.colors.begin(),
+                                             winner->ehb_pal.colors.end()),
+                        /*is_ham=*/false,
+                        options.interlace,
+                        chipset);
                     if (pv) {
                         winner->planes = *std::move(bp_res);
                         winner->indices = std::move(dr.indices);
@@ -2905,8 +2830,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         winner->total_error = dr.total_error;
                     }
                 }
-                if (options.on_progress)
-                    options.on_progress(1.0f, "done");
+                if (options.on_progress) options.on_progress(1.0f, "done");
             }
             std::vector<Color3f> full_palette(winner->ehb_pal.colors.begin(),
                                               winner->ehb_pal.colors.end());
@@ -2928,16 +2852,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // With custom palette: use as-is (32 colors expected).
         // Without: reserve index 0 for transparency when needed.
         bool user_pal_ehb = has_user_palette(options);
-        bool lock_zero_ehb = !user_pal_ehb
-            && (has_transparency || options.lock_color0);
+        bool lock_zero_ehb = !user_pal_ehb && (has_transparency || options.lock_color0);
         Palette base_pal;
         std::vector<bool> base_locked(32, false);
         if (user_pal_ehb) {
             auto loaded = load_user_palette(options);
             if (!loaded) return std::unexpected{loaded.error()};
             base_pal = *std::move(loaded);
-            if (base_pal.colors.size() > 32)
-                base_pal.colors.resize(32);
+            if (base_pal.colors.size() > 32) base_pal.colors.resize(32);
             snap_to_chipset(base_pal, chipset, mode);
             // Apply locks on top of user palette
             for (auto& lock : options.locks) {
@@ -2950,22 +2872,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         } else {
             auto reserves_in_pal_ehb = palette_locks::validate_reserves(
                 options.reserves, options.locks, 32, lock_zero_ehb);
-            if (!reserves_in_pal_ehb)
-                return std::unexpected{reserves_in_pal_ehb.error()};
+            if (!reserves_in_pal_ehb) return std::unexpected{reserves_in_pal_ehb.error()};
             std::size_t reserves_ehb = *reserves_in_pal_ehb;
             auto qc = palette_locks::quant_counts_for_assemble(
                 32, options.locks, reserves_ehb, lock_zero_ehb);
             auto quantized = palette_locks::two_pass_quantize(
                 [&](std::size_t k) -> Result<Palette> {
-                    return quantize::quantize(*image, k,
-                                              quantize::Algorithm::pnn,
-                                              options.palette_diversity);
+                    return quantize::quantize(
+                        *image, k, quantize::Algorithm::pnn, options.palette_diversity);
                 },
-                qc.qcount, qc.kfallback, lock_zero_ehb);
+                qc.qcount,
+                qc.kfallback,
+                lock_zero_ehb);
             if (!quantized) return std::unexpected{quantized.error()};
             auto assembled = palette_locks::assemble_with_reserves(
-                *quantized, options.locks, options.reserves,
-                32, lock_zero_ehb, chipset, mode);
+                *quantized, options.locks, options.reserves, 32, lock_zero_ehb, chipset, mode);
             base_pal = std::move(assembled.palette);
             base_locked = std::move(assembled.locked);
         }
@@ -2980,21 +2901,17 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         bool any_user_lock = false;
         for (std::size_t i = 1; i < base_locked.size(); ++i)
             any_user_lock = any_user_lock || base_locked[i];
-        if (!user_pal_ehb && !any_user_lock
-                && base_pal.colors.size() >= 32) {
-            palette::refine_ehb_base_palette(
-                std::span<Color3f>(base_pal.colors.data(), 32),
-                image->pixels(),
-                /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
-            if (lock_zero_ehb)
-                base_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
+        if (!user_pal_ehb && !any_user_lock && base_pal.colors.size() >= 32) {
+            palette::refine_ehb_base_palette(std::span<Color3f>(base_pal.colors.data(), 32),
+                                             image->pixels(),
+                                             /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+            if (lock_zero_ehb) base_pal.colors[0] = Color3f{0.0f, 0.0f, 0.0f};
             // Reclaim duplicate half-brite slots by doubling their
             // base color where possible. Doubles the effective
             // color count when the source has dark clusters that
             // collapsed onto the same hb code.
-            palette::dedupe_ehb_halfbrite(
-                std::span<Color3f>(base_pal.colors.data(), 32),
-                /*preserve_slot0=*/lock_zero_ehb);
+            palette::dedupe_ehb_halfbrite(std::span<Color3f>(base_pal.colors.data(), 32),
+                                          /*preserve_slot0=*/lock_zero_ehb);
         }
         // 1-opt local search is --best-only; plain EHB stays at
         // PNN + pair-refine for the fast (~0.1s) baseline path.
@@ -3002,8 +2919,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Build full 64-color EHB palette (32 base + 32 half-bright)
         auto ehb_pal = palette::make_ehb_palette(base_pal.colors);
 
-        if (options.match_range)
-            preprocess::match_palette_range(*image, ehb_pal);
+        if (options.match_range) preprocess::match_palette_range(*image, ehb_pal);
 
         // Dither against all 64 colors
         dither::Settings dith;
@@ -3063,14 +2979,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto w = image->width();
             std::vector<std::uint8_t> indices(w * image->height(), 0);
             float total_err = dither::diffuse_raw_buffer(
-                *image, dith,
+                *image,
+                dith,
                 [&](const color_space::OKLab& target,
-                    std::size_t x, std::size_t y) -> dither::PickResult {
+                    std::size_t x,
+                    std::size_t y) -> dither::PickResult {
                     std::size_t k = 0;
                     color_space::OKLab chosen{};
                     float thr = dither::pick_palette_index_with_ostro(
-                        dith.method, target, pal_lab, x, y,
-                        dith.strength, /*k_min=*/0, k, chosen);
+                        dith.method, target, pal_lab, x, y, dith.strength, /*k_min=*/0, k, chosen);
                     indices[y * w + x] = cand_to_full[k];
                     return {chosen, thr};
                 });
@@ -3084,11 +3001,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (std::size_t i = 0; i < indices.size(); ++i)
                     cand_indices[i] = full_to_cand[indices[i]];
                 dither::apply_dbs_post_pass(
-                    *image, cand_indices,
+                    *image,
+                    cand_indices,
                     [&](std::size_t /*x*/, std::size_t /*y*/)
-                        -> std::span<const color_space::OKLab> {
-                        return pal_lab;
-                    });
+                        -> std::span<const color_space::OKLab> { return pal_lab; });
                 for (std::size_t i = 0; i < indices.size(); ++i)
                     indices[i] = cand_to_full[cand_indices[i]];
             }
@@ -3107,8 +3023,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (pixel_offset >= dither_result.indices.size()) {
                 return std::unexpected{Error{
                     ErrorCode::invalid_dimensions,
-                    std::format("--pin-index-at {}: pixel offset out of bounds",
-                                pin.index),
+                    std::format("--pin-index-at {}: pixel offset out of bounds", pin.index),
                 }};
             }
             auto src = static_cast<std::size_t>(dither_result.indices[pixel_offset]);
@@ -3118,7 +3033,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     std::format("--pin-index-at {}: source pixel ({},{}) "
                                 "dithered to half-brite slot {} (EHB pins must "
                                 "land on a base color, slots 0-31)",
-                                pin.index, pin.x, pin.y, src),
+                                pin.index,
+                                pin.x,
+                                pin.y,
+                                src),
                 }};
             }
             if (src == target) {
@@ -3130,8 +3048,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // without swapping palette entries (a swap would clobber
                 // the lock). See palette_locks::apply_pins for the
                 // rationale.
-                dither_result.indices[pixel_offset] =
-                    static_cast<std::uint8_t>(target);
+                dither_result.indices[pixel_offset] = static_cast<std::uint8_t>(target);
                 continue;
             }
             // Swap base palette entries
@@ -3142,10 +3059,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto src_hb = static_cast<std::uint8_t>(src + 32);
             auto tgt_hb = static_cast<std::uint8_t>(target + 32);
             for (auto& idx : dither_result.indices) {
-                if (idx == src_u8) idx = tgt_u8;
-                else if (idx == tgt_u8) idx = src_u8;
-                else if (idx == src_hb) idx = tgt_hb;
-                else if (idx == tgt_hb) idx = src_hb;
+                if (idx == src_u8)
+                    idx = tgt_u8;
+                else if (idx == tgt_u8)
+                    idx = src_u8;
+                else if (idx == src_hb)
+                    idx = tgt_hb;
+                else if (idx == tgt_hb)
+                    idx = src_hb;
             }
             base_locked[target] = true;
             // Re-derive 64-color EHB palette
@@ -3159,28 +3080,29 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // reordered base.
         {
             std::vector<Color3f> ehb64 = ehb_pal.colors;
-            palette_locks::sort_by_brightness(
-                ehb64, base_locked, dither_result.indices,
-                /*sort_n=*/32, /*hb_mirror=*/true);
+            palette_locks::sort_by_brightness(ehb64,
+                                              base_locked,
+                                              dither_result.indices,
+                                              /*sort_n=*/32,
+                                              /*hb_mirror=*/true);
             ehb_pal.colors = std::move(ehb64);
             // Sync base_pal too so any downstream consumers see the
             // same ordering.
-            base_pal.colors.assign(ehb_pal.colors.begin(),
-                                    ehb_pal.colors.begin() + 32);
+            base_pal.colors.assign(ehb_pal.colors.begin(), ehb_pal.colors.begin() + 32);
         }
 
         // Encode to 6 bitplanes
-        auto planes = bitplane::encode(dither_result.indices,
-                                       image->width(), image->height(),
-                                       depth);
+        auto planes = bitplane::encode(
+            dither_result.indices, image->width(), image->height(), depth);
         if (!planes) return std::unexpected{planes.error()};
 
-        std::vector<Color3f> full_palette(ehb_pal.colors.begin(),
-                                          ehb_pal.colors.end());
+        std::vector<Color3f> full_palette(ehb_pal.colors.begin(), ehb_pal.colors.end());
 
-        auto preview = pipeline::render_preview(
-            *planes, full_palette,
-            /*is_ham=*/false, options.interlace, chipset);
+        auto preview = pipeline::render_preview(*planes,
+                                                full_palette,
+                                                /*is_ham=*/false,
+                                                options.interlace,
+                                                chipset);
         if (!preview) return std::unexpected{preview.error()};
 
         PipelineResult result;
@@ -3200,8 +3122,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         result.finalize_psnr(*image, dither_result.total_error);
         if (tile_active) {
-            auto cropped = tile_crop_result(result, tile_w, tile_h, depth,
-                                            bitplane::Layout::interleaved);
+            auto cropped = tile_crop_result(
+                result, tile_w, tile_h, depth, bitplane::Layout::interleaved);
             if (!cropped) return std::unexpected{cropped.error()};
         }
         return result;
@@ -3211,8 +3133,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // strips is an extension to sliced — when both are set, the strips encoder
     // owns the per-line copper stream (and adds mid-line MOVEs on top),
     // so skip the sliced branch entirely.
-    if (options.copper && !options.scap &&
-        !amiga::is_ham(mode) && mode != amiga::Mode::ehb) {
+    if (options.copper && !options.scap && !amiga::is_ham(mode) && mode != amiga::Mode::ehb) {
         if (!options.pins.empty()) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
@@ -3247,21 +3168,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
         for (auto& lock : options.locks) {
             auto idx = static_cast<std::size_t>(lock.index);
-            copper_locks.emplace_back(idx,
-                palette_locks::to_color(lock, chipset, mode));
+            copper_locks.emplace_back(idx, palette_locks::to_color(lock, chipset, mode));
         }
         // Validate reserves against the sliced base palette size (1<<depth).
         auto sliced_max_colors = std::size_t{1} << depth;
         auto reserves_in_cap = palette_locks::validate_reserves(
-            options.reserves, options.locks, sliced_max_colors,
-            options.lock_color0);
+            options.reserves, options.locks, sliced_max_colors, options.lock_color0);
         if (!reserves_in_cap) return std::unexpected{reserves_in_cap.error()};
         std::vector<std::size_t> sliced_excluded;
         for (auto& r : options.reserves) {
             auto i = static_cast<std::size_t>(r.index);
             if (r.index >= 0 && i < sliced_max_colors) {
-                copper_locks.emplace_back(i, palette_locks::to_color(
-                    LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                copper_locks.emplace_back(
+                    i, palette_locks::to_color(LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
                 sliced_excluded.push_back(i);
             }
         }
@@ -3274,29 +3193,33 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // Forward sentinel when CLI flag absent → encode_copper picks
         // its depth/is_ehb-aware default.
         auto spread_r = options.sliced_spread_radius >= 0
-            ? static_cast<std::size_t>(options.sliced_spread_radius)
-            : std::numeric_limits<std::size_t>::max();
-        auto spread_d = options.sliced_spread_decay >= 0.0f
-            ? options.sliced_spread_decay : -1.0f;
+                            ? static_cast<std::size_t>(options.sliced_spread_radius)
+                            : std::numeric_limits<std::size_t>::max();
+        auto spread_d = options.sliced_spread_decay >= 0.0f ? options.sliced_spread_decay : -1.0f;
         auto encode_once = [&](const Image& img,
-                               const dither::Settings& d, int diversity,
+                               const dither::Settings& d,
+                               int diversity,
                                bool beam_on,
-                               std::function<void(float, std::string_view)>
-                                   inner_progress = {}) {
-            return copper::encode_copper(
-                img, depth, d, chipset,
-                static_cast<std::size_t>(options.copper_changes),
-                copper_user_pal.empty() ? nullptr : &copper_user_pal,
-                options.lock_color0, copper_locks,
-                diversity,
-                skip_initial_lace, options.interlace,
-                /*is_ehb=*/false,
-                std::move(inner_progress),
-                spread_r, spread_d,
-                options.sliced_vertical_dither,
-                sliced_excluded,
-                /*quantizer_override=*/std::nullopt,
-                beam_on);
+                               std::function<void(float, std::string_view)> inner_progress = {}) {
+            return copper::encode_copper(img,
+                                         depth,
+                                         d,
+                                         chipset,
+                                         static_cast<std::size_t>(options.copper_changes),
+                                         copper_user_pal.empty() ? nullptr : &copper_user_pal,
+                                         options.lock_color0,
+                                         copper_locks,
+                                         diversity,
+                                         skip_initial_lace,
+                                         options.interlace,
+                                         /*is_ehb=*/false,
+                                         std::move(inner_progress),
+                                         spread_r,
+                                         spread_d,
+                                         options.sliced_vertical_dither,
+                                         sliced_excluded,
+                                         /*quantizer_override=*/std::nullopt,
+                                         beam_on);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -3320,39 +3243,44 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 copper::CopperResult result;
                 Image rendered;
             };
-            float jitter_amp = (chipset == amiga::Chipset::aga)
-                ? 0.4f : 1.0f;
+            float jitter_amp = (chipset == amiga::Chipset::aga) ? 0.4f : 1.0f;
             std::optional<CapTrial> best_overall;
             float best_overall_score = -std::numeric_limits<float>::infinity();
             int sweep_idx = 0;
             for (bool beam_on : {false, true}) {
                 auto sweep_winner = pipeline::best_sweep<CapTrial>(
-                    *image, dith, options.palette_diversity,
+                    *image,
+                    dith,
+                    options.palette_diversity,
                     /*jitter_count=*/8,
                     [&](const Image& jittered_in,
-                        const dither::Settings& d, int div) -> Result<CapTrial> {
+                        const dither::Settings& d,
+                        int div) -> Result<CapTrial> {
                         auto enc = encode_once(jittered_in, d, div, beam_on);
                         if (!enc) return std::unexpected{enc.error()};
-                        auto preview = pipeline::render_preview(
-                            enc->planes, enc->base_palette,
-                            /*is_ham=*/false, options.interlace, chipset,
-                            &enc->scanline_palettes,
-                            enc->changes_per_line);
+                        auto preview = pipeline::render_preview(enc->planes,
+                                                                enc->base_palette,
+                                                                /*is_ham=*/false,
+                                                                options.interlace,
+                                                                chipset,
+                                                                &enc->scanline_palettes,
+                                                                enc->changes_per_line);
                         if (!preview) return std::unexpected{preview.error()};
                         return CapTrial{*std::move(enc), *std::move(preview)};
                     },
                     [](const CapTrial& t) -> const Image& { return t.rendered; },
                     [&](float p, std::string_view s) {
                         if (s == "done" && sweep_idx == 0) return;
-                        if (options.on_progress) options.on_progress(
-                            (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                        if (options.on_progress)
+                            options.on_progress((static_cast<float>(sweep_idx) + p) * 0.5f, s);
                     },
                     jitter_amp);
                 ++sweep_idx;
                 if (!sweep_winner.has_value()) continue;
-                float score = ssimulacra2::compute(
-                    image->pixels(), sweep_winner->rendered.pixels(),
-                    image->width(), image->height());
+                float score = ssimulacra2::compute(image->pixels(),
+                                                   sweep_winner->rendered.pixels(),
+                                                   image->width(),
+                                                   image->height());
                 if (score > best_overall_score) {
                     best_overall_score = score;
                     best_overall = std::move(sweep_winner);
@@ -3361,15 +3289,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (best_overall.has_value()) {
                 copper_result = std::move(best_overall->result);
             } else {
-                copper_result = encode_once(*image, dith,
+                copper_result = encode_once(*image,
+                                            dith,
                                             options.palette_diversity,
                                             /*beam_on=*/false);
             }
         } else {
-            copper_result = encode_once(*image, dith,
-                                        options.palette_diversity,
-                                        options.sliced_beam,
-                                        options.on_progress);
+            copper_result = encode_once(
+                *image, dith, options.palette_diversity, options.sliced_beam, options.on_progress);
             if (options.on_progress) options.on_progress(1.0f, "done");
         }
         if (!copper_result) return std::unexpected{copper_result.error()};
@@ -3380,11 +3307,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // version replays the same top-K-by-distance diff clipping the
         // cheader emitter does, so the preview matches what a generated
         // viewer will actually display on hardware.
-        auto preview = pipeline::render_preview(
-            copper_result->planes, copper_result->base_palette,
-            /*is_ham=*/false, options.interlace, chipset,
-            &copper_result->scanline_palettes,
-            copper_result->changes_per_line);
+        auto preview = pipeline::render_preview(copper_result->planes,
+                                                copper_result->base_palette,
+                                                /*is_ham=*/false,
+                                                options.interlace,
+                                                chipset,
+                                                &copper_result->scanline_palettes,
+                                                copper_result->changes_per_line);
         if (!preview) return std::unexpected{preview.error()};
 
         // Dual-playfield expansion (copper path): same as standard branch —
@@ -3476,124 +3405,120 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         Result<strips::ScapResult> strips_res =
             strips_ham6
-            ? strips::encode_strips_ham6_ocs(
-                *image,
-                static_cast<int>(image->width()),
-                static_cast<int>(image->height()),
-                options.lock_color0,
-                strips_dith,
-                static_cast<std::size_t>(options.copper_changes),
-                options.palette_diversity,
-                options.on_progress,
-                options.sliced_spread_radius,
-                options.sliced_spread_decay,
-                options.sliced_vertical_dither,
-                options.best,
-                strips_user_pal_span,
-                (options.ham_metric == "srgb-mse")
-                    ? ham::HamMetric::srgb_mse
-                    : ham::HamMetric::oklab2)
+                ? strips::encode_strips_ham6_ocs(*image,
+                                                 static_cast<int>(image->width()),
+                                                 static_cast<int>(image->height()),
+                                                 options.lock_color0,
+                                                 strips_dith,
+                                                 static_cast<std::size_t>(options.copper_changes),
+                                                 options.palette_diversity,
+                                                 options.on_progress,
+                                                 options.sliced_spread_radius,
+                                                 options.sliced_spread_decay,
+                                                 options.sliced_vertical_dither,
+                                                 options.best,
+                                                 strips_user_pal_span,
+                                                 (options.ham_metric == "srgb-mse")
+                                                     ? ham::HamMetric::srgb_mse
+                                                     : ham::HamMetric::oklab2)
             : strips_ehb
-            ? [&] {
-                // strips-EHB reserves: build (idx, color) pairs for the
-                // 32-base palette. encode_strips_ehb_ocs forwards them to
-                // encode_copper as locked + dither-excluded, AND blocks
-                // the mid-line strips swap planner from targeting them.
-                std::vector<std::pair<std::size_t, Color3f>> strips_ehb_reserves;
-                for (auto& r : options.reserves) {
-                    auto i = static_cast<std::size_t>(r.index);
-                    if (r.index >= 0 && i < 32) {
-                        strips_ehb_reserves.emplace_back(i,
-                            palette_locks::to_color(
-                                LockSpec{r.index, r.r, r.g, r.b},
-                                chipset, mode));
-                    }
-                }
-                return strips::encode_strips_ehb_ocs(
-                    *image,
-                    static_cast<int>(image->width()),
-                    static_cast<int>(image->height()),
-                    options.lock_color0,
-                    strips_dith,
-                    static_cast<std::size_t>(options.copper_changes),
-                    options.palette_diversity,
-                    options.strips_debug,
-                    options.on_progress,
-                    options.best,
-                    options.sliced_spread_radius,
-                    options.sliced_spread_decay,
-                    options.sliced_vertical_dither,
-                    strips_user_pal_span,
-                    strips_ehb_reserves,
-                    options.sliced_beam);
-            }()
-            : [&] {
-                // strips-DPF reserves/locks: indices reference the OCS
-                // DPF 16-entry CLUT layout (CLUT[0..7] = PF1, CLUT[8..15]
-                // = PF2). PF1 is zeroed in our encoder, so any CLUT-1..7
-                // entry is a silent no-op. PF2 base indices 0..7 map to
-                // CLUT registers via the OCS DPF combiner:
-                //   PF2 idx 0 → COLOR00 (dual-written to COLOR08 for
-                //               AGA-DPF source compatibility)
-                //   PF2 idx 1..7 → COLOR09..15
-                // Translate CLUT slot → PF2 base index for the planner.
-                auto translate_to_pf2 = [&](int user_idx) -> std::optional<int> {
-                    if (user_idx < 0) return std::nullopt;
-                    auto i = static_cast<std::size_t>(user_idx);
-                    if (i == 0 || i == 8) return 0;
-                    if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
-                    return std::nullopt;
-                };
-                std::vector<std::pair<std::size_t, Color3f>> strips_dpf_reserves;
-                strips_dpf_reserves.reserve(options.reserves.size());
-                for (auto& r : options.reserves) {
-                    auto pf2 = translate_to_pf2(r.index);
-                    if (!pf2) continue;
-                    bool dup = std::any_of(strips_dpf_reserves.begin(),
-                                           strips_dpf_reserves.end(),
-                                           [&](const auto& p) {
-                                               return static_cast<int>(p.first) == *pf2;
-                                           });
-                    if (dup) continue;
-                    strips_dpf_reserves.emplace_back(
-                        static_cast<std::size_t>(*pf2),
-                        palette_locks::to_color(
-                            LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
-                }
-                std::vector<std::pair<std::size_t, Color3f>> strips_dpf_locks;
-                strips_dpf_locks.reserve(options.locks.size());
-                for (auto& l : options.locks) {
-                    auto pf2 = translate_to_pf2(l.index);
-                    if (!pf2) continue;
-                    bool dup = std::any_of(strips_dpf_locks.begin(),
-                                           strips_dpf_locks.end(),
-                                           [&](const auto& p) {
-                                               return static_cast<int>(p.first) == *pf2;
-                                           });
-                    if (dup) continue;
-                    strips_dpf_locks.emplace_back(
-                        static_cast<std::size_t>(*pf2),
-                        palette_locks::to_color(l, chipset, mode));
-                }
-                return strips::encode_strips_dpf_ocs(
-                    *image,
-                    static_cast<int>(image->width()),
-                    static_cast<int>(image->height()),
-                    options.lock_color0,
-                    strips_dith,
-                    options.strips_debug,
-                    static_cast<std::size_t>(options.copper_changes),
-                    options.palette_diversity,
-                    options.on_progress,
-                    options.best,
-                    options.sliced_spread_radius,
-                    options.sliced_spread_decay,
-                    options.sliced_vertical_dither,
-                    strips_user_pal_span,
-                    strips_dpf_reserves,
-                    strips_dpf_locks,
-                    options.sliced_beam);
-            }();
+                ? [&] {
+                      // strips-EHB reserves: build (idx, color) pairs for the
+                      // 32-base palette. encode_strips_ehb_ocs forwards them to
+                      // encode_copper as locked + dither-excluded, AND blocks
+                      // the mid-line strips swap planner from targeting them.
+                      std::vector<std::pair<std::size_t, Color3f>> strips_ehb_reserves;
+                      for (auto& r : options.reserves) {
+                          auto i = static_cast<std::size_t>(r.index);
+                          if (r.index >= 0 && i < 32) {
+                              strips_ehb_reserves.emplace_back(
+                                  i,
+                                  palette_locks::to_color(
+                                      LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                          }
+                      }
+                      return strips::encode_strips_ehb_ocs(
+                          *image,
+                          static_cast<int>(image->width()),
+                          static_cast<int>(image->height()),
+                          options.lock_color0,
+                          strips_dith,
+                          static_cast<std::size_t>(options.copper_changes),
+                          options.palette_diversity,
+                          options.strips_debug,
+                          options.on_progress,
+                          options.best,
+                          options.sliced_spread_radius,
+                          options.sliced_spread_decay,
+                          options.sliced_vertical_dither,
+                          strips_user_pal_span,
+                          strips_ehb_reserves,
+                          options.sliced_beam);
+                  }()
+                : [&] {
+                      // strips-DPF reserves/locks: indices reference the OCS
+                      // DPF 16-entry CLUT layout (CLUT[0..7] = PF1, CLUT[8..15]
+                      // = PF2). PF1 is zeroed in our encoder, so any CLUT-1..7
+                      // entry is a silent no-op. PF2 base indices 0..7 map to
+                      // CLUT registers via the OCS DPF combiner:
+                      //   PF2 idx 0 → COLOR00 (dual-written to COLOR08 for
+                      //               AGA-DPF source compatibility)
+                      //   PF2 idx 1..7 → COLOR09..15
+                      // Translate CLUT slot → PF2 base index for the planner.
+                      auto translate_to_pf2 = [&](int user_idx) -> std::optional<int> {
+                          if (user_idx < 0) return std::nullopt;
+                          auto i = static_cast<std::size_t>(user_idx);
+                          if (i == 0 || i == 8) return 0;
+                          if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
+                          return std::nullopt;
+                      };
+                      std::vector<std::pair<std::size_t, Color3f>> strips_dpf_reserves;
+                      strips_dpf_reserves.reserve(options.reserves.size());
+                      for (auto& r : options.reserves) {
+                          auto pf2 = translate_to_pf2(r.index);
+                          if (!pf2) continue;
+                          bool dup = std::any_of(
+                              strips_dpf_reserves.begin(),
+                              strips_dpf_reserves.end(),
+                              [&](const auto& p) { return static_cast<int>(p.first) == *pf2; });
+                          if (dup) continue;
+                          strips_dpf_reserves.emplace_back(
+                              static_cast<std::size_t>(*pf2),
+                              palette_locks::to_color(
+                                  LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                      }
+                      std::vector<std::pair<std::size_t, Color3f>> strips_dpf_locks;
+                      strips_dpf_locks.reserve(options.locks.size());
+                      for (auto& l : options.locks) {
+                          auto pf2 = translate_to_pf2(l.index);
+                          if (!pf2) continue;
+                          bool dup = std::any_of(
+                              strips_dpf_locks.begin(), strips_dpf_locks.end(), [&](const auto& p) {
+                                  return static_cast<int>(p.first) == *pf2;
+                              });
+                          if (dup) continue;
+                          strips_dpf_locks.emplace_back(static_cast<std::size_t>(*pf2),
+                                                        palette_locks::to_color(l, chipset, mode));
+                      }
+                      return strips::encode_strips_dpf_ocs(
+                          *image,
+                          static_cast<int>(image->width()),
+                          static_cast<int>(image->height()),
+                          options.lock_color0,
+                          strips_dith,
+                          options.strips_debug,
+                          static_cast<std::size_t>(options.copper_changes),
+                          options.palette_diversity,
+                          options.on_progress,
+                          options.best,
+                          options.sliced_spread_radius,
+                          options.sliced_spread_decay,
+                          options.sliced_vertical_dither,
+                          strips_user_pal_span,
+                          strips_dpf_reserves,
+                          strips_dpf_locks,
+                          options.sliced_beam);
+                  }();
         if (!strips_res) return std::unexpected{strips_res.error()};
 
         PipelineResult result;
@@ -3613,12 +3538,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.transparency_mask = tmask;
         result.copper_changes = strips_res->avg_changes_per_line;
         result.max_moves_per_line = strips_res->max_moves_per_line;
-        result.strips_avg_total_moves_per_line   = strips_res->avg_total_moves_per_line;
-        result.strips_avg_hblank_moves_per_line  = strips_res->avg_hblank_moves_per_line;
-        result.strips_max_hblank_moves_per_line  = strips_res->max_hblank_moves_per_line;
+        result.strips_avg_total_moves_per_line = strips_res->avg_total_moves_per_line;
+        result.strips_avg_hblank_moves_per_line = strips_res->avg_hblank_moves_per_line;
+        result.strips_max_hblank_moves_per_line = strips_res->max_hblank_moves_per_line;
         result.strips_avg_visible_moves_per_line = strips_res->avg_visible_moves_per_line;
         result.strips_max_visible_moves_per_line = strips_res->max_visible_moves_per_line;
-        result.strips_slot_count                 = strips_res->slot_table.slots.size();
+        result.strips_slot_count = strips_res->slot_table.slots.size();
 
         // Synthesize per-line palette snapshots for the web tool's
         // per-scanline strip view. Strips planner only retains the
@@ -3680,14 +3605,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // the pin swap per trial — visual no-op so trial ranking is
     // unaffected. Full user palettes are the only excluded case (every
     // slot is already user-fixed).
-    bool lores_plain_best_eligible =
-        options.best &&
-        (mode == amiga::Mode::lores ||
-         mode == amiga::Mode::lores_interlace ||
-         mode == amiga::Mode::hires ||
-         mode == amiga::Mode::hires_interlace) &&
-        !options.copper && !options.scap && !options.dual_playfield &&
-        !has_user_palette(options);
+    bool lores_plain_best_eligible = options.best &&
+                                     (mode == amiga::Mode::lores ||
+                                      mode == amiga::Mode::lores_interlace ||
+                                      mode == amiga::Mode::hires ||
+                                      mode == amiga::Mode::hires_interlace) &&
+                                     !options.copper && !options.scap && !options.dual_playfield &&
+                                     !has_user_palette(options);
     if (lores_plain_best_eligible) {
         // Both --best and the non-best plain auto branch route through
         // encode_plain_auto (anon ns, src/api.cpp). Per-trial knobs flow as
@@ -3706,33 +3630,38 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // The palette is fixed to {black, white} (no basin to optimise),
         // so every trial would render identically. encode_plain_auto's
         // own bypass produces the b/w trial in one shot.
-        if (max_colors == 2 && options.locks.empty() &&
-            options.reserves.empty()) {
-            auto trial = encode_plain_auto(
-                *image, depth, max_colors, mode, chipset,
-                base_dith, options.palette_diversity,
-                options.refine_iterations,
-                options.lock_color0, has_transparency,
-                /*use_dpf=*/false,
-                /*match_range=*/options.match_range,
-                options.locks, options.reserves, options.pins, tmask);
+        if (max_colors == 2 && options.locks.empty() && options.reserves.empty()) {
+            auto trial = encode_plain_auto(*image,
+                                           depth,
+                                           max_colors,
+                                           mode,
+                                           chipset,
+                                           base_dith,
+                                           options.palette_diversity,
+                                           options.refine_iterations,
+                                           options.lock_color0,
+                                           has_transparency,
+                                           /*use_dpf=*/false,
+                                           /*match_range=*/options.match_range,
+                                           options.locks,
+                                           options.reserves,
+                                           options.pins,
+                                           tmask);
             if (!trial) return std::unexpected{trial.error()};
             if (options.on_progress) options.on_progress(1.0f, "done");
-            std::vector<Color3f> used_pal(
-                trial->pal.colors.begin(),
-                trial->pal.colors.begin() +
-                    static_cast<std::ptrdiff_t>(trial->pal_size));
+            std::vector<Color3f> used_pal(trial->pal.colors.begin(),
+                                          trial->pal.colors.begin() +
+                                              static_cast<std::ptrdiff_t>(trial->pal_size));
             PipelineResult result;
             result.rendered = std::move(trial->rendered);
-            result.planes   = std::move(trial->planes);
-            result.palette  = std::move(used_pal);
-            result.indices  = std::move(trial->indices);
-            result.mode     = mode;
-            result.hires    = compound_hires ||
-                              amiga::get_mode_params(mode).is_hires;
+            result.planes = std::move(trial->planes);
+            result.palette = std::move(used_pal);
+            result.indices = std::move(trial->indices);
+            result.mode = mode;
+            result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
             result.interlace = options.interlace;
-            result.dpf      = false;
-            result.aga      = is_aga;
+            result.dpf = false;
+            result.aga = is_aga;
             result.has_transparency = has_transparency;
             if (has_transparency) result.transparency_mask = tmask;
             result.finalize_psnr(*image, trial->total_error);
@@ -3745,10 +3674,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // entirely; pop search self-seeds via internal k-means
         // diversity restarts.
         const auto& mp_curr = amiga::get_mode_params(mode);
-        bool pop_only =
-            chipset == amiga::Chipset::ocs &&
-            !mp_curr.is_hires &&
-            depth >= 1 && depth <= 5;
+        bool pop_only = chipset == amiga::Chipset::ocs && !mp_curr.is_hires && depth >= 1 &&
+                        depth <= 5;
         if (pop_only) {
             // Plain lores OCS --best runs pop search and best_sweep
             // sequentially. Split the user-visible bar in half so the
@@ -3757,23 +3684,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // 50–100%; pop's intermediate "done" (if any) is swallowed
             // so only sweep's "done" terminates the line.
             auto pop_phase_progress = options.on_progress
-                ? std::function<void(float, std::string_view)>(
-                    [op = options.on_progress](float p, std::string_view s) {
-                        if (s == "done") return;
-                        op(0.5f * std::clamp(p, 0.0f, 1.0f), s);
-                    })
-                : std::function<void(float, std::string_view)>{};
-            auto sweep_phase_progress = options.on_progress
-                ? std::function<void(float, std::string_view)>(
-                    [op = options.on_progress](float p, std::string_view s) {
-                        op(0.5f + 0.5f * std::clamp(p, 0.0f, 1.0f), s);
-                    })
-                : std::function<void(float, std::string_view)>{};
+                                          ? std::function<void(float, std::string_view)>(
+                                                [op = options.on_progress](float p,
+                                                                           std::string_view s) {
+                                                    if (s == "done") return;
+                                                    op(0.5f * std::clamp(p, 0.0f, 1.0f), s);
+                                                })
+                                          : std::function<void(float, std::string_view)>{};
+            auto sweep_phase_progress =
+                options.on_progress ? std::function<void(float, std::string_view)>(
+                                          [op = options.on_progress](float p, std::string_view s) {
+                                              op(0.5f + 0.5f * std::clamp(p, 0.0f, 1.0f), s);
+                                          })
+                                    : std::function<void(float, std::string_view)>{};
             palette_search::PopSearchOptions pso;
-            pso.pop_size      = 128;
-            pso.generations   = 64;
-            pso.stale_limit   = 32;
-            pso.on_progress   = pop_phase_progress;
+            pso.pop_size = 128;
+            pso.generations = 64;
+            pso.stale_limit = 32;
+            pso.on_progress = pop_phase_progress;
 
             // When reserves or transparency are present, run
             // encode_plain_auto once at diversity=0 to produce a
@@ -3793,12 +3721,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // space is tiny).
             std::size_t reserves_in_pal = 0;
             for (auto& r : options.reserves) {
-                if (r.index >= 0 &&
-                    static_cast<std::size_t>(r.index) < max_colors)
+                if (r.index >= 0 && static_cast<std::size_t>(r.index) < max_colors)
                     ++reserves_in_pal;
             }
             const bool has_reserves_in_call = reserves_in_pal > 0;
-            const bool has_locks_in_call    = !options.locks.empty();
+            const bool has_locks_in_call = !options.locks.empty();
             std::vector<bool> seed_locked_mask;
             // Hold seed_trial across the pop_search call so we can use
             // its rendered output as a fallback when pop_search regresses
@@ -3806,24 +3733,31 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // and cpu_fitness's dither doesn't always match
             // encode_plain_auto's). Compared via SSIMULACRA2 below.
             std::optional<PlainAutoTrial> seed_keep;
-            if (has_reserves_in_call || has_transparency ||
-                has_locks_in_call) {
+            if (has_reserves_in_call || has_transparency || has_locks_in_call) {
                 // Use options.palette_diversity for the seed — this
                 // matches what the non-best path would produce, so the
                 // S2 comparison below is between (pop_search winner)
                 // vs (the normal-pass output the user would get
                 // without --best), which is what the user asked for.
-                auto seed_trial = encode_plain_auto(
-                    *image, depth, max_colors, mode, chipset,
-                    base_dith, options.palette_diversity,
-                    options.refine_iterations,
-                    options.lock_color0, has_transparency,
-                    /*use_dpf=*/false,
-                    /*match_range=*/options.match_range,
-                    options.locks, options.reserves, options.pins, tmask);
+                auto seed_trial = encode_plain_auto(*image,
+                                                    depth,
+                                                    max_colors,
+                                                    mode,
+                                                    chipset,
+                                                    base_dith,
+                                                    options.palette_diversity,
+                                                    options.refine_iterations,
+                                                    options.lock_color0,
+                                                    has_transparency,
+                                                    /*use_dpf=*/false,
+                                                    /*match_range=*/options.match_range,
+                                                    options.locks,
+                                                    options.reserves,
+                                                    options.pins,
+                                                    tmask);
                 if (seed_trial) {
                     Palette seed_pal;
-                    seed_pal.name   = "pop-seed";
+                    seed_pal.name = "pop-seed";
                     seed_pal.colors = std::vector<Color3f>(
                         seed_trial->pal.colors.begin(),
                         seed_trial->pal.colors.begin() +
@@ -3836,8 +3770,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     seed_locked_mask = seed_trial->locked_mask;
                     if (seed_locked_mask.size() < max_colors)
                         seed_locked_mask.resize(max_colors, false);
-                    if (has_transparency && !seed_locked_mask.empty())
-                        seed_locked_mask[0] = true;
+                    if (has_transparency && !seed_locked_mask.empty()) seed_locked_mask[0] = true;
                     pso.locked_mask = seed_locked_mask;
                     // dither_exclude_mask = reserves ∪ {slot 0 if
                     // transparent}. Locks are NOT included — the
@@ -3846,8 +3779,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     // expecting them to be reachable).
                     std::vector<bool> excl(max_colors, false);
                     for (auto& r : options.reserves) {
-                        if (r.index >= 0 &&
-                            static_cast<std::size_t>(r.index) < max_colors)
+                        if (r.index >= 0 && static_cast<std::size_t>(r.index) < max_colors)
                             excl[static_cast<std::size_t>(r.index)] = true;
                     }
                     if (has_transparency) excl[0] = true;
@@ -3857,9 +3789,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (has_transparency) pso.tmask = tmask;
             }
 
-            auto pop = palette_search::run_population_search(
-                *image, static_cast<int>(depth), max_colors,
-                mode, chipset, base_dith, options.lock_color0, pso);
+            auto pop = palette_search::run_population_search(*image,
+                                                             static_cast<int>(depth),
+                                                             max_colors,
+                                                             mode,
+                                                             chipset,
+                                                             base_dith,
+                                                             options.lock_color0,
+                                                             pso);
 
             // Also run the legacy multi-basin sweep (5 strengths × 2
             // diversities × 8 jitter seeds = 80 trials of
@@ -3869,36 +3806,43 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // basins would beat. Running both and picking the higher
             // S2 covers both regimes. Wall cost ~doubles, which the
             // user explicitly OK'd for --best.
-            auto sweep_encode_once =
-                [&](const Image& img, const dither::Settings& d,
-                    int diversity) -> Result<PlainAutoTrial> {
-                return encode_plain_auto(
-                    img, depth, max_colors, mode, chipset,
-                    d, diversity, options.refine_iterations,
-                    options.lock_color0, has_transparency,
-                    /*use_dpf=*/false,
-                    /*match_range=*/options.match_range,
-                    options.locks, options.reserves, options.pins,
-                    tmask);
+            auto sweep_encode_once = [&](const Image& img,
+                                         const dither::Settings& d,
+                                         int diversity) -> Result<PlainAutoTrial> {
+                return encode_plain_auto(img,
+                                         depth,
+                                         max_colors,
+                                         mode,
+                                         chipset,
+                                         d,
+                                         diversity,
+                                         options.refine_iterations,
+                                         options.lock_color0,
+                                         has_transparency,
+                                         /*use_dpf=*/false,
+                                         /*match_range=*/options.match_range,
+                                         options.locks,
+                                         options.reserves,
+                                         options.pins,
+                                         tmask);
             };
             auto sweep = pipeline::best_sweep<PlainAutoTrial>(
-                *image, base_dith, options.palette_diversity,
+                *image,
+                base_dith,
+                options.palette_diversity,
                 /*jitter_count=*/8,
                 sweep_encode_once,
-                [](const PlainAutoTrial& t) -> const Image& {
-                    return t.rendered;
-                },
-                sweep_phase_progress, /*jitter_amplitude=*/1.0f);
+                [](const PlainAutoTrial& t) -> const Image& { return t.rendered; },
+                sweep_phase_progress,
+                /*jitter_amplitude=*/1.0f);
 
             // Score helper — masks transparent pixels to black on
             // both sides so SSIMULACRA2 doesn't penalise the ignored
             // regions (matches cpu_fitness's masking).
-            auto score_rendered =
-                [&](const Image& rnd) -> float {
+            auto score_rendered = [&](const Image& rnd) -> float {
                 if (!has_transparency) {
-                    return ssimulacra2::compute(image->pixels(),
-                        rnd.pixels(),
-                        image->width(), image->height());
+                    return ssimulacra2::compute(
+                        image->pixels(), rnd.pixels(), image->width(), image->height());
                 }
                 Image src_m(image->width(), image->height());
                 Image rnd_m(image->width(), image->height());
@@ -3915,9 +3859,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         rp[i] = orp[i];
                     }
                 }
-                return ssimulacra2::compute(src_m.pixels(),
-                    rnd_m.pixels(),
-                    image->width(), image->height());
+                return ssimulacra2::compute(
+                    src_m.pixels(), rnd_m.pixels(), image->width(), image->height());
             };
 
             // 3-way candidate ranking: pop / seed / sweep. seed_keep is
@@ -3925,61 +3868,55 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // play (otherwise pop_search's internal k-means seeding
             // suffices). Pick the highest-scoring candidate.
             enum Kind { K_POP, K_SEED, K_SWEEP };
-            struct Cand { float s2; Kind kind; };
+            struct Cand {
+                float s2;
+                Kind kind;
+            };
             std::vector<Cand> cands;
-            if (pop)
-                cands.push_back({score_rendered(pop->rendered), K_POP});
-            if (seed_keep)
-                cands.push_back({score_rendered(seed_keep->rendered),
-                                  K_SEED});
-            if (sweep)
-                cands.push_back({score_rendered(sweep->rendered),
-                                  K_SWEEP});
+            if (pop) cands.push_back({score_rendered(pop->rendered), K_POP});
+            if (seed_keep) cands.push_back({score_rendered(seed_keep->rendered), K_SEED});
+            if (sweep) cands.push_back({score_rendered(sweep->rendered), K_SWEEP});
 
             if (!cands.empty()) {
-                auto win = std::max_element(cands.begin(), cands.end(),
-                    [](const Cand& a, const Cand& b) {
+                auto win = std::max_element(
+                    cands.begin(), cands.end(), [](const Cand& a, const Cand& b) {
                         return a.s2 < b.s2;
                     });
                 PipelineResult result;
                 if (win->kind == K_POP) {
-                    auto enc = bitplane::encode(pop->indices,
-                        image->width(), image->height(), depth);
+                    auto enc = bitplane::encode(
+                        pop->indices, image->width(), image->height(), depth);
                     if (!enc) return std::unexpected{enc.error()};
                     result.rendered = std::move(pop->rendered);
-                    result.planes   = std::move(*enc);
-                    result.palette  = std::move(pop->palette.colors);
-                    result.indices  = std::move(pop->indices);
+                    result.planes = std::move(*enc);
+                    result.palette = std::move(pop->palette.colors);
+                    result.indices = std::move(pop->indices);
                     result.finalize_psnr(*image, pop->total_error);
                 } else if (win->kind == K_SEED) {
                     std::vector<Color3f> pal_keep(
                         seed_keep->pal.colors.begin(),
                         seed_keep->pal.colors.begin() +
-                            static_cast<std::ptrdiff_t>(
-                                seed_keep->pal_size));
+                            static_cast<std::ptrdiff_t>(seed_keep->pal_size));
                     result.rendered = std::move(seed_keep->rendered);
-                    result.planes   = std::move(seed_keep->planes);
-                    result.palette  = std::move(pal_keep);
-                    result.indices  = std::move(seed_keep->indices);
-                    result.finalize_psnr(*image,
-                        seed_keep->total_error);
+                    result.planes = std::move(seed_keep->planes);
+                    result.palette = std::move(pal_keep);
+                    result.indices = std::move(seed_keep->indices);
+                    result.finalize_psnr(*image, seed_keep->total_error);
                 } else {  // K_SWEEP
-                    std::vector<Color3f> pal_keep(
-                        sweep->pal.colors.begin(),
-                        sweep->pal.colors.begin() +
-                            static_cast<std::ptrdiff_t>(
-                                sweep->pal_size));
+                    std::vector<Color3f> pal_keep(sweep->pal.colors.begin(),
+                                                  sweep->pal.colors.begin() +
+                                                      static_cast<std::ptrdiff_t>(sweep->pal_size));
                     result.rendered = std::move(sweep->rendered);
-                    result.planes   = std::move(sweep->planes);
-                    result.palette  = std::move(pal_keep);
-                    result.indices  = std::move(sweep->indices);
+                    result.planes = std::move(sweep->planes);
+                    result.palette = std::move(pal_keep);
+                    result.indices = std::move(sweep->indices);
                     result.finalize_psnr(*image, sweep->total_error);
                 }
-                result.mode      = mode;
-                result.hires     = compound_hires || mp_curr.is_hires;
+                result.mode = mode;
+                result.hires = compound_hires || mp_curr.is_hires;
                 result.interlace = options.interlace;
-                result.dpf       = false;
-                result.aga       = is_aga;
+                result.dpf = false;
+                result.aga = is_aga;
                 result.has_transparency = has_transparency;
                 result.transparency_mask = tmask;
                 return result;
@@ -3990,25 +3927,36 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto encode_once = [&](const Image& img,
                                const dither::Settings& d,
                                int diversity) -> Result<PlainAutoTrial> {
-            return encode_plain_auto(
-                img, depth, max_colors, mode, chipset,
-                d, diversity, options.refine_iterations,
-                options.lock_color0, has_transparency,
-                /*use_dpf=*/false, /*match_range=*/options.match_range,
-                options.locks, options.reserves, options.pins,
-                tmask);
+            return encode_plain_auto(img,
+                                     depth,
+                                     max_colors,
+                                     mode,
+                                     chipset,
+                                     d,
+                                     diversity,
+                                     options.refine_iterations,
+                                     options.lock_color0,
+                                     has_transparency,
+                                     /*use_dpf=*/false,
+                                     /*match_range=*/options.match_range,
+                                     options.locks,
+                                     options.reserves,
+                                     options.pins,
+                                     tmask);
         };
         auto winner = pipeline::best_sweep<PlainAutoTrial>(
-            *image, base_dith, options.palette_diversity,
+            *image,
+            base_dith,
+            options.palette_diversity,
             /*jitter_count=*/8,
             encode_once,
             [](const PlainAutoTrial& t) -> const Image& { return t.rendered; },
-            options.on_progress, /*jitter_amplitude=*/1.0f);
+            options.on_progress,
+            /*jitter_amplitude=*/1.0f);
         if (winner) {
-            std::vector<Color3f> used_pal(
-                winner->pal.colors.begin(),
-                winner->pal.colors.begin() +
-                    static_cast<std::ptrdiff_t>(winner->pal_size));
+            std::vector<Color3f> used_pal(winner->pal.colors.begin(),
+                                          winner->pal.colors.begin() +
+                                              static_cast<std::ptrdiff_t>(winner->pal_size));
 
             // d≤5 case is already handled by the pop_only branch above.
             // This block runs for d≥6 (or pop_only fallback) where
@@ -4019,8 +3967,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.palette = std::move(used_pal);
             result.indices = std::move(winner->indices);
             result.mode = mode;
-            result.hires = compound_hires ||
-                           amiga::get_mode_params(mode).is_hires;
+            result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
             result.interlace = options.interlace;
             result.dpf = false;
             result.aga = is_aga;
@@ -4042,8 +3989,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // With custom palette: use as-is, no forced black at index 0.
     // Without: reserve index 0 for black (Amiga border/background),
     // unless the user explicitly disabled it.
-    auto lock_zero = !user_pal && options.lock_color0 &&
-                        (has_transparency || !is_atari);
+    auto lock_zero = !user_pal && options.lock_color0 && (has_transparency || !is_atari);
 
     // OCS DPF exposes the user-facing 16-entry CLUT view for
     // --reserve-range / --lock-index / --pin-index-at: CLUT 0/8 → PF2
@@ -4060,77 +4006,75 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
         return std::nullopt;
     };
-    auto translate_dpf_reserves =
-        [&](std::span<const ReserveSpec> raw) {
-            std::vector<ReserveSpec> out;
-            out.reserve(raw.size());
-            if (!dpf_clut_indexing) {
-                out.assign(raw.begin(), raw.end());
-                return out;
-            }
-            bool slot0_emitted = false;
-            for (auto& r : raw) {
-                auto pf2_idx = dpf_clut_to_pf2(r.index);
-                if (!pf2_idx) continue;
-                if (*pf2_idx == 0) {
-                    if (lock_zero) continue;
-                    if (slot0_emitted) continue;
-                    slot0_emitted = true;
-                }
-                out.push_back({*pf2_idx, r.r, r.g, r.b});
-            }
+    auto translate_dpf_reserves = [&](std::span<const ReserveSpec> raw) {
+        std::vector<ReserveSpec> out;
+        out.reserve(raw.size());
+        if (!dpf_clut_indexing) {
+            out.assign(raw.begin(), raw.end());
             return out;
-        };
-    auto translate_dpf_locks =
-        [&](std::span<const LockSpec> raw) {
-            std::vector<LockSpec> out;
-            out.reserve(raw.size());
-            if (!dpf_clut_indexing) {
-                out.assign(raw.begin(), raw.end());
-                return out;
+        }
+        bool slot0_emitted = false;
+        for (auto& r : raw) {
+            auto pf2_idx = dpf_clut_to_pf2(r.index);
+            if (!pf2_idx) continue;
+            if (*pf2_idx == 0) {
+                if (lock_zero) continue;
+                if (slot0_emitted) continue;
+                slot0_emitted = true;
             }
-            bool slot0_emitted = false;
-            for (auto& l : raw) {
-                auto pf2_idx = dpf_clut_to_pf2(l.index);
-                if (!pf2_idx) continue;
-                if (*pf2_idx == 0) {
-                    if (slot0_emitted) continue;
-                    slot0_emitted = true;
-                }
-                out.push_back({*pf2_idx, l.r, l.g, l.b});
-            }
+            out.push_back({*pf2_idx, r.r, r.g, r.b});
+        }
+        return out;
+    };
+    auto translate_dpf_locks = [&](std::span<const LockSpec> raw) {
+        std::vector<LockSpec> out;
+        out.reserve(raw.size());
+        if (!dpf_clut_indexing) {
+            out.assign(raw.begin(), raw.end());
             return out;
-        };
-    auto translate_dpf_pins =
-        [&](std::span<const PinSpec> raw) {
-            std::vector<PinSpec> out;
-            out.reserve(raw.size());
-            if (!dpf_clut_indexing) {
-                out.assign(raw.begin(), raw.end());
-                return out;
+        }
+        bool slot0_emitted = false;
+        for (auto& l : raw) {
+            auto pf2_idx = dpf_clut_to_pf2(l.index);
+            if (!pf2_idx) continue;
+            if (*pf2_idx == 0) {
+                if (slot0_emitted) continue;
+                slot0_emitted = true;
             }
-            for (auto& p : raw) {
-                auto pf2_idx = dpf_clut_to_pf2(p.index);
-                if (!pf2_idx) continue;
-                out.push_back({*pf2_idx, p.x, p.y});
-            }
+            out.push_back({*pf2_idx, l.r, l.g, l.b});
+        }
+        return out;
+    };
+    auto translate_dpf_pins = [&](std::span<const PinSpec> raw) {
+        std::vector<PinSpec> out;
+        out.reserve(raw.size());
+        if (!dpf_clut_indexing) {
+            out.assign(raw.begin(), raw.end());
             return out;
-        };
-    std::vector<ReserveSpec> effective_reserves =
-        translate_dpf_reserves(options.reserves);
-    std::vector<LockSpec> effective_locks =
-        translate_dpf_locks(options.locks);
-    std::vector<PinSpec> effective_pins =
-        translate_dpf_pins(options.pins);
+        }
+        for (auto& p : raw) {
+            auto pf2_idx = dpf_clut_to_pf2(p.index);
+            if (!pf2_idx) continue;
+            out.push_back({*pf2_idx, p.x, p.y});
+        }
+        return out;
+    };
+    std::vector<ReserveSpec> effective_reserves = translate_dpf_reserves(options.reserves);
+    std::vector<LockSpec> effective_locks = translate_dpf_locks(options.locks);
+    std::vector<PinSpec> effective_pins = translate_dpf_pins(options.pins);
 
     // Validate locks/pins (no-op for HAM/copper paths above which return earlier).
     // Locks override the implicit reserve-zero rule when index 0 is locked.
     if (auto v = palette_locks::validate_locks(effective_locks, max_colors); !v)
         return std::unexpected{v.error()};
-    if (auto v = palette_locks::validate_pins(effective_pins, effective_locks,
-                                              effective_reserves, max_colors,
-                                              image->width(), image->height(),
-                                              lock_zero); !v)
+    if (auto v = palette_locks::validate_pins(effective_pins,
+                                              effective_locks,
+                                              effective_reserves,
+                                              max_colors,
+                                              image->width(),
+                                              image->height(),
+                                              lock_zero);
+        !v)
         return std::unexpected{v.error()};
     auto reserves_in_pal = palette_locks::validate_reserves(
         effective_reserves, effective_locks, max_colors, lock_zero);
@@ -4188,7 +4132,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     err += d_best;
                 }
             }
-            if (err < best_err) { best_err = err; best = p; }
+            if (err < best_err) {
+                best_err = err;
+                best = p;
+            }
         }
         auto pal4 = palette::cga_build_palette(best, 0);
         pal.colors.assign(pal4.begin(), pal4.end());
@@ -4199,8 +4146,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto loaded = load_user_palette(options);
         if (!loaded) return std::unexpected{loaded.error()};
         pal = *std::move(loaded);
-        if (pal.colors.size() > max_colors)
-            pal.colors.resize(max_colors);
+        if (pal.colors.size() > max_colors) pal.colors.resize(max_colors);
         snap_to_chipset(pal, chipset, mode);
         // Apply locks on top of user palette: overwrite specified slots.
         for (auto& lock : options.locks) {
@@ -4235,17 +4181,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto_dith.method = parse_dither(options.dither);
         auto_dith.strength = options.dither_strength;
         auto_dith.error_clamp = options.error_clamp;
-        auto trial = encode_plain_auto(
-            *image, depth, max_colors, mode, chipset,
-            auto_dith, options.palette_diversity, options.refine_iterations,
-            options.lock_color0, has_transparency, use_dpf,
-            options.match_range,
-            effective_locks, effective_reserves, effective_pins, tmask);
+        auto trial = encode_plain_auto(*image,
+                                       depth,
+                                       max_colors,
+                                       mode,
+                                       chipset,
+                                       auto_dith,
+                                       options.palette_diversity,
+                                       options.refine_iterations,
+                                       options.lock_color0,
+                                       has_transparency,
+                                       use_dpf,
+                                       options.match_range,
+                                       effective_locks,
+                                       effective_reserves,
+                                       effective_pins,
+                                       tmask);
         if (!trial) return std::unexpected{trial.error()};
-        std::vector<Color3f> used_palette(
-            trial->pal.colors.begin(),
-            trial->pal.colors.begin() +
-                static_cast<std::ptrdiff_t>(trial->pal_size));
+        std::vector<Color3f> used_palette(trial->pal.colors.begin(),
+                                          trial->pal.colors.begin() +
+                                              static_cast<std::ptrdiff_t>(trial->pal_size));
         auto trial_planes = std::move(trial->planes);
         auto trial_indices = std::move(trial->indices);
         // DPF expansion lives in the call-site (post-trial) since the
@@ -4255,11 +4210,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto expanded = bitplane::expand_to_dpf_pf2(trial_planes);
             if (!expanded) return std::unexpected{expanded.error()};
             trial_planes = *std::move(expanded);
-            auto pf2_base = std::size_t{1} <<
-                            (trial_planes.depth / 2);
+            auto pf2_base = std::size_t{1} << (trial_planes.depth / 2);
             std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
-            shifted.insert(shifted.end(),
-                           used_palette.begin(), used_palette.end());
+            shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
             used_palette = std::move(shifted);
             for (auto& idx : trial_indices)
                 idx = static_cast<std::uint8_t>(idx + pf2_base);
@@ -4270,8 +4223,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.palette = std::move(used_palette);
         result.indices = std::move(trial_indices);
         result.mode = mode;
-        result.hires = compound_hires ||
-                       amiga::get_mode_params(mode).is_hires;
+        result.hires = compound_hires || amiga::get_mode_params(mode).is_hires;
         result.interlace = options.interlace;
         result.dpf = use_dpf;
         result.aga = is_aga;
@@ -4279,15 +4231,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.transparency_mask = tmask;
         if (has_transparency) {
             for (std::size_t i = 0; i < tmask.size(); ++i)
-                if (tmask[i])
-                    result.rendered.pixels()[i] = Color3f{0, 0, 0};
+                if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
         result.finalize_psnr(*image, trial->total_error);
         return result;
     }
 
-    if (options.match_range)
-        preprocess::match_palette_range(*image, pal);
+    if (options.match_range) preprocess::match_palette_range(*image, pal);
 
     // Apply dithering to map pixels to palette indices
     dither::Settings dith;
@@ -4311,15 +4261,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     //     the same gamut entry (reduces 16 slots → ~11 effective colors)
     //     and drops PSNR by 3+ dB.
     if (options.refine_iterations > 0 && !has_user_palette(options) &&
-        dith.method != dither::Method::none && reserve_count == 0 &&
-        !amiga::is_cga(mode) && !amiga::is_chunky(mode) &&
-        !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
+        dith.method != dither::Method::none && reserve_count == 0 && !amiga::is_cga(mode) &&
+        !amiga::is_chunky(mode) && !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             *image,
-            Palette{"refined", {pal.colors.begin(),
-                                pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
-            dith, chipset, mode,
-            static_cast<std::size_t>(options.refine_iterations), locked_mask);
+            Palette{
+                "refined",
+                {pal.colors.begin(), pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
+            dith,
+            chipset,
+            mode,
+            static_cast<std::size_t>(options.refine_iterations),
+            locked_mask);
         if (refined) {
             pal.colors = std::move(refined->colors);
             pal_size = pal.colors.size();
@@ -4345,10 +4298,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
         dither_result = dither::apply(*image, dither_span, dith);
-        for (auto& idx : dither_result.indices) idx = cand_to_full[idx];
+        for (auto& idx : dither_result.indices)
+            idx = cand_to_full[idx];
         if (has_transparency) {
-            for (std::size_t i = 0;
-                 i < tmask.size() && i < dither_result.indices.size(); ++i)
+            for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
                 if (tmask[i]) dither_result.indices[i] = 0;
         }
     } else {
@@ -4358,8 +4311,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Apply pin-index swaps (post-quantization, post-dither).
     if (!options.pins.empty()) {
         auto pin_result = palette_locks::apply_pins(
-            pal, dither_result.indices, locked_mask, options.pins,
-            image->width(), image->height());
+            pal, dither_result.indices, locked_mask, options.pins, image->width(), image->height());
         if (!pin_result) return std::unexpected{pin_result.error()};
         // pal_span/pal_size still valid (palette length unchanged).
     }
@@ -4371,9 +4323,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // palette into the upper registers; sorting first then expanding
     // would mis-align lock indices vs the shifted palette layout.
     if (!amiga::is_ham(mode) && !use_dpf) {
-        palette_locks::sort_by_brightness(pal.colors, locked_mask,
-                                          dither_result.indices,
-                                          pal.colors.size());
+        palette_locks::sort_by_brightness(
+            pal.colors, locked_mask, dither_result.indices, pal.colors.size());
         pal_span = std::span<const Color3f>(pal.colors);
     }
 
@@ -4381,15 +4332,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // See main.cpp for rationale. DOS planar (EGA + VGA 10h/12h) uses
     // Layout::standard so planes can be blitted contiguously via the
     // sequencer map mask.
-    bool dos_planar = (amiga::is_ega(mode) || amiga::is_vga(mode))
-                      && !amiga::is_chunky(mode);
-    auto bp_layout = amiga::is_atari(mode)
-        ? bitplane::Layout::word_interleaved
-        : dos_planar ? bitplane::Layout::standard
-                     : bitplane::Layout::interleaved;
-    auto planes = bitplane::encode(dither_result.indices,
-                                   image->width(), image->height(),
-                                   depth, bp_layout);
+    bool dos_planar = (amiga::is_ega(mode) || amiga::is_vga(mode)) && !amiga::is_chunky(mode);
+    auto bp_layout = amiga::is_atari(mode) ? bitplane::Layout::word_interleaved
+                     : dos_planar          ? bitplane::Layout::standard
+                                           : bitplane::Layout::interleaved;
+    auto planes = bitplane::encode(
+        dither_result.indices, image->width(), image->height(), depth, bp_layout);
     if (!planes) return std::unexpected{planes.error()};
 
     // Build used palette vector
@@ -4400,9 +4348,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // direct color preview. (After expansion the "combined" indices read
     // from all planes would be non-contiguous, so render the unexpanded
     // image then transform the planes/palette to their final DPF layout.)
-    auto preview = pipeline::render_preview(
-        *planes, used_palette,
-        /*is_ham=*/false, options.interlace, chipset);
+    auto preview = pipeline::render_preview(*planes,
+                                            used_palette,
+                                            /*is_ham=*/false,
+                                            options.interlace,
+                                            chipset);
 
     // Dual-playfield expansion: place the encoded N-plane image into the
     // even hardware planes (PF2), leave the odd planes (PF1) zeroed, and
@@ -4494,12 +4444,9 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.paletteBytes.reserve(swatch_pal.size() * 3);
     for (auto& c : swatch_pal) {
         auto s = color_space::linear_to_srgb(c).clamped();
-        r.paletteBytes.push_back(static_cast<std::uint8_t>(
-            std::round(s.r * 255.0f)));
-        r.paletteBytes.push_back(static_cast<std::uint8_t>(
-            std::round(s.g * 255.0f)));
-        r.paletteBytes.push_back(static_cast<std::uint8_t>(
-            std::round(s.b * 255.0f)));
+        r.paletteBytes.push_back(static_cast<std::uint8_t>(std::round(s.r * 255.0f)));
+        r.paletteBytes.push_back(static_cast<std::uint8_t>(std::round(s.g * 255.0f)));
+        r.paletteBytes.push_back(static_cast<std::uint8_t>(std::round(s.b * 255.0f)));
     }
     // Per-pixel palette indices for the web swatch hover-isolate
     // feature. Only forwarded when the mode emits a true 1:1 grid
@@ -4517,8 +4464,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         std::size_t colors_per_row = p.scanline_palettes[0].size();
         if (colors_per_row > 0) {
             r.scanlinePaletteSize = static_cast<int>(colors_per_row);
-            r.scanlinePaletteBytes.reserve(
-                p.scanline_palettes.size() * colors_per_row * 3);
+            r.scanlinePaletteBytes.reserve(p.scanline_palettes.size() * colors_per_row * 3);
             for (auto& row_pal : p.scanline_palettes) {
                 // Per-row palettes can theoretically differ in length
                 // across modes; clamp to the row-0 size so the JS-side
@@ -4526,12 +4472,12 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
                 std::size_t n = std::min(row_pal.size(), colors_per_row);
                 for (std::size_t i = 0; i < n; ++i) {
                     auto s = color_space::linear_to_srgb(row_pal[i]).clamped();
-                    r.scanlinePaletteBytes.push_back(static_cast<std::uint8_t>(
-                        std::round(s.r * 255.0f)));
-                    r.scanlinePaletteBytes.push_back(static_cast<std::uint8_t>(
-                        std::round(s.g * 255.0f)));
-                    r.scanlinePaletteBytes.push_back(static_cast<std::uint8_t>(
-                        std::round(s.b * 255.0f)));
+                    r.scanlinePaletteBytes.push_back(
+                        static_cast<std::uint8_t>(std::round(s.r * 255.0f)));
+                    r.scanlinePaletteBytes.push_back(
+                        static_cast<std::uint8_t>(std::round(s.g * 255.0f)));
+                    r.scanlinePaletteBytes.push_back(
+                        static_cast<std::uint8_t>(std::round(s.b * 255.0f)));
                 }
                 for (std::size_t i = n; i < colors_per_row; ++i) {
                     r.scanlinePaletteBytes.push_back(0);
@@ -4542,8 +4488,8 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         }
     }
     r.copperChanges = p.copper_changes;
-    r.avgPaletteUsedPerLine =
-        pipeline::compute_avg_palette_used_per_line(p.rendered, p.scanline_palettes);
+    r.avgPaletteUsedPerLine = pipeline::compute_avg_palette_used_per_line(p.rendered,
+                                                                          p.scanline_palettes);
     r.totalColors = count_unique_colors(p.rendered);
     r.planeBytes = static_cast<int>(p.planes.total_bytes());
     r.aga = p.aga;
@@ -4567,10 +4513,13 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         strips_op_count = static_cast<int>(total_ops);
         max_moves = std::max(max_moves, static_cast<int>(per_line_max));
     }
-    auto sb = compute_size_breakdown(
-        r.planeBytes,
-        static_cast<int>(p.palette.size()),
-        p.aga, sliced_grid_entries, strips_op_count, r.height, max_moves);
+    auto sb = compute_size_breakdown(r.planeBytes,
+                                     static_cast<int>(p.palette.size()),
+                                     p.aga,
+                                     sliced_grid_entries,
+                                     strips_op_count,
+                                     r.height,
+                                     max_moves);
     r.copperBytes = sb.copper_bytes;
     r.diskBytes = sb.disk_bytes;
     r.chipBytes = sb.chip_bytes;
@@ -4580,15 +4529,15 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.s2 = p.ssimulacra2_score;
     r.hasTransparency = p.has_transparency;
     r.genesisUniqueTiles = static_cast<int>(p.genesis_unique_tiles);
-    r.tileDataBytes      = static_cast<int>(p.tile_data_bytes);
-    r.genesisTotalCells  = static_cast<int>(p.genesis_total_cells);
+    r.tileDataBytes = static_cast<int>(p.tile_data_bytes);
+    r.genesisTotalCells = static_cast<int>(p.genesis_total_cells);
     // c64 charset diagnostic: copy raw_frame so the web preview can
     // render the generated charset under the image. Cheap (a few KB
     // for typical charsets) and only populated when cols/rows are set.
     if (amiga::is_c64_charset(p.mode) && p.c64_cols > 0 && p.c64_rows > 0) {
         r.c64CharsetData = p.raw_frame;
-        r.c64Mc1     = p.c64_mc1;
-        r.c64Mc2     = p.c64_mc2;
+        r.c64Mc1 = p.c64_mc1;
+        r.c64Mc2 = p.c64_mc2;
         r.c64BgColor = p.c64_bg_color;
     }
     // Genesis tile diagnostic: u16 vectors get serialised as little-endian
@@ -4598,13 +4547,13 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
         auto u16_to_bytes = [](const std::vector<std::uint16_t>& src) {
             std::vector<std::uint8_t> out(src.size() * 2);
             for (std::size_t i = 0; i < src.size(); ++i) {
-                out[i * 2]     = static_cast<std::uint8_t>(src[i] & 0xFF);
+                out[i * 2] = static_cast<std::uint8_t>(src[i] & 0xFF);
                 out[i * 2 + 1] = static_cast<std::uint8_t>((src[i] >> 8) & 0xFF);
             }
             return out;
         };
-        r.genesisTilemapBytes  = u16_to_bytes(p.genesis_tilemap_cells);
-        r.genesisPaletteBytes  = u16_to_bytes(p.genesis_palette_words);
+        r.genesisTilemapBytes = u16_to_bytes(p.genesis_tilemap_cells);
+        r.genesisPaletteBytes = u16_to_bytes(p.genesis_palette_words);
     }
     // SNES Mode 7 tile diagnostic: split packed_bytes into tilemap (first
     // 16 KB) + tile data (rest). Palette is 256 RGB triples for 256 mode,
@@ -4612,14 +4561,11 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     if (amiga::is_snes(p.mode) && !p.raw_frame.empty()) {
         constexpr std::size_t kTilemapBytes = 128 * 128;
         if (p.raw_frame.size() >= kTilemapBytes) {
-            r.snesTilemapBytes.assign(
-                p.raw_frame.begin(),
-                p.raw_frame.begin()
-                    + static_cast<std::ptrdiff_t>(kTilemapBytes));
-            r.snesTileBytes.assign(
-                p.raw_frame.begin()
-                    + static_cast<std::ptrdiff_t>(kTilemapBytes),
-                p.raw_frame.end());
+            r.snesTilemapBytes.assign(p.raw_frame.begin(),
+                                      p.raw_frame.begin() +
+                                          static_cast<std::ptrdiff_t>(kTilemapBytes));
+            r.snesTileBytes.assign(p.raw_frame.begin() + static_cast<std::ptrdiff_t>(kTilemapBytes),
+                                   p.raw_frame.end());
         }
         if (!p.palette.empty()) {
             r.snesPaletteBytes.reserve(p.palette.size() * 3);
@@ -4627,8 +4573,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
                 auto srgb = color_space::linear_to_srgb(c);
                 auto chan = [](float v) {
                     return static_cast<std::uint8_t>(
-                        std::clamp(static_cast<int>(std::lround(v * 255.0f)),
-                                    0, 255));
+                        std::clamp(static_cast<int>(std::lround(v * 255.0f)), 0, 255));
                 };
                 r.snesPaletteBytes.push_back(chan(srgb.r));
                 r.snesPaletteBytes.push_back(chan(srgb.g));
@@ -4639,9 +4584,10 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     return r;
 }
 
-} // namespace
+}  // namespace
 
-ConvertResult convert(const std::uint8_t* input_data, std::size_t input_size,
+ConvertResult convert(const std::uint8_t* input_data,
+                      std::size_t input_size,
                       const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
@@ -4652,9 +4598,11 @@ ConvertResult convert(const std::uint8_t* input_data, std::size_t input_size,
     Result<std::vector<std::uint8_t>> png;
     if (!result->indices.empty() && !result->palette.empty()) {
         int trans = result->has_transparency ? 0 : -1;
-        png = png_io::encode_palettized(
-            result->indices, result->palette,
-            result->rendered.width(), result->rendered.height(), trans);
+        png = png_io::encode_palettized(result->indices,
+                                        result->palette,
+                                        result->rendered.width(),
+                                        result->rendered.height(),
+                                        trans);
     } else {
         png = png_io::encode(result->rendered);
     }
@@ -4700,8 +4648,7 @@ ConvertResult convert_iff(const std::uint8_t* input_data,
         iff_opts.scanline_palettes = &result->scanline_palettes;
     }
 
-    auto iff_data = iff::write_ilbm(
-        result->planes, result->palette, result->mode, iff_opts);
+    auto iff_data = iff::write_ilbm(result->planes, result->palette, result->mode, iff_opts);
     if (!iff_data) return make_error(iff_data.error().message);
 
     return make_result(*std::move(iff_data), *result);
@@ -4713,8 +4660,7 @@ ConvertResult convert_degas(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
-    auto degas_data = degas::encode(
-        result->planes, result->palette, result->mode);
+    auto degas_data = degas::encode(result->planes, result->palette, result->mode);
     if (!degas_data) return make_error(degas_data.error().message);
 
     return make_result(*std::move(degas_data), *result);
@@ -4728,8 +4674,7 @@ static std::string emit_byte_array(std::string_view name,
                                    std::string_view type = "unsigned char") {
     std::string out;
     out.reserve(bytes.size() * 6 + 64);
-    out += std::format("static const {} {}[] = {{\n   ",
-                        type, name);
+    out += std::format("static const {} {}[] = {{\n   ", type, name);
     for (std::size_t i = 0; i < bytes.size(); ++i) {
         out += std::format(" 0x{:02X}", bytes[i]);
         if (i + 1 < bytes.size()) out += ',';
@@ -4741,25 +4686,21 @@ static std::string emit_byte_array(std::string_view name,
 
 // Minimal SNES Mode 7 .h: tiles + tilemap + (256-mode) palette.
 // Direct mode skips the palette since pixels self-decode (BBGGGRRR).
-static std::string snes_header(const PipelineResult& p,
-                                std::string_view sym) {
+static std::string snes_header(const PipelineResult& p, std::string_view sym) {
     std::string out;
-    out += std::format(
-        "// Generated by png2amiga. Do not edit.\n"
-        "//   SNES Mode 7 — {} tile(s), {}×{} tilemap.\n\n"
-        "#pragma once\n\n",
-        p.genesis_unique_tiles, 128, 128);
+    out += std::format("// Generated by png2amiga. Do not edit.\n"
+                       "//   SNES Mode 7 — {} tile(s), {}×{} tilemap.\n\n"
+                       "#pragma once\n\n",
+                       p.genesis_unique_tiles,
+                       128,
+                       128);
     constexpr std::size_t kTilemapBytes = 128 * 128;
     if (p.raw_frame.size() < kTilemapBytes) return out;
-    auto tilemap = std::span<const std::uint8_t>(
-        p.raw_frame.data(), kTilemapBytes);
-    auto tile_bytes = std::span<const std::uint8_t>(
-        p.raw_frame.data() + kTilemapBytes,
-        p.raw_frame.size() - kTilemapBytes);
-    out += std::format("#define {}_TILES   {}\n",
-                        sym, p.genesis_unique_tiles);
-    out += std::format("#define {}_TILE_BYTES   {}\n\n",
-                        sym, tile_bytes.size());
+    auto tilemap = std::span<const std::uint8_t>(p.raw_frame.data(), kTilemapBytes);
+    auto tile_bytes = std::span<const std::uint8_t>(p.raw_frame.data() + kTilemapBytes,
+                                                    p.raw_frame.size() - kTilemapBytes);
+    out += std::format("#define {}_TILES   {}\n", sym, p.genesis_unique_tiles);
+    out += std::format("#define {}_TILE_BYTES   {}\n\n", sym, tile_bytes.size());
     out += emit_byte_array(std::string(sym) + "_tiles", tile_bytes);
     out += emit_byte_array(std::string(sym) + "_tilemap", tilemap);
     if (!p.palette.empty()) {
@@ -4771,8 +4712,7 @@ static std::string snes_header(const PipelineResult& p,
             pal_bytes.push_back(static_cast<std::uint8_t>(w & 0xFF));
             pal_bytes.push_back(static_cast<std::uint8_t>((w >> 8) & 0xFF));
         }
-        out += emit_byte_array(std::string(sym) + "_palette",
-                                pal_bytes);
+        out += emit_byte_array(std::string(sym) + "_palette", pal_bytes);
     }
     return out;
 }
@@ -4783,8 +4723,7 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
-    auto sym = options.symbol_name.empty()
-        ? std::string{"img"} : options.symbol_name;
+    auto sym = options.symbol_name.empty() ? std::string{"img"} : options.symbol_name;
 
     // C64 charset: route through the existing c64::charset_header writer.
     // raw_frame holds charset_data + screen + color; cols/rows/glyph-count
@@ -4801,20 +4740,14 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
         std::size_t cells = enc.cols * enc.rows;
         if (result->raw_frame.size() < charset_bytes + 2 * cells)
             return make_error("c64-charset .h: raw_frame too small");
-        enc.bitmap.assign(
-            result->raw_frame.begin(),
-            result->raw_frame.begin()
-                + static_cast<std::ptrdiff_t>(charset_bytes));
+        enc.bitmap.assign(result->raw_frame.begin(),
+                          result->raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes));
         enc.screen_ram.assign(
-            result->raw_frame.begin()
-                + static_cast<std::ptrdiff_t>(charset_bytes),
-            result->raw_frame.begin()
-                + static_cast<std::ptrdiff_t>(charset_bytes + cells));
+            result->raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes),
+            result->raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes + cells));
         enc.color_ram.assign(
-            result->raw_frame.begin()
-                + static_cast<std::ptrdiff_t>(charset_bytes + cells),
-            result->raw_frame.begin()
-                + static_cast<std::ptrdiff_t>(charset_bytes + 2 * cells));
+            result->raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes + cells),
+            result->raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes + 2 * cells));
         auto pal_choice = c64::parse_palette(options.c64_palette);
         bool mc = result->mode == amiga::Mode::c64_charset_multicolor;
         auto hdr = c64::charset_header(enc, sym, mc, pal_choice);
@@ -4824,13 +4757,12 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     }
 
     // Sega Genesis: SGDK-compatible header via cheader_genesis.
-    if (amiga::is_genesis(result->mode)
-        && !result->genesis_tile_bytes.empty()) {
+    if (amiga::is_genesis(result->mode) && !result->genesis_tile_bytes.empty()) {
         cheader_genesis::GenesisHeaderOptions hopts;
-        hopts.tile_bytes   = result->genesis_tile_bytes;
-        hopts.tilemap      = result->genesis_tilemap_cells;
-        hopts.palette      = result->genesis_palette_words;
-        hopts.width_pixels  = result->rendered.width();
+        hopts.tile_bytes = result->genesis_tile_bytes;
+        hopts.tilemap = result->genesis_tilemap_cells;
+        hopts.palette = result->genesis_palette_words;
+        hopts.width_pixels = result->rendered.width();
         hopts.height_pixels = result->rendered.height();
         hopts.symbol = sym;
         auto hdr = cheader_genesis::generate(hopts);
@@ -4849,8 +4781,7 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
         .symbol_override = options.symbol_name,
         .aga = result->aga,
         .dpf = result->dpf,
-        .total_unique_colors =
-            static_cast<std::size_t>(count_unique_colors(result->rendered)),
+        .total_unique_colors = static_cast<std::size_t>(count_unique_colors(result->rendered)),
     });
     // sliced per-line copper data, when present.
     if (result->copper && !result->scanline_changes.empty()) {
@@ -4862,19 +4793,18 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     // (data only — no init code; that lives in the .cpp viewer).
     if (result->scap && !result->strips_line_moves.empty()) {
         ch_opts.strips_line_moves = &result->strips_line_moves;
-        bool strips_ehb  = result->mode == amiga::Mode::ehb;
+        bool strips_ehb = result->mode == amiga::Mode::ehb;
         bool strips_ham6 = result->mode == amiga::Mode::ham6;
-        auto& table = strips_ehb  ? strips::kStrips6bplEhb
-                    : strips_ham6 ? strips::kStrips6bplHam6
-                                : strips::kStrips6bplOcs;
-        ch_opts.strips_label = strips_ehb  ? "strips_ehb_ocs"
-                           : strips_ham6 ? "strips_ham6_ocs"
-                                       : "strips_dpf_ocs";
+        auto& table = strips_ehb    ? strips::kStrips6bplEhb
+                      : strips_ham6 ? strips::kStrips6bplHam6
+                                    : strips::kStrips6bplOcs;
+        ch_opts.strips_label = strips_ehb    ? "strips_ehb_ocs"
+                               : strips_ham6 ? "strips_ham6_ocs"
+                                             : "strips_dpf_ocs";
         ch_opts.strips_anchor_hpos = table.line_gate_hpos;
         ch_opts.strips_total_planes = table.total_planes;
     }
-    auto header = cheader::generate(
-        result->planes, result->palette, result->mode, ch_opts);
+    auto header = cheader::generate(result->planes, result->palette, result->mode, ch_opts);
     if (!header) return make_error(header.error().message);
 
     std::vector<std::uint8_t> bytes(header->begin(), header->end());
@@ -4891,12 +4821,10 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     // ia16-elf-gcc (real-mode 8088+; no DPMI, no 32-bit code).
     // Build the mode-specific raw bytes + palette bytes, then call
     // cheader_dos_c::generate which dispatches per mode.
-    if (amiga::is_vga(result->mode) || amiga::is_ega(result->mode) ||
-        amiga::is_cga(result->mode)) {
+    if (amiga::is_vga(result->mode) || amiga::is_ega(result->mode) || amiga::is_cga(result->mode)) {
         using amiga::Mode;
         cheader_dos_c::Options opts;
-        if (!options.symbol_name.empty())
-            opts.symbol_name = options.symbol_name;
+        if (!options.symbol_name.empty()) opts.symbol_name = options.symbol_name;
 
         auto mode = result->mode;
         std::size_t w = result->rendered.width();
@@ -4904,20 +4832,17 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
         std::vector<std::uint8_t> raw;
         std::vector<std::uint8_t> palette_bytes;
 
-        if (mode == Mode::cga_320 || mode == Mode::cga_640 ||
-            mode == Mode::cga_composite) {
+        if (mode == Mode::cga_320 || mode == Mode::cga_640 || mode == Mode::cga_composite) {
             // 16 KB banked CGAPIC frame.
             if (!result->raw_frame.empty())
                 raw = result->raw_frame;
             else
-                raw = cheader_dos_c::pack_cga_banked(
-                    result->indices, w, h, mode);
+                raw = cheader_dos_c::pack_cga_banked(result->indices, w, h, mode);
             if (mode == Mode::cga_320 && result->cga_mode_ctrl2 != 0xFF)
                 opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
         } else if (amiga::is_cga_text(mode)) {
-            raw = result->raw_frame;   // char+attr pairs
-        } else if (mode == Mode::ega_320 || mode == Mode::ega_640 ||
-                   mode == Mode::ega_hi) {
+            raw = result->raw_frame;  // char+attr pairs
+        } else if (mode == Mode::ega_320 || mode == Mode::ega_640 || mode == Mode::ega_hi) {
             raw = result->planes.data;
             // EGA palette: CGA-compat IRGB for 200-line (ega_320/640),
             // full IrgbIRGB via linear_to_ega+ega_to_hw for 350-line.
@@ -4927,11 +4852,12 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
                     auto rrggbb = palette::linear_to_ega(c);
                     palette_bytes.push_back(palette::ega_to_hw(rrggbb));
                 }
-                while (palette_bytes.size() < 16) palette_bytes.push_back(0);
+                while (palette_bytes.size() < 16)
+                    palette_bytes.push_back(0);
             } else {
                 for (std::size_t i = 0; i < 16; ++i)
-                    palette_bytes.push_back(static_cast<std::uint8_t>(
-                        (i & 0x07) | ((i & 0x08) << 1)));
+                    palette_bytes.push_back(
+                        static_cast<std::uint8_t>((i & 0x07) | ((i & 0x08) << 1)));
             }
         } else if (mode == Mode::vga_13h) {
             // Chunky 256-color: build 768-byte DAC.
@@ -4940,8 +4866,8 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < n; ++i) {
                 auto v = palette::linear_to_vga(result->palette[i]);
                 palette_bytes[i * 3 + 0] = (v >> 16) & 0x3F;
-                palette_bytes[i * 3 + 1] = (v >>  8) & 0x3F;
-                palette_bytes[i * 3 + 2] =  v        & 0x3F;
+                palette_bytes[i * 3 + 1] = (v >> 8) & 0x3F;
+                palette_bytes[i * 3 + 2] = v & 0x3F;
             }
             raw.assign(result->indices.begin(), result->indices.end());
         } else if (mode == Mode::vga_10h || mode == Mode::vga_12h) {
@@ -4951,10 +4877,11 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < n; ++i) {
                 auto v = palette::linear_to_vga(result->palette[i]);
                 palette_bytes.push_back((v >> 16) & 0x3F);
-                palette_bytes.push_back((v >>  8) & 0x3F);
-                palette_bytes.push_back( v        & 0x3F);
+                palette_bytes.push_back((v >> 8) & 0x3F);
+                palette_bytes.push_back(v & 0x3F);
             }
-            while (palette_bytes.size() < 48) palette_bytes.push_back(0);
+            while (palette_bytes.size() < 48)
+                palette_bytes.push_back(0);
         } else {
             return make_error("DOS viewer: mode not supported on ia16 path");
         }
@@ -4967,8 +4894,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
 
     // Pad or crop bitplanes to display width for correct hardware row stride.
     auto mode = result->mode;
-    auto display_w = result->hires
-        ? std::size_t{640} : amiga::default_width(mode);
+    auto display_w = result->hires ? std::size_t{640} : amiga::default_width(mode);
     auto& planes = result->planes;
     if (planes.width != display_w) {
         auto old_bpr = planes.bytes_per_row;
@@ -4985,8 +4911,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
                     dst_off = y * depth * new_bpr + p * new_bpr;
                 else
                     dst_off = p * height * new_bpr + y * new_bpr;
-                std::copy_n(planes.data.data() + src_off, copy_bpr,
-                            padded.data() + dst_off);
+                std::copy_n(planes.data.data() + src_off, copy_bpr, padded.data() + dst_off);
             }
         }
         planes.data = std::move(padded);
@@ -4999,10 +4924,9 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
         .hires = result->hires,
         .interlace = result->interlace,
         .aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga),
-        .fade_in = true,            // always enable fade-in for web/compile exports
+        .fade_in = true,  // always enable fade-in for web/compile exports
         .dpf = result->dpf,
-        .total_unique_colors =
-            static_cast<std::size_t>(count_unique_colors(result->rendered)),
+        .total_unique_colors = static_cast<std::size_t>(count_unique_colors(result->rendered)),
     });
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
@@ -5010,20 +4934,19 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     }
     if (result->scap && !result->strips_line_moves.empty()) {
         ch_opts.strips_line_moves = &result->strips_line_moves;
-        bool strips_ehb  = result->mode == amiga::Mode::ehb;
+        bool strips_ehb = result->mode == amiga::Mode::ehb;
         bool strips_ham6 = result->mode == amiga::Mode::ham6;
-        auto& table = strips_ehb  ? strips::kStrips6bplEhb
-                    : strips_ham6 ? strips::kStrips6bplHam6
-                                : strips::kStrips6bplOcs;
-        ch_opts.strips_label = strips_ehb  ? "strips_ehb_ocs"
-                           : strips_ham6 ? "strips_ham6_ocs"
-                                       : "strips_dpf_ocs";
+        auto& table = strips_ehb    ? strips::kStrips6bplEhb
+                      : strips_ham6 ? strips::kStrips6bplHam6
+                                    : strips::kStrips6bplOcs;
+        ch_opts.strips_label = strips_ehb    ? "strips_ehb_ocs"
+                               : strips_ham6 ? "strips_ham6_ocs"
+                                             : "strips_dpf_ocs";
         ch_opts.strips_anchor_hpos = table.line_gate_hpos;
         ch_opts.strips_total_planes = table.total_planes;
         ch_opts.fade_in = false;  // strips carries its own per-line palette
     }
-    auto viewer = cheader::generate_viewer(
-        planes, result->palette, result->mode, ch_opts);
+    auto viewer = cheader::generate_viewer(planes, result->palette, result->mode, ch_opts);
     if (!viewer) return make_error(viewer.error().message);
 
     std::vector<std::uint8_t> bytes(viewer->begin(), viewer->end());
@@ -5059,29 +4982,26 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     //     (6-bit per channel).
     //   EGA: 4 bitplanes + 16-byte IrgbIRGB palette.
     //   VGA planar (Mode 10h / 12h): 4 planes + 16×3-byte DAC palette.
-    if (amiga::is_cga_text(result->mode) ||
-        result->mode == amiga::Mode::cga_composite ||
+    if (amiga::is_cga_text(result->mode) || result->mode == amiga::Mode::cga_composite ||
         amiga::is_chunky(result->mode)) {
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         if (amiga::is_chunky(result->mode)) {
             for (auto& c : result->palette) {
                 auto v = palette::linear_to_vga(c);
                 raw.push_back(static_cast<std::uint8_t>((v >> 16) & 0x3F));
-                raw.push_back(static_cast<std::uint8_t>((v >> 8)  & 0x3F));
-                raw.push_back(static_cast<std::uint8_t>( v        & 0x3F));
+                raw.push_back(static_cast<std::uint8_t>((v >> 8) & 0x3F));
+                raw.push_back(static_cast<std::uint8_t>(v & 0x3F));
             }
         }
         return make_result(std::move(raw), *result);
     }
-    if (amiga::is_ega(result->mode) || amiga::is_vga(result->mode) ||
-        amiga::is_cga(result->mode)) {
+    if (amiga::is_ega(result->mode) || amiga::is_vga(result->mode) || amiga::is_cga(result->mode)) {
         std::vector<std::uint8_t> raw;
         if (amiga::is_cga(result->mode)) {
             // CGA 320/640: pack indices into the banked 16 KB CGAPIC
             // frame. Palette is hardware-fixed so we emit no palette bytes.
             raw = cheader_dos_c::pack_cga_banked(
-                result->indices, result->rendered.width(),
-                result->rendered.height(), result->mode);
+                result->indices, result->rendered.width(), result->rendered.height(), result->mode);
         } else {
             raw = std::move(result->planes.data);
             if (amiga::is_ega(result->mode)) {
@@ -5093,8 +5013,8 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                 for (auto& c : result->palette) {
                     auto v = palette::linear_to_vga(c);
                     raw.push_back(static_cast<std::uint8_t>((v >> 16) & 0x3F));
-                    raw.push_back(static_cast<std::uint8_t>((v >> 8)  & 0x3F));
-                    raw.push_back(static_cast<std::uint8_t>( v        & 0x3F));
+                    raw.push_back(static_cast<std::uint8_t>((v >> 8) & 0x3F));
+                    raw.push_back(static_cast<std::uint8_t>(v & 0x3F));
                 }
             }
         }
@@ -5106,8 +5026,7 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
 
     // Append palette (2 bytes/color, 0x0RGB)
     for (auto& c : result->palette) {
-        auto rgb12 = aga ? palette::linear_to_aga_hilo(c).hi
-                         : palette::linear_to_ocs(c);
+        auto rgb12 = aga ? palette::linear_to_aga_hilo(c).hi : palette::linear_to_ocs(c);
         raw.push_back(static_cast<std::uint8_t>(rgb12 >> 8));
         raw.push_back(static_cast<std::uint8_t>(rgb12 & 0xFF));
     }
@@ -5131,8 +5050,7 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                 // A consumer that walks the table and skips 0xFFFF entries
                 // honors the encoder's MOVE budget; without this, naive
                 // consumers could exceed MOVE_BUDGET_PER_LINE on some lines.
-                bool active = s < line.size() &&
-                              !(aga && line[s].skip_hi);
+                bool active = s < line.size() && !(aga && line[s].skip_hi);
                 if (active) {
                     auto hi = aga ? palette::linear_to_aga_hilo(line[s].color).hi
                                   : palette::linear_to_ocs(line[s].color);
@@ -5179,18 +5097,17 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
 
 namespace {
 
-ConvertResult c64_export(const std::uint8_t* input_data, std::size_t input_size,
-                         const Options& options,
-                         const std::function<Result<c64::prg::PrgData>(
-                             amiga::Mode, const c64::EncodeResult&)>& gen,
-                         const char* label) {
+ConvertResult c64_export(
+    const std::uint8_t* input_data,
+    std::size_t input_size,
+    const Options& options,
+    const std::function<Result<c64::prg::PrgData>(amiga::Mode, const c64::EncodeResult&)>& gen,
+    const char* label) {
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
     if (!amiga::is_c64(result->mode))
-        return make_error(std::string(label)
-                          + " export only supported for c64 modes");
-    auto enc = c64::prg::unpack_pipeline_raw(
-        result->mode, result->raw_frame, result->c64_bg_color);
+        return make_error(std::string(label) + " export only supported for c64 modes");
+    auto enc = c64::prg::unpack_pipeline_raw(result->mode, result->raw_frame, result->c64_bg_color);
     if (!enc) return make_error(enc.error().message);
     auto prg = gen(result->mode, *enc);
     if (!prg) return make_error(prg.error().message);
@@ -5202,41 +5119,44 @@ ConvertResult c64_export(const std::uint8_t* input_data, std::size_t input_size,
 ConvertResult convert_prg(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {
-    return c64_export(input_data, input_size, options,
-                      [](amiga::Mode m, const c64::EncodeResult& r) {
-                          return c64::prg::from_mode(m, r);
-                      },
-                      "PRG");
+    return c64_export(
+        input_data,
+        input_size,
+        options,
+        [](amiga::Mode m, const c64::EncodeResult& r) { return c64::prg::from_mode(m, r); },
+        "PRG");
 }
 
 ConvertResult convert_koa(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {
-    return c64_export(input_data, input_size, options,
-                      [](amiga::Mode m, const c64::EncodeResult& r) {
-                          if (m != amiga::Mode::c64_multicolor)
-                              return Result<c64::prg::PrgData>{
-                                  std::unexpected{Error{
-                                      ErrorCode::unsupported_mode,
-                                      ".koa requires c64-multicolor mode"}}};
-                          return c64::prg::koala_raw(r);
-                      },
-                      "Koala raw");
+    return c64_export(
+        input_data,
+        input_size,
+        options,
+        [](amiga::Mode m, const c64::EncodeResult& r) {
+            if (m != amiga::Mode::c64_multicolor)
+                return Result<c64::prg::PrgData>{std::unexpected{
+                    Error{ErrorCode::unsupported_mode, ".koa requires c64-multicolor mode"}}};
+            return c64::prg::koala_raw(r);
+        },
+        "Koala raw");
 }
 
 ConvertResult convert_hir(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {
-    return c64_export(input_data, input_size, options,
-                      [](amiga::Mode m, const c64::EncodeResult& r) {
-                          if (m != amiga::Mode::c64_hires)
-                              return Result<c64::prg::PrgData>{
-                                  std::unexpected{Error{
-                                      ErrorCode::unsupported_mode,
-                                      ".hir requires c64-hires mode"}}};
-                          return c64::prg::hires_raw(r);
-                      },
-                      "Art Studio raw");
+    return c64_export(
+        input_data,
+        input_size,
+        options,
+        [](amiga::Mode m, const c64::EncodeResult& r) {
+            if (m != amiga::Mode::c64_hires)
+                return Result<c64::prg::PrgData>{std::unexpected{
+                    Error{ErrorCode::unsupported_mode, ".hir requires c64-hires mode"}}};
+            return c64::prg::hires_raw(r);
+        },
+        "Art Studio raw");
 }
 
 ConvertResult convert_palette(const std::uint8_t* input_data,
@@ -5260,8 +5180,7 @@ namespace {
 // Build a 1-bit B/W Image from the transparency mask.
 // Default: white (1.0) = opaque pixel, black (0.0) = transparent pixel.
 // With mask_invert: inverted.
-Image mask_to_image(const std::vector<bool>& tmask,
-                    std::size_t w, std::size_t h, bool invert) {
+Image mask_to_image(const std::vector<bool>& tmask, std::size_t w, std::size_t h, bool invert) {
     Image img(w, h);
     for (std::size_t i = 0; i < w * h; ++i) {
         bool transparent = (i < tmask.size()) && tmask[i];
@@ -5275,8 +5194,9 @@ Image mask_to_image(const std::vector<bool>& tmask,
 // Build pixel indices for 1-bitplane encoding from mask.
 // Index 1 = white (opaque), index 0 = black (transparent), or inverted.
 std::vector<std::uint8_t> mask_to_indices(const std::vector<bool>& tmask,
-                                           std::size_t w, std::size_t h,
-                                           bool invert) {
+                                          std::size_t w,
+                                          std::size_t h,
+                                          bool invert) {
     std::vector<std::uint8_t> indices(w * h, 0);
     for (std::size_t i = 0; i < w * h; ++i) {
         bool transparent = (i < tmask.size()) && tmask[i];
@@ -5286,8 +5206,7 @@ std::vector<std::uint8_t> mask_to_indices(const std::vector<bool>& tmask,
     return indices;
 }
 
-ConvertResult make_mask_result(std::vector<std::uint8_t> data,
-                               const PipelineResult& p) {
+ConvertResult make_mask_result(std::vector<std::uint8_t> data, const PipelineResult& p) {
     ConvertResult r;
     r.data = std::move(data);
     r.width = static_cast<int>(p.rendered.width());
@@ -5298,7 +5217,7 @@ ConvertResult make_mask_result(std::vector<std::uint8_t> data,
     return r;
 }
 
-} // namespace
+}  // namespace
 
 ConvertResult convert_mask(const std::uint8_t* input_data,
                            std::size_t input_size,
@@ -5349,7 +5268,7 @@ ConvertResult convert_mask_raw(const std::uint8_t* input_data,
     auto planes = bitplane::encode(indices,
                                    result->rendered.width(),
                                    result->rendered.height(),
-                                   1); // 1 bitplane
+                                   1);  // 1 bitplane
     if (!planes) return make_error(planes.error().message);
 
     return make_mask_result(std::move(planes->data), *result);
@@ -5375,10 +5294,7 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
                                    result->rendered.height(),
                                    options.mask_invert);
 
-    auto planes = bitplane::encode(indices,
-                                   result->rendered.width(),
-                                   result->rendered.height(),
-                                   1);
+    auto planes = bitplane::encode(indices, result->rendered.width(), result->rendered.height(), 1);
     if (!planes) return make_error(planes.error().message);
 
     // B/W palette: index 0 = black, index 1 = white
@@ -5390,8 +5306,7 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
     iff::IffOptions iff_opts;
     iff_opts.interlace = result->interlace;
 
-    auto iff_data = iff::write_ilbm(*planes, mask_palette,
-                                    amiga::Mode::lores, iff_opts);
+    auto iff_data = iff::write_ilbm(*planes, mask_palette, amiga::Mode::lores, iff_opts);
     if (!iff_data) return make_error(iff_data.error().message);
 
     return make_mask_result(*std::move(iff_data), *result);
@@ -5406,8 +5321,7 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
 // between encode_state (bytes input) and encode_state_image (Image input)
 // so the public State stays in sync without duplicate field lists.
 namespace {
-void state_from_pipeline_result(EncodeStateOrError& out,
-                                pipeline::PipelineResult& p) {
+void state_from_pipeline_result(EncodeStateOrError& out, pipeline::PipelineResult& p) {
     auto& s = out.state;
     s.rendered = std::move(p.rendered);
     s.planes = std::move(p.planes);
@@ -5429,12 +5343,12 @@ void state_from_pipeline_result(EncodeStateOrError& out,
     s.changes_per_line = p.changes_per_line;
     s.max_moves_per_line = p.max_moves_per_line;
     s.copper_changes = p.copper_changes;
-    s.strips_avg_total_moves_per_line   = p.strips_avg_total_moves_per_line;
-    s.strips_avg_hblank_moves_per_line  = p.strips_avg_hblank_moves_per_line;
-    s.strips_max_hblank_moves_per_line  = p.strips_max_hblank_moves_per_line;
+    s.strips_avg_total_moves_per_line = p.strips_avg_total_moves_per_line;
+    s.strips_avg_hblank_moves_per_line = p.strips_avg_hblank_moves_per_line;
+    s.strips_max_hblank_moves_per_line = p.strips_max_hblank_moves_per_line;
     s.strips_avg_visible_moves_per_line = p.strips_avg_visible_moves_per_line;
     s.strips_max_visible_moves_per_line = p.strips_max_visible_moves_per_line;
-    s.strips_slot_count                 = p.strips_slot_count;
+    s.strips_slot_count = p.strips_slot_count;
     s.quant_error = p.quant_error;
     s.psnr = p.psnr;
     s.ssimulacra2_score = p.ssimulacra2_score;
@@ -5446,13 +5360,13 @@ void state_from_pipeline_result(EncodeStateOrError& out,
     s.c64_mc1 = p.c64_mc1;
     s.c64_mc2 = p.c64_mc2;
     s.genesis_unique_tiles = p.genesis_unique_tiles;
-    s.tile_data_bytes      = p.tile_data_bytes;
+    s.tile_data_bytes = p.tile_data_bytes;
     s.genesis_total_cells = p.genesis_total_cells;
     s.genesis_tile_bytes = std::move(p.genesis_tile_bytes);
     s.genesis_tilemap_cells = std::move(p.genesis_tilemap_cells);
     s.genesis_palette_words = std::move(p.genesis_palette_words);
 }
-}  // anon namespace
+}  // namespace
 
 EncodeStateOrError encode_state(const std::uint8_t* input_data,
                                 std::size_t input_size,
@@ -5467,8 +5381,7 @@ EncodeStateOrError encode_state(const std::uint8_t* input_data,
     return out;
 }
 
-EncodeStateOrError encode_state_image(const Image& image,
-                                       const Options& options) {
+EncodeStateOrError encode_state_image(const Image& image, const Options& options) {
     EncodeStateOrError out;
     // Bytes input is unused on this path; pass empty + the prepared
     // image. run_pipeline detects the prepared_image and skips
@@ -5490,20 +5403,18 @@ EncodeStateOrError encode_state_image(const Image& image,
 DitherDefaults dither_defaults_for(const Options& options) {
     auto opts = decompose_mode_options(options);
     auto mode = parse_mode(opts.mode);
-    auto chipset = opts.chipset == "aga"
-        ? amiga::Chipset::aga
-        : amiga::Chipset::ocs;
+    auto chipset = opts.chipset == "aga" ? amiga::Chipset::aga : amiga::Chipset::ocs;
     auto depth = std::clamp(opts.depth, 1, 8);
     auto tune = dither_tuning::defaults_for(dither_tuning::Context{
-        .mode    = mode,
-        .depth   = depth,
-        .dpf     = opts.dual_playfield,
-        .scap    = opts.scap,
-        .copper  = opts.copper,
+        .mode = mode,
+        .depth = depth,
+        .dpf = opts.dual_playfield,
+        .scap = opts.scap,
+        .copper = opts.copper,
         .chipset = chipset,
-        .method  = parse_dither(opts.dither),
+        .method = parse_dither(opts.dither),
     });
     return DitherDefaults{tune.strength, tune.error_clamp};
 }
 
-} // namespace png2amiga::api
+}  // namespace png2amiga::api

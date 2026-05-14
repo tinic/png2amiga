@@ -54,10 +54,9 @@ Result<PrgData> from_mode(amiga::Mode mode, const EncodeResult& result);
 // Used by convert_prg to bridge from the generic raw_frame back to the
 // shape c64::prg writers expect. Sizes per mode are baked in here —
 // keep in sync with api.cpp's c64 packing.
-Result<EncodeResult> unpack_pipeline_raw(
-    amiga::Mode mode,
-    const std::vector<std::uint8_t>& raw_frame,
-    std::uint8_t bg_color);
+Result<EncodeResult> unpack_pipeline_raw(amiga::Mode mode,
+                                         const std::vector<std::uint8_t>& raw_frame,
+                                         std::uint8_t bg_color);
 
 // Write PRG bytes to a file.
 Result<void> write(std::string_view path, const PrgData& data);

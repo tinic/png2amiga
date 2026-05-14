@@ -48,11 +48,11 @@ std::string sanitize_symbol(std::string_view name) {
 std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) {
     std::uint32_t camg = 0;
     auto params = amiga::get_mode_params(mode);
-    if (hires)           camg |= 0x8000;
-    if (params.is_ham)   camg |= 0x0800;
-    if (params.is_ehb)   camg |= 0x0080;
-    if (interlace)       camg |= 0x0004;
-    if (dpf)             camg |= 0x0400;  // DBLPF (dual playfield)
+    if (hires) camg |= 0x8000;
+    if (params.is_ham) camg |= 0x0800;
+    if (params.is_ehb) camg |= 0x0080;
+    if (interlace) camg |= 0x0004;
+    if (dpf) camg |= 0x0400;  // DBLPF (dual playfield)
     return camg;
 }
 
@@ -65,27 +65,26 @@ std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) 
 // WAIT when the list extends past line 255 + kVStart=44 — see the
 // detailed comment at the original emit site for the timing rationale.
 void emit_strips_copper_list(std::string& out,
-                           const std::string& sym,
-                           const CHeaderOptions& options,
-                           std::string_view linkage) {
+                             const std::string& sym,
+                             const CHeaderOptions& options,
+                             std::string_view linkage) {
     auto& moves = *options.strips_line_moves;
     constexpr int kVStart = 44;
 
     out += std::format("// Strips copper list — {} (anchor=0x{:02X}, "
                        "total_planes={})\n",
-                       options.strips_label.empty() ? "unnamed"
-                                                  : options.strips_label,
+                       options.strips_label.empty() ? "unnamed" : options.strips_label,
                        options.strips_anchor_hpos,
                        options.strips_total_planes);
 
     std::size_t strips_total_words = 0;
-    for (auto& row : moves) strips_total_words += row.size() * 2;
-    bool needs_wrap_marker =
-        (kVStart + static_cast<int>(moves.size()) > 256) && !moves.empty();
+    for (auto& row : moves)
+        strips_total_words += row.size() * 2;
+    bool needs_wrap_marker = (kVStart + static_cast<int>(moves.size()) > 256) && !moves.empty();
     if (strips_total_words == 0) strips_total_words = 2;
 
-    out += std::format("{} UWORD {}_strips_copper_list[{}] = {{\n",
-                       linkage, sym, strips_total_words);
+    out += std::format(
+        "{} UWORD {}_strips_copper_list[{}] = {{\n", linkage, sym, strips_total_words);
     std::size_t emitted = 0;
     for (std::size_t y = 0; y < moves.size(); ++y) {
         auto& row = moves[y];
@@ -97,9 +96,8 @@ void emit_strips_copper_list(std::string& out,
             auto& op = row[i];
             std::uint16_t w0 = 0, w1 = 0;
             if (op.kind == strips::ScapOpKind::kWait) {
-                w0 = static_cast<std::uint16_t>(
-                    (static_cast<unsigned>(op.vpos) << 8) |
-                    (op.hpos & 0xFE) | 0x0001);
+                w0 = static_cast<std::uint16_t>((static_cast<unsigned>(op.vpos) << 8) |
+                                                (op.hpos & 0xFE) | 0x0001);
                 w1 = 0xFFFE;
                 if (patch_wrap_at_eol && i == row.size() - 1) {
                     w0 = 0xFFDF;
@@ -117,11 +115,10 @@ void emit_strips_copper_list(std::string& out,
     }
     if (emitted == 0) out += "    0x0000,0x0000\n";
     out += "};\n\n";
-    out += std::format("{} ULONG {}_strips_copper_words = {};\n\n",
-                       linkage, sym, emitted);
+    out += std::format("{} ULONG {}_strips_copper_words = {};\n\n", linkage, sym, emitted);
 }
 
-} // namespace
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Generate C header content
@@ -155,8 +152,8 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
     out += std::format("#define {}_WIDTH   {}\n", SYM, planes.width);
     out += std::format("#define {}_HEIGHT  {}\n", SYM, planes.height);
     out += std::format("#define {}_DEPTH   {}\n", SYM, planes.depth);
-    out += std::format("#define {}_BPR     {}    /* bytes per row per plane */\n",
-                       SYM, planes.bytes_per_row);
+    out += std::format(
+        "#define {}_BPR     {}    /* bytes per row per plane */\n", SYM, planes.bytes_per_row);
     out += std::format("#define {}_CAMG    0x{:04X}\n\n", SYM, camg);
 
     auto words_per_row = planes.bytes_per_row / 2;
@@ -255,7 +252,8 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
 
         out += std::format("#define {}_COPPER_CHANGES  {}  "
                            "/* max register changes per scanline */\n\n",
-                           SYM, cpl);
+                           SYM,
+                           cpl);
 
         // Struct for copper change entry
         out += std::format("struct {}_copper_entry {{\n", sym);
@@ -267,7 +265,9 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
         // Unused slots filled with {0xFFFF, 0x0000} as sentinel
         out += std::format("const struct {0}_copper_entry {0}_copper"
                            "[{1}][{2}] = {{\n",
-                           sym, height, cpl);
+                           sym,
+                           height,
+                           cpl);
 
         for (std::size_t y = 0; y < height; ++y) {
             out += "    { ";
@@ -277,7 +277,8 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
                     auto rgb12 = palette::linear_to_ocs(line[s].color);
                     out += std::format("{{{},"
                                        "0x{:04X}}}",
-                                       line[s].reg, rgb12);
+                                       line[s].reg,
+                                       rgb12);
                 } else {
                     out += "{0xFFFF,0x0000}";  // sentinel: no change
                 }
@@ -375,17 +376,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // supported because the runtime scan walks COLOR MOVEs in cop-
     // list order ignoring BPLCON3 toggles, and the value table is
     // packed in the same per-bank HI-then-LO order.
-    bool do_fade_to =
-        !options.fade_per_frame_values.empty() &&
-        options.fade_per_frame_values.size() >= 2 &&
-        !options.interlace && !is_ham && !do_fade;
+    bool do_fade_to = !options.fade_per_frame_values.empty() &&
+                      options.fade_per_frame_values.size() >= 2 && !options.interlace && !is_ham &&
+                      !do_fade;
 
     std::string out;
     out.reserve(planes.total_bytes() * 8 + 8192);
 
     // Header
-    out += std::format("// Generated by png2amiga {} — AmigaOS viewer\n",
-                       png2amiga::version);
+    out += std::format("// Generated by png2amiga {} — AmigaOS viewer\n", png2amiga::version);
     out += "// https://www.png2amiga.app\n";
     out += "//\n";
     out += "// Compile: m68k-amiga-elf-gcc -m68000 -Ofast -nostdlib -o out.elf "
@@ -396,7 +395,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Build a human-readable mode label that mirrors the runtime
         // exit message (e.g. "HAM6 + Sliced", "EHB + Strips",
         // "lores 6bpl + DPF + Strips").
-        bool _has_cop  = options.copper_changes && !options.copper_changes->empty();
+        bool _has_cop = options.copper_changes && !options.copper_changes->empty();
         bool _has_scap = options.strips_line_moves && !options.strips_line_moves->empty();
         std::string mode_label;
         if (params.is_ham) {
@@ -408,24 +407,25 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         } else {
             mode_label = std::format("lores {}bpl", depth);
         }
-        if (options.dpf)       mode_label += " + DPF";
+        if (options.dpf) mode_label += " + DPF";
         if (options.interlace) mode_label += " + lace";
-        if (_has_scap)         mode_label += " + Strips";
-        else if (_has_cop)     mode_label += " + Sliced";
+        if (_has_scap)
+            mode_label += " + Strips";
+        else if (_has_cop)
+            mode_label += " + Sliced";
         const char* chipset_str = options.aga ? "AGA" : "OCS";
         out += std::format("// Image:    {}x{}, {} ({}-bit palette)\n",
-                           width, height, chipset_str,
+                           width,
+                           height,
+                           chipset_str,
                            options.aga ? 24 : 12);
         out += std::format("// Mode:     {}\n", mode_label);
-        out += std::format("// Bitplane: {} bytes ({} planes, {} bytes/row)\n",
-                           planes.total_bytes(), depth, bpr);
-        std::size_t visible_pal_count = options.dpf
-            ? (std::size_t{1} << (depth / 2))
-            : pal_count;
+        out += std::format(
+            "// Bitplane: {} bytes ({} planes, {} bytes/row)\n", planes.total_bytes(), depth, bpr);
+        std::size_t visible_pal_count = options.dpf ? (std::size_t{1} << (depth / 2)) : pal_count;
         out += std::format("// Palette:  {} colors\n", visible_pal_count);
         if (options.total_unique_colors > 0) {
-            out += std::format("// Colors:   {} unique\n",
-                               options.total_unique_colors);
+            out += std::format("// Colors:   {} unique\n", options.total_unique_colors);
         }
         if (_has_cop)
             out += std::format("// Sliced:      {} swaps/line max\n",
@@ -434,8 +434,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             std::size_t strips_words = 0;
             for (auto& row : *options.strips_line_moves)
                 strips_words += row.size() * 2;
-            out += std::format("// Strips:     {} bytes copper list\n",
-                               strips_words * 2);
+            out += std::format("// Strips:     {} bytes copper list\n", strips_words * 2);
         }
         out += std::format("// CAMG:     0x{:04X}\n", camg);
     }
@@ -574,11 +573,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // emission path. They never compose in the same viewer.
     if (has_scap) has_copper = false;
     bool is_lace = options.interlace;
-    bool need_fmode3 = ((depth > 6) && has_copper) ||
-                       (is_hires && depth > 4);
+    bool need_fmode3 = ((depth > 6) && has_copper) || (is_hires && depth > 4);
 
-    out += std::format("// {}x{}, {} bitplanes, CAMG 0x{:04X}\n",
-                       width, height, depth, camg);
+    out += std::format("// {}x{}, {} bitplanes, CAMG 0x{:04X}\n", width, height, depth, camg);
     // 8-byte alignment when FMODE=3 (64-bit DMA fetch); 2-byte otherwise.
     auto align = need_fmode3 ? 8 : 2;
     auto words_per_row = bpr / 2;
@@ -611,16 +608,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         for (std::size_t p = 0; p < depth; ++p) {
             bool z = plane_all_zero(planes, p);
             for (std::size_t fi = 0; fi < n_extra && z; ++fi)
-                if (!plane_all_zero(options.extra_frame_planes[fi], p))
-                    z = false;
+                if (!plane_all_zero(options.extra_frame_planes[fi], p)) z = false;
             plane_zero[p] = z;
         }
     }
-    bool any_zero_plane = std::ranges::any_of(plane_zero,
-                                              [](bool z) { return z; });
+    bool any_zero_plane = std::ranges::any_of(plane_zero, [](bool z) { return z; });
 
-    auto emit_plane_seq = [&](std::size_t fi, const bitplane::BitplaneData& bp,
-                              std::size_t p) {
+    auto emit_plane_seq = [&](std::size_t fi, const bitplane::BitplaneData& bp, std::size_t p) {
         // One plane-sequential UWORD array: just this plane's bpr*height
         // bytes serialised row-by-row. Word count = words_per_row*height.
         auto wpr = bp.bytes_per_row / 2;
@@ -629,7 +623,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("static const UWORD {}_f{}_p{}[]"
                            " __attribute__((aligned({})))"
                            " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
-                           sym, fi, p, align);
+                           sym,
+                           fi,
+                           p,
+                           align);
         for (std::size_t y = 0; y < bp.height; ++y) {
             out += "    ";
             auto offset = bp.plane_row_offset(p, y);
@@ -659,8 +656,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += " */\n\n";
         }
         for (std::size_t fi = 0; fi < n_frames_total; ++fi) {
-            const auto& bp = (fi == 0) ? planes
-                                       : options.extra_frame_planes[fi - 1];
+            const auto& bp = (fi == 0) ? planes : options.extra_frame_planes[fi - 1];
             for (std::size_t p = 0; p < depth; ++p) {
                 if (plane_zero[p]) continue;
                 emit_plane_seq(fi, bp, p);
@@ -669,14 +665,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "\n";
         // Pointer table: per frame, per plane. NULL = use the shared
         // runtime zero buffer (alloc'd and patched in below).
-        out += std::format("static const UBYTE* {}_frame_planes[{}][{}] = {{\n",
-                           sym, n_frames_total, depth);
+        out += std::format(
+            "static const UBYTE* {}_frame_planes[{}][{}] = {{\n", sym, n_frames_total, depth);
         for (std::size_t fi = 0; fi < n_frames_total; ++fi) {
             out += "    {";
             for (std::size_t p = 0; p < depth; ++p) {
-                if (plane_zero[p]) out += " 0";
-                else out += std::format(" (const UBYTE*){}_f{}_p{}",
-                                        sym, fi, p);
+                if (plane_zero[p])
+                    out += " 0";
+                else
+                    out += std::format(" (const UBYTE*){}_f{}_p{}", sym, fi, p);
                 if (p + 1 < depth) out += ",";
             }
             out += " }";
@@ -690,7 +687,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("static const UWORD {}_planes[]"
                            " __attribute__((aligned({})))"
                            " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
-                           sym, align);
+                           sym,
+                           align);
         auto total_words = words_per_row * depth * height;
         std::size_t word_count = 0;
         for (std::size_t y = 0; y < height; ++y) {
@@ -748,10 +746,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // skips a row — row y's effective transition is from y-2) and
         // 1 otherwise.
         std::vector<std::vector<copper::CopperChange>> lace_changes;
-        const std::vector<std::vector<copper::CopperChange>>* changes_ptr =
-            options.copper_changes;
-        if (options.copper_scanline_palettes
-                && !options.copper_scanline_palettes->empty()) {
+        const std::vector<std::vector<copper::CopperChange>>* changes_ptr = options.copper_changes;
+        if (options.copper_scanline_palettes && !options.copper_scanline_palettes->empty()) {
             auto& pals = *options.copper_scanline_palettes;
             auto H = pals.size();
             lace_changes.resize(H);
@@ -783,8 +779,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                     auto db = pal_cur[r].b - pal_prev[r].b;
                     auto d2 = color_space::fma_dist_sq(dr, dg, db);
                     if (d2 > 0.0f) {
-                        cands.push_back({static_cast<std::uint8_t>(r),
-                                         d2, pal_cur[r]});
+                        cands.push_back({static_cast<std::uint8_t>(r), d2, pal_cur[r]});
                     }
                 }
                 // Keep top-K by distance.
@@ -796,8 +791,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                     cands.resize(cpl);
                 }
                 // Sort by register for stable bank emission.
-                std::sort(cands.begin(), cands.end(),
-                          [](auto& a, auto& b) { return a.reg < b.reg; });
+                std::sort(
+                    cands.begin(), cands.end(), [](auto& a, auto& b) { return a.reg < b.reg; });
                 auto& out_changes = lace_changes[y];
                 out_changes.reserve(cands.size());
                 for (auto& c : cands) {
@@ -827,15 +822,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             }
         }
 
-        out += std::format("// Copper: {} changes/line max, {} scanlines\n",
-                           cpl, ch_height);
+        out += std::format("// Copper: {} changes/line max, {} scanlines\n", cpl, ch_height);
         out += "struct CopperEntry { UWORD reg; UWORD color; };\n";
 
         // Per-line count arrays
-        auto emit_count_array = [&](const char* suffix,
-                                    const std::vector<std::size_t>& counts) {
-            out += std::format("static const UBYTE {}_copper_n_{}[{}] = {{\n    ",
-                               sym, suffix, ch_height);
+        auto emit_count_array = [&](const char* suffix, const std::vector<std::size_t>& counts) {
+            out += std::format(
+                "static const UBYTE {}_copper_n_{}[{}] = {{\n    ", sym, suffix, ch_height);
             for (std::size_t y = 0; y < ch_height; ++y) {
                 out += std::format("{}", counts[y]);
                 if (y + 1 < ch_height) out += ",";
@@ -851,10 +844,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // interlace, where field 1 walks even rows (0, 2, 4, ...) and
         // field 2 walks odd rows (1, 3, 5, ...), so the two fields can't
         // share a single sequentially-advancing pointer.
-        auto emit_offset_array = [&](const char* suffix,
-                                     const std::vector<std::size_t>& counts) {
-            out += std::format("static const USHORT {}_copper_off_{}[{}] = {{\n    ",
-                               sym, suffix, ch_height);
+        auto emit_offset_array = [&](const char* suffix, const std::vector<std::size_t>& counts) {
+            out += std::format(
+                "static const USHORT {}_copper_off_{}[{}] = {{\n    ", sym, suffix, ch_height);
             std::size_t acc = 0;
             for (std::size_t y = 0; y < ch_height; ++y) {
                 out += std::format("{}", acc);
@@ -869,9 +861,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
         // Flat hi-entry array
         std::size_t total_hi = 0;
-        for (auto v : n_hi) total_hi += v;
+        for (auto v : n_hi)
+            total_hi += v;
         out += std::format("static const struct CopperEntry {}_copper_hi[{}] = {{\n",
-                           sym, std::max(total_hi, std::size_t{1}));
+                           sym,
+                           std::max(total_hi, std::size_t{1}));
         if (total_hi == 0) {
             out += "    {0,0}\n";  // dummy entry to avoid zero-sized array
         } else {
@@ -881,9 +875,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += "    ";
                 for (auto& ch : changes[y]) {
                     if (options.aga && ch.skip_hi) continue;
-                    auto hi = options.aga
-                        ? palette::linear_to_aga_hilo(ch.color).hi
-                        : palette::linear_to_ocs(ch.color);
+                    auto hi = options.aga ? palette::linear_to_aga_hilo(ch.color).hi
+                                          : palette::linear_to_ocs(ch.color);
                     out += std::format("{{{},0x{:04X}}}", ch.reg, hi);
                     ++emitted;
                     if (emitted < total_hi) out += ",";
@@ -896,9 +889,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Flat lo-entry array (AGA only)
         if (options.aga) {
             std::size_t total_lo = 0;
-            for (auto v : n_lo) total_lo += v;
+            for (auto v : n_lo)
+                total_lo += v;
             out += std::format("static const struct CopperEntry {}_copper_lo[{}] = {{\n",
-                               sym, std::max(total_lo, std::size_t{1}));
+                               sym,
+                               std::max(total_lo, std::size_t{1}));
             if (total_lo == 0) {
                 out += "    {0,0}\n";
             } else {
@@ -946,17 +941,20 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto N = options.fade_per_frame_values[0].size();
         for (std::size_t f = 0; f < F; ++f) {
             if (options.fade_per_frame_values[f].size() != N) {
-                return std::unexpected{Error{
-                    ErrorCode::invalid_dimensions,
-                    std::format("fade_per_frame_values[{}] has {} entries, "
-                                "expected {} to match frame 0", f,
-                                options.fade_per_frame_values[f].size(), N)
-                }};
+                return std::unexpected{
+                    Error{ErrorCode::invalid_dimensions,
+                          std::format("fade_per_frame_values[{}] has {} entries, "
+                                      "expected {} to match frame 0",
+                                      f,
+                                      options.fade_per_frame_values[f].size(),
+                                      N)}};
             }
         }
         out += std::format("// Fade-to: {} frames × {} palette MOVEs\n", F, N);
         out += std::format("static const UWORD {}_fade_values[{}][{}] = {{\n",
-                           sym, F, std::max(N, std::size_t{1}));
+                           sym,
+                           F,
+                           std::max(N, std::size_t{1}));
         for (std::size_t f = 0; f < F; ++f) {
             out += "    {";
             for (std::size_t i = 0; i < N; ++i) {
@@ -1041,8 +1039,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // on every AGA machine (A1200/A4000/CD32). Canonical refs:
     //   https://jvaltane.kapsi.fi/amiga/howtocode/aga.html
     //   http://www.lysator.liu.se/amiga/code/guide/howtocode/text/AGA
-    bool requires_aga = (pal_count > 32) || (depth > 6) ||
-                        (is_hires && depth > 4);
+    bool requires_aga = (pal_count > 32) || (depth > 6) || (is_hires && depth > 4);
     if (requires_aga) {
         out += "    // AGA detection: force-populate via SetChipRev, check Alice bit\n";
         out += "    ULONG chiprev = 0;\n";
@@ -1080,7 +1077,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (pal_count > 32) {
         // AGA >32: double writes (LOCT high + low) + BPLCON3 per bank + reset
         auto num_banks = (pal_count + 31) / 32;
-        cop_size += pal_count * 4;  // double the color writes (LOCT=1 pass)
+        cop_size += pal_count * 4;            // double the color writes (LOCT=1 pass)
         cop_size += (num_banks * 2 + 1) * 4;  // BPLCON3 switches
     } else if (options.aga) {
         // AGA <=32: LOCT=1 pass + BPLCON3 switches (2 for LOCT on/off)
@@ -1102,8 +1099,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
         // Line 0 copper changes emitted separately (before display)
         cop_size += options.copper_changes_per_line * 4;
-        if (options.aga)
-            cop_size += 8 + options.copper_changes_per_line * 4;
+        if (options.aga) cop_size += 8 + options.copper_changes_per_line * 4;
     }
     cop_size += 128;  // padding for blank-below, 256-boundary WAITs, end markers
 
@@ -1139,8 +1135,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D4;\n";
     } else {
         auto lores_ddfstrt = need_fmode3 ? 0x0030 : 0x0038;
-        out += std::format("    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x{:04X};  // lores{}\n",
-                           lores_ddfstrt, need_fmode3 ? " FMODE=3" : "");
+        out += std::format(
+            "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x{:04X};  // lores{}\n",
+            lores_ddfstrt,
+            need_fmode3 ? " FMODE=3" : "");
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D0;\n";
     }
 
@@ -1149,7 +1147,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     out += "    // Display window start/stop — visible area on screen\n";
     out += std::format("    *cl++ = offsetof(struct Custom, diwstrt); "
                        "*cl++ = ({}<<8)|0x81;  // VSTART={}, HSTART=$81\n",
-                       y_start, y_start);
+                       y_start,
+                       y_start);
     {
         // Close DIWSTOP V at exactly the image bottom so the display window
         // ends there. Stops bitplane DMA at the hardware level — much more
@@ -1163,7 +1162,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto stop_v = last_line & 0xFF;
         out += std::format("    *cl++ = offsetof(struct Custom, diwstop); "
                            "*cl++ = ({}<<8)|0xC1;  // VSTOP={}, HSTOP=$C1\n",
-                           stop_v, last_line);
+                           stop_v,
+                           last_line);
     }
 
     // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed
@@ -1202,7 +1202,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (is_lace) bplcon0_expr += "|(1<<2)/*LACE*/";
 
     out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); "
-                       "*cl++ = {};  // 0x{:04X}\n", bplcon0_expr, bplcon0);
+                       "*cl++ = {};  // 0x{:04X}\n",
+                       bplcon0_expr,
+                       bplcon0);
     out += "    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0;  // scroll offset = 0\n";
 
     // BPLCON2: playfield priority and KILLEHB
@@ -1210,11 +1212,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     //                  (not applicable in DPF mode — bit 9 is unused there)
     // Bit 6: PF2PRI = 0 (PF1 in front of PF2). With DPF and PF1 zeroed,
     //        leaving PF2 behind means transparent PF1 lets PF2 show through.
-    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham && !options.dpf)
-                       ? 0x0200 : 0x0000;
+    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham && !options.dpf) ? 0x0200 : 0x0000;
     if (bplcon2)
         out += std::format("    *cl++ = offsetof(struct Custom, bplcon2); "
-                           "*cl++ = 0x{:04X};  // KILLEHB\n", bplcon2);
+                           "*cl++ = 0x{:04X};  // KILLEHB\n",
+                           bplcon2);
     else
         out += "    *cl++ = offsetof(struct Custom, bplcon2); *cl++ = 0x0000;\n";
 
@@ -1233,16 +1235,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     {
         unsigned bplcon3 = 0;
         if (options.dpf) {
-            bplcon3 |= (depth == 8) ? 0x1000  // PF2OF=100, +16
-                                    : 0x0C00; // PF2OF=011, +8
+            bplcon3 |= (depth == 8) ? 0x1000   // PF2OF=100, +16
+                                    : 0x0C00;  // PF2OF=011, +8
         }
         out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};  // BPLCON3"
                            "{}\n",
                            bplcon3,
-                           options.dpf
-                               ? (depth == 8 ? " (DPF, PF2 +16)"
-                                             : " (DPF, PF2 +8)")
-                               : ": bank 0, no LOCT");
+                           options.dpf ? (depth == 8 ? " (DPF, PF2 +16)" : " (DPF, PF2 +8)")
+                                       : ": bank 0, no LOCT");
     }
     // BPLCON4: AGA bitplane XOR mask + sprite color base. Default state
     // varies (Workbench may leave non-zero); zero it explicitly so
@@ -1261,15 +1261,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // block, so the next row is already at +bpr — no skip, mod = 0.
     // FMODE=3 reads 8 bytes past the visible area as overread, so the
     // pointer has advanced bpr+8 instead of bpr — subtract 8.
-    int mod = is_batch
-        ? -(need_fmode3 ? 8 : 0)
-        : static_cast<int>(bpr)
-              * (static_cast<int>(depth) * (is_lace ? 2 : 1) - 1)
-              - (need_fmode3 ? 8 : 0);
+    int mod = is_batch ? -(need_fmode3 ? 8 : 0)
+                       : static_cast<int>(bpr) * (static_cast<int>(depth) * (is_lace ? 2 : 1) - 1) -
+                             (need_fmode3 ? 8 : 0);
     out += std::format("    *cl++ = offsetof(struct Custom, bpl1mod); "
-                       "*cl++ = {};\n", mod);
+                       "*cl++ = {};\n",
+                       mod);
     out += std::format("    *cl++ = offsetof(struct Custom, bpl2mod); "
-                       "*cl++ = {};\n\n", mod);
+                       "*cl++ = {};\n\n",
+                       mod);
 
     if (is_batch) {
         // Batch: BPLxPT comes from <sym>_frame_planes[frame][plane].
@@ -1281,13 +1281,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                "{}, MEMF_CHIP | MEMF_CLEAR);\n",
                                bpr * height);
             out += "    if (!zero_plane) { FreeSystem(); return 0; }\n";
-            out += std::format("    for (int fi = 0; fi < {}; fi++)\n",
-                               n_frames_total);
+            out += std::format("    for (int fi = 0; fi < {}; fi++)\n", n_frames_total);
             out += std::format("        for (int p = 0; p < {}; p++)\n", depth);
-            out += std::format("            if (!{}_frame_planes[fi][p])\n",
-                               sym);
+            out += std::format("            if (!{}_frame_planes[fi][p])\n", sym);
             out += std::format("                {}_frame_planes[fi][p] = "
-                               "zero_plane;\n", sym);
+                               "zero_plane;\n",
+                               sym);
         }
         out += std::format("    const UBYTE* planes[{}];\n", depth);
         out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
@@ -1297,8 +1296,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     } else {
         out += std::format("    const UBYTE* planes[{}];\n", depth);
         out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
-        out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n",
-                           sym, bpr);
+        out += std::format("        planes[i] = (const UBYTE*){}_planes + {} * i;\n", sym, bpr);
         out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
     }
 
@@ -1310,8 +1308,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     //   the auto-copy artifact that makes bright colors overshoot.
     if (pal_count > 32) {
         auto num_banks = (pal_count + 31) / 32;
-        out += std::format("    // AGA palette: {} colors, {} banks\n",
-                           pal_count, num_banks);
+        out += std::format("    // AGA palette: {} colors, {} banks\n", pal_count, num_banks);
         for (std::size_t bank = 0; bank < static_cast<std::size_t>(num_banks); ++bank) {
             auto base = bank * 32;
             auto count = std::min(std::size_t{32}, pal_count - base);
@@ -1319,7 +1316,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
             // High nibbles (LOCT=0)
             out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
-                               "  // bank {}\n", bank_bits, bank);
+                               "  // bank {}\n",
+                               bank_bits,
+                               bank);
             out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
             out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
             out += std::format("        *cl++ = {}_palette[{} + i];\n", sym, base);
@@ -1327,14 +1326,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
 
             // Low nibbles (LOCT=1) — skip during fade, full precision on final step
             if (options.aga) {
-                    out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
+                out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
                                    "  // bank {}, LOCT=1\n",
-                                   bank_bits | 0x0200, bank);
+                                   bank_bits | 0x0200,
+                                   bank);
                 out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
                 out += "        *cl++ = offsetof(struct Custom, color) + i * 2;\n";
                 out += std::format("        *cl++ = {}_palette_lo[{} + i];\n", sym, base);
                 out += "    }\n";
-                }
+            }
         }
         // Reset to bank 0, LOCT=0
         out += "    *cl++ = 0x0106; *cl++ = 0x0000;\n\n";
@@ -1349,8 +1349,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             // On final step or no-fade: write full 24-bit lo nibbles. In
             // DPF the BPLCON3 write must preserve PF2OF or PF2 collapses
             // back to register 0 (= no offset).
-            unsigned pf2of = options.dpf ? ((depth == 8) ? 0x1000 : 0x0C00)
-                                         : 0x0000;
+            unsigned pf2of = options.dpf ? ((depth == 8) ? 0x1000 : 0x0C00) : 0x0000;
             out += std::format("    *cl++ = 0x0106; *cl++ = 0x{:04X};"
                                "  // LOCT=1\n",
                                pf2of | 0x0200);
@@ -1397,21 +1396,19 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                    bool use_aga_banks) {
         if (!has_copper) return;
         out += "        {\n";
-        out += std::format(
-            "          const struct CopperEntry* p_hi = "
-            "{0}_copper_hi + {0}_copper_off_hi[{1}];\n",
-            sym, row_expr);
+        out += std::format("          const struct CopperEntry* p_hi = "
+                           "{0}_copper_hi + {0}_copper_off_hi[{1}];\n",
+                           sym,
+                           row_expr);
         if (options.aga) {
-            out += std::format(
-                "          const struct CopperEntry* p_lo = "
-                "{0}_copper_lo + {0}_copper_off_lo[{1}];\n",
-                sym, row_expr);
+            out += std::format("          const struct CopperEntry* p_lo = "
+                               "{0}_copper_lo + {0}_copper_off_lo[{1}];\n",
+                               sym,
+                               row_expr);
         }
-        out += std::format(
-            "          int n_hi = {}_copper_n_hi[{}];\n", sym, row_expr);
+        out += std::format("          int n_hi = {}_copper_n_hi[{}];\n", sym, row_expr);
         if (options.aga)
-            out += std::format(
-                "          int n_lo = {}_copper_n_lo[{}];\n", sym, row_expr);
+            out += std::format("          int n_lo = {}_copper_n_lo[{}];\n", sym, row_expr);
 
         if (use_aga_banks) {
             out += "          int cur_bank = -1;\n";
@@ -1424,7 +1421,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += "                cur_bank = bank;\n";
             out += "            }\n";
             out += std::format("            *{0}++ = offsetof(struct Custom, color)"
-                               " + (reg % 32) * 2;\n", cl_var);
+                               " + (reg % 32) * 2;\n",
+                               cl_var);
             out += std::format("            *{0}++ = p_hi[s].color;\n", cl_var);
             out += "          }\n";
             out += "          cur_bank = -1;\n";
@@ -1433,34 +1431,39 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += "            int bank = reg / 32;\n";
             out += "            if (bank != cur_bank) {\n";
             out += std::format("                *{0}++ = 0x0106;\n", cl_var);
-            out += std::format("                *{0}++ = (UWORD)((bank << 13) | 0x0200);\n", cl_var);
+            out += std::format("                *{0}++ = (UWORD)((bank << 13) | 0x0200);\n",
+                               cl_var);
             out += "                cur_bank = bank;\n";
             out += "            }\n";
             out += std::format("            *{0}++ = offsetof(struct Custom, color)"
-                               " + (reg % 32) * 2;\n", cl_var);
+                               " + (reg % 32) * 2;\n",
+                               cl_var);
             out += std::format("            *{0}++ = p_lo[s].color;\n", cl_var);
             out += "          }\n";
         } else if (options.aga) {
             // BPLCON3 LOCT toggle inside the per-scanline copper. In DPF
             // mode the write must keep PF2OF set or PF2 will collapse to
             // register 0 starting from the line that ran this code.
-            unsigned pf2of = options.dpf ? ((depth == 8) ? 0x1000 : 0x0C00)
-                                         : 0x0000;
+            unsigned pf2of = options.dpf ? ((depth == 8) ? 0x1000 : 0x0C00) : 0x0000;
             out += "          for (int s = 0; s < n_hi; s++) {\n";
-            out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
+            out += std::format(
+                "            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
             out += std::format("            *{0}++ = p_hi[s].color;\n", cl_var);
             out += "          }\n";
             out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x{1:04X};  // LOCT=1\n",
-                               cl_var, pf2of | 0x0200);
+                               cl_var,
+                               pf2of | 0x0200);
             out += "          for (int s = 0; s < n_lo; s++) {\n";
-            out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_lo[s].reg * 2;\n", cl_var);
+            out += std::format(
+                "            *{0}++ = offsetof(struct Custom, color) + p_lo[s].reg * 2;\n", cl_var);
             out += std::format("            *{0}++ = p_lo[s].color;\n", cl_var);
             out += "          }\n";
-            out += std::format("          *{0}++ = 0x0106; *{0}++ = 0x{1:04X};  // LOCT=0\n",
-                               cl_var, pf2of);
+            out += std::format(
+                "          *{0}++ = 0x0106; *{0}++ = 0x{1:04X};  // LOCT=0\n", cl_var, pf2of);
         } else {
             out += "          for (int s = 0; s < n_hi; s++) {\n";
-            out += std::format("            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
+            out += std::format(
+                "            *{0}++ = offsetof(struct Custom, color) + p_hi[s].reg * 2;\n", cl_var);
             out += std::format("            *{0}++ = p_hi[s].color;\n", cl_var);
             out += "          }\n";
         }
@@ -1504,10 +1507,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                  std::size_t rows_in_field,
                                  int vpos_step,
                                  int vpos_first) {
-            out += std::format("    for (int y = 1; y < {}; y++) {{\n",
-                               rows_in_field);
-            out += std::format("        USHORT line = (y - 1) * {} + {};\n",
-                               vpos_step, vpos_first);
+            out += std::format("    for (int y = 1; y < {}; y++) {{\n", rows_in_field);
+            out += std::format("        USHORT line = (y - 1) * {} + {};\n", vpos_step, vpos_first);
             // Interlace needs the WAIT HP pushed later (0xE3 = HPOS 226) —
             // with 0xDD (220) the MOVEs land inside the last ~16 lores pixels
             // of the scanline still being drawn. Progressive keeps 0xDD.
@@ -1520,7 +1521,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                "        }} else {{\n"
                                "            *{0}++ = ((line & 0xFF) << 8) | {1};\n"
                                "        }}\n",
-                               cl_var, hp_byte);
+                               cl_var,
+                               hp_byte);
             out += std::format("        *{0}++ = 0xfffe;\n", cl_var);
             emit_copper_changes(cl_var, row_expr, aga_banks);
             out += "    }\n\n";
@@ -1538,21 +1540,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // streams it out.
     if (has_scap) {
         out += "    // Strips per-line copper ops (raw WAIT/MOVE pairs)\n";
-        out += std::format(
-            "    for (ULONG i = 0; i < {0}_strips_copper_words; i++)\n"
-            "        *cl++ = {0}_strips_copper_list[i];\n\n", sym);
+        out += std::format("    for (ULONG i = 0; i < {0}_strips_copper_words; i++)\n"
+                           "        *cl++ = {0}_strips_copper_list[i];\n\n",
+                           sym);
     }
 
     // Blank below image: 0 bitplanes, keep LACE if interlaced
-    auto blank_expr = is_lace
-        ? "(1<<9)/*COLOR*/|(1<<2)/*LACE*/"
-        : "(1<<9)/*COLOR*/";
+    auto blank_expr = is_lace ? "(1<<9)/*COLOR*/|(1<<2)/*LACE*/" : "(1<<9)/*COLOR*/";
     {
         auto vpos_stride = 1;
         auto vpos_y_start = y_start;
-        auto field_lines = is_lace
-            ? static_cast<int>(height / 2)
-            : static_cast<int>(height);
+        auto field_lines = is_lace ? static_cast<int>(height / 2) : static_cast<int>(height);
         auto last_line = vpos_y_start + field_lines * vpos_stride;
         auto loop_max_line = vpos_y_start + (field_lines - 2) * vpos_stride;
         // If the per-line loop already emitted 0xFFDF (loop reached line=255
@@ -1563,8 +1561,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // when needed (see strips_copper_list emitter); suppress here so we
         // don't double-emit and hang past vp=0xFF.
         bool strips_emitted_wrap = has_scap && (last_line >= 256);
-        if (last_line >= 256 && (!has_copper || loop_max_line < 255)
-            && !strips_emitted_wrap) {
+        if (last_line >= 256 && (!has_copper || loop_max_line < 255) && !strips_emitted_wrap) {
             out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
                    "  // cross 256 boundary\n";
         }
@@ -1573,7 +1570,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                            last_line >= 256 ? (last_line & 0xFF) : last_line,
                            last_line);
         out += std::format("    *cl++ = offsetof(struct Custom, bplcon0); "
-               "*cl++ = {};  // 0 planes, blank below image\n", blank_expr);
+                           "*cl++ = {};  // 0 planes, blank below image\n",
+                           blank_expr);
     }
 
     // End copper list
@@ -1592,13 +1590,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("      int want = (int)(avail / {});\n", cop_size);
         out += "      if (want > 15) want = 15;\n";
         out += "      if (want > 0) {\n";
-        out += std::format("          fade_block = (USHORT*)AllocMem((ULONG)want * {}, MEMF_CHIP);\n",
-                           cop_size);
+        out += std::format(
+            "          fade_block = (USHORT*)AllocMem((ULONG)want * {}, MEMF_CHIP);\n", cop_size);
         out += "          if (fade_block) fade_steps = want;\n";
         out += "      }\n";
         out += "      for (int s = 0; s < fade_steps; s++)\n";
-        out += std::format("          fade_cops[s] = (USHORT*)((UBYTE*)fade_block + (ULONG)s * {});\n",
-                           cop_size);
+        out += std::format(
+            "          fade_cops[s] = (USHORT*)((UBYTE*)fade_block + (ULONG)s * {});\n", cop_size);
         out += "    }\n";
         out += "    fade_cops[fade_steps] = copper1;  // last = full brightness\n";
         out += "    // Build faded copies in a single pass (no CopyMem needed)\n";
@@ -1631,45 +1629,53 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // Rebuild even field copper list
         if (is_hires) {
             auto h_ddf = need_fmode3 ? 0x0034 : 0x003C;
-            out += std::format("    *cl2++ = offsetof(struct Custom, ddfstrt); *cl2++ = 0x{:04X};\n", h_ddf);
+            out += std::format(
+                "    *cl2++ = offsetof(struct Custom, ddfstrt); *cl2++ = 0x{:04X};\n", h_ddf);
             out += "    *cl2++ = offsetof(struct Custom, ddfstop); *cl2++ = 0x00D4;\n";
         } else {
             out += "    *cl2++ = offsetof(struct Custom, ddfstrt); *cl2++ = 0x0038;\n";
             out += "    *cl2++ = offsetof(struct Custom, ddfstop); *cl2++ = 0x00D0;\n";
         }
         out += std::format("    *cl2++ = offsetof(struct Custom, diwstrt); "
-                           "*cl2++ = ({}<<8)|0x81;\n", y_start);
+                           "*cl2++ = ({}<<8)|0x81;\n",
+                           y_start);
         {
             auto field_lines = height / 2;
             auto last_line = y_start + static_cast<int>(field_lines);
             auto stop_v = last_line & 0xFF;
             out += std::format("    *cl2++ = offsetof(struct Custom, diwstop); "
                                "*cl2++ = ({}<<8)|0xC1;  // VSTOP={}\n",
-                               stop_v, last_line);
+                               stop_v,
+                               last_line);
         }
-        if (need_fmode3)
-            out += "    *cl2++ = 0x01fc; *cl2++ = 0x0003;\n";
+        if (need_fmode3) out += "    *cl2++ = 0x01fc; *cl2++ = 0x0003;\n";
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
-                           "*cl2++ = {};  // 0x{:04X}\n", bplcon0_expr, bplcon0);
+                           "*cl2++ = {};  // 0x{:04X}\n",
+                           bplcon0_expr,
+                           bplcon0);
         out += "    *cl2++ = offsetof(struct Custom, bplcon1); *cl2++ = 0;\n";
         out += std::format("    *cl2++ = offsetof(struct Custom, bplcon2); *cl2++ = 0x{:04X};\n",
                            bplcon2);
 
         // Interleaved interlace: mod skips other field's interleaved row,
         // -8 compensates FMODE=3 overread.
-        auto lace_mod = static_cast<int>(bpr) * (static_cast<int>(depth) * 2 - 1)
-                      - (need_fmode3 ? 8 : 0);
+        auto lace_mod = static_cast<int>(bpr) * (static_cast<int>(depth) * 2 - 1) -
+                        (need_fmode3 ? 8 : 0);
         out += std::format("    *cl2++ = offsetof(struct Custom, bpl1mod); "
-                           "*cl2++ = {};\n", lace_mod);
+                           "*cl2++ = {};\n",
+                           lace_mod);
         out += std::format("    *cl2++ = offsetof(struct Custom, bpl2mod); "
-                           "*cl2++ = {};\n", lace_mod);
+                           "*cl2++ = {};\n",
+                           lace_mod);
         // Even field starts one interleaved row (depth*bpr) into the data,
         // plus the per-plane offset within that row.
         out += std::format("    const UBYTE* planes_even[{}];\n", depth);
         out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
         out += std::format("        planes_even[i] = (const UBYTE*){}_planes"
                            " + {} * i + {};\n",
-                           sym, bpr, bpr * depth);
+                           sym,
+                           bpr,
+                           bpr * depth);
         out += std::format("    cl2 = copSetPlanes(cl2, planes_even, {});\n", depth);
         // Field 2 palette init — must mirror field 1's setup so AGA banks
         // and LOCT bytes are loaded for HAM8 etc. Otherwise field 2's color
@@ -1682,7 +1688,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 auto bank_bits = static_cast<unsigned>(bank << 13);
 
                 out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
-                                   "  // bank {}\n", bank_bits, bank);
+                                   "  // bank {}\n",
+                                   bank_bits,
+                                   bank);
                 out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
                 out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
                 out += std::format("        *cl2++ = {}_palette[{} + i];\n", sym, base);
@@ -1691,7 +1699,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 if (options.aga) {
                     out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
                                        "  // bank {}, LOCT=1\n",
-                                       bank_bits | 0x0200, bank);
+                                       bank_bits | 0x0200,
+                                       bank);
                     out += std::format("    for (int i = 0; i < {}; i++) {{\n", count);
                     out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
                     out += std::format("        *cl2++ = {}_palette_lo[{} + i];\n", sym, base);
@@ -1705,16 +1714,17 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             out += std::format("        *cl2++ = {}_palette[i];\n", sym);
             out += "    }\n";
             if (options.aga) {
-                unsigned pf2of = options.dpf
-                    ? ((depth == 8) ? 0x1000 : 0x0C00) : 0x0000;
+                unsigned pf2of = options.dpf ? ((depth == 8) ? 0x1000 : 0x0C00) : 0x0000;
                 out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
-                                   "  // LOCT=1\n", pf2of | 0x0200);
+                                   "  // LOCT=1\n",
+                                   pf2of | 0x0200);
                 out += std::format("    for (int i = 0; i < {}; i++) {{\n", pal_count);
                 out += "        *cl2++ = offsetof(struct Custom, color) + i * 2;\n";
                 out += std::format("        *cl2++ = {}_palette_lo[i];\n", sym);
                 out += "    }\n";
                 out += std::format("    *cl2++ = 0x0106; *cl2++ = 0x{:04X};"
-                                   "  // LOCT=0\n", pf2of);
+                                   "  // LOCT=0\n",
+                                   pf2of);
             }
         }
 
@@ -1733,8 +1743,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         if (has_copper) {
             out += "    // Field 2 per-scanline palette changes\n";
             out += std::format("    for (int y = 1; y < {}; y++) {{\n", height / 2);
-            out += std::format("        USHORT line = (y - 1) + {};\n",
-                               y_start);
+            out += std::format("        USHORT line = (y - 1) + {};\n", y_start);
             out += "        if (line == 255) {\n";
             out += "            *cl2++ = 0xFFDF;  // activates past-0xFF state\n";
             out += "        } else {\n";
@@ -1758,7 +1767,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                last_line >= 256 ? (last_line & 0xFF) : last_line,
                                last_line);
             out += std::format("    *cl2++ = offsetof(struct Custom, bplcon0); "
-                   "*cl2++ = {};\n", blank_expr);
+                               "*cl2++ = {};\n",
+                               blank_expr);
         }
         out += "    *cl2++ = 0xffff; *cl2++ = 0xfffe;\n\n";
 
@@ -1802,75 +1812,75 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     if (do_fade_to) {
         auto F = options.fade_per_frame_values.size();
         auto N = options.fade_per_frame_values[0].size();
-        out += std::format(
-            "    // Fade-to setup: scan cop list for COLOR MOVE value-word "
-            "addresses\n"
-            "    USHORT* fade_addrs[{}];\n"
-            "    int fade_n = 0;\n"
-            "    for (USHORT* p = copper1; "
-            "!(p[0] == 0xFFFF && p[1] == 0xFFFE); p += 2) {{\n"
-            "        UWORD reg = p[0];\n"
-            "        if ((reg & 1) == 0 && reg >= 0x0180 && reg <= 0x01BE) {{\n"
-            "            if (fade_n < {}) fade_addrs[fade_n++] = &p[1];\n"
-            "        }}\n"
-            "    }}\n", N, N);
-        out += std::format(
-            "    // Animation: cycle frame every {} VBLs ({} → {} → 0).\n"
-            "    {{\n"
-            "        int frame = 0, dir = 1, hold = 0;\n"
-            "        for (;;) {{\n"
-            "            WaitVbl();\n"
-            "            // Right-click exits.\n"
-            "            if (((*(volatile UWORD*)0xdff016) & (1<<10)) == 0) "
-            "break;\n"
-            "            if (++hold >= {}) {{\n"
-            "                hold = 0;\n"
-            "                const UWORD* vals = {}_fade_values[frame];\n"
-            "                for (int i = 0; i < fade_n; i++) "
-            "*fade_addrs[i] = vals[i];\n",
-            options.fade_frame_hold_vbls,
-            options.fade_ping_pong ? "0..F-1..0" : "0..F-1, wrap",
-            F - 1, options.fade_frame_hold_vbls, sym);
+        out += std::format("    // Fade-to setup: scan cop list for COLOR MOVE value-word "
+                           "addresses\n"
+                           "    USHORT* fade_addrs[{}];\n"
+                           "    int fade_n = 0;\n"
+                           "    for (USHORT* p = copper1; "
+                           "!(p[0] == 0xFFFF && p[1] == 0xFFFE); p += 2) {{\n"
+                           "        UWORD reg = p[0];\n"
+                           "        if ((reg & 1) == 0 && reg >= 0x0180 && reg <= 0x01BE) {{\n"
+                           "            if (fade_n < {}) fade_addrs[fade_n++] = &p[1];\n"
+                           "        }}\n"
+                           "    }}\n",
+                           N,
+                           N);
+        out += std::format("    // Animation: cycle frame every {} VBLs ({} → {} → 0).\n"
+                           "    {{\n"
+                           "        int frame = 0, dir = 1, hold = 0;\n"
+                           "        for (;;) {{\n"
+                           "            WaitVbl();\n"
+                           "            // Right-click exits.\n"
+                           "            if (((*(volatile UWORD*)0xdff016) & (1<<10)) == 0) "
+                           "break;\n"
+                           "            if (++hold >= {}) {{\n"
+                           "                hold = 0;\n"
+                           "                const UWORD* vals = {}_fade_values[frame];\n"
+                           "                for (int i = 0; i < fade_n; i++) "
+                           "*fade_addrs[i] = vals[i];\n",
+                           options.fade_frame_hold_vbls,
+                           options.fade_ping_pong ? "0..F-1..0" : "0..F-1, wrap",
+                           F - 1,
+                           options.fade_frame_hold_vbls,
+                           sym);
         if (options.fade_ping_pong) {
-            out += std::format(
-                "                frame += dir;\n"
-                "                if (frame >= {}) {{ dir = -1; frame = {}; }}\n"
-                "                else if (frame < 0) {{ dir = 1; frame = 1; }}\n",
-                F, F >= 2 ? F - 2 : 0);
+            out += std::format("                frame += dir;\n"
+                               "                if (frame >= {}) {{ dir = -1; frame = {}; }}\n"
+                               "                else if (frame < 0) {{ dir = 1; frame = 1; }}\n",
+                               F,
+                               F >= 2 ? F - 2 : 0);
         } else {
-            out += std::format(
-                "                if (++frame >= {}) frame = 0;\n", F);
+            out += std::format("                if (++frame >= {}) frame = 0;\n", F);
         }
         out += "            }\n"
                "        }\n"
                "    }\n\n";
     } else
-    // Wait for left mouse button. Multi-frame batch viewer: each click
-    // advances to the next frame (wraps around); right-click exits.
-    if (n_extra > 0) {
-        out += std::format("    // Multi-frame click-cycle: {} frames total\n",
-                           n_extra + 1);
-        out += "    int frame = 0;\n";
-        out += "    short prev = 0;\n";
-        out += "    for (;;) {\n";
-        out += "        WaitVbl();\n";
-        out += "        // Right-click (CIA-A port A bit 2 via POTGOR bit 10) exits.\n";
-        out += "        if (((*(volatile UWORD*)0xdff016) & (1<<10)) == 0) break;\n";
-        out += "        short cur = MouseLeft();\n";
-        out += "        if (cur && !prev) {\n";
-        out += std::format("            frame++; if (frame >= {}) frame = 0;\n",
-                           n_extra + 1);
-        out += std::format("            const UBYTE* fp[{}];\n", depth);
-        out += std::format("            for (int i = 0; i < {}; i++) fp[i] = "
-                           "{}_frame_planes[frame][i];\n", depth, sym);
-        out += std::format("            (void)copSetPlanes(bpl_slot, fp, {});\n",
-                           depth);
-        out += "        }\n";
-        out += "        prev = cur;\n";
-        out += "    }\n\n";
-    } else {
-        out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
-    }
+        // Wait for left mouse button. Multi-frame batch viewer: each click
+        // advances to the next frame (wraps around); right-click exits.
+        if (n_extra > 0) {
+            out += std::format("    // Multi-frame click-cycle: {} frames total\n", n_extra + 1);
+            out += "    int frame = 0;\n";
+            out += "    short prev = 0;\n";
+            out += "    for (;;) {\n";
+            out += "        WaitVbl();\n";
+            out += "        // Right-click (CIA-A port A bit 2 via POTGOR bit 10) exits.\n";
+            out += "        if (((*(volatile UWORD*)0xdff016) & (1<<10)) == 0) break;\n";
+            out += "        short cur = MouseLeft();\n";
+            out += "        if (cur && !prev) {\n";
+            out += std::format("            frame++; if (frame >= {}) frame = 0;\n", n_extra + 1);
+            out += std::format("            const UBYTE* fp[{}];\n", depth);
+            out += std::format("            for (int i = 0; i < {}; i++) fp[i] = "
+                               "{}_frame_planes[frame][i];\n",
+                               depth,
+                               sym);
+            out += std::format("            (void)copSetPlanes(bpl_slot, fp, {});\n", depth);
+            out += "        }\n";
+            out += "        prev = cur;\n";
+            out += "    }\n\n";
+        } else {
+            out += "    while (!MouseLeft()) { WaitVbl(); }\n\n";
+        }
 
     // Fade-out: reverse, then disable display and free
     if (do_fade) {
@@ -1881,8 +1891,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += "    }\n";
         out += "    WaitVbl();\n";
         out += "    custom->dmacon = DMAF_COPPER | DMAF_RASTER;\n";
-        out += std::format("    if (fade_block) FreeMem(fade_block, (ULONG)(fade_steps-1) * {});\n\n",
-                           cop_size);
+        out += std::format(
+            "    if (fade_block) FreeMem(fade_block, (ULONG)(fade_steps-1) * {});\n\n", cop_size);
     }
 
     // Cleanup
@@ -1900,7 +1910,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     {
         auto chipset_str = options.aga ? "AGA" : "OCS";
         auto total_bytes = planes.total_bytes();
-        bool has_cop  = options.copper_changes && !options.copper_changes->empty();
+        bool has_cop = options.copper_changes && !options.copper_changes->empty();
         // has_scap is already declared in the outer scope (line 416).
 
         // Mode label: combines the base mode (HAM/EHB/lores/hires) with
@@ -1917,10 +1927,12 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         } else {
             mode_label = std::format("lores {}bpl", planes.depth);
         }
-        if (options.dpf)       mode_label += " + DPF";
+        if (options.dpf) mode_label += " + DPF";
         if (options.interlace) mode_label += " + lace";
-        if (has_scap)          mode_label += " + Strips";
-        else if (has_cop)      mode_label += " + Sliced";
+        if (has_scap)
+            mode_label += " + Strips";
+        else if (has_cop)
+            mode_label += " + Sliced";
 
         // Build the message as a C string literal. Each line starts with
         // two spaces and a label-padded prefix so the values align in a
@@ -1937,19 +1949,19 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         msg += "\\n";
         msg += std::format("  Mode:     {}\\n", mode_label);
         msg += std::format("  Display:  {}x{}, {} ({}-bit palette)\\n",
-                           planes.width, planes.height, chipset_str,
+                           planes.width,
+                           planes.height,
+                           chipset_str,
                            options.aga ? 24 : 12);
         // Visible palette count: for DPF the palette span is the
         // COLOR00..15 register layout (16 entries) but PF2 only uses
         // 1 << (depth/2) of them. Report the visible count so the
         // viewer matches the CLI / web Palette: line.
-        std::size_t visible_pal = options.dpf
-            ? (std::size_t{1} << (planes.depth / 2))
-            : palette.size();
+        std::size_t visible_pal = options.dpf ? (std::size_t{1} << (planes.depth / 2))
+                                              : palette.size();
         msg += std::format("  Palette:  {} colors\\n", visible_pal);
         if (options.total_unique_colors > 0) {
-            msg += std::format("  Colors:   {} unique\\n",
-                               options.total_unique_colors);
+            msg += std::format("  Colors:   {} unique\\n", options.total_unique_colors);
         }
         msg += std::format("  Bitplane: {} bytes\\n", total_bytes);
         if (has_cop)
@@ -1959,8 +1971,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             std::size_t strips_words = 0;
             for (auto& row : *options.strips_line_moves)
                 strips_words += row.size() * 2;
-            msg += std::format("  Strips:     {} bytes copper list\\n",
-                               strips_words * 2);
+            msg += std::format("  Strips:     {} bytes copper list\\n", strips_words * 2);
         }
         msg += "\\n";
         msg += R"(  \033[36mhttps://www.png2amiga.app\033[0m\n)";
@@ -1979,8 +1990,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                std::size_t len = 0;
                                for (std::size_t i = 0; i < msg.size(); ++i) {
                                    if (msg[i] == '\\' && i + 1 < msg.size()) {
-                                       if (msg[i+1] == 'n' || msg[i+1] == '\\') { ++i; }
-                                       else if (msg[i+1] == '0') { i += 3; }  // \033
+                                       if (msg[i + 1] == 'n' || msg[i + 1] == '\\') {
+                                           ++i;
+                                       } else if (msg[i + 1] == '0') {
+                                           i += 3;
+                                       }  // \033
                                    }
                                    ++len;
                                }
@@ -2024,4 +2038,4 @@ Result<void> save_viewer(std::string_view path,
     return {};
 }
 
-} // namespace png2amiga::cheader
+}  // namespace png2amiga::cheader

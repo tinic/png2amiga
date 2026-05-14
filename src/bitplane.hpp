@@ -32,11 +32,11 @@ enum class Layout : unsigned char {
 // ---------------------------------------------------------------------------
 
 struct BitplaneData {
-    std::vector<std::uint8_t> data;     // raw bitplane bytes
-    std::size_t width{};                // image width in pixels
-    std::size_t height{};               // image height in pixels
-    std::size_t depth{};                // number of bitplanes
-    std::size_t bytes_per_row{};        // bytes per row per plane (width/8, word-aligned)
+    std::vector<std::uint8_t> data;  // raw bitplane bytes
+    std::size_t width{};             // image width in pixels
+    std::size_t height{};            // image height in pixels
+    std::size_t depth{};             // number of bitplanes
+    std::size_t bytes_per_row{};     // bytes per row per plane (width/8, word-aligned)
     Layout layout{Layout::interleaved};
 
     // Total size: depth * height * bytes_per_row
@@ -45,8 +45,7 @@ struct BitplaneData {
     }
 
     // Offset to a specific row of a specific plane
-    [[nodiscard]] std::size_t plane_row_offset(std::size_t plane,
-                                                std::size_t row) const noexcept {
+    [[nodiscard]] std::size_t plane_row_offset(std::size_t plane, std::size_t row) const noexcept {
         if (layout == Layout::interleaved) {
             // row * (depth * bytes_per_row) + plane * bytes_per_row
             return row * depth * bytes_per_row + plane * bytes_per_row;
@@ -68,7 +67,8 @@ struct BitplaneData {
 // ---------------------------------------------------------------------------
 
 Result<BitplaneData> encode(const std::vector<std::uint8_t>& pixel_indices,
-                            std::size_t width, std::size_t height,
+                            std::size_t width,
+                            std::size_t height,
                             std::size_t depth,
                             Layout layout = Layout::interleaved);
 
@@ -88,9 +88,9 @@ Result<std::vector<std::uint8_t>> decode(const BitplaneData& planes);
 
 struct EncodeResult {
     BitplaneData planes;
-    std::vector<std::uint8_t> indices;      // per-pixel palette index
-    std::vector<Color3f> used_palette;       // the palette colors actually used
-    float total_error{};                     // sum of perceptual error
+    std::vector<std::uint8_t> indices;  // per-pixel palette index
+    std::vector<Color3f> used_palette;  // the palette colors actually used
+    float total_error{};                // sum of perceptual error
 };
 
 Result<EncodeResult> encode_image(const Image& image,
@@ -102,8 +102,7 @@ Result<EncodeResult> encode_image(const Image& image,
 // Render bitplane data back to an Image for preview
 // ---------------------------------------------------------------------------
 
-Result<Image> render(const BitplaneData& planes,
-                     std::span<const Color3f> palette);
+Result<Image> render(const BitplaneData& planes, std::span<const Color3f> palette);
 
 // ---------------------------------------------------------------------------
 // Dual-playfield expansion.
@@ -120,4 +119,4 @@ Result<Image> render(const BitplaneData& planes,
 
 Result<BitplaneData> expand_to_dpf_pf2(const BitplaneData& planes);
 
-} // namespace png2amiga::bitplane
+}  // namespace png2amiga::bitplane

@@ -89,9 +89,9 @@ Result<void> save(std::string_view path,
 //                  nibbles via palette::cga_composite_pattern.
 // Output always 16384 bytes: even rows at offset 0x0000, odd rows at
 // 0x2000, padding zeroed.
-std::vector<std::uint8_t>
-pack_cga_banked(std::span<const std::uint8_t> indices,
-                std::size_t width, std::size_t height,
-                amiga::Mode mode);
+std::vector<std::uint8_t> pack_cga_banked(std::span<const std::uint8_t> indices,
+                                          std::size_t width,
+                                          std::size_t height,
+                                          amiga::Mode mode);
 
-} // namespace png2amiga::cheader_dos_c
+}  // namespace png2amiga::cheader_dos_c

@@ -28,8 +28,8 @@ namespace png2amiga::iff {
 
 // Compression method for BODY chunk
 enum class Compression : std::uint8_t {
-    none = 0,           // Uncompressed
-    byterun1 = 1,       // PackBits / ByteRun1 (standard IFF compression)
+    none = 0,      // Uncompressed
+    byterun1 = 1,  // PackBits / ByteRun1 (standard IFF compression)
 };
 
 // ---------------------------------------------------------------------------
@@ -64,11 +64,10 @@ struct IffOptions {
 // Returns IFF file bytes.
 // ---------------------------------------------------------------------------
 
-Result<std::vector<std::uint8_t>> write_ilbm(
-    const bitplane::BitplaneData& planes,
-    std::span<const Color3f> palette,
-    amiga::Mode mode,
-    const IffOptions& options = {});
+Result<std::vector<std::uint8_t>> write_ilbm(const bitplane::BitplaneData& planes,
+                                             std::span<const Color3f> palette,
+                                             amiga::Mode mode,
+                                             const IffOptions& options = {});
 
 // ---------------------------------------------------------------------------
 // Write IFF ILBM to file
@@ -80,4 +79,4 @@ Result<void> save_ilbm(std::string_view path,
                        amiga::Mode mode,
                        const IffOptions& options = {});
 
-} // namespace png2amiga::iff
+}  // namespace png2amiga::iff

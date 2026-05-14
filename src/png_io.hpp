@@ -11,7 +11,8 @@ Result<Image> load(std::string_view path);
 Result<void> save(std::string_view path, const Image& image);
 
 // Save with transparency mask: pixels where mask[i]==true get alpha=0
-Result<void> save(std::string_view path, const Image& image,
+Result<void> save(std::string_view path,
+                  const Image& image,
                   const std::vector<bool>& transparency_mask);
 
 // Encode image to in-memory PNG bytes
@@ -34,16 +35,17 @@ Result<std::vector<std::uint8_t>> encode(const Image& image,
 // Caller should only use this for modes that have a single global palette
 // (lores/hires/EHB without copper). HAM and copper have dynamic palettes.
 // ---------------------------------------------------------------------------
-Result<std::vector<std::uint8_t>> encode_palettized(
-    const std::vector<std::uint8_t>& indices,
-    const std::vector<Color3f>& palette,
-    std::size_t width, std::size_t height,
-    int transparent_index = -1);
+Result<std::vector<std::uint8_t>> encode_palettized(const std::vector<std::uint8_t>& indices,
+                                                    const std::vector<Color3f>& palette,
+                                                    std::size_t width,
+                                                    std::size_t height,
+                                                    int transparent_index = -1);
 
 Result<void> save_palettized(std::string_view path,
                              const std::vector<std::uint8_t>& indices,
                              const std::vector<Color3f>& palette,
-                             std::size_t width, std::size_t height,
+                             std::size_t width,
+                             std::size_t height,
                              int transparent_index = -1);
 
-} // namespace png2amiga::png_io
+}  // namespace png2amiga::png_io

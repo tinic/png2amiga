@@ -34,14 +34,13 @@ namespace png2amiga::quantize {
 // palette (linear RGB) sorted by perceptual luminance. On failure
 // (Metal unavailable, GPU error, image empty) returns
 // std::unexpected; caller should fall back to median_cut.
-[[nodiscard]] Result<Palette> gpu_restart_quantize(
-    const Image& image,
-    std::size_t max_colors,
-    int restarts = 32,
-    int iterations = 20,
-    std::uint32_t seed = 0xC0FFEEu) noexcept;
+[[nodiscard]] Result<Palette> gpu_restart_quantize(const Image& image,
+                                                   std::size_t max_colors,
+                                                   int restarts = 32,
+                                                   int iterations = 20,
+                                                   std::uint32_t seed = 0xC0FFEEu) noexcept;
 
-} // namespace png2amiga::quantize
+}  // namespace png2amiga::quantize
 
 // ---------------------------------------------------------------------------
 // C-pure boundary for the apple-clang implementation TU. Don't call
@@ -55,14 +54,13 @@ bool png2amiga_metal_available_c() noexcept;
 // out_palette_rgb must be float[max_colors * 3] caller-allocated.
 // On success returns 0 and writes *out_palette_size palette entries
 // (sorted by OKLab L). Non-zero return = caller falls back.
-int png2amiga_quantize_metal_c(
-    const float* pixels_rgb,
-    std::size_t  n_pixels,
-    std::size_t  max_colors,
-    int          restarts,
-    int          iterations,
-    std::uint32_t seed,
-    float*       out_palette_rgb,
-    std::size_t* out_palette_size) noexcept;
+int png2amiga_quantize_metal_c(const float* pixels_rgb,
+                               std::size_t n_pixels,
+                               std::size_t max_colors,
+                               int restarts,
+                               int iterations,
+                               std::uint32_t seed,
+                               float* out_palette_rgb,
+                               std::size_t* out_palette_size) noexcept;
 
-} // extern "C"
+}  // extern "C"

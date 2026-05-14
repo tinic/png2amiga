@@ -13,24 +13,24 @@
 
 // SIMD backend selection — same gates as quantize.cpp / ssimulacra2.cpp.
 #if defined(__wasm_simd128__)
-    #include <wasm_simd128.h>
-    #define PNG2AMIGA_DITHER_SIMD_NEON      0
-    #define PNG2AMIGA_DITHER_SIMD_AVX2      0
-    #define PNG2AMIGA_DITHER_SIMD_WASM      1
+#include <wasm_simd128.h>
+#define PNG2AMIGA_DITHER_SIMD_NEON 0
+#define PNG2AMIGA_DITHER_SIMD_AVX2 0
+#define PNG2AMIGA_DITHER_SIMD_WASM 1
 #elif defined(__AVX2__)
-    #include <immintrin.h>
-    #define PNG2AMIGA_DITHER_SIMD_NEON      0
-    #define PNG2AMIGA_DITHER_SIMD_AVX2      1
-    #define PNG2AMIGA_DITHER_SIMD_WASM      0
+#include <immintrin.h>
+#define PNG2AMIGA_DITHER_SIMD_NEON 0
+#define PNG2AMIGA_DITHER_SIMD_AVX2 1
+#define PNG2AMIGA_DITHER_SIMD_WASM 0
 #elif defined(__ARM_NEON) || defined(__aarch64__)
-    #include <arm_neon.h>
-    #define PNG2AMIGA_DITHER_SIMD_NEON      1
-    #define PNG2AMIGA_DITHER_SIMD_AVX2      0
-    #define PNG2AMIGA_DITHER_SIMD_WASM      0
+#include <arm_neon.h>
+#define PNG2AMIGA_DITHER_SIMD_NEON 1
+#define PNG2AMIGA_DITHER_SIMD_AVX2 0
+#define PNG2AMIGA_DITHER_SIMD_WASM 0
 #else
-    #define PNG2AMIGA_DITHER_SIMD_NEON      0
-    #define PNG2AMIGA_DITHER_SIMD_AVX2      0
-    #define PNG2AMIGA_DITHER_SIMD_WASM      0
+#define PNG2AMIGA_DITHER_SIMD_NEON 0
+#define PNG2AMIGA_DITHER_SIMD_AVX2 0
+#define PNG2AMIGA_DITHER_SIMD_WASM 0
 #endif
 
 namespace png2amiga::dither {
@@ -55,10 +55,10 @@ constexpr auto make_bayer2x2() noexcept {
 
 constexpr auto make_bayer4x4() noexcept {
     constexpr std::array<std::array<int, 4>, 4> raw = {{
-        {{ 0,  8,  2, 10}},
-        {{12,  4, 14,  6}},
-        {{ 3, 11,  1,  9}},
-        {{15,  7, 13,  5}},
+        {{0, 8, 2, 10}},
+        {{12, 4, 14, 6}},
+        {{3, 11, 1, 9}},
+        {{15, 7, 13, 5}},
     }};
     std::array<std::array<float, 4>, 4> m{};
     for (std::size_t y = 0; y < 4; ++y)
@@ -89,11 +89,11 @@ constexpr auto make_bayer3x3() noexcept {
 
 constexpr auto make_bayer5x5() noexcept {
     constexpr std::array<std::array<int, 5>, 5> raw = {{
-        {{ 0, 14,  3, 17,  6}},
-        {{10, 21,  7, 24, 12}},
-        {{ 4, 18,  1, 15,  9}},
-        {{20,  8, 23, 11, 22}},
-        {{ 2, 16,  5, 19, 13}},
+        {{0, 14, 3, 17, 6}},
+        {{10, 21, 7, 24, 12}},
+        {{4, 18, 1, 15, 9}},
+        {{20, 8, 23, 11, 22}},
+        {{2, 16, 5, 19, 13}},
     }};
     std::array<std::array<float, 5>, 5> m{};
     for (std::size_t y = 0; y < 5; ++y)
@@ -104,12 +104,12 @@ constexpr auto make_bayer5x5() noexcept {
 
 constexpr auto make_bayer6x6() noexcept {
     constexpr std::array<std::array<int, 6>, 6> raw = {{
-        {{ 0, 22,  6, 28, 12, 33}},
-        {{18,  9, 25, 15, 31,  3}},
-        {{ 5, 27, 14, 35, 20,  8}},
-        {{23, 11, 32, 17, 26,  1}},
-        {{ 7, 30, 19,  4, 29, 13}},
-        {{34, 16, 24, 10, 21,  2}},
+        {{0, 22, 6, 28, 12, 33}},
+        {{18, 9, 25, 15, 31, 3}},
+        {{5, 27, 14, 35, 20, 8}},
+        {{23, 11, 32, 17, 26, 1}},
+        {{7, 30, 19, 4, 29, 13}},
+        {{34, 16, 24, 10, 21, 2}},
     }};
     std::array<std::array<float, 6>, 6> m{};
     for (std::size_t y = 0; y < 6; ++y)
@@ -120,13 +120,13 @@ constexpr auto make_bayer6x6() noexcept {
 
 constexpr auto make_bayer7x7() noexcept {
     constexpr std::array<std::array<int, 7>, 7> raw = {{
-        {{ 0, 30,  6, 36, 12, 42, 18}},
-        {{24, 11, 38, 17, 44, 23,  4}},
-        {{ 7, 33, 20, 27, 14, 47, 31}},
-        {{40, 15, 46,  2, 28, 10, 35}},
-        {{19, 25,  8, 41, 22, 37,  1}},
-        {{43,  3, 32, 13, 48,  5, 26}},
-        {{ 9, 39, 21, 34, 16, 29, 45}},
+        {{0, 30, 6, 36, 12, 42, 18}},
+        {{24, 11, 38, 17, 44, 23, 4}},
+        {{7, 33, 20, 27, 14, 47, 31}},
+        {{40, 15, 46, 2, 28, 10, 35}},
+        {{19, 25, 8, 41, 22, 37, 1}},
+        {{43, 3, 32, 13, 48, 5, 26}},
+        {{9, 39, 21, 34, 16, 29, 45}},
     }};
     std::array<std::array<float, 7>, 7> m{};
     for (std::size_t y = 0; y < 7; ++y)
@@ -137,13 +137,13 @@ constexpr auto make_bayer7x7() noexcept {
 
 constexpr auto make_bayer8x8() noexcept {
     constexpr std::array<std::array<int, 8>, 8> raw = {{
-        {{ 0, 32,  8, 40,  2, 34, 10, 42}},
+        {{0, 32, 8, 40, 2, 34, 10, 42}},
         {{48, 16, 56, 24, 50, 18, 58, 26}},
-        {{12, 44,  4, 36, 14, 46,  6, 38}},
+        {{12, 44, 4, 36, 14, 46, 6, 38}},
         {{60, 28, 52, 20, 62, 30, 54, 22}},
-        {{ 3, 35, 11, 43,  1, 33,  9, 41}},
+        {{3, 35, 11, 43, 1, 33, 9, 41}},
         {{51, 19, 59, 27, 49, 17, 57, 25}},
-        {{15, 47,  7, 39, 13, 45,  5, 37}},
+        {{15, 47, 7, 39, 13, 45, 5, 37}},
         {{63, 31, 55, 23, 61, 29, 53, 21}},
     }};
     std::array<std::array<float, 8>, 8> m{};
@@ -155,8 +155,8 @@ constexpr auto make_bayer8x8() noexcept {
 
 constexpr auto make_checker() noexcept {
     return std::array<std::array<float, 2>, 2>{{
-        {{-0.25f,  0.25f}},
-        {{ 0.25f, -0.25f}},
+        {{-0.25f, 0.25f}},
+        {{0.25f, -0.25f}},
     }};
 }
 
@@ -179,10 +179,10 @@ constexpr auto make_clustered_dot() noexcept {
     // 4x4 clustered dot — pixels form round dots at 2:1 pixel ratio,
     // cluster grows from center outward
     constexpr std::array<std::array<int, 4>, 4> raw = {{
-        {{12,  5,  6, 13}},
-        {{ 4,  0,  1,  7}},
-        {{11,  3,  2,  8}},
-        {{15, 10,  9, 14}},
+        {{12, 5, 6, 13}},
+        {{4, 0, 1, 7}},
+        {{11, 3, 2, 8}},
+        {{15, 10, 9, 14}},
     }};
     std::array<std::array<float, 4>, 4> m{};
     for (std::size_t y = 0; y < 4; ++y)
@@ -195,7 +195,7 @@ constexpr auto make_line2() noexcept {
     // 1x2 alternating rows
     return std::array<std::array<float, 1>, 2>{{
         {{-0.25f}},
-        {{ 0.25f}},
+        {{0.25f}},
     }};
 }
 
@@ -211,8 +211,8 @@ constexpr auto make_vline_checker() noexcept {
     // rows get subtle offset — produces vertical lines with pixel variation
     // (transpose of line_checker)
     return std::array<std::array<float, 2>, 2>{{
-        {{-0.35f,  0.15f}},
-        {{-0.15f,  0.35f}},
+        {{-0.35f, 0.15f}},
+        {{-0.15f, 0.35f}},
     }};
 }
 
@@ -237,7 +237,7 @@ constexpr auto make_line_checker() noexcept {
     // columns get subtle offset — produces horizontal lines with pixel variation
     return std::array<std::array<float, 2>, 2>{{
         {{-0.35f, -0.15f}},
-        {{ 0.15f,  0.35f}},
+        {{0.15f, 0.35f}},
     }};
 }
 
@@ -246,8 +246,8 @@ constexpr auto make_line4() noexcept {
     return std::array<std::array<float, 1>, 4>{{
         {{-0.375f}},
         {{-0.125f}},
-        {{ 0.125f}},
-        {{ 0.375f}},
+        {{0.125f}},
+        {{0.375f}},
     }};
 }
 
@@ -268,7 +268,7 @@ constexpr auto make_line8() noexcept {
 // 256 distinct thresholds. Quieter, more organic-feeling dither than
 // standard 8×8 Bayer.
 constexpr auto make_fractal16() noexcept {
-    constexpr std::array<std::array<int, 2>, 2> b2 = {{ {{0, 2}}, {{3, 1}} }};
+    constexpr std::array<std::array<int, 2>, 2> b2 = {{{{0, 2}}, {{3, 1}}}};
     std::array<std::array<int, 16>, 16> raw{};
     // Recursively double: B_{2N}[i,j] = 4·B_N[i/2,j/2] + b2[i%2, j%2].
     for (std::size_t y = 0; y < 16; ++y) {
@@ -282,7 +282,10 @@ constexpr auto make_fractal16() noexcept {
             }
             // Reverse the level order so finest level is least-significant.
             int rev = 0, vv = v;
-            for (int i = 0; i < 4; ++i) { rev = rev * 4 + (vv & 3); vv >>= 2; }
+            for (int i = 0; i < 4; ++i) {
+                rev = rev * 4 + (vv & 3);
+                vv >>= 2;
+            }
             raw[y][x] = rev;
         }
     }
@@ -304,10 +307,10 @@ constexpr auto fractal16_mat = make_fractal16();
 // ordered_dither.h (BSD-2 licensed).
 constexpr auto make_aseprite_old() noexcept {
     constexpr std::array<std::array<int, 4>, 4> raw = {{
-        {{ 0,  8,  2, 10}},
-        {{14,  6, 12,  4}},
-        {{ 3, 11,  1,  9}},
-        {{15,  7, 13,  5}},
+        {{0, 8, 2, 10}},
+        {{14, 6, 12, 4}},
+        {{3, 11, 1, 9}},
+        {{15, 7, 13, 5}},
     }};
     std::array<std::array<float, 4>, 4> m{};
     for (std::size_t y = 0; y < 4; ++y)
@@ -333,12 +336,12 @@ constexpr auto make_libcaca_3x3() noexcept {
 
 constexpr auto make_libcaca_6x6() noexcept {
     constexpr std::array<std::array<int, 6>, 6> raw = {{
-        {{ 0, 28,  4, 24, 14, 32}},
-        {{20,  8, 30, 12, 22,  2}},
-        {{ 6, 26, 16, 34, 10, 18}},
-        {{31, 13, 23,  3, 29,  5}},
-        {{15, 35,  9, 19,  7, 25}},
-        {{21,  1, 27, 11, 33, 17}},
+        {{0, 28, 4, 24, 14, 32}},
+        {{20, 8, 30, 12, 22, 2}},
+        {{6, 26, 16, 34, 10, 18}},
+        {{31, 13, 23, 3, 29, 5}},
+        {{15, 35, 9, 19, 7, 25}},
+        {{21, 1, 27, 11, 33, 17}},
     }};
     std::array<std::array<float, 6>, 6> m{};
     for (std::size_t y = 0; y < 6; ++y)
@@ -352,13 +355,13 @@ constexpr auto make_libcaca_6x6() noexcept {
 // displays where each pixel is a separate visual unit.
 constexpr auto make_pegasus_8x8() noexcept {
     constexpr std::array<std::array<int, 8>, 8> raw = {{
-        {{ 0, 48,  8, 40,  2, 50, 10, 42}},
+        {{0, 48, 8, 40, 2, 50, 10, 42}},
         {{56, 24, 32, 16, 58, 26, 34, 18}},
-        {{12, 44,  4, 36, 14, 46,  6, 38}},
+        {{12, 44, 4, 36, 14, 46, 6, 38}},
         {{28, 60, 20, 52, 30, 62, 22, 54}},
-        {{ 3, 51, 11, 43,  1, 49,  9, 41}},
+        {{3, 51, 11, 43, 1, 49, 9, 41}},
         {{59, 27, 35, 19, 57, 25, 33, 17}},
-        {{15, 47,  7, 39, 13, 45,  5, 37}},
+        {{15, 47, 7, 39, 13, 45, 5, 37}},
         {{31, 63, 23, 55, 29, 61, 21, 53}},
     }};
     std::array<std::array<float, 8>, 8> m{};
@@ -382,8 +385,8 @@ constexpr auto h2x4_mat = make_h2x4();
 // V 4x2: vertical bias (4 wide, 2 tall) — good for hires 1:2 tall pixels
 constexpr auto make_v4x2() noexcept {
     return std::array<std::array<float, 4>, 2>{{
-        {{-0.35f, -0.15f,  0.15f,  0.35f}},
-        {{ 0.25f,  0.05f, -0.05f, -0.25f}},
+        {{-0.35f, -0.15f, 0.15f, 0.35f}},
+        {{0.25f, 0.05f, -0.05f, -0.25f}},
     }};
 }
 
@@ -431,13 +434,13 @@ constexpr auto line8_mat = make_line8();
 // 45-degree halftone 8x8 (newspaper/print look, 32 gray levels)
 constexpr auto make_halftone8x8() noexcept {
     constexpr std::array<std::array<int, 8>, 8> raw = {{
-        {{13,  7,  8, 14, 17, 21, 22, 18}},
-        {{ 6,  1,  3,  9, 28, 31, 29, 23}},
-        {{ 5,  2,  4, 10, 27, 32, 30, 24}},
+        {{13, 7, 8, 14, 17, 21, 22, 18}},
+        {{6, 1, 3, 9, 28, 31, 29, 23}},
+        {{5, 2, 4, 10, 27, 32, 30, 24}},
         {{16, 12, 11, 15, 20, 26, 25, 19}},
-        {{17, 21, 22, 18, 13,  7,  8, 14}},
-        {{28, 31, 29, 23,  6,  1,  3,  9}},
-        {{27, 32, 30, 24,  5,  2,  4, 10}},
+        {{17, 21, 22, 18, 13, 7, 8, 14}},
+        {{28, 31, 29, 23, 6, 1, 3, 9}},
+        {{27, 32, 30, 24, 5, 2, 4, 10}},
         {{20, 26, 25, 19, 16, 12, 11, 15}},
     }};
     std::array<std::array<float, 8>, 8> m{};
@@ -451,9 +454,9 @@ constexpr auto make_halftone8x8() noexcept {
 constexpr auto make_spiral5x5() noexcept {
     constexpr std::array<std::array<int, 5>, 5> raw = {{
         {{20, 21, 22, 23, 24}},
-        {{19,  6,  7,  8,  9}},
-        {{18,  5,  0,  1, 10}},
-        {{17,  4,  3,  2, 11}},
+        {{19, 6, 7, 8, 9}},
+        {{18, 5, 0, 1, 10}},
+        {{17, 4, 3, 2, 11}},
         {{16, 15, 14, 13, 12}},
     }};
     std::array<std::array<float, 5>, 5> m{};
@@ -486,7 +489,7 @@ constexpr auto make_hex8x8() noexcept {
 // tools/gen_void_cluster.mjs. Per-rank optimal: every threshold
 // percentile is itself blue-noise distributed.
 constexpr auto make_void_cluster64() noexcept {
-    #include "void_cluster_64.inc"
+#include "void_cluster_64.inc"
     std::array<std::array<float, 64>, 64> m{};
     for (std::size_t y = 0; y < 64; ++y)
         for (std::size_t x = 0; x < 64; ++x)
@@ -499,7 +502,7 @@ constexpr auto make_void_cluster64() noexcept {
 // film-grainy texture than the standard void-and-cluster — good for
 // CRT phosphor look and very small palettes.
 constexpr auto make_cluster_noise64() noexcept {
-    #include "cluster_noise_64.inc"
+#include "cluster_noise_64.inc"
     std::array<std::array<float, 64>, 64> m{};
     for (std::size_t y = 0; y < 64; ++y)
         for (std::size_t x = 0; x < 64; ++x)
@@ -518,10 +521,10 @@ constexpr auto make_blue_noise64() noexcept {
             auto fx = static_cast<float>(x);
             auto fy = static_cast<float>(y);
             float v = 52.9829189f * (0.06711056f * fx + 0.00583715f * fy);
-            v = v - static_cast<float>(static_cast<int>(v)); // fract
+            v = v - static_cast<float>(static_cast<int>(v));  // fract
             if (v < 0.0f) v += 1.0f;
             v = 52.9829189f * v;
-            v = v - static_cast<float>(static_cast<int>(v)); // fract
+            v = v - static_cast<float>(static_cast<int>(v));  // fract
             if (v < 0.0f) v += 1.0f;
             m[y][x] = v - 0.5f;  // center around 0
         }
@@ -533,12 +536,12 @@ constexpr auto make_blue_noise64() noexcept {
 constexpr auto make_diagonal8x8() noexcept {
     constexpr std::array<std::array<int, 8>, 8> raw = {{
         {{24, 10, 12, 26, 35, 47, 49, 37}},
-        {{ 8,  0,  2, 14, 45, 59, 61, 51}},
-        {{22,  6,  4, 16, 43, 57, 63, 53}},
+        {{8, 0, 2, 14, 45, 59, 61, 51}},
+        {{22, 6, 4, 16, 43, 57, 63, 53}},
         {{30, 20, 18, 28, 33, 41, 55, 39}},
         {{34, 46, 48, 36, 25, 11, 13, 27}},
-        {{44, 58, 60, 50,  9,  1,  3, 15}},
-        {{42, 56, 62, 52, 23,  7,  5, 17}},
+        {{44, 58, 60, 50, 9, 1, 3, 15}},
+        {{42, 56, 62, 52, 23, 7, 5, 17}},
         {{32, 40, 54, 38, 31, 21, 19, 29}},
     }};
     std::array<std::array<float, 8>, 8> m{};
@@ -624,8 +627,7 @@ struct PaletteSoA {
     std::size_t padded;
 };
 
-void fill_palette_soa(std::span<const OKLab> palette_lab,
-                      PaletteSoA& s) {
+void fill_palette_soa(std::span<const OKLab> palette_lab, PaletteSoA& s) {
     s.n = palette_lab.size();
 #if PNG2AMIGA_DITHER_SIMD_AVX2
     constexpr std::size_t W = 8;
@@ -647,8 +649,7 @@ void fill_palette_soa(std::span<const OKLab> palette_lab,
     }
 }
 
-NearestResult find_nearest_oklab_soa(OKLab px,
-                                     const PaletteSoA& pal) {
+NearestResult find_nearest_oklab_soa(OKLab px, const PaletteSoA& pal) {
     const std::size_t n = pal.padded;
     if (n == 0) return {0, OKLab{}, 0.0f};
 
@@ -656,9 +657,9 @@ NearestResult find_nearest_oklab_soa(OKLab px,
     const float32x4_t pL = vdupq_n_f32(px.L);
     const float32x4_t pa = vdupq_n_f32(px.a);
     const float32x4_t pb = vdupq_n_f32(px.b);
-    float32x4_t      best_d = vdupq_n_f32(std::numeric_limits<float>::max());
-    uint32x4_t       best_i = vdupq_n_u32(0);
-    const uint32x4_t k0123  = uint32x4_t{0u, 1u, 2u, 3u};
+    float32x4_t best_d = vdupq_n_f32(std::numeric_limits<float>::max());
+    uint32x4_t best_i = vdupq_n_u32(0);
+    const uint32x4_t k0123 = uint32x4_t{0u, 1u, 2u, 3u};
     for (std::size_t i = 0; i < n; i += 4) {
         float32x4_t cL = vld1q_f32(pal.L.data() + i);
         float32x4_t ca = vld1q_f32(pal.a.data() + i);
@@ -666,33 +667,34 @@ NearestResult find_nearest_oklab_soa(OKLab px,
         float32x4_t dL = vsubq_f32(pL, cL);
         float32x4_t da = vsubq_f32(pa, ca);
         float32x4_t db = vsubq_f32(pb, cb);
-        float32x4_t d  = vfmaq_f32(vfmaq_f32(vmulq_f32(dL, dL), da, da),
-                                    db, db);
-        uint32x4_t cur_i = vaddq_u32(k0123,
-                                vdupq_n_u32(static_cast<std::uint32_t>(i)));
+        float32x4_t d = vfmaq_f32(vfmaq_f32(vmulq_f32(dL, dL), da, da), db, db);
+        uint32x4_t cur_i = vaddq_u32(k0123, vdupq_n_u32(static_cast<std::uint32_t>(i)));
         uint32x4_t lt = vcltq_f32(d, best_d);
         best_d = vbslq_f32(lt, d, best_d);
         best_i = vbslq_u32(lt, cur_i, best_i);
     }
     // Reduce 4 lanes to 1.
-    alignas(16) float dd[4]; alignas(16) std::uint32_t ii[4];
-    vst1q_f32(dd, best_d); vst1q_u32(ii, best_i);
-    int   bk = 0;
+    alignas(16) float dd[4];
+    alignas(16) std::uint32_t ii[4];
+    vst1q_f32(dd, best_d);
+    vst1q_u32(ii, best_i);
+    int bk = 0;
     float bd = dd[0];
     for (int k = 1; k < 4; ++k)
-        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+        if (dd[k] < bd) {
+            bd = dd[k];
+            bk = k;
+        }
     std::size_t bi = ii[bk];
     if (bi >= pal.n) bi = pal.n - 1;
-    return {bi,
-            OKLab{pal.L[bi], pal.a[bi], pal.b[bi]},
-            bd};
+    return {bi, OKLab{pal.L[bi], pal.a[bi], pal.b[bi]}, bd};
 #elif PNG2AMIGA_DITHER_SIMD_AVX2
     const __m256 pL = _mm256_set1_ps(px.L);
     const __m256 pa = _mm256_set1_ps(px.a);
     const __m256 pb = _mm256_set1_ps(px.b);
     __m256 best_d = _mm256_set1_ps(std::numeric_limits<float>::max());
     __m256i best_i = _mm256_setzero_si256();
-    const __m256i k01234567 = _mm256_setr_epi32(0,1,2,3,4,5,6,7);
+    const __m256i k01234567 = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
     for (std::size_t i = 0; i < n; i += 8) {
         __m256 cL = _mm256_loadu_ps(pal.L.data() + i);
         __m256 ca = _mm256_loadu_ps(pal.a.data() + i);
@@ -700,15 +702,12 @@ NearestResult find_nearest_oklab_soa(OKLab px,
         __m256 dL = _mm256_sub_ps(pL, cL);
         __m256 da = _mm256_sub_ps(pa, ca);
         __m256 db = _mm256_sub_ps(pb, cb);
-        __m256 d  = _mm256_fmadd_ps(db, db,
-                       _mm256_fmadd_ps(da, da, _mm256_mul_ps(dL, dL)));
+        __m256 d = _mm256_fmadd_ps(db, db, _mm256_fmadd_ps(da, da, _mm256_mul_ps(dL, dL)));
         __m256 lt = _mm256_cmp_ps(d, best_d, _CMP_LT_OQ);
         best_d = _mm256_blendv_ps(best_d, d, lt);
-        __m256i cur_i = _mm256_add_epi32(k01234567,
-                        _mm256_set1_epi32(static_cast<int>(i)));
+        __m256i cur_i = _mm256_add_epi32(k01234567, _mm256_set1_epi32(static_cast<int>(i)));
         best_i = _mm256_castps_si256(
-            _mm256_blendv_ps(_mm256_castsi256_ps(best_i),
-                              _mm256_castsi256_ps(cur_i), lt));
+            _mm256_blendv_ps(_mm256_castsi256_ps(best_i), _mm256_castsi256_ps(cur_i), lt));
     }
     // SIMD horizontal min — 3 stages of vminps + permute, broadcast the
     // global min into all 8 lanes, then `cmp_eq + movemask + ctz` finds
@@ -721,12 +720,12 @@ NearestResult find_nearest_oklab_soa(OKLab px,
     __m256 m2 = _mm256_min_ps(m1, perm64);
     __m256 perm32 = _mm256_shuffle_ps(m2, m2, _MM_SHUFFLE(2, 3, 0, 1));
     __m256 mglobal = _mm256_min_ps(m2, perm32);
-    int eq_mask = _mm256_movemask_ps(
-        _mm256_cmp_ps(best_d, mglobal, _CMP_EQ_OQ));
+    int eq_mask = _mm256_movemask_ps(_mm256_cmp_ps(best_d, mglobal, _CMP_EQ_OQ));
     // ctz(eq_mask) is the first lane matching the global min.
     int lane;
 #if defined(_MSC_VER) && !defined(__clang__)
-    unsigned long ctz; _BitScanForward(&ctz, static_cast<unsigned>(eq_mask));
+    unsigned long ctz;
+    _BitScanForward(&ctz, static_cast<unsigned>(eq_mask));
     lane = static_cast<int>(ctz);
 #else
     lane = __builtin_ctz(static_cast<unsigned>(eq_mask));
@@ -743,9 +742,9 @@ NearestResult find_nearest_oklab_soa(OKLab px,
     const v128_t pL = wasm_f32x4_splat(px.L);
     const v128_t pa = wasm_f32x4_splat(px.a);
     const v128_t pb = wasm_f32x4_splat(px.b);
-    v128_t       best_d = wasm_f32x4_splat(std::numeric_limits<float>::max());
-    v128_t       best_i = wasm_i32x4_splat(0);
-    const v128_t k0123  = wasm_i32x4_make(0, 1, 2, 3);
+    v128_t best_d = wasm_f32x4_splat(std::numeric_limits<float>::max());
+    v128_t best_i = wasm_i32x4_splat(0);
+    const v128_t k0123 = wasm_i32x4_make(0, 1, 2, 3);
     for (std::size_t i = 0; i < n; i += 4) {
         v128_t cL = wasm_v128_load(pal.L.data() + i);
         v128_t ca = wasm_v128_load(pal.a.data() + i);
@@ -753,29 +752,29 @@ NearestResult find_nearest_oklab_soa(OKLab px,
         v128_t dL = wasm_f32x4_sub(pL, cL);
         v128_t da = wasm_f32x4_sub(pa, ca);
         v128_t db = wasm_f32x4_sub(pb, cb);
-        v128_t d  = wasm_f32x4_add(
-                        wasm_f32x4_mul(dL, dL),
-                        wasm_f32x4_add(wasm_f32x4_mul(da, da),
-                                       wasm_f32x4_mul(db, db)));
-        v128_t cur_i = wasm_i32x4_add(k0123,
-                          wasm_i32x4_splat(static_cast<std::int32_t>(i)));
+        v128_t d = wasm_f32x4_add(wasm_f32x4_mul(dL, dL),
+                                  wasm_f32x4_add(wasm_f32x4_mul(da, da), wasm_f32x4_mul(db, db)));
+        v128_t cur_i = wasm_i32x4_add(k0123, wasm_i32x4_splat(static_cast<std::int32_t>(i)));
         v128_t lt = wasm_f32x4_lt(d, best_d);
         best_d = wasm_v128_bitselect(d, best_d, lt);
         best_i = wasm_v128_bitselect(cur_i, best_i, lt);
     }
     // Reduce 4 lanes to 1 (scalar — 3 compares is cheaper than a
     // shuffle dance at this width).
-    alignas(16) float dd[4]; alignas(16) std::int32_t ii[4];
-    wasm_v128_store(dd, best_d); wasm_v128_store(ii, best_i);
-    int   bk = 0;
+    alignas(16) float dd[4];
+    alignas(16) std::int32_t ii[4];
+    wasm_v128_store(dd, best_d);
+    wasm_v128_store(ii, best_i);
+    int bk = 0;
     float bd = dd[0];
     for (int k = 1; k < 4; ++k)
-        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+        if (dd[k] < bd) {
+            bd = dd[k];
+            bk = k;
+        }
     std::size_t bi = static_cast<std::size_t>(ii[bk]);
     if (bi >= pal.n) bi = pal.n - 1;
-    return {bi,
-            OKLab{pal.L[bi], pal.a[bi], pal.b[bi]},
-            bd};
+    return {bi, OKLab{pal.L[bi], pal.a[bi], pal.b[bi]}, bd};
 #else
     // Scalar fallback (no SIMD ISA detected).
     float best_dist = std::numeric_limits<float>::max();
@@ -784,12 +783,13 @@ NearestResult find_nearest_oklab_soa(OKLab px,
         float dL = px.L - pal.L[i];
         float da = px.a - pal.a[i];
         float db = px.b - pal.b[i];
-        float d  = dL*dL + da*da + db*db;
-        if (d < best_dist) { best_dist = d; best_idx = i; }
+        float d = dL * dL + da * da + db * db;
+        if (d < best_dist) {
+            best_dist = d;
+            best_idx = i;
+        }
     }
-    return {best_idx,
-            OKLab{pal.L[best_idx], pal.a[best_idx], pal.b[best_idx]},
-            best_dist};
+    return {best_idx, OKLab{pal.L[best_idx], pal.a[best_idx], pal.b[best_idx]}, best_dist};
 #endif
 }
 
@@ -799,14 +799,13 @@ NearestResult find_nearest_oklab_soa(OKLab px,
 
 // Find nearest + second-nearest palette entries.
 struct NearestPair {
-    std::size_t idxA;    // nearest
-    std::size_t idxB;    // second-nearest
-    float distA;          // OKLab ΔE² to nearest
-    float distB;          // OKLab ΔE² to second-nearest
+    std::size_t idxA;  // nearest
+    std::size_t idxB;  // second-nearest
+    float distA;       // OKLab ΔE² to nearest
+    float distB;       // OKLab ΔE² to second-nearest
 };
 
-NearestPair find_nearest_pair(OKLab pixel,
-                               std::span<const OKLab> palette_lab) noexcept {
+NearestPair find_nearest_pair(OKLab pixel, std::span<const OKLab> palette_lab) noexcept {
     float best = std::numeric_limits<float>::max();
     float second = std::numeric_limits<float>::max();
     std::size_t bi = 0, si = 0;
@@ -816,16 +815,19 @@ NearestPair find_nearest_pair(OKLab pixel,
         float db = pixel.b - palette_lab[k].b;
         float d = color_space::fma_dist_sq(dL, da, db);
         if (d < best) {
-            second = best; si = bi;
-            best = d; bi = k;
+            second = best;
+            si = bi;
+            best = d;
+            bi = k;
         } else if (d < second) {
-            second = d; si = k;
+            second = d;
+            si = k;
         }
     }
     return {bi, si, best, second};
 }
 
-template <std::size_t W, std::size_t H>
+template<std::size_t W, std::size_t H>
 DitherResult apply_ordered(const Image& image,
                            const std::array<std::array<float, W>, H>& matrix,
                            std::span<const OKLab> palette_lab,
@@ -866,7 +868,10 @@ DitherResult apply_ordered(const Image& image,
                 float da = pixel_lab.a - palette_lab[i].a;
                 float db = pixel_lab.b - palette_lab[i].b;
                 float d = color_space::fma_dist_sq(dL, da, db);
-                if (d < best_d) { best_d = d; best = i; }
+                if (d < best_d) {
+                    best_d = d;
+                    best = i;
+                }
             }
             auto chosen = palette_lab[best];
             // Report error against the (unperturbed) target for metric consistency.
@@ -894,10 +899,10 @@ DitherResult apply_ordered(const Image& image,
 //        * 7/16
 //  3/16 5/16 1/16
 constexpr std::array floyd_steinberg_kernel = {
-    DiffusionEntry{ 1, 0, 7.0f / 16.0f},
+    DiffusionEntry{1, 0, 7.0f / 16.0f},
     DiffusionEntry{-1, 1, 3.0f / 16.0f},
-    DiffusionEntry{ 0, 1, 5.0f / 16.0f},
-    DiffusionEntry{ 1, 1, 1.0f / 16.0f},
+    DiffusionEntry{0, 1, 5.0f / 16.0f},
+    DiffusionEntry{1, 1, 1.0f / 16.0f},
 };
 
 // Atkinson: 6-cell error diffusion. Originally distributed only 75% of
@@ -918,12 +923,12 @@ constexpr std::array floyd_steinberg_kernel = {
 //      0
 //
 constexpr std::array atkinson_kernel = {
-    DiffusionEntry{ 1, 0, 0.25f},   // c1: right
-    DiffusionEntry{ 2, 0, 0.25f},   // c2: right2
-    DiffusionEntry{-1, 1, 0.25f},   // c3: bottom-left
-    DiffusionEntry{ 0, 1, 0.25f},   // c4: bottom
-    DiffusionEntry{ 1, 1, 0.00f},   // c5: bottom-right (was 1/8)
-    DiffusionEntry{ 0, 2, 0.00f},   // c6: bottom2     (was 1/8)
+    DiffusionEntry{1, 0, 0.25f},   // c1: right
+    DiffusionEntry{2, 0, 0.25f},   // c2: right2
+    DiffusionEntry{-1, 1, 0.25f},  // c3: bottom-left
+    DiffusionEntry{0, 1, 0.25f},   // c4: bottom
+    DiffusionEntry{1, 1, 0.00f},   // c5: bottom-right (was 1/8)
+    DiffusionEntry{0, 2, 0.00f},   // c6: bottom2     (was 1/8)
 };
 
 // Sierra Lite — Frankie Sierra 1990 "Filter Lite". Kernel-shape sweep
@@ -934,9 +939,9 @@ constexpr std::array atkinson_kernel = {
 // not kernel reshaping, is the real lever — see dither_tuning.cpp
 // where sierra-lite's strength was raised from 0.85 to 0.90.
 constexpr std::array sierra_lite_kernel = {
-    DiffusionEntry{ 1, 0, 2.0f / 4.0f},
+    DiffusionEntry{1, 0, 2.0f / 4.0f},
     DiffusionEntry{-1, 1, 1.0f / 4.0f},
-    DiffusionEntry{ 0, 1, 1.0f / 4.0f},
+    DiffusionEntry{0, 1, 1.0f / 4.0f},
 };
 
 // Stucki: 12-cell wide kernel. Original 1981 weights (8 4 2 4 8 4 2 / 1 2 4
@@ -954,18 +959,18 @@ constexpr std::array sierra_lite_kernel = {
 //   -0.026 0.048  0.145  0.048 -0.026 ?? row 2 — wait, see code below
 //
 constexpr std::array stucki_kernel = {
-    DiffusionEntry{ 1, 0,  0.240f},   // c1: right        (was 8/42 ≈ 0.190)
-    DiffusionEntry{ 2, 0,  0.045f},   // c2: right2       (was 4/42 ≈ 0.095)
-    DiffusionEntry{-2, 1,  0.048f},   // c3: row1 |±2|    (was 2/42 ≈ 0.048)
-    DiffusionEntry{-1, 1,  0.095f},   // c4: row1 |±1|    (was 4/42 ≈ 0.095)
-    DiffusionEntry{ 0, 1,  0.240f},   // c5: row1 center  (was 8/42 ≈ 0.190)
-    DiffusionEntry{ 1, 1,  0.095f},   // c4 mirror
-    DiffusionEntry{ 2, 1,  0.048f},   // c3 mirror
-    DiffusionEntry{-2, 2, -0.026f},   // c6: row2 |±2|    (was 1/42 ≈ 0.024) — NEGATIVE
-    DiffusionEntry{-1, 2,  0.048f},   // c7: row2 |±1|    (was 2/42 ≈ 0.048)
-    DiffusionEntry{ 0, 2,  0.145f},   // c8: row2 center  (was 4/42 ≈ 0.095)
-    DiffusionEntry{ 1, 2,  0.048f},   // c7 mirror
-    DiffusionEntry{ 2, 2, -0.026f},   // c6 mirror
+    DiffusionEntry{1, 0, 0.240f},    // c1: right        (was 8/42 ≈ 0.190)
+    DiffusionEntry{2, 0, 0.045f},    // c2: right2       (was 4/42 ≈ 0.095)
+    DiffusionEntry{-2, 1, 0.048f},   // c3: row1 |±2|    (was 2/42 ≈ 0.048)
+    DiffusionEntry{-1, 1, 0.095f},   // c4: row1 |±1|    (was 4/42 ≈ 0.095)
+    DiffusionEntry{0, 1, 0.240f},    // c5: row1 center  (was 8/42 ≈ 0.190)
+    DiffusionEntry{1, 1, 0.095f},    // c4 mirror
+    DiffusionEntry{2, 1, 0.048f},    // c3 mirror
+    DiffusionEntry{-2, 2, -0.026f},  // c6: row2 |±2|    (was 1/42 ≈ 0.024) — NEGATIVE
+    DiffusionEntry{-1, 2, 0.048f},   // c7: row2 |±1|    (was 2/42 ≈ 0.048)
+    DiffusionEntry{0, 2, 0.145f},    // c8: row2 center  (was 4/42 ≈ 0.095)
+    DiffusionEntry{1, 2, 0.048f},    // c7 mirror
+    DiffusionEntry{2, 2, -0.026f},   // c6 mirror
 };
 
 // Jarvis-Judice-Ninke: 12-cell wide kernel, originally 1976 weights
@@ -979,26 +984,26 @@ constexpr std::array stucki_kernel = {
 // and Stucki re-tunes. 12-cell sum ≈ 0.90 (gentle under-distribution).
 //
 constexpr std::array jarvis_kernel = {
-    DiffusionEntry{ 1, 0,  0.196f},   // c1: right          (was 7/48 ≈ 0.146)
-    DiffusionEntry{ 2, 0,  0.104f},   // c2: right2         (≈ canonical 5/48)
-    DiffusionEntry{-2, 1,  0.113f},   // c3: row1 |±2|      (was 3/48 ≈ 0.063)
-    DiffusionEntry{-1, 1,  0.054f},   // c4: row1 |±1|      (was 5/48 ≈ 0.104)
-    DiffusionEntry{ 0, 1,  0.146f},   // c5: row1 center    (≈ canonical 7/48)
-    DiffusionEntry{ 1, 1,  0.054f},   // c4 mirror
-    DiffusionEntry{ 2, 1,  0.113f},   // c3 mirror
-    DiffusionEntry{-2, 2, -0.029f},   // c6: row2 |±2|      (was 1/48 ≈ 0.021) — NEGATIVE
-    DiffusionEntry{-1, 2,  0.062f},   // c7: row2 |±1|      (≈ canonical 3/48)
-    DiffusionEntry{ 0, 2,  0.054f},   // c8: row2 center    (was 5/48 ≈ 0.104)
-    DiffusionEntry{ 1, 2,  0.062f},   // c7 mirror
-    DiffusionEntry{ 2, 2, -0.029f},   // c6 mirror
+    DiffusionEntry{1, 0, 0.196f},    // c1: right          (was 7/48 ≈ 0.146)
+    DiffusionEntry{2, 0, 0.104f},    // c2: right2         (≈ canonical 5/48)
+    DiffusionEntry{-2, 1, 0.113f},   // c3: row1 |±2|      (was 3/48 ≈ 0.063)
+    DiffusionEntry{-1, 1, 0.054f},   // c4: row1 |±1|      (was 5/48 ≈ 0.104)
+    DiffusionEntry{0, 1, 0.146f},    // c5: row1 center    (≈ canonical 7/48)
+    DiffusionEntry{1, 1, 0.054f},    // c4 mirror
+    DiffusionEntry{2, 1, 0.113f},    // c3 mirror
+    DiffusionEntry{-2, 2, -0.029f},  // c6: row2 |±2|      (was 1/48 ≈ 0.021) — NEGATIVE
+    DiffusionEntry{-1, 2, 0.062f},   // c7: row2 |±1|      (≈ canonical 3/48)
+    DiffusionEntry{0, 2, 0.054f},    // c8: row2 center    (was 5/48 ≈ 0.104)
+    DiffusionEntry{1, 2, 0.062f},    // c7 mirror
+    DiffusionEntry{2, 2, -0.029f},   // c6 mirror
 };
 
-DitherResult apply_error_diffusion(
-    const Image& image,
-    std::span<const OKLab> palette_lab,
-    float strength, float error_clamp_val,
-    bool serpentine,
-    std::span<const DiffusionEntry> kernel) {
+DitherResult apply_error_diffusion(const Image& image,
+                                   std::span<const OKLab> palette_lab,
+                                   float strength,
+                                   float error_clamp_val,
+                                   bool serpentine,
+                                   std::span<const DiffusionEntry> kernel) {
 
     auto w = image.width();
     auto h = image.height();
@@ -1012,7 +1017,7 @@ DitherResult apply_error_diffusion(
     // (vector::resize keeps capacity). Each parallel_for worker has its
     // own TLS instance, so no contention.
     thread_local std::vector<Color3f> image_s_tls;
-    thread_local std::vector<OKLab>   image_lab_tls;
+    thread_local std::vector<OKLab> image_lab_tls;
     thread_local std::vector<Color3f> palette_s_tls;
     thread_local std::vector<Color3f> err_buf_s_tls;
 
@@ -1025,7 +1030,7 @@ DitherResult apply_error_diffusion(
     palette_s_tls.resize(palette_lab.size());
     err_buf_s_tls.assign(w * h, Color3f{0, 0, 0});  // must zero between calls
 
-    auto& image_s   = image_s_tls;
+    auto& image_s = image_s_tls;
     auto& image_lab = image_lab_tls;
     auto& palette_s = palette_s_tls;
     auto& err_buf_s = err_buf_s_tls;
@@ -1034,13 +1039,13 @@ DitherResult apply_error_diffusion(
     // perceptually (OKLab); residual conservation runs in sRGB
     // (gamma-encoded) — see diffuse_raw_buffer for the rationale.
     for (std::size_t i = 0; i < palette_lab.size(); ++i) {
-        palette_s[i] = color_space::linear_to_srgb(
-            color_space::oklab_to_linear(palette_lab[i])).clamped();
+        palette_s[i] =
+            color_space::linear_to_srgb(color_space::oklab_to_linear(palette_lab[i])).clamped();
     }
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
             auto lin = image[x, y];
-            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+            image_s[y * w + x] = color_space::linear_to_srgb(lin).clamped();
             image_lab[y * w + x] = color_space::linear_to_oklab(lin);
         }
     }
@@ -1078,8 +1083,7 @@ DitherResult apply_error_diffusion(
             // doesn't beat std::pow there); no regression observed.
             auto adjusted = color_space::srgb_to_oklab_simd(target_s);
 
-            auto [idx, chosen_lab, dist_sq] =
-                find_nearest_oklab_soa(adjusted, pal_soa);
+            auto [idx, chosen_lab, dist_sq] = find_nearest_oklab_soa(adjusted, pal_soa);
             result.indices[buf_idx] = static_cast<std::uint8_t>(idx);
             result.total_error += dist_sq;
 
@@ -1094,10 +1098,9 @@ DitherResult apply_error_diffusion(
                 auto nx = static_cast<int>(x) + kdx * dir;
                 auto ny = static_cast<int>(y) + kdy;
 
-                if (nx >= 0 && static_cast<std::size_t>(nx) < w &&
-                    ny >= 0 && static_cast<std::size_t>(ny) < h) {
-                    auto nidx = static_cast<std::size_t>(ny) * w +
-                                static_cast<std::size_t>(nx);
+                if (nx >= 0 && static_cast<std::size_t>(nx) < w && ny >= 0 &&
+                    static_cast<std::size_t>(ny) < h) {
+                    auto nidx = static_cast<std::size_t>(ny) * w + static_cast<std::size_t>(nx);
                     auto& en = err_buf_s[nidx];
                     en.r = std::clamp(en.r + qe_s.r * weight, -ec, ec);
                     en.g = std::clamp(en.g + qe_s.g * weight, -ec, ec);
@@ -1128,32 +1131,40 @@ DitherResult apply_error_diffusion(
 
 namespace {
 
-inline int sgn(int v) noexcept { return (v > 0) - (v < 0); }
+inline int sgn(int v) noexcept {
+    return (v > 0) - (v < 0);
+}
 
 // Recursive subdivision. (x, y) is the starting cell; a = (ax, ay) is the
 // major axis vector; b = (bx, by) is the minor axis vector. Each emitted
 // coordinate is pushed onto `out`.
-void gilbert_recurse(int x, int y, int ax, int ay, int bx, int by,
-                     std::vector<std::pair<int, int>>& out);
+void gilbert_recurse(
+    int x, int y, int ax, int ay, int bx, int by, std::vector<std::pair<int, int>>& out);
 
-void gilbert_emit_row(int x, int y, int ax, int ay,
-                      std::vector<std::pair<int, int>>& out) {
+void gilbert_emit_row(int x, int y, int ax, int ay, std::vector<std::pair<int, int>>& out) {
     int dax = sgn(ax), day = sgn(ay);
     int len = std::abs(ax) + std::abs(ay);
     for (int i = 0; i < len; ++i) {
         out.emplace_back(x, y);
-        x += dax; y += day;
+        x += dax;
+        y += day;
     }
 }
 
-void gilbert_recurse(int x, int y, int ax, int ay, int bx, int by,
-                     std::vector<std::pair<int, int>>& out) {
+void gilbert_recurse(
+    int x, int y, int ax, int ay, int bx, int by, std::vector<std::pair<int, int>>& out) {
     int w = std::abs(ax) + std::abs(ay);
     int h = std::abs(bx) + std::abs(by);
 
     if (h == 0) return;
-    if (h == 1) { gilbert_emit_row(x, y, ax, ay, out); return; }
-    if (w == 1) { gilbert_emit_row(x, y, bx, by, out); return; }
+    if (h == 1) {
+        gilbert_emit_row(x, y, ax, ay, out);
+        return;
+    }
+    if (w == 1) {
+        gilbert_emit_row(x, y, bx, by, out);
+        return;
+    }
 
     int dax = sgn(ax), day = sgn(ay);
     int dbx = sgn(bx), dby = sgn(by);
@@ -1165,35 +1176,46 @@ void gilbert_recurse(int x, int y, int ax, int ay, int bx, int by,
 
     if (2 * w > 3 * h) {
         // Prefer horizontal split
-        if ((w2 % 2) && w > 2) { ax2 += dax; ay2 += day; }
+        if ((w2 % 2) && w > 2) {
+            ax2 += dax;
+            ay2 += day;
+        }
         gilbert_recurse(x, y, ax2, ay2, bx, by, out);
         gilbert_recurse(x + ax2, y + ay2, ax - ax2, ay - ay2, bx, by, out);
     } else {
         // Prefer vertical split
-        if ((h2 % 2) && h > 2) { bx2 += dbx; by2 += dby; }
+        if ((h2 % 2) && h > 2) {
+            bx2 += dbx;
+            by2 += dby;
+        }
         gilbert_recurse(x, y, bx2, by2, ax2, ay2, out);
-        gilbert_recurse(x + bx2, y + by2, ax, ay,
-                        bx - bx2, by - by2, out);
+        gilbert_recurse(x + bx2, y + by2, ax, ay, bx - bx2, by - by2, out);
         gilbert_recurse(x + (ax - dax) + (bx2 - dbx),
                         y + (ay - day) + (by2 - dby),
-                        -bx2, -by2, -(ax - ax2), -(ay - ay2), out);
+                        -bx2,
+                        -by2,
+                        -(ax - ax2),
+                        -(ay - ay2),
+                        out);
     }
 }
 
 std::vector<std::pair<int, int>> gilbert_curve(int w, int h) {
     std::vector<std::pair<int, int>> out;
     out.reserve(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
-    if (w >= h) gilbert_recurse(0, 0, w, 0, 0, h, out);
-    else        gilbert_recurse(0, 0, 0, h, w, 0, out);
+    if (w >= h)
+        gilbert_recurse(0, 0, w, 0, 0, h, out);
+    else
+        gilbert_recurse(0, 0, 0, h, w, 0, out);
     return out;
 }
 
-} // namespace
+}  // namespace
 
-DitherResult apply_gilbert(
-    const Image& image,
-    std::span<const OKLab> palette_lab,
-    float strength, float error_clamp_val) {
+DitherResult apply_gilbert(const Image& image,
+                           std::span<const OKLab> palette_lab,
+                           float strength,
+                           float error_clamp_val) {
 
     auto w = image.width();
     auto h = image.height();
@@ -1204,18 +1226,18 @@ DitherResult apply_gilbert(
 
     auto curve = gilbert_curve(static_cast<int>(w), static_cast<int>(h));
 
-    std::vector<OKLab>  image_lab(w * h);
+    std::vector<OKLab> image_lab(w * h);
     std::vector<Color3f> image_s(w * h);
     std::vector<Color3f> palette_s(palette_lab.size());
     for (std::size_t i = 0; i < palette_lab.size(); ++i) {
-        palette_s[i] = color_space::linear_to_srgb(
-            color_space::oklab_to_linear(palette_lab[i])).clamped();
+        palette_s[i] =
+            color_space::linear_to_srgb(color_space::oklab_to_linear(palette_lab[i])).clamped();
     }
     for (std::size_t y = 0; y < h; ++y)
         for (std::size_t x = 0; x < w; ++x) {
             auto lin = image[x, y];
             image_lab[y * w + x] = color_space::linear_to_oklab(lin);
-            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+            image_s[y * w + x] = color_space::linear_to_srgb(lin).clamped();
         }
 
     // Flatness map: 1.0 in smooth regions, 0.0 at edges. Error diffusion
@@ -1235,9 +1257,9 @@ DitherResult apply_gilbert(
             for (std::size_t x = 0; x < w; ++x) {
                 float L = image_lab[y * w + x].L;
                 float g = 0.0f;
-                if (x > 0)     g += std::abs(L - image_lab[y * w + (x - 1)].L);
+                if (x > 0) g += std::abs(L - image_lab[y * w + (x - 1)].L);
                 if (x + 1 < w) g += std::abs(L - image_lab[y * w + (x + 1)].L);
-                if (y > 0)     g += std::abs(L - image_lab[(y - 1) * w + x].L);
+                if (y > 0) g += std::abs(L - image_lab[(y - 1) * w + x].L);
                 if (y + 1 < h) g += std::abs(L - image_lab[(y + 1) * w + x].L);
                 float f = 1.0f - std::min(g / grad_thresh, 1.0f);
                 flatness[y * w + x] = f;
@@ -1282,7 +1304,9 @@ DitherResult apply_gilbert(
     //
     // 12/16 + 3/16 + 1/16 = 16/16 = 1.0 (same total as FS).
     constexpr std::array<float, 3> weights = {
-        12.0f / 16.0f, 3.0f / 16.0f, 1.0f / 16.0f,
+        12.0f / 16.0f,
+        3.0f / 16.0f,
+        1.0f / 16.0f,
     };
 
     float ec = error_clamp_val;
@@ -1297,8 +1321,7 @@ DitherResult apply_gilbert(
             image_s[idx].g + std::clamp(e.g, -ec, ec),
             image_s[idx].b + std::clamp(e.b, -ec, ec),
         };
-        auto target = color_space::linear_to_oklab(
-            color_space::srgb_to_linear(target_s));
+        auto target = color_space::linear_to_oklab(color_space::srgb_to_linear(target_s));
 
         // Blue-noise perturbation in flat regions only. The noise is
         // applied to the NEAREST-COLOR LOOKUP target but NOT to the
@@ -1323,7 +1346,10 @@ DitherResult apply_gilbert(
             float da = lookup.a - palette_lab[k].a;
             float db = lookup.b - palette_lab[k].b;
             float d = color_space::fma_dist_sq(dL, da, db);
-            if (d < best_d) { best_d = d; best_k = k; }
+            if (d < best_d) {
+                best_d = d;
+                best_k = k;
+            }
         }
         result.indices[idx] = static_cast<std::uint8_t>(best_k);
         result.total_error += best_d;
@@ -1340,8 +1366,7 @@ DitherResult apply_gilbert(
         // Distribute to next 4 cells along the curve
         for (std::size_t k = 0; k < weights.size() && i + 1 + k < curve.size(); ++k) {
             auto [nx, ny] = curve[i + 1 + k];
-            auto nidx = static_cast<std::size_t>(ny) * w +
-                        static_cast<std::size_t>(nx);
+            auto nidx = static_cast<std::size_t>(ny) * w + static_cast<std::size_t>(nx);
             auto& en = err_buf_s[nidx];
             en.r = std::clamp(en.r + qe_s.r * weights[k], -ec, ec);
             en.g = std::clamp(en.g + qe_s.g * weights[k], -ec, ec);
@@ -1368,10 +1393,10 @@ DitherResult apply_gilbert(
 // painterly result on smooth gradients.
 // ===========================================================================
 
-DitherResult apply_riemersma(
-    const Image& image,
-    std::span<const OKLab> palette_lab,
-    float strength, float error_clamp_val) {
+DitherResult apply_riemersma(const Image& image,
+                             std::span<const OKLab> palette_lab,
+                             float strength,
+                             float error_clamp_val) {
 
     auto w = image.width();
     auto h = image.height();
@@ -1382,18 +1407,18 @@ DitherResult apply_riemersma(
 
     auto curve = gilbert_curve(static_cast<int>(w), static_cast<int>(h));
 
-    std::vector<OKLab>  image_lab(w * h);
+    std::vector<OKLab> image_lab(w * h);
     std::vector<Color3f> image_s(w * h);
     std::vector<Color3f> palette_s(palette_lab.size());
     for (std::size_t i = 0; i < palette_lab.size(); ++i) {
-        palette_s[i] = color_space::linear_to_srgb(
-            color_space::oklab_to_linear(palette_lab[i])).clamped();
+        palette_s[i] =
+            color_space::linear_to_srgb(color_space::oklab_to_linear(palette_lab[i])).clamped();
     }
     for (std::size_t y = 0; y < h; ++y)
         for (std::size_t x = 0; x < w; ++x) {
             auto lin = image[x, y];
             image_lab[y * w + x] = color_space::linear_to_oklab(lin);
-            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+            image_s[y * w + x] = color_space::linear_to_srgb(lin).clamped();
         }
 
     // Riemersma's canonical queue: 16 entries with exponential decay.
@@ -1406,14 +1431,16 @@ DitherResult apply_riemersma(
     {
         const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
         float w_acc = 1.0f;
-        for (std::size_t i = QSIZE; i-- > 0; ) {
+        for (std::size_t i = QSIZE; i-- > 0;) {
             weights[i] = w_acc;
             w_acc *= ratio;
         }
         // Normalize so sum = 1.
         float total = 0.0f;
-        for (float wt : weights) total += wt;
-        for (float& wt : weights) wt /= total;
+        for (float wt : weights)
+            total += wt;
+        for (float& wt : weights)
+            wt /= total;
     }
     std::size_t qhead = 0;  // next slot to overwrite
 
@@ -1435,8 +1462,7 @@ DitherResult apply_riemersma(
             image_s[idx].g + std::clamp(carry.g, -ec, ec),
             image_s[idx].b + std::clamp(carry.b, -ec, ec),
         };
-        auto target = color_space::linear_to_oklab(
-            color_space::srgb_to_linear(target_s));
+        auto target = color_space::linear_to_oklab(color_space::srgb_to_linear(target_s));
 
         // Find nearest palette entry.
         float best_d = std::numeric_limits<float>::max();
@@ -1447,7 +1473,11 @@ DitherResult apply_riemersma(
             float da = target.a - palette_lab[k].a;
             float db = target.b - palette_lab[k].b;
             float d = color_space::fma_dist_sq(dL, da, db);
-            if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
+            if (d < best_d) {
+                best_d = d;
+                best_k = k;
+                best_lab = palette_lab[k];
+            }
         }
 
         result.indices[idx] = static_cast<std::uint8_t>(best_k);
@@ -1486,20 +1516,22 @@ DitherResult apply_riemersma(
 // distance from target. O(N×P) per pixel.
 // ===========================================================================
 
-} // namespace (anon closes — the next two are public API)
+}  // namespace
 
 // Forward decls so pick_yliluoma_family_index can dispatch.
-std::uint8_t pick_yliluoma_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y,
-    bool mode2, float strength);
+std::uint8_t pick_yliluoma_index(const color_space::OKLab& target,
+                                 std::span<const color_space::OKLab> palette_lab,
+                                 std::size_t x,
+                                 std::size_t y,
+                                 bool mode2,
+                                 float strength);
 
-std::uint8_t pick_yliluoma_family_index(
-    Method method,
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
+std::uint8_t pick_yliluoma_family_index(Method method,
+                                        const color_space::OKLab& target,
+                                        std::span<const color_space::OKLab> palette_lab,
+                                        std::size_t x,
+                                        std::size_t y,
+                                        float strength) {
 
     switch (method) {
     case Method::opt_checker:
@@ -1530,11 +1562,12 @@ std::uint8_t pick_yliluoma_family_index(
 // for Bayer rotation. Bypassing dither::apply on a 1-row sub-image was
 // the root of the "vertical line bias" bug — bayer8[0][x%8] is the
 // same row of thresholds for every scanline.
-std::uint8_t pick_yliluoma_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y,
-    bool mode2, float strength) {
+std::uint8_t pick_yliluoma_index(const color_space::OKLab& target,
+                                 std::span<const color_space::OKLab> palette_lab,
+                                 std::size_t x,
+                                 std::size_t y,
+                                 bool mode2,
+                                 float strength) {
 
     constexpr std::size_t PLAN_SIZE = 64;
     const std::size_t P = palette_lab.size();
@@ -1558,10 +1591,13 @@ std::uint8_t pick_yliluoma_index(
             float dL = avg.L - target.L;
             float da = avg.a - target.a;
             float db = avg.b - target.b;
-            float err = mode2
-                ? color_space::fma_dist_sq(2.0f * dL, da, db)  // (2*dL)² weights luma 4×
-                : color_space::fma_dist_sq(dL, da, db);
-            if (err < best_err) { best_err = err; best_k = k; }
+            float err = mode2 ? color_space::fma_dist_sq(
+                                    2.0f * dL, da, db)  // (2*dL)² weights luma 4×
+                              : color_space::fma_dist_sq(dL, da, db);
+            if (err < best_err) {
+                best_err = err;
+                best_k = k;
+            }
         }
         plan[step] = best_k;
         sum = oklab_add(sum, palette_lab[best_k]);
@@ -1583,7 +1619,8 @@ std::uint8_t pick_yliluoma_index(
     if (b < 0) b = 0;
     if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
     int median = static_cast<int>(PLAN_SIZE) / 2;
-    int adjusted = static_cast<int>(std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
+    int adjusted = static_cast<int>(
+        std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
     if (adjusted < 0) adjusted = 0;
     if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
     return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
@@ -1595,11 +1632,11 @@ std::uint8_t pick_yliluoma_index(
 // parameters: N=16 plan size laid out on a 4×4 Bayer matrix. The shorter
 // plan is faster than Yliluoma's 8×8/N=64 setup and gives the
 // characteristic "Photoshop pattern" look.
-std::uint8_t pick_knoll_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y,
-    float strength) {
+std::uint8_t pick_knoll_index(const color_space::OKLab& target,
+                              std::span<const color_space::OKLab> palette_lab,
+                              std::size_t x,
+                              std::size_t y,
+                              float strength) {
 
     constexpr std::size_t PLAN_SIZE = 16;
     const std::size_t P = palette_lab.size();
@@ -1624,7 +1661,10 @@ std::uint8_t pick_knoll_index(
             float da = avg.a - target.a;
             float db = avg.b - target.b;
             float err = color_space::fma_dist_sq(dL, da, db);
-            if (err < best_err) { best_err = err; best_k = k; }
+            if (err < best_err) {
+                best_err = err;
+                best_k = k;
+            }
         }
         plan[step] = best_k;
         sum.L += palette_lab[best_k].L;
@@ -1650,7 +1690,8 @@ std::uint8_t pick_knoll_index(
     if (b < 0) b = 0;
     if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
     int median = static_cast<int>(PLAN_SIZE) / 2;
-    int adjusted = static_cast<int>(std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
+    int adjusted = static_cast<int>(
+        std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
     if (adjusted < 0) adjusted = 0;
     if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
     return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
@@ -1661,10 +1702,11 @@ std::uint8_t pick_knoll_index(
 // Bayer 2×2 phase. When the 4-step plan picks the same color twice,
 // you naturally get the "one at 50% + two at 25%" pattern Yliluoma
 // describes.
-std::uint8_t pick_tri_tone_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
+std::uint8_t pick_tri_tone_index(const color_space::OKLab& target,
+                                 std::span<const color_space::OKLab> palette_lab,
+                                 std::size_t x,
+                                 std::size_t y,
+                                 float strength) {
 
     constexpr std::size_t PLAN_SIZE = 4;
     const std::size_t P = palette_lab.size();
@@ -1689,7 +1731,10 @@ std::uint8_t pick_tri_tone_index(
             float da = avg.a - target.a;
             float db = avg.b - target.b;
             float err = color_space::fma_dist_sq(dL, da, db);
-            if (err < best_err) { best_err = err; best_k = k; }
+            if (err < best_err) {
+                best_err = err;
+                best_k = k;
+            }
         }
         plan[step] = best_k;
         sum.L += palette_lab[best_k].L;
@@ -1713,7 +1758,8 @@ std::uint8_t pick_tri_tone_index(
     if (b < 0) b = 0;
     if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
     int median = static_cast<int>(PLAN_SIZE) / 2;
-    int adjusted = static_cast<int>(std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
+    int adjusted = static_cast<int>(
+        std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
     if (adjusted < 0) adjusted = 0;
     if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
     return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
@@ -1729,10 +1775,11 @@ std::uint8_t pick_tri_tone_index(
 // far-apart pairs and keeps the search tractable on 32+ color
 // palettes. Output for the current pixel: bayer threshold ∈ [0, N) is
 // compared to r — below r → palette[i], else palette[j].
-std::uint8_t pick_yliluoma1_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
+std::uint8_t pick_yliluoma1_index(const color_space::OKLab& target,
+                                  std::span<const color_space::OKLab> palette_lab,
+                                  std::size_t x,
+                                  std::size_t y,
+                                  float strength) {
 
     constexpr int N = 16;  // 4×4 Bayer cell area
     const std::size_t P = palette_lab.size();
@@ -1766,7 +1813,10 @@ std::uint8_t pick_yliluoma1_index(
                 float db = ab - target.b;
                 float err = color_space::fma_dist_sq(dL, da, db);
                 if (err < best_err) {
-                    best_err = err; best_i = i; best_j = j; best_r = r;
+                    best_err = err;
+                    best_i = i;
+                    best_j = j;
+                    best_r = r;
                 }
             }
         }
@@ -1781,10 +1831,10 @@ std::uint8_t pick_yliluoma1_index(
 
 bool is_yliluoma(Method method) {
     return method == Method::yliluoma || method == Method::yliluoma2 ||
-           method == Method::opt_checker || method == Method::knoll ||
-           method == Method::tri_tone || method == Method::yliluoma1 ||
-           method == Method::opt_line || method == Method::opt_line_checker ||
-           method == Method::opt_vline || method == Method::opt_vline_checker;
+           method == Method::opt_checker || method == Method::knoll || method == Method::tri_tone ||
+           method == Method::yliluoma1 || method == Method::opt_line ||
+           method == Method::opt_line_checker || method == Method::opt_vline ||
+           method == Method::opt_vline_checker;
 }
 
 bool needs_discrete_palette(Method method) {
@@ -1805,10 +1855,10 @@ bool needs_discrete_palette(Method method) {
 // Yliluoma N=2 pair search anchored on the nearest-color, then pick
 // `lo` (luma-sorted darker) or `hi` based on the per-method `phase` (0
 // or 1). Strength controls a separation penalty in the partner search.
-static std::uint8_t opt_pair_pick(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    int phase, float strength) {
+static std::uint8_t opt_pair_pick(const color_space::OKLab& target,
+                                  std::span<const color_space::OKLab> palette_lab,
+                                  int phase,
+                                  float strength) {
 
     const std::size_t P = palette_lab.size();
     if (P == 0) return 0;
@@ -1827,7 +1877,10 @@ static std::uint8_t opt_pair_pick(
         float da = palette_lab[k].a - target.a;
         float db = palette_lab[k].b - target.b;
         float d = color_space::fma_dist_sq(dL, da, db);
-        if (d < best_a) { best_a = d; A = k; }
+        if (d < best_a) {
+            best_a = d;
+            A = k;
+        }
     }
 
     // Strength=0 short-circuit — never call the algorithm "no dither"
@@ -1867,7 +1920,10 @@ static std::uint8_t opt_pair_pick(
         float sb = palette_lab[A].b - palette_lab[k].b;
         float sep = color_space::fma_dist_sq(sL, sa, sb);
         float err = avg_err + sep_w * sep;
-        if (err < best_b) { best_b = err; B = k; }
+        if (err < best_b) {
+            best_b = err;
+            B = k;
+        }
     }
 
     // If B collapsed back to A (no candidate beat the same-color
@@ -1880,30 +1936,30 @@ static std::uint8_t opt_pair_pick(
     return static_cast<std::uint8_t>(phase ? hi : lo);
 }
 
-std::uint8_t pick_opt_checker_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
-    return opt_pair_pick(target, palette_lab,
-                         static_cast<int>((x + y) & 1u), strength);
+std::uint8_t pick_opt_checker_index(const color_space::OKLab& target,
+                                    std::span<const color_space::OKLab> palette_lab,
+                                    std::size_t x,
+                                    std::size_t y,
+                                    float strength) {
+    return opt_pair_pick(target, palette_lab, static_cast<int>((x + y) & 1u), strength);
 }
 
-std::uint8_t pick_opt_line_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
+std::uint8_t pick_opt_line_index(const color_space::OKLab& target,
+                                 std::span<const color_space::OKLab> palette_lab,
+                                 std::size_t x,
+                                 std::size_t y,
+                                 float strength) {
     (void)x;
-    return opt_pair_pick(target, palette_lab,
-                         static_cast<int>(y & 1u), strength);
+    return opt_pair_pick(target, palette_lab, static_cast<int>(y & 1u), strength);
 }
 
-std::uint8_t pick_opt_vline_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
+std::uint8_t pick_opt_vline_index(const color_space::OKLab& target,
+                                  std::span<const color_space::OKLab> palette_lab,
+                                  std::size_t x,
+                                  std::size_t y,
+                                  float strength) {
     (void)y;
-    return opt_pair_pick(target, palette_lab,
-                         static_cast<int>(x & 1u), strength);
+    return opt_pair_pick(target, palette_lab, static_cast<int>(x & 1u), strength);
 }
 
 // 4-step greedy plan for a 2×2 dither cell, parametrised by the per-
@@ -1911,10 +1967,10 @@ std::uint8_t pick_opt_vline_index(
 // variants only differ in which 2×2 matrix produces `thr`
 // (line_checker_mat is row-dominant, vline_checker_mat is the transpose
 // / column-dominant), so factor the plan logic here.
-static std::uint8_t opt_plan4_pick_by_threshold(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    float thr, float strength) {
+static std::uint8_t opt_plan4_pick_by_threshold(const color_space::OKLab& target,
+                                                std::span<const color_space::OKLab> palette_lab,
+                                                float thr,
+                                                float strength) {
     constexpr std::size_t PLAN_SIZE = 4;
     const std::size_t P = palette_lab.size();
     if (P == 0) return 0;
@@ -1938,7 +1994,10 @@ static std::uint8_t opt_plan4_pick_by_threshold(
             float da = avg.a - target.a;
             float db = avg.b - target.b;
             float err = color_space::fma_dist_sq(dL, da, db);
-            if (err < best_err) { best_err = err; best_k = k; }
+            if (err < best_err) {
+                best_err = err;
+                best_k = k;
+            }
         }
         plan[step] = best_k;
         sum.L += palette_lab[best_k].L;
@@ -1961,43 +2020,45 @@ static std::uint8_t opt_plan4_pick_by_threshold(
     if (b < 0) b = 0;
     if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
     int median = static_cast<int>(PLAN_SIZE) / 2;
-    int adjusted = static_cast<int>(std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
+    int adjusted = static_cast<int>(
+        std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
     if (adjusted < 0) adjusted = 0;
     if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
     return static_cast<std::uint8_t>(plan[sorted[static_cast<std::size_t>(adjusted)]]);
 }
 
-std::uint8_t pick_opt_line_checker_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
+std::uint8_t pick_opt_line_checker_index(const color_space::OKLab& target,
+                                         std::span<const color_space::OKLab> palette_lab,
+                                         std::size_t x,
+                                         std::size_t y,
+                                         float strength) {
     // 2×2 cell, row-dominant: large threshold difference between rows
     // and a subtle column shift → 4-color line-tinted pattern.
-    return opt_plan4_pick_by_threshold(target, palette_lab,
-                                       line_checker_mat[y % 2][x % 2], strength);
+    return opt_plan4_pick_by_threshold(
+        target, palette_lab, line_checker_mat[y % 2][x % 2], strength);
 }
 
-std::uint8_t pick_opt_vline_checker_index(
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength) {
+std::uint8_t pick_opt_vline_checker_index(const color_space::OKLab& target,
+                                          std::span<const color_space::OKLab> palette_lab,
+                                          std::size_t x,
+                                          std::size_t y,
+                                          float strength) {
     // Same algorithm as opt_line_checker, transposed onto vline_checker_mat
     // (column-dominant). Visually preferred on tall pixels / hires modes.
-    return opt_plan4_pick_by_threshold(target, palette_lab,
-                                       vline_checker_mat[y % 2][x % 2], strength);
+    return opt_plan4_pick_by_threshold(
+        target, palette_lab, vline_checker_mat[y % 2][x % 2], strength);
 }
 
-namespace { // reopen anon namespace for the apply_* helpers below
+namespace {  // reopen anon namespace for the apply_* helpers below
 
 // `mode2` selects Yliluoma method 2: weights candidates by closeness to
 // target's luma rather than its full OKLab vector during plan
 // construction. Tends to produce smoother gradients with less color
 // drift on small palettes than method 1.
-DitherResult apply_yliluoma(
-    const Image& image,
-    std::span<const OKLab> palette_lab,
-    float strength,
-    bool mode2 = false) {
+DitherResult apply_yliluoma(const Image& image,
+                            std::span<const OKLab> palette_lab,
+                            float strength,
+                            bool mode2 = false) {
 
     auto w = image.width();
     auto h = image.height();
@@ -2040,10 +2101,13 @@ DitherResult apply_yliluoma(
                     // Method 2: weight luma 4× heavier than chroma — keeps
                     // gradients smooth at the cost of slightly worse hue
                     // matching, the canonical Yliluoma-2 trade-off.
-                    float err = mode2
-                        ? color_space::fma_dist_sq(2.0f * dL, da, db)  // (2*dL)² weights luma 4×
-                        : color_space::fma_dist_sq(dL, da, db);
-                    if (err < best_err) { best_err = err; best_k = k; }
+                    float err = mode2 ? color_space::fma_dist_sq(
+                                            2.0f * dL, da, db)  // (2*dL)² weights luma 4×
+                                      : color_space::fma_dist_sq(dL, da, db);
+                    if (err < best_err) {
+                        best_err = err;
+                        best_k = k;
+                    }
                 }
                 plan[step] = best_k;
                 sum = oklab_add(sum, palette_lab[best_k]);
@@ -2070,7 +2134,8 @@ DitherResult apply_yliluoma(
             if (b < 0) b = 0;
             if (b >= static_cast<int>(PLAN_SIZE)) b = static_cast<int>(PLAN_SIZE) - 1;
             int median = static_cast<int>(PLAN_SIZE) / 2;
-            int adjusted = static_cast<int>(std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
+            int adjusted = static_cast<int>(
+                std::round(static_cast<float>(median) + static_cast<float>(b - median) * strength));
             if (adjusted < 0) adjusted = 0;
             if (adjusted >= static_cast<int>(PLAN_SIZE)) adjusted = static_cast<int>(PLAN_SIZE) - 1;
             std::size_t pick = plan[sorted[static_cast<std::size_t>(adjusted)]];
@@ -2106,12 +2171,12 @@ DitherResult apply_yliluoma(
 // Bias mode chooses how the per-pixel threshold is modulated.
 enum class StructureBias { laplacian, contrast, zhoufang };
 
-DitherResult apply_structure_fs(
-    const Image& image,
-    std::span<const OKLab> palette_lab,
-    float strength, float error_clamp_val,
-    bool serpentine,
-    StructureBias bias_mode = StructureBias::laplacian) {
+DitherResult apply_structure_fs(const Image& image,
+                                std::span<const OKLab> palette_lab,
+                                float strength,
+                                float error_clamp_val,
+                                bool serpentine,
+                                StructureBias bias_mode = StructureBias::laplacian) {
 
     auto w = image.width();
     auto h = image.height();
@@ -2121,18 +2186,18 @@ DitherResult apply_structure_fs(
     result.total_error = 0.0f;
 
     // Source as OKLab + sRGB; palette pre-converted to sRGB.
-    std::vector<OKLab>  image_lab(w * h);
+    std::vector<OKLab> image_lab(w * h);
     std::vector<Color3f> image_s(w * h);
     std::vector<Color3f> palette_s(palette_lab.size());
     for (std::size_t i = 0; i < palette_lab.size(); ++i) {
-        palette_s[i] = color_space::linear_to_srgb(
-            color_space::oklab_to_linear(palette_lab[i])).clamped();
+        palette_s[i] =
+            color_space::linear_to_srgb(color_space::oklab_to_linear(palette_lab[i])).clamped();
     }
     for (std::size_t y = 0; y < h; ++y)
         for (std::size_t x = 0; x < w; ++x) {
             auto lin = image[x, y];
             image_lab[y * w + x] = color_space::linear_to_oklab(lin);
-            image_s[y * w + x]   = color_space::linear_to_srgb(lin).clamped();
+            image_s[y * w + x] = color_space::linear_to_srgb(lin).clamped();
         }
 
     // Per-pixel structure signal. For Laplacian mode this is the 4-conn
@@ -2144,13 +2209,13 @@ DitherResult apply_structure_fs(
         for (std::size_t y = 0; y < h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
                 float L = image_lab[y * w + x].L;
-                float Lx0 = (x > 0)     ? image_lab[y * w + (x - 1)].L : L;
+                float Lx0 = (x > 0) ? image_lab[y * w + (x - 1)].L : L;
                 float Lx1 = (x + 1 < w) ? image_lab[y * w + (x + 1)].L : L;
-                float Ly0 = (y > 0)     ? image_lab[(y - 1) * w + x].L : L;
+                float Ly0 = (y > 0) ? image_lab[(y - 1) * w + x].L : L;
                 float Ly1 = (y + 1 < h) ? image_lab[(y + 1) * w + x].L : L;
                 float v = 4.0f * L - Lx0 - Lx1 - Ly0 - Ly1;
                 if (v < -0.5f) v = -0.5f;
-                if (v > 0.5f)  v = 0.5f;
+                if (v > 0.5f) v = 0.5f;
                 lap[y * w + x] = v;
             }
         }
@@ -2165,7 +2230,8 @@ DitherResult apply_structure_fs(
                         if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
                         if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
                         float L = image_lab[static_cast<std::size_t>(yy) * w +
-                                            static_cast<std::size_t>(xx)].L;
+                                            static_cast<std::size_t>(xx)]
+                                      .L;
                         if (L < lo) lo = L;
                         if (L > hi) hi = L;
                     }
@@ -2175,7 +2241,7 @@ DitherResult apply_structure_fs(
                 lap[y * w + x] = (hi - lo) * ((L > center) ? 1.0f : -1.0f);
             }
         }
-    } else { // zhoufang: signal = intensity-noise-amplitude (used below)
+    } else {  // zhoufang: signal = intensity-noise-amplitude (used below)
         for (std::size_t y = 0; y < h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
                 float L = image_lab[y * w + x].L;
@@ -2202,8 +2268,9 @@ DitherResult apply_structure_fs(
                     auto xx = static_cast<std::ptrdiff_t>(x) + dx;
                     if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
                     if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
-                    float L = image_lab[static_cast<std::size_t>(yy) * w +
-                                        static_cast<std::size_t>(xx)].L;
+                    float L =
+                        image_lab[static_cast<std::size_t>(yy) * w + static_cast<std::size_t>(xx)]
+                            .L;
                     mean += L;
                     sq += L * L;
                     ++count;
@@ -2247,8 +2314,7 @@ DitherResult apply_structure_fs(
                 image_s[idx].g + std::clamp(e.g, -ec, ec),
                 image_s[idx].b + std::clamp(e.b, -ec, ec),
             };
-            auto target = color_space::linear_to_oklab(
-                color_space::srgb_to_linear(target_s));
+            auto target = color_space::linear_to_oklab(color_space::srgb_to_linear(target_s));
 
             // Structure bias: shape depends on mode. Laplacian/contrast
             // scale by local stddev so flat regions stay neutral. ZF uses
@@ -2266,7 +2332,7 @@ DitherResult apply_structure_fs(
             } else {
                 bias = K_SCALE * lap[idx] * (stddev[idx] / 0.1f);
                 if (bias < -0.2f) bias = -0.2f;
-                if (bias > 0.2f)  bias = 0.2f;
+                if (bias > 0.2f) bias = 0.2f;
             }
             target.L += bias;
 
@@ -2279,7 +2345,11 @@ DitherResult apply_structure_fs(
                 float da = target.a - palette_lab[k].a;
                 float db = target.b - palette_lab[k].b;
                 float d = color_space::fma_dist_sq(dL, da, db);
-                if (d < best_d) { best_d = d; best_k = k; best_lab = palette_lab[k]; }
+                if (d < best_d) {
+                    best_d = d;
+                    best_k = k;
+                    best_lab = palette_lab[k];
+                }
             }
 
             result.indices[idx] = static_cast<std::uint8_t>(best_k);
@@ -2296,8 +2366,7 @@ DitherResult apply_structure_fs(
                 auto ny = static_cast<std::ptrdiff_t>(y) + kr.dy;
                 if (nx < 0 || nx >= static_cast<std::ptrdiff_t>(w)) continue;
                 if (ny < 0 || ny >= static_cast<std::ptrdiff_t>(h)) continue;
-                auto nidx = static_cast<std::size_t>(ny) * w +
-                            static_cast<std::size_t>(nx);
+                auto nidx = static_cast<std::size_t>(ny) * w + static_cast<std::size_t>(nx);
                 auto& en = err_buf_s[nidx];
                 en.r = std::clamp(en.r + qe_s.r * kr.weight, -ec, ec);
                 en.g = std::clamp(en.g + qe_s.g * kr.weight, -ec, ec);
@@ -2313,7 +2382,6 @@ DitherResult apply_structure_fs(
 
     return result;
 }
-
 
 // ===========================================================================
 // Direct Binary Search (Allebach et al. ~1992)
@@ -2341,16 +2409,14 @@ namespace {
 // Separable 5×5 Gaussian, σ ≈ 0.7. Coefficients sum to 1.0; symmetric.
 // (Generated by sampling the 1D normal PDF at integer offsets and
 // normalizing.) Center tap ≈ 0.55, ±1 ≈ 0.21, ±2 ≈ 0.012.
-constexpr float kHvsKernel[5] = {
-    0.012144f, 0.215441f, 0.544830f, 0.215441f, 0.012144f
-};
+constexpr float kHvsKernel[5] = {0.012144f, 0.215441f, 0.544830f, 0.215441f, 0.012144f};
 
 // Build the horizontal-pass blur of `field` (an OKLab image stored as
 // w*h). Output[y*w+x] = Σ_dx kHvs[dx+2] * field[y*w + clamp(x+dx)].
-void hvs_blur_horizontal(
-    std::span<const OKLab> field,
-    std::span<OKLab> out,
-    std::size_t w, std::size_t h) {
+void hvs_blur_horizontal(std::span<const OKLab> field,
+                         std::span<OKLab> out,
+                         std::size_t w,
+                         std::size_t h) {
 
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
@@ -2358,8 +2424,7 @@ void hvs_blur_horizontal(
             for (int dx = -2; dx <= 2; ++dx) {
                 std::ptrdiff_t xx = static_cast<std::ptrdiff_t>(x) + dx;
                 if (xx < 0) xx = 0;
-                if (xx >= static_cast<std::ptrdiff_t>(w))
-                    xx = static_cast<std::ptrdiff_t>(w) - 1;
+                if (xx >= static_cast<std::ptrdiff_t>(w)) xx = static_cast<std::ptrdiff_t>(w) - 1;
                 float kw = kHvsKernel[dx + 2];
                 const auto& s = field[y * w + static_cast<std::size_t>(xx)];
                 acc.L += s.L * kw;
@@ -2371,12 +2436,11 @@ void hvs_blur_horizontal(
     }
 }
 
-} // namespace
+}  // namespace
 
-DitherResult apply_dbs(
-    const Image& image,
-    std::span<const OKLab> palette_lab,
-    const Settings& settings) {
+DitherResult apply_dbs(const Image& image,
+                       std::span<const OKLab> palette_lab,
+                       const Settings& settings) {
 
     auto w = image.width();
     auto h = image.height();
@@ -2387,9 +2451,12 @@ DitherResult apply_dbs(
     //    everywhere already. (FS does its own perceptual nearest in
     //    OKLab; the blur-space probe below only swaps the DBS cost
     //    metric.)
-    DitherResult res = apply_error_diffusion(
-        image, palette_lab, settings.strength, settings.error_clamp,
-        settings.serpentine, floyd_steinberg_kernel);
+    DitherResult res = apply_error_diffusion(image,
+                                             palette_lab,
+                                             settings.strength,
+                                             settings.error_clamp,
+                                             settings.serpentine,
+                                             floyd_steinberg_kernel);
     auto& indices = res.indices;
 
     // The DBS HVS-blur cost metric runs in sRGB. Same lesson as
@@ -2426,12 +2493,11 @@ DitherResult apply_dbs(
 
     // Two-stage separable blur: horizontal, then vertical.
     std::vector<OKLab> source_h(w * h), source_blur(w * h);
-    std::vector<OKLab> half_h(w * h),   half_blur(w * h);
+    std::vector<OKLab> half_h(w * h), half_blur(w * h);
     hvs_blur_horizontal(source_lab, source_h, w, h);
     hvs_blur_horizontal(halftone_lab, half_h, w, h);
     // Vertical pass to produce the fully-blurred buffers.
-    auto vertical_pass = [&](std::span<const OKLab> hin,
-                             std::span<OKLab> hout) {
+    auto vertical_pass = [&](std::span<const OKLab> hin, std::span<OKLab> hout) {
         for (std::size_t y = 0; y < h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
                 OKLab acc{};
@@ -2451,7 +2517,7 @@ DitherResult apply_dbs(
         }
     };
     vertical_pass(source_h, source_blur);
-    vertical_pass(half_h,   half_blur);
+    vertical_pass(half_h, half_blur);
 
     // 3. Sweep over pixels. For each pixel, try every palette
     //    alternative and pick the one that lowers cost the most
@@ -2482,9 +2548,8 @@ DitherResult apply_dbs(
                     for (int dx = -2; dx <= 2; ++dx) {
                         std::ptrdiff_t xx = static_cast<std::ptrdiff_t>(x) + dx;
                         if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
-                        current_cost += cost_at(
-                            static_cast<std::size_t>(yy) * w +
-                            static_cast<std::size_t>(xx));
+                        current_cost += cost_at(static_cast<std::size_t>(yy) * w +
+                                                static_cast<std::size_t>(xx));
                     }
                 }
 
@@ -2523,9 +2588,8 @@ DitherResult apply_dbs(
                             float kx = kHvsKernel[dx + 2];
                             float ky = kHvsKernel[dy + 2];
                             float kk = kx * ky;
-                            std::size_t nidx =
-                                static_cast<std::size_t>(yy) * w +
-                                static_cast<std::size_t>(xx);
+                            std::size_t nidx = static_cast<std::size_t>(yy) * w +
+                                               static_cast<std::size_t>(xx);
                             auto& s = source_blur[nidx];
                             auto& g = half_blur[nidx];
                             float dL = s.L - (g.L + delta_h.L * kk);
@@ -2560,9 +2624,8 @@ DitherResult apply_dbs(
                             std::ptrdiff_t xx = static_cast<std::ptrdiff_t>(x) + dx;
                             if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
                             float kk = kHvsKernel[dx + 2] * kHvsKernel[dy + 2];
-                            std::size_t nidx =
-                                static_cast<std::size_t>(yy) * w +
-                                static_cast<std::size_t>(xx);
+                            std::size_t nidx = static_cast<std::size_t>(yy) * w +
+                                               static_cast<std::size_t>(xx);
                             half_blur[nidx].L += delta_h.L * kk;
                             half_blur[nidx].a += delta_h.a * kk;
                             half_blur[nidx].b += delta_h.b * kk;
@@ -2596,7 +2659,7 @@ DitherResult apply_dbs(
     return res;
 }
 
-} // namespace (close anon ns; apply_dbs_post_pass is public API)
+}  // namespace
 
 // ===========================================================================
 // DBS post-pass refinement with per-pixel palette lookup.
@@ -2609,11 +2672,10 @@ DitherResult apply_dbs(
 // place.
 // ===========================================================================
 
-void apply_dbs_post_pass(
-    const Image& image,
-    std::vector<std::uint8_t>& indices,
-    const PalettePerPixel& palette_for_pixel,
-    int max_sweeps) {
+void apply_dbs_post_pass(const Image& image,
+                         std::vector<std::uint8_t>& indices,
+                         const PalettePerPixel& palette_for_pixel,
+                         int max_sweeps) {
 
     auto w = image.width();
     auto h = image.height();
@@ -2632,7 +2694,7 @@ void apply_dbs_post_pass(
         return OKLab{s.r, s.g, s.b};
     };
     const OKLab* last_pal_data = nullptr;
-    std::size_t  last_pal_size = 0;
+    std::size_t last_pal_size = 0;
     std::vector<OKLab> pal_blur_cache;
     auto get_pal_blur = [&](std::span<const OKLab> pal) -> std::span<const OKLab> {
         if (pal.data() != last_pal_data || pal.size() != last_pal_size) {
@@ -2709,9 +2771,8 @@ void apply_dbs_post_pass(
                     for (int dx = -2; dx <= 2; ++dx) {
                         auto xx = static_cast<std::ptrdiff_t>(x) + dx;
                         if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
-                        current_cost += cost_at(
-                            static_cast<std::size_t>(yy) * w +
-                            static_cast<std::size_t>(xx));
+                        current_cost += cost_at(static_cast<std::size_t>(yy) * w +
+                                                static_cast<std::size_t>(xx));
                     }
                 }
 
@@ -2734,9 +2795,8 @@ void apply_dbs_post_pass(
                             auto xx = static_cast<std::ptrdiff_t>(x) + dx;
                             if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
                             float kk = kHvsKernel[dx + 2] * kHvsKernel[dy + 2];
-                            std::size_t nidx =
-                                static_cast<std::size_t>(yy) * w +
-                                static_cast<std::size_t>(xx);
+                            std::size_t nidx = static_cast<std::size_t>(yy) * w +
+                                               static_cast<std::size_t>(xx);
                             auto& s = source_blur[nidx];
                             auto& g = half_blur[nidx];
                             float dL = s.L - (g.L + delta_h.L * kk);
@@ -2769,9 +2829,8 @@ void apply_dbs_post_pass(
                             auto xx = static_cast<std::ptrdiff_t>(x) + dx;
                             if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
                             float kk = kHvsKernel[dx + 2] * kHvsKernel[dy + 2];
-                            std::size_t nidx =
-                                static_cast<std::size_t>(yy) * w +
-                                static_cast<std::size_t>(xx);
+                            std::size_t nidx = static_cast<std::size_t>(yy) * w +
+                                               static_cast<std::size_t>(xx);
                             half_blur[nidx].L += delta_h.L * kk;
                             half_blur[nidx].a += delta_h.a * kk;
                             half_blur[nidx].b += delta_h.b * kk;
@@ -2785,14 +2844,13 @@ void apply_dbs_post_pass(
     }
 }
 
-namespace { // reopen anon ns for the rest of the helpers
+namespace {  // reopen anon ns for the rest of the helpers
 
 // ===========================================================================
 // No-dither fallback (plain nearest-color mapping)
 // ===========================================================================
 
-DitherResult apply_none(const Image& image,
-                        std::span<const OKLab> palette_lab) {
+DitherResult apply_none(const Image& image, std::span<const OKLab> palette_lab) {
     auto w = image.width();
     auto h = image.height();
 
@@ -2805,8 +2863,7 @@ DitherResult apply_none(const Image& image,
     for (std::size_t y = 0; y < h; ++y) {
         for (std::size_t x = 0; x < w; ++x) {
             auto pixel_lab = color_space::linear_to_oklab(image[x, y]);
-            auto [idx, chosen, dist_sq] =
-                find_nearest_oklab_soa(pixel_lab, pal_soa);
+            auto [idx, chosen, dist_sq] = find_nearest_oklab_soa(pixel_lab, pal_soa);
             result.indices[y * w + x] = static_cast<std::uint8_t>(idx);
             result.total_error += dist_sq;
         }
@@ -2815,15 +2872,13 @@ DitherResult apply_none(const Image& image,
     return result;
 }
 
-} // namespace
+}  // namespace
 
 // ===========================================================================
 // Public API
 // ===========================================================================
 
-DitherResult apply(const Image& image,
-                   std::span<const Color3f> palette,
-                   const Settings& settings) {
+DitherResult apply(const Image& image, std::span<const Color3f> palette, const Settings& settings) {
 
     auto palette_lab = precompute_palette_lab(palette);
     std::span<const OKLab> pal_span{palette_lab};
@@ -2834,107 +2889,73 @@ DitherResult apply(const Image& image,
 
     // Ordered dithering
     case Method::bayer2x2:
-        return apply_ordered(image, bayer2, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer2, pal_span, settings.strength);
     case Method::bayer4x4:
-        return apply_ordered(image, bayer4, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer4, pal_span, settings.strength);
     case Method::bayer8x8:
-        return apply_ordered(image, bayer8, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer8, pal_span, settings.strength);
     case Method::bayer3x3:
-        return apply_ordered(image, bayer3, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer3, pal_span, settings.strength);
     case Method::bayer5x5:
-        return apply_ordered(image, bayer5, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer5, pal_span, settings.strength);
     case Method::bayer6x6:
-        return apply_ordered(image, bayer6, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer6, pal_span, settings.strength);
     case Method::bayer7x7:
-        return apply_ordered(image, bayer7, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer7, pal_span, settings.strength);
     case Method::checker:
-        return apply_ordered(image, checker_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, checker_mat, pal_span, settings.strength);
     case Method::h2x4:
-        return apply_ordered(image, h2x4_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, h2x4_mat, pal_span, settings.strength);
     case Method::v4x2:
-        return apply_ordered(image, v4x2_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, v4x2_mat, pal_span, settings.strength);
     case Method::bayer4x2:
-        return apply_ordered(image, bayer4x2_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer4x2_mat, pal_span, settings.strength);
     case Method::bayer2x4:
-        return apply_ordered(image, bayer2x4_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, bayer2x4_mat, pal_span, settings.strength);
     case Method::clustered_dot:
-        return apply_ordered(image, clustered_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, clustered_mat, pal_span, settings.strength);
     case Method::line2:
-        return apply_ordered(image, line2_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, line2_mat, pal_span, settings.strength);
     case Method::vline2:
-        return apply_ordered(image, vline2_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, vline2_mat, pal_span, settings.strength);
     case Method::vline_checker:
-        return apply_ordered(image, vline_checker_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, vline_checker_mat, pal_span, settings.strength);
     case Method::vline4:
-        return apply_ordered(image, vline4_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, vline4_mat, pal_span, settings.strength);
     case Method::vline8:
-        return apply_ordered(image, vline8_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, vline8_mat, pal_span, settings.strength);
     case Method::line_checker:
-        return apply_ordered(image, line_checker_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, line_checker_mat, pal_span, settings.strength);
     case Method::line4:
-        return apply_ordered(image, line4_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, line4_mat, pal_span, settings.strength);
     case Method::line8:
-        return apply_ordered(image, line8_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, line8_mat, pal_span, settings.strength);
     case Method::halftone8x8:
-        return apply_ordered(image, halftone8x8_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, halftone8x8_mat, pal_span, settings.strength);
     case Method::diagonal8x8:
-        return apply_ordered(image, diagonal8x8_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, diagonal8x8_mat, pal_span, settings.strength);
     case Method::spiral5x5:
-        return apply_ordered(image, spiral5x5_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, spiral5x5_mat, pal_span, settings.strength);
     case Method::hex8x8:
-        return apply_ordered(image, hex8x8_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, hex8x8_mat, pal_span, settings.strength);
     case Method::hex5x5:
-        return apply_ordered(image, hex5x5_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, hex5x5_mat, pal_span, settings.strength);
     case Method::blue_noise:
-        return apply_ordered(image, blue_noise_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, blue_noise_mat, pal_span, settings.strength);
     case Method::void_cluster:
-        return apply_ordered(image, void_cluster_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, void_cluster_mat, pal_span, settings.strength);
     case Method::cluster_noise:
-        return apply_ordered(image, cluster_noise_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, cluster_noise_mat, pal_span, settings.strength);
     case Method::fractal16:
-        return apply_ordered(image, fractal16_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, fractal16_mat, pal_span, settings.strength);
     case Method::aseprite_old:
-        return apply_ordered(image, aseprite_old_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, aseprite_old_mat, pal_span, settings.strength);
     case Method::libcaca_3x3:
-        return apply_ordered(image, libcaca_3x3_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, libcaca_3x3_mat, pal_span, settings.strength);
     case Method::libcaca_6x6:
-        return apply_ordered(image, libcaca_6x6_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, libcaca_6x6_mat, pal_span, settings.strength);
     case Method::pegasus_8x8:
-        return apply_ordered(image, pegasus_8x8_mat, pal_span,
-                             settings.strength);
+        return apply_ordered(image, pegasus_8x8_mat, pal_span, settings.strength);
     case Method::ign:
     case Method::ign_triangle:
     case Method::white_noise:
@@ -2961,9 +2982,8 @@ DitherResult apply(const Image& image,
                 auto np = find_nearest_pair(pixel_lab, pal_span);
                 float total = np.distA + np.distB;
                 float t = (total > 1e-12f)
-                    ? (std::sqrt(np.distA) /
-                       (std::sqrt(np.distA) + std::sqrt(np.distB)))
-                    : 0.0f;
+                              ? (std::sqrt(np.distA) / (std::sqrt(np.distA) + std::sqrt(np.distB)))
+                              : 0.0f;
                 // ordered_threshold returns value in [-0.5, 0.5)
                 float thr = ordered_threshold(method, x, y) + 0.5f;
                 bool use_b = (thr < t * settings.strength);
@@ -2981,43 +3001,49 @@ DitherResult apply(const Image& image,
 
     // Error diffusion
     case Method::floyd_steinberg:
-        return apply_error_diffusion(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, floyd_steinberg_kernel);
+        return apply_error_diffusion(image,
+                                     pal_span,
+                                     settings.strength,
+                                     settings.error_clamp,
+                                     settings.serpentine,
+                                     floyd_steinberg_kernel);
     case Method::atkinson:
-        return apply_error_diffusion(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, atkinson_kernel);
+        return apply_error_diffusion(image,
+                                     pal_span,
+                                     settings.strength,
+                                     settings.error_clamp,
+                                     settings.serpentine,
+                                     atkinson_kernel);
     case Method::sierra_lite:
-        return apply_error_diffusion(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, sierra_lite_kernel);
+        return apply_error_diffusion(image,
+                                     pal_span,
+                                     settings.strength,
+                                     settings.error_clamp,
+                                     settings.serpentine,
+                                     sierra_lite_kernel);
     case Method::stucki:
-        return apply_error_diffusion(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, stucki_kernel);
+        return apply_error_diffusion(image,
+                                     pal_span,
+                                     settings.strength,
+                                     settings.error_clamp,
+                                     settings.serpentine,
+                                     stucki_kernel);
     case Method::jarvis:
-        return apply_error_diffusion(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, jarvis_kernel);
+        return apply_error_diffusion(image,
+                                     pal_span,
+                                     settings.strength,
+                                     settings.error_clamp,
+                                     settings.serpentine,
+                                     jarvis_kernel);
 
     case Method::dbs:
         return apply_dbs(image, pal_span, settings);
 
     case Method::gilbert:
-        return apply_gilbert(
-            image, pal_span,
-            settings.strength, settings.error_clamp);
+        return apply_gilbert(image, pal_span, settings.strength, settings.error_clamp);
 
     case Method::riemersma:
-        return apply_riemersma(
-            image, pal_span,
-            settings.strength, settings.error_clamp);
+        return apply_riemersma(image, pal_span, settings.strength, settings.error_clamp);
 
     case Method::yliluoma:
         return apply_yliluoma(image, pal_span, settings.strength, false);
@@ -3179,20 +3205,26 @@ DitherResult apply(const Image& image,
     }
 
     case Method::structure_fs:
-        return apply_structure_fs(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, StructureBias::laplacian);
+        return apply_structure_fs(image,
+                                  pal_span,
+                                  settings.strength,
+                                  settings.error_clamp,
+                                  settings.serpentine,
+                                  StructureBias::laplacian);
     case Method::contrast_fs:
-        return apply_structure_fs(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, StructureBias::contrast);
+        return apply_structure_fs(image,
+                                  pal_span,
+                                  settings.strength,
+                                  settings.error_clamp,
+                                  settings.serpentine,
+                                  StructureBias::contrast);
     case Method::zhoufang:
-        return apply_structure_fs(
-            image, pal_span,
-            settings.strength, settings.error_clamp,
-            settings.serpentine, StructureBias::zhoufang);
+        return apply_structure_fs(image,
+                                  pal_span,
+                                  settings.strength,
+                                  settings.error_clamp,
+                                  settings.serpentine,
+                                  StructureBias::zhoufang);
     }
 
     return apply_none(image, pal_span);
@@ -3200,25 +3232,34 @@ DitherResult apply(const Image& image,
 
 std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
     switch (method) {
-    case Method::floyd_steinberg: return floyd_steinberg_kernel;
-    case Method::atkinson:        return atkinson_kernel;
-    case Method::sierra_lite:     return sierra_lite_kernel;
-    case Method::stucki:          return stucki_kernel;
-    case Method::jarvis:          return jarvis_kernel;
+    case Method::floyd_steinberg:
+        return floyd_steinberg_kernel;
+    case Method::atkinson:
+        return atkinson_kernel;
+    case Method::sierra_lite:
+        return sierra_lite_kernel;
+    case Method::stucki:
+        return stucki_kernel;
+    case Method::jarvis:
+        return jarvis_kernel;
     // Structure-aware variants and Riemersma all build on F-S in sliced mode
     // — the per-pixel bias / queue is layered on top by the caller.
     // (Curve walking can't span per-scanline palette swaps cleanly.)
-    case Method::structure_fs:    return floyd_steinberg_kernel;
-    case Method::contrast_fs:     return floyd_steinberg_kernel;
-    case Method::zhoufang:        return floyd_steinberg_kernel;
-    case Method::riemersma:       return floyd_steinberg_kernel;
-    default:                      return {};
+    case Method::structure_fs:
+        return floyd_steinberg_kernel;
+    case Method::contrast_fs:
+        return floyd_steinberg_kernel;
+    case Method::zhoufang:
+        return floyd_steinberg_kernel;
+    case Method::riemersma:
+        return floyd_steinberg_kernel;
+    default:
+        return {};
     }
 }
 
 bool needs_structure_bias(Method method) {
-    return method == Method::structure_fs ||
-           method == Method::contrast_fs ||
+    return method == Method::structure_fs || method == Method::contrast_fs ||
            method == Method::zhoufang;
 }
 
@@ -3240,13 +3281,13 @@ std::vector<float> compute_structure_bias(const Image& image, Method method) {
         for (std::size_t y = 0; y < h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
                 float L = image_lab[y * w + x].L;
-                float Lx0 = (x > 0)     ? image_lab[y * w + (x - 1)].L : L;
+                float Lx0 = (x > 0) ? image_lab[y * w + (x - 1)].L : L;
                 float Lx1 = (x + 1 < w) ? image_lab[y * w + (x + 1)].L : L;
-                float Ly0 = (y > 0)     ? image_lab[(y - 1) * w + x].L : L;
+                float Ly0 = (y > 0) ? image_lab[(y - 1) * w + x].L : L;
                 float Ly1 = (y + 1 < h) ? image_lab[(y + 1) * w + x].L : L;
                 float v = 4.0f * L - Lx0 - Lx1 - Ly0 - Ly1;
                 if (v < -0.5f) v = -0.5f;
-                if (v > 0.5f)  v = 0.5f;
+                if (v > 0.5f) v = 0.5f;
                 sig[y * w + x] = v;
             }
         }
@@ -3261,7 +3302,8 @@ std::vector<float> compute_structure_bias(const Image& image, Method method) {
                         if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
                         if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
                         float L = image_lab[static_cast<std::size_t>(yy) * w +
-                                            static_cast<std::size_t>(xx)].L;
+                                            static_cast<std::size_t>(xx)]
+                                      .L;
                         if (L < lo) lo = L;
                         if (L > hi) hi = L;
                     }
@@ -3271,7 +3313,7 @@ std::vector<float> compute_structure_bias(const Image& image, Method method) {
                 sig[y * w + x] = (hi - lo) * ((L > center) ? 1.0f : -1.0f);
             }
         }
-    } else { // zhoufang: triangular intensity-modulated noise amplitude
+    } else {  // zhoufang: triangular intensity-modulated noise amplitude
         for (std::size_t y = 0; y < h; ++y) {
             for (std::size_t x = 0; x < w; ++x) {
                 float L = image_lab[y * w + x].L;
@@ -3294,8 +3336,9 @@ std::vector<float> compute_structure_bias(const Image& image, Method method) {
                     auto xx = static_cast<std::ptrdiff_t>(x) + dx;
                     if (yy < 0 || yy >= static_cast<std::ptrdiff_t>(h)) continue;
                     if (xx < 0 || xx >= static_cast<std::ptrdiff_t>(w)) continue;
-                    float L = image_lab[static_cast<std::size_t>(yy) * w +
-                                        static_cast<std::size_t>(xx)].L;
+                    float L =
+                        image_lab[static_cast<std::size_t>(yy) * w + static_cast<std::size_t>(xx)]
+                            .L;
                     mean += L;
                     sq += L * L;
                     ++count;
@@ -3326,7 +3369,7 @@ std::vector<float> compute_structure_bias(const Image& image, Method method) {
             } else {
                 b = K_SCALE * sig[idx] * (stddev[idx] / 0.1f);
                 if (b < -0.2f) b = -0.2f;
-                if (b > 0.2f)  b = 0.2f;
+                if (b > 0.2f) b = 0.2f;
             }
             bias[idx] = b;
         }
@@ -3335,28 +3378,27 @@ std::vector<float> compute_structure_bias(const Image& image, Method method) {
 }
 
 bool uses_error_diffusion(Method method) {
-    return method != Method::none &&
-           !is_ordered(method) &&
-           !is_yliluoma(method) &&
+    return method != Method::none && !is_ordered(method) && !is_yliluoma(method) &&
            !error_diffusion_kernel(method).empty();
 }
 
-float pick_palette_index_with_ostro(
-    Method method,
-    const color_space::OKLab& target,
-    std::span<const color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength,
-    std::size_t k_min,
-    std::size_t& chosen_index,
-    color_space::OKLab& chosen_lab) {
+float pick_palette_index_with_ostro(Method method,
+                                    const color_space::OKLab& target,
+                                    std::span<const color_space::OKLab> palette_lab,
+                                    std::size_t x,
+                                    std::size_t y,
+                                    float strength,
+                                    std::size_t k_min,
+                                    std::size_t& chosen_index,
+                                    color_space::OKLab& chosen_lab) {
 
     if (is_yliluoma(method)) {
         std::span<const color_space::OKLab> sub = (k_min == 0)
-            ? palette_lab
-            : std::span<const color_space::OKLab>{
-                palette_lab.data() + k_min, palette_lab.size() - k_min};
-        auto rel = pick_yliluoma_family_index(method, target, sub,
-                                               x, y, strength);
+                                                      ? palette_lab
+                                                      : std::span<const color_space::OKLab>{
+                                                            palette_lab.data() + k_min,
+                                                            palette_lab.size() - k_min};
+        auto rel = pick_yliluoma_family_index(method, target, sub, x, y, strength);
         chosen_index = k_min + static_cast<std::size_t>(rel);
         chosen_lab = palette_lab[chosen_index];
         return 0.5f;  // yliluoma → unit ostromoukhov scale
@@ -3397,22 +3439,16 @@ float pick_palette_index_with_ostro(
 // variable scaling was no-op'd in 6/9 sites, and main.cpp's loop wasn't
 // serpentining.
 // ===========================================================================
-float diffuse_raw_buffer(const Image& image,
-                         const Settings& settings,
-                         const PixelPicker& pick) {
+float diffuse_raw_buffer(const Image& image, const Settings& settings, const PixelPicker& pick) {
     auto w = image.width();
     auto h = image.height();
 
-    bool is_ord  = is_ordered(settings.method) &&
-                   settings.method != Method::none;
-    auto kernel  = error_diffusion_kernel(settings.method);
-    bool is_diff = settings.method != Method::none && !is_ord &&
-                   !kernel.empty();
+    bool is_ord = is_ordered(settings.method) && settings.method != Method::none;
+    auto kernel = error_diffusion_kernel(settings.method);
+    bool is_diff = settings.method != Method::none && !is_ord && !kernel.empty();
     bool needs_riem = is_diff && needs_riemersma_queue(settings.method);
 
-    auto bias_map = is_diff
-        ? compute_structure_bias(image, settings.method)
-        : std::vector<float>{};
+    auto bias_map = is_diff ? compute_structure_bias(image, settings.method) : std::vector<float>{};
 
     constexpr std::size_t RIEM_QSIZE = 16;
     std::array<float, RIEM_QSIZE> riem_weights{};
@@ -3420,13 +3456,15 @@ float diffuse_raw_buffer(const Image& image,
     if (needs_riem) {
         const float ratio = std::pow(1.0f / 16.0f, 1.0f / 15.0f);
         float w_acc = 1.0f;
-        for (std::size_t i = RIEM_QSIZE; i-- > 0; ) {
+        for (std::size_t i = RIEM_QSIZE; i-- > 0;) {
             riem_weights[i] = w_acc;
             w_acc *= ratio;
         }
         float total = 0.0f;
-        for (float wt : riem_weights) total += wt;
-        for (float& wt : riem_weights) wt /= total;
+        for (float wt : riem_weights)
+            total += wt;
+        for (float& wt : riem_weights)
+            wt /= total;
     }
 
     // Error diffusion in sRGB (gamma-encoded) space. Picker still
@@ -3460,8 +3498,7 @@ float diffuse_raw_buffer(const Image& image,
             if (needs_riem) {
                 Color3f carry{0, 0, 0};
                 for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                    std::size_t age =
-                        (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                    std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
                     carry.r += riem_queue_s[age].r * riem_weights[k];
                     carry.g += riem_queue_s[age].g * riem_weights[k];
                     carry.b += riem_queue_s[age].b * riem_weights[k];
@@ -3512,9 +3549,8 @@ float diffuse_raw_buffer(const Image& image,
                         if (nx < 0 || ny < 0) continue;
                         if (static_cast<std::size_t>(nx) >= w) continue;
                         if (static_cast<std::size_t>(ny) >= h) continue;
-                        auto& en = err_buf_s[
-                            static_cast<std::size_t>(ny) * w +
-                            static_cast<std::size_t>(nx)];
+                        auto& en = err_buf_s[static_cast<std::size_t>(ny) * w +
+                                             static_cast<std::size_t>(nx)];
                         en.r += qe_s.r * kw;
                         en.g += qe_s.g * kw;
                         en.b += qe_s.b * kw;
@@ -3529,40 +3565,74 @@ float diffuse_raw_buffer(const Image& image,
 
 float ordered_threshold(Method method, std::size_t x, std::size_t y) {
     switch (method) {
-    case Method::bayer2x2:      return bayer2[y % 2][x % 2];
-    case Method::bayer4x4:      return bayer4[y % 4][x % 4];
-    case Method::bayer8x8:      return bayer8[y % 8][x % 8];
-    case Method::bayer3x3:      return bayer3[y % 3][x % 3];
-    case Method::bayer5x5:      return bayer5[y % 5][x % 5];
-    case Method::bayer6x6:      return bayer6[y % 6][x % 6];
-    case Method::bayer7x7:      return bayer7[y % 7][x % 7];
-    case Method::checker:       return checker_mat[y % 2][x % 2];
-    case Method::h2x4:          return h2x4_mat[y % 4][x % 2];
-    case Method::v4x2:          return v4x2_mat[y % 2][x % 4];
-    case Method::bayer4x2:      return bayer4x2_mat[y % 2][x % 4];
-    case Method::bayer2x4:      return bayer2x4_mat[y % 4][x % 2];
-    case Method::clustered_dot: return clustered_mat[y % 4][x % 4];
-    case Method::line2:         return line2_mat[y % 2][0];
-    case Method::vline2:        return vline2_mat[0][x % 2];
-    case Method::vline_checker: return vline_checker_mat[y % 2][x % 2];
-    case Method::vline4:        return vline4_mat[0][x % 4];
-    case Method::vline8:        return vline8_mat[0][x % 8];
-    case Method::line_checker:  return line_checker_mat[y % 2][x % 2];
-    case Method::line4:         return line4_mat[y % 4][0];
-    case Method::line8:         return line8_mat[y % 8][0];
-    case Method::halftone8x8:  return halftone8x8_mat[y % 8][x % 8];
-    case Method::diagonal8x8:  return diagonal8x8_mat[y % 8][x % 8];
-    case Method::spiral5x5:    return spiral5x5_mat[y % 5][x % 5];
-    case Method::hex8x8:       return hex8x8_mat[y % 8][x % 8];
-    case Method::hex5x5:       return hex5x5_mat[y % 5][x % 5];
-    case Method::blue_noise:   return blue_noise_mat[y % 64][x % 64];
-    case Method::void_cluster: return void_cluster_mat[y % 64][x % 64];
-    case Method::cluster_noise: return cluster_noise_mat[y % 64][x % 64];
-    case Method::fractal16:    return fractal16_mat[y % 16][x % 16];
-    case Method::aseprite_old: return aseprite_old_mat[y % 4][x % 4];
-    case Method::libcaca_3x3:  return libcaca_3x3_mat[y % 3][x % 3];
-    case Method::libcaca_6x6:  return libcaca_6x6_mat[y % 6][x % 6];
-    case Method::pegasus_8x8:  return pegasus_8x8_mat[y % 8][x % 8];
+    case Method::bayer2x2:
+        return bayer2[y % 2][x % 2];
+    case Method::bayer4x4:
+        return bayer4[y % 4][x % 4];
+    case Method::bayer8x8:
+        return bayer8[y % 8][x % 8];
+    case Method::bayer3x3:
+        return bayer3[y % 3][x % 3];
+    case Method::bayer5x5:
+        return bayer5[y % 5][x % 5];
+    case Method::bayer6x6:
+        return bayer6[y % 6][x % 6];
+    case Method::bayer7x7:
+        return bayer7[y % 7][x % 7];
+    case Method::checker:
+        return checker_mat[y % 2][x % 2];
+    case Method::h2x4:
+        return h2x4_mat[y % 4][x % 2];
+    case Method::v4x2:
+        return v4x2_mat[y % 2][x % 4];
+    case Method::bayer4x2:
+        return bayer4x2_mat[y % 2][x % 4];
+    case Method::bayer2x4:
+        return bayer2x4_mat[y % 4][x % 2];
+    case Method::clustered_dot:
+        return clustered_mat[y % 4][x % 4];
+    case Method::line2:
+        return line2_mat[y % 2][0];
+    case Method::vline2:
+        return vline2_mat[0][x % 2];
+    case Method::vline_checker:
+        return vline_checker_mat[y % 2][x % 2];
+    case Method::vline4:
+        return vline4_mat[0][x % 4];
+    case Method::vline8:
+        return vline8_mat[0][x % 8];
+    case Method::line_checker:
+        return line_checker_mat[y % 2][x % 2];
+    case Method::line4:
+        return line4_mat[y % 4][0];
+    case Method::line8:
+        return line8_mat[y % 8][0];
+    case Method::halftone8x8:
+        return halftone8x8_mat[y % 8][x % 8];
+    case Method::diagonal8x8:
+        return diagonal8x8_mat[y % 8][x % 8];
+    case Method::spiral5x5:
+        return spiral5x5_mat[y % 5][x % 5];
+    case Method::hex8x8:
+        return hex8x8_mat[y % 8][x % 8];
+    case Method::hex5x5:
+        return hex5x5_mat[y % 5][x % 5];
+    case Method::blue_noise:
+        return blue_noise_mat[y % 64][x % 64];
+    case Method::void_cluster:
+        return void_cluster_mat[y % 64][x % 64];
+    case Method::cluster_noise:
+        return cluster_noise_mat[y % 64][x % 64];
+    case Method::fractal16:
+        return fractal16_mat[y % 16][x % 16];
+    case Method::aseprite_old:
+        return aseprite_old_mat[y % 4][x % 4];
+    case Method::libcaca_3x3:
+        return libcaca_3x3_mat[y % 3][x % 3];
+    case Method::libcaca_6x6:
+        return libcaca_6x6_mat[y % 6][x % 6];
+    case Method::pegasus_8x8:
+        return pegasus_8x8_mat[y % 8][x % 8];
     case Method::cranley_bayer: {
         // Bayer 8×8 with a deterministic per-tile random rotation
         // (Iñigo Quílez "Free dithering" — Cranley-Patterson rotation).
@@ -3600,17 +3670,29 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         // distinct from the rectangular Bayer/blue-noise look.
         std::size_t cx = x / 8, cy = y / 8;
         auto seed = static_cast<std::uint32_t>(cx * 73856093u ^ cy * 19349663u);
-        seed ^= seed >> 13u; seed *= 0x5BD1E995u; seed ^= seed >> 15u;
+        seed ^= seed >> 13u;
+        seed *= 0x5BD1E995u;
+        seed ^= seed >> 15u;
         int rot = static_cast<int>(seed & 3u);
         float lx = static_cast<float>(x % 8) / 8.0f - 0.5f;
         float ly = static_cast<float>(y % 8) / 8.0f - 0.5f;
         // Apply rotation
         float rx = lx, ry = ly;
         switch (rot) {
-        case 1: rx = -ly; ry = lx; break;
-        case 2: rx = -lx; ry = -ly; break;
-        case 3: rx = ly; ry = -lx; break;
-        default: break;
+        case 1:
+            rx = -ly;
+            ry = lx;
+            break;
+        case 2:
+            rx = -lx;
+            ry = -ly;
+            break;
+        case 3:
+            rx = ly;
+            ry = -lx;
+            break;
+        default:
+            break;
         }
         float r = std::sqrt((rx + 0.5f) * (rx + 0.5f) + (ry + 0.5f) * (ry + 0.5f));
         return (r - 0.5f);
@@ -3652,8 +3734,8 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         // Martin Roberts R2: generalized golden ratio for 2D
         constexpr float phi1 = 0.7548776662f;  // 1/plastic number
         constexpr float phi2 = 0.5698402910f;  // 1/plastic^2
-        float v = std::fmod(static_cast<float>(x) * phi1 +
-                            static_cast<float>(y) * phi2 + 0.5f, 1.0f);
+        float v = std::fmod(static_cast<float>(x) * phi1 + static_cast<float>(y) * phi2 + 0.5f,
+                            1.0f);
         return v - 0.5f;
     }
     case Method::r2_triangle: {
@@ -3663,8 +3745,8 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         // dither evenly instead of clipping to flat color.
         constexpr float phi1 = 0.7548776662f;
         constexpr float phi2 = 0.5698402910f;
-        float u = std::fmod(static_cast<float>(x) * phi1 +
-                            static_cast<float>(y) * phi2 + 0.5f, 1.0f);
+        float u = std::fmod(static_cast<float>(x) * phi1 + static_cast<float>(y) * phi2 + 0.5f,
+                            1.0f);
         // Remap U(0,1) → triangle(-1,1): u<0.5 → -1+sqrt(2u); u>=0.5 → 1-sqrt(2-2u)
         float t;
         if (u < 0.5f) {
@@ -3679,17 +3761,18 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         // the minimum distance to any line, giving pen-and-ink texture
         auto fx = static_cast<float>(x);
         auto fy = static_cast<float>(y);
-        float d0 = std::fmod(fy, 8.0f) / 8.0f;                          // horizontal
-        float d1 = std::fmod(fx, 8.0f) / 8.0f;                          // vertical
-        float d2 = std::fmod((fx + fy) * 0.7071f, 8.0f) / 8.0f;         // 45°
-        float d3 = std::fmod((fx - fy + 512.0f) * 0.7071f, 8.0f) / 8.0f; // 135°
+        float d0 = std::fmod(fy, 8.0f) / 8.0f;                            // horizontal
+        float d1 = std::fmod(fx, 8.0f) / 8.0f;                            // vertical
+        float d2 = std::fmod((fx + fy) * 0.7071f, 8.0f) / 8.0f;           // 45°
+        float d3 = std::fmod((fx - fy + 512.0f) * 0.7071f, 8.0f) / 8.0f;  // 135°
         // Triangle wave each to [0,1]
         d0 = 1.0f - std::abs(d0 * 2.0f - 1.0f);
         d1 = 1.0f - std::abs(d1 * 2.0f - 1.0f);
         d2 = 1.0f - std::abs(d2 * 2.0f - 1.0f);
         d3 = 1.0f - std::abs(d3 * 2.0f - 1.0f);
         // Progressive reveal: horizontal first, then +vertical, +diagonals
-        float t = std::min({d0, d0 * 0.5f + d1 * 0.5f,
+        float t = std::min({d0,
+                            d0 * 0.5f + d1 * 0.5f,
                             d0 * 0.3f + d1 * 0.3f + d2 * 0.4f,
                             d0 * 0.25f + d1 * 0.25f + d2 * 0.25f + d3 * 0.25f});
         return t - 0.5f;
@@ -3721,11 +3804,12 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         ty = ty * ty * (3.0f - 2.0f * ty);
         float v00 = hash(ix, iy), v10 = hash(ix + 1, iy);
         float v01 = hash(ix, iy + 1), v11 = hash(ix + 1, iy + 1);
-        float v = v00 * (1 - tx) * (1 - ty) + v10 * tx * (1 - ty) +
-                  v01 * (1 - tx) * ty + v11 * tx * ty;
+        float v = v00 * (1 - tx) * (1 - ty) + v10 * tx * (1 - ty) + v01 * (1 - tx) * ty +
+                  v11 * tx * ty;
         return v - 0.5f;
     }
-    default:                    return 0.0f;
+    default:
+        return 0.0f;
     }
 }
 
@@ -3809,16 +3893,18 @@ constexpr MethodNameRow kMethodNames[] = {
     {"radial", Method::radial},
     {"value-noise", Method::value_noise},
 };
-} // namespace
+}  // namespace
 
 std::string_view method_name(Method m) noexcept {
-    for (auto& row : kMethodNames) if (row.method == m) return row.name;
+    for (auto& row : kMethodNames)
+        if (row.method == m) return row.name;
     return "";  // caller treats empty as "unknown"; should be unreachable.
 }
 
 std::optional<Method> parse_method_or_null(std::string_view s) noexcept {
-    for (auto& row : kMethodNames) if (row.name == s) return row.method;
+    for (auto& row : kMethodNames)
+        if (row.name == s) return row.method;
     return std::nullopt;
 }
 
-} // namespace png2amiga::dither
+}  // namespace png2amiga::dither

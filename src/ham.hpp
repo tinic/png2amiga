@@ -34,10 +34,10 @@ namespace png2amiga::ham {
 
 // HAM operation codes (stored in the top 2 bits)
 enum class HamOp : std::uint8_t {
-    set_palette = 0b00,     // Use base palette color
-    modify_blue = 0b01,     // Modify blue, keep red/green
-    modify_red  = 0b10,     // Modify red, keep green/blue
-    modify_green = 0b11,    // Modify green, keep red/blue
+    set_palette = 0b00,   // Use base palette color
+    modify_blue = 0b01,   // Modify blue, keep red/green
+    modify_red = 0b10,    // Modify red, keep green/blue
+    modify_green = 0b11,  // Modify green, keep red/blue
 };
 
 // ---------------------------------------------------------------------------
@@ -113,8 +113,10 @@ struct SRGBColor {
     std::uint8_t b;
     std::uint8_t _pad;
     constexpr SRGBColor() noexcept = default;
-    constexpr SRGBColor(std::uint8_t r_, std::uint8_t g_,
-                        std::uint8_t b_, std::uint8_t pad_ = 0) noexcept
+    constexpr SRGBColor(std::uint8_t r_,
+                        std::uint8_t g_,
+                        std::uint8_t b_,
+                        std::uint8_t pad_ = 0) noexcept
         : r{r_}, g{g_}, b{b_}, _pad{pad_} {}
     bool operator==(const SRGBColor& other) const noexcept {
         return r == other.r && g == other.g && b == other.b;
@@ -122,16 +124,16 @@ struct SRGBColor {
 };
 
 struct HamPixelResult {
-    std::uint8_t value;       // encoded HAM op (control<<data_bits | data)
-    SRGBColor    result_color;
-    float        error;       // OKLab² distance to target
+    std::uint8_t value;  // encoded HAM op (control<<data_bits | data)
+    SRGBColor result_color;
+    float error;  // OKLab² distance to target
 };
 
 struct HamPrecomp {
     std::vector<color_space::OKLab> palette_lab;
-    std::vector<std::uint8_t>       expand_lut;
-    std::size_t                     data_bits;
-    std::size_t                     num_data_values;
+    std::vector<std::uint8_t> expand_lut;
+    std::size_t data_bits;
+    std::size_t num_data_values;
 
     HamPrecomp(std::span<const Color3f> palette, std::size_t db);
 };
@@ -139,9 +141,9 @@ struct HamPrecomp {
 SRGBColor linear_to_srgb8(Color3f c);
 
 HamPixelResult encode_ham_pixel(SRGBColor prev,
-                                 Color3f target,
-                                 const HamPrecomp& pre,
-                                 std::span<const SRGBColor> base_srgb);
+                                Color3f target,
+                                const HamPrecomp& pre,
+                                std::span<const SRGBColor> base_srgb);
 
 // Row-level DP beam search HAM encoder with per-strip palettes. Same
 // algorithm encode_ham_copper uses internally for its per-row palette
@@ -157,14 +159,13 @@ struct ScanlineResult {
     float error{};
 };
 enum class HamMetric;  // forward decl; full definition below.
-ScanlineResult encode_scanline_dp_per_strip(
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    std::span<const HamPrecomp> pres,
-    std::span<const std::span<const SRGBColor>> base_srgbs,
-    std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_width,
-    HamMetric metric);
+ScanlineResult encode_scanline_dp_per_strip(std::span<const Color3f> target_row,
+                                            SRGBColor start_color,
+                                            std::span<const HamPrecomp> pres,
+                                            std::span<const std::span<const SRGBColor>> base_srgbs,
+                                            std::span<const std::uint16_t> strip_for_x,
+                                            std::size_t beam_width,
+                                            HamMetric metric);
 
 // Triple-pixel refinement post-pass for per-strip encoded scanlines.
 // Same algorithm as the single-palette refine_triple inside ham.cpp,
@@ -172,15 +173,14 @@ ScanlineResult encode_scanline_dp_per_strip(
 // base_srgbs[strip_for_x[i]]. Triples that straddle a strip boundary
 // pick ops valid for each pixel's own palette. Mutates `values` in
 // place when a strictly-better window is found.
-void refine_scanline_triple_per_strip(
-    std::vector<std::uint8_t>& values,
-    std::span<const Color3f> target_row,
-    SRGBColor start_color,
-    std::span<const HamPrecomp> pres,
-    std::span<const std::span<const SRGBColor>> base_srgbs,
-    std::span<const std::uint16_t> strip_for_x,
-    std::size_t beam_k,
-    HamMetric metric);
+void refine_scanline_triple_per_strip(std::vector<std::uint8_t>& values,
+                                      std::span<const Color3f> target_row,
+                                      SRGBColor start_color,
+                                      std::span<const HamPrecomp> pres,
+                                      std::span<const std::span<const SRGBColor>> base_srgbs,
+                                      std::span<const std::uint16_t> strip_for_x,
+                                      std::size_t beam_k,
+                                      HamMetric metric);
 
 // ---------------------------------------------------------------------------
 // HAM op-selection metric. OKLab² is perceptually-uniform and matches
@@ -201,7 +201,7 @@ enum class HamMetric { srgb_mse, oklab2 };
 // ---------------------------------------------------------------------------
 
 struct HamOptions {
-    std::size_t beam_width = 48;    // beam search width for DP
+    std::size_t beam_width = 48;  // beam search width for DP
 
     // Op-selection metric. See HamMetric for tradeoff.
     HamMetric metric = HamMetric::oklab2;
@@ -267,12 +267,12 @@ struct HamOptions {
 // ---------------------------------------------------------------------------
 
 struct HamResult {
-    bitplane::BitplaneData planes;          // encoded bitplane data
-    std::vector<Color3f> base_palette;      // the base palette chosen
+    bitplane::BitplaneData planes;      // encoded bitplane data
+    std::vector<Color3f> base_palette;  // the base palette chosen
     float total_error{};
 
     // Copper HAM: per-scanline data (empty if not copper)
-    std::vector<std::vector<Color3f>> scanline_palettes;         // effective palette per line
+    std::vector<std::vector<Color3f>> scanline_palettes;            // effective palette per line
     std::vector<std::vector<copper::CopperChange>> copper_changes;  // register changes per line
     std::size_t changes_per_line{};
 
@@ -314,18 +314,16 @@ Result<HamResult> encode_ham_copper(const Image& image,
                                     std::size_t override_changes = 0);
 
 // Render copper HAM with per-scanline palettes
-Result<Image> render_ham_copper(
-    const bitplane::BitplaneData& planes,
-    const std::vector<std::vector<Color3f>>& scanline_palettes,
-    std::size_t data_bits);
+Result<Image> render_ham_copper(const bitplane::BitplaneData& planes,
+                                const std::vector<std::vector<Color3f>>& scanline_palettes,
+                                std::size_t data_bits);
 
 // Convenience wrappers for backwards compatibility and explicit mode selection
 Result<HamResult> encode_ham6(const Image& image,
                               amiga::Chipset chipset = amiga::Chipset::ocs,
                               const HamOptions& opts = {});
 
-Result<HamResult> encode_ham8(const Image& image,
-                              const HamOptions& opts = {});
+Result<HamResult> encode_ham8(const Image& image, const HamOptions& opts = {});
 
 // ---------------------------------------------------------------------------
 // Render HAM bitplane data back to an Image
@@ -347,4 +345,4 @@ Result<Image> render_ham(const bitplane::BitplaneData& planes,
                          std::span<const Color3f> base_palette,
                          std::size_t data_bits);
 
-} // namespace png2amiga::ham
+}  // namespace png2amiga::ham

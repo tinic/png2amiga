@@ -17,8 +17,10 @@
 
 // stb_image_write exposes stbi_zlib_compress in its implementation block,
 // but the public header doesn't forward-declare it. Add a manual extern.
-extern "C" unsigned char* stbi_zlib_compress(unsigned char* data, int data_len,
-                                             int* out_len, int quality);
+extern "C" unsigned char* stbi_zlib_compress(unsigned char* data,
+                                             int data_len,
+                                             int* out_len,
+                                             int quality);
 
 // stbi_write_png_compression_level is already declared by stb_image_write.h
 // (global C variable). We set it to 1 at startup to prioritize throughput
@@ -43,23 +45,22 @@ using StbiPtr = std::unique_ptr<stbi_uc[], StbiFree>;
 
 // Returns true if the byte buffer begins with a WebP RIFF container
 bool is_webp(const unsigned char* data, std::size_t size) noexcept {
-    return size >= 12 &&
-           std::memcmp(data, "RIFF", 4) == 0 &&
-           std::memcmp(data + 8, "WEBP", 4) == 0;
+    return size >= 12 && std::memcmp(data, "RIFF", 4) == 0 && std::memcmp(data + 8, "WEBP", 4) == 0;
 }
 
 // PNG magic bytes.
 bool is_png(const unsigned char* data, std::size_t size) noexcept {
-    static const unsigned char sig[8] = {0x89, 0x50, 0x4E, 0x47,
-                                         0x0D, 0x0A, 0x1A, 0x0A};
+    static const unsigned char sig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
     return size >= 8 && std::memcmp(data, sig, 8) == 0;
 }
 
 // Decode PNG via libspng → RGBA8 buffer (malloc'd, caller uses free()).
 // Returns nullptr on failure; stb_image is used as a fallback for any PNG
 // libspng rejects (should be rare — spng handles the full spec).
-unsigned char* decode_png_spng(const unsigned char* data, std::size_t size,
-                               int* out_w, int* out_h) noexcept {
+unsigned char* decode_png_spng(const unsigned char* data,
+                               std::size_t size,
+                               int* out_w,
+                               int* out_h) noexcept {
     spng_ctx* ctx = spng_ctx_new(0);
     if (!ctx) return nullptr;
     // Limit ridiculous image sizes to prevent OOM.
@@ -67,7 +68,10 @@ unsigned char* decode_png_spng(const unsigned char* data, std::size_t size,
     spng_set_png_buffer(ctx, data, size);
 
     struct spng_ihdr ihdr{};
-    if (spng_get_ihdr(ctx, &ihdr) != 0) { spng_ctx_free(ctx); return nullptr; }
+    if (spng_get_ihdr(ctx, &ihdr) != 0) {
+        spng_ctx_free(ctx);
+        return nullptr;
+    }
 
     std::size_t out_size = 0;
     if (spng_decoded_image_size(ctx, SPNG_FMT_RGBA8, &out_size) != 0) {
@@ -75,47 +79,54 @@ unsigned char* decode_png_spng(const unsigned char* data, std::size_t size,
         return nullptr;
     }
     auto* pixels = static_cast<unsigned char*>(std::malloc(out_size));
-    if (!pixels) { spng_ctx_free(ctx); return nullptr; }
+    if (!pixels) {
+        spng_ctx_free(ctx);
+        return nullptr;
+    }
 
     // SPNG_DECODE_TRNS applies tRNS chunks; _GAMMA we skip — we rely on
     // sRGB interpretation downstream regardless of gamma tags.
-    int err = spng_decode_image(ctx, pixels, out_size, SPNG_FMT_RGBA8,
-                                SPNG_DECODE_TRNS);
+    int err = spng_decode_image(ctx, pixels, out_size, SPNG_FMT_RGBA8, SPNG_DECODE_TRNS);
     spng_ctx_free(ctx);
-    if (err != 0) { std::free(pixels); return nullptr; }
+    if (err != 0) {
+        std::free(pixels);
+        return nullptr;
+    }
 
     *out_w = static_cast<int>(ihdr.width);
     *out_h = static_cast<int>(ihdr.height);
     return pixels;
 }
 
-} // namespace
+}  // namespace
 
 // Decode image bytes. PNG via libspng (~3× faster than stb_image), with
 // stb_image as a fallback for uncommon PNG variants; other formats
 // (JPEG, BMP, TGA, GIF) via stb_image; WebP via libwebp.
 // Returns malloc'd RGBA8 buffer; on failure returns nullptr.
-unsigned char* decode_rgba(const unsigned char* data, std::size_t size,
-                           int* out_w, int* out_h) noexcept {
+unsigned char* decode_rgba(const unsigned char* data,
+                           std::size_t size,
+                           int* out_w,
+                           int* out_h) noexcept {
     if (is_webp(data, size)) {
         return WebPDecodeRGBA(data, size, out_w, out_h);
     }
     if (is_png(data, size)) {
-        if (auto* pixels = decode_png_spng(data, size, out_w, out_h))
-            return pixels;
+        if (auto* pixels = decode_png_spng(data, size, out_w, out_h)) return pixels;
         // Fall through to stb_image if libspng rejected the PNG.
     }
     int channels{};
-    return stbi_load_from_memory(data, static_cast<int>(size),
-                                 out_w, out_h, &channels, 4);
+    return stbi_load_from_memory(data, static_cast<int>(size), out_w, out_h, &channels, 4);
 }
 
 // Free a buffer returned by decode_rgba.
 // WebP uses WebPFree; stb uses stbi_image_free; libspng uses std::free.
 void free_rgba(unsigned char* data, bool was_webp) noexcept {
     if (!data) return;
-    if (was_webp) WebPFree(data);
-    else std::free(data);  // stbi_image_free and our spng path both use free()
+    if (was_webp)
+        WebPFree(data);
+    else
+        std::free(data);  // stbi_image_free and our spng path both use free()
 }
 
 Result<Image> load(std::string_view path) {
@@ -133,24 +144,27 @@ Result<Image> load(std::string_view path) {
     auto file_size = static_cast<std::size_t>(f.tellg());
     f.seekg(0, std::ios::beg);
     std::vector<unsigned char> buf(file_size);
-    f.read(reinterpret_cast<char*>(buf.data()),
-           static_cast<std::streamsize>(file_size));
+    f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(file_size));
 
     int w{}, h{};
     bool webp = is_webp(buf.data(), buf.size());
     auto* raw_data = decode_rgba(buf.data(), buf.size(), &w, &h);
     // Wrap in smart pointer that uses the right free function
     auto deleter = [webp](unsigned char* p) {
-        if (p) { if (webp) WebPFree(p); else stbi_image_free(p); }
+        if (p) {
+            if (webp)
+                WebPFree(p);
+            else
+                stbi_image_free(p);
+        }
     };
     std::unique_ptr<unsigned char, decltype(deleter)> data{raw_data, deleter};
 
     if (!data) {
         return std::unexpected{Error{
             ErrorCode::invalid_png,
-            webp
-                ? std::string("Failed to decode WebP")
-                : std::string("Failed to load: ") + stbi_failure_reason(),
+            webp ? std::string("Failed to decode WebP")
+                 : std::string("Failed to load: ") + stbi_failure_reason(),
         }};
     }
 
@@ -166,7 +180,10 @@ Result<Image> load(std::string_view path) {
             ErrorCode::invalid_dimensions,
             std::format("Image dimensions out of range: {}x{} "
                         "(per-axis max {}, total max {} pixels)",
-                        w, h, kMaxDimension, kMaxPixels),
+                        w,
+                        h,
+                        kMaxDimension,
+                        kMaxPixels),
         }};
     }
 
@@ -190,8 +207,7 @@ Result<Image> load(std::string_view path) {
         std::vector<float> alpha(pixel_count);
         for (std::size_t i = 0; i < pixel_count; ++i) {
             auto base = i * 4;
-            pixels[i] = color_space::srgb_u8_to_linear(
-                raw[base + 0], raw[base + 1], raw[base + 2]);
+            pixels[i] = color_space::srgb_u8_to_linear(raw[base + 0], raw[base + 1], raw[base + 2]);
             alpha[i] = static_cast<float>(raw[base + 3]) / 255.0f;
         }
         return Image{width, height, std::move(pixels), std::move(alpha)};
@@ -199,8 +215,7 @@ Result<Image> load(std::string_view path) {
 
     for (std::size_t i = 0; i < pixel_count; ++i) {
         auto base = i * 4;
-        pixels[i] = color_space::srgb_u8_to_linear(
-            raw[base + 0], raw[base + 1], raw[base + 2]);
+        pixels[i] = color_space::srgb_u8_to_linear(raw[base + 0], raw[base + 1], raw[base + 2]);
     }
 
     return Image{width, height, std::move(pixels)};
@@ -220,16 +235,16 @@ Result<void> save(std::string_view path, const Image& image) {
         auto srgb = color_space::linear_to_srgb(image[x, y]).clamped();
 
         auto base = i * 3;
-        out[base + 0] =
-            static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
-        out[base + 1] =
-            static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
-        out[base + 2] =
-            static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
+        out[base + 0] = static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
+        out[base + 1] = static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
+        out[base + 2] = static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
     }
 
-    int result = stbi_write_png(path_str.c_str(), static_cast<int>(w),
-                                static_cast<int>(h), 3, out.data(),
+    int result = stbi_write_png(path_str.c_str(),
+                                static_cast<int>(w),
+                                static_cast<int>(h),
+                                3,
+                                out.data(),
                                 static_cast<int>(w * 3));
 
     if (result == 0) {
@@ -250,7 +265,7 @@ void png_write_callback(void* context, void* data, int size) {
     vec->insert(vec->end(), bytes, bytes + size);
 }
 
-} // namespace
+}  // namespace
 
 Result<std::vector<std::uint8_t>> encode(const Image& image) {
     auto w = image.width();
@@ -265,18 +280,19 @@ Result<std::vector<std::uint8_t>> encode(const Image& image) {
         auto srgb = color_space::linear_to_srgb(image[x, y]).clamped();
 
         auto base = i * 3;
-        rgb[base + 0] =
-            static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
-        rgb[base + 1] =
-            static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
-        rgb[base + 2] =
-            static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
+        rgb[base + 0] = static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
+        rgb[base + 1] = static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
+        rgb[base + 2] = static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
     }
 
     std::vector<std::uint8_t> png_data;
-    int result = stbi_write_png_to_func(
-        png_write_callback, &png_data, static_cast<int>(w),
-        static_cast<int>(h), 3, rgb.data(), static_cast<int>(w * 3));
+    int result = stbi_write_png_to_func(png_write_callback,
+                                        &png_data,
+                                        static_cast<int>(w),
+                                        static_cast<int>(h),
+                                        3,
+                                        rgb.data(),
+                                        static_cast<int>(w * 3));
 
     if (result == 0) {
         return std::unexpected{Error{
@@ -288,7 +304,8 @@ Result<std::vector<std::uint8_t>> encode(const Image& image) {
     return png_data;
 }
 
-Result<void> save(std::string_view path, const Image& image,
+Result<void> save(std::string_view path,
+                  const Image& image,
                   const std::vector<bool>& transparency_mask) {
     auto path_str = std::string(path);
     auto w = image.width();
@@ -304,17 +321,17 @@ Result<void> save(std::string_view path, const Image& image,
         bool transparent = (i < transparency_mask.size()) && transparency_mask[i];
 
         auto base = i * 4;
-        out[base + 0] =
-            static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
-        out[base + 1] =
-            static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
-        out[base + 2] =
-            static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
+        out[base + 0] = static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
+        out[base + 1] = static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
+        out[base + 2] = static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
         out[base + 3] = transparent ? std::uint8_t{0} : std::uint8_t{255};
     }
 
-    int result = stbi_write_png(path_str.c_str(), static_cast<int>(w),
-                                static_cast<int>(h), 4, out.data(),
+    int result = stbi_write_png(path_str.c_str(),
+                                static_cast<int>(w),
+                                static_cast<int>(h),
+                                4,
+                                out.data(),
                                 static_cast<int>(w * 4));
 
     if (result == 0) {
@@ -342,19 +359,20 @@ Result<std::vector<std::uint8_t>> encode(const Image& image,
         bool transparent = (i < transparency_mask.size()) && transparency_mask[i];
 
         auto base = i * 4;
-        rgba[base + 0] =
-            static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
-        rgba[base + 1] =
-            static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
-        rgba[base + 2] =
-            static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
+        rgba[base + 0] = static_cast<std::uint8_t>(std::lround(srgb.r * 255.0f));
+        rgba[base + 1] = static_cast<std::uint8_t>(std::lround(srgb.g * 255.0f));
+        rgba[base + 2] = static_cast<std::uint8_t>(std::lround(srgb.b * 255.0f));
         rgba[base + 3] = transparent ? std::uint8_t{0} : std::uint8_t{255};
     }
 
     std::vector<std::uint8_t> png_data;
-    int result = stbi_write_png_to_func(
-        png_write_callback, &png_data, static_cast<int>(w),
-        static_cast<int>(h), 4, rgba.data(), static_cast<int>(w * 4));
+    int result = stbi_write_png_to_func(png_write_callback,
+                                        &png_data,
+                                        static_cast<int>(w),
+                                        static_cast<int>(h),
+                                        4,
+                                        rgba.data(),
+                                        static_cast<int>(w * 4));
 
     if (result == 0) {
         return std::unexpected{Error{
@@ -404,7 +422,8 @@ void write_be32(std::vector<std::uint8_t>& out, std::uint32_t v) {
 // Append a PNG chunk: length, type, data, crc(type+data).
 void write_chunk(std::vector<std::uint8_t>& out,
                  const char (&type)[5],
-                 const std::uint8_t* data, std::size_t len) {
+                 const std::uint8_t* data,
+                 std::size_t len) {
     write_be32(out, static_cast<std::uint32_t>(len));
     auto crc_start = out.size();
     out.insert(out.end(), type, type + 4);
@@ -413,13 +432,13 @@ void write_chunk(std::vector<std::uint8_t>& out,
     write_be32(out, crc);
 }
 
-} // namespace
+}  // namespace
 
-Result<std::vector<std::uint8_t>> encode_palettized(
-    const std::vector<std::uint8_t>& indices,
-    const std::vector<Color3f>& palette,
-    std::size_t width, std::size_t height,
-    int transparent_index) {
+Result<std::vector<std::uint8_t>> encode_palettized(const std::vector<std::uint8_t>& indices,
+                                                    const std::vector<Color3f>& palette,
+                                                    std::size_t width,
+                                                    std::size_t height,
+                                                    int transparent_index) {
 
     if (width == 0 || height == 0)
         return std::unexpected{Error{ErrorCode::invalid_dimensions, "zero dim"}};
@@ -468,8 +487,7 @@ Result<std::vector<std::uint8_t>> encode_palettized(
     }
 
     // tRNS: optional, alpha per palette entry (entries beyond array length are opaque)
-    if (transparent_index >= 0 &&
-        static_cast<std::size_t>(transparent_index) < palette.size()) {
+    if (transparent_index >= 0 && static_cast<std::size_t>(transparent_index) < palette.size()) {
         auto ti = static_cast<std::size_t>(transparent_index);
         std::vector<std::uint8_t> trns(ti + 1, 255);
         trns[ti] = 0;
@@ -482,14 +500,11 @@ Result<std::vector<std::uint8_t>> encode_palettized(
         raw.reserve(height * (width + 1));
         for (std::size_t y = 0; y < height; ++y) {
             raw.push_back(0);  // filter type none
-            raw.insert(raw.end(),
-                       indices.data() + y * width,
-                       indices.data() + (y + 1) * width);
+            raw.insert(raw.end(), indices.data() + y * width, indices.data() + (y + 1) * width);
         }
         int zlen = 0;
         unsigned char* zbuf = stbi_zlib_compress(
-            raw.data(), static_cast<int>(raw.size()), &zlen,
-            8 /* level */);
+            raw.data(), static_cast<int>(raw.size()), &zlen, 8 /* level */);
         if (!zbuf) {
             return std::unexpected{Error{ErrorCode::write_failed, "deflate failed"}};
         }
@@ -506,7 +521,8 @@ Result<std::vector<std::uint8_t>> encode_palettized(
 Result<void> save_palettized(std::string_view path,
                              const std::vector<std::uint8_t>& indices,
                              const std::vector<Color3f>& palette,
-                             std::size_t width, std::size_t height,
+                             std::size_t width,
+                             std::size_t height,
                              int transparent_index) {
     auto encoded = encode_palettized(indices, palette, width, height, transparent_index);
     if (!encoded) return std::unexpected{encoded.error()};
@@ -519,4 +535,4 @@ Result<void> save_palettized(std::string_view path,
     return {};
 }
 
-} // namespace png2amiga::png_io
+}  // namespace png2amiga::png_io

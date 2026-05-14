@@ -26,16 +26,16 @@
 #include <vector>
 
 #if defined(__wasm_simd128__)
-    #include <wasm_simd128.h>
-    #define PNG2AMIGA_OKLAB_SIMD_AVX2 0
-    #define PNG2AMIGA_OKLAB_SIMD_WASM 1
+#include <wasm_simd128.h>
+#define PNG2AMIGA_OKLAB_SIMD_AVX2 0
+#define PNG2AMIGA_OKLAB_SIMD_WASM 1
 #elif defined(__AVX2__)
-    #include <immintrin.h>
-    #define PNG2AMIGA_OKLAB_SIMD_AVX2 1
-    #define PNG2AMIGA_OKLAB_SIMD_WASM 0
+#include <immintrin.h>
+#define PNG2AMIGA_OKLAB_SIMD_AVX2 1
+#define PNG2AMIGA_OKLAB_SIMD_WASM 0
 #else
-    #define PNG2AMIGA_OKLAB_SIMD_AVX2 0
-    #define PNG2AMIGA_OKLAB_SIMD_WASM 0
+#define PNG2AMIGA_OKLAB_SIMD_AVX2 0
+#define PNG2AMIGA_OKLAB_SIMD_WASM 0
 #endif
 
 namespace png2amiga::oklab_simd {
@@ -80,15 +80,16 @@ inline void fill(std::span<const png2amiga::color_space::OKLab> pal,
 }
 
 // Convenience overload — no exclusion mask.
-inline void fill(std::span<const png2amiga::color_space::OKLab> pal,
-                 PaletteSoA& s) noexcept {
+inline void fill(std::span<const png2amiga::color_space::OKLab> pal, PaletteSoA& s) noexcept {
     fill(pal, std::vector<bool>{}, s);
 }
 
-struct Result { std::size_t index; float dist_sq; };
+struct Result {
+    std::size_t index;
+    float dist_sq;
+};
 
-inline Result argmin(png2amiga::color_space::OKLab px,
-                     const PaletteSoA& s) noexcept {
+inline Result argmin(png2amiga::color_space::OKLab px, const PaletteSoA& s) noexcept {
     const std::size_t n = s.padded;
     if (n == 0) return {0, 0.0f};
 #if PNG2AMIGA_OKLAB_SIMD_AVX2
@@ -105,22 +106,24 @@ inline Result argmin(png2amiga::color_space::OKLab px,
         __m256 dL = _mm256_sub_ps(pL, cL);
         __m256 da = _mm256_sub_ps(pa, ca);
         __m256 db = _mm256_sub_ps(pb, cb);
-        __m256 d  = _mm256_fmadd_ps(db, db,
-                       _mm256_fmadd_ps(da, da, _mm256_mul_ps(dL, dL)));
+        __m256 d = _mm256_fmadd_ps(db, db, _mm256_fmadd_ps(da, da, _mm256_mul_ps(dL, dL)));
         __m256 lt = _mm256_cmp_ps(d, best_d, _CMP_LT_OQ);
         best_d = _mm256_blendv_ps(best_d, d, lt);
-        __m256i cur_i = _mm256_add_epi32(k01234567,
-                          _mm256_set1_epi32(static_cast<int>(i)));
-        best_i = _mm256_castps_si256(_mm256_blendv_ps(
-            _mm256_castsi256_ps(best_i),
-            _mm256_castsi256_ps(cur_i), lt));
+        __m256i cur_i = _mm256_add_epi32(k01234567, _mm256_set1_epi32(static_cast<int>(i)));
+        best_i = _mm256_castps_si256(
+            _mm256_blendv_ps(_mm256_castsi256_ps(best_i), _mm256_castsi256_ps(cur_i), lt));
     }
-    alignas(32) float dd[8]; alignas(32) std::int32_t ii[8];
+    alignas(32) float dd[8];
+    alignas(32) std::int32_t ii[8];
     _mm256_store_ps(dd, best_d);
     _mm256_store_si256(reinterpret_cast<__m256i*>(ii), best_i);
-    int bk = 0; float bd = dd[0];
+    int bk = 0;
+    float bd = dd[0];
     for (int k = 1; k < 8; ++k)
-        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+        if (dd[k] < bd) {
+            bd = dd[k];
+            bk = k;
+        }
     auto bi = static_cast<std::size_t>(ii[bk]);
     if (bi >= s.n) bi = s.n - 1;
     return {bi, bd};
@@ -128,8 +131,8 @@ inline Result argmin(png2amiga::color_space::OKLab px,
     const v128_t pL = wasm_f32x4_splat(px.L);
     const v128_t pa = wasm_f32x4_splat(px.a);
     const v128_t pb = wasm_f32x4_splat(px.b);
-    v128_t       best_d = wasm_f32x4_splat(std::numeric_limits<float>::max());
-    v128_t       best_i = wasm_i32x4_splat(0);
+    v128_t best_d = wasm_f32x4_splat(std::numeric_limits<float>::max());
+    v128_t best_i = wasm_i32x4_splat(0);
     const v128_t k0123 = wasm_i32x4_make(0, 1, 2, 3);
     for (std::size_t i = 0; i < n; i += 4) {
         v128_t cL = wasm_v128_load(s.L.data() + i);
@@ -138,22 +141,24 @@ inline Result argmin(png2amiga::color_space::OKLab px,
         v128_t dL = wasm_f32x4_sub(pL, cL);
         v128_t da = wasm_f32x4_sub(pa, ca);
         v128_t db = wasm_f32x4_sub(pb, cb);
-        v128_t d  = wasm_f32x4_add(
-                        wasm_f32x4_mul(dL, dL),
-                        wasm_f32x4_add(wasm_f32x4_mul(da, da),
-                                       wasm_f32x4_mul(db, db)));
-        v128_t cur_i = wasm_i32x4_add(k0123,
-                          wasm_i32x4_splat(static_cast<std::int32_t>(i)));
+        v128_t d = wasm_f32x4_add(wasm_f32x4_mul(dL, dL),
+                                  wasm_f32x4_add(wasm_f32x4_mul(da, da), wasm_f32x4_mul(db, db)));
+        v128_t cur_i = wasm_i32x4_add(k0123, wasm_i32x4_splat(static_cast<std::int32_t>(i)));
         v128_t lt = wasm_f32x4_lt(d, best_d);
         best_d = wasm_v128_bitselect(d, best_d, lt);
         best_i = wasm_v128_bitselect(cur_i, best_i, lt);
     }
-    alignas(16) float dd[4]; alignas(16) std::int32_t ii[4];
+    alignas(16) float dd[4];
+    alignas(16) std::int32_t ii[4];
     wasm_v128_store(dd, best_d);
     wasm_v128_store(ii, best_i);
-    int bk = 0; float bd = dd[0];
+    int bk = 0;
+    float bd = dd[0];
     for (int k = 1; k < 4; ++k)
-        if (dd[k] < bd) { bd = dd[k]; bk = k; }
+        if (dd[k] < bd) {
+            bd = dd[k];
+            bk = k;
+        }
     auto bi = static_cast<std::size_t>(ii[bk]);
     if (bi >= s.n) bi = s.n - 1;
     return {bi, bd};
@@ -164,8 +169,11 @@ inline Result argmin(png2amiga::color_space::OKLab px,
         float dL = px.L - s.L[i];
         float da = px.a - s.a[i];
         float db = px.b - s.b[i];
-        float d  = dL*dL + da*da + db*db;
-        if (d < bd) { bd = d; bk = i; }
+        float d = dL * dL + da * da + db * db;
+        if (d < bd) {
+            bd = d;
+            bk = i;
+        }
     }
     if (bk >= s.n) bk = s.n - 1;
     return {bk, bd};

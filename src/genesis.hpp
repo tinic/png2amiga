@@ -78,16 +78,14 @@ struct GenesisResult {
 // Returns the per-tile palette assignment and the 4 palette lines. The
 // `pixel_index` and `preview` fields are NOT populated by this call —
 // caller fills them via the dither driver.
-GenesisResult cluster_tiles_into_palettes(
-    const Image& image, float palette_diversity);
+GenesisResult cluster_tiles_into_palettes(const Image& image, float palette_diversity);
 
 // Same as above + per-tile shadow flag (for S/H modes). After base
 // palettes are picked, each tile chooses normal vs shadowed based on
 // which gives lower nearest-neighbor OKLab² error against the assigned
 // palette. The shadowed palette is the hardware-derived halving of each
 // base entry — no extra CRAM consumed.
-GenesisResult cluster_tiles_into_palettes_sh(
-    const Image& image, float palette_diversity);
+GenesisResult cluster_tiles_into_palettes_sh(const Image& image, float palette_diversity);
 
 // Compute the shadowed view of a base palette line: each entry's RGB
 // halved in sRGB space (matches Genesis VDP's hardware shadow rule
@@ -123,15 +121,15 @@ struct DedupResult {
 
 DedupResult dedup_tiles(std::span<const std::uint8_t> pixel_index,
                         std::span<const std::uint8_t> tile_palette,
-                        std::size_t width, std::size_t height);
+                        std::size_t width,
+                        std::size_t height);
 
 // Encode a single 8×8 tile of palette indices into Genesis VRAM bytes.
 //
 // VRAM tile layout: 32 bytes per tile, row-major. Each row is 4 bytes;
 // each byte holds two 4-bit pixel indices, high nibble = left pixel.
 // `pixel_indices` must be 64 entries in row-major order, values 0..15.
-std::array<std::uint8_t, 32> encode_4bpp_tile(
-    std::span<const std::uint8_t> pixel_indices);
+std::array<std::uint8_t, 32> encode_4bpp_tile(std::span<const std::uint8_t> pixel_indices);
 
 // Encode a single tilemap cell (16-bit, big-endian on the wire):
 //   bit 15:    priority (0 = low, 1 = high)
@@ -139,15 +137,17 @@ std::array<std::uint8_t, 32> encode_4bpp_tile(
 //   bit 12:    vertical flip
 //   bit 11:    horizontal flip
 //   bits 10-0: tile index in VRAM
-constexpr std::uint16_t encode_tilemap_cell(
-    std::uint16_t tile_index, std::uint8_t palette_line,
-    bool h_flip = false, bool v_flip = false, bool priority = false) noexcept {
+constexpr std::uint16_t encode_tilemap_cell(std::uint16_t tile_index,
+                                            std::uint8_t palette_line,
+                                            bool h_flip = false,
+                                            bool v_flip = false,
+                                            bool priority = false) noexcept {
     std::uint16_t cell = static_cast<std::uint16_t>(tile_index & 0x07FF);
     cell |= static_cast<std::uint16_t>((palette_line & 0x03) << 13);
-    if (h_flip)   cell |= 0x0800;
-    if (v_flip)   cell |= 0x1000;
+    if (h_flip) cell |= 0x0800;
+    if (v_flip) cell |= 0x1000;
     if (priority) cell |= 0x8000;
     return cell;
 }
 
-} // namespace png2amiga::genesis
+}  // namespace png2amiga::genesis

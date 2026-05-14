@@ -39,11 +39,11 @@ Defaults defaults_for(const Context& ctx) {
         // HAM8+copper is flat across the entire range — keep 0.70.
         if (ctx.mode == amiga::Mode::ham6) {
             if (ctx.copper) return Defaults{0.82f, 0.04f};  // mean S2 70.09
-            return Defaults{0.80f, 0.08f};                   // mean S2 67.17
+            return Defaults{0.80f, 0.08f};                  // mean S2 67.17
         }
         // HAM8.
-        if (ctx.copper) return Defaults{0.70f, 0.04f};      // mean S2 85.40 (flat)
-        return Defaults{0.82f, 0.10f};                       // mean S2 83.30
+        if (ctx.copper) return Defaults{0.70f, 0.04f};  // mean S2 85.40 (flat)
+        return Defaults{0.82f, 0.10f};                  // mean S2 83.30
     }
 
     // ---- Palette-aware ordered methods: per-(method, mode, depth)
@@ -63,65 +63,91 @@ Defaults defaults_for(const Context& ctx) {
     // surface consistency.
     // Mode-buckets shared across the per-method tables below.
     const bool is_lores = (ctx.mode == amiga::Mode::lores ||
-                            ctx.mode == amiga::Mode::lores_interlace);
+                           ctx.mode == amiga::Mode::lores_interlace);
     const bool is_hires = (ctx.mode == amiga::Mode::hires ||
-                            ctx.mode == amiga::Mode::hires_interlace);
+                           ctx.mode == amiga::Mode::hires_interlace);
     switch (ctx.method) {
     case dither::Method::opt_checker:
         // c64 hires/afli (2 colors per cell) prefer less dither.
-        if (ctx.mode == amiga::Mode::c64_hires ||
-            ctx.mode == amiga::Mode::c64_afli) {
+        if (ctx.mode == amiga::Mode::c64_hires || ctx.mode == amiga::Mode::c64_afli) {
             return Defaults{0.60f, 0.35f};
         }
-        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.80f, 0.35f}; // S2 56.69
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.80f, 0.35f};  // S2 56.69
         if (is_lores) switch (ctx.depth) {
-            case 2: return Defaults{1.00f, 0.35f};   // S2 -41.78
-            case 3: return Defaults{1.00f, 0.35f};   // S2   4.76
-            case 4: return Defaults{0.80f, 0.35f};   // S2  30.43
-            case 5: return Defaults{0.70f, 0.35f};   // S2  51.87
-            default: break;
-        }
+            case 2:
+                return Defaults{1.00f, 0.35f};  // S2 -41.78
+            case 3:
+                return Defaults{1.00f, 0.35f};  // S2   4.76
+            case 4:
+                return Defaults{0.80f, 0.35f};  // S2  30.43
+            case 5:
+                return Defaults{0.70f, 0.35f};  // S2  51.87
+            default:
+                break;
+            }
         if (is_hires) switch (ctx.depth) {
-            case 2: return Defaults{1.00f, 0.35f};   // S2 -45.66
-            case 3: return Defaults{0.90f, 0.35f};   // S2  -5.19
-            case 4: return Defaults{0.80f, 0.35f};   // S2  21.59
-            default: break;
-        }
-        return Defaults{0.85f, 0.35f};   // fallback for unswept modes
+            case 2:
+                return Defaults{1.00f, 0.35f};  // S2 -45.66
+            case 3:
+                return Defaults{0.90f, 0.35f};  // S2  -5.19
+            case 4:
+                return Defaults{0.80f, 0.35f};  // S2  21.59
+            default:
+                break;
+            }
+        return Defaults{0.85f, 0.35f};  // fallback for unswept modes
     case dither::Method::opt_line:
-        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.80f, 0.35f}; // S2 55.65
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.80f, 0.35f};  // S2 55.65
         if (is_lores) switch (ctx.depth) {
-            case 2: return Defaults{0.95f, 0.35f};
-            case 3: return Defaults{1.00f, 0.35f};
-            case 4: return Defaults{1.00f, 0.35f};
-            case 5: return Defaults{0.70f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.95f, 0.35f};
+            case 3:
+                return Defaults{1.00f, 0.35f};
+            case 4:
+                return Defaults{1.00f, 0.35f};
+            case 5:
+                return Defaults{0.70f, 0.35f};
+            default:
+                break;
+            }
         if (is_hires) switch (ctx.depth) {
-            case 2: return Defaults{1.00f, 0.35f};
-            case 3: return Defaults{0.90f, 0.35f};
-            case 4: return Defaults{0.80f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{1.00f, 0.35f};
+            case 3:
+                return Defaults{0.90f, 0.35f};
+            case 4:
+                return Defaults{0.80f, 0.35f};
+            default:
+                break;
+            }
         return Defaults{0.80f, 0.35f};
     case dither::Method::opt_line_checker:
         // S2-flat at 0.80 across all amiga (mode, depth) combos.
         return Defaults{0.80f, 0.35f};
     case dither::Method::knoll:
-        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.70f, 0.35f}; // S2 55.01
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.70f, 0.35f};  // S2 55.01
         if (is_lores) switch (ctx.depth) {
-            case 2: return Defaults{0.80f, 0.35f};
-            case 3: return Defaults{0.60f, 0.35f};
-            case 4: return Defaults{0.80f, 0.35f};
-            case 5: return Defaults{0.60f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.80f, 0.35f};
+            case 3:
+                return Defaults{0.60f, 0.35f};
+            case 4:
+                return Defaults{0.80f, 0.35f};
+            case 5:
+                return Defaults{0.60f, 0.35f};
+            default:
+                break;
+            }
         if (is_hires) switch (ctx.depth) {
-            case 2: return Defaults{0.80f, 0.35f};
-            case 3: return Defaults{0.80f, 0.35f};
-            case 4: return Defaults{0.80f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.80f, 0.35f};
+            case 3:
+                return Defaults{0.80f, 0.35f};
+            case 4:
+                return Defaults{0.80f, 0.35f};
+            default:
+                break;
+            }
         return Defaults{0.75f, 0.35f};
     case dither::Method::tri_tone:
         // S2-flat at 0.80 across all amiga (mode, depth) combos.
@@ -129,52 +155,79 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::yliluoma1:
         // Strongest depth-sensitivity in the family — drops from 0.95
         // at d=2 to 0.50 at d=5+.
-        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.50f, 0.35f}; // S2 34.56
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.50f, 0.35f};  // S2 34.56
         if (is_lores) switch (ctx.depth) {
-            case 2: return Defaults{0.95f, 0.35f};
-            case 3: return Defaults{0.60f, 0.35f};
-            case 4: return Defaults{0.50f, 0.35f};
-            case 5: return Defaults{0.50f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.95f, 0.35f};
+            case 3:
+                return Defaults{0.60f, 0.35f};
+            case 4:
+                return Defaults{0.50f, 0.35f};
+            case 5:
+                return Defaults{0.50f, 0.35f};
+            default:
+                break;
+            }
         if (is_hires) switch (ctx.depth) {
-            case 2: return Defaults{0.90f, 0.35f};
-            case 3: return Defaults{0.70f, 0.35f};
-            case 4: return Defaults{0.50f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.90f, 0.35f};
+            case 3:
+                return Defaults{0.70f, 0.35f};
+            case 4:
+                return Defaults{0.50f, 0.35f};
+            default:
+                break;
+            }
         return Defaults{0.50f, 0.35f};
     case dither::Method::yliluoma:
-        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.70f, 0.35f}; // S2 48.08
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.70f, 0.35f};  // S2 48.08
         if (is_lores) switch (ctx.depth) {
-            case 2: return Defaults{0.85f, 0.35f};
-            case 3: return Defaults{0.70f, 0.35f};
-            case 4: return Defaults{0.60f, 0.35f};
-            case 5: return Defaults{0.60f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.85f, 0.35f};
+            case 3:
+                return Defaults{0.70f, 0.35f};
+            case 4:
+                return Defaults{0.60f, 0.35f};
+            case 5:
+                return Defaults{0.60f, 0.35f};
+            default:
+                break;
+            }
         if (is_hires) switch (ctx.depth) {
-            case 2: return Defaults{0.85f, 0.35f};
-            case 3: return Defaults{0.70f, 0.35f};
-            case 4: return Defaults{0.70f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.85f, 0.35f};
+            case 3:
+                return Defaults{0.70f, 0.35f};
+            case 4:
+                return Defaults{0.70f, 0.35f};
+            default:
+                break;
+            }
         return Defaults{0.70f, 0.35f};
     case dither::Method::yliluoma2:
-        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.60f, 0.35f}; // S2 55.60
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.60f, 0.35f};  // S2 55.60
         if (is_lores) switch (ctx.depth) {
-            case 2: return Defaults{0.80f, 0.35f};
-            case 3: return Defaults{0.60f, 0.35f};
-            case 4: return Defaults{0.70f, 0.35f};
-            case 5: return Defaults{0.60f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.80f, 0.35f};
+            case 3:
+                return Defaults{0.60f, 0.35f};
+            case 4:
+                return Defaults{0.70f, 0.35f};
+            case 5:
+                return Defaults{0.60f, 0.35f};
+            default:
+                break;
+            }
         if (is_hires) switch (ctx.depth) {
-            case 2: return Defaults{0.80f, 0.35f};
-            case 3: return Defaults{0.70f, 0.35f};
-            case 4: return Defaults{0.70f, 0.35f};
-            default: break;
-        }
+            case 2:
+                return Defaults{0.80f, 0.35f};
+            case 3:
+                return Defaults{0.70f, 0.35f};
+            case 4:
+                return Defaults{0.70f, 0.35f};
+            default:
+                break;
+            }
         return Defaults{0.65f, 0.35f};
     // Error diffusion + structure-aware methods: fall through to the
     // mode-context tables below — per-mode tuning wins when there's an
@@ -197,14 +250,14 @@ Defaults defaults_for(const Context& ctx) {
     case dither::Method::zhoufang:
     case dither::Method::dbs:
         break;
-    default: break;
+    default:
+        break;
     }
 
     // ---- strips: layered on top of sliced. -----------------------------------
     if (ctx.scap) {
-        if (ctx.dpf)        return Defaults{0.9f, 0.10f};   // 8 colors
-        if (ctx.mode == amiga::Mode::ehb)
-                            return Defaults{0.9f, 0.10f};   // 64 effective
+        if (ctx.dpf) return Defaults{0.9f, 0.10f};                       // 8 colors
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.9f, 0.10f};  // 64 effective
         return kFallback;
     }
 
@@ -213,32 +266,44 @@ Defaults defaults_for(const Context& ctx) {
 
     // ---- sliced (per-line palette evolution, no strips) ----------------------
     if (ctx.copper) {
-        if (ctx.mode == amiga::Mode::ehb)
-                            return Defaults{0.9f, 0.20f};   // mean 37.83
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.9f, 0.20f};  // mean 37.83
         if (ctx.mode == amiga::Mode::lores) {
             if (ctx.chipset == amiga::Chipset::aga) {
                 switch (ctx.depth) {
-                    case 4: return Defaults{1.0f, 0.10f};   // mean 33.20
-                    case 5: return Defaults{1.0f, 0.10f};   // mean 37.19
-                    case 6: return Defaults{1.0f, 0.06f};   // mean 44.33
-                    case 8: return Defaults{1.0f, 0.04f};   // mean 48.14
-                    default: break;
+                case 4:
+                    return Defaults{1.0f, 0.10f};  // mean 33.20
+                case 5:
+                    return Defaults{1.0f, 0.10f};  // mean 37.19
+                case 6:
+                    return Defaults{1.0f, 0.06f};  // mean 44.33
+                case 8:
+                    return Defaults{1.0f, 0.04f};  // mean 48.14
+                default:
+                    break;
                 }
             } else {
                 switch (ctx.depth) {
-                    case 2: return Defaults{1.0f, 0.10f};   // mean 21.76
-                    case 3: return Defaults{1.0f, 0.20f};   // mean 26.89
-                    case 4: return Defaults{1.0f, 0.04f};   // mean 30.92
-                    case 5: return Defaults{1.0f, 0.10f};   // mean 35.61
-                    default: break;
+                case 2:
+                    return Defaults{1.0f, 0.10f};  // mean 21.76
+                case 3:
+                    return Defaults{1.0f, 0.20f};  // mean 26.89
+                case 4:
+                    return Defaults{1.0f, 0.04f};  // mean 30.92
+                case 5:
+                    return Defaults{1.0f, 0.10f};  // mean 35.61
+                default:
+                    break;
                 }
             }
         }
         if (ctx.mode == amiga::Mode::hires) {
             switch (ctx.depth) {
-                case 3: return Defaults{1.0f, 0.10f};       // mean 26.48
-                case 4: return Defaults{1.0f, 0.20f};       // mean 30.68
-                default: break;
+            case 3:
+                return Defaults{1.0f, 0.10f};  // mean 26.48
+            case 4:
+                return Defaults{1.0f, 0.20f};  // mean 30.68
+            default:
+                break;
             }
         }
         return kFallback;
@@ -260,27 +325,37 @@ Defaults defaults_for(const Context& ctx) {
     // granularity (electrichues02 / chuck31 / lovers). error_clamp left
     // at the previous PSNR-tuned values for d=2 and d=4 — those weren't
     // re-explored in this pass and are conservative defaults.
-    if (ctx.mode == amiga::Mode::ehb) return Defaults{0.74f, 0.35f};       // S2 59.37 (was 0.80)
-    if (ctx.mode == amiga::Mode::lores ||
-        ctx.mode == amiga::Mode::lores_interlace) {
+    if (ctx.mode == amiga::Mode::ehb) return Defaults{0.74f, 0.35f};  // S2 59.37 (was 0.80)
+    if (ctx.mode == amiga::Mode::lores || ctx.mode == amiga::Mode::lores_interlace) {
         switch (ctx.depth) {
-            case 1: return Defaults{0.90f, 0.35f};                          // unswept (1-bit)
-            case 2: return Defaults{0.76f, 0.10f};                          // S2 -33.92 (was 0.70)
-            case 3: return Defaults{0.72f, 0.35f};                          // S2   6.59 (was 0.60)
-            case 4: return Defaults{0.72f, 0.20f};                          // S2  34.51 (was 0.70)
-            case 5: return Defaults{0.72f, 0.35f};                          // S2  56.81 (was 0.70)
-            case 6: return Defaults{0.78f, 0.35f};                          // S2  72.74 (was 0.70, AGA only)
-            default: break;
+        case 1:
+            return Defaults{0.90f, 0.35f};  // unswept (1-bit)
+        case 2:
+            return Defaults{0.76f, 0.10f};  // S2 -33.92 (was 0.70)
+        case 3:
+            return Defaults{0.72f, 0.35f};  // S2   6.59 (was 0.60)
+        case 4:
+            return Defaults{0.72f, 0.20f};  // S2  34.51 (was 0.70)
+        case 5:
+            return Defaults{0.72f, 0.35f};  // S2  56.81 (was 0.70)
+        case 6:
+            return Defaults{0.78f, 0.35f};  // S2  72.74 (was 0.70, AGA only)
+        default:
+            break;
         }
     }
-    if (ctx.mode == amiga::Mode::hires ||
-        ctx.mode == amiga::Mode::hires_interlace) {
+    if (ctx.mode == amiga::Mode::hires || ctx.mode == amiga::Mode::hires_interlace) {
         switch (ctx.depth) {
-            case 1: return Defaults{0.85f, 0.35f};                          // unswept (1-bit)
-            case 2: return Defaults{0.72f, 0.35f};                          // S2 -39.05 (was 0.70)
-            case 3: return Defaults{0.70f, 0.35f};                          // S2  -0.07 (was 0.60)
-            case 4: return Defaults{0.76f, 0.35f};                          // S2  33.49 (was 0.70)
-            default: break;
+        case 1:
+            return Defaults{0.85f, 0.35f};  // unswept (1-bit)
+        case 2:
+            return Defaults{0.72f, 0.35f};  // S2 -39.05 (was 0.70)
+        case 3:
+            return Defaults{0.70f, 0.35f};  // S2  -0.07 (was 0.60)
+        case 4:
+            return Defaults{0.76f, 0.35f};  // S2  33.49 (was 0.70)
+        default:
+            break;
         }
     }
 
@@ -289,20 +364,31 @@ Defaults defaults_for(const Context& ctx) {
     // chunky / DOS / SNES / Genesis / etc.). These are the lores-d=5 sweep
     // optima at 0.02 granularity (commit history for details).
     switch (ctx.method) {
-    case dither::Method::floyd_steinberg: return Defaults{0.76f, 0.35f};  // S2 56.80
-    case dither::Method::atkinson:        return Defaults{0.74f, 0.35f};  // S2 56.53
-    case dither::Method::sierra_lite:     return Defaults{0.76f, 0.35f};  // S2 56.79
-    case dither::Method::stucki:          return Defaults{0.74f, 0.35f};  // S2 56.33
-    case dither::Method::jarvis:          return Defaults{0.83f, 0.35f};  // S2 56.11
-    case dither::Method::gilbert:         return Defaults{0.72f, 0.35f};  // S2 56.16
-    case dither::Method::riemersma:       return Defaults{0.52f, 0.35f};  // S2 48.96
-    case dither::Method::structure_fs:    return Defaults{0.80f, 0.35f};  // legacy
-    case dither::Method::contrast_fs:     return Defaults{1.00f, 0.35f};  // legacy
-    case dither::Method::zhoufang:        return Defaults{0.60f, 0.35f};  // legacy
-    default: break;
+    case dither::Method::floyd_steinberg:
+        return Defaults{0.76f, 0.35f};  // S2 56.80
+    case dither::Method::atkinson:
+        return Defaults{0.74f, 0.35f};  // S2 56.53
+    case dither::Method::sierra_lite:
+        return Defaults{0.76f, 0.35f};  // S2 56.79
+    case dither::Method::stucki:
+        return Defaults{0.74f, 0.35f};  // S2 56.33
+    case dither::Method::jarvis:
+        return Defaults{0.83f, 0.35f};  // S2 56.11
+    case dither::Method::gilbert:
+        return Defaults{0.72f, 0.35f};  // S2 56.16
+    case dither::Method::riemersma:
+        return Defaults{0.52f, 0.35f};  // S2 48.96
+    case dither::Method::structure_fs:
+        return Defaults{0.80f, 0.35f};  // legacy
+    case dither::Method::contrast_fs:
+        return Defaults{1.00f, 0.35f};  // legacy
+    case dither::Method::zhoufang:
+        return Defaults{0.60f, 0.35f};  // legacy
+    default:
+        break;
     }
 
     return kFallback;
 }
 
-} // namespace png2amiga::dither_tuning
+}  // namespace png2amiga::dither_tuning

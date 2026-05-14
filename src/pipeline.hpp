@@ -24,7 +24,9 @@
 #include <utility>
 #include <vector>
 
-namespace png2amiga::api { struct Options; }
+namespace png2amiga::api {
+struct Options;
+}
 
 namespace png2amiga::pipeline {
 
@@ -37,10 +39,8 @@ std::string derive_symbol_name(std::string_view path);
 // and an empty/unrecognized request defaults to OCS. Used by both CLI
 // (Config::chipset is std::optional<Chipset>) and WASM (Options::chipset
 // is a string parsed from JS).
-amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested,
-                               amiga::Mode mode);
-amiga::Chipset resolve_chipset(std::string_view requested,
-                               amiga::Mode mode);
+amiga::Chipset resolve_chipset(std::optional<amiga::Chipset> requested, amiga::Mode mode);
+amiga::Chipset resolve_chipset(std::string_view requested, amiga::Mode mode);
 
 // Source-of-truth for the "core" CHeaderOptions fields. Each output site
 // fills this from its current context (Config / api::Options / pipeline
@@ -49,15 +49,15 @@ amiga::Chipset resolve_chipset(std::string_view requested,
 // frames) are still set on the returned struct by the caller — those
 // vary too much per-site to live here.
 struct ChOptsBase {
-    std::string_view output_path = {};     // for symbol derivation when override empty
-    std::string_view symbol_override = {}; // empty => derive from output_path
+    std::string_view output_path = {};      // for symbol derivation when override empty
+    std::string_view symbol_override = {};  // empty => derive from output_path
     bool hires = false;
     bool interlace = false;
     bool aga = false;
     bool fade_in = false;
     bool dpf = false;
     bool interleaved = false;
-    std::size_t total_unique_colors = 0;   // 0 = caller didn't compute
+    std::size_t total_unique_colors = 0;  // 0 = caller didn't compute
 };
 
 cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base);
@@ -103,7 +103,7 @@ struct PipelineResult {
     std::vector<std::vector<strips::ScapMove>> strips_line_moves;
     std::size_t copper_num_colors{};
     std::size_t changes_per_line{};
-    std::size_t max_moves_per_line{};   // worst-case copper MOVEs/line for chip-RAM sizing
+    std::size_t max_moves_per_line{};  // worst-case copper MOVEs/line for chip-RAM sizing
 
     // strips-only stats. Populated when scap=true; zero otherwise. Match
     // the same fields on strips::ScapResult so the CLI / web UI can show
@@ -172,7 +172,7 @@ struct PipelineResult {
     std::size_t tile_data_bytes = 0;  // unique_tiles × bytes-per-tile
     // Genesis split byte streams for SGDK header generation. raw_frame
     // remains the single concatenated stream for .bin output.
-    std::vector<std::uint8_t>  genesis_tile_bytes;     // unique_tiles × 32
+    std::vector<std::uint8_t> genesis_tile_bytes;      // unique_tiles × 32
     std::vector<std::uint16_t> genesis_tilemap_cells;  // total_cells
     std::vector<std::uint16_t> genesis_palette_words;  // 64 BGR333 words
 
@@ -189,8 +189,7 @@ struct PipelineResult {
 // (e.g. 8 of 32 slots/line) hints the quantiser is allocating slots
 // the dither doesn't end up using.
 float compute_avg_palette_used_per_line(
-    const Image& rendered,
-    const std::vector<std::vector<Color3f>>& scanline_palettes) noexcept;
+    const Image& rendered, const std::vector<std::vector<Color3f>>& scanline_palettes) noexcept;
 
 // Single per-mode preview-render dispatcher. Picks the right back-end:
 //   - HAM (no scanline palettes)        → ham::render_ham
@@ -220,14 +219,13 @@ float compute_avg_palette_used_per_line(
 // where each back-end honors them. The deferred OCS preview-vs-chip
 // gradient bug (REFACTOR_PLAN.md target #3 step 5) lives entirely in
 // the render_copper_capped branch.
-Result<Image> render_preview(
-    const bitplane::BitplaneData& planes,
-    std::span<const Color3f> base_palette,
-    bool is_ham,
-    bool is_lace,
-    amiga::Chipset chipset,
-    const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr,
-    std::size_t sliced_changes_per_line = 0);
+Result<Image> render_preview(const bitplane::BitplaneData& planes,
+                             std::span<const Color3f> base_palette,
+                             bool is_ham,
+                             bool is_lace,
+                             amiga::Chipset chipset,
+                             const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr,
+                             std::size_t sliced_changes_per_line = 0);
 
 // Build a deterministically jittered copy of `source` (per-pixel
 // hash-based perturbation, ±0.5*amplitude/255 per channel). Used by
@@ -238,15 +236,13 @@ Result<Image> render_preview(
 // AGA where continuous-RGB median-cut already gives natural variation
 // and big nudges can drift the picked palette far enough to introduce
 // per-line swap shimmer the rendered-preview PSNR doesn't capture).
-Image jitter_image(const Image& source, std::uint32_t seed,
-                   float amplitude = 1.0f);
+Image jitter_image(const Image& source, std::uint32_t seed, float amplitude = 1.0f);
 
 // Run body(i) for i in [0, n) — parallel-dispatched across
 // hardware_concurrency() jthreads on native, sequential under WASM.
 // Used by best_sweep but generic; any caller with N independent
 // units of work can use it.
-void parallel_for(std::size_t n,
-                  std::function<void(std::size_t)> body);
+void parallel_for(std::size_t n, std::function<void(std::size_t)> body);
 
 // Multi-restart parallel sweep for any --best sliced-aware encoder.
 // Sweeps:
@@ -274,16 +270,15 @@ void parallel_for(std::size_t n,
 // strips EHB and plain sliced use 8 (32-color and 16-color palettes
 // have shallower basins). User explicitly OK'd unbounded compute on
 // best, so the large trial count (5×4×N + 1) is a feature.
-template <typename T, typename EncodeFn, typename RenderedFn>
-std::optional<T> best_sweep(
-    const Image& source,
-    const dither::Settings& base_settings,
-    int base_diversity,
-    int jitter_count,
-    EncodeFn encode_fn,
-    RenderedFn rendered_fn,
-    const std::function<void(float, std::string_view)>& on_progress,
-    float jitter_amplitude = 1.0f) {
+template<typename T, typename EncodeFn, typename RenderedFn>
+std::optional<T> best_sweep(const Image& source,
+                            const dither::Settings& base_settings,
+                            int base_diversity,
+                            int jitter_count,
+                            EncodeFn encode_fn,
+                            RenderedFn rendered_fn,
+                            const std::function<void(float, std::string_view)>& on_progress,
+                            float jitter_amplitude = 1.0f) {
     struct Trial {
         dither::Settings settings;
         int diversity;
@@ -291,22 +286,20 @@ std::optional<T> best_sweep(
     };
     std::vector<Trial> trials;
     trials.push_back({base_settings, base_diversity, 0});  // baseline
-    const float strengths[] = { 0.7f, 0.85f, 1.0f, 1.15f, 1.3f };
+    const float strengths[] = {0.7f, 0.85f, 1.0f, 1.15f, 1.3f};
     // {3, 4} only — a 32-image × 8-depth × 7-diversity sweep on
     // test-suite-lores + examples confirmed d∈{0,1,2} never wins on
     // mean SSIMULACRA2 at any depth. d=4 is the per-depth peak from
     // depth 4 upward; d=3 stays in the sweep so individual images that
     // happen to favor a slightly less aggressive reseed still get
     // sampled. Trims --best trial count by 2× over the previous {0..3}.
-    const int diversities[] = { 3, 4 };
+    const int diversities[] = {3, 4};
     for (auto s : strengths) {
         for (auto div : diversities) {
             for (int js = 0; js < jitter_count; ++js) {
                 auto d = base_settings;
-                d.strength = std::clamp(
-                    base_settings.strength * s, 0.0f, 2.0f);
-                int retry_div = (base_diversity > 0)
-                    ? base_diversity : div;
+                d.strength = std::clamp(base_settings.strength * s, 0.0f, 2.0f);
+                int retry_div = (base_diversity > 0) ? base_diversity : div;
                 trials.push_back({d, retry_div, js});
             }
         }
@@ -314,9 +307,8 @@ std::optional<T> best_sweep(
 
     std::vector<Image> jittered(static_cast<std::size_t>(jitter_count));
     for (int js = 1; js < jitter_count; ++js) {
-        jittered[static_cast<std::size_t>(js)] =
-            jitter_image(source, static_cast<std::uint32_t>(js),
-                         jitter_amplitude);
+        jittered[static_cast<std::size_t>(js)] = jitter_image(
+            source, static_cast<std::uint32_t>(js), jitter_amplitude);
     }
 
     std::optional<T> best;
@@ -327,8 +319,8 @@ std::optional<T> best_sweep(
     parallel_for(total, [&](std::size_t i) {
         const auto& t = trials[i];
         const Image& trial_input = (t.jitter_seed == 0)
-            ? source
-            : jittered[static_cast<std::size_t>(t.jitter_seed)];
+                                       ? source
+                                       : jittered[static_cast<std::size_t>(t.jitter_seed)];
         auto retry = encode_fn(trial_input, t.settings, t.diversity);
         auto n_done = done.fetch_add(1) + 1;
         float label_best = -1.0f;
@@ -336,8 +328,7 @@ std::optional<T> best_sweep(
         if (retry) {
             const Image& rendered = rendered_fn(*retry);
             float score = ssimulacra2::compute(
-                source.pixels(), rendered.pixels(),
-                source.width(), source.height());
+                source.pixels(), rendered.pixels(), source.width(), source.height());
             std::lock_guard lk(best_mu);
             if (!best.has_value() || score > best_psnr) {
                 best = std::move(*retry);
@@ -355,15 +346,12 @@ std::optional<T> best_sweep(
         if (on_progress) {
             char label[48];
             if (have_best) {
-                std::snprintf(label, sizeof(label),
-                              "best  S2=%.2f",
-                              static_cast<double>(label_best));
+                std::snprintf(
+                    label, sizeof(label), "best  S2=%.2f", static_cast<double>(label_best));
             } else {
                 std::snprintf(label, sizeof(label), "best");
             }
-            on_progress(static_cast<float>(n_done) /
-                        static_cast<float>(total),
-                        label);
+            on_progress(static_cast<float>(n_done) / static_cast<float>(total), label);
         }
     });
     if (on_progress) on_progress(1.0f, "done");

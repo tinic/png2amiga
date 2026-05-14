@@ -36,16 +36,14 @@ enum class Format : unsigned char {
 };
 
 Format detect_format(std::span<const std::uint8_t> data) {
-    if (data.size() < 4)
-        return Format::unknown;
+    if (data.size() < 4) return Format::unknown;
 
     // GIMP Palette: starts with "GIMP Palette"
     constexpr std::string_view gimp_magic = "GIMP Palette";
     if (data.size() >= gimp_magic.size()) {
-        auto header = std::string_view(
-            reinterpret_cast<const char*>(data.data()), gimp_magic.size());
-        if (header == gimp_magic)
-            return Format::gimp_gpl;
+        auto header = std::string_view(reinterpret_cast<const char*>(data.data()),
+                                       gimp_magic.size());
+        if (header == gimp_magic) return Format::gimp_gpl;
     }
 
     // JSON: first non-whitespace character is `{` or `[`. Matches the
@@ -70,8 +68,7 @@ Format detect_format(std::span<const std::uint8_t> data) {
             if (data[i] & 0xF0) valid_ocs = false;  // top nibble must be 0
             if (data[i] < 0x20 || data[i] > 0x7E) looks_binary = true;
         }
-        if (valid_ocs && looks_binary)
-            return Format::ocs_binary;
+        if (valid_ocs && looks_binary) return Format::ocs_binary;
     }
 
     // Fallback: try text hex (lines of hex colors)
@@ -83,10 +80,8 @@ Format detect_format(std::span<const std::uint8_t> data) {
 // ---------------------------------------------------------------------------
 
 std::uint32_t read_u32_be(const std::uint8_t* p) {
-    return (static_cast<std::uint32_t>(p[0]) << 24) |
-           (static_cast<std::uint32_t>(p[1]) << 16) |
-           (static_cast<std::uint32_t>(p[2]) << 8) |
-           static_cast<std::uint32_t>(p[3]);
+    return (static_cast<std::uint32_t>(p[0]) << 24) | (static_cast<std::uint32_t>(p[1]) << 16) |
+           (static_cast<std::uint32_t>(p[2]) << 8) | static_cast<std::uint32_t>(p[3]);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +96,7 @@ std::uint32_t read_u32_be(const std::uint8_t* p) {
 // ---------------------------------------------------------------------------
 
 Result<Palette> parse_gimp_gpl(std::span<const std::uint8_t> data) {
-    auto text = std::string_view(
-        reinterpret_cast<const char*>(data.data()), data.size());
+    auto text = std::string_view(reinterpret_cast<const char*>(data.data()), data.size());
 
     Palette pal;
     pal.name = "gimp";
@@ -115,8 +109,7 @@ Result<Palette> parse_gimp_gpl(std::span<const std::uint8_t> data) {
         auto line = text.substr(pos, eol - pos);
         pos = eol + 1;
         // Strip trailing \r
-        if (!line.empty() && line.back() == '\r')
-            line.remove_suffix(1);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
         return line;
     };
 
@@ -133,7 +126,7 @@ Result<Palette> parse_gimp_gpl(std::span<const std::uint8_t> data) {
     while (pos < text.size()) {
         auto line = next_line();
         if (line.empty()) continue;
-        if (line.starts_with('#')) continue;       // comment
+        if (line.starts_with('#')) continue;  // comment
         if (line.starts_with("Name:")) {
             pal.name = std::string(line.substr(5));
             // Trim leading whitespace
@@ -149,7 +142,8 @@ Result<Palette> parse_gimp_gpl(std::span<const std::uint8_t> data) {
         auto end = p + line.size();
 
         auto skip_ws = [&]() {
-            while (p < end && (*p == ' ' || *p == '\t')) ++p;
+            while (p < end && (*p == ' ' || *p == '\t'))
+                ++p;
         };
 
         skip_ws();
@@ -163,17 +157,15 @@ Result<Palette> parse_gimp_gpl(std::span<const std::uint8_t> data) {
             return true;
         };
 
-        if (!parse_int(r) || !parse_int(g) || !parse_int(b))
-            continue;  // skip malformed lines
+        if (!parse_int(r) || !parse_int(g) || !parse_int(b)) continue;  // skip malformed lines
 
         r = std::clamp(r, 0, 255);
         g = std::clamp(g, 0, 255);
         b = std::clamp(b, 0, 255);
 
-        pal.colors.push_back(color_space::srgb_u8_to_linear(
-            static_cast<std::uint8_t>(r),
-            static_cast<std::uint8_t>(g),
-            static_cast<std::uint8_t>(b)));
+        pal.colors.push_back(color_space::srgb_u8_to_linear(static_cast<std::uint8_t>(r),
+                                                            static_cast<std::uint8_t>(g),
+                                                            static_cast<std::uint8_t>(b)));
     }
 
     if (pal.colors.empty()) {
@@ -271,8 +263,7 @@ Result<Palette> parse_iff_cmap(std::span<const std::uint8_t> data) {
 // ---------------------------------------------------------------------------
 
 Result<Palette> parse_text_hex(std::span<const std::uint8_t> data) {
-    auto text = std::string_view(
-        reinterpret_cast<const char*>(data.data()), data.size());
+    auto text = std::string_view(reinterpret_cast<const char*>(data.data()), data.size());
 
     Palette pal;
     pal.name = "hex";
@@ -285,8 +276,7 @@ Result<Palette> parse_text_hex(std::span<const std::uint8_t> data) {
         pos = eol + 1;
 
         // Strip trailing \r
-        if (!line.empty() && line.back() == '\r')
-            line.remove_suffix(1);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
 
         // Trim leading/trailing whitespace
         while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
@@ -320,9 +310,7 @@ Result<Palette> parse_text_hex(std::span<const std::uint8_t> data) {
         if (!valid) continue;
 
         std::uint32_t rgb = 0;
-        auto [ptr, ec] = std::from_chars(hex_str.data(),
-                                          hex_str.data() + hex_str.size(),
-                                          rgb, 16);
+        auto [ptr, ec] = std::from_chars(hex_str.data(), hex_str.data() + hex_str.size(), rgb, 16);
         if (ec != std::errc{}) continue;
 
         auto r = static_cast<std::uint8_t>((rgb >> 16) & 0xFF);
@@ -377,8 +365,7 @@ Result<std::vector<std::uint8_t>> read_file(std::string_view path) {
 
     file.seekg(0);
     std::vector<std::uint8_t> data(static_cast<std::size_t>(size));
-    file.read(reinterpret_cast<char*>(data.data()),
-              static_cast<std::streamsize>(size));
+    file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
 
     return data;
 }
@@ -402,7 +389,7 @@ Result<Palette> parse_ocs_binary(std::span<const std::uint8_t> data) {
     return pal;
 }
 
-} // namespace
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -438,18 +425,18 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
     pal.name = "json";
     nlohmann::json doc;
     try {
-        doc = nlohmann::json::parse(data.begin(), data.end(),
-                                     /*cb=*/nullptr,
-                                     /*allow_exceptions=*/true,
-                                     /*ignore_comments=*/true);
+        doc = nlohmann::json::parse(data.begin(),
+                                    data.end(),
+                                    /*cb=*/nullptr,
+                                    /*allow_exceptions=*/true,
+                                    /*ignore_comments=*/true);
     } catch (const nlohmann::json::parse_error& e) {
         return std::unexpected{Error{
             ErrorCode::invalid_png,
             std::string{"JSON palette: parse error — "} + e.what(),
         }};
     }
-    if (!doc.is_object() || !doc.contains("palette") ||
-        !doc["palette"].is_array()) {
+    if (!doc.is_object() || !doc.contains("palette") || !doc["palette"].is_array()) {
         return std::unexpected{Error{
             ErrorCode::invalid_png,
             "JSON palette: top-level object must have an array "
@@ -459,38 +446,32 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
     const auto& arr = doc["palette"];
     int slot = 0;
     for (const auto& entry : arr) {
-        if (!entry.is_object() || !entry.contains("rgb") ||
-            !entry["rgb"].is_string()) {
+        if (!entry.is_object() || !entry.contains("rgb") || !entry["rgb"].is_string()) {
             return std::unexpected{Error{
                 ErrorCode::invalid_png,
-                std::string{"JSON palette: slot "} +
-                    std::to_string(slot) +
+                std::string{"JSON palette: slot "} + std::to_string(slot) +
                     " missing string \"rgb\"",
             }};
         }
         std::string hex = entry["rgb"].get<std::string>();
-        if (hex.size() != 6 ||
-            !std::all_of(hex.begin(), hex.end(), [](char c) {
+        if (hex.size() != 6 || !std::all_of(hex.begin(), hex.end(), [](char c) {
                 return std::isxdigit(static_cast<unsigned char>(c));
             })) {
             return std::unexpected{Error{
                 ErrorCode::invalid_png,
-                std::string{"JSON palette: slot "} +
-                    std::to_string(slot) +
-                    " malformed rgb \"" + hex + "\"",
+                std::string{"JSON palette: slot "} + std::to_string(slot) + " malformed rgb \"" +
+                    hex + "\"",
             }};
         }
         std::uint32_t rgb = 0;
         std::from_chars(hex.data(), hex.data() + 6, rgb, 16);
-        pal.colors.push_back(color_space::srgb_u8_to_linear(
-            static_cast<std::uint8_t>((rgb >> 16) & 0xFF),
-            static_cast<std::uint8_t>((rgb >>  8) & 0xFF),
-            static_cast<std::uint8_t>(rgb & 0xFF)));
-        if (entry.contains("locked") && entry["locked"].is_boolean() &&
-            entry["locked"].get<bool>())
+        pal.colors.push_back(
+            color_space::srgb_u8_to_linear(static_cast<std::uint8_t>((rgb >> 16) & 0xFF),
+                                           static_cast<std::uint8_t>((rgb >> 8) & 0xFF),
+                                           static_cast<std::uint8_t>(rgb & 0xFF)));
+        if (entry.contains("locked") && entry["locked"].is_boolean() && entry["locked"].get<bool>())
             pal.locked_indices.push_back(slot);
-        if (entry.contains("reserved") &&
-            entry["reserved"].is_boolean() &&
+        if (entry.contains("reserved") && entry["reserved"].is_boolean() &&
             entry["reserved"].get<bool>())
             pal.reserved_indices.push_back(slot);
         ++slot;
@@ -513,14 +494,12 @@ Result<Palette> parse_json_palette(std::span<const std::uint8_t> data) {
         }
         int pin_slot = 0;
         for (const auto& pin : doc["pins"]) {
-            if (!pin.is_object() ||
-                !pin.contains("idx") || !pin["idx"].is_number_integer() ||
-                !pin.contains("x")   || !pin["x"].is_number_integer() ||
-                !pin.contains("y")   || !pin["y"].is_number_integer()) {
+            if (!pin.is_object() || !pin.contains("idx") || !pin["idx"].is_number_integer() ||
+                !pin.contains("x") || !pin["x"].is_number_integer() || !pin.contains("y") ||
+                !pin["y"].is_number_integer()) {
                 return std::unexpected{Error{
                     ErrorCode::invalid_png,
-                    std::string{"JSON palette: pin "} +
-                        std::to_string(pin_slot) +
+                    std::string{"JSON palette: pin "} + std::to_string(pin_slot) +
                         " requires integer idx/x/y",
                 }};
             }
@@ -572,8 +551,7 @@ Result<Palette> load_palette_from_memory(std::span<const std::uint8_t> data) {
 // Write OCS 12-bit palette
 // ---------------------------------------------------------------------------
 
-Result<std::vector<std::uint8_t>> encode_ocs_palette(
-    std::span<const Color3f> colors) {
+Result<std::vector<std::uint8_t>> encode_ocs_palette(std::span<const Color3f> colors) {
     std::vector<std::uint8_t> data;
     data.reserve(colors.size() * 2);
 
@@ -587,8 +565,7 @@ Result<std::vector<std::uint8_t>> encode_ocs_palette(
     return data;
 }
 
-Result<void> save_ocs_palette(std::string_view path,
-                              std::span<const Color3f> colors) {
+Result<void> save_ocs_palette(std::string_view path, std::span<const Color3f> colors) {
     auto data = encode_ocs_palette(colors);
     if (!data) return std::unexpected{data.error()};
 
@@ -613,4 +590,4 @@ Result<void> save_ocs_palette(std::string_view path,
     return {};
 }
 
-} // namespace png2amiga::palette_io
+}  // namespace png2amiga::palette_io

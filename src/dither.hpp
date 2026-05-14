@@ -27,49 +27,49 @@ enum class Method : unsigned char {
     bayer2x2,
     bayer4x4,
     bayer8x8,
-    bayer3x3,         // dispersed-dot 3×3 (non-power-of-2)
-    bayer5x5,         // dispersed-dot 5×5 (non-power-of-2)
-    bayer6x6,         // dispersed-dot 6×6 (non-power-of-2)
-    bayer7x7,         // dispersed-dot 7×7 (non-power-of-2)
-    checker,          // 2x2 checkerboard
-    clustered_dot,    // 4x4 clustered dot
+    bayer3x3,       // dispersed-dot 3×3 (non-power-of-2)
+    bayer5x5,       // dispersed-dot 5×5 (non-power-of-2)
+    bayer6x6,       // dispersed-dot 6×6 (non-power-of-2)
+    bayer7x7,       // dispersed-dot 7×7 (non-power-of-2)
+    checker,        // 2x2 checkerboard
+    clustered_dot,  // 4x4 clustered dot
 
     // Non-square ordered (for non-square pixel modes)
-    h2x4,             // 2 wide x 4 tall (lores interlace, wide pixels)
-    v4x2,             // 4 wide x 2 tall (hires, tall pixels)
-    bayer4x2,         // Bayer 4 wide x 2 tall (hires)
-    bayer2x4,         // Bayer 2 wide x 4 tall (interlace)
+    h2x4,      // 2 wide x 4 tall (lores interlace, wide pixels)
+    v4x2,      // 4 wide x 2 tall (hires, tall pixels)
+    bayer4x2,  // Bayer 4 wide x 2 tall (hires)
+    bayer2x4,  // Bayer 2 wide x 4 tall (interlace)
 
     // Horizontal lines
-    line2,            // 1x2 alternating rows
-    line_checker,     // 2x2 line-biased
-    line4,            // 1x4 horizontal gradient
-    line8,            // 1x8 horizontal gradient
+    line2,         // 1x2 alternating rows
+    line_checker,  // 2x2 line-biased
+    line4,         // 1x4 horizontal gradient
+    line8,         // 1x8 horizontal gradient
 
     // Vertical lines
-    vline2,           // 2x1 alternating columns
-    vline_checker,    // 2x2 column-biased
-    vline4,           // 4x1 vertical gradient
-    vline8,           // 8x1 finest vertical gradient
+    vline2,         // 2x1 alternating columns
+    vline_checker,  // 2x2 column-biased
+    vline4,         // 4x1 vertical gradient
+    vline8,         // 8x1 finest vertical gradient
 
     // Additional ordered dithering
-    halftone8x8,      // 45-degree clustered dot halftone (newspaper look)
-    diagonal8x8,      // 45-degree diagonal clustered dot (64 levels)
-    spiral5x5,        // spiral dot growth from center
-    hex8x8,           // non-rectangular hexagonal tiling
-    hex5x5,           // non-rectangular slanted square tiling
-    blue_noise,       // 64x64 blue noise (film-grain look, no visible pattern)
-    void_cluster,     // 64x64 Ulichney void-and-cluster (per-rank optimal)
-    cluster_noise,    // 64x64 cluster blue noise (wider clusters, libcaca-style)
-    fractal16,        // 16×16 self-nested Bayer recursion (Niklasson/Obra Dinn)
-    ign,              // Interleaved Gradient Noise (analytical, no LUT)
-    ign_triangle,     // IGN with U(0,1)→triangle(-1,1) remap
-    white_noise,      // pure random hash per pixel (film grain)
-    r2_sequence,      // Martin Roberts R2 low-discrepancy sequence
-    r2_triangle,      // R2 with U(0,1)→triangle(-1,1) remap (Wronski 2016)
-    crosshatch,       // pen-and-ink crosshatching
-    radial,           // concentric circles (engraving look)
-    value_noise,      // coherent noise (organic clumping)
+    halftone8x8,    // 45-degree clustered dot halftone (newspaper look)
+    diagonal8x8,    // 45-degree diagonal clustered dot (64 levels)
+    spiral5x5,      // spiral dot growth from center
+    hex8x8,         // non-rectangular hexagonal tiling
+    hex5x5,         // non-rectangular slanted square tiling
+    blue_noise,     // 64x64 blue noise (film-grain look, no visible pattern)
+    void_cluster,   // 64x64 Ulichney void-and-cluster (per-rank optimal)
+    cluster_noise,  // 64x64 cluster blue noise (wider clusters, libcaca-style)
+    fractal16,      // 16×16 self-nested Bayer recursion (Niklasson/Obra Dinn)
+    ign,            // Interleaved Gradient Noise (analytical, no LUT)
+    ign_triangle,   // IGN with U(0,1)→triangle(-1,1) remap
+    white_noise,    // pure random hash per pixel (film grain)
+    r2_sequence,    // Martin Roberts R2 low-discrepancy sequence
+    r2_triangle,    // R2 with U(0,1)→triangle(-1,1) remap (Wronski 2016)
+    crosshatch,     // pen-and-ink crosshatching
+    radial,         // concentric circles (engraving look)
+    value_noise,    // coherent noise (organic clumping)
 
     // Error diffusion
     floyd_steinberg,
@@ -79,28 +79,28 @@ enum class Method : unsigned char {
     jarvis,
 
     // Advanced error diffusion
-    gilbert,          // Gilbert space-filling-curve error diffusion
-    riemersma,        // Riemersma curve dither (exponential-decay error queue)
-    structure_fs,     // FS with Laplacian-modulated threshold (dalpil/structure-aware)
-    contrast_fs,      // FS with local-contrast modulated threshold (Mould 2009)
-    zhoufang,         // Zhou-Fang adaptive-coefficient ED (intensity-dependent)
-    yliluoma,         // Yliluoma/Knoll palette-aware pattern dither (8×8 Bayer)
-    yliluoma2,        // Yliluoma method 2 — gamma-aware variant
-    opt_checker,      // Optimal Checker — palette-aware 2-color greedy pair on a 2×2 cell
-    opt_line,         // Optimal Line — 2-color pair, y&1 phase (CRT-scanline friendly)
-    opt_line_checker, // Optimal Line-Checker — 4-color plan, line_checker 2×2 phase
-    opt_vline,        // Optimal VLine — 2-color pair, x&1 phase (vertical-stripe variant)
-    opt_vline_checker,// Optimal VLine-Checker — 4-color plan, vline_checker 2×2 phase
-    knoll,            // Knoll pattern dither — N=16 plan on 4×4 Bayer (US 6,606,166 expired 2019)
-    tri_tone,         // Yliluoma tri-tone — 2×2 cell, 3 colors (one 50%, two 25%)
-    yliluoma1,        // Yliluoma Algorithm 1 — exhaustive pair × ratio search w/ luma threshold
-    aseprite_old,     // Aseprite "old" 4×4 — hand-tuned, checker-biased
-    libcaca_3x3,      // libcaca hand-tuned 3×3 dispersed dot
-    libcaca_6x6,      // libcaca hand-tuned 6×6 dispersed dot
-    pegasus_8x8,      // Pegasus/REXPaint 8×8 mosaic (center-biased)
-    cranley_bayer,    // Bayer 8×8 with Cranley-Patterson random offset (Quilez)
-    quasicrystal,     // Sum-of-cosines quasicrystal pattern (Sloan 2010)
-    truchet,          // Truchet-tile threshold pattern
+    gilbert,            // Gilbert space-filling-curve error diffusion
+    riemersma,          // Riemersma curve dither (exponential-decay error queue)
+    structure_fs,       // FS with Laplacian-modulated threshold (dalpil/structure-aware)
+    contrast_fs,        // FS with local-contrast modulated threshold (Mould 2009)
+    zhoufang,           // Zhou-Fang adaptive-coefficient ED (intensity-dependent)
+    yliluoma,           // Yliluoma/Knoll palette-aware pattern dither (8×8 Bayer)
+    yliluoma2,          // Yliluoma method 2 — gamma-aware variant
+    opt_checker,        // Optimal Checker — palette-aware 2-color greedy pair on a 2×2 cell
+    opt_line,           // Optimal Line — 2-color pair, y&1 phase (CRT-scanline friendly)
+    opt_line_checker,   // Optimal Line-Checker — 4-color plan, line_checker 2×2 phase
+    opt_vline,          // Optimal VLine — 2-color pair, x&1 phase (vertical-stripe variant)
+    opt_vline_checker,  // Optimal VLine-Checker — 4-color plan, vline_checker 2×2 phase
+    knoll,              // Knoll pattern dither — N=16 plan on 4×4 Bayer (US 6,606,166 expired 2019)
+    tri_tone,           // Yliluoma tri-tone — 2×2 cell, 3 colors (one 50%, two 25%)
+    yliluoma1,          // Yliluoma Algorithm 1 — exhaustive pair × ratio search w/ luma threshold
+    aseprite_old,       // Aseprite "old" 4×4 — hand-tuned, checker-biased
+    libcaca_3x3,        // libcaca hand-tuned 3×3 dispersed dot
+    libcaca_6x6,        // libcaca hand-tuned 6×6 dispersed dot
+    pegasus_8x8,        // Pegasus/REXPaint 8×8 mosaic (center-biased)
+    cranley_bayer,      // Bayer 8×8 with Cranley-Patterson random offset (Quilez)
+    quasicrystal,       // Sum-of-cosines quasicrystal pattern (Sloan 2010)
+    truchet,            // Truchet-tile threshold pattern
 
     // Direct Binary Search (Allebach et al. ~1992) — the perceptual-
     // optimum halftone via greedy-descent on an HVS-blurred OKLab cost.
@@ -119,7 +119,7 @@ struct Settings {
     Method method = Method::floyd_steinberg;
     float strength = 1.0f;      // 0.0 = no dithering, 1.0 = full
     float error_clamp = 0.12f;  // max error magnitude per OKLab channel
-    bool serpentine = true;      // alternate scan direction (error diffusion)
+    bool serpentine = true;     // alternate scan direction (error diffusion)
 };
 
 // ---------------------------------------------------------------------------
@@ -141,9 +141,7 @@ struct DitherResult {
     float total_error{};                // sum of perceptual squared error
 };
 
-DitherResult apply(const Image& image,
-                   std::span<const Color3f> palette,
-                   const Settings& settings);
+DitherResult apply(const Image& image, std::span<const Color3f> palette, const Settings& settings);
 
 // ---------------------------------------------------------------------------
 // Returns true if the method is an ordered (non-error-diffusion) method.
@@ -166,8 +164,13 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::line_checker:
     case Method::line4:
     case Method::line8:
-    case Method::vline2: case Method::vline_checker: case Method::vline4: case Method::vline8:
-    case Method::v4x2: case Method::bayer4x2: case Method::bayer2x4:
+    case Method::vline2:
+    case Method::vline_checker:
+    case Method::vline4:
+    case Method::vline8:
+    case Method::v4x2:
+    case Method::bayer4x2:
+    case Method::bayer2x4:
     case Method::halftone8x8:
     case Method::diagonal8x8:
     case Method::spiral5x5:
@@ -254,71 +257,80 @@ bool needs_discrete_palette(Method method);
 // Per-pixel Yliluoma quantizer. Builds the 64-step mixing plan against
 // `palette_lab`, sorts by luma, and picks via Bayer8 at absolute (x,y).
 // `mode2` selects Yliluoma method 2 (luma-weighted distance).
-std::uint8_t pick_yliluoma_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y,
-    bool mode2, float strength);
+std::uint8_t pick_yliluoma_index(const png2amiga::color_space::OKLab& target,
+                                 std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                 std::size_t x,
+                                 std::size_t y,
+                                 bool mode2,
+                                 float strength);
 
 // Per-pixel Yliluoma 2×2-checker variant — brute-force optimal palette
 // PAIR whose average matches target, picked by (x+y)&1 phase. CRT-
 // friendly; phosphor + scanline blur averages adjacent pixels.
 // `strength` scales how often the phase wins vs collapsing to nearest
 // (1.0 = full checker, 0.0 = no visible dither).
-std::uint8_t pick_opt_checker_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_opt_checker_index(const png2amiga::color_space::OKLab& target,
+                                    std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                    std::size_t x,
+                                    std::size_t y,
+                                    float strength);
 
 // Same 2-color optimal-pair pick as opt_checker, but the phase
 // function is y & 1 — alternating rows. Each scanline alternates
 // between the pair's darker and brighter member. Aligns with CRT
 // scanline structure; no left/right asymmetry.
-std::uint8_t pick_opt_line_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_opt_line_index(const png2amiga::color_space::OKLab& target,
+                                 std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                 std::size_t x,
+                                 std::size_t y,
+                                 float strength);
 
 // 4-color greedy plan on a 2×2 cell, indexed by the line_checker
 // threshold matrix — row-major dominant with a subtle column shift
 // inside each row. Produces a 4-tone line-tinted pattern, not a
 // 2-tone line.
-std::uint8_t pick_opt_line_checker_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_opt_line_checker_index(const png2amiga::color_space::OKLab& target,
+                                         std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                         std::size_t x,
+                                         std::size_t y,
+                                         float strength);
 
 // Same as pick_opt_line_index but phase = (x & 1) instead of (y & 1).
 // Produces a vertical-stripe pattern (column-dominant) — visually
 // preferred on tall pixels (hires modes) and orthogonal to the
 // CRT-scanline-friendly horizontal version.
-std::uint8_t pick_opt_vline_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_opt_vline_index(const png2amiga::color_space::OKLab& target,
+                                  std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                  std::size_t x,
+                                  std::size_t y,
+                                  float strength);
 
 // Same as pick_opt_line_checker_index but uses vline_checker_mat so
 // the dominance axis is columns (not rows) with a subtle row shift.
 std::uint8_t pick_opt_vline_checker_index(
     const png2amiga::color_space::OKLab& target,
     std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+    std::size_t x,
+    std::size_t y,
+    float strength);
 
 // Per-pixel Knoll pattern dither (Photoshop's "Pattern", US patent
 // 6,606,166 expired 2019). N=16 greedy mixing plan on a 4×4 Bayer cell.
-std::uint8_t pick_knoll_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_knoll_index(const png2amiga::color_space::OKLab& target,
+                              std::span<const png2amiga::color_space::OKLab> palette_lab,
+                              std::size_t x,
+                              std::size_t y,
+                              float strength);
 
 // Tri-tone — Yliluoma's named 2×2 / 3-color preset. One palette entry
 // at 50% (Bayer cells 0 and 1) plus two more at 25% each (cells 2 and
 // 3). Implemented as a 4-step greedy plan with palette repeats allowed,
 // indexed by Bayer 2×2.
-std::uint8_t pick_tri_tone_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_tri_tone_index(const png2amiga::color_space::OKLab& target,
+                                 std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                 std::size_t x,
+                                 std::size_t y,
+                                 float strength);
 
 // ---------------------------------------------------------------------------
 // Direct Binary Search post-pass refinement for tiled-palette modes
@@ -335,14 +347,12 @@ std::uint8_t pick_tri_tone_index(
 // ---------------------------------------------------------------------------
 
 using PalettePerPixel =
-    std::function<std::span<const png2amiga::color_space::OKLab>(
-        std::size_t x, std::size_t y)>;
+    std::function<std::span<const png2amiga::color_space::OKLab>(std::size_t x, std::size_t y)>;
 
-void apply_dbs_post_pass(
-    const Image& image,
-    std::vector<std::uint8_t>& indices,  // in/out, size w*h
-    const PalettePerPixel& palette_for_pixel,
-    int max_sweeps = 8);
+void apply_dbs_post_pass(const Image& image,
+                         std::vector<std::uint8_t>& indices,  // in/out, size w*h
+                         const PalettePerPixel& palette_for_pixel,
+                         int max_sweeps = 8);
 
 // ---------------------------------------------------------------------------
 // diffuse_raw_buffer — single source of truth for per-pixel error-diffusion
@@ -376,13 +386,10 @@ struct PickResult {
     float ostro_threshold = 0.5f;
 };
 
-using PixelPicker = std::function<PickResult(
-    const color_space::OKLab& target,
-    std::size_t x, std::size_t y)>;
+using PixelPicker =
+    std::function<PickResult(const color_space::OKLab& target, std::size_t x, std::size_t y)>;
 
-float diffuse_raw_buffer(const Image& image,
-                         const Settings& settings,
-                         const PixelPicker& pick);
+float diffuse_raw_buffer(const Image& image, const Settings& settings, const PixelPicker& pick);
 
 // True if `method` actually performs error diffusion (has an FS-style
 // kernel and isn't an ordered or palette-aware family). Centralised
@@ -403,14 +410,15 @@ bool uses_error_diffusion(Method method);
 //
 // Replaces the duplicate 25-line if(yli)/else(nearest+second) blocks
 // in api.cpp / copper.cpp / scap.cpp×2 / main.cpp.
-float pick_palette_index_with_ostro(
-    Method method,
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength,
-    std::size_t k_min,
-    std::size_t& chosen_index,
-    png2amiga::color_space::OKLab& chosen_lab);
+float pick_palette_index_with_ostro(Method method,
+                                    const png2amiga::color_space::OKLab& target,
+                                    std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                    std::size_t x,
+                                    std::size_t y,
+                                    float strength,
+                                    std::size_t k_min,
+                                    std::size_t& chosen_index,
+                                    png2amiga::color_space::OKLab& chosen_lab);
 
 // Dispatch helper for the yliluoma family — picks the right
 // per-pixel quantizer (opt_checker/opt_line/opt_line_checker/knoll/
@@ -420,11 +428,12 @@ float pick_palette_index_with_ostro(
 // method falls back to plain yliluoma alg-2 greedy. Replaces the
 // 8-case switch that was duplicated in copper.cpp / scap.cpp /
 // ham.cpp / main.cpp / api.cpp.
-std::uint8_t pick_yliluoma_family_index(
-    Method method,
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_yliluoma_family_index(Method method,
+                                        const png2amiga::color_space::OKLab& target,
+                                        std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                        std::size_t x,
+                                        std::size_t y,
+                                        float strength);
 
 // Yliluoma Algorithm 1 — exhaustive search over (Color1, Color2, ratio)
 // triples. For each unique palette pair (i ≤ j) and each ratio r in
@@ -432,10 +441,11 @@ std::uint8_t pick_yliluoma_family_index(
 // against target; pick the best triple. A luminance-difference cutoff
 // trims the pair list ("Improvement to Algorithm 1") so the search
 // stays tractable on 32+ color palettes.
-std::uint8_t pick_yliluoma1_index(
-    const png2amiga::color_space::OKLab& target,
-    std::span<const png2amiga::color_space::OKLab> palette_lab,
-    std::size_t x, std::size_t y, float strength);
+std::uint8_t pick_yliluoma1_index(const png2amiga::color_space::OKLab& target,
+                                  std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                  std::size_t x,
+                                  std::size_t y,
+                                  float strength);
 
 // ----------------------------------------------------------------------
 // Canonical string ↔ Method registry.
@@ -460,4 +470,4 @@ std::uint8_t pick_yliluoma1_index(
 std::string_view method_name(Method m) noexcept;
 std::optional<Method> parse_method_or_null(std::string_view s) noexcept;
 
-} // namespace png2amiga::dither
+}  // namespace png2amiga::dither

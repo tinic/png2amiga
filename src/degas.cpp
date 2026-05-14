@@ -23,8 +23,7 @@ std::uint16_t to_ste_palette_word(Color3f color) {
     auto twist = [](unsigned v) -> unsigned {
         return ((v & 0x7) << 1) | ((v >> 3) & 1);
     };
-    return static_cast<std::uint16_t>(
-        (twist(r4) << 8) | (twist(g4) << 4) | twist(b4));
+    return static_cast<std::uint16_t>((twist(r4) << 8) | (twist(g4) << 4) | twist(b4));
 }
 
 std::uint16_t to_stf_palette_word(Color3f color) {
@@ -35,19 +34,18 @@ std::uint16_t to_stf_palette_word(Color3f color) {
     return static_cast<std::uint16_t>((r3 << 8) | (g3 << 4) | b3);
 }
 
-Result<std::vector<std::uint8_t>> encode(
-    const bitplane::BitplaneData& planes,
-    std::span<const Color3f> palette,
-    amiga::Mode mode) {
+Result<std::vector<std::uint8_t>> encode(const bitplane::BitplaneData& planes,
+                                         std::span<const Color3f> palette,
+                                         amiga::Mode mode) {
 
     if (!amiga::is_atari(mode)) {
-        return std::unexpected{Error{ErrorCode::unsupported_mode,
-            "Degas output requires an Atari ST/STE mode"}};
+        return std::unexpected{
+            Error{ErrorCode::unsupported_mode, "Degas output requires an Atari ST/STE mode"}};
     }
 
     if (planes.layout != bitplane::Layout::word_interleaved) {
         return std::unexpected{Error{ErrorCode::invalid_dimensions,
-            "Degas output requires word-interleaved bitplane data"}};
+                                     "Degas output requires word-interleaved bitplane data"}};
     }
 
     bool is_med = (mode == amiga::Mode::stf_med || mode == amiga::Mode::ste_med);
@@ -62,10 +60,9 @@ Result<std::vector<std::uint8_t>> encode(
 
     // Palette: 16 entries, 2 bytes each (big-endian)
     for (std::size_t i = 0; i < 16 && i < palette.size(); ++i) {
-        auto word = is_stf
-            ? to_stf_palette_word(palette[i])
-            : to_ste_palette_word(palette[i]);  // STE: 12-bit twisted encoding
-        out[2 + i * 2]     = static_cast<std::uint8_t>(word >> 8);
+        auto word = is_stf ? to_stf_palette_word(palette[i])
+                           : to_ste_palette_word(palette[i]);  // STE: 12-bit twisted encoding
+        out[2 + i * 2] = static_cast<std::uint8_t>(word >> 8);
         out[2 + i * 2 + 1] = static_cast<std::uint8_t>(word & 0xFF);
     }
 
@@ -86,12 +83,11 @@ Result<void> save(std::string_view path,
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
     if (!file) {
-        return std::unexpected{Error{ErrorCode::write_failed,
-            "Failed to open file: " + path_str}};
+        return std::unexpected{Error{ErrorCode::write_failed, "Failed to open file: " + path_str}};
     }
     file.write(reinterpret_cast<const char*>(data->data()),
                static_cast<std::streamsize>(data->size()));
     return {};
 }
 
-} // namespace png2amiga::degas
+}  // namespace png2amiga::degas

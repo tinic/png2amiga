@@ -15,9 +15,9 @@
 #define CA_PRIVATE_IMPLEMENTATION
 
 #if PNG2AMIGA_HAVE_METAL
-    #include <Foundation/Foundation.hpp>
-    #include <Metal/Metal.hpp>
-    #include "quantize_metal_metallib.h"   // generated: byte array
+#include <Foundation/Foundation.hpp>
+#include <Metal/Metal.hpp>
+#include "quantize_metal_metallib.h"  // generated: byte array
 #endif
 
 #include <algorithm>
@@ -34,10 +34,19 @@
 #if !PNG2AMIGA_HAVE_METAL
 
 extern "C" {
-bool png2amiga_metal_available_c() noexcept { return false; }
-int png2amiga_quantize_metal_c(const float*, std::size_t, std::size_t,
-                                int, int, std::uint32_t,
-                                float*, std::size_t*) noexcept { return 1; }
+bool png2amiga_metal_available_c() noexcept {
+    return false;
+}
+int png2amiga_quantize_metal_c(const float*,
+                               std::size_t,
+                               std::size_t,
+                               int,
+                               int,
+                               std::uint32_t,
+                               float*,
+                               std::size_t*) noexcept {
+    return 1;
+}
 }
 
 #else  // ============================================================
@@ -49,23 +58,25 @@ int png2amiga_quantize_metal_c(const float*, std::size_t, std::size_t,
 
 namespace {
 
-struct OKLab { float L, a, b; };
+struct OKLab {
+    float L, a, b;
+};
 
 float srgb_to_linear_f(float s) noexcept {
-    return s <= 0.04045f ? s / 12.92f
-                          : std::pow((s + 0.055f) / 1.055f, 2.4f);
+    return s <= 0.04045f ? s / 12.92f : std::pow((s + 0.055f) / 1.055f, 2.4f);
 }
 
 float linear_to_srgb_f(float l) noexcept {
-    return l <= 0.0031308f ? l * 12.92f
-                            : 1.055f * std::pow(l, 1.0f / 2.4f) - 0.055f;
+    return l <= 0.0031308f ? l * 12.92f : 1.055f * std::pow(l, 1.0f / 2.4f) - 0.055f;
 }
 
 OKLab linear_to_oklab(float r, float g, float b) noexcept {
     float l = 0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b;
     float m = 0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b;
     float s = 0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b;
-    l = std::cbrt(l); m = std::cbrt(m); s = std::cbrt(s);
+    l = std::cbrt(l);
+    m = std::cbrt(m);
+    s = std::cbrt(s);
     return {
         0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s,
         1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s,
@@ -80,14 +91,14 @@ void oklab_to_linear_rgb(OKLab lab, float& r, float& g, float& b) noexcept {
     float l = l_ * l_ * l_;
     float m = m_ * m_ * m_;
     float s = s_ * s_ * s_;
-    r =  4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * s;
+    r = 4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * s;
     g = -1.2684380046f * l + 2.6097574011f * m - 0.3413193965f * s;
     b = -0.0041960863f * l - 0.7034186147f * m + 1.7076147010f * s;
 }
 
 float oklab_dist_sq(OKLab a, OKLab b) noexcept {
     float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
-    return dL*dL + da*da + db*db;
+    return dL * dL + da * da + db * db;
 }
 
 // k-means++ init on a uniform random subsample of the pixel set.
@@ -96,9 +107,7 @@ float oklab_dist_sq(OKLab a, OKLab b) noexcept {
 // indistinguishable seed quality for downstream Lloyd.
 constexpr std::size_t kInitSampleSize = 8192;
 
-std::vector<OKLab> kmeanspp_init(
-    std::span<const OKLab> pixels, int K, std::mt19937& rng)
-{
+std::vector<OKLab> kmeanspp_init(std::span<const OKLab> pixels, int K, std::mt19937& rng) {
     std::vector<OKLab> sample;
     if (pixels.size() <= kInitSampleSize) {
         sample.assign(pixels.begin(), pixels.end());
@@ -115,16 +124,14 @@ std::vector<OKLab> kmeanspp_init(
     std::uniform_int_distribution<std::size_t> first(0, sample.size() - 1);
     out.push_back(sample[first(rng)]);
 
-    std::vector<float> nearest_d2(sample.size(),
-                                   std::numeric_limits<float>::max());
+    std::vector<float> nearest_d2(sample.size(), std::numeric_limits<float>::max());
     while (static_cast<int>(out.size()) < K) {
         const auto& last = out.back();
         for (std::size_t i = 0; i < sample.size(); ++i) {
             float d = oklab_dist_sq(sample[i], last);
             if (d < nearest_d2[i]) nearest_d2[i] = d;
         }
-        std::discrete_distribution<std::size_t> pick(
-            nearest_d2.begin(), nearest_d2.end());
+        std::discrete_distribution<std::size_t> pick(nearest_d2.begin(), nearest_d2.end());
         out.push_back(sample[pick(rng)]);
     }
     return out;
@@ -141,23 +148,24 @@ public:
         return ctx;
     }
     bool ok() const noexcept { return ready_; }
-    MTL::Device*               device()       const noexcept { return device_; }
-    MTL::CommandQueue*         queue()        const noexcept { return queue_; }
-    MTL::ComputePipelineState* pso_assign()       const noexcept { return pso_assign_; }
-    MTL::ComputePipelineState* pso_assign_only()  const noexcept { return pso_assign_only_; }
-    MTL::ComputePipelineState* pso_finalize()     const noexcept { return pso_finalize_; }
+    MTL::Device* device() const noexcept { return device_; }
+    MTL::CommandQueue* queue() const noexcept { return queue_; }
+    MTL::ComputePipelineState* pso_assign() const noexcept { return pso_assign_; }
+    MTL::ComputePipelineState* pso_assign_only() const noexcept { return pso_assign_only_; }
+    MTL::ComputePipelineState* pso_finalize() const noexcept { return pso_finalize_; }
+
 private:
     MetalContext() noexcept {
         device_ = MTL::CreateSystemDefaultDevice();
         if (!device_) return;
         if (!device_->supportsFamily(MTL::GPUFamilyApple7)) {
-            device_->release(); device_ = nullptr; return;
+            device_->release();
+            device_ = nullptr;
+            return;
         }
         // Wrap the embedded metallib bytes as dispatch_data_t.
         auto* data = dispatch_data_create(
-            quantize_metal_metallib_data,
-            quantize_metal_metallib_data_size,
-            nullptr, nullptr);
+            quantize_metal_metallib_data, quantize_metal_metallib_data_size, nullptr, nullptr);
         NS::Error* err = nullptr;
         lib_ = device_->newLibrary(static_cast<dispatch_data_t>(data), &err);
         if (data) dispatch_release(data);
@@ -172,9 +180,9 @@ private:
             f->release();
             return p;
         };
-        pso_assign_      = fn("assign_and_accumulate");
+        pso_assign_ = fn("assign_and_accumulate");
         pso_assign_only_ = fn("assign_only");
-        pso_finalize_    = fn("finalize_centroids");
+        pso_finalize_ = fn("finalize_centroids");
         if (!pso_assign_ || !pso_assign_only_ || !pso_finalize_) return;
 
         queue_ = device_->newCommandQueue();
@@ -184,16 +192,16 @@ private:
     MetalContext(const MetalContext&) = delete;
     MetalContext& operator=(const MetalContext&) = delete;
 
-    MTL::Device*                device_           = nullptr;
-    MTL::Library*               lib_              = nullptr;
-    MTL::CommandQueue*          queue_            = nullptr;
-    MTL::ComputePipelineState*  pso_assign_       = nullptr;
-    MTL::ComputePipelineState*  pso_assign_only_  = nullptr;
-    MTL::ComputePipelineState*  pso_finalize_     = nullptr;
+    MTL::Device* device_ = nullptr;
+    MTL::Library* lib_ = nullptr;
+    MTL::CommandQueue* queue_ = nullptr;
+    MTL::ComputePipelineState* pso_assign_ = nullptr;
+    MTL::ComputePipelineState* pso_assign_only_ = nullptr;
+    MTL::ComputePipelineState* pso_finalize_ = nullptr;
     bool ready_ = false;
 };
 
-} // anon
+}  // namespace
 
 extern "C" {
 
@@ -201,19 +209,21 @@ bool png2amiga_metal_available_c() noexcept {
     return MetalContext::instance().ok();
 }
 
-int png2amiga_quantize_metal_c(
-    const float* pixels_rgb, std::size_t n_pixels,
-    std::size_t  max_colors, int restarts, int iterations,
-    std::uint32_t seed,
-    float* out_palette_rgb, std::size_t* out_palette_size) noexcept
-try {
+int png2amiga_quantize_metal_c(const float* pixels_rgb,
+                               std::size_t n_pixels,
+                               std::size_t max_colors,
+                               int restarts,
+                               int iterations,
+                               std::uint32_t seed,
+                               float* out_palette_rgb,
+                               std::size_t* out_palette_size) noexcept try {
     auto& ctx = MetalContext::instance();
-    if (!ctx.ok())                       return 1;
-    if (n_pixels == 0)                   return 2;
+    if (!ctx.ok()) return 1;
+    if (n_pixels == 0) return 2;
     if (max_colors == 0 || max_colors > 256) return 3;
     if (!pixels_rgb || !out_palette_rgb || !out_palette_size) return 4;
 
-    if (restarts < 1)   restarts   = 1;
+    if (restarts < 1) restarts = 1;
     if (iterations < 1) iterations = 1;
     const int K = static_cast<int>(max_colors);
     const int R = restarts;
@@ -221,41 +231,37 @@ try {
     // sRGB-linear → OKLab f32 (CPU; cheap relative to the GPU work).
     std::vector<OKLab> oklab(n_pixels);
     for (std::size_t i = 0; i < n_pixels; ++i) {
-        oklab[i] = linear_to_oklab(pixels_rgb[i*3+0],
-                                    pixels_rgb[i*3+1],
-                                    pixels_rgb[i*3+2]);
+        oklab[i] = linear_to_oklab(
+            pixels_rgb[i * 3 + 0], pixels_rgb[i * 3 + 1], pixels_rgb[i * 3 + 2]);
     }
 
     NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
     auto* device = ctx.device();
-    auto* queue  = ctx.queue();
+    auto* queue = ctx.queue();
 
     auto* pixel_buf = device->newBuffer(n_pixels * 4 * sizeof(float),
+                                        MTL::ResourceStorageModeShared);
+    auto* cent_buf = device->newBuffer(static_cast<std::size_t>(R * K) * 4 * sizeof(float),
+                                       MTL::ResourceStorageModeShared);
+    auto* sums_buf = device->newBuffer(static_cast<std::size_t>(R * K) * 3 * sizeof(float),
+                                       MTL::ResourceStorageModeShared);
+    auto* counts_buf = device->newBuffer(static_cast<std::size_t>(R * K) * sizeof(unsigned),
                                          MTL::ResourceStorageModeShared);
-    auto* cent_buf  = device->newBuffer(static_cast<std::size_t>(R*K) * 4 * sizeof(float),
-                                         MTL::ResourceStorageModeShared);
-    auto* sums_buf  = device->newBuffer(static_cast<std::size_t>(R*K) * 3 * sizeof(float),
-                                         MTL::ResourceStorageModeShared);
-    auto* counts_buf= device->newBuffer(static_cast<std::size_t>(R*K) * sizeof(unsigned),
-                                         MTL::ResourceStorageModeShared);
-    auto* sse_buf   = device->newBuffer(static_cast<std::size_t>(R) * sizeof(float),
-                                         MTL::ResourceStorageModeShared);
-    auto* idx_buf   = device->newBuffer(static_cast<std::size_t>(R) * n_pixels * sizeof(unsigned),
-                                         MTL::ResourceStorageModeShared);
+    auto* sse_buf = device->newBuffer(static_cast<std::size_t>(R) * sizeof(float),
+                                      MTL::ResourceStorageModeShared);
+    auto* idx_buf = device->newBuffer(static_cast<std::size_t>(R) * n_pixels * sizeof(unsigned),
+                                      MTL::ResourceStorageModeShared);
 
     auto* px = static_cast<float*>(pixel_buf->contents());
     for (std::size_t i = 0; i < n_pixels; ++i) {
-        px[i*4+0] = oklab[i].L;
-        px[i*4+1] = oklab[i].a;
-        px[i*4+2] = oklab[i].b;
-        px[i*4+3] = 0.0f;
+        px[i * 4 + 0] = oklab[i].L;
+        px[i * 4 + 1] = oklab[i].a;
+        px[i * 4 + 2] = oklab[i].b;
+        px[i * 4 + 3] = 0.0f;
     }
-    std::memset(sums_buf->contents(),   0,
-                static_cast<std::size_t>(R*K) * 3 * sizeof(float));
-    std::memset(counts_buf->contents(), 0,
-                static_cast<std::size_t>(R*K) * sizeof(unsigned));
-    std::memset(sse_buf->contents(),    0,
-                static_cast<std::size_t>(R) * sizeof(float));
+    std::memset(sums_buf->contents(), 0, static_cast<std::size_t>(R * K) * 3 * sizeof(float));
+    std::memset(counts_buf->contents(), 0, static_cast<std::size_t>(R * K) * sizeof(unsigned));
+    std::memset(sse_buf->contents(), 0, static_cast<std::size_t>(R) * sizeof(float));
 
     // k-means++ init per restart.
     std::mt19937 master_rng(seed);
@@ -265,17 +271,19 @@ try {
         std::mt19937 rng(master_rng());
         auto seeds = kmeanspp_init(oklab_span, K, rng);
         for (int k = 0; k < K; ++k) {
-            cent[r*K*4 + k*4 + 0] = seeds[static_cast<std::size_t>(k)].L;
-            cent[r*K*4 + k*4 + 1] = seeds[static_cast<std::size_t>(k)].a;
-            cent[r*K*4 + k*4 + 2] = seeds[static_cast<std::size_t>(k)].b;
-            cent[r*K*4 + k*4 + 3] = 0.0f;
+            cent[r * K * 4 + k * 4 + 0] = seeds[static_cast<std::size_t>(k)].L;
+            cent[r * K * 4 + k * 4 + 1] = seeds[static_cast<std::size_t>(k)].a;
+            cent[r * K * 4 + k * 4 + 2] = seeds[static_cast<std::size_t>(k)].b;
+            cent[r * K * 4 + k * 4 + 3] = 0.0f;
         }
     }
 
     struct Params {
         unsigned num_pixels, num_centroids, num_restarts, pixels_stride;
-    } params{ static_cast<unsigned>(n_pixels), static_cast<unsigned>(K),
-              static_cast<unsigned>(R),       static_cast<unsigned>(n_pixels) };
+    } params{static_cast<unsigned>(n_pixels),
+             static_cast<unsigned>(K),
+             static_cast<unsigned>(R),
+             static_cast<unsigned>(n_pixels)};
 
     // Lloyd loop — deterministic variant. The original kernel used
     // atomic_float adds inside the GPU shader; the order in which
@@ -293,7 +301,7 @@ try {
     // dominated by the GPU readback wait. Acceptable for the
     // determinism win.
     auto* cent_host = static_cast<float*>(cent_buf->contents());
-    auto* idx_host  = static_cast<unsigned*>(idx_buf->contents());
+    auto* idx_host = static_cast<unsigned*>(idx_buf->contents());
     std::vector<double> sums_cpu(static_cast<std::size_t>(K) * 3, 0.0);
     std::vector<std::uint32_t> counts_cpu(static_cast<std::size_t>(K), 0);
     for (int r = 0; r < R; ++r) {
@@ -304,14 +312,13 @@ try {
                 auto* enc = cmd->computeCommandEncoder();
                 enc->setComputePipelineState(ctx.pso_assign_only());
                 enc->setBuffer(pixel_buf, 0, 0);
-                enc->setBuffer(cent_buf,  0, 1);
-                enc->setBuffer(idx_buf,   0, 2);
+                enc->setBuffer(cent_buf, 0, 1);
+                enc->setBuffer(idx_buf, 0, 2);
                 enc->setBytes(&params, sizeof(params), 3);
                 enc->setBytes(&restart_u, sizeof(unsigned), 4);
                 NS::UInteger tg = ctx.pso_assign_only()->maxTotalThreadsPerThreadgroup();
                 if (tg > 256) tg = 256;
-                enc->dispatchThreads(MTL::Size(n_pixels, 1, 1),
-                                      MTL::Size(tg, 1, 1));
+                enc->dispatchThreads(MTL::Size(n_pixels, 1, 1), MTL::Size(tg, 1, 1));
                 enc->endEncoding();
             }
             cmd->commit();
@@ -320,8 +327,7 @@ try {
             // CPU sum in deterministic pixel-index order.
             std::fill(sums_cpu.begin(), sums_cpu.end(), 0.0);
             std::fill(counts_cpu.begin(), counts_cpu.end(), 0u);
-            const unsigned* row_idx =
-                idx_host + static_cast<std::size_t>(r) * n_pixels;
+            const unsigned* row_idx = idx_host + static_cast<std::size_t>(r) * n_pixels;
             for (std::size_t i = 0; i < n_pixels; ++i) {
                 unsigned k = row_idx[i];
                 sums_cpu[k * 3 + 0] += static_cast<double>(oklab[i].L);
@@ -333,15 +339,11 @@ try {
             // empty clusters (rare for K << N).
             for (int k = 0; k < K; ++k) {
                 if (counts_cpu[static_cast<std::size_t>(k)] == 0) continue;
-                double inv = 1.0 / static_cast<double>(
-                    counts_cpu[static_cast<std::size_t>(k)]);
-                cent_host[r*K*4 + k*4 + 0] =
-                    static_cast<float>(sums_cpu[k*3 + 0] * inv);
-                cent_host[r*K*4 + k*4 + 1] =
-                    static_cast<float>(sums_cpu[k*3 + 1] * inv);
-                cent_host[r*K*4 + k*4 + 2] =
-                    static_cast<float>(sums_cpu[k*3 + 2] * inv);
-                cent_host[r*K*4 + k*4 + 3] = 0.0f;
+                double inv = 1.0 / static_cast<double>(counts_cpu[static_cast<std::size_t>(k)]);
+                cent_host[r * K * 4 + k * 4 + 0] = static_cast<float>(sums_cpu[k * 3 + 0] * inv);
+                cent_host[r * K * 4 + k * 4 + 1] = static_cast<float>(sums_cpu[k * 3 + 1] * inv);
+                cent_host[r * K * 4 + k * 4 + 2] = static_cast<float>(sums_cpu[k * 3 + 2] * inv);
+                cent_host[r * K * 4 + k * 4 + 3] = 0.0f;
             }
         }
     }
@@ -349,25 +351,29 @@ try {
     // signature for compatibility with the legacy atomic-float
     // kernel still living in the metallib (might be re-enabled
     // behind a flag for the perf path).
-    (void)sums_buf; (void)counts_buf; (void)sse_buf;
+    (void)sums_buf;
+    (void)counts_buf;
+    (void)sse_buf;
 
     // CPU re-score per restart against the FINAL centroids; pick best.
     int best_r = 0;
     double best_sse = std::numeric_limits<double>::max();
-    auto* idx        = static_cast<const unsigned*>(idx_buf->contents());
+    auto* idx = static_cast<const unsigned*>(idx_buf->contents());
     auto* cent_final = static_cast<const float*>(cent_buf->contents());
     for (int r = 0; r < R; ++r) {
         double sse = 0.0;
         for (std::size_t i = 0; i < n_pixels; ++i) {
             unsigned k = idx[static_cast<std::size_t>(r) * n_pixels + i];
-            float dL = oklab[i].L - cent_final[r*K*4 + k*4 + 0];
-            float da = oklab[i].a - cent_final[r*K*4 + k*4 + 1];
-            float db = oklab[i].b - cent_final[r*K*4 + k*4 + 2];
-            sse += static_cast<double>(dL)*dL
-                 + static_cast<double>(da)*da
-                 + static_cast<double>(db)*db;
+            float dL = oklab[i].L - cent_final[r * K * 4 + k * 4 + 0];
+            float da = oklab[i].a - cent_final[r * K * 4 + k * 4 + 1];
+            float db = oklab[i].b - cent_final[r * K * 4 + k * 4 + 2];
+            sse += static_cast<double>(dL) * dL + static_cast<double>(da) * da +
+                   static_cast<double>(db) * db;
         }
-        if (sse < best_sse) { best_sse = sse; best_r = r; }
+        if (sse < best_sse) {
+            best_sse = sse;
+            best_r = r;
+        }
     }
 
     // Convert winning palette OKLab → linear RGB. Sort by L so the
@@ -375,25 +381,28 @@ try {
     std::vector<OKLab> lab_pal(static_cast<std::size_t>(K));
     for (int k = 0; k < K; ++k) {
         lab_pal[static_cast<std::size_t>(k)] = OKLab{
-            cent_final[best_r*K*4 + k*4 + 0],
-            cent_final[best_r*K*4 + k*4 + 1],
-            cent_final[best_r*K*4 + k*4 + 2],
+            cent_final[best_r * K * 4 + k * 4 + 0],
+            cent_final[best_r * K * 4 + k * 4 + 1],
+            cent_final[best_r * K * 4 + k * 4 + 2],
         };
     }
-    std::sort(lab_pal.begin(), lab_pal.end(),
-              [](OKLab a, OKLab b) { return a.L < b.L; });
+    std::sort(lab_pal.begin(), lab_pal.end(), [](OKLab a, OKLab b) { return a.L < b.L; });
 
     for (int k = 0; k < K; ++k) {
         float r, g, b;
         oklab_to_linear_rgb(lab_pal[static_cast<std::size_t>(k)], r, g, b);
-        out_palette_rgb[k*3+0] = std::clamp(r, 0.0f, 1.0f);
-        out_palette_rgb[k*3+1] = std::clamp(g, 0.0f, 1.0f);
-        out_palette_rgb[k*3+2] = std::clamp(b, 0.0f, 1.0f);
+        out_palette_rgb[k * 3 + 0] = std::clamp(r, 0.0f, 1.0f);
+        out_palette_rgb[k * 3 + 1] = std::clamp(g, 0.0f, 1.0f);
+        out_palette_rgb[k * 3 + 2] = std::clamp(b, 0.0f, 1.0f);
     }
     *out_palette_size = static_cast<std::size_t>(K);
 
-    pixel_buf->release(); cent_buf->release(); sums_buf->release();
-    counts_buf->release(); sse_buf->release(); idx_buf->release();
+    pixel_buf->release();
+    cent_buf->release();
+    sums_buf->release();
+    counts_buf->release();
+    sse_buf->release();
+    idx_buf->release();
     pool->release();
 
     return 0;
@@ -401,6 +410,6 @@ try {
     return 99;  // unknown error
 }
 
-} // extern "C"
+}  // extern "C"
 
-#endif // PNG2AMIGA_HAVE_METAL
+#endif  // PNG2AMIGA_HAVE_METAL

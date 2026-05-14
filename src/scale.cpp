@@ -18,8 +18,7 @@ constexpr int kLanczosA = 3;
 // (320x... lores, 640x... hires).
 inline float lanczos3(float x) noexcept {
     if (x == 0.0f) return 1.0f;
-    if (x <= -static_cast<float>(kLanczosA) ||
-        x >=  static_cast<float>(kLanczosA)) return 0.0f;
+    if (x <= -static_cast<float>(kLanczosA) || x >= static_cast<float>(kLanczosA)) return 0.0f;
     constexpr float pi = std::numbers::pi_v<float>;
     float pix = pi * x;
     float pix_a = pix / static_cast<float>(kLanczosA);
@@ -28,13 +27,12 @@ inline float lanczos3(float x) noexcept {
 
 // Precomputed kernel weights for one destination column or row.
 struct KernelRow {
-    int first;                 // first source index (already clamped)
-    int count;                 // number of taps
-    std::vector<float> w;      // normalized weights, summed to 1
+    int first;             // first source index (already clamped)
+    int count;             // number of taps
+    std::vector<float> w;  // normalized weights, summed to 1
 };
 
-std::vector<KernelRow> build_kernel_rows(std::size_t src_size,
-                                         std::size_t dst_size) {
+std::vector<KernelRow> build_kernel_rows(std::size_t src_size, std::size_t dst_size) {
     float ratio = static_cast<float>(src_size) / static_cast<float>(dst_size);
     // Proper anti-aliasing: stretch the filter by `ratio` when
     // downscaling so it averages over exactly one destination
@@ -44,8 +42,7 @@ std::vector<KernelRow> build_kernel_rows(std::size_t src_size,
     // sharper" but actually aliased — sharpness now comes from
     // Lanczos itself, not from leaking high frequencies.
     float filter_scale = std::max(1.0f, ratio);
-    int support = static_cast<int>(std::ceil(
-        static_cast<float>(kLanczosA) * filter_scale));
+    int support = static_cast<int>(std::ceil(static_cast<float>(kLanczosA) * filter_scale));
     int src_last = static_cast<int>(src_size) - 1;
 
     std::vector<KernelRow> rows(dst_size);
@@ -69,7 +66,8 @@ std::vector<KernelRow> build_kernel_rows(std::size_t src_size,
         }
         if (wsum > 0.0f) {
             float inv = 1.0f / wsum;
-            for (auto& w : r.w) w *= inv;
+            for (auto& w : r.w)
+                w *= inv;
         }
     }
     return rows;
@@ -122,10 +120,9 @@ Image scale_vertical(const Image& src, std::size_t dst_height) {
     return dst;
 }
 
-} // namespace
+}  // namespace
 
-Result<Image> resample(const Image& src, std::size_t dst_width,
-                       std::size_t dst_height) {
+Result<Image> resample(const Image& src, std::size_t dst_width, std::size_t dst_height) {
     if (dst_width == 0 || dst_height == 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
@@ -137,4 +134,4 @@ Result<Image> resample(const Image& src, std::size_t dst_width,
     return scale_vertical(intermediate, dst_height);
 }
 
-} // namespace png2amiga::scale
+}  // namespace png2amiga::scale

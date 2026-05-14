@@ -28,7 +28,7 @@ struct Error {
     std::string message;
 };
 
-template <typename T>
+template<typename T>
 using Result = std::expected<T, Error>;
 
 // ---------------------------------------------------------------------------
@@ -50,9 +50,7 @@ struct Color3f {
         return {r - rhs.r, g - rhs.g, b - rhs.b};
     }
 
-    constexpr Color3f operator*(float s) const noexcept {
-        return {r * s, g * s, b * s};
-    }
+    constexpr Color3f operator*(float s) const noexcept { return {r * s, g * s, b * s}; }
 
     constexpr Color3f& operator+=(Color3f rhs) noexcept {
         r += rhs.r;
@@ -75,9 +73,7 @@ struct Color3f {
         return *this;
     }
 
-    friend constexpr Color3f operator*(float s, Color3f c) noexcept {
-        return c * s;
-    }
+    friend constexpr Color3f operator*(float s, Color3f c) noexcept { return c * s; }
 
     constexpr Color3f clamped() const noexcept {
         return {
@@ -92,7 +88,7 @@ struct Color3f {
 // Concepts
 // ---------------------------------------------------------------------------
 
-template <typename T>
+template<typename T>
 concept ColorType = requires(T c) {
     { c.r } -> std::convertible_to<float>;
     { c.g } -> std::convertible_to<float>;
@@ -105,23 +101,20 @@ concept ColorType = requires(T c) {
 
 class Image {
     std::vector<Color3f> pixels_;
-    std::vector<float> alpha_;      // empty if fully opaque
+    std::vector<float> alpha_;  // empty if fully opaque
     std::size_t width_{};
     std::size_t height_{};
 
 public:
     Image() = default;
 
-    Image(std::size_t w, std::size_t h)
-        : pixels_(w * h), width_(w), height_(h) {}
+    Image(std::size_t w, std::size_t h) : pixels_(w * h), width_(w), height_(h) {}
 
     Image(std::size_t w, std::size_t h, std::vector<Color3f> data)
         : pixels_(std::move(data)), width_(w), height_(h) {}
 
-    Image(std::size_t w, std::size_t h, std::vector<Color3f> data,
-          std::vector<float> a)
-        : pixels_(std::move(data)), alpha_(std::move(a)),
-          width_(w), height_(h) {}
+    Image(std::size_t w, std::size_t h, std::vector<Color3f> data, std::vector<float> a)
+        : pixels_(std::move(data)), alpha_(std::move(a)), width_(w), height_(h) {}
 
     [[nodiscard]] std::size_t width() const noexcept { return width_; }
     [[nodiscard]] std::size_t height() const noexcept { return height_; }
@@ -132,15 +125,11 @@ public:
         return alpha_[y * width_ + x];
     }
 
-    [[nodiscard]] std::span<const float> alpha() const noexcept {
-        return alpha_;
-    }
+    [[nodiscard]] std::span<const float> alpha() const noexcept { return alpha_; }
 
     void set_alpha(std::vector<float> a) { alpha_ = std::move(a); }
 
-    Color3f& operator[](std::size_t x, std::size_t y) noexcept {
-        return pixels_[y * width_ + x];
-    }
+    Color3f& operator[](std::size_t x, std::size_t y) noexcept { return pixels_[y * width_ + x]; }
 
     const Color3f& operator[](std::size_t x, std::size_t y) const noexcept {
         return pixels_[y * width_ + x];
@@ -154,13 +143,9 @@ public:
         return {pixels_.data() + y * width_, width_};
     }
 
-    [[nodiscard]] std::span<Color3f> pixels() noexcept {
-        return pixels_;
-    }
+    [[nodiscard]] std::span<Color3f> pixels() noexcept { return pixels_; }
 
-    [[nodiscard]] std::span<const Color3f> pixels() const noexcept {
-        return pixels_;
-    }
+    [[nodiscard]] std::span<const Color3f> pixels() const noexcept { return pixels_; }
 };
 
 // ---------------------------------------------------------------------------
@@ -184,16 +169,16 @@ struct Palette {
     // JSON dump's pins:[{idx, x, y}, ...] array. Empty for formats
     // that don't carry pins. Merged into config.pins at the CLI load
     // site (CLI --pin-index-at takes precedence per (idx)).
-    struct PinEntry { int idx; int x; int y; };
+    struct PinEntry {
+        int idx;
+        int x;
+        int y;
+    };
     std::vector<PinEntry> pins{};
 
-    [[nodiscard]] std::span<const Color3f> as_span() const noexcept {
-        return colors;
-    }
+    [[nodiscard]] std::span<const Color3f> as_span() const noexcept { return colors; }
 
-    [[nodiscard]] std::size_t size() const noexcept {
-        return colors.size();
-    }
+    [[nodiscard]] std::size_t size() const noexcept { return colors.size(); }
 };
 
-} // namespace png2amiga
+}  // namespace png2amiga

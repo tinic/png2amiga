@@ -79,10 +79,10 @@ using namespace png2amiga;
 //   66 EX_NOINPUT   — input file missing or unreadable
 //   73 EX_CANTCREAT — output file write failed
 namespace exit_code {
-inline constexpr int ok          = 0;
-inline constexpr int internal    = 1;
-inline constexpr int usage       = 64;
-inline constexpr int no_input    = 66;
+inline constexpr int ok = 0;
+inline constexpr int internal = 1;
+inline constexpr int usage = 64;
+inline constexpr int no_input = 66;
 inline constexpr int cant_create = 73;
 }  // namespace exit_code
 
@@ -90,14 +90,16 @@ inline constexpr int cant_create = 73;
 // cli_status() can no-op silently in quiet mode. Two booleans (vs. a
 // pointer to Config) so this works without forward declarations.
 bool g_quiet = false;
-bool g_json  = false;
+bool g_json = false;
 
-bool is_quiet() { return g_quiet; }
+bool is_quiet() {
+    return g_quiet;
+}
 
 // Wrapper around std::println for human status output to stdout. No-op
 // when --quiet / --json is set. Errors should NOT use this — they go
 // straight to stderr regardless of flag state.
-template <class... Args>
+template<class... Args>
 void cli_status(std::format_string<Args...> fmt, Args&&... args) {
     if (is_quiet()) return;
     std::println(fmt, std::forward<Args>(args)...);
@@ -106,8 +108,7 @@ void cli_status(std::format_string<Args...> fmt, Args&&... args) {
 // Human-readable byte size: "51120 B", "49.9 K", "1.2 M".
 std::string fmt_size(int bytes) {
     if (bytes < 1024) return std::format("{} B", bytes);
-    if (bytes < 1024 * 1024)
-        return std::format("{:.1f} K", static_cast<double>(bytes) / 1024.0);
+    if (bytes < 1024 * 1024) return std::format("{:.1f} K", static_cast<double>(bytes) / 1024.0);
     return std::format("{:.1f} M", static_cast<double>(bytes) / (1024.0 * 1024.0));
 }
 
@@ -122,10 +123,9 @@ std::string fmt_size(int bytes) {
 // OCS: each MOVE = 4 B (one 32-bit copper instruction). AGA: each
 // 24-bit color update = 2 MOVEs (HI + LO mux), so 8 B per slot
 // change. WAIT word = 4 B once per row per frame.
-inline int fade_actual_bytes(
-        const std::vector<std::vector<Color3f>>& seq,
-        std::size_t budget,
-        amiga::Chipset chipset) {
+inline int fade_actual_bytes(const std::vector<std::vector<Color3f>>& seq,
+                             std::size_t budget,
+                             amiga::Chipset chipset) {
     if (seq.size() < 2) return 0;
     int aga_mul = (chipset == amiga::Chipset::aga) ? 2 : 1;
     std::size_t total_words = 0;
@@ -135,8 +135,7 @@ inline int fade_actual_bytes(
         for (std::size_t k = 0; k < n; ++k)
             if (seq[f][k] != seq[f - 1][k]) ++diffs;
         std::size_t clipped = std::min(diffs, budget);
-        if (clipped > 0)
-            total_words += clipped * static_cast<std::size_t>(aga_mul);
+        if (clipped > 0) total_words += clipped * static_cast<std::size_t>(aga_mul);
     }
     return static_cast<int>(total_words) * 4;
 }
@@ -149,9 +148,11 @@ inline void cli_print_fade_data(int actual_bytes,
     int per_move = (chipset == amiga::Chipset::aga) ? 8 : 4;
     cli_status("Data:     {} fade copper RAM ({}, {} transition lists, "
                "≤{} MOVEs/line @ {} B, post-OKLab/snap diff)",
-               fmt_size(actual_bytes), kind,
+               fmt_size(actual_bytes),
+               kind,
                (frames > 0 ? frames - 1 : std::size_t{0}),
-               budget, per_move);
+               budget,
+               per_move);
 }
 
 // Canonical "Encoded:" status line. ALL CLI encoders should funnel
@@ -187,8 +188,7 @@ inline void cli_print_target(std::size_t w, std::size_t h, int depth) {
     cli_status("Target:   {}x{} @ {} bitplanes", w, h, depth);
 }
 inline void cli_print_chipset(amiga::Chipset cs) {
-    cli_status("Chipset:  {}",
-               cs == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
+    cli_status("Chipset:  {}", cs == amiga::Chipset::aga ? "AGA (24-bit)" : "OCS (12-bit)");
 }
 inline void cli_print_mode(std::string_view mode_desc) {
     cli_status("Mode:     {}", mode_desc);
@@ -204,7 +204,7 @@ std::string_view mode_to_options_string(amiga::Mode m);
 // Global flags set from --print-palette / --print-palette-json. Picked
 // up by cli_dump_palette to avoid threading a flag through every
 // encode-path callsite.
-inline bool g_print_palette      = false;
+inline bool g_print_palette = false;
 inline bool g_print_palette_json = false;
 
 // Dump a color list:
@@ -219,18 +219,20 @@ inline bool g_print_palette_json = false;
 // the dither never picked) — added so callers can detect over-locked
 // palettes and unused slots without re-rendering. Each color is
 // snapped to 8-bit sRGB. Both modes can be on at once.
-template <typename Cfg>
+template<typename Cfg>
 inline void cli_dump_palette(std::span<const Color3f> colors,
                              const Cfg& cfg,
                              std::span<const std::uint8_t> indices = {}) {
     if (!g_print_palette && !g_print_palette_json) return;
     auto is_locked = [&](int idx) {
         if (cfg.lock_color0 && idx == 0) return true;
-        for (auto& l : cfg.locks) if (l.index == idx) return true;
+        for (auto& l : cfg.locks)
+            if (l.index == idx) return true;
         return false;
     };
     auto is_reserved = [&](int idx) {
-        for (auto& r : cfg.reserves) if (r.index == idx) return true;
+        for (auto& r : cfg.reserves)
+            if (r.index == idx) return true;
         return false;
     };
     // Per-slot pixel-routed count. Zero for every slot when indices is
@@ -241,34 +243,28 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
         if (v < pix_count.size()) ++pix_count[v];
     }
     if (g_print_palette) {
-        std::println(stderr,
-            "Palette dump: {} entries  🔒 = locked, 🔖 = reserved",
-            colors.size());
+        std::println(stderr, "Palette dump: {} entries  🔒 = locked, 🔖 = reserved", colors.size());
         for (std::size_t k = 0; k < colors.size(); ++k) {
             auto srgb = color_space::linear_to_srgb(colors[k]).clamped();
             auto r = static_cast<int>(std::round(srgb.r * 255.0f));
             auto g = static_cast<int>(std::round(srgb.g * 255.0f));
             auto b = static_cast<int>(std::round(srgb.b * 255.0f));
             std::string_view tag = "";
-            if      (is_reserved(static_cast<int>(k))) tag = " 🔖";
-            else if (is_locked(static_cast<int>(k)))   tag = " 🔒";
+            if (is_reserved(static_cast<int>(k)))
+                tag = " 🔖";
+            else if (is_locked(static_cast<int>(k)))
+                tag = " 🔒";
             if (!indices.empty()) {
-                std::println(stderr,
-                    "  {:3}: #{:02x}{:02x}{:02x}{} ({}px)",
-                    k, r, g, b, tag, pix_count[k]);
+                std::println(
+                    stderr, "  {:3}: #{:02x}{:02x}{:02x}{} ({}px)", k, r, g, b, tag, pix_count[k]);
             } else {
-                std::println(stderr,
-                    "  {:3}: #{:02x}{:02x}{:02x}{}",
-                    k, r, g, b, tag);
+                std::println(stderr, "  {:3}: #{:02x}{:02x}{:02x}{}", k, r, g, b, tag);
             }
         }
         if (!cfg.pins.empty()) {
-            std::println(stderr,
-                "Pins: {} entry(ies)  📍 (slot ← pixel coord)",
-                cfg.pins.size());
+            std::println(stderr, "Pins: {} entry(ies)  📍 (slot ← pixel coord)", cfg.pins.size());
             for (auto& p : cfg.pins) {
-                std::println(stderr,
-                    "  📍 slot {:3} ← ({},{})", p.index, p.x, p.y);
+                std::println(stderr, "  📍 slot {:3} ← ({},{})", p.index, p.x, p.y);
             }
         }
     }
@@ -281,13 +277,16 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
             auto r = static_cast<int>(std::round(srgb.r * 255.0f));
             auto g = static_cast<int>(std::round(srgb.g * 255.0f));
             auto b = static_cast<int>(std::round(srgb.b * 255.0f));
-            out += std::format(
-                "{}{{\"idx\":{},\"rgb\":\"{:02X}{:02X}{:02X}\","
-                "\"locked\":{},\"reserved\":{},\"pixels\":{}}}",
-                k == 0 ? "" : ",", k, r, g, b,
-                is_locked(static_cast<int>(k)) ? "true" : "false",
-                is_reserved(static_cast<int>(k)) ? "true" : "false",
-                pix_count[k]);
+            out += std::format("{}{{\"idx\":{},\"rgb\":\"{:02X}{:02X}{:02X}\","
+                               "\"locked\":{},\"reserved\":{},\"pixels\":{}}}",
+                               k == 0 ? "" : ",",
+                               k,
+                               r,
+                               g,
+                               b,
+                               is_locked(static_cast<int>(k)) ? "true" : "false",
+                               is_reserved(static_cast<int>(k)) ? "true" : "false",
+                               pix_count[k]);
         }
         // pins[] — round-trips through parse_json_palette into
         // Palette::pins, then back into config.pins at the CLI load
@@ -295,28 +294,27 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
         out += "],\"pins\":[";
         for (std::size_t i = 0; i < cfg.pins.size(); ++i) {
             auto& p = cfg.pins[i];
-            out += std::format(R"({}{{"idx":{},"x":{},"y":{}}})",
-                               i == 0 ? "" : ",", p.index, p.x, p.y);
+            out += std::format(
+                R"({}{{"idx":{},"x":{},"y":{}}})", i == 0 ? "" : ",", p.index, p.x, p.y);
         }
         // chipset: explicit if user passed --chipset, else "ocs".
         // Mode-driven AGA forcing (HAM7/HAM8) reports "aga".
         std::string_view chipset_str = "ocs";
         if (cfg.chipset.has_value()) {
-            chipset_str = (*cfg.chipset == amiga::Chipset::aga)
-                ? "aga" : "ocs";
+            chipset_str = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
         } else {
             auto params = amiga::get_mode_params(cfg.mode);
             if (params.bitplane_depth > 6) chipset_str = "aga";
         }
-        out += std::format(
-            R"(],"depth":{},"chipset":"{}","mode":"{}"}})",
-            cfg.depth, chipset_str, mode_to_options_string(cfg.mode));
+        out += std::format(R"(],"depth":{},"chipset":"{}","mode":"{}"}})",
+                           cfg.depth,
+                           chipset_str,
+                           mode_to_options_string(cfg.mode));
         std::println("{}", out);
     }
 }
 inline void cli_print_dither(dither::Method method, float strength) {
-    cli_status("Dither:   {} (strength: {:.2f})",
-               dither_name(method), strength);
+    cli_status("Dither:   {} (strength: {:.2f})", dither_name(method), strength);
 }
 
 // Apply --transparent-color sentinel synthesis to an image: any
@@ -324,8 +322,7 @@ inline void cli_print_dither(dither::Method method, float strength) {
 // Existing alpha (PNG native) is preserved on non-matching pixels.
 // Returns the count of newly-synthesised transparent pixels.
 inline std::size_t apply_transparent_color_sentinels(
-        Image& img,
-        const std::vector<std::array<std::uint8_t, 3>>& sentinels) {
+    Image& img, const std::vector<std::array<std::uint8_t, 3>>& sentinels) {
     if (sentinels.empty()) return 0;
     const std::size_t pix = img.width() * img.height();
     std::vector<float> a(pix, 1.0f);
@@ -338,12 +335,9 @@ inline std::size_t apply_transparent_color_sentinels(
     auto px = img.pixels();
     for (std::size_t i = 0; i < pix; ++i) {
         auto srgb = color_space::linear_to_srgb(px[i]).clamped();
-        std::uint8_t r = static_cast<std::uint8_t>(
-            std::round(srgb.r * 255.0f));
-        std::uint8_t g = static_cast<std::uint8_t>(
-            std::round(srgb.g * 255.0f));
-        std::uint8_t b = static_cast<std::uint8_t>(
-            std::round(srgb.b * 255.0f));
+        std::uint8_t r = static_cast<std::uint8_t>(std::round(srgb.r * 255.0f));
+        std::uint8_t g = static_cast<std::uint8_t>(std::round(srgb.g * 255.0f));
+        std::uint8_t b = static_cast<std::uint8_t>(std::round(srgb.b * 255.0f));
         for (auto& tc : sentinels) {
             if (tc[0] == r && tc[1] == g && tc[2] == b) {
                 a[i] = 0.0f;
@@ -361,10 +355,9 @@ inline std::size_t apply_transparent_color_sentinels(
 // Applied right before .idx / per-input output write — the palette
 // itself is untouched, only the indexed-byte stream changes. Default
 // N=0 is a no-op (legacy behavior).
-inline void apply_transparent_slot_swap(
-        std::vector<std::uint8_t>& indices,
-        const std::vector<bool>& tmask,
-        int slot) {
+inline void apply_transparent_slot_swap(std::vector<std::uint8_t>& indices,
+                                        const std::vector<bool>& tmask,
+                                        int slot) {
     if (slot <= 0) return;
     // std::vector<bool> is the specialised proxy type — can't take
     // a span over it, so we index directly.
@@ -387,17 +380,14 @@ inline bool ends_with(std::string_view s, std::string_view suffix) {
 // Tokens: {dir} = parent dir, {stem} = filename without extension,
 // {name} = filename with extension. Bare `.ext` shortcut puts the
 // output alongside the source as `<stem><ext>`.
-inline std::string resolve_oe_pattern(const std::string& pat,
-                                      const std::string& src) {
+inline std::string resolve_oe_pattern(const std::string& pat, const std::string& src) {
     namespace fs = std::filesystem;
     fs::path p(src);
-    std::string dir  = p.parent_path().string();
+    std::string dir = p.parent_path().string();
     std::string name = p.filename().string();
     std::string stem = p.stem().string();
     if (!pat.empty() && pat[0] == '.') {
-        fs::path o = dir.empty()
-            ? fs::path(stem + pat)
-            : fs::path(dir) / (stem + pat);
+        fs::path o = dir.empty() ? fs::path(stem + pat) : fs::path(dir) / (stem + pat);
         return o.string();
     }
     std::string out = pat;
@@ -408,7 +398,7 @@ inline std::string resolve_oe_pattern(const std::string& pat,
             pos += val.size();
         }
     };
-    repl("{dir}",  dir);
+    repl("{dir}", dir);
     repl("{stem}", stem);
     repl("{name}", name);
     return out;
@@ -422,53 +412,48 @@ inline std::string resolve_oe_pattern(const std::string& pat,
 // success. Used by both lores and EHB joint write paths so the
 // EHB block (which returns early before reaching the unified write
 // loop) gets identical per-input output behavior.
-inline int write_oe_outputs(
-        const std::vector<std::string>& patterns,
-        const std::string& src,
-        std::span<const std::uint8_t> idx_in,
-        const std::vector<bool>& tmask,
-        std::span<const Color3f> palette,
-        std::size_t w, std::size_t h,
-        int swap_slot) {
+inline int write_oe_outputs(const std::vector<std::string>& patterns,
+                            const std::string& src,
+                            std::span<const std::uint8_t> idx_in,
+                            const std::vector<bool>& tmask,
+                            std::span<const Color3f> palette,
+                            std::size_t w,
+                            std::size_t h,
+                            int swap_slot) {
     for (auto& pat : patterns) {
         auto out_path = resolve_oe_pattern(pat, src);
         if (ends_with(out_path, ".idx")) {
-            std::ofstream f(out_path,
-                std::ios::binary | std::ios::trunc);
+            std::ofstream f(out_path, std::ios::binary | std::ios::trunc);
             if (!f) {
-                std::println(stderr,
-                    "--output-each: cannot open '{}'", out_path);
+                std::println(stderr, "--output-each: cannot open '{}'", out_path);
                 return exit_code::cant_create;
             }
-            std::vector<std::uint8_t> out_idx(idx_in.begin(),
-                                               idx_in.end());
+            std::vector<std::uint8_t> out_idx(idx_in.begin(), idx_in.end());
             apply_transparent_slot_swap(out_idx, tmask, swap_slot);
             f.write(reinterpret_cast<const char*>(out_idx.data()),
                     static_cast<std::streamsize>(out_idx.size()));
             cli_status("Joint-out: {} ({} bytes, {}x{}{})",
-                       out_path, out_idx.size(), w, h,
-                       swap_slot > 0
-                           ? std::format(", transparent→slot {}",
-                                          swap_slot)
-                           : std::string{});
+                       out_path,
+                       out_idx.size(),
+                       w,
+                       h,
+                       swap_slot > 0 ? std::format(", transparent→slot {}", swap_slot)
+                                     : std::string{});
         } else if (ends_with(out_path, ".png")) {
-            std::vector<std::uint8_t> idx_v(idx_in.begin(),
-                                             idx_in.end());
+            std::vector<std::uint8_t> idx_v(idx_in.begin(), idx_in.end());
             std::vector<Color3f> pal_v(palette.begin(), palette.end());
-            auto r = png_io::save_palettized(out_path, idx_v,
-                pal_v, w, h, /*transparent_index=*/-1);
+            auto r = png_io::save_palettized(
+                out_path, idx_v, pal_v, w, h, /*transparent_index=*/-1);
             if (!r) {
-                std::println(stderr,
-                    "--output-each: PNG write error: {}",
-                    r.error().message);
+                std::println(stderr, "--output-each: PNG write error: {}", r.error().message);
                 return exit_code::cant_create;
             }
-            cli_status("Joint-out: {} (paletted, {}x{})",
-                       out_path, w, h);
+            cli_status("Joint-out: {} (paletted, {}x{})", out_path, w, h);
         } else {
             std::println(stderr,
-                "--output-each: unsupported extension in '{}' "
-                "(expected .idx or .png)", out_path);
+                         "--output-each: unsupported extension in '{}' "
+                         "(expected .idx or .png)",
+                         out_path);
             return exit_code::usage;
         }
     }
@@ -507,7 +492,7 @@ inline int write_oe_outputs(
 inline void matte_to_black(Image& img) {
     if (!img.has_alpha()) return;
     auto px = img.pixels();
-    auto a  = img.alpha();
+    auto a = img.alpha();
     std::vector<float> new_alpha(a.size());
     for (std::size_t i = 0; i < px.size() && i < a.size(); ++i) {
         if (a[i] < 0.5f) {
@@ -533,7 +518,8 @@ inline void matte_to_black(Image& img) {
 // under the magenta sentinel.
 inline float score_s2_masked(std::span<const Color3f> src,
                              std::span<const Color3f> rendered,
-                             std::size_t w, std::size_t h,
+                             std::size_t w,
+                             std::size_t h,
                              const std::vector<bool>& tmask) {
     if (tmask.empty()) {
         return ssimulacra2::compute(src, rendered, w, h);
@@ -558,34 +544,54 @@ inline float score_s2_masked(std::span<const Color3f> src,
 // (C64, SNES, Genesis, cga-text, indexed PNG-8 benchmark, etc). Mirrors
 // the suffix of `cli_print_encoded` so all CLI outputs report the same
 // metric block: "..., N colors, error: X, PSNR: Y dB, S2: Z".
-inline void cli_print_encoded_other(std::string_view blurb,
-                                    std::size_t num_colors,
-                                    double quant_error,
-                                    float psnr, float s2) {
+inline void cli_print_encoded_other(
+    std::string_view blurb, std::size_t num_colors, double quant_error, float psnr, float s2) {
     cli_status("Encoded:  {}, {} colors, error: {:.4f}, "
                "PSNR: {:.2f} dB, S2: {:.2f}",
-               blurb, num_colors, quant_error, psnr, s2);
+               blurb,
+               num_colors,
+               quant_error,
+               psnr,
+               s2);
 }
 
-void cli_print_encoded(int depth, int plane_bytes, int palette_size,
-                       bool aga, int sliced_grid_entries, int strips_op_count,
-                       int height, int max_moves, int num_colors,
+void cli_print_encoded(int depth,
+                       int plane_bytes,
+                       int palette_size,
+                       bool aga,
+                       int sliced_grid_entries,
+                       int strips_op_count,
+                       int height,
+                       int max_moves,
+                       int num_colors,
                        std::optional<float> avg_cap,
-                       double quant_error, float psnr, float s2) {
-    auto sb = api::compute_size_breakdown(plane_bytes, palette_size, aga,
-                                          sliced_grid_entries, strips_op_count,
-                                          height, max_moves);
+                       double quant_error,
+                       float psnr,
+                       float s2) {
+    auto sb = api::compute_size_breakdown(
+        plane_bytes, palette_size, aga, sliced_grid_entries, strips_op_count, height, max_moves);
     if (avg_cap) {
         cli_status("Encoded:  {} bitplanes, disk: {}, chip: {}, {} colors, "
                    "{:.1f} avg swaps/line, error: {:.4f}, PSNR: {:.2f} dB, "
                    "S2: {:.2f}",
-                   depth, fmt_size(sb.disk_bytes), fmt_size(sb.chip_bytes),
-                   num_colors, *avg_cap, quant_error, psnr, s2);
+                   depth,
+                   fmt_size(sb.disk_bytes),
+                   fmt_size(sb.chip_bytes),
+                   num_colors,
+                   *avg_cap,
+                   quant_error,
+                   psnr,
+                   s2);
     } else {
         cli_status("Encoded:  {} bitplanes, disk: {}, chip: {}, {} colors, "
                    "error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
-                   depth, fmt_size(sb.disk_bytes), fmt_size(sb.chip_bytes),
-                   num_colors, quant_error, psnr, s2);
+                   depth,
+                   fmt_size(sb.disk_bytes),
+                   fmt_size(sb.chip_bytes),
+                   num_colors,
+                   quant_error,
+                   psnr,
+                   s2);
     }
 }
 
@@ -622,16 +628,15 @@ std::string sanitise_symbol(std::string_view s);
 
 struct BatchInputFrame {
     std::string path;
-    std::string stem;     // basename without extension — used for symbol names
-    Image       image;
+    std::string stem;  // basename without extension — used for symbol names
+    Image image;
 };
 
 // Load all batch input PNGs and validate constraints:
 //  * all frames same width AND height
 //  * width % 16 == 0 (Amiga bitplane word alignment for clean per-frame slicing)
 //  * unique stems (or hard error)
-Result<std::vector<BatchInputFrame>> load_batch_inputs(
-    std::span<const std::string> input_paths) {
+Result<std::vector<BatchInputFrame>> load_batch_inputs(std::span<const std::string> input_paths) {
     std::vector<BatchInputFrame> frames;
     frames.reserve(input_paths.size());
     std::unordered_set<std::string> seen_stems;
@@ -643,15 +648,18 @@ Result<std::vector<BatchInputFrame>> load_batch_inputs(
         std::filesystem::path fp(p);
         auto stem = fp.stem().string();
         if (stem.empty() || stem == "." || stem == "..") {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                std::format("batch: invalid empty/dot stem from path '{}' "
-                            "(would yield bare '.iff' / unsafe output name)", p)}};
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode,
+                      std::format("batch: invalid empty/dot stem from path '{}' "
+                                  "(would yield bare '.iff' / unsafe output name)",
+                                  p)}};
         }
         if (auto [_, inserted] = seen_stems.insert(stem); !inserted) {
             return std::unexpected{Error{ErrorCode::unsupported_mode,
-                std::format("batch: duplicate input stem '{}' "
-                            "(would collide on output) from path '{}'",
-                            stem, p)}};
+                                         std::format("batch: duplicate input stem '{}' "
+                                                     "(would collide on output) from path '{}'",
+                                                     stem,
+                                                     p)}};
         }
         // Symbol-collision check: distinct stems can collapse to the same
         // C identifier under sanitise_symbol (e.g. 'foo-1' and 'foo_1' both
@@ -659,32 +667,45 @@ Result<std::vector<BatchInputFrame>> load_batch_inputs(
         // duplicate symbols.
         auto sym = sanitise_symbol(stem);
         if (auto [_, inserted] = seen_syms.insert(sym); !inserted) {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                std::format("batch: stem '{}' (from '{}') sanitises to "
-                            "C identifier '{}' which collides with a prior "
-                            "frame; rename so symbols stay unique",
-                            stem, p, sym)}};
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode,
+                      std::format("batch: stem '{}' (from '{}') sanitises to "
+                                  "C identifier '{}' which collides with a prior "
+                                  "frame; rename so symbols stay unique",
+                                  stem,
+                                  p,
+                                  sym)}};
         }
         int w = static_cast<int>(img->width());
         int h = static_cast<int>(img->height());
-        if (first_w < 0) { first_w = w; first_h = h; }
-        else if (w != first_w || h != first_h) {
+        if (first_w < 0) {
+            first_w = w;
+            first_h = h;
+        } else if (w != first_w || h != first_h) {
             return std::unexpected{Error{ErrorCode::unsupported_mode,
-                std::format("batch: frame '{}' is {}x{}; expected {}x{} "
-                            "(all frames must share dimensions)",
-                            p, w, h, first_w, first_h)}};
+                                         std::format("batch: frame '{}' is {}x{}; expected {}x{} "
+                                                     "(all frames must share dimensions)",
+                                                     p,
+                                                     w,
+                                                     h,
+                                                     first_w,
+                                                     first_h)}};
         }
         if (w % 16 != 0) {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                std::format("batch: frame width {} must be a multiple of 16 "
-                            "(Amiga bitplane word alignment for per-frame "
-                            "slicing); got '{}'", w, p)}};
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode,
+                      std::format("batch: frame width {} must be a multiple of 16 "
+                                  "(Amiga bitplane word alignment for per-frame "
+                                  "slicing); got '{}'",
+                                  w,
+                                  p)}};
         }
         frames.push_back(BatchInputFrame{p, std::move(stem), *std::move(img)});
     }
     if (frames.empty()) {
-        return std::unexpected{Error{ErrorCode::unsupported_mode,
-            "batch: no input PNGs provided (expected positional args after --batch <dir>)"}};
+        return std::unexpected{
+            Error{ErrorCode::unsupported_mode,
+                  "batch: no input PNGs provided (expected positional args after --batch <dir>)"}};
     }
     return frames;
 }
@@ -752,11 +773,12 @@ Image build_atlas(std::span<const BatchInputFrame> frames) {
 std::string sanitise_symbol(std::string_view s) {
     std::string out;
     out.reserve(s.size() + 1);
-    if (!s.empty() && std::isdigit(static_cast<unsigned char>(s[0])))
-        out.push_back('_');
+    if (!s.empty() && std::isdigit(static_cast<unsigned char>(s[0]))) out.push_back('_');
     for (auto c : s) {
-        if (std::isalnum(static_cast<unsigned char>(c))) out.push_back(c);
-        else out.push_back('_');
+        if (std::isalnum(static_cast<unsigned char>(c)))
+            out.push_back(c);
+        else
+            out.push_back('_');
     }
     if (out.empty()) out = "frame";
     return out;
@@ -779,10 +801,9 @@ int count_unique_colors(const Image& img) {
 // Pad bitplane data to mode display width (for viewer .cpp export only)
 // ---------------------------------------------------------------------------
 
-void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode,
-                        bool hires = false) {
-    auto display_w = (hires || amiga::get_mode_params(mode).is_hires)
-        ? std::size_t{640} : amiga::default_width(mode);
+void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode, bool hires = false) {
+    auto display_w = (hires || amiga::get_mode_params(mode).is_hires) ? std::size_t{640}
+                                                                      : amiga::default_width(mode);
     if (planes.width == display_w) return;
     auto old_bpr = planes.bytes_per_row;
     auto new_bpr = ((display_w + 15) / 16) * 2;
@@ -798,8 +819,7 @@ void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode,
                 dst_off = y * depth * new_bpr + p * new_bpr;
             else
                 dst_off = p * height * new_bpr + y * new_bpr;
-            std::copy_n(planes.data.data() + src_off, copy_bpr,
-                        padded.data() + dst_off);
+            std::copy_n(planes.data.data() + src_off, copy_bpr, padded.data() + dst_off);
         }
     }
     planes.data = std::move(padded);
@@ -825,13 +845,13 @@ void pad_planes_to_mode(bitplane::BitplaneData& planes, amiga::Mode mode,
 // member). See REFACTOR_PLAN.md target #5.
 struct Config {
     std::string input_path;
-    std::string output_path;           // .png for preview, .iff for ILBM, .h for C header
-    bool quiet = false;                // suppress all stdout status (errors → stderr)
-    bool json = false;                 // emit JSON status object instead of human text
-    int  profile_repeats = 1;          // run main encoding loop N times for profilers (--profile N)
-    std::string depfile;               // Make-format depfile path (empty = disabled)
-    bool list_modes = false;           // emit mode catalog (human or JSON) and exit 0
-    bool list_dithers = false;         // emit dither-method catalog and exit 0
+    std::string output_path;    // .png for preview, .iff for ILBM, .h for C header
+    bool quiet = false;         // suppress all stdout status (errors → stderr)
+    bool json = false;          // emit JSON status object instead of human text
+    int profile_repeats = 1;    // run main encoding loop N times for profilers (--profile N)
+    std::string depfile;        // Make-format depfile path (empty = disabled)
+    bool list_modes = false;    // emit mode catalog (human or JSON) and exit 0
+    bool list_dithers = false;  // emit dither-method catalog and exit 0
 
     // Batch mode: N input PNGs encoded as a single horizontally-tiled
     // atlas so they share one palette and (if --sliced) one copper plan,
@@ -841,8 +861,8 @@ struct Config {
     // --strips rejected, --no-scale auto-implied.
     bool batch = false;
     std::string batch_output_dir;
-    std::string batch_format = "h";        // iff, h, png, raw
-    std::vector<std::string> batch_inputs; // populated from positional args
+    std::string batch_format = "h";         // iff, h, png, raw
+    std::vector<std::string> batch_inputs;  // populated from positional args
 
     // Bitplane layout override for raw/.h export. nullopt = auto per mode
     // (Amiga → line-interleaved, DOS planar → plane-sequential, Atari →
@@ -856,8 +876,8 @@ struct Config {
     // rejected because the viewer code assumes fixed Amiga screen modes.
     bool no_scale = false;
     amiga::Mode mode = amiga::Mode::lores;
-    bool hires = false;                // compound mode hires override
-    bool interlace = false;            // LACE bit in CAMG
+    bool hires = false;      // compound mode hires override
+    bool interlace = false;  // LACE bit in CAMG
     std::size_t depth = 5;
     bool depth_explicit = false;  // true if user passed --depth on the CLI
 
@@ -918,7 +938,7 @@ struct Config {
 
     // Dithering
     dither::Method dither_method = dither::Method::floyd_steinberg;
-    bool dither_explicit = false;       // true if user passed --dither
+    bool dither_explicit = false;  // true if user passed --dither
     bool dither_strength_explicit = false;
     bool error_clamp_explicit = false;  // true if user passed --error-clamp
     float dither_strength = 1.0f;
@@ -930,7 +950,7 @@ struct Config {
     std::optional<amiga::Chipset> chipset;  // empty = auto-detect from mode
 
     // Palette
-    std::string palette_file;            // load palette from file (empty = auto)
+    std::string palette_file;  // load palette from file (empty = auto)
     // --quantize-from <file>: train the palette on a separate image
     // (typically a joint atlas of multiple frames), then re-quantise
     // the actual input with that palette locked. Internally: pass 1
@@ -950,12 +970,12 @@ struct Config {
     std::vector<std::string> output_each;
 
     // C header
-    std::string symbol_name;           // base name for C symbols (default: derived from output)
+    std::string symbol_name;  // base name for C symbols (default: derived from output)
 
     // Transparency
-    float alpha_threshold = 0.0f;      // offset from 0.5 midpoint (-0.5..0.5)
+    float alpha_threshold = 0.0f;                        // offset from 0.5 midpoint (-0.5..0.5)
     dither::Method alpha_dither = dither::Method::none;  // none = use threshold
-    float alpha_dither_strength = 1.0f; // strength for alpha dither (independent)
+    float alpha_dither_strength = 1.0f;                  // strength for alpha dither (independent)
     // --transparent-output-slot <N>: write slot N (not slot 0) for
     // every alpha=0 pixel in the indexed output (.idx + paletted PNG).
     // The palette itself is unchanged (slot 0 is still the transparent
@@ -969,18 +989,18 @@ struct Config {
     int transparent_output_slot = 0;
 
     // Palette refinement
-    int refine_iterations = 8;         // dither-aware palette refinement
-                                       // iterations (0=off). Bumped from
-                                       // 4 → 8 after the 2026-05-03 fix
-                                       // made the algorithm monotonically
-                                       // converge: at d=5 over DIV2K-50,
-                                       // 8 iters buys +5 S2 / +0.9 dB
-                                       // PSNR over the old broken-algo
-                                       // default; plateau near 16-32.
+    int refine_iterations = 8;  // dither-aware palette refinement
+                                // iterations (0=off). Bumped from
+                                // 4 → 8 after the 2026-05-03 fix
+                                // made the algorithm monotonically
+                                // converge: at d=5 over DIV2K-50,
+                                // 8 iters buys +5 S2 / +0.9 dB
+                                // PSNR over the old broken-algo
+                                // default; plateau near 16-32.
 
     // Copper palette
-    bool copper = false;               // per-scanline palette changes
-    int copper_changes = 0;            // 0 = auto (based on chipset/depth)
+    bool copper = false;                  // per-scanline palette changes
+    int copper_changes = 0;               // 0 = auto (based on chipset/depth)
     int sliced_spread_radius = -1;        // -1 = use encode_copper default (4)
     float sliced_spread_decay = -1.0f;    // -1 = use encode_copper default (0.85)
     bool sliced_vertical_dither = false;  // 1-D Bayer alternation between old/new
@@ -992,7 +1012,7 @@ struct Config {
                                           // forward window. --best sweeps both
                                           // states automatically; outside --best
                                           // this flag lets the user force-enable.
-    bool fade_in = false;              // 16-step fade-in from black
+    bool fade_in = false;                 // 16-step fade-in from black
 
     // Cross-fade: encode the bitmap once, animate the palette through one
     // or more target images. Indices stay constant; per-slot palette
@@ -1011,17 +1031,17 @@ struct Config {
     bool fade_loop = false;
 
     // CGA-specific options
-    int cga_palette = 3;               // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
-    std::string c64_palette = "colodore"; // pepto/vice/colodore/deekay/godot/c64wiki/levy
-    std::string c64_metric  = "blur";     // blur (PN, default), mse (OKLab²)
+    int cga_palette = 3;                   // 0=P0-low, 1=P0-high, 2=P1-low, 3=P1-high (default)
+    std::string c64_palette = "colodore";  // pepto/vice/colodore/deekay/godot/c64wiki/levy
+    std::string c64_metric = "blur";       // blur (PN, default), mse (OKLab²)
     bool c64_petscii_graphics_only = false;
     // Tile-based modes (c64 charset; SNES / Genesis / future Amiga 16x16
     // / PS1 64x64). 0 = mode default. >0 sets a custom dedup budget so
     // demos can ship larger glyph catalogs across charset banks.
     std::size_t tile_budget = 0;
     std::size_t tile_reserve = 0;
-    int cga_bg = 0;                    // background color index (0..15 in master palette)
-    bool cga_auto_palette = true;      // try all palettes, pick lowest-error
+    int cga_bg = 0;                // background color index (0..15 in master palette)
+    bool cga_auto_palette = true;  // try all palettes, pick lowest-error
 
     // PAR handling: for modes with non-square hardware pixels (VGA 13h 1.2
     // tall, EGA 640x200 2x tall, etc.), --native-par preserves source aspect
@@ -1029,7 +1049,7 @@ struct Config {
     // fixed buffer. Without the flag, modes with fixed dimensions stretch
     // source to fill the buffer (may look squished on CRT).
     bool native_par = false;
-    bool lock_color0 = true;        // reserve index 0 for black (border)
+    bool lock_color0 = true;  // reserve index 0 for black (border)
 
     // Dual playfield: encode image into PF2, leave PF1 zeroed, palette
     // shifted into upper color registers (8-15 OCS / 16-31 AGA).
@@ -1046,8 +1066,8 @@ struct Config {
     bool strips_debug = false;
 
     // Mask export
-    std::string mask_path;             // output path for transparency mask
-    bool mask_invert = false;          // invert mask polarity
+    std::string mask_path;     // output path for transparency mask
+    bool mask_invert = false;  // invert mask polarity
 
     // Embedded mask in .bpl/.raw/.bin output. Layout values:
     //   ""           — no embedded mask (default)
@@ -1066,32 +1086,32 @@ struct Config {
     // Cropping
     int crop_x = 0;
     int crop_y = 0;
-    int crop_w = 0;                    // 0 = no crop
+    int crop_w = 0;  // 0 = no crop
     int crop_h = 0;
-    bool crop_auto = false;            // auto-crop to mode aspect ratio
+    bool crop_auto = false;  // auto-crop to mode aspect ratio
 
     // kingcon-style source orientation: applied before crop/scale.
     bool flip_x = false;
     bool flip_y = false;
-    int rotate_quarters = 0;           // 0/1/2/3 = 0/90/180/270 CW
+    int rotate_quarters = 0;  // 0/1/2/3 = 0/90/180/270 CW
     // Auto-crop to non-transparent content bbox (kingcon -Trim).
     bool trim = false;
 
     // Output
-    bool print_palette = false;        // dump CMAP as idx=#rrggbb to stderr
-    bool print_palette_json = false;   // dump CMAP as one-line JSON to stdout
-    std::string output_indexed_path;   // --output-indexed <file>: raw chunky bytes
+    bool print_palette = false;       // dump CMAP as idx=#rrggbb to stderr
+    bool print_palette_json = false;  // dump CMAP as one-line JSON to stdout
+    std::string output_indexed_path;  // --output-indexed <file>: raw chunky bytes
     // --transparent-color RRGGBB (repeatable): treat matching pixels as alpha=0
     std::vector<std::array<std::uint8_t, 3>> transparent_colors;
-    bool preview = false;              // show terminal image preview (iTerm2)
-    int  preview_scale = 0;            // 0 = auto (2× on iTerm.app, 1× elsewhere);
-                                       // any value 1..8 forces that integer scale.
-    bool  preview_video = false;       // batch: loop frames inline at preview_video_fps
-    float preview_video_fps = 12.5f;   // default playback rate (8mm-ish)
+    bool preview = false;             // show terminal image preview (iTerm2)
+    int preview_scale = 0;            // 0 = auto (2× on iTerm.app, 1× elsewhere);
+                                      // any value 1..8 forces that integer scale.
+    bool preview_video = false;       // batch: loop frames inline at preview_video_fps
+    float preview_video_fps = 12.5f;  // default playback rate (8mm-ish)
 
     // Palette index manipulation
-    std::vector<api::LockSpec> locks;     // --lock-index <id> <rgbhex>
-    std::vector<api::PinSpec>  pins;      // --pin-index-at <id> <x> <y>
+    std::vector<api::LockSpec> locks;        // --lock-index <id> <rgbhex>
+    std::vector<api::PinSpec> pins;          // --pin-index-at <id> <x> <y>
     std::vector<api::ReserveSpec> reserves;  // --reserve-range <range> <rgbhex>
 };
 
@@ -1101,15 +1121,17 @@ void print_version() {
 
 void print_usage() {
     std::println(stderr,
-        "png2amiga {}\n"
-        "\n"
-        "Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]\n"
-        "\n",
-        png2amiga::version);
+                 "png2amiga {}\n"
+                 "\n"
+                 "Usage: png2amiga [options] input.[png|jpg|webp] [-o "
+                 "output.[png|iff|h|raw|pal|pi1|pi2|pi3]]\n"
+                 "\n",
+                 png2amiga::version);
     // Description column starts at byte 34 (32-char flag field + 2-space lead).
     // Keep flag descriptions to one line where possible; second line aligned
     // to column 34 for continuation. Run --list-modes for full mode catalog.
-    std::println(stderr,
+    std::println(
+        stderr,
         "Modes:\n"
         "  --mode <mode>                   Graphics mode (default: lores)\n"
         "    Amiga:  lores | lores-lace | hires | hires-lace |\n"
@@ -1288,8 +1310,8 @@ void print_usage() {
 
 Result<dither::Method> parse_dither_method(std::string_view s) {
     if (auto m = dither::parse_method_or_null(s)) return *m;
-    return std::unexpected{Error{ErrorCode::unsupported_mode,
-        "Unknown dither method: " + std::string(s)}};
+    return std::unexpected{
+        Error{ErrorCode::unsupported_mode, "Unknown dither method: " + std::string(s)}};
 }
 
 Result<Config> parse_args(int argc, char* argv[]) {
@@ -1333,25 +1355,23 @@ Result<Config> parse_args(int argc, char* argv[]) {
             config.output_indexed_path = argv[++i];
             continue;
         }
-        if ((arg == "--transparent-color" || arg == "--tc") &&
-            i + 1 < argc) {
+        if ((arg == "--transparent-color" || arg == "--tc") && i + 1 < argc) {
             std::string hex = argv[++i];
             if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
             if (hex.size() == 3) {
-                hex = std::string{hex[0],hex[0], hex[1],hex[1], hex[2],hex[2]};
+                hex = std::string{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]};
             }
-            if (hex.size() != 6 ||
-                !std::all_of(hex.begin(), hex.end(), [](char c) {
+            if (hex.size() != 6 || !std::all_of(hex.begin(), hex.end(), [](char c) {
                     return std::isxdigit(static_cast<unsigned char>(c));
                 })) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--transparent-color expects 3- or 6-digit hex (e.g. F0F or FF00FF)"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          "--transparent-color expects 3- or 6-digit hex (e.g. F0F or FF00FF)"}};
             }
-            std::uint32_t v = static_cast<std::uint32_t>(
-                std::strtoul(hex.c_str(), nullptr, 16));
+            std::uint32_t v = static_cast<std::uint32_t>(std::strtoul(hex.c_str(), nullptr, 16));
             config.transparent_colors.push_back({
                 static_cast<std::uint8_t>((v >> 16) & 0xFF),
-                static_cast<std::uint8_t>((v >>  8) & 0xFF),
+                static_cast<std::uint8_t>((v >> 8) & 0xFF),
                 static_cast<std::uint8_t>(v & 0xFF),
             });
             continue;
@@ -1360,11 +1380,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (arg == "--preview-scale") {
             if (i + 1 >= argc)
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--preview-scale requires an integer argument"}};
+                                             "--preview-scale requires an integer argument"}};
             auto v = std::atoi(argv[++i]);
             if (v < 1 || v > 8)
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--preview-scale must be in 1..8"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode, "--preview-scale must be in 1..8"}};
             config.preview_scale = v;
             continue;
         }
@@ -1376,15 +1396,13 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (arg == "--preview-video-fps") {
             if (i + 1 >= argc)
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--preview-video-fps requires a numeric argument"}};
-            config.preview_video_fps =
-                std::strtof(argv[++i], nullptr);
+                                             "--preview-video-fps requires a numeric argument"}};
+            config.preview_video_fps = std::strtof(argv[++i], nullptr);
             if (!(config.preview_video_fps > 0.0f))
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--preview-video-fps must be > 0"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode, "--preview-video-fps must be > 0"}};
             continue;
         }
-
 
         if (arg == "--no-lock-color0") {
             config.lock_color0 = false;
@@ -1444,8 +1462,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
             std::size_t start = 0;
             while (start <= raw.size()) {
                 auto comma = raw.find(',', start);
-                auto piece = raw.substr(start,
-                    comma == std::string::npos ? std::string::npos : comma - start);
+                auto piece = raw.substr(
+                    start, comma == std::string::npos ? std::string::npos : comma - start);
                 if (!piece.empty()) config.fade_to_paths.push_back(std::move(piece));
                 if (comma == std::string::npos) break;
                 start = comma + 1;
@@ -1456,13 +1474,13 @@ Result<Config> parse_args(int argc, char* argv[]) {
             try {
                 auto n = std::stol(argv[++i]);
                 if (n < 2 || n > 256) {
-                    return std::unexpected{Error{ErrorCode::invalid_depth,
-                        "--fade-frames must be in [2, 256]"}};
+                    return std::unexpected{
+                        Error{ErrorCode::invalid_depth, "--fade-frames must be in [2, 256]"}};
                 }
                 config.fade_frames = static_cast<std::size_t>(n);
             } catch (...) {
-                return std::unexpected{Error{ErrorCode::invalid_depth,
-                    "--fade-frames: bad integer"}};
+                return std::unexpected{
+                    Error{ErrorCode::invalid_depth, "--fade-frames: bad integer"}};
             }
             continue;
         }
@@ -1514,8 +1532,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--batch") {
             if (i + 1 >= argc) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--batch requires a directory argument"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode, "--batch requires a directory argument"}};
             }
             config.batch = true;
             config.batch_output_dir = std::string(argv[++i]);
@@ -1526,8 +1544,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--batch-format") {
             if (i + 1 >= argc) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--batch-format requires an extension argument (h, iff, png, raw)"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          "--batch-format requires an extension argument (h, iff, png, raw)"}};
             }
             config.batch_format = std::string(argv[++i]);
             // Strip leading '.' if present.
@@ -1543,15 +1562,16 @@ Result<Config> parse_args(int argc, char* argv[]) {
             std::string_view v = argv[++i];
             if (v == "interleaved")
                 config.layout_override = bitplane::Layout::interleaved;
-            else if (v == "standard" || v == "non-interleaved" ||
-                     v == "planar" || v == "plane-sequential")
+            else if (v == "standard" || v == "non-interleaved" || v == "planar" ||
+                     v == "plane-sequential")
                 config.layout_override = bitplane::Layout::standard;
             else if (v == "word-interleaved" || v == "atari")
                 config.layout_override = bitplane::Layout::word_interleaved;
             else if (v != "auto") {
                 return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                    std::format("Unknown --layout '{}' (use interleaved, "
-                                "standard, word-interleaved, or auto)", v)}};
+                                             std::format("Unknown --layout '{}' (use interleaved, "
+                                                         "standard, word-interleaved, or auto)",
+                                                         v)}};
             }
             continue;
         }
@@ -1609,8 +1629,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.mask_layout = v;
             } else {
                 return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                    std::format("Unknown --mask-layout '{}' "
-                                "(use appended or replicated)", v)}};
+                                             std::format("Unknown --mask-layout '{}' "
+                                                         "(use appended or replicated)",
+                                                         v)}};
             }
             continue;
         }
@@ -1633,19 +1654,33 @@ Result<Config> parse_args(int argc, char* argv[]) {
             try {
                 long n = std::stol(v);
                 switch (n) {
-                    case 0: case 360: q = 0; break;
-                    case 1: case 90:  q = 1; break;
-                    case 2: case 180: q = 2; break;
-                    case 3: case 270: q = 3; break;
-                    default: break;
+                case 0:
+                case 360:
+                    q = 0;
+                    break;
+                case 1:
+                case 90:
+                    q = 1;
+                    break;
+                case 2:
+                case 180:
+                    q = 2;
+                    break;
+                case 3:
+                case 270:
+                    q = 3;
+                    break;
+                default:
+                    break;
                 }
             } catch (...) {  // NOLINT(bugprone-empty-catch)
                 // Parse failure → q stays -1 → handled by the q<0 branch below.
             }
             if (q < 0) {
                 return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                    std::format("--rotate expects 0/1/2/3 or 0/90/180/270 "
-                                "(got '{}')", v)}};
+                                             std::format("--rotate expects 0/1/2/3 or 0/90/180/270 "
+                                                         "(got '{}')",
+                                                         v)}};
             }
             config.rotate_quarters = q;
             continue;
@@ -1660,13 +1695,14 @@ Result<Config> parse_args(int argc, char* argv[]) {
             try {
                 long n = std::stol(v);
                 if (n < 1) {
-                    return std::unexpected{Error{ErrorCode::unsupported_mode,
-                        "--tile-budget must be ≥ 1"}};
+                    return std::unexpected{
+                        Error{ErrorCode::unsupported_mode, "--tile-budget must be ≥ 1"}};
                 }
                 config.tile_budget = static_cast<std::size_t>(n);
             } catch (...) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    std::format("--tile-budget: invalid integer '{}'", v)}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          std::format("--tile-budget: invalid integer '{}'", v)}};
             }
             continue;
         }
@@ -1675,21 +1711,23 @@ Result<Config> parse_args(int argc, char* argv[]) {
             try {
                 long n = std::stol(v);
                 if (n < 0) {
-                    return std::unexpected{Error{ErrorCode::unsupported_mode,
-                        "--tile-reserve must be ≥ 0"}};
+                    return std::unexpected{
+                        Error{ErrorCode::unsupported_mode, "--tile-reserve must be ≥ 0"}};
                 }
                 config.tile_reserve = static_cast<std::size_t>(n);
             } catch (...) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    std::format("--tile-reserve: invalid integer '{}'", v)}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          std::format("--tile-reserve: invalid integer '{}'", v)}};
             }
             continue;
         }
         if (arg == "--c64-metric" && i + 1 < argc) {
             auto v = std::string_view(argv[++i]);
             if (v != "blur" && v != "mse") {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    std::format("Unknown C64 metric: {} (expected blur/mse)", v)}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          std::format("Unknown C64 metric: {} (expected blur/mse)", v)}};
             }
             config.c64_metric = std::string(v);
             continue;
@@ -1697,12 +1735,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--c64-palette" && i + 1 < argc) {
             auto v = std::string_view(argv[++i]);
-            if (v != "pepto" && v != "vice" && v != "colodore" &&
-                v != "deekay" && v != "godot" && v != "c64wiki" &&
-                v != "wiki" && v != "levy") {
+            if (v != "pepto" && v != "vice" && v != "colodore" && v != "deekay" && v != "godot" &&
+                v != "c64wiki" && v != "wiki" && v != "levy") {
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    std::format("Unknown C64 palette: {} (expected pepto/"
-                                "vice/colodore/deekay/godot/c64wiki/levy)", v)}};
+                                             std::format("Unknown C64 palette: {} (expected pepto/"
+                                                         "vice/colodore/deekay/godot/c64wiki/levy)",
+                                                         v)}};
             }
             config.c64_palette = std::string(v == "wiki" ? "c64wiki" : v);
             continue;
@@ -1710,21 +1748,28 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--cga-palette" && i + 1 < argc) {
             auto v = std::string_view(argv[++i]);
-            if      (v == "0-low"  || v == "p0-low")  config.cga_palette = 0;
-            else if (v == "0-high" || v == "p0-high") config.cga_palette = 1;
-            else if (v == "1-low"  || v == "p1-low")  config.cga_palette = 2;
-            else if (v == "1-high" || v == "p1-high") config.cga_palette = 3;
-            else if (v == "auto") { config.cga_auto_palette = true; continue; }
-            else return std::unexpected{Error{ErrorCode::unsupported_mode,
-                std::format("Unknown CGA palette: {}", v)}};
+            if (v == "0-low" || v == "p0-low")
+                config.cga_palette = 0;
+            else if (v == "0-high" || v == "p0-high")
+                config.cga_palette = 1;
+            else if (v == "1-low" || v == "p1-low")
+                config.cga_palette = 2;
+            else if (v == "1-high" || v == "p1-high")
+                config.cga_palette = 3;
+            else if (v == "auto") {
+                config.cga_auto_palette = true;
+                continue;
+            } else
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode, std::format("Unknown CGA palette: {}", v)}};
             config.cga_auto_palette = false;
             continue;
         }
         if (arg == "--cga-bg" && i + 1 < argc) {
             auto d = std::atoi(argv[++i]);
-            if (d < 0 || d > 15) return std::unexpected{Error{
-                ErrorCode::unsupported_mode,
-                "--cga-bg must be 0..15 (master palette index)"}};
+            if (d < 0 || d > 15)
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                             "--cga-bg must be 0..15 (master palette index)"}};
             config.cga_bg = d;
             continue;
         }
@@ -1735,12 +1780,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
 
         // --lock-index <id> <rgbhex>: lock palette slot to a specific color.
-        if ((arg == "--lock-index" || arg == "--li") &&
-            i + 2 < argc) {
+        if ((arg == "--lock-index" || arg == "--li") && i + 2 < argc) {
             int idx = std::atoi(argv[++i]);
             if (idx < 0 || idx > 255) {
-                return std::unexpected{Error{ErrorCode::invalid_depth,
-                    "--lock-index id must be 0..255"}};
+                return std::unexpected{
+                    Error{ErrorCode::invalid_depth, "--lock-index id must be 0..255"}};
             }
             auto hex = std::string(argv[++i]);
             // Strip leading '#' or '0x'/'0X'
@@ -1750,21 +1794,29 @@ Result<Config> parse_args(int argc, char* argv[]) {
             // Expand 3-digit hex to 6 (e.g. "f0c" -> "ff00cc")
             if (hex.size() == 3) {
                 std::string expanded;
-                for (char c : hex) { expanded.push_back(c); expanded.push_back(c); }
+                for (char c : hex) {
+                    expanded.push_back(c);
+                    expanded.push_back(c);
+                }
                 hex = expanded;
             }
             if (hex.size() != 6) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                return std::unexpected{Error{
+                    ErrorCode::unsupported_mode,
                     "--lock-index color must be a 3- or 6-digit hex value (e.g. f0c or ff00cc)"}};
             }
             auto parse_byte = [](std::string_view s) -> int {
                 int v = 0;
                 for (char c : s) {
                     v <<= 4;
-                    if (c >= '0' && c <= '9') v |= (c - '0');
-                    else if (c >= 'a' && c <= 'f') v |= (c - 'a' + 10);
-                    else if (c >= 'A' && c <= 'F') v |= (c - 'A' + 10);
-                    else return -1;
+                    if (c >= '0' && c <= '9')
+                        v |= (c - '0');
+                    else if (c >= 'a' && c <= 'f')
+                        v |= (c - 'a' + 10);
+                    else if (c >= 'A' && c <= 'F')
+                        v |= (c - 'A' + 10);
+                    else
+                        return -1;
                 }
                 return v;
             };
@@ -1772,8 +1824,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
             int g = parse_byte(std::string_view(hex).substr(2, 2));
             int b = parse_byte(std::string_view(hex).substr(4, 2));
             if (r < 0 || g < 0 || b < 0) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--lock-index color must be a hex value (e.g. ff00cc)"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          "--lock-index color must be a hex value (e.g. ff00cc)"}};
             }
             config.locks.push_back({idx, r, g, b});
             continue;
@@ -1784,8 +1837,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
         // resolved per mode in the pipeline). Quantizer cannot place
         // image colors into reserved slots; the slots are filled with
         // the user-supplied default color.
-        if ((arg == "--reserve-range" || arg == "--rr") &&
-            i + 2 < argc) {
+        if ((arg == "--reserve-range" || arg == "--rr") && i + 2 < argc) {
             auto ranges = std::string_view(argv[++i]);
             auto hex = std::string(argv[++i]);
             if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
@@ -1793,22 +1845,30 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 hex.erase(0, 2);
             if (hex.size() == 3) {
                 std::string e;
-                for (char c : hex) { e.push_back(c); e.push_back(c); }
+                for (char c : hex) {
+                    e.push_back(c);
+                    e.push_back(c);
+                }
                 hex = e;
             }
             if (hex.size() != 6) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--reserve-range color must be a 3- or 6-digit hex value "
-                    "(e.g. f0c or ff00cc)"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          "--reserve-range color must be a 3- or 6-digit hex value "
+                          "(e.g. f0c or ff00cc)"}};
             }
             auto parse_byte = [](std::string_view s) -> int {
                 int v = 0;
                 for (char c : s) {
                     v <<= 4;
-                    if (c >= '0' && c <= '9') v |= (c - '0');
-                    else if (c >= 'a' && c <= 'f') v |= (c - 'a' + 10);
-                    else if (c >= 'A' && c <= 'F') v |= (c - 'A' + 10);
-                    else return -1;
+                    if (c >= '0' && c <= '9')
+                        v |= (c - '0');
+                    else if (c >= 'a' && c <= 'f')
+                        v |= (c - 'a' + 10);
+                    else if (c >= 'A' && c <= 'F')
+                        v |= (c - 'A' + 10);
+                    else
+                        return -1;
                 }
                 return v;
             };
@@ -1816,8 +1876,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
             int g = parse_byte(std::string_view(hex).substr(2, 2));
             int b = parse_byte(std::string_view(hex).substr(4, 2));
             if (r < 0 || g < 0 || b < 0) {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "--reserve-range color must be a hex value (e.g. ff00cc)"}};
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode,
+                          "--reserve-range color must be a hex value (e.g. ff00cc)"}};
             }
             // Token forms:
             //   "5"     → single index 5
@@ -1825,19 +1886,20 @@ Result<Config> parse_args(int argc, char* argv[]) {
             //   "-5"    → 0..5
             //   "5-"    → 5..255 (pipeline drops indices ≥ palette size)
             auto parse_int = [](std::string_view s) -> int {
-                int v = 0; bool any = false;
+                int v = 0;
+                bool any = false;
                 for (char c : s) {
                     if (c < '0' || c > '9') return -1;
-                    v = v * 10 + (c - '0'); any = true;
+                    v = v * 10 + (c - '0');
+                    any = true;
                 }
                 return any ? v : -1;
             };
             std::size_t pos = 0;
             while (pos < ranges.size()) {
                 auto next = ranges.find(',', pos);
-                auto tok = (next == std::string_view::npos)
-                    ? ranges.substr(pos)
-                    : ranges.substr(pos, next - pos);
+                auto tok = (next == std::string_view::npos) ? ranges.substr(pos)
+                                                            : ranges.substr(pos, next - pos);
                 pos = (next == std::string_view::npos) ? ranges.size() : next + 1;
                 if (tok.empty()) continue;
                 int lo = 0, hi = 0;
@@ -1845,17 +1907,20 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 if (dash == std::string_view::npos) {
                     lo = hi = parse_int(tok);
                 } else if (dash == 0) {
-                    lo = 0; hi = parse_int(tok.substr(1));
+                    lo = 0;
+                    hi = parse_int(tok.substr(1));
                 } else if (dash == tok.size() - 1) {
-                    lo = parse_int(tok.substr(0, dash)); hi = 255;
+                    lo = parse_int(tok.substr(0, dash));
+                    hi = 255;
                 } else {
                     lo = parse_int(tok.substr(0, dash));
                     hi = parse_int(tok.substr(dash + 1));
                 }
                 if (lo < 0 || hi < 0 || hi < lo || lo > 255 || hi > 255) {
                     return std::unexpected{Error{ErrorCode::unsupported_mode,
-                        std::format("--reserve-range: bad range '{}' "
-                                    "(use 0..255, e.g. 0,1,5-10)", tok)}};
+                                                 std::format("--reserve-range: bad range '{}' "
+                                                             "(use 0..255, e.g. 0,1,5-10)",
+                                                             tok)}};
                 }
                 for (int k = lo; k <= hi; ++k) {
                     config.reserves.push_back({k, r, g, b});
@@ -1865,14 +1930,13 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
 
         // --pin-index-at <id> <x> <y>: pin palette slot to source pixel.
-        if ((arg == "--pin-index-at" || arg == "--pia") &&
-            i + 3 < argc) {
+        if ((arg == "--pin-index-at" || arg == "--pia") && i + 3 < argc) {
             int idx = std::atoi(argv[++i]);
             int x = std::atoi(argv[++i]);
             int y = std::atoi(argv[++i]);
             if (idx < 0 || idx > 255 || x < 0 || y < 0) {
                 return std::unexpected{Error{ErrorCode::invalid_depth,
-                    "--pin-index-at id must be 0..255 and x/y >= 0"}};
+                                             "--pin-index-at id must be 0..255 and x/y >= 0"}};
             }
             config.pins.push_back({idx, x, y});
             continue;
@@ -1893,34 +1957,42 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 // Amiga compound modes and must not get config.width=640
                 // forced on. Anchor by Amiga-mode prefix, mirroring
                 // api::decompose_mode_options.
-                bool is_amiga_compound = v.starts_with("ham") ||
-                                          v.starts_with("lores") ||
-                                          v.starts_with("hires") ||
-                                          v.starts_with("ehb");
-                bool mode_hires = is_amiga_compound &&
-                                  v.find("hires") != std::string::npos;
-                bool mode_lace = is_amiga_compound &&
-                                 v.size() > 4 &&
+                bool is_amiga_compound = v.starts_with("ham") || v.starts_with("lores") ||
+                                         v.starts_with("hires") || v.starts_with("ehb");
+                bool mode_hires = is_amiga_compound && v.find("hires") != std::string::npos;
+                bool mode_lace = is_amiga_compound && v.size() > 4 &&
                                  v.find("-lace") != std::string::npos;
-                if (v == "lores") config.mode = amiga::Mode::lores;
-                else if (v == "lores-lace") config.mode = amiga::Mode::lores_interlace;
-                else if (v == "hires") config.mode = amiga::Mode::hires;
-                else if (v == "hires-lace") config.mode = amiga::Mode::hires_interlace;
-                else if (v.starts_with("ham6")) config.mode = amiga::Mode::ham6;
-                else if (v.starts_with("ham8")) config.mode = amiga::Mode::ham8;
-                else if (v.starts_with("ehb")) config.mode = amiga::Mode::ehb;
-                else if (v == "stf-low") config.mode = amiga::Mode::stf_low;
-                else if (v == "stf-med") config.mode = amiga::Mode::stf_med;
-                else if (v == "ste-low") config.mode = amiga::Mode::ste_low;
-                else if (v == "ste-med") config.mode = amiga::Mode::ste_med;
-                else if (v == "stf-hi") config.mode = amiga::Mode::stf_hi;
-                else if (v == "ste-hi") config.mode = amiga::Mode::ste_hi;
+                if (v == "lores")
+                    config.mode = amiga::Mode::lores;
+                else if (v == "lores-lace")
+                    config.mode = amiga::Mode::lores_interlace;
+                else if (v == "hires")
+                    config.mode = amiga::Mode::hires;
+                else if (v == "hires-lace")
+                    config.mode = amiga::Mode::hires_interlace;
+                else if (v.starts_with("ham6"))
+                    config.mode = amiga::Mode::ham6;
+                else if (v.starts_with("ham8"))
+                    config.mode = amiga::Mode::ham8;
+                else if (v.starts_with("ehb"))
+                    config.mode = amiga::Mode::ehb;
+                else if (v == "stf-low")
+                    config.mode = amiga::Mode::stf_low;
+                else if (v == "stf-med")
+                    config.mode = amiga::Mode::stf_med;
+                else if (v == "ste-low")
+                    config.mode = amiga::Mode::ste_low;
+                else if (v == "ste-med")
+                    config.mode = amiga::Mode::ste_med;
+                else if (v == "stf-hi")
+                    config.mode = amiga::Mode::stf_hi;
+                else if (v == "ste-hi")
+                    config.mode = amiga::Mode::ste_hi;
                 else if (v == "vga" || v == "vga-13h")
                     config.mode = amiga::Mode::vga_13h;
                 else if (v == "vga-10h" || v == "vga-640x350")
                     config.mode = amiga::Mode::vga_10h;
-                else if (v == "vga-12h" || v == "vga-hires" ||
-                         v == "vga-640x480")
+                else if (v == "vga-12h" || v == "vga-hires" || v == "vga-640x480")
                     config.mode = amiga::Mode::vga_12h;
                 else if (v == "ega" || v == "ega-320")
                     config.mode = amiga::Mode::ega_320;
@@ -1932,11 +2004,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::cga_320;
                 else if (v == "cga-640" || v == "cga-mono")
                     config.mode = amiga::Mode::cga_640;
-                else if (v == "cga-composite" || v == "cga-comp" ||
-                         v == "cga-16")
+                else if (v == "cga-composite" || v == "cga-comp" || v == "cga-16")
                     config.mode = amiga::Mode::cga_composite;
-                else if (v == "cga-text80x100" || v == "cga-text-1k" ||
-                         v == "cga-80x100")
+                else if (v == "cga-text80x100" || v == "cga-text-1k" || v == "cga-80x100")
                     config.mode = amiga::Mode::cga_text80x100;
                 else if (v == "cga-text80x50" || v == "cga-80x50")
                     config.mode = amiga::Mode::cga_text80x50;
@@ -1950,24 +2020,21 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::cga_text40x100;
                 else if (v == "snes-mode7-256" || v == "snes-256")
                     config.mode = amiga::Mode::snes_mode7_256;
-                else if (v == "snes-mode7-direct" || v == "snes-direct" ||
-                         v == "snes-mode7-rgb443")
+                else if (v == "snes-mode7-direct" || v == "snes-direct" || v == "snes-mode7-rgb443")
                     config.mode = amiga::Mode::snes_mode7_direct;
                 else if (v == "genesis-h32" || v == "md-h32")
                     config.mode = amiga::Mode::genesis_h32;
-                else if (v == "genesis-h40" || v == "md-h40" ||
-                         v == "genesis" || v == "megadrive")
+                else if (v == "genesis-h40" || v == "md-h40" || v == "genesis" || v == "megadrive")
                     config.mode = amiga::Mode::genesis_h40;
                 else if (v == "genesis-h32-sh" || v == "md-h32-sh")
                     config.mode = amiga::Mode::genesis_h32_sh;
-                else if (v == "genesis-h40-sh" || v == "md-h40-sh" ||
-                         v == "genesis-sh" || v == "megadrive-sh")
+                else if (v == "genesis-h40-sh" || v == "md-h40-sh" || v == "genesis-sh" ||
+                         v == "megadrive-sh")
                     config.mode = amiga::Mode::genesis_h40_sh;
-                else if (v == "c64-multicolor" || v == "c64-mc" ||
-                         v == "c64" || v == "vic2-multicolor")
+                else if (v == "c64-multicolor" || v == "c64-mc" || v == "c64" ||
+                         v == "vic2-multicolor")
                     config.mode = amiga::Mode::c64_multicolor;
-                else if (v == "c64-hires" || v == "c64-hi" ||
-                         v == "vic2-hires")
+                else if (v == "c64-hires" || v == "c64-hi" || v == "vic2-hires")
                     config.mode = amiga::Mode::c64_hires;
                 else if (v == "c64-fli" || v == "fli")
                     config.mode = amiga::Mode::c64_fli;
@@ -1975,11 +2042,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::c64_afli;
                 else if (v == "c64-petscii" || v == "petscii")
                     config.mode = amiga::Mode::c64_petscii;
-                else if (v == "c64-charset-hires" || v == "c64-charset-hi" ||
-                         v == "charset-hires")
+                else if (v == "c64-charset-hires" || v == "c64-charset-hi" || v == "charset-hires")
                     config.mode = amiga::Mode::c64_charset_hires;
-                else if (v == "c64-charset-multicolor" ||
-                         v == "c64-charset-mc" || v == "charset-multicolor")
+                else if (v == "c64-charset-multicolor" || v == "c64-charset-mc" ||
+                         v == "charset-multicolor")
                     config.mode = amiga::Mode::c64_charset_multicolor;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
@@ -1987,203 +2053,162 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     // head-to-head against pngquant. config.mode is left
                     // at its default; main() short-circuits on this flag.
                     config.png_benchmark = true;
-                }
-                else return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "Unknown mode: " + v}};
+                } else
+                    return std::unexpected{
+                        Error{ErrorCode::unsupported_mode, "Unknown mode: " + v}};
                 // Apply compound mode overrides + set flags from built-in modes
-                if (mode_hires) { config.hires = true; if (!config.width) config.width = 640; }
+                if (mode_hires) {
+                    config.hires = true;
+                    if (!config.width) config.width = 640;
+                }
                 auto mp = amiga::get_mode_params(config.mode);
                 config.interlace = mode_lace || mp.is_interlaced;
                 // config.hires drives Amiga-style preview vertical doubling
                 // (Amiga hires has 1:2 pixels). Don't set it for DOS modes —
                 // they use their own `par` for preview aspect and shouldn't
                 // go through Amiga's integer-scale preview path.
-                bool dos_mode = amiga::is_vga(config.mode) ||
-                                amiga::is_ega(config.mode) ||
+                bool dos_mode = amiga::is_vga(config.mode) || amiga::is_ega(config.mode) ||
                                 amiga::is_cga(config.mode);
                 if (!dos_mode) config.hires = config.hires || mp.is_hires;
-            }
-            else if (arg == "--score-vs") {
+            } else if (arg == "--score-vs") {
                 config.score_vs = std::string(val);
-            }
-            else if (arg == "--depth") {
+            } else if (arg == "--depth") {
                 int d = std::atoi(std::string(val).c_str());
                 if (d < 1 || d > 8) {
-                    return std::unexpected{Error{ErrorCode::invalid_depth,
-                        "--depth must be 1..8"}};
+                    return std::unexpected{Error{ErrorCode::invalid_depth, "--depth must be 1..8"}};
                 }
                 config.depth = static_cast<std::size_t>(d);
                 config.depth_explicit = true;
-            }
-            else if (arg == "--chipset") {
-                if (val == "ocs") config.chipset = amiga::Chipset::ocs;
-                else if (val == "aga") config.chipset = amiga::Chipset::aga;
-                else return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "Unknown chipset: " + std::string(val) + " (use ocs or aga)"}};
-            }
-            else if (arg == "--ham-beam") {
+            } else if (arg == "--chipset") {
+                if (val == "ocs")
+                    config.chipset = amiga::Chipset::ocs;
+                else if (val == "aga")
+                    config.chipset = amiga::Chipset::aga;
+                else
+                    return std::unexpected{
+                        Error{ErrorCode::unsupported_mode,
+                              "Unknown chipset: " + std::string(val) + " (use ocs or aga)"}};
+            } else if (arg == "--ham-beam") {
                 config.ham_beam = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
                 if (config.ham_beam < 1) config.ham_beam = 1;
                 if (config.ham_beam > 256) config.ham_beam = 256;
-            }
-            else if (arg == "--ham-triple") {
+            } else if (arg == "--ham-triple") {
                 config.ham_triple = static_cast<std::size_t>(std::atoi(std::string(val).c_str()));
                 if (config.ham_triple > 256) config.ham_triple = 256;
-            }
-            else if (arg == "--ham-metric") {
+            } else if (arg == "--ham-metric") {
                 config.ham_metric = std::string(val);
-                if (config.ham_metric != "srgb-mse" &&
-                    config.ham_metric != "oklab2") {
-                    return std::unexpected{Error{
-                        ErrorCode::unsupported_mode,
-                        std::format("Invalid --ham-metric '{}': use "
-                                    "'srgb-mse' (default) or 'oklab2'",
-                                    config.ham_metric)}};
+                if (config.ham_metric != "srgb-mse" && config.ham_metric != "oklab2") {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                                 std::format("Invalid --ham-metric '{}': use "
+                                                             "'srgb-mse' (default) or 'oklab2'",
+                                                             config.ham_metric)}};
                 }
-            }
-            else if (arg == "--palette-diversity") {
+            } else if (arg == "--palette-diversity") {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
                 if (config.palette_diversity < 0) config.palette_diversity = 0;
                 if (config.palette_diversity > 9) config.palette_diversity = 9;
                 config.palette_diversity_explicit = true;
-            }
-            else if (arg == "--quantizer") {
+            } else if (arg == "--quantizer") {
                 config.quantizer = std::string(val);
                 if (config.quantizer != "" && config.quantizer != "auto" &&
-                    config.quantizer != "median-cut" &&
-                    config.quantizer != "ocs-bruteforce" &&
-                    config.quantizer != "pnn" &&
-                    config.quantizer != "gpu-restart") {
-                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                        "Unknown quantizer: " + config.quantizer +
-                        " (use auto, median-cut, ocs-bruteforce, pnn, gpu-restart)"}};
+                    config.quantizer != "median-cut" && config.quantizer != "ocs-bruteforce" &&
+                    config.quantizer != "pnn" && config.quantizer != "gpu-restart") {
+                    return std::unexpected{
+                        Error{ErrorCode::invalid_dimensions,
+                              "Unknown quantizer: " + config.quantizer +
+                                  " (use auto, median-cut, ocs-bruteforce, pnn, gpu-restart)"}};
                 }
-            }
-            else if (arg == "--slice-changes") {
+            } else if (arg == "--slice-changes") {
                 config.copper_changes = std::atoi(std::string(val).c_str());
-            }
-            else if (arg == "--slice-spread-radius") {
+            } else if (arg == "--slice-spread-radius") {
                 config.sliced_spread_radius = std::atoi(std::string(val).c_str());
-            }
-            else if (arg == "--slice-spread-decay") {
+            } else if (arg == "--slice-spread-decay") {
                 config.sliced_spread_decay = std::stof(std::string(val));
-            }
-            else if (arg == "--weight-l") {
+            } else if (arg == "--weight-l") {
                 color_space::WEIGHT_L = std::stof(std::string(val));
-            }
-            else if (arg == "--weight-a") {
+            } else if (arg == "--weight-a") {
                 color_space::WEIGHT_A = std::stof(std::string(val));
-            }
-            else if (arg == "--weight-b") {
+            } else if (arg == "--weight-b") {
                 color_space::WEIGHT_B = std::stof(std::string(val));
-            }
-            else if (arg == "--dither") {
+            } else if (arg == "--dither") {
                 auto m = parse_dither_method(val);
                 if (!m) return std::unexpected{m.error()};
                 config.dither_method = *m;
                 config.dither_explicit = true;
-            }
-            else if (arg == "--dither-strength") {
+            } else if (arg == "--dither-strength") {
                 config.dither_strength = std::stof(std::string(val));
                 config.dither_strength_explicit = true;
-            }
-            else if (arg == "--error-clamp") {
+            } else if (arg == "--error-clamp") {
                 config.error_clamp = std::stof(std::string(val));
                 config.error_clamp_explicit = true;
-            }
-            else if (arg == "--cga-text-metric") {
+            } else if (arg == "--cga-text-metric") {
                 config.cga_text_metric = std::string(val);
-            }
-            else if (arg == "--cga-text-kernel") {
-                if (val != "auto" && val != "binomial"
-                    && val != "aniso53" && val != "aniso73"
-                    && val != "aniso35" && val != "aniso37"
-                    && val != "wide55" && val != "wide77") {
-                    return std::unexpected{Error{ErrorCode::unsupported_mode,
-                        std::format("Unknown CGA-text kernel: {} "
-                                    "(expected auto/binomial/aniso53/"
-                                    "aniso73/aniso35/aniso37/wide55/wide77)",
-                                    val)}};
+            } else if (arg == "--cga-text-kernel") {
+                if (val != "auto" && val != "binomial" && val != "aniso53" && val != "aniso73" &&
+                    val != "aniso35" && val != "aniso37" && val != "wide55" && val != "wide77") {
+                    return std::unexpected{
+                        Error{ErrorCode::unsupported_mode,
+                              std::format("Unknown CGA-text kernel: {} "
+                                          "(expected auto/binomial/aniso53/"
+                                          "aniso73/aniso35/aniso37/wide55/wide77)",
+                                          val)}};
                 }
                 config.cga_text_kernel = std::string(val);
-            }
-            else if (arg == "--refine") {
+            } else if (arg == "--refine") {
                 config.refine_iterations = std::stoi(std::string(val));
-            }
-            else if (arg == "--brightness") {
+            } else if (arg == "--brightness") {
                 config.preprocess.brightness = std::stof(std::string(val));
-            }
-            else if (arg == "--contrast") {
+            } else if (arg == "--contrast") {
                 config.preprocess.contrast = std::stof(std::string(val));
-            }
-            else if (arg == "--saturation") {
+            } else if (arg == "--saturation") {
                 config.preprocess.saturation = std::stof(std::string(val));
-            }
-            else if (arg == "--gamma") {
+            } else if (arg == "--gamma") {
                 config.preprocess.gamma = std::stof(std::string(val));
-            }
-            else if (arg == "--hue-shift") {
+            } else if (arg == "--hue-shift") {
                 config.preprocess.hue_shift = std::stof(std::string(val));
-            }
-            else if (arg == "--sharpen") {
+            } else if (arg == "--sharpen") {
                 config.preprocess.sharpen = std::stof(std::string(val));
-            }
-            else if (arg == "--black-point") {
+            } else if (arg == "--black-point") {
                 config.preprocess.black_point = std::stof(std::string(val));
-            }
-            else if (arg == "--white-point") {
+            } else if (arg == "--white-point") {
                 config.preprocess.white_point = std::stof(std::string(val));
-            }
-            else if (arg == "--width") {
+            } else if (arg == "--width") {
                 int v = std::atoi(std::string(val).c_str());
                 if (v <= 0 || v > 32768) {
-                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                        "--width must be 1..32768"}};
+                    return std::unexpected{
+                        Error{ErrorCode::invalid_dimensions, "--width must be 1..32768"}};
                 }
                 config.width = static_cast<std::size_t>(v);
-            }
-            else if (arg == "--height") {
+            } else if (arg == "--height") {
                 int v = std::atoi(std::string(val).c_str());
                 if (v <= 0 || v > 32768) {
-                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                        "--height must be 1..32768"}};
+                    return std::unexpected{
+                        Error{ErrorCode::invalid_dimensions, "--height must be 1..32768"}};
                 }
                 config.height = static_cast<std::size_t>(v);
-            }
-            else if (arg == "--symbol") {
+            } else if (arg == "--symbol") {
                 config.symbol_name = std::string(val);
-            }
-            else if (arg == "--alpha-threshold") {
+            } else if (arg == "--alpha-threshold") {
                 config.alpha_threshold = std::stof(std::string(val));
-            }
-            else if (arg == "--alpha-dither") {
+            } else if (arg == "--alpha-dither") {
                 auto m = parse_dither_method(val);
                 if (!m) return std::unexpected{m.error()};
                 config.alpha_dither = *m;
-            }
-            else if (arg == "--alpha-dither-strength") {
+            } else if (arg == "--alpha-dither-strength") {
                 config.alpha_dither_strength = std::stof(std::string(val));
-            }
-            else if (arg == "--transparent-output-slot") {
-                config.transparent_output_slot = std::atoi(
-                    std::string(val).c_str());
-            }
-            else if (arg == "--palette") {
+            } else if (arg == "--transparent-output-slot") {
+                config.transparent_output_slot = std::atoi(std::string(val).c_str());
+            } else if (arg == "--palette") {
                 config.palette_file = std::string(val);
-            }
-            else if (arg == "--quantize-from") {
+            } else if (arg == "--quantize-from") {
                 config.quantize_from = std::string(val);
-            }
-            else if (arg == "--joint-input" || arg == "--ji") {
+            } else if (arg == "--joint-input" || arg == "--ji") {
                 config.joint_inputs.emplace_back(val);
-            }
-            else if (arg == "--output-each" || arg == "--oe") {
+            } else if (arg == "--output-each" || arg == "--oe") {
                 config.output_each.emplace_back(val);
-            }
-            else if (arg == "--mask") {
+            } else if (arg == "--mask") {
                 config.mask_path = std::string(val);
-            }
-            else if (arg == "--crop") {
+            } else if (arg == "--crop") {
                 // Parse "x,y,w,h" format
                 auto s = std::string(val);
                 int parsed[4]{};
@@ -2196,36 +2221,35 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     pos = (comma == std::string::npos) ? s.size() : comma + 1;
                 }
                 if (idx != 4) {
-                    return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                        "Crop format must be x,y,w,h (e.g. 10,20,300,200)"}};
+                    return std::unexpected{
+                        Error{ErrorCode::invalid_dimensions,
+                              "Crop format must be x,y,w,h (e.g. 10,20,300,200)"}};
                 }
-                if (parsed[0] < 0 || parsed[1] < 0 ||
-                    parsed[2] <= 0 || parsed[3] <= 0) {
+                if (parsed[0] < 0 || parsed[1] < 0 || parsed[2] <= 0 || parsed[3] <= 0) {
                     return std::unexpected{Error{ErrorCode::invalid_dimensions,
-                        "Crop x/y must be >= 0 and w/h must be > 0"}};
+                                                 "Crop x/y must be >= 0 and w/h must be > 0"}};
                 }
                 config.crop_x = parsed[0];
                 config.crop_y = parsed[1];
                 config.crop_w = parsed[2];
                 config.crop_h = parsed[3];
+            } else {
+                return std::unexpected{
+                    Error{ErrorCode::unsupported_mode, "Unknown option: " + std::string(arg)}};
             }
-            else {
-                return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    "Unknown option: " + std::string(arg)}};
-            }
-        }
-        else if (arg.starts_with("--")) {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                "Unknown option: " + std::string(arg)}};
-        }
-        else {
+        } else if (arg.starts_with("--")) {
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode, "Unknown option: " + std::string(arg)}};
+        } else {
             if (config.batch) {
                 // In batch mode every positional arg is an input PNG;
                 // the output dir + format come from --batch / --batch-format.
                 config.batch_inputs.emplace_back(arg);
             } else {
-                if (positional == 0) config.input_path = std::string(arg);
-                else if (positional == 1) config.output_path = std::string(arg);
+                if (positional == 0)
+                    config.input_path = std::string(arg);
+                else if (positional == 1)
+                    config.output_path = std::string(arg);
             }
             ++positional;
         }
@@ -2235,9 +2259,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
         // Reject incompatible flags up front so the user sees the issue
         // before we do any work.
         if (config.scap) {
-            return std::unexpected{Error{ErrorCode::unsupported_mode,
-                "batch mode is incompatible with --strips (per-frame mid-line "
-                "swap chains aren't shareable across frames)"}};
+            return std::unexpected{
+                Error{ErrorCode::unsupported_mode,
+                      "batch mode is incompatible with --strips (per-frame mid-line "
+                      "swap chains aren't shareable across frames)"}};
         }
         if (!config.batch_output_dir.empty()) {
             // Auto-create the output dir.
@@ -2245,8 +2270,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
             std::filesystem::create_directories(config.batch_output_dir, ec);
             if (ec) {
                 return std::unexpected{Error{ErrorCode::unsupported_mode,
-                    std::format("batch: cannot create output dir '{}': {}",
-                                config.batch_output_dir, ec.message())}};
+                                             std::format("batch: cannot create output dir '{}': {}",
+                                                         config.batch_output_dir,
+                                                         ec.message())}};
             }
         }
         // Validate format.
@@ -2254,23 +2280,23 @@ Result<Config> parse_args(int argc, char* argv[]) {
             config.batch_format != "png" && config.batch_format != "raw" &&
             config.batch_format != "cpp") {
             return std::unexpected{Error{ErrorCode::unsupported_mode,
-                std::format("batch: unknown --batch-format '{}' "
-                            "(expected: h, iff, png, raw, cpp)",
-                            config.batch_format)}};
+                                         std::format("batch: unknown --batch-format '{}' "
+                                                     "(expected: h, iff, png, raw, cpp)",
+                                                     config.batch_format)}};
         }
         if (config.batch_format == "cpp" && config.interlace) {
             return std::unexpected{Error{ErrorCode::unsupported_mode,
-                "batch: --batch-format cpp does not support --interlace "
-                "(multi-frame BPLxPT patching needs both fields' lists "
-                "kept in sync; not implemented)"}};
+                                         "batch: --batch-format cpp does not support --interlace "
+                                         "(multi-frame BPLxPT patching needs both fields' lists "
+                                         "kept in sync; not implemented)"}};
         }
         // input_path is unused in batch mode — set to a dummy non-empty
         // value so the no-input gate below passes.
         if (config.input_path.empty()) config.input_path = "<batch>";
     }
 
-    if (config.input_path.empty() && config.strips_probe.empty() &&
-        !config.list_modes && !config.list_dithers) {
+    if (config.input_path.empty() && config.strips_probe.empty() && !config.list_modes &&
+        !config.list_dithers) {
         print_usage();
         std::exit(exit_code::usage);  // NOLINT(concurrency-mt-unsafe)
     }
@@ -2288,14 +2314,18 @@ Result<Config> parse_args(int argc, char* argv[]) {
 using pipeline::derive_symbol_name;
 
 // Crop an image to a sub-region
-Result<Image> crop_image(const Image& src,
-                         std::size_t cx, std::size_t cy,
-                         std::size_t cw, std::size_t ch) {
+Result<Image> crop_image(
+    const Image& src, std::size_t cx, std::size_t cy, std::size_t cw, std::size_t ch) {
     if (cx + cw > src.width() || cy + ch > src.height() || cw == 0 || ch == 0) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
             std::format("Crop region {}x{}+{}+{} exceeds image {}x{}",
-                        cw, ch, cx, cy, src.width(), src.height()),
+                        cw,
+                        ch,
+                        cx,
+                        cy,
+                        src.width(),
+                        src.height()),
         }};
     }
     Image dst(cw, ch);
@@ -2314,8 +2344,7 @@ Result<Image> crop_image(const Image& src,
 // iTerm2 inline image display
 // ---------------------------------------------------------------------------
 
-constexpr auto base64_chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+constexpr auto base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 std::string base64_encode(std::span<const std::uint8_t> data) {
     std::string out;
@@ -2390,26 +2419,25 @@ InlineImageProtocol detect_inline_image_protocol() {
     auto term_program = std::getenv("TERM_PROGRAM");  // NOLINT(concurrency-mt-unsafe)
 
     // Kitty / Ghostty — both speak the Kitty graphics protocol.
-    if (contains(term, "kitty"))         return InlineImageProtocol::kitty;
-    if (contains(term, "ghostty"))       return InlineImageProtocol::kitty;
-    if (set("KITTY_WINDOW_ID"))          return InlineImageProtocol::kitty;
-    if (eq(term_program, "ghostty"))     return InlineImageProtocol::kitty;
-    if (set("GHOSTTY_RESOURCES_DIR"))    return InlineImageProtocol::kitty;
+    if (contains(term, "kitty")) return InlineImageProtocol::kitty;
+    if (contains(term, "ghostty")) return InlineImageProtocol::kitty;
+    if (set("KITTY_WINDOW_ID")) return InlineImageProtocol::kitty;
+    if (eq(term_program, "ghostty")) return InlineImageProtocol::kitty;
+    if (set("GHOSTTY_RESOURCES_DIR")) return InlineImageProtocol::kitty;
 
     // iTerm.app — OSC 1337 only.
-    if (eq(term_program, "iTerm.app"))   return InlineImageProtocol::iterm;
+    if (eq(term_program, "iTerm.app")) return InlineImageProtocol::iterm;
 
     // Windows Terminal — sixel since 1.22. WT_SESSION is set on every
     // pane; we don't probe DA1 because the env var is sufficient and
     // the probe needs raw-mode stdin handling on Windows.
-    if (set("WT_SESSION"))               return InlineImageProtocol::sixel;
+    if (set("WT_SESSION")) return InlineImageProtocol::sixel;
 
     return InlineImageProtocol::none;
 }
 
 unsigned resolve_preview_scale(int user_override) {
-    if (user_override >= 1 && user_override <= 8)
-        return static_cast<unsigned>(user_override);
+    if (user_override >= 1 && user_override <= 8) return static_cast<unsigned>(user_override);
 #ifdef __APPLE__
     // HiDPI is the default on Apple laptops since 2012; doubling on a
     // recognized inline-image terminal makes preview readable. Other
@@ -2433,9 +2461,8 @@ std::string inline_image_escape(const Image& image) {
     auto proto = detect_inline_image_protocol();
     if (proto == InlineImageProtocol::none) return {};
 
-    Image scaled = (g_preview_scale > 1)
-        ? scale_preview(image, g_preview_scale, g_preview_scale)
-        : image;
+    Image scaled = (g_preview_scale > 1) ? scale_preview(image, g_preview_scale, g_preview_scale)
+                                         : image;
 
     if (proto == InlineImageProtocol::sixel) {
         // Convert linear-RGB Image to sRGB RGBA bytes. Then derive a
@@ -2466,8 +2493,8 @@ std::string inline_image_escape(const Image& image) {
                 rgba[base + 2] = b;
                 rgba[base + 3] = 255;
                 if (!overflow) {
-                    unique_colors.insert(
-                        (std::uint32_t(r) << 16) | (std::uint32_t(g) << 8) | std::uint32_t(b));
+                    unique_colors.insert((std::uint32_t(r) << 16) | (std::uint32_t(g) << 8) |
+                                         std::uint32_t(b));
                     if (unique_colors.size() > 256) overflow = true;
                 }
             }
@@ -2480,7 +2507,9 @@ std::string inline_image_escape(const Image& image) {
         }
         std::string out;
         out.reserve(w * h);
-        auto sink = [&](char c) { out.push_back(c); };
+        auto sink = [&](char c) {
+            out.push_back(c);
+        };
         std::vector<std::array<std::uint8_t, 3>> pal;
         if (!overflow) {
             pal.reserve(unique_colors.size());
@@ -2509,14 +2538,24 @@ std::string inline_image_escape(const Image& image) {
         if (!pal.empty()) {
             constixel::dynamic_image<constixel::format_8bit_dyn> dimg(
                 w, h, std::span<const std::array<std::uint8_t, 3>>(pal));
-            dimg.blit_RGBA(0, 0, static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
-                           rgba.data(), static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+            dimg.blit_RGBA(0,
+                           0,
+                           static_cast<std::int32_t>(w),
+                           static_cast<std::int32_t>(h),
+                           rgba.data(),
+                           static_cast<std::int32_t>(w),
+                           static_cast<std::int32_t>(h),
                            static_cast<std::int32_t>(w * 4));
             dimg.sixel(sink);
         } else {
             constixel::dynamic_image<constixel::format_8bit_dyn> dimg(w, h);
-            dimg.blit_RGBA(0, 0, static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
-                           rgba.data(), static_cast<std::int32_t>(w), static_cast<std::int32_t>(h),
+            dimg.blit_RGBA(0,
+                           0,
+                           static_cast<std::int32_t>(w),
+                           static_cast<std::int32_t>(h),
+                           rgba.data(),
+                           static_cast<std::int32_t>(w),
+                           static_cast<std::int32_t>(h),
                            static_cast<std::int32_t>(w * 4));
             dimg.sixel(sink);
         }
@@ -2528,9 +2567,11 @@ std::string inline_image_escape(const Image& image) {
     auto encoded = base64_encode(*png);
 
     if (proto == InlineImageProtocol::iterm) {
-        return std::format(
-            "\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
-            png->size(), scaled.width(), scaled.height(), encoded);
+        return std::format("\033]1337;File=inline=1;size={};width={}px;height={}px:{}\a",
+                           png->size(),
+                           scaled.width(),
+                           scaled.height(),
+                           encoded);
     }
 
     // Kitty graphics protocol — same chunking pattern as constixel.hpp's
@@ -2547,9 +2588,9 @@ std::string inline_image_escape(const Image& image) {
     while (pos < encoded.size()) {
         auto bytes = std::min(encoded.size() - pos, kMaxChunk);
         bool last = (pos + bytes == encoded.size());
-        out.append(first ? "\033_Ga=T,f=100,q=2,"  : "\033_G");
+        out.append(first ? "\033_Ga=T,f=100,q=2," : "\033_G");
         first = false;
-        out.append(last  ? "m=0;" : "m=1;");
+        out.append(last ? "m=0;" : "m=1;");
         out.append(encoded, pos, bytes);
         out.append("\033\\");
         pos += bytes;
@@ -2583,41 +2624,76 @@ amiga::Chipset effective_chipset(const Config& cfg) {
 // — callers that care (SNES/Genesis) override explicitly post-build.
 std::string_view mode_to_options_string(amiga::Mode m) {
     switch (m) {
-    case amiga::Mode::lores:            return "lores";
-    case amiga::Mode::lores_interlace:  return "lores-lace";
-    case amiga::Mode::hires:            return "hires";
-    case amiga::Mode::hires_interlace:  return "hires-lace";
-    case amiga::Mode::ham6:             return "ham6";
-    case amiga::Mode::ham8:             return "ham8";
-    case amiga::Mode::ehb:              return "ehb";
-    case amiga::Mode::stf_low:          return "stf-low";
-    case amiga::Mode::stf_med:          return "stf-med";
-    case amiga::Mode::stf_hi:           return "stf-hi";
-    case amiga::Mode::ste_low:          return "ste-low";
-    case amiga::Mode::ste_med:          return "ste-med";
-    case amiga::Mode::ste_hi:           return "ste-hi";
-    case amiga::Mode::vga_13h:          return "vga-13h";
-    case amiga::Mode::vga_10h:          return "vga-10h";
-    case amiga::Mode::vga_12h:          return "vga-12h";
-    case amiga::Mode::ega_320:          return "ega-320";
-    case amiga::Mode::ega_640:          return "ega-640";
-    case amiga::Mode::ega_hi:           return "ega-hi";
-    case amiga::Mode::cga_320:          return "cga-320";
-    case amiga::Mode::cga_640:          return "cga-640";
-    case amiga::Mode::cga_composite:    return "cga-composite";
-    case amiga::Mode::cga_text80x100:   return "cga-text80x100";
-    case amiga::Mode::cga_text80x50:    return "cga-text80x50";
-    case amiga::Mode::cga_text80x25:    return "cga-text80x25";
-    case amiga::Mode::cga_text80x200:   return "cga-text80x200";
-    case amiga::Mode::cga_text40x200:   return "cga-text40x200";
-    case amiga::Mode::cga_text40x100:   return "cga-text40x100";
-    case amiga::Mode::snes_mode7_256:   return "snes-mode7-256";
-    case amiga::Mode::snes_mode7_direct:return "snes-mode7-direct";
-    case amiga::Mode::genesis_h32:      return "genesis-h32";
-    case amiga::Mode::genesis_h40:      return "genesis-h40";
-    case amiga::Mode::genesis_h32_sh:   return "genesis-h32-sh";
-    case amiga::Mode::genesis_h40_sh:   return "genesis-h40-sh";
-    default: return "lores";
+    case amiga::Mode::lores:
+        return "lores";
+    case amiga::Mode::lores_interlace:
+        return "lores-lace";
+    case amiga::Mode::hires:
+        return "hires";
+    case amiga::Mode::hires_interlace:
+        return "hires-lace";
+    case amiga::Mode::ham6:
+        return "ham6";
+    case amiga::Mode::ham8:
+        return "ham8";
+    case amiga::Mode::ehb:
+        return "ehb";
+    case amiga::Mode::stf_low:
+        return "stf-low";
+    case amiga::Mode::stf_med:
+        return "stf-med";
+    case amiga::Mode::stf_hi:
+        return "stf-hi";
+    case amiga::Mode::ste_low:
+        return "ste-low";
+    case amiga::Mode::ste_med:
+        return "ste-med";
+    case amiga::Mode::ste_hi:
+        return "ste-hi";
+    case amiga::Mode::vga_13h:
+        return "vga-13h";
+    case amiga::Mode::vga_10h:
+        return "vga-10h";
+    case amiga::Mode::vga_12h:
+        return "vga-12h";
+    case amiga::Mode::ega_320:
+        return "ega-320";
+    case amiga::Mode::ega_640:
+        return "ega-640";
+    case amiga::Mode::ega_hi:
+        return "ega-hi";
+    case amiga::Mode::cga_320:
+        return "cga-320";
+    case amiga::Mode::cga_640:
+        return "cga-640";
+    case amiga::Mode::cga_composite:
+        return "cga-composite";
+    case amiga::Mode::cga_text80x100:
+        return "cga-text80x100";
+    case amiga::Mode::cga_text80x50:
+        return "cga-text80x50";
+    case amiga::Mode::cga_text80x25:
+        return "cga-text80x25";
+    case amiga::Mode::cga_text80x200:
+        return "cga-text80x200";
+    case amiga::Mode::cga_text40x200:
+        return "cga-text40x200";
+    case amiga::Mode::cga_text40x100:
+        return "cga-text40x100";
+    case amiga::Mode::snes_mode7_256:
+        return "snes-mode7-256";
+    case amiga::Mode::snes_mode7_direct:
+        return "snes-mode7-direct";
+    case amiga::Mode::genesis_h32:
+        return "genesis-h32";
+    case amiga::Mode::genesis_h40:
+        return "genesis-h40";
+    case amiga::Mode::genesis_h32_sh:
+        return "genesis-h32-sh";
+    case amiga::Mode::genesis_h40_sh:
+        return "genesis-h40-sh";
+    default:
+        return "lores";
     }
 }
 
@@ -2666,8 +2742,7 @@ void neutralize_preprocess(api::Options& opts) {
 api::Options make_api_options(const Config& cfg) {
     api::Options opts;
     opts.mode = std::string{mode_to_options_string(cfg.mode)};
-    if (cfg.chipset)
-        opts.chipset = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
+    if (cfg.chipset) opts.chipset = (*cfg.chipset == amiga::Chipset::aga) ? "aga" : "ocs";
     opts.depth = static_cast<int>(cfg.depth);
     opts.interlace = cfg.interlace;
     opts.gamma = cfg.preprocess.gamma;
@@ -2685,10 +2760,8 @@ api::Options make_api_options(const Config& cfg) {
     // entry — single location for the lookup). The CLI passes the
     // user's explicit value when they used --dither-strength /
     // --error-clamp, otherwise sentinel so the encoder auto-tunes.
-    opts.dither_strength = cfg.dither_strength_explicit
-        ? cfg.dither_strength : -1.0f;
-    opts.error_clamp = cfg.error_clamp_explicit
-        ? cfg.error_clamp : -1.0f;
+    opts.dither_strength = cfg.dither_strength_explicit ? cfg.dither_strength : -1.0f;
+    opts.error_clamp = cfg.error_clamp_explicit ? cfg.error_clamp : -1.0f;
     opts.palette_diversity = cfg.palette_diversity;
     opts.quantizer = cfg.quantizer;
     opts.ham_fast = cfg.ham_fast;
@@ -2737,7 +2810,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.pins = cfg.pins;
     opts.reserves = cfg.reserves;
     opts.palette_file = cfg.palette_file;
-    if (cfg.width)  opts.width  = static_cast<int>(*cfg.width);
+    if (cfg.width) opts.width = static_cast<int>(*cfg.width);
     if (cfg.height) opts.height = static_cast<int>(*cfg.height);
     return opts;
 }
@@ -2756,8 +2829,8 @@ Palette ega_histogram_quantize(const Image& image, std::size_t K) {
     return quantize::ega_histogram(image, K);
 }
 
-
-Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
+Result<Palette> auto_quantize(const Image& image,
+                              std::size_t max_colors,
                               amiga::Chipset chipset,
                               int palette_diversity = 0,
                               std::string_view quantizer = {},
@@ -2785,8 +2858,7 @@ Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
             pal.name = "ega-irgb16";
             pal.colors.reserve(16);
             for (auto hex : palette::kCgaHw) {
-                pal.colors.push_back(
-                    color_space::srgb_hex_to_linear(hex));
+                pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
             }
             return pal;
         }
@@ -2794,7 +2866,8 @@ Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
     }
     // PNN with chipset-aware snap: OCS → OCS-snapped PNN, AGA → continuous.
     if (quantizer == "pnn") {
-        auto pal = quantize::pnn_quantize(image.pixels(), max_colors,
+        auto pal = quantize::pnn_quantize(image.pixels(),
+                                          max_colors,
                                           palette_diversity,
                                           /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
         return pal;
@@ -2807,12 +2880,11 @@ Result<Palette> auto_quantize(const Image& image, std::size_t max_colors,
 // nullopt for "auto" / "" so callers fall through to the
 // chipset-aware default. Centralised so encode_copper / strips /
 // HAM / etc. callers all do the same string→enum mapping.
-inline std::optional<quantize::Algorithm>
-parse_quantizer_override(std::string_view name) {
-    if (name == "median-cut")     return quantize::Algorithm::median_cut;
+inline std::optional<quantize::Algorithm> parse_quantizer_override(std::string_view name) {
+    if (name == "median-cut") return quantize::Algorithm::median_cut;
     if (name == "ocs-bruteforce") return quantize::Algorithm::ocs_bruteforce;
-    if (name == "pnn")            return quantize::Algorithm::pnn;
-    if (name == "gpu-restart")    return quantize::Algorithm::gpu_restart;
+    if (name == "pnn") return quantize::Algorithm::pnn;
+    if (name == "gpu-restart") return quantize::Algorithm::gpu_restart;
     return std::nullopt;
 }
 
@@ -2822,8 +2894,7 @@ parse_quantizer_override(std::string_view name) {
 inline std::string resolve_quantizer_name(amiga::Mode mode,
                                           amiga::Chipset chipset,
                                           std::string_view user) {
-    return std::string{quantize::name_of(
-        quantize::resolve_algorithm(mode, chipset, user))};
+    return std::string{quantize::name_of(quantize::resolve_algorithm(mode, chipset, user))};
 }
 
 // Snap palette to chipset/mode precision
@@ -2881,8 +2952,12 @@ Image scale_preview_nn(const Image& src, std::size_t dst_w, std::size_t dst_h) {
 // Save transparency mask to file (PNG, IFF, or raw 1-bitplane)
 // ---------------------------------------------------------------------------
 
-void save_mask(std::string_view path, const std::vector<bool>& tmask,
-               std::size_t w, std::size_t h, bool invert, bool interlace) {
+void save_mask(std::string_view path,
+               const std::vector<bool>& tmask,
+               std::size_t w,
+               std::size_t h,
+               bool invert,
+               bool interlace) {
     if (tmask.empty()) {
         std::println(stderr, "Mask: no transparency in source image");
         return;
@@ -2935,8 +3010,7 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
         };
         iff::IffOptions iff_opts;
         iff_opts.interlace = interlace;
-        auto result = iff::save_ilbm(path, *planes, mask_palette,
-                                     amiga::Mode::lores, iff_opts);
+        auto result = iff::save_ilbm(path, *planes, mask_palette, amiga::Mode::lores, iff_opts);
         if (!result) {
             std::println(stderr, "Mask IFF write error: {}", result.error().message);
             return;
@@ -2956,8 +3030,7 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
         }
         file.write(reinterpret_cast<const char*>(planes->data.data()),
                    static_cast<std::streamsize>(planes->data.size()));
-        cli_status("Mask:     {} ({}x{} raw, {} bytes)", path, w, h,
-                     planes->data.size());
+        cli_status("Mask:     {} ({}x{} raw, {} bytes)", path, w, h, planes->data.size());
     } else if (ends_with(path, ".h")) {
         auto indices = build_indices();
         auto planes = bitplane::encode(indices, w, h, 1);
@@ -2972,17 +3045,19 @@ void save_mask(std::string_view path, const std::vector<bool>& tmask,
         cheader::CHeaderOptions hopts;
         hopts.symbol_name = pipeline::derive_symbol_name(path);
         hopts.interlace = interlace;
-        auto result = cheader::save(path, *planes, mask_palette,
-                                    amiga::Mode::lores, hopts);
+        auto result = cheader::save(path, *planes, mask_palette, amiga::Mode::lores, hopts);
         if (!result) {
-            std::println(stderr, "Mask C header write error: {}",
-                         result.error().message);
+            std::println(stderr, "Mask C header write error: {}", result.error().message);
             return;
         }
         cli_status("Mask:     {} ({}x{} C header, 1 bitplane, symbol '{}')",
-                   path, w, h, hopts.symbol_name);
+                   path,
+                   w,
+                   h,
+                   hopts.symbol_name);
     } else {
-        std::println(stderr, "Mask: unsupported extension for '{}' (use .png, .iff, .raw, or .h)", path);
+        std::println(
+            stderr, "Mask: unsupported extension for '{}' (use .png, .iff, .raw, or .h)", path);
     }
 }
 
@@ -3004,8 +3079,7 @@ std::vector<std::uint8_t> build_mask_plane(const std::vector<bool>& tmask,
             bool opaque = !transparent;
             bool bit = invert ? !opaque : opaque;
             if (bit) {
-                mask[y * bytes_per_row + (x >> 3)] |=
-                    static_cast<std::uint8_t>(0x80 >> (x & 7));
+                mask[y * bytes_per_row + (x >> 3)] |= static_cast<std::uint8_t>(0x80 >> (x & 7));
             }
         }
     }
@@ -3028,10 +3102,13 @@ void save_raw(std::string_view path,
     bool aga = (chipset == amiga::Chipset::aga);
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
-    if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
+    if (!file) {
+        std::println(stderr, "Failed to open: {}", path_str);
+        return;
+    }
 
     const auto rows = planes.height;
-    const auto bpr  = planes.bytes_per_row;
+    const auto bpr = planes.bytes_per_row;
     const auto depth = planes.depth;
 
     // Mask plane bytes, if requested AND we have something to derive it
@@ -3076,16 +3153,17 @@ void save_raw(std::string_view path,
         // outside interleaved — degrades to appended).
         file.write(reinterpret_cast<const char*>(planes.data.data()),
                    static_cast<std::streamsize>(planes.data.size()));
-        for (std::size_t row = 0; row < rows; ++row) write_mask_row(row);
+        for (std::size_t row = 0; row < rows; ++row)
+            write_mask_row(row);
     }
 
     auto raw_bytes = static_cast<std::size_t>(file.tellp());
     file.close();
     cli_status("Raw:      {} ({} bytes{})",
-               path, raw_bytes,
+               path,
+               raw_bytes,
                want_mask ? std::format(", incl. {} mask",
-                                       mask_layout == "replicated"
-                                           ? "replicated" : "appended")
+                                       mask_layout == "replicated" ? "replicated" : "appended")
                          : "");
 
     // Sibling .pal (big-endian 0x0RGB; AGA appends 0x0RGB low halves).
@@ -3097,23 +3175,21 @@ void save_raw(std::string_view path,
     } else {
         for (auto& c : palette) {
             auto hi = aga ? palette::linear_to_aga_hilo(c).hi : palette::linear_to_ocs(c);
-            std::array<std::uint8_t, 2> buf{
-                static_cast<std::uint8_t>(hi >> 8),
-                static_cast<std::uint8_t>(hi & 0xFF)};
+            std::array<std::uint8_t, 2> buf{static_cast<std::uint8_t>(hi >> 8),
+                                            static_cast<std::uint8_t>(hi & 0xFF)};
             pf.write(reinterpret_cast<const char*>(buf.data()), 2);
         }
         if (aga) {
             for (auto& c : palette) {
                 auto lo = palette::linear_to_aga_hilo(c).lo;
-                std::array<std::uint8_t, 2> buf{
-                    static_cast<std::uint8_t>(lo >> 8),
-                    static_cast<std::uint8_t>(lo & 0xFF)};
+                std::array<std::uint8_t, 2> buf{static_cast<std::uint8_t>(lo >> 8),
+                                                static_cast<std::uint8_t>(lo & 0xFF)};
                 pf.write(reinterpret_cast<const char*>(buf.data()), 2);
             }
         }
         auto pal_bytes = static_cast<std::size_t>(pf.tellp());
-        cli_status("Pal:      {} ({} colors, {} bytes)",
-                   pal_path.string(), palette.size(), pal_bytes);
+        cli_status(
+            "Pal:      {} ({} colors, {} bytes)", pal_path.string(), palette.size(), pal_bytes);
     }
 
     // Sibling .cop with copper changes (UWORD reg + UWORD color per
@@ -3132,7 +3208,8 @@ void save_raw(std::string_view path,
                     if (s < line.size()) {
                         auto hi = aga ? palette::linear_to_aga_hilo(line[s].color).hi
                                       : palette::linear_to_ocs(line[s].color);
-                        buf = {0, line[s].reg,
+                        buf = {0,
+                               line[s].reg,
                                static_cast<std::uint8_t>(hi >> 8),
                                static_cast<std::uint8_t>(hi & 0xFF)};
                     } else {
@@ -3147,7 +3224,8 @@ void save_raw(std::string_view path,
                         std::array<std::uint8_t, 4> buf;
                         if (s < line.size()) {
                             auto lo = palette::linear_to_aga_hilo(line[s].color).lo;
-                            buf = {0, line[s].reg,
+                            buf = {0,
+                                   line[s].reg,
                                    static_cast<std::uint8_t>(lo >> 8),
                                    static_cast<std::uint8_t>(lo & 0xFF)};
                         } else {
@@ -3158,8 +3236,7 @@ void save_raw(std::string_view path,
                 }
             }
             auto cop_bytes = static_cast<std::size_t>(cf.tellp());
-            cli_status("Cop:      {} ({} bytes)",
-                       cop_path.string(), cop_bytes);
+            cli_status("Cop:      {} ({} bytes)", cop_path.string(), cop_bytes);
         }
     }
 }
@@ -3178,11 +3255,15 @@ void save_raw(std::string_view path,
 // This is the classic CGAPIC format; loads directly into 0xB8000 video RAM.
 void save_raw_cga(std::string_view path,
                   std::span<const std::uint8_t> indices,
-                  std::size_t width, std::size_t height,
+                  std::size_t width,
+                  std::size_t height,
                   amiga::Mode mode) {
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
-    if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
+    if (!file) {
+        std::println(stderr, "Failed to open: {}", path_str);
+        return;
+    }
 
     bool is_mono = (mode == amiga::Mode::cga_640);
     bool is_composite = (mode == amiga::Mode::cga_composite);
@@ -3203,35 +3284,32 @@ void save_raw_cga(std::string_view path,
                 for (std::size_t p = 0; p < 8; ++p) {
                     auto x = bx * 8 + p;
                     auto idx = indices[y * width + x];
-                    byte = static_cast<std::uint8_t>(
-                        (byte << 1) | (idx != 0 ? 1 : 0));
+                    byte = static_cast<std::uint8_t>((byte << 1) | (idx != 0 ? 1 : 0));
                 }
             } else if (is_composite) {
                 // Each byte holds 2 composite pixels (4 packed 2bpp pixels =
                 // two 4-bit patterns). Each logical pixel's 0..15 color index
                 // becomes a 4-bit pattern MSB-first in its half of the byte.
-                auto p0 = palette::cga_composite_pattern(
-                    indices[y * width + bx * 2]);
-                auto p1 = palette::cga_composite_pattern(
-                    indices[y * width + bx * 2 + 1]);
+                auto p0 = palette::cga_composite_pattern(indices[y * width + bx * 2]);
+                auto p1 = palette::cga_composite_pattern(indices[y * width + bx * 2 + 1]);
                 byte = static_cast<std::uint8_t>((p0 << 4) | p1);
             } else {
                 // 4 pixels per byte, 2bpp MSB first.
                 for (std::size_t p = 0; p < 4; ++p) {
                     auto x = bx * 4 + p;
                     auto idx = indices[y * width + x] & 0x3;
-                    byte = static_cast<std::uint8_t>(
-                        (byte << 2) | idx);
+                    byte = static_cast<std::uint8_t>((byte << 2) | idx);
                 }
             }
             buf[row_offset + bx] = byte;
         }
     }
-    file.write(reinterpret_cast<const char*>(buf.data()),
-               static_cast<std::streamsize>(buf.size()));
+    file.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
 
-    cli_status("Raw:      {} ({} bytes, CGA {})", path, buf.size(),
-                 is_mono      ? "mono 640x200 (1bpp banked)"
+    cli_status("Raw:      {} ({} bytes, CGA {})",
+               path,
+               buf.size(),
+               is_mono        ? "mono 640x200 (1bpp banked)"
                : is_composite ? "composite 160x200x16 (2bpp banked, NTSC artifact)"
                               : "320x200 (2bpp banked)");
 }
@@ -3245,7 +3323,10 @@ void save_raw_ega(std::string_view path,
                   std::span<const Color3f> palette) {
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
-    if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
+    if (!file) {
+        std::println(stderr, "Failed to open: {}", path_str);
+        return;
+    }
 
     // Bitplane data (4 planes, standard MSB-first layout).
     file.write(reinterpret_cast<const char*>(planes.data.data()),
@@ -3272,7 +3353,10 @@ void save_raw_vga_planar(std::string_view path,
                          amiga::Mode mode) {
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
-    if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
+    if (!file) {
+        std::println(stderr, "Failed to open: {}", path_str);
+        return;
+    }
 
     file.write(reinterpret_cast<const char*>(planes.data.data()),
                static_cast<std::streamsize>(planes.data.size()));
@@ -3289,21 +3373,27 @@ void save_raw_vga_planar(std::string_view path,
     }
 
     auto total = static_cast<std::size_t>(file.tellp());
-    cli_status("Raw:      {} ({} bytes, VGA {})", path, total,
-                 mode == amiga::Mode::vga_10h ? "Mode 10h 4-plane planar"
-                                              : "Mode 12h 4-plane planar");
+    cli_status("Raw:      {} ({} bytes, VGA {})",
+               path,
+               total,
+               mode == amiga::Mode::vga_10h ? "Mode 10h 4-plane planar"
+                                            : "Mode 12h 4-plane planar");
 }
 
 // VGA Mode 13h raw output: chunky 8bpp indices + 6-bit DAC palette
 // (3 bytes/color), ready to feed into port 0x3C9 via `outp` loop.
 void save_raw_vga(std::string_view path,
                   std::span<const std::uint8_t> indices,
-                  std::size_t /*width*/, std::size_t /*height*/,
+                  std::size_t /*width*/,
+                  std::size_t /*height*/,
                   std::span<const Color3f> palette,
                   amiga::Mode /*mode*/) {
     auto path_str = std::string(path);
     std::ofstream file(path_str, std::ios::binary);
-    if (!file) { std::println(stderr, "Failed to open: {}", path_str); return; }
+    if (!file) {
+        std::println(stderr, "Failed to open: {}", path_str);
+        return;
+    }
 
     file.write(reinterpret_cast<const char*>(indices.data()),
                static_cast<std::streamsize>(indices.size()));
@@ -3358,14 +3448,12 @@ void save_raw_vga(std::string_view path,
 // Mirrors web's paintPreviewCanvas() so iTerm2 inline previews look
 // the same physical size as the web canvas — c64-multicolor (160×200)
 // renders at 640×427 like c64-hires (320×200) does, not at 320×214.
-std::pair<std::size_t, std::size_t>
-preview_display_dims(std::size_t w, std::size_t h, amiga::Mode mode,
-                     bool hires, bool interlace) {
+std::pair<std::size_t, std::size_t> preview_display_dims(
+    std::size_t w, std::size_t h, amiga::Mode mode, bool hires, bool interlace) {
     // 1. Backing-canvas (sx, sy) — mirrors web's previewScale().
     std::size_t sx = 2, sy = 2;
 
-    if (amiga::is_cga(mode) || amiga::is_ega(mode) ||
-        amiga::is_vga(mode) || amiga::is_c64(mode)) {
+    if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode)) {
         // DOS / C64 lookup, mirrors DOS_PREVIEW_SCALE in options.ts.
         switch (mode) {
         case amiga::Mode::cga_320:
@@ -3375,56 +3463,91 @@ preview_display_dims(std::size_t w, std::size_t h, amiga::Mode mode,
         case amiga::Mode::c64_afli:
         case amiga::Mode::c64_petscii:
         case amiga::Mode::c64_charset_hires:
-            sx = 2; sy = 2; break;
+            sx = 2;
+            sy = 2;
+            break;
         case amiga::Mode::cga_composite:
         case amiga::Mode::c64_multicolor:
         case amiga::Mode::c64_fli:
         case amiga::Mode::c64_charset_multicolor:
-            sx = 4; sy = 2; break;
+            sx = 4;
+            sy = 2;
+            break;
         case amiga::Mode::cga_640:
         case amiga::Mode::ega_640:
         case amiga::Mode::cga_text80x100:
         case amiga::Mode::cga_text80x50:
         case amiga::Mode::cga_text80x25:
         case amiga::Mode::cga_text80x200:
-            sx = 1; sy = 2; break;
+            sx = 1;
+            sy = 2;
+            break;
         // 40-column cga-text variants: source is 320 wide, like cga-320.
         // Use the default sx=2 sy=2 so the preview comes out 640×400
         // backing then gets PAR-corrected to 640×480 (4:3).
         case amiga::Mode::cga_text40x200:
         case amiga::Mode::cga_text40x100:
-            sx = 2; sy = 2; break;
+            sx = 2;
+            sy = 2;
+            break;
         case amiga::Mode::vga_12h:
         case amiga::Mode::vga_10h:
         case amiga::Mode::ega_hi:
-            sx = 1; sy = 1; break;
+            sx = 1;
+            sy = 1;
+            break;
         default:
-            sx = 2; sy = 2; break;
+            sx = 2;
+            sy = 2;
+            break;
         }
-    } else if (amiga::is_atari(mode) || amiga::is_snes(mode) ||
-               amiga::is_genesis(mode)) {
+    } else if (amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode)) {
         // Web's previewScale() falls through to the Amiga table for
         // these modes (no DOS_PREVIEW_SCALE entry). The table keys
         // off `isHiresMode || ends-with -med || ends-with -hi` and
         // `isInterlaceMode || ends-with -hi`.
         bool hi = false, lace = false;
         switch (mode) {
-        case amiga::Mode::stf_med: case amiga::Mode::ste_med:
-            hi = true; break;
-        case amiga::Mode::stf_hi:  case amiga::Mode::ste_hi:
-            hi = true; lace = true; break;
-        default: break;
+        case amiga::Mode::stf_med:
+        case amiga::Mode::ste_med:
+            hi = true;
+            break;
+        case amiga::Mode::stf_hi:
+        case amiga::Mode::ste_hi:
+            hi = true;
+            lace = true;
+            break;
+        default:
+            break;
         }
-        if (hi && lace)        { sx = 1; sy = 1; }
-        else if (hi)           { sx = 1; sy = 2; }
-        else if (lace)         { sx = 2; sy = 1; }
-        else                   { sx = 2; sy = 2; }
+        if (hi && lace) {
+            sx = 1;
+            sy = 1;
+        } else if (hi) {
+            sx = 1;
+            sy = 2;
+        } else if (lace) {
+            sx = 2;
+            sy = 1;
+        } else {
+            sx = 2;
+            sy = 2;
+        }
     } else {
         // Amiga lores / hires / HAM / EHB.
-        if (hires && interlace)      { sx = 1; sy = 1; }
-        else if (hires)              { sx = 1; sy = 2; }
-        else if (interlace)          { sx = 2; sy = 1; }
-        else                         { sx = 2; sy = 2; }
+        if (hires && interlace) {
+            sx = 1;
+            sy = 1;
+        } else if (hires) {
+            sx = 1;
+            sy = 2;
+        } else if (interlace) {
+            sx = 2;
+            sy = 1;
+        } else {
+            sx = 2;
+            sy = 2;
+        }
     }
 
     std::size_t display_w = w * sx;
@@ -3436,16 +3559,14 @@ preview_display_dims(std::size_t w, std::size_t h, amiga::Mode mode,
     //    fixed-buffer when at default size — this CLI helper has no
     //    "size-override" signal so apply PAR uniformly, which matches
     //    the web's freshly-opened-mode state.
-    if (amiga::is_cga(mode) || amiga::is_ega(mode) ||
-        amiga::is_vga(mode) || amiga::is_c64(mode) ||
-        amiga::is_atari(mode) || amiga::is_snes(mode) ||
-        amiga::is_genesis(mode)) {
+    if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
+        amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode)) {
         auto params = amiga::get_mode_params(mode);
         double par = static_cast<double>(params.par);
         if (par > 0 && w > 0) {
-            display_h = static_cast<std::size_t>(std::lround(
-                static_cast<double>(display_w) * static_cast<double>(h) /
-                (static_cast<double>(w) * par)));
+            display_h = static_cast<std::size_t>(
+                std::lround(static_cast<double>(display_w) * static_cast<double>(h) /
+                            (static_cast<double>(w) * par)));
             if (display_h == 0) display_h = h * sy;
         }
     }
@@ -3455,16 +3576,13 @@ preview_display_dims(std::size_t w, std::size_t h, amiga::Mode mode,
 
 // Used by save_preview() (PNG output), show_terminal_preview() (iTerm2),
 // and the batch / video preview loops.
-Image scale_for_display(const Image& preview, amiga::Mode mode,
-                        bool hires, bool interlace) {
-    auto [pw, ph] = preview_display_dims(preview.width(), preview.height(),
-                                         mode, hires, interlace);
+Image scale_for_display(const Image& preview, amiga::Mode mode, bool hires, bool interlace) {
+    auto [pw, ph] = preview_display_dims(preview.width(), preview.height(), mode, hires, interlace);
     if (pw == preview.width() && ph == preview.height()) return preview;
     // Whole-integer scale: use scale_preview() for cheap NN-by-replication.
-    if (preview.width() != 0 && preview.height() != 0 &&
-        pw % preview.width() == 0 && ph % preview.height() == 0) {
-        return scale_preview(preview, pw / preview.width(),
-                             ph / preview.height());
+    if (preview.width() != 0 && preview.height() != 0 && pw % preview.width() == 0 &&
+        ph % preview.height() == 0) {
+        return scale_preview(preview, pw / preview.width(), ph / preview.height());
     }
     return scale_preview_nn(preview, pw, ph);
 }
@@ -3473,9 +3591,11 @@ Image scale_for_display(const Image& preview, amiga::Mode mode,
 // (preview_w × preview_h); returned mask matches the dimensions
 // scale_for_display() would produce for the same (mode, hires, interlace).
 std::vector<bool> scale_mask_for_display(const std::vector<bool>& mask,
-                                         std::size_t src_w, std::size_t src_h,
+                                         std::size_t src_w,
+                                         std::size_t src_h,
                                          amiga::Mode mode,
-                                         bool hires, bool interlace) {
+                                         bool hires,
+                                         bool interlace) {
     auto [pw, ph] = preview_display_dims(src_w, src_h, mode, hires, interlace);
     if (pw == src_w && ph == src_h) return mask;
     // Generic NN resample to (pw × ph), matches scale_preview_nn() math.
@@ -3491,9 +3611,12 @@ std::vector<bool> scale_mask_for_display(const std::vector<bool>& mask,
     return scaled;
 }
 
-Result<void> save_preview(std::string_view path, const Image& preview,
-                          bool has_trans, const std::vector<bool>& mask,
-                          amiga::Mode mode, bool hires = false,
+Result<void> save_preview(std::string_view path,
+                          const Image& preview,
+                          bool has_trans,
+                          const std::vector<bool>& mask,
+                          amiga::Mode mode,
+                          bool hires = false,
                           bool interlace = false) {
     auto scaled = scale_for_display(preview, mode, hires, interlace);
     if (has_trans) {
@@ -3508,13 +3631,12 @@ Result<void> save_preview(std::string_view path, const Image& preview,
 // mask flags a pixel as transparent. Matches the web's preview-canvas
 // background: light tile #c0c0c0, dark tile #808080, 8-pixel squares
 // (sRGB; converted to linear here since Image stores linear RGB).
-Image composite_on_checkerboard(const Image& preview,
-                                const std::vector<bool>& mask) {
+Image composite_on_checkerboard(const Image& preview, const std::vector<bool>& mask) {
     constexpr int kTile = 8;
     static const auto kLight = color_space::srgb_to_linear(
-        Color3f{0xC0/255.0f, 0xC0/255.0f, 0xC0/255.0f});
-    static const auto kDark  = color_space::srgb_to_linear(
-        Color3f{0x80/255.0f, 0x80/255.0f, 0x80/255.0f});
+        Color3f{0xC0 / 255.0f, 0xC0 / 255.0f, 0xC0 / 255.0f});
+    static const auto kDark = color_space::srgb_to_linear(
+        Color3f{0x80 / 255.0f, 0x80 / 255.0f, 0x80 / 255.0f});
     auto w = preview.width(), h = preview.height();
     Image out = preview;
     for (std::size_t y = 0; y < h; ++y) {
@@ -3530,8 +3652,10 @@ Image composite_on_checkerboard(const Image& preview,
 // Show preview in terminal (iTerm2 inline image protocol). When the
 // encoder reports transparency, composite onto a checkerboard so the
 // terminal preview matches what the web shows through alpha=0 pixels.
-void show_terminal_preview(const Image& preview, amiga::Mode mode,
-                           bool hires = false, bool interlace = false,
+void show_terminal_preview(const Image& preview,
+                           amiga::Mode mode,
+                           bool hires = false,
+                           bool interlace = false,
                            bool has_trans = false,
                            const std::vector<bool>& mask = {}) {
     auto scaled = scale_for_display(preview, mode, hires, interlace);
@@ -3565,8 +3689,8 @@ void show_terminal_preview(const Image& preview, amiga::Mode mode,
 // ---------------------------------------------------------------------------
 struct AmigaOutputBundle {
     bitplane::BitplaneData planes;
-    std::vector<Color3f>   cmap_palette;
-    Image                  rendered;
+    std::vector<Color3f> cmap_palette;
+    Image rendered;
     // Per-pixel palette indices at native (pre-display-scale) dim.
     // When set + mode is eligible (non-HAM, non-DPF, no per-line
     // palettes), the default PNG write path emits a paletted PNG-8
@@ -3574,24 +3698,24 @@ struct AmigaOutputBundle {
     // operations, not slot positions) and for sliced/strips (per-line
     // palettes don't fit a single global PLTE chunk).
     std::vector<std::uint8_t> indices;
-    amiga::Mode            mode = amiga::Mode::lores;
-    amiga::Chipset         chipset = amiga::Chipset::ocs;
-    bool                   hires = false;
-    bool                   interlace = false;
-    bool                   dpf = false;
-    bool                   has_transparency = false;
-    std::vector<bool>      transparency_mask;
-    std::string            output_path;
-    std::string            symbol_override;
+    amiga::Mode mode = amiga::Mode::lores;
+    amiga::Chipset chipset = amiga::Chipset::ocs;
+    bool hires = false;
+    bool interlace = false;
+    bool dpf = false;
+    bool has_transparency = false;
+    std::vector<bool> transparency_mask;
+    std::string output_path;
+    std::string symbol_override;
 
     // Optional sliced/strips data — set when the encoder produced it.
     const std::vector<std::vector<copper::CopperChange>>* scanline_changes = nullptr;
-    const std::vector<std::vector<Color3f>>*              scanline_palettes = nullptr;
-    const std::vector<std::vector<strips::ScapMove>>*     strips_line_moves = nullptr;
-    std::size_t   changes_per_line = 0;
-    std::string   strips_label;
-    int           strips_anchor_hpos = 0;
-    int           strips_total_planes = 0;
+    const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr;
+    const std::vector<std::vector<strips::ScapMove>>* strips_line_moves = nullptr;
+    std::size_t changes_per_line = 0;
+    std::string strips_label;
+    int strips_anchor_hpos = 0;
+    int strips_total_planes = 0;
 
     // Fade-to (CLI cross-fade): pre-computed per-frame palette MOVEs
     // for the .cpp/.c viewer to animate at runtime.
@@ -3629,8 +3753,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
             .aga = aga,
             .fade_in = out.fade_in,
             .dpf = out.dpf,
-            .total_unique_colors = static_cast<std::size_t>(
-                count_unique_colors(out.rendered)),
+            .total_unique_colors = static_cast<std::size_t>(count_unique_colors(out.rendered)),
         });
         if (out.scanline_changes && !out.scanline_changes->empty()) {
             ch.copper_changes = out.scanline_changes;
@@ -3670,8 +3793,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
         iff_opts.dpf = out.dpf;
         if (out.scanline_palettes && !out.scanline_palettes->empty())
             iff_opts.scanline_palettes = out.scanline_palettes;
-        auto r = iff::save_ilbm(path, out.planes, out.cmap_palette,
-                                out.mode, iff_opts);
+        auto r = iff::save_ilbm(path, out.planes, out.cmap_palette, out.mode, iff_opts);
         if (!r) {
             std::println(stderr, "IFF write error: {}", r.error().message);
             return exit_code::cant_create;
@@ -3687,8 +3809,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
         // the mode default (e.g. 320). Sliced / strips paths are gated
         // against tile, so their planes.width already matches display_w
         // and the previously-present pad call was a no-op.
-        auto r = cheader::save(path, out.planes, out.cmap_palette,
-                               out.mode, ch);
+        auto r = cheader::save(path, out.planes, out.cmap_palette, out.mode, ch);
         if (!r) {
             std::println(stderr, "C header write error: {}", r.error().message);
             return exit_code::cant_create;
@@ -3700,8 +3821,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
     if (ends_with(path, ".cpp") || ends_with(path, ".c")) {
         auto ch = build_ch_opts();
         pad_planes_to_mode(out.planes, out.mode, out.hires);
-        auto r = cheader::save_viewer(path, out.planes, out.cmap_palette,
-                                      out.mode, ch);
+        auto r = cheader::save_viewer(path, out.planes, out.cmap_palette, out.mode, ch);
         if (!r) {
             std::println(stderr, "Viewer write error: {}", r.error().message);
             return exit_code::cant_create;
@@ -3710,12 +3830,17 @@ int write_amiga_output(AmigaOutputBundle& out) {
         return 0;
     }
 
-    if (ends_with(path, ".raw") || ends_with(path, ".bin") ||
-        ends_with(path, ".bpl")) {
+    if (ends_with(path, ".raw") || ends_with(path, ".bin") || ends_with(path, ".bpl")) {
         if (!out.allow_raw) return disallow(".raw/.bin/.bpl");
-        save_raw(path, out.planes, out.cmap_palette, out.chipset,
-                 out.scanline_changes, out.changes_per_line,
-                 out.transparency_mask, out.mask_layout, out.mask_invert);
+        save_raw(path,
+                 out.planes,
+                 out.cmap_palette,
+                 out.chipset,
+                 out.scanline_changes,
+                 out.changes_per_line,
+                 out.transparency_mask,
+                 out.mask_layout,
+                 out.mask_invert);
         return 0;
     }
 
@@ -3727,7 +3852,8 @@ int write_amiga_output(AmigaOutputBundle& out) {
             return exit_code::cant_create;
         }
         cli_status("Pal:      {} ({} colors, {} bytes)",
-                   path, out.cmap_palette.size(),
+                   path,
+                   out.cmap_palette.size(),
                    out.cmap_palette.size() * 2);
         return 0;
     }
@@ -3747,24 +3873,18 @@ int write_amiga_output(AmigaOutputBundle& out) {
     // sentinel-transparent ones. Marking slot 0 alpha=0 in tRNS would
     // erase those legitimate black pixels. RGB+alpha PNG carries per-
     // pixel alpha and preserves the distinction.
-    bool palettized_eligible =
-        !out.indices.empty() &&
-        !out.cmap_palette.empty() &&
-        !out.dpf &&
-        !out.has_transparency &&
-        !amiga::is_ham(out.mode) &&
-        (!out.scanline_palettes || out.scanline_palettes->empty()) &&
-        (!out.strips_line_moves || out.strips_line_moves->empty());
+    bool palettized_eligible = !out.indices.empty() && !out.cmap_palette.empty() && !out.dpf &&
+                               !out.has_transparency && !amiga::is_ham(out.mode) &&
+                               (!out.scanline_palettes || out.scanline_palettes->empty()) &&
+                               (!out.strips_line_moves || out.strips_line_moves->empty());
     if (palettized_eligible) {
         const auto sw = out.rendered.width();
         const auto sh = out.rendered.height();
-        auto [pw, ph] = preview_display_dims(sw, sh, out.mode,
-                                              out.hires, out.interlace);
+        auto [pw, ph] = preview_display_dims(sw, sh, out.mode, out.hires, out.interlace);
         std::vector<std::uint8_t> idx_scaled;
         if (pw == sw && ph == sh) {
             idx_scaled = out.indices;
-        } else if (sw != 0 && sh != 0 &&
-                   pw % sw == 0 && ph % sh == 0) {
+        } else if (sw != 0 && sh != 0 && pw % sw == 0 && ph % sh == 0) {
             const auto kx = pw / sw, ky = ph / sh;
             idx_scaled.resize(pw * ph);
             for (std::size_t y = 0; y < sh; ++y) {
@@ -3787,20 +3907,26 @@ int write_amiga_output(AmigaOutputBundle& out) {
         }
         // has_transparency excluded by eligibility above — palettized
         // path never carries transparency.
-        auto r = png_io::save_palettized(path, idx_scaled,
-                                          out.cmap_palette, pw, ph,
-                                          /*transparent_index=*/-1);
+        auto r = png_io::save_palettized(path,
+                                         idx_scaled,
+                                         out.cmap_palette,
+                                         pw,
+                                         ph,
+                                         /*transparent_index=*/-1);
         if (!r) {
             std::println(stderr, "PNG write error: {}", r.error().message);
             return exit_code::cant_create;
         }
-        cli_status("PNG:      {} (paletted, {} colors)",
-                   path, out.cmap_palette.size());
+        cli_status("PNG:      {} (paletted, {} colors)", path, out.cmap_palette.size());
         return 0;
     }
-    auto r = save_preview(path, out.rendered,
-                          out.has_transparency, out.transparency_mask,
-                          out.mode, out.hires, out.interlace);
+    auto r = save_preview(path,
+                          out.rendered,
+                          out.has_transparency,
+                          out.transparency_mask,
+                          out.mode,
+                          out.hires,
+                          out.interlace);
     if (!r) {
         std::println(stderr, "PNG write error: {}", r.error().message);
         return exit_code::cant_create;
@@ -3828,12 +3954,11 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter();
 // runs the sweep externally and doesn't want recursion. The returned
 // state's mode-specific fields (raw_frame, palette, indices, etc.)
 // match what encode_state would produce on a single run.
-api::EncodeStateOrError best_via_encode_state(
-    const Image& src,
-    api::Options aopts,
-    const Config& cfg,
-    std::size_t jitter_count = 8,
-    float jitter_amplitude = 1.0f) {
+api::EncodeStateOrError best_via_encode_state(const Image& src,
+                                              api::Options aopts,
+                                              const Config& cfg,
+                                              std::size_t jitter_count = 8,
+                                              float jitter_amplitude = 1.0f) {
 
     struct Trial {
         api::EncodeStateOrError enc;
@@ -3845,9 +3970,8 @@ api::EncodeStateOrError best_via_encode_state(
     // 24.2% [Lloyd refinement]" garble. Strip the per-trial reporter; we
     // emit one sweep-level progress line below.
     aopts.on_progress = nullptr;
-    auto encode_once = [&](const Image& img,
-                           const dither::Settings& d,
-                           int diversity) -> Result<Trial> {
+    auto encode_once =
+        [&](const Image& img, const dither::Settings& d, int diversity) -> Result<Trial> {
         api::Options trial_opts = aopts;
         trial_opts.dither_strength = d.strength;
         trial_opts.error_clamp = d.error_clamp;
@@ -3856,8 +3980,7 @@ api::EncodeStateOrError best_via_encode_state(
         // png_io::encode + encode_state(bytes) imposed.
         auto enc = api::encode_state_image(img, trial_opts);
         if (!enc.ok()) {
-            return std::unexpected{Error{
-                ErrorCode::write_failed, std::string{enc.error_msg}}};
+            return std::unexpected{Error{ErrorCode::write_failed, std::string{enc.error_msg}}};
         }
         Image rendered = enc.state.rendered;
         return Trial{std::move(enc), std::move(rendered)};
@@ -3867,7 +3990,9 @@ api::EncodeStateOrError best_via_encode_state(
     base_dith.strength = aopts.dither_strength;
     base_dith.error_clamp = aopts.error_clamp;
     auto winner = pipeline::best_sweep<Trial>(
-        src, base_dith, cfg.palette_diversity,
+        src,
+        base_dith,
+        cfg.palette_diversity,
         static_cast<int>(jitter_count),
         encode_once,
         [](const Trial& t) -> const Image& { return t.rendered; },
@@ -3911,10 +4036,10 @@ Image tile_3x3_for_preview(const Image& center) {
 // calls fade_build_palette_sequence() (also further below); both are
 // in this same anonymous namespace so the fwd-decl just satisfies
 // the call site's name lookup without reordering the file.
-std::vector<std::vector<Color3f>> fade_build_palette_sequence(
-        const std::vector<Palette>& stops,
-        std::size_t frames_per_segment,
-        amiga::Chipset chipset, amiga::Mode mode);
+std::vector<std::vector<Color3f>> fade_build_palette_sequence(const std::vector<Palette>& stops,
+                                                              std::size_t frames_per_segment,
+                                                              amiga::Chipset chipset,
+                                                              amiga::Mode mode);
 
 // --- Joint k-means clustering in (source ⊕ target_1 ⊕ ... ⊕ target_N) space.
 //
@@ -3936,7 +4061,7 @@ std::vector<std::vector<Color3f>> fade_build_palette_sequence(
 struct FadeJointResult {
     std::vector<Color3f> palette_source;
     std::vector<std::vector<Color3f>> palette_targets;  // one per target image
-    std::vector<std::uint8_t> indices;                   // per-pixel cluster id
+    std::vector<std::uint8_t> indices;                  // per-pixel cluster id
 };
 
 FadeJointResult fade_joint_kmeans(const Image& source,
@@ -3960,8 +4085,7 @@ FadeJointResult fade_joint_kmeans(const Image& source,
         features[i * n_dim + 1] = sl.a;
         features[i * n_dim + 2] = sl.b;
         for (std::size_t t = 0; t < targets.size(); ++t) {
-            auto tp = (i < targets[t].pixels().size())
-                      ? targets[t].pixels()[i] : Color3f{0, 0, 0};
+            auto tp = (i < targets[t].pixels().size()) ? targets[t].pixels()[i] : Color3f{0, 0, 0};
             auto tl = color_space::linear_to_oklab(tp);
             features[i * n_dim + 3 + t * 3 + 0] = tl.L;
             features[i * n_dim + 3 + t * 3 + 1] = tl.a;
@@ -3987,12 +4111,14 @@ FadeJointResult fade_joint_kmeans(const Image& source,
             idx = pick(rng);
             repeat = false;
             for (auto p : picked) {
-                if (p == idx) { repeat = true; break; }
+                if (p == idx) {
+                    repeat = true;
+                    break;
+                }
             }
         } while (repeat && picked.size() < npix);
         picked.push_back(idx);
-        std::copy_n(features.data() + idx * n_dim, n_dim,
-                    centroids.data() + k * n_dim);
+        std::copy_n(features.data() + idx * n_dim, n_dim, centroids.data() + k * n_dim);
     }
 
     std::vector<std::uint8_t> assignments(npix);
@@ -4008,7 +4134,10 @@ FadeJointResult fade_joint_kmeans(const Image& source,
                     float v = features[i * n_dim + j] - centroids[k * n_dim + j];
                     d += v * v;
                 }
-                if (d < best_d) { best_d = d; best_k = static_cast<std::uint8_t>(k); }
+                if (d < best_d) {
+                    best_d = d;
+                    best_k = static_cast<std::uint8_t>(k);
+                }
             }
             assignments[i] = best_k;
         }
@@ -4040,24 +4169,22 @@ FadeJointResult fade_joint_kmeans(const Image& source,
     FadeJointResult result;
     result.indices = std::move(assignments);
     result.palette_source.resize(k_palette);
-    result.palette_targets = std::vector<std::vector<Color3f>>(
-        targets.size(), std::vector<Color3f>(k_palette));
+    result.palette_targets = std::vector<std::vector<Color3f>>(targets.size(),
+                                                               std::vector<Color3f>(k_palette));
     for (std::size_t k = 0; k < k_palette; ++k) {
         color_space::OKLab src_lab{
             centroids[k * n_dim + 0],
             centroids[k * n_dim + 1],
             centroids[k * n_dim + 2],
         };
-        result.palette_source[k] =
-            snap(color_space::oklab_to_linear(src_lab));
+        result.palette_source[k] = snap(color_space::oklab_to_linear(src_lab));
         for (std::size_t t = 0; t < targets.size(); ++t) {
             color_space::OKLab tgt_lab{
                 centroids[k * n_dim + 3 + t * 3 + 0],
                 centroids[k * n_dim + 3 + t * 3 + 1],
                 centroids[k * n_dim + 3 + t * 3 + 2],
             };
-            result.palette_targets[t][k] =
-                snap(color_space::oklab_to_linear(tgt_lab));
+            result.palette_targets[t][k] = snap(color_space::oklab_to_linear(tgt_lab));
         }
     }
     return result;
@@ -4084,12 +4211,12 @@ FadeJointResult fade_joint_kmeans(const Image& source,
 // EHB: pass slot_count=32 (cop list writes only base; half-brite
 // is hardware-derived).
 std::vector<std::vector<std::uint16_t>> fade_compute_viewer_values_global(
-        const std::vector<std::vector<Color3f>>& fade_seq,
-        std::size_t slot_count,
-        bool lock_color0_black,
-        bool aga) {
-    auto value_at = [&](const std::vector<Color3f>& pal, std::size_t k,
-                        bool want_lo) -> std::uint16_t {
+    const std::vector<std::vector<Color3f>>& fade_seq,
+    std::size_t slot_count,
+    bool lock_color0_black,
+    bool aga) {
+    auto value_at =
+        [&](const std::vector<Color3f>& pal, std::size_t k, bool want_lo) -> std::uint16_t {
         if (k == 0 && lock_color0_black) return 0x0000;
         Color3f col = (k < pal.size()) ? pal[k] : Color3f{0, 0, 0};
         if (!aga) return palette::linear_to_ocs(col);
@@ -4148,9 +4275,8 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
     for (std::size_t i = 0; i < npix; ++i) {
         pixels[i * n_axes] = source.pixels()[i];
         for (std::size_t t = 0; t < targets.size(); ++t)
-            pixels[i * n_axes + 1 + t] =
-                (i < targets[t].pixels().size())
-                ? targets[t].pixels()[i] : Color3f{0, 0, 0};
+            pixels[i * n_axes + 1 + t] = (i < targets[t].pixels().size()) ? targets[t].pixels()[i]
+                                                                          : Color3f{0, 0, 0};
     }
 
     // Forgy init in linear RGB. Slot 0 (when reserved) stays at black.
@@ -4166,7 +4292,11 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
         do {
             idx = pick(rng);
             repeat = false;
-            for (auto p : picked) if (p == idx) { repeat = true; break; }
+            for (auto p : picked)
+                if (p == idx) {
+                    repeat = true;
+                    break;
+                }
         } while (repeat && picked.size() < npix);
         picked.push_back(idx);
         for (std::size_t a = 0; a < n_axes; ++a)
@@ -4189,8 +4319,7 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
     std::vector<color_space::OKLab> px_lab(npix * n_axes);
     for (std::size_t i = 0; i < npix; ++i)
         for (std::size_t a = 0; a < n_axes; ++a)
-            px_lab[i * n_axes + a] =
-                color_space::linear_to_oklab(pixels[i * n_axes + a]);
+            px_lab[i * n_axes + a] = color_space::linear_to_oklab(pixels[i * n_axes + a]);
 
     for (int iter = 0; iter < iterations; ++iter) {
         // Project current centroids to OKLab + halfbrite-OKLab.
@@ -4198,8 +4327,7 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
             for (std::size_t a = 0; a < n_axes; ++a) {
                 auto base = centroids[k * n_axes + a];
                 base_lab[k * n_axes + a] = color_space::linear_to_oklab(base);
-                hb_lab[k * n_axes + a]   = color_space::linear_to_oklab(
-                    palette::half_brite(base));
+                hb_lab[k * n_axes + a] = color_space::linear_to_oklab(palette::half_brite(base));
             }
         }
         // E-step: nearest of 64 effective slots per pixel (skipping
@@ -4210,7 +4338,7 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
             std::uint8_t best_slot = static_cast<std::uint8_t>(k_first);
             for (std::size_t k = k_first; k < k_base; ++k) {
                 float d_base = 0.0f;
-                float d_hb   = 0.0f;
+                float d_hb = 0.0f;
                 for (std::size_t a = 0; a < n_axes; ++a) {
                     auto& p = px_lab[i * n_axes + a];
                     auto& b = base_lab[k * n_axes + a];
@@ -4220,8 +4348,14 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
                     auto dlh = p.L - h.L, dah = p.a - h.a, dbh = p.b - h.b;
                     d_hb += color_space::fma_dist_sq(dlh, dah, dbh);
                 }
-                if (d_base < best_d) { best_d = d_base; best_slot = static_cast<std::uint8_t>(k); }
-                if (d_hb   < best_d) { best_d = d_hb;   best_slot = static_cast<std::uint8_t>(k + k_base); }
+                if (d_base < best_d) {
+                    best_d = d_base;
+                    best_slot = static_cast<std::uint8_t>(k);
+                }
+                if (d_hb < best_d) {
+                    best_d = d_hb;
+                    best_slot = static_cast<std::uint8_t>(k + k_base);
+                }
             }
             assignments[i] = best_slot;
         }
@@ -4259,8 +4393,8 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
     FadeJointResult result;
     result.indices = std::move(assignments);
     result.palette_source.resize(k_eff);
-    result.palette_targets = std::vector<std::vector<Color3f>>(
-        targets.size(), std::vector<Color3f>(k_eff));
+    result.palette_targets = std::vector<std::vector<Color3f>>(targets.size(),
+                                                               std::vector<Color3f>(k_eff));
     auto build_pal = [&](std::vector<Color3f>& pal, std::size_t axis) {
         for (std::size_t k = 0; k < k_base; ++k) {
             // Snap base to OCS gamut so the encoded palette matches what
@@ -4296,11 +4430,11 @@ FadeJointResult fade_joint_kmeans_ehb(const Image& source,
 //     fade_postprocess (joint dither doesn't compose with their
 //     candidate-set picker).
 std::vector<std::uint8_t> fade_joint_dither(
-        const Image& source,
-        const std::vector<Image>& targets,
-        std::span<const Color3f> source_palette,
-        const std::vector<std::vector<Color3f>>& target_palettes,
-        const dither::Settings& settings) {
+    const Image& source,
+    const std::vector<Image>& targets,
+    std::span<const Color3f> source_palette,
+    const std::vector<std::vector<Color3f>>& target_palettes,
+    const dither::Settings& settings) {
     const auto w = source.width(), h = source.height();
     const std::size_t T = targets.size();
     const std::size_t n_slots = source_palette.size();
@@ -4314,8 +4448,7 @@ std::vector<std::uint8_t> fade_joint_dither(
     for (std::size_t t = 0; t < T; ++t) {
         pal_tgt_lab[t].resize(n_slots);
         for (std::size_t k = 0; k < n_slots; ++k)
-            pal_tgt_lab[t][k] =
-                color_space::linear_to_oklab(target_palettes[t][k]);
+            pal_tgt_lab[t][k] = color_space::linear_to_oklab(target_palettes[t][k]);
     }
 
     const bool is_ord = dither::is_ordered(settings.method);
@@ -4327,7 +4460,8 @@ std::vector<std::uint8_t> fade_joint_dither(
     std::vector<std::vector<Color3f>> tgt_err;
     if (!is_ord) {
         tgt_err.resize(T);
-        for (auto& e : tgt_err) e.assign(w * h, Color3f{0, 0, 0});
+        for (auto& e : tgt_err)
+            e.assign(w * h, Color3f{0, 0, 0});
     }
 
     auto clamp01 = [](Color3f c) {
@@ -4339,7 +4473,8 @@ std::vector<std::uint8_t> fade_joint_dither(
     };
 
     auto picker = [&](const color_space::OKLab& src_target,
-                      std::size_t x, std::size_t y) -> dither::PickResult {
+                      std::size_t x,
+                      std::size_t y) -> dither::PickResult {
         const auto idx = y * w + x;
 
         // Adjusted target pixels:
@@ -4348,10 +4483,8 @@ std::vector<std::uint8_t> fade_joint_dither(
         //                  OKLab L/a/b (matching diffuse_raw_buffer's
         //                  source-side bias at lines 3358-3362).
         std::vector<color_space::OKLab> tgt_cur_lab(T);
-        std::vector<Color3f>            tgt_cur_lin(T);
-        float ord_thr = is_ord
-            ? dither::ordered_threshold(settings.method, x, y)
-            : 0.0f;
+        std::vector<Color3f> tgt_cur_lin(T);
+        float ord_thr = is_ord ? dither::ordered_threshold(settings.method, x, y) : 0.0f;
         for (std::size_t t = 0; t < T; ++t) {
             auto& tp = targets[t].pixels()[idx];
             Color3f adj;
@@ -4409,10 +4542,10 @@ std::vector<std::uint8_t> fade_joint_dither(
                     auto& [kdx, kdy, weight] = kdx_kdy_w;
                     int nx = static_cast<int>(x) + kdx;
                     int ny = static_cast<int>(y) + kdy;
-                    if (nx < 0 || nx >= static_cast<int>(w) ||
-                        ny < 0 || ny >= static_cast<int>(h)) continue;
-                    auto& slot = tgt_err[t][static_cast<std::size_t>(ny) * w +
-                                            static_cast<std::size_t>(nx)];
+                    if (nx < 0 || nx >= static_cast<int>(w) || ny < 0 || ny >= static_cast<int>(h))
+                        continue;
+                    auto& slot =
+                        tgt_err[t][static_cast<std::size_t>(ny) * w + static_cast<std::size_t>(nx)];
                     slot.r += e.r * weight;
                     slot.g += e.g * weight;
                     slot.b += e.b * weight;
@@ -4433,45 +4566,45 @@ std::vector<std::uint8_t> fade_joint_dither(
     return indices;
 }
 
-
 // Fade post-process — runs after the main pipeline produced an indexed
 // bitmap, mutates indices/palette/planes/rendered to reflect the joint
 // k-means clustering, and returns the per-frame palette sequence the
 // preview animator consumes. Shared between lores/hires and EHB
 // branches. is_ehb routes to the half-brite-aware joint k-means.
-std::vector<std::vector<Color3f>> fade_postprocess(
-        const Image& source,
-        const std::vector<std::string>& fade_to_paths,
-        std::size_t fade_frames,
-        bool fade_loop,
-        bool is_ehb,
-        std::size_t depth,
-        bitplane::Layout layout,
-        amiga::Chipset chipset,
-        amiga::Mode mode,
-        bool interlace,
-        const dither::Settings& dither_settings,
-        bool reserve_slot0,
-        std::vector<std::uint8_t>& indices,
-        std::vector<Color3f>& palette,
-        bitplane::BitplaneData& planes,
-        Image& rendered) {
+std::vector<std::vector<Color3f>> fade_postprocess(const Image& source,
+                                                   const std::vector<std::string>& fade_to_paths,
+                                                   std::size_t fade_frames,
+                                                   bool fade_loop,
+                                                   bool is_ehb,
+                                                   std::size_t depth,
+                                                   bitplane::Layout layout,
+                                                   amiga::Chipset chipset,
+                                                   amiga::Mode mode,
+                                                   bool interlace,
+                                                   const dither::Settings& dither_settings,
+                                                   bool reserve_slot0,
+                                                   std::vector<std::uint8_t>& indices,
+                                                   std::vector<Color3f>& palette,
+                                                   bitplane::BitplaneData& planes,
+                                                   Image& rendered) {
     // 1. Load + scale targets to source dimensions.
     std::vector<Image> targets;
     targets.reserve(fade_to_paths.size());
     for (auto& path : fade_to_paths) {
         auto loaded = png_io::load(path);
         if (!loaded) {
-            std::println(stderr, "Error: --fade-to: cannot read '{}': {}",
-                         path, loaded.error().message);
+            std::println(
+                stderr, "Error: --fade-to: cannot read '{}': {}", path, loaded.error().message);
             return {};
         }
         Image t = *std::move(loaded);
         if (t.width() != source.width() || t.height() != source.height()) {
             auto resized = scale::resample(t, source.width(), source.height());
             if (!resized) {
-                std::println(stderr, "Error: --fade-to: resample of '{}' failed: {}",
-                             path, resized.error().message);
+                std::println(stderr,
+                             "Error: --fade-to: resample of '{}' failed: {}",
+                             path,
+                             resized.error().message);
                 return {};
             }
             t = *std::move(resized);
@@ -4481,11 +4614,10 @@ std::vector<std::vector<Color3f>> fade_postprocess(
 
     // 2. Joint k-means (EHB or non-EHB) — produces the palette set.
     auto k_pal = std::size_t{1} << depth;
-    FadeJointResult joint = is_ehb
-        ? fade_joint_kmeans_ehb(source, targets, /*iterations=*/12, chipset,
-                                reserve_slot0)
-        : fade_joint_kmeans(source, targets, k_pal, /*iterations=*/12,
-                            chipset, mode, reserve_slot0);
+    FadeJointResult joint =
+        is_ehb ? fade_joint_kmeans_ehb(source, targets, /*iterations=*/12, chipset, reserve_slot0)
+               : fade_joint_kmeans(
+                     source, targets, k_pal, /*iterations=*/12, chipset, mode, reserve_slot0);
 
     // 3. Joint dither using the joint palette set. Source-axis ED
     //    runs through dither::diffuse_raw_buffer with the user's
@@ -4500,27 +4632,23 @@ std::vector<std::vector<Color3f>> fade_postprocess(
     // — fade_joint_dither applies dither::ordered_threshold to each
     // axis independently before computing joint distance.
     auto fade_dither = dither_settings;
-    if (dither::is_yliluoma(fade_dither.method) ||
-        fade_dither.method == dither::Method::none) {
+    if (dither::is_yliluoma(fade_dither.method) || fade_dither.method == dither::Method::none) {
         cli_status("Fade:     --dither {} doesn't compose with joint "
                    "dither — using floyd-steinberg for the fade pass.",
                    dither_to_options_string(fade_dither.method));
         fade_dither.method = dither::Method::floyd_steinberg;
     }
-    indices = fade_joint_dither(source, targets,
-                                joint.palette_source,
-                                joint.palette_targets,
-                                fade_dither);
+    indices = fade_joint_dither(
+        source, targets, joint.palette_source, joint.palette_targets, fade_dither);
     palette = joint.palette_source;
-    auto rebuilt = bitplane::encode(indices, source.width(), source.height(),
-                                    is_ehb ? std::size_t{6} : depth, layout);
+    auto rebuilt = bitplane::encode(
+        indices, source.width(), source.height(), is_ehb ? std::size_t{6} : depth, layout);
     if (!rebuilt) {
         std::println(stderr, "Encode error: {}", rebuilt.error().message);
         return {};
     }
     planes = *std::move(rebuilt);
-    auto rerender = pipeline::render_preview(
-        planes, palette, /*is_ham=*/false, interlace, chipset);
+    auto rerender = pipeline::render_preview(planes, palette, /*is_ham=*/false, interlace, chipset);
     if (!rerender) {
         std::println(stderr, "Render error: {}", rerender.error().message);
         return {};
@@ -4540,7 +4668,9 @@ std::vector<std::vector<Color3f>> fade_postprocess(
     auto seq = fade_build_palette_sequence(stops, fade_frames, chipset, mode);
     cli_status("Fade:     {} stops × {} frames/segment = {} frames "
                "({}joint k-means + joint dither / {})",
-               stops.size(), fade_frames, seq.size(),
+               stops.size(),
+               fade_frames,
+               seq.size(),
                is_ehb ? "EHB " : "",
                dither_to_options_string(fade_dither.method));
     return seq;
@@ -4549,10 +4679,10 @@ std::vector<std::vector<Color3f>> fade_postprocess(
 // Lerp each palette slot in OKLab space, snap each frame's palette to
 // chipset so the in-flight transition fits the DAC grid (no banding when
 // the runtime cycles a 12-bit DAC palette through these states).
-std::vector<std::vector<Color3f>> fade_build_palette_sequence(
-        const std::vector<Palette>& stops,
-        std::size_t frames_per_segment,
-        amiga::Chipset chipset, amiga::Mode mode) {
+std::vector<std::vector<Color3f>> fade_build_palette_sequence(const std::vector<Palette>& stops,
+                                                              std::size_t frames_per_segment,
+                                                              amiga::Chipset chipset,
+                                                              amiga::Mode mode) {
     std::vector<std::vector<Color3f>> out;
     if (stops.size() < 2 || frames_per_segment < 2) return out;
     const auto n_slots = stops[0].colors.size();
@@ -4571,14 +4701,13 @@ std::vector<std::vector<Color3f>> fade_build_palette_sequence(
         bool last = (seg + 1 == stops.size() - 1);
         std::size_t count = last ? frames_per_segment + 1 : frames_per_segment;
         for (std::size_t f = 0; f < count; ++f) {
-            float t = static_cast<float>(f) /
-                      static_cast<float>(frames_per_segment);
+            float t = static_cast<float>(f) / static_cast<float>(frames_per_segment);
             std::vector<Color3f> palette(n_slots);
             for (std::size_t k = 0; k < n_slots; ++k) {
-                auto la = color_space::linear_to_oklab(
-                    k < a.colors.size() ? a.colors[k] : Color3f{0, 0, 0});
-                auto lb = color_space::linear_to_oklab(
-                    k < b.colors.size() ? b.colors[k] : Color3f{0, 0, 0});
+                auto la = color_space::linear_to_oklab(k < a.colors.size() ? a.colors[k]
+                                                                           : Color3f{0, 0, 0});
+                auto lb = color_space::linear_to_oklab(k < b.colors.size() ? b.colors[k]
+                                                                           : Color3f{0, 0, 0});
                 color_space::OKLab mid{
                     (1.0f - t) * la.L + t * lb.L,
                     (1.0f - t) * la.a + t * lb.a,
@@ -4594,7 +4723,8 @@ std::vector<std::vector<Color3f>> fade_build_palette_sequence(
 
 // Render an indexed image with a specific palette into an RGB Image.
 Image fade_render_with_palette(std::span<const std::uint8_t> indices,
-                               std::size_t w, std::size_t h,
+                               std::size_t w,
+                               std::size_t h,
                                std::span<const Color3f> palette) {
     Image out(w, h);
     auto px = out.pixels();
@@ -4611,21 +4741,27 @@ Image fade_render_with_palette(std::span<const std::uint8_t> indices,
 // before each frame keeps the animation in place rather than scrolling.
 // Loops the sequence until the user hits Ctrl+C.
 void fade_animate_preview(std::span<const std::uint8_t> indices,
-                          std::size_t w, std::size_t h,
+                          std::size_t w,
+                          std::size_t h,
                           const std::vector<std::vector<Color3f>>& sequence,
-                          amiga::Mode mode, bool hires, bool interlace,
+                          amiga::Mode mode,
+                          bool hires,
+                          bool interlace,
                           bool loop_back_to_start) {
     if (sequence.empty()) return;
     cli_status("Fade preview: {} frames per segment, {} total. "
                "Ctrl+C to exit.",
-               sequence.size() ? sequence.size() : 0, sequence.size());
+               sequence.size() ? sequence.size() : 0,
+               sequence.size());
     // Build the playback order: forward, then reversed if !loop (so the
     // user sees a ping-pong); or just the forward sequence if loop is on.
     std::vector<std::size_t> order;
     order.reserve(sequence.size() * 2);
-    for (std::size_t i = 0; i < sequence.size(); ++i) order.push_back(i);
+    for (std::size_t i = 0; i < sequence.size(); ++i)
+        order.push_back(i);
     if (!loop_back_to_start && sequence.size() >= 3) {
-        for (std::size_t i = sequence.size() - 2; i >= 1; --i) order.push_back(i);
+        for (std::size_t i = sequence.size() - 2; i >= 1; --i)
+            order.push_back(i);
     }
     while (true) {
         for (auto idx : order) {
@@ -4669,8 +4805,7 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
         // every encoder MUST fire (1.0, "done") when its progress
         // session ends. Audit and fix any that don't, rather than
         // band-aiding here.
-        bool stage_changed = !state->last_stage.empty() &&
-                              state->last_stage != stage;
+        bool stage_changed = !state->last_stage.empty() && state->last_stage != stage;
         // 16 ms throttle ≈ 60 Hz — gives the user actual visible
         // motion on fast parallel passes (previous 50 ms swallowed
         // most updates from a 25-50 ms HAM6 beam search and made the
@@ -4683,9 +4818,11 @@ std::function<void(float, std::string_view)> make_cli_progress_reporter() {
         state->last_emit = now;
         state->last_stage.assign(stage);
         float pct = std::clamp(p, 0.0f, 1.0f) * 100.0f;
-        std::fprintf(stderr, "\rEncoding... %5.1f%% [%.*s]\033[K",
+        std::fprintf(stderr,
+                     "\rEncoding... %5.1f%% [%.*s]\033[K",
                      static_cast<double>(pct),
-                     static_cast<int>(stage.size()), stage.data());
+                     static_cast<int>(stage.size()),
+                     stage.data());
         if (final_tick) std::fputc('\n', stderr);
         std::fflush(stderr);
     };
@@ -4723,16 +4860,14 @@ int run_batch(const Config& cfg) {
     std::size_t frame_h = frames[0].image.height();
     std::size_t n_frames = frames.size();
 
-    cli_status("Batch:    {} frames, {}x{} each",
-               n_frames, frame_w, frame_h);
+    cli_status("Batch:    {} frames, {}x{} each", n_frames, frame_w, frame_h);
 
     // 2. Build atlas + encode atlas → PNG bytes (api::encode_state takes
     //    PNG bytes).
     auto atlas = build_atlas(frames);
     auto atlas_png = png_io::encode(atlas);
     if (!atlas_png) {
-        std::println(stderr, "batch: atlas PNG encode failed: {}",
-                     atlas_png.error().message);
+        std::println(stderr, "batch: atlas PNG encode failed: {}", atlas_png.error().message);
         return exit_code::internal;
     }
 
@@ -4757,8 +4892,7 @@ int run_batch(const Config& cfg) {
     //    encode either way.
     auto atlas_indices_r = bitplane::decode(st.planes);
     if (!atlas_indices_r) {
-        std::println(stderr, "batch: atlas decode failed: {}",
-                     atlas_indices_r.error().message);
+        std::println(stderr, "batch: atlas decode failed: {}", atlas_indices_r.error().message);
         return exit_code::internal;
     }
     auto& atlas_indices = *atlas_indices_r;
@@ -4780,8 +4914,8 @@ int run_batch(const Config& cfg) {
         auto enc_planes = bitplane::encode(
             idx, frame_w, frame_h, st.planes.depth, st.planes.layout);
         if (!enc_planes) {
-            std::println(stderr, "batch: frame {} encode failed: {}",
-                         fi, enc_planes.error().message);
+            std::println(
+                stderr, "batch: frame {} encode failed: {}", fi, enc_planes.error().message);
             return exit_code::internal;
         }
         frame_planes.push_back(*std::move(enc_planes));
@@ -4801,24 +4935,20 @@ int run_batch(const Config& cfg) {
             iff_opts.interlace = st.interlace;
             iff_opts.dpf = st.dpf;
             iff_opts.has_transparency = st.has_transparency;
-            if (!st.scanline_palettes.empty())
-                iff_opts.scanline_palettes = &st.scanline_palettes;
+            if (!st.scanline_palettes.empty()) iff_opts.scanline_palettes = &st.scanline_palettes;
             auto out_path = (out_dir / (frames[fi].stem + ".iff")).string();
-            auto r = iff::save_ilbm(out_path, frame_planes[fi],
-                                    st.palette, st.mode, iff_opts);
+            auto r = iff::save_ilbm(out_path, frame_planes[fi], st.palette, st.mode, iff_opts);
             if (!r) {
-                std::println(stderr, "batch: IFF write '{}' failed: {}",
-                             out_path, r.error().message);
+                std::println(
+                    stderr, "batch: IFF write '{}' failed: {}", out_path, r.error().message);
                 return exit_code::cant_create;
             }
         }
         // Companion .pal — base palette, OCS 12-bit packed.
         auto pal_path = (out_dir / "palette.pal").string();
         auto pr = palette_io::save_ocs_palette(pal_path, st.palette);
-        if (!pr) std::println(stderr, "batch: warning, .pal write failed: {}",
-                              pr.error().message);
-    }
-    else if (fmt == "png") {
+        if (!pr) std::println(stderr, "batch: warning, .pal write failed: {}", pr.error().message);
+    } else if (fmt == "png") {
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             // Render frame from atlas (the encoder already produced the
             // full atlas preview in st.rendered; we slice past the gutter
@@ -4831,8 +4961,8 @@ int run_batch(const Config& cfg) {
             auto out_path = (out_dir / (frames[fi].stem + ".png")).string();
             auto r = png_io::save(out_path, frame_img);
             if (!r) {
-                std::println(stderr, "batch: PNG write '{}' failed: {}",
-                             out_path, r.error().message);
+                std::println(
+                    stderr, "batch: PNG write '{}' failed: {}", out_path, r.error().message);
                 return exit_code::cant_create;
             }
         }
@@ -4840,10 +4970,8 @@ int run_batch(const Config& cfg) {
         // even though it's already baked into each PNG's pixels.
         auto pal_path = (out_dir / "palette.pal").string();
         if (auto pr = palette_io::save_ocs_palette(pal_path, st.palette); !pr)
-            std::println(stderr, "batch: warning, .pal write failed: {}",
-                         pr.error().message);
-    }
-    else if (fmt == "raw") {
+            std::println(stderr, "batch: warning, .pal write failed: {}", pr.error().message);
+    } else if (fmt == "raw") {
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             auto out_path = (out_dir / (frames[fi].stem + ".raw")).string();
             std::ofstream f(out_path, std::ios::binary);
@@ -4857,10 +4985,8 @@ int run_batch(const Config& cfg) {
         // Shared .pal.
         auto pal_path = (out_dir / "palette.pal").string();
         if (auto pr = palette_io::save_ocs_palette(pal_path, st.palette); !pr)
-            std::println(stderr, "batch: warning, .pal write failed: {}",
-                         pr.error().message);
-    }
-    else if (fmt == "h") {
+            std::println(stderr, "batch: warning, .pal write failed: {}", pr.error().message);
+    } else if (fmt == "h") {
         // Single combined .h with N frame plane arrays, one shared
         // palette, optional shared copper changes. Symbol prefix is
         // derived from the output dir's basename. Format is hand-rolled
@@ -4876,14 +5002,14 @@ int run_batch(const Config& cfg) {
             return exit_code::cant_create;
         }
         auto upper_prefix = prefix;
-        for (auto& c : upper_prefix) c = static_cast<char>(std::toupper(c));
+        for (auto& c : upper_prefix)
+            c = static_cast<char>(std::toupper(c));
         auto& plane_ref = frame_planes[0];
         auto words_per_row = plane_ref.bytes_per_row / 2;
 
         f << "/* Generated by png2amiga --batch — do not edit */\n";
-        f << "/* " << n_frames << " frames, " << frame_w << "x" << frame_h
-          << ", " << static_cast<int>(plane_ref.depth)
-          << " bitplanes, shared palette"
+        f << "/* " << n_frames << " frames, " << frame_w << "x" << frame_h << ", "
+          << static_cast<int>(plane_ref.depth) << " bitplanes, shared palette"
           << (st.scanline_changes.empty() ? "" : " + per-line copper") << " */\n\n";
         f << "#ifndef " << upper_prefix << "_H\n";
         f << "#define " << upper_prefix << "_H\n\n";
@@ -4892,8 +5018,8 @@ int run_batch(const Config& cfg) {
         f << "#define " << upper_prefix << "_FRAME_COUNT  " << n_frames << "\n";
         f << "#define " << upper_prefix << "_FRAME_WIDTH  " << frame_w << "\n";
         f << "#define " << upper_prefix << "_FRAME_HEIGHT " << frame_h << "\n";
-        f << "#define " << upper_prefix << "_DEPTH        "
-          << static_cast<int>(plane_ref.depth) << "\n";
+        f << "#define " << upper_prefix << "_DEPTH        " << static_cast<int>(plane_ref.depth)
+          << "\n";
         f << "#define " << upper_prefix << "_BPR          "
           << static_cast<int>(plane_ref.bytes_per_row) << "\n\n";
 
@@ -4908,13 +5034,15 @@ int run_batch(const Config& cfg) {
                 for (std::size_t y = 0; y < bp.height && plane_zero[p]; ++y) {
                     auto off = bp.plane_row_offset(p, y);
                     for (std::size_t b = 0; b < bp.bytes_per_row; ++b) {
-                        if (bp.data[off + b]) { plane_zero[p] = false; break; }
+                        if (bp.data[off + b]) {
+                            plane_zero[p] = false;
+                            break;
+                        }
                     }
                 }
             }
         }
-        bool any_zero_plane = std::ranges::any_of(plane_zero,
-                                                  [](bool z) { return z; });
+        bool any_zero_plane = std::ranges::any_of(plane_zero, [](bool z) { return z; });
         if (any_zero_plane) {
             f << "/* Plane mask (all-zero across every frame): ";
             for (std::size_t p = 0; p < plane_ref.depth; ++p)
@@ -4955,15 +5083,16 @@ int run_batch(const Config& cfg) {
 
         // Plane-pointer table: const UWORD* prefix_frames[N][DEPTH].
         // NULL entries = caller supplies a zero'd buffer at runtime.
-        f << "static const UWORD* const " << prefix << "_frames["
-          << n_frames << "]["
+        f << "static const UWORD* const " << prefix << "_frames[" << n_frames << "]["
           << static_cast<int>(plane_ref.depth) << "] = {\n";
         for (std::size_t fi = 0; fi < n_frames; ++fi) {
             auto sym = prefix + "_" + sanitise_symbol(frames[fi].stem);
             f << "    {";
             for (std::size_t p = 0; p < plane_ref.depth; ++p) {
-                if (plane_zero[p]) f << " 0";
-                else f << " " << sym << "_plane" << p;
+                if (plane_zero[p])
+                    f << " 0";
+                else
+                    f << " " << sym << "_plane" << p;
                 if (p + 1 < plane_ref.depth) f << ",";
             }
             f << " }";
@@ -5000,8 +5129,8 @@ int run_batch(const Config& cfg) {
               << "    UWORD reg;\n"
               << "    UWORD color;\n"
               << "};\n\n";
-            f << "static const struct " << prefix << "_copper_entry "
-              << prefix << "_copper[" << height << "][" << cpl << "] = {\n";
+            f << "static const struct " << prefix << "_copper_entry " << prefix << "_copper["
+              << height << "][" << cpl << "] = {\n";
             for (std::size_t y = 0; y < height; ++y) {
                 f << "    { ";
                 auto& line = changes[y];
@@ -5023,8 +5152,7 @@ int run_batch(const Config& cfg) {
 
         f << "#endif /* " << upper_prefix << "_H */\n";
         cli_status("Header:   {}", h_path);
-    }
-    else if (fmt == "cpp") {
+    } else if (fmt == "cpp") {
         // Single AmigaOS viewer with all frames; left-click cycles, right-click exits.
         auto dir_name = out_dir.filename().string();
         if (dir_name.empty()) dir_name = "sprites";
@@ -5037,28 +5165,25 @@ int run_batch(const Config& cfg) {
             .interlace = st.interlace,
             .aga = st.aga,
             .dpf = st.dpf,
-            .total_unique_colors =
-                static_cast<std::size_t>(count_unique_colors(st.rendered)),
+            .total_unique_colors = static_cast<std::size_t>(count_unique_colors(st.rendered)),
         });
-        std::span<const bitplane::BitplaneData> extras{
-            frame_planes.data() + 1, frame_planes.size() - 1};
+        std::span<const bitplane::BitplaneData> extras{frame_planes.data() + 1,
+                                                       frame_planes.size() - 1};
         ch.extra_frame_planes = extras;
         if (!st.scanline_changes.empty()) {
             ch.copper_changes = &st.scanline_changes;
             ch.copper_changes_per_line = st.changes_per_line;
             ch.copper_scanline_palettes = &st.scanline_palettes;
         }
-        auto r = cheader::save_viewer(cpp_path, frame_planes[0],
-                                      st.palette, st.mode, ch);
+        auto r = cheader::save_viewer(cpp_path, frame_planes[0], st.palette, st.mode, ch);
         if (!r) {
-            std::println(stderr, "batch: viewer write '{}' failed: {}",
-                         cpp_path, r.error().message);
+            std::println(
+                stderr, "batch: viewer write '{}' failed: {}", cpp_path, r.error().message);
             return exit_code::cant_create;
         }
-        cli_status("Viewer:   {} ({} frames, click to cycle, right-click to exit)",
-                   cpp_path, n_frames);
-    }
-    else {
+        cli_status(
+            "Viewer:   {} ({} frames, click to cycle, right-click to exit)", cpp_path, n_frames);
+    } else {
         std::println(stderr, "batch: unknown --batch-format '{}'", fmt);
         return exit_code::usage;
     }
@@ -5072,8 +5197,7 @@ int run_batch(const Config& cfg) {
             for (std::size_t y = 0; y < frame_h; ++y)
                 for (std::size_t x = 0; x < frame_w; ++x)
                     frame_img[x, y] = st.rendered[x0 + x, y];
-            cli_status("Preview frame {}/{} ({}):",
-                       fi + 1, n_frames, frames[fi].stem);
+            cli_status("Preview frame {}/{} ({}):", fi + 1, n_frames, frames[fi].stem);
             show_terminal_preview(frame_img, st.mode, st.hires, st.interlace);
         }
     }
@@ -5097,8 +5221,7 @@ int run_batch(const Config& cfg) {
             for (std::size_t y = 0; y < frame_h; ++y)
                 for (std::size_t x = 0; x < frame_w; ++x)
                     frame_img[x, y] = st.rendered[x0 + x, y];
-            auto scaled = scale_for_display(frame_img, st.mode,
-                                            st.hires, st.interlace);
+            auto scaled = scale_for_display(frame_img, st.mode, st.hires, st.interlace);
             auto seq = inline_image_escape(scaled);
             if (seq.empty()) continue;
             frame_payloads.push_back("\033[H" + seq);
@@ -5113,21 +5236,20 @@ int run_batch(const Config& cfg) {
             raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
             raw.c_cc[VMIN] = 0;
             raw.c_cc[VTIME] = 0;
-            if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0)
-                tty_raw = true;
+            if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) tty_raw = true;
         }
 #endif
         // Hide cursor + clear once for clean playback.
         std::fputs("\033[?25l\033[2J", stdout);
         std::fflush(stdout);
 
-        auto frame_dt = std::chrono::duration<double>(
-            1.0 / static_cast<double>(cfg.preview_video_fps));
-        auto sleep_dt = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            frame_dt);
+        auto frame_dt = std::chrono::duration<double>(1.0 /
+                                                      static_cast<double>(cfg.preview_video_fps));
+        auto sleep_dt = std::chrono::duration_cast<std::chrono::nanoseconds>(frame_dt);
 
         cli_status("Looping {} frames at {:.2f} fps — press any key to stop.",
-                   n_frames, cfg.preview_video_fps);
+                   n_frames,
+                   cfg.preview_video_fps);
 
         bool exit_requested = false;
         while (!exit_requested && !frame_payloads.empty()) {
@@ -5162,9 +5284,9 @@ int run_batch(const Config& cfg) {
     // per-frame planes + shared. compute_size_breakdown does the math
     // for one full image; we ask it for both halves so per-frame
     // doesn't pretend to include the shared overhead.
-    int sliced_entries = st.scanline_changes.empty() ? 0
-        : (static_cast<int>(frame_h) *
-           static_cast<int>(st.changes_per_line));
+    int sliced_entries = st.scanline_changes.empty()
+                             ? 0
+                             : (static_cast<int>(frame_h) * static_cast<int>(st.changes_per_line));
     // Skip all-zero planes in disk accounting. DPF uses two playfields'
     // worth of bitplanes (e.g. depth=3 + dpf → 6 total), but if one
     // playfield is unused (e.g. PF1 transparent for video frames) those
@@ -5179,15 +5301,17 @@ int run_batch(const Config& cfg) {
             for (std::size_t y = 0; y < bp.height && !any; ++y) {
                 auto off = bp.plane_row_offset(p, y);
                 for (std::size_t b = 0; b < bpr; ++b)
-                    if (bp.data[off + b]) { any = true; break; }
+                    if (bp.data[off + b]) {
+                        any = true;
+                        break;
+                    }
             }
             if (any) ++nonzero;
         }
         return nonzero;
     };
     int nonzero_planes = count_nonzero_planes(frame_planes[0]);
-    int per_plane_bytes = static_cast<int>(frame_planes[0].height *
-                                            frame_planes[0].bytes_per_row);
+    int per_plane_bytes = static_cast<int>(frame_planes[0].height * frame_planes[0].bytes_per_row);
     int plane_b = nonzero_planes * per_plane_bytes;
     int pal_b = static_cast<int>(st.palette.size()) * (st.aga ? 4 : 2);
     int sliced_b = sliced_entries * (st.aga ? 8 : 4);
@@ -5204,12 +5328,18 @@ int run_batch(const Config& cfg) {
             for (std::size_t x = 0; x < frame_w; ++x)
                 frame_img[x, y] = st.rendered[x0 + x, y];
         float fp = color_space::compute_psnr_blurred(
-            frames[fi].image.pixels(), frame_img.pixels(),
-            frame_w, frame_h);
+            frames[fi].image.pixels(), frame_img.pixels(), frame_w, frame_h);
         int fc = count_unique_colors(frame_img);
         cli_status("  frame {}/{} ({}): {} colors, PSNR {:.2f} dB",
-                   fi + 1, n_frames, frames[fi].stem, fc, fp);
-        if (std::isfinite(fp)) { psnr_sum += fp; ++psnr_count; }
+                   fi + 1,
+                   n_frames,
+                   frames[fi].stem,
+                   fc,
+                   fp);
+        if (std::isfinite(fp)) {
+            psnr_sum += fp;
+            ++psnr_count;
+        }
     }
     float avg_psnr = psnr_count ? psnr_sum / static_cast<float>(psnr_count)
                                 : std::numeric_limits<float>::infinity();
@@ -5218,11 +5348,13 @@ int run_batch(const Config& cfg) {
                "{} colors, {:.1f} avg swaps/line, "
                "planes {}/frame ({}/{} non-zero) × {} + shared {} = {} total, "
                "PSNR avg {:.2f} dB",
-               n_frames, cfg.batch_output_dir,
+               n_frames,
+               cfg.batch_output_dir,
                total_colors,
                st.copper_changes,
                fmt_size(plane_b),
-               nonzero_planes, static_cast<int>(frame_planes[0].depth),
+               nonzero_planes,
+               static_cast<int>(frame_planes[0].depth),
                n_frames,
                fmt_size(shared_b),
                fmt_size(total_b),
@@ -5230,7 +5362,7 @@ int run_batch(const Config& cfg) {
     return exit_code::ok;
 }
 
-} // namespace
+}  // namespace
 
 int run_main(int argc, char* argv[]) {
     auto config = parse_args(argc, argv);
@@ -5239,9 +5371,9 @@ int run_main(int argc, char* argv[]) {
         return exit_code::usage;
     }
     g_quiet = config->quiet;
-    g_print_palette      = config->print_palette;
+    g_print_palette = config->print_palette;
     g_print_palette_json = config->print_palette_json;
-    g_json  = config->json;
+    g_json = config->json;
     g_preview_scale = resolve_preview_scale(config->preview_scale);
 
     // --no-scale + .cpp/.c viewer is incoherent: the generated viewer
@@ -5251,15 +5383,15 @@ int run_main(int argc, char* argv[]) {
     // at startup so the user gets a clear error before any work.
     auto _ends_cpp_or_c = [](std::string_view s) {
         return s.size() >= 4 &&
-               (s.substr(s.size() - 4) == ".cpp" ||
-                s.substr(s.size() - 2) == ".c");
+               (s.substr(s.size() - 4) == ".cpp" || s.substr(s.size() - 2) == ".c");
     };
     if (config->no_scale && _ends_cpp_or_c(config->output_path)) {
-        std::println(stderr, "Error: --no-scale is incompatible with .cpp/.c "
-                             "viewer output. The generated AmigaOS viewer "
-                             "expects fixed Amiga screen dimensions; use "
-                             "--no-scale only with .h, .iff, .raw, .pal, "
-                             "or .png output.");
+        std::println(stderr,
+                     "Error: --no-scale is incompatible with .cpp/.c "
+                     "viewer output. The generated AmigaOS viewer "
+                     "expects fixed Amiga screen dimensions; use "
+                     "--no-scale only with .h, .iff, .raw, .pal, "
+                     "or .png output.");
         return exit_code::usage;
     }
 
@@ -5267,38 +5399,68 @@ int run_main(int argc, char* argv[]) {
     // systems probing supported modes without running an encode.
     if (config->list_modes) {
         if (config->json) {
-            std::print("{{\n  \"version\": \"{}\",\n  \"modes\": [\n",
-                       png2amiga::version);
+            std::print("{{\n  \"version\": \"{}\",\n  \"modes\": [\n", png2amiga::version);
             const char* modes[] = {
-                "lores", "lores-lace", "hires", "hires-lace",
-                "ham6", "ham6-lace", "ham6-hires", "ham6-hires-lace",
-                "ham8", "ham8-lace", "ham8-hires", "ham8-hires-lace",
-                "ehb", "ehb-lace",
-                "stf-low", "stf-med", "stf-hi",
-                "ste-low", "ste-med", "ste-hi",
-                "vga-13h", "vga-10h", "vga-12h",
-                "ega-320", "ega-640", "ega-hi",
-                "cga-320", "cga-640", "cga-composite",
-                "cga-text80x100", "cga-text80x50", "cga-text80x25",
+                "lores",
+                "lores-lace",
+                "hires",
+                "hires-lace",
+                "ham6",
+                "ham6-lace",
+                "ham6-hires",
+                "ham6-hires-lace",
+                "ham8",
+                "ham8-lace",
+                "ham8-hires",
+                "ham8-hires-lace",
+                "ehb",
+                "ehb-lace",
+                "stf-low",
+                "stf-med",
+                "stf-hi",
+                "ste-low",
+                "ste-med",
+                "ste-hi",
+                "vga-13h",
+                "vga-10h",
+                "vga-12h",
+                "ega-320",
+                "ega-640",
+                "ega-hi",
+                "cga-320",
+                "cga-640",
+                "cga-composite",
+                "cga-text80x100",
+                "cga-text80x50",
+                "cga-text80x25",
                 "cga-text80x200",
-                "cga-text40x200", "cga-text40x100",
-                "snes-mode7-256", "snes-mode7-direct",
-                "genesis-h32", "genesis-h40",
-                "genesis-h32-sh", "genesis-h40-sh",
-                "c64-multicolor", "c64-hires", "c64-fli", "c64-afli",
+                "cga-text40x200",
+                "cga-text40x100",
+                "snes-mode7-256",
+                "snes-mode7-direct",
+                "genesis-h32",
+                "genesis-h40",
+                "genesis-h32-sh",
+                "genesis-h40-sh",
+                "c64-multicolor",
+                "c64-hires",
+                "c64-fli",
+                "c64-afli",
                 "c64-petscii",
-                "c64-charset-hires", "c64-charset-multicolor",
+                "c64-charset-hires",
+                "c64-charset-multicolor",
             };
             for (std::size_t i = 0; i < std::size(modes); ++i) {
-                std::print("    \"{}\"{}\n", modes[i],
-                           i + 1 < std::size(modes) ? "," : "");
+                std::print("    \"{}\"{}\n", modes[i], i + 1 < std::size(modes) ? "," : "");
             }
             cli_status("  ]\n}}");
         } else {
             cli_status("png2amiga {} — supported modes:", png2amiga::version);
-            cli_status("  Amiga:    lores, lores-lace, hires, hires-lace, ham6, ham8, ehb (+ -lace, -hires variants)");
+            cli_status("  Amiga:    lores, lores-lace, hires, hires-lace, ham6, ham8, ehb (+ "
+                       "-lace, -hires variants)");
             cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi");
-            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, cga-text80x{{200,100,50,25}}");
+            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, "
+                       "cga-text80x{{200,100,50,25}}");
             cli_status("  SNES:     snes-mode7-256, snes-mode7-direct");
             cli_status("  Genesis:  genesis-h32, genesis-h40 (+ -sh variants)");
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
@@ -5337,8 +5499,8 @@ int run_main(int argc, char* argv[]) {
     if (!config->score_vs.empty()) {
         if (config->input_path.empty()) {
             std::println(stderr,
-                "Error: --score-vs requires "
-                "<distorted.png|distorted.idx> as input");
+                         "Error: --score-vs requires "
+                         "<distorted.png|distorted.idx> as input");
             return exit_code::usage;
         }
         auto reference = png_io::load(config->score_vs);
@@ -5356,63 +5518,57 @@ int run_main(int argc, char* argv[]) {
         if (ends_with(config->input_path, ".idx")) {
             if (config->palette_file.empty()) {
                 std::println(stderr,
-                    "Error: --score-vs <reference.png> "
-                    "<distorted.idx> requires --palette <file> "
-                    "to render the indexed bytes (no .idx header).");
+                             "Error: --score-vs <reference.png> "
+                             "<distorted.idx> requires --palette <file> "
+                             "to render the indexed bytes (no .idx header).");
                 return exit_code::usage;
             }
             auto pal = palette_io::load_palette(config->palette_file);
             if (!pal) {
-                std::println(stderr, "Load palette: {}",
-                             pal.error().message);
+                std::println(stderr, "Load palette: {}", pal.error().message);
                 return 1;
             }
-            std::ifstream f(config->input_path,
-                            std::ios::binary);
+            std::ifstream f(config->input_path, std::ios::binary);
             if (!f) {
-                std::println(stderr,
-                    "Load distorted .idx: cannot open '{}'",
-                    config->input_path);
+                std::println(stderr, "Load distorted .idx: cannot open '{}'", config->input_path);
                 return 1;
             }
             const std::size_t expected = w * h;
             std::vector<std::uint8_t> raw(expected);
-            f.read(reinterpret_cast<char*>(raw.data()),
-                   static_cast<std::streamsize>(expected));
-            std::size_t got =
-                static_cast<std::size_t>(f.gcount());
+            f.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(expected));
+            std::size_t got = static_cast<std::size_t>(f.gcount());
             // Detect tail bytes so a too-large file is also a
             // hard error (gcount caps at the requested count).
             f.peek();
             if (got != expected || !f.eof()) {
                 std::println(stderr,
-                    "Error: --score-vs .idx size mismatch: "
-                    "reference is {}x{} = {} bytes, file has "
-                    "different size",
-                    w, h, expected);
+                             "Error: --score-vs .idx size mismatch: "
+                             "reference is {}x{} = {} bytes, file has "
+                             "different size",
+                             w,
+                             h,
+                             expected);
                 return 1;
             }
             auto px = distorted_img.pixels();
             for (std::size_t i = 0; i < expected; ++i) {
                 const std::uint8_t idx = raw[i];
-                px[i] = (idx < pal->colors.size())
-                    ? pal->colors[idx]
-                    : Color3f{0.0f, 0.0f, 0.0f};
+                px[i] = (idx < pal->colors.size()) ? pal->colors[idx] : Color3f{0.0f, 0.0f, 0.0f};
             }
         } else {
             auto distorted = png_io::load(config->input_path);
             if (!distorted) {
-                std::println(stderr, "Load distorted: {}",
-                             distorted.error().message);
+                std::println(stderr, "Load distorted: {}", distorted.error().message);
                 return 1;
             }
-            if (distorted->width() != w ||
-                distorted->height() != h) {
+            if (distorted->width() != w || distorted->height() != h) {
                 std::println(stderr,
-                    "Error: --score-vs dimensions differ: "
-                    "distorted {}x{}, reference {}x{}",
-                    distorted->width(), distorted->height(),
-                    w, h);
+                             "Error: --score-vs dimensions differ: "
+                             "distorted {}x{}, reference {}x{}",
+                             distorted->width(),
+                             distorted->height(),
+                             w,
+                             h);
                 return 1;
             }
             distorted_img = std::move(*distorted);
@@ -5429,8 +5585,7 @@ int run_main(int argc, char* argv[]) {
         matte_to_black(distorted_img);
         float psnr = color_space::compute_psnr_blurred(
             reference->pixels(), distorted_img.pixels(), w, h);
-        float s2 = ssimulacra2::compute(
-            reference->pixels(), distorted_img.pixels(), w, h);
+        float s2 = ssimulacra2::compute(reference->pixels(), distorted_img.pixels(), w, h);
         cli_status("Encoded:  scored, PSNR: {:.2f} dB, S2: {:.2f}", psnr, s2);
         return exit_code::ok;
     }
@@ -5444,13 +5599,11 @@ int run_main(int argc, char* argv[]) {
     // is ignored.
     if (config->png_benchmark) {
         if (config->input_path.empty() || config->output_path.empty()) {
-            std::println(stderr,
-                "Error: --mode png requires <input> <output.png>");
+            std::println(stderr, "Error: --mode png requires <input> <output.png>");
             return exit_code::usage;
         }
         if (config->depth < 1 || config->depth > 8) {
-            std::println(stderr,
-                "Error: --mode png needs --depth 1..8 (2..256 colors)");
+            std::println(stderr, "Error: --mode png needs --depth 1..8 (2..256 colors)");
             return exit_code::usage;
         }
 
@@ -5495,11 +5648,9 @@ int run_main(int argc, char* argv[]) {
             png_algo = quantize::Algorithm::gpu_restart;
         }
 
-        auto quantized = quantize::quantize(img, max_colors, png_algo,
-                                            config->palette_diversity);
+        auto quantized = quantize::quantize(img, max_colors, png_algo, config->palette_diversity);
         if (!quantized) {
-            std::println(stderr, "Quantize error: {}",
-                         quantized.error().message);
+            std::println(stderr, "Quantize error: {}", quantized.error().message);
             return 1;
         }
 
@@ -5508,29 +5659,29 @@ int run_main(int argc, char* argv[]) {
         // the per-method ED entries — use lores as a placeholder so the
         // function picks the early-return per-method branch.
         auto tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = amiga::Mode::lores,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = false,
-            .scap    = false,
-            .copper  = false,
+            .mode = amiga::Mode::lores,
+            .depth = static_cast<int>(config->depth),
+            .dpf = false,
+            .scap = false,
+            .copper = false,
             .chipset = amiga::Chipset::aga,
-            .method  = config->dither_method,
+            .method = config->dither_method,
         });
         dither::Settings dith;
         dith.method = config->dither_method;
-        dith.strength = config->dither_strength_explicit
-            ? config->dither_strength : tune.strength;
-        dith.error_clamp = config->error_clamp_explicit
-            ? config->error_clamp : tune.error_clamp;
+        dith.strength = config->dither_strength_explicit ? config->dither_strength : tune.strength;
+        dith.error_clamp = config->error_clamp_explicit ? config->error_clamp : tune.error_clamp;
 
         // Dither-aware palette refinement (skipped when dither off).
         // Standard pipeline runs this for non-Amiga modes; the PNG
         // benchmark needs it too so we measure parity with libimagequant.
-        if (config->refine_iterations > 0 &&
-            dith.method != dither::Method::none) {
+        if (config->refine_iterations > 0 && dith.method != dither::Method::none) {
             auto refined = quantize::refine_with_dither(
-                img, *quantized, dith,
-                amiga::Chipset::aga, amiga::Mode::lores,
+                img,
+                *quantized,
+                dith,
+                amiga::Chipset::aga,
+                amiga::Mode::lores,
                 static_cast<std::size_t>(config->refine_iterations));
             if (refined) quantized->colors = std::move(refined->colors);
         }
@@ -5542,9 +5693,8 @@ int run_main(int argc, char* argv[]) {
         for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
             rendered.pixels()[i] = quantized->colors[dith_result.indices[i]];
 
-        auto saved = png_io::save_palettized(config->output_path,
-                                             dith_result.indices,
-                                             quantized->colors, w, h);
+        auto saved = png_io::save_palettized(
+            config->output_path, dith_result.indices, quantized->colors, w, h);
         if (!saved) {
             std::println(stderr, "Save error: {}", saved.error().message);
             return 1;
@@ -5553,23 +5703,19 @@ int run_main(int argc, char* argv[]) {
         cli_print_input(img.width(), img.height());
         cli_print_target(w, h, static_cast<int>(config->depth));
         cli_print_palette(std::format(
-            "{} colors, indexed PNG-8 (benchmark, {})",
-            quantized->colors.size(), quantized->name));
+            "{} colors, indexed PNG-8 (benchmark, {})", quantized->colors.size(), quantized->name));
         cli_dump_palette(std::span<const Color3f>(quantized->colors), *config);
         cli_print_dither(dith.method, dith.strength);
 
-        float psnr = color_space::compute_psnr_blurred(
-            img.pixels(), rendered.pixels(), w, h);
-        float s2 = ssimulacra2::compute(
-            img.pixels(), rendered.pixels(), w, h);
-        cli_print_encoded_other(
-            "indexed PNG-8 (benchmark)",
-            quantized->colors.size(),
-            static_cast<double>(dith_result.total_error),
-            psnr, s2);
+        float psnr = color_space::compute_psnr_blurred(img.pixels(), rendered.pixels(), w, h);
+        float s2 = ssimulacra2::compute(img.pixels(), rendered.pixels(), w, h);
+        cli_print_encoded_other("indexed PNG-8 (benchmark)",
+                                quantized->colors.size(),
+                                static_cast<double>(dith_result.total_error),
+                                psnr,
+                                s2);
         return exit_code::ok;
     }
-
 
     // --- strips calibration probe path ---
     // Synthesize the probe image + per-line copper ops directly and emit a
@@ -5578,39 +5724,38 @@ int run_main(int argc, char* argv[]) {
     // afterwards to produce an ADF.
     if (!config->strips_probe.empty()) {
         if (config->output_path.empty()) {
-            std::println(stderr,
-                         "Error: --strips-probe requires -o <output.cpp>");
+            std::println(stderr, "Error: --strips-probe requires -o <output.cpp>");
             return 1;
         }
         auto probe = config->strips_probe;
         strips::ScapResult res;
         if (probe == "a") {
             auto r = strips::make_scap_probe_a_dpf_ocs(320, 256);
-            if (!r) { std::println(stderr, "Probe A error: {}",
-                                   r.error().message); return 1; }
+            if (!r) {
+                std::println(stderr, "Probe A error: {}", r.error().message);
+                return 1;
+            }
             res = *std::move(r);
         } else if (probe == "b" || probe == "c" || probe == "d") {
-            std::println(stderr, "Error: --strips-probe {} not implemented yet "
-                                 "(needs Probe A slot data first)", probe);
+            std::println(stderr,
+                         "Error: --strips-probe {} not implemented yet "
+                         "(needs Probe A slot data first)",
+                         probe);
             return 1;
         } else {
-            std::println(stderr,
-                         "Error: --strips-probe value must be a|b|c|d, got '{}'",
-                         probe);
+            std::println(stderr, "Error: --strips-probe value must be a|b|c|d, got '{}'", probe);
             return 1;
         }
 
         // Pad palette to 16 entries (DPF emit needs the full upper-register
         // bank populated even when most are black).
-        if (res.palette.size() < 16)
-            res.palette.resize(16, Color3f{0.0f, 0.0f, 0.0f});
+        if (res.palette.size() < 16) res.palette.resize(16, Color3f{0.0f, 0.0f, 0.0f});
 
         auto fallback_sym = std::string("strips_") + res.probe_label;
         auto ch_opts = pipeline::make_ch_opts({
-            .symbol_override = config->symbol_name.empty()
-                ? std::string_view{fallback_sym}
-                : std::string_view{config->symbol_name},
-            .dpf = true,                // OCS DPF for Phase 1
+            .symbol_override = config->symbol_name.empty() ? std::string_view{fallback_sym}
+                                                           : std::string_view{config->symbol_name},
+            .dpf = true,  // OCS DPF for Phase 1
         });
         ch_opts.strips_line_moves = &res.line_moves;
         ch_opts.strips_label = res.probe_label;
@@ -5618,35 +5763,30 @@ int run_main(int argc, char* argv[]) {
         ch_opts.strips_total_planes = res.slot_table.total_planes;
 
         cli_status("Strips probe: {} ({}x{}, {} planes, {} per-line ops)",
-                     res.probe_label,
-                     res.planes.width, res.planes.height,
-                     res.planes.depth,
-                     res.line_moves.empty() ? 0 : res.line_moves[0].size());
+                   res.probe_label,
+                   res.planes.width,
+                   res.planes.height,
+                   res.planes.depth,
+                   res.line_moves.empty() ? 0 : res.line_moves[0].size());
 
-        if (ends_with(config->output_path, ".cpp") ||
-            ends_with(config->output_path, ".c")) {
-            auto r = cheader::save_viewer(config->output_path, res.planes,
-                                          res.palette, amiga::Mode::lores,
-                                          ch_opts);
+        if (ends_with(config->output_path, ".cpp") || ends_with(config->output_path, ".c")) {
+            auto r = cheader::save_viewer(
+                config->output_path, res.planes, res.palette, amiga::Mode::lores, ch_opts);
             if (!r) {
-                std::println(stderr, "Viewer write error: {}",
-                             r.error().message);
+                std::println(stderr, "Viewer write error: {}", r.error().message);
                 return 1;
             }
             cli_status("Viewer:   {}", config->output_path);
         } else if (ends_with(config->output_path, ".h")) {
-            auto r = cheader::save(config->output_path, res.planes,
-                                   res.palette, amiga::Mode::lores,
-                                   ch_opts);
+            auto r = cheader::save(
+                config->output_path, res.planes, res.palette, amiga::Mode::lores, ch_opts);
             if (!r) {
-                std::println(stderr, "Header write error: {}",
-                             r.error().message);
+                std::println(stderr, "Header write error: {}", r.error().message);
                 return 1;
             }
             cli_status("Header:   {}", config->output_path);
         } else {
-            std::println(stderr,
-                         "Error: --strips-probe output must be .cpp/.c/.h");
+            std::println(stderr, "Error: --strips-probe output must be .cpp/.c/.h");
             return 1;
         }
         return 0;
@@ -5664,8 +5804,7 @@ int run_main(int argc, char* argv[]) {
         auto cs_name = (cs == amiga::Chipset::aga) ? "AGA" : "OCS";
 
         if (config->depth < 1 || config->depth > 8) {
-            std::println(stderr, "Error: depth must be 1-8, got {}",
-                         config->depth);
+            std::println(stderr, "Error: depth must be 1-8, got {}", config->depth);
             return 1;
         }
 
@@ -5676,26 +5815,24 @@ int run_main(int argc, char* argv[]) {
         // HAM_INCOMPATIBLE_DITHERS watcher and keeps existing scripts
         // / CMake invocations working without --dither. Explicit
         // picks fail loud — scripted callers chose them for a reason.
-        if (config->dither_explicit &&
-            dither::needs_discrete_palette(config->dither_method)) {
+        if (config->dither_explicit && dither::needs_discrete_palette(config->dither_method)) {
             auto dname = dither_name(config->dither_method);
             if (amiga::is_ham(config->mode)) {
                 std::println(stderr,
-                    "Error: dither '{}' needs a discrete palette and "
-                    "silently degenerates in HAM modes (no per-pixel "
-                    "palette index — encoder picks SET/MODIFY ops). "
-                    "Use atkinson, floyd-steinberg, sierra-lite, jarvis, "
-                    "stucki, or an ordered method.",
-                    dname);
+                             "Error: dither '{}' needs a discrete palette and "
+                             "silently degenerates in HAM modes (no per-pixel "
+                             "palette index — encoder picks SET/MODIFY ops). "
+                             "Use atkinson, floyd-steinberg, sierra-lite, jarvis, "
+                             "stucki, or an ordered method.",
+                             dname);
                 return 1;
             }
-            if (amiga::is_snes_direct(config->mode) &&
-                dither::is_yliluoma(config->dither_method)) {
+            if (amiga::is_snes_direct(config->mode) && dither::is_yliluoma(config->dither_method)) {
                 std::println(stderr,
-                    "Error: dither '{}' is palette-aware but Mode 7 "
-                    "Direct has no palette table. Use a non-yliluoma "
-                    "method (atkinson, floyd-steinberg, ordered).",
-                    dname);
+                             "Error: dither '{}' is palette-aware but Mode 7 "
+                             "Direct has no palette table. Use a non-yliluoma "
+                             "method (atkinson, floyd-steinberg, ordered).",
+                             dname);
                 return 1;
             }
         }
@@ -5704,8 +5841,7 @@ int run_main(int argc, char* argv[]) {
         // it's the right default for HAM. SNES Mode 7 Direct uses
         // ostromoukhov instead — yliluoma-family is the only thing
         // that really breaks there and the default isn't yliluoma.
-        if (!config->dither_explicit &&
-            dither::needs_discrete_palette(config->dither_method) &&
+        if (!config->dither_explicit && dither::needs_discrete_palette(config->dither_method) &&
             amiga::is_ham(config->mode)) {
             config->dither_method = dither::Method::atkinson;
         }
@@ -5715,9 +5851,8 @@ int run_main(int argc, char* argv[]) {
             *config->chipset == amiga::Chipset::ocs) {
             auto ham_bp = amiga::get_mode_params(config->mode).bitplane_depth;
             if (ham_bp > amiga::max_depth(amiga::Chipset::ocs)) {
-                std::println(stderr,
-                    "Error: HAM{} requires AGA (>6 bitplanes), cannot use OCS",
-                    ham_bp);
+                std::println(
+                    stderr, "Error: HAM{} requires AGA (>6 bitplanes), cannot use OCS", ham_bp);
                 return 1;
             }
         }
@@ -5730,10 +5865,8 @@ int run_main(int argc, char* argv[]) {
         //                              below).
         //   OCS lores / lores-lace → 5 (the existing global default).
         if (!config->depth_explicit &&
-            (config->mode == amiga::Mode::lores ||
-             config->mode == amiga::Mode::lores_interlace ||
-             config->mode == amiga::Mode::hires ||
-             config->mode == amiga::Mode::hires_interlace)) {
+            (config->mode == amiga::Mode::lores || config->mode == amiga::Mode::lores_interlace ||
+             config->mode == amiga::Mode::hires || config->mode == amiga::Mode::hires_interlace)) {
             if (cs == amiga::Chipset::aga) {
                 config->depth = 8;
             } else if (config->mode == amiga::Mode::hires ||
@@ -5748,8 +5881,7 @@ int run_main(int argc, char* argv[]) {
         // set: d=2 +0.99, d=4 +0.62, d=3 flat (kept the default win at 4).
         // Lores buckets all prefer ≤ 4, so the override is hires-only.
         if (!config->palette_diversity_explicit &&
-            (config->mode == amiga::Mode::hires ||
-             config->mode == amiga::Mode::hires_interlace)) {
+            (config->mode == amiga::Mode::hires || config->mode == amiga::Mode::hires_interlace)) {
             config->palette_diversity = 5;
         }
 
@@ -5764,9 +5896,12 @@ int run_main(int argc, char* argv[]) {
                 auto mp = amiga::get_mode_params(config->mode);
                 const char* mode_name = mp.is_hires ? "hires" : "lores";
                 std::println(stderr,
-                    "Error: {} {} supports max {} bitplanes ({} colors), got {}",
-                    cs_name, mode_name, max_d, std::size_t{1} << max_d,
-                    config->depth);
+                             "Error: {} {} supports max {} bitplanes ({} colors), got {}",
+                             cs_name,
+                             mode_name,
+                             max_d,
+                             std::size_t{1} << max_d,
+                             config->depth);
                 return 1;
             }
         }
@@ -5799,26 +5934,21 @@ int run_main(int argc, char* argv[]) {
             return 1;
         };
         if (config->copper || config->scap)
-            return reject_tile(
-                "not yet supported with sliced palette (--sliced) or "
-                "strip palette (--strips). Drop those flags or drop --tile.");
-        if (amiga::is_ham(config->mode))
-            return reject_tile("not supported with HAM modes");
-        if (config->batch)
-            return reject_tile("not supported with --batch");
-        bool tile_mode_ok =
-            config->mode == amiga::Mode::lores ||
-            config->mode == amiga::Mode::lores_interlace ||
-            config->mode == amiga::Mode::hires ||
-            config->mode == amiga::Mode::hires_interlace ||
-            config->mode == amiga::Mode::ehb;
+            return reject_tile("not yet supported with sliced palette (--sliced) or "
+                               "strip palette (--strips). Drop those flags or drop --tile.");
+        if (amiga::is_ham(config->mode)) return reject_tile("not supported with HAM modes");
+        if (config->batch) return reject_tile("not supported with --batch");
+        bool tile_mode_ok = config->mode == amiga::Mode::lores ||
+                            config->mode == amiga::Mode::lores_interlace ||
+                            config->mode == amiga::Mode::hires ||
+                            config->mode == amiga::Mode::hires_interlace ||
+                            config->mode == amiga::Mode::ehb;
         if (!tile_mode_ok)
-            return reject_tile(
-                "only supported on freeform indexed bitmap modes "
-                "(lores, hires, EHB; with optional --interlace and --dpf). "
-                "Atari/VGA/EGA/CGA, SNES Mode 7, Genesis, and C64 modes "
-                "all use fixed buffers or tile-coded encodings that don't "
-                "round-trip through the 3x3 replicate.");
+            return reject_tile("only supported on freeform indexed bitmap modes "
+                               "(lores, hires, EHB; with optional --interlace and --dpf). "
+                               "Atari/VGA/EGA/CGA, SNES Mode 7, Genesis, and C64 modes "
+                               "all use fixed buffers or tile-coded encodings that don't "
+                               "round-trip through the 3x3 replicate.");
     }
 
     // --fade-to gating. Same shape as --tile: indexed lores / hires /
@@ -5830,32 +5960,25 @@ int run_main(int argc, char* argv[]) {
             std::println(stderr, "Error: --fade-to: {}", why);
             return 1;
         };
-        if (config->scap)
-            return reject_fade(
-                "not supported with strip palette (--strips).");
+        if (config->scap) return reject_fade("not supported with strip palette (--strips).");
         if (config->copper)
-            return reject_fade(
-                "not supported with --sliced. Joint per-line palette "
-                "evolution under the MOVE budget would need encode_copper "
-                "rewritten in joint (source ⊕ targets) OKLab — deferred.");
+            return reject_fade("not supported with --sliced. Joint per-line palette "
+                               "evolution under the MOVE budget would need encode_copper "
+                               "rewritten in joint (source ⊕ targets) OKLab — deferred.");
         if (amiga::is_ham(config->mode))
             return reject_fade("not supported in HAM modes (palette is "
                                "dynamic per pixel; there's no static "
                                "palette to fade).");
-        if (config->batch)
-            return reject_fade("not supported with --batch");
-        bool fade_mode_ok =
-            config->mode == amiga::Mode::lores ||
-            config->mode == amiga::Mode::lores_interlace ||
-            config->mode == amiga::Mode::hires ||
-            config->mode == amiga::Mode::hires_interlace ||
-            config->mode == amiga::Mode::ehb;
+        if (config->batch) return reject_fade("not supported with --batch");
+        bool fade_mode_ok = config->mode == amiga::Mode::lores ||
+                            config->mode == amiga::Mode::lores_interlace ||
+                            config->mode == amiga::Mode::hires ||
+                            config->mode == amiga::Mode::hires_interlace ||
+                            config->mode == amiga::Mode::ehb;
         if (!fade_mode_ok)
-            return reject_fade(
-                "supports lores / hires / EHB (with optional "
-                "--interlace and --dpf) only.");
-        if (config->fade_to_paths.size() > 8)
-            return reject_fade("max 8 target stops in --fade-to");
+            return reject_fade("supports lores / hires / EHB (with optional "
+                               "--interlace and --dpf) only.");
+        if (config->fade_to_paths.size() > 8) return reject_fade("max 8 target stops in --fade-to");
     }
 
     // Batch mode runs an entirely different path: build atlas, encode
@@ -5868,8 +5991,7 @@ int run_main(int argc, char* argv[]) {
     // Load input image
     auto image = png_io::load(config->input_path);
     if (!image) {
-        std::println(stderr, "Error loading {}: {}", config->input_path,
-                     image.error().message);
+        std::println(stderr, "Error loading {}: {}", config->input_path, image.error().message);
         return exit_code::no_input;
     }
 
@@ -5887,9 +6009,9 @@ int run_main(int argc, char* argv[]) {
                 auto gf = static_cast<float>(tc[1]) / 255.0f;
                 auto bf = static_cast<float>(tc[2]) / 255.0f;
                 auto srgb = color_space::linear_to_srgb(c);
-                if (std::abs(srgb.r - rf) < 1.0f/512.0f &&
-                    std::abs(srgb.g - gf) < 1.0f/512.0f &&
-                    std::abs(srgb.b - bf) < 1.0f/512.0f) return true;
+                if (std::abs(srgb.r - rf) < 1.0f / 512.0f &&
+                    std::abs(srgb.g - gf) < 1.0f / 512.0f && std::abs(srgb.b - bf) < 1.0f / 512.0f)
+                    return true;
             }
             return false;
         };
@@ -5897,9 +6019,8 @@ int run_main(int argc, char* argv[]) {
         bool found = false;
         for (std::size_t y = 0; y < ih; ++y) {
             for (std::size_t x = 0; x < iw; ++x) {
-                bool transparent =
-                    (image->has_alpha() && image->alpha_at(x, y) <= 0.0f) ||
-                    matches_sentinel((*image)[x, y]);
+                bool transparent = (image->has_alpha() && image->alpha_at(x, y) <= 0.0f) ||
+                                   matches_sentinel((*image)[x, y]);
                 if (!transparent) {
                     min_x = std::min(min_x, x);
                     min_y = std::min(min_y, y);
@@ -5910,16 +6031,13 @@ int run_main(int argc, char* argv[]) {
             }
         }
         if (!found) {
-            std::println(stderr,
-                "Trim:     entire image is transparent — leaving uncropped");
-        } else if (min_x == 0 && min_y == 0 &&
-                   max_x == iw - 1 && max_y == ih - 1) {
+            std::println(stderr, "Trim:     entire image is transparent — leaving uncropped");
+        } else if (min_x == 0 && min_y == 0 && max_x == iw - 1 && max_y == ih - 1) {
             cli_status("Trim:     no transparent borders found");
         } else {
             auto cw = max_x - min_x + 1;
             auto ch = max_y - min_y + 1;
-            cli_status("Trim:     {}x{} -> {}x{} (+{},{})",
-                       iw, ih, cw, ch, min_x, min_y);
+            cli_status("Trim:     {}x{} -> {}x{} (+{},{})", iw, ih, cw, ch, min_x, min_y);
             config->crop_x = static_cast<int>(min_x);
             config->crop_y = static_cast<int>(min_y);
             config->crop_w = static_cast<int>(cw);
@@ -5943,30 +6061,28 @@ int run_main(int argc, char* argv[]) {
     if (joint_mode) {
         if (config->output_each.empty()) {
             std::println(stderr,
-                "Error: --joint-input requires --output-each "
-                "<pattern>. Pass `--output-each .idx` (or .png) "
-                "so each input gets a per-file output.");
+                         "Error: --joint-input requires --output-each "
+                         "<pattern>. Pass `--output-each .idx` (or .png) "
+                         "so each input gets a per-file output.");
             return exit_code::usage;
         }
         if (!config->pins.empty()) {
             std::println(stderr,
-                "Error: --pin-index-at is not supported in joint-"
-                "palette mode (a pin's (x, y) coordinates only "
-                "make sense for one input). Drop --pin-index-at.");
+                         "Error: --pin-index-at is not supported in joint-"
+                         "palette mode (a pin's (x, y) coordinates only "
+                         "make sense for one input). Drop --pin-index-at.");
             return exit_code::usage;
         }
-        bool mode_ok =
-            config->mode == amiga::Mode::lores ||
-            config->mode == amiga::Mode::lores_interlace ||
-            config->mode == amiga::Mode::hires ||
-            config->mode == amiga::Mode::hires_interlace ||
-            config->mode == amiga::Mode::ehb;
-        if (!mode_ok || config->copper || config->scap ||
-            config->dual_playfield || config->tile) {
+        bool mode_ok = config->mode == amiga::Mode::lores ||
+                       config->mode == amiga::Mode::lores_interlace ||
+                       config->mode == amiga::Mode::hires ||
+                       config->mode == amiga::Mode::hires_interlace ||
+                       config->mode == amiga::Mode::ehb;
+        if (!mode_ok || config->copper || config->scap || config->dual_playfield || config->tile) {
             std::println(stderr,
-                "Error: joint-palette mode (--joint-input) only "
-                "supports plain lores/hires/EHB without --copper "
-                "/ --scap / --dpf / --tile.");
+                         "Error: joint-palette mode (--joint-input) only "
+                         "supports plain lores/hires/EHB without --copper "
+                         "/ --scap / --dpf / --tile.");
             return exit_code::usage;
         }
         // Apply --transparent-color synthesis + premultiply to
@@ -5975,20 +6091,16 @@ int run_main(int argc, char* argv[]) {
         // without this the atlas would see the positional's
         // sentinel-magenta pixels as content. Same shape as the
         // per-input loop below.
-        apply_transparent_color_sentinels(*image,
-            config->transparent_colors);
+        apply_transparent_color_sentinels(*image, config->transparent_colors);
         matte_to_black(*image);
         joint_imgs.push_back(*image);
         for (auto& jp : config->joint_inputs) {
             auto j = png_io::load(jp);
             if (!j) {
-                std::println(stderr,
-                    "Error loading --joint-input {}: {}", jp,
-                    j.error().message);
+                std::println(stderr, "Error loading --joint-input {}: {}", jp, j.error().message);
                 return exit_code::no_input;
             }
-            apply_transparent_color_sentinels(*j,
-                config->transparent_colors);
+            apply_transparent_color_sentinels(*j, config->transparent_colors);
             matte_to_black(*j);
             joint_imgs.push_back(*std::move(j));
         }
@@ -6016,10 +6128,9 @@ int run_main(int argc, char* argv[]) {
         };
         std::vector<std::size_t> order(joint_imgs.size());
         std::iota(order.begin(), order.end(), std::size_t{0});
-        std::sort(order.begin(), order.end(),
-            [&](std::size_t a, std::size_t b) {
-                return joint_imgs[a].height() > joint_imgs[b].height();
-            });
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            return joint_imgs[a].height() > joint_imgs[b].height();
+        });
         std::size_t total_area = 0;
         std::size_t max_input_w = 0;
         std::size_t max_input_h = 0;
@@ -6029,17 +6140,14 @@ int run_main(int argc, char* argv[]) {
             max_input_h = std::max(max_input_h, im.height());
         }
         if (total_area == 0) {
-            std::println(stderr,
-                "Joint-palette: zero-sized training set.");
+            std::println(stderr, "Joint-palette: zero-sized training set.");
             return exit_code::usage;
         }
         // Initial side: sqrt of inflated area, but at least the
         // largest individual dim so any single input still fits.
         int atlas_w = static_cast<int>(std::max<std::size_t>(
             max_input_w,
-            static_cast<std::size_t>(
-                std::ceil(std::sqrt(
-                    static_cast<double>(total_area) * 1.3)))));
+            static_cast<std::size_t>(std::ceil(std::sqrt(static_cast<double>(total_area) * 1.3)))));
         int atlas_h = atlas_w;
         if (static_cast<std::size_t>(atlas_h) < max_input_h)
             atlas_h = static_cast<int>(max_input_h);
@@ -6050,33 +6158,34 @@ int run_main(int argc, char* argv[]) {
             bool all_fit = true;
             for (auto idx : order) {
                 auto& im = joint_imgs[idx];
-                auto* it = sma_item_add(atlas,
-                    static_cast<int>(im.width()),
-                    static_cast<int>(im.height()));
+                auto* it = sma_item_add(
+                    atlas, static_cast<int>(im.width()), static_cast<int>(im.height()));
                 if (!it) {
                     all_fit = false;
                     break;
                 }
                 placed[idx] = AtlasItem{
-                    idx,
-                    sma_item_x(it), sma_item_y(it),
-                    sma_item_width(it), sma_item_height(it)};
+                    idx, sma_item_x(it), sma_item_y(it), sma_item_width(it), sma_item_height(it)};
             }
             sma_atlas_destroy(atlas);
             if (all_fit) {
                 packed = true;
             } else {
                 // Grow atlas: prefer growing the smaller dim.
-                if (atlas_w <= atlas_h) atlas_w *= 2;
-                else                     atlas_h *= 2;
+                if (atlas_w <= atlas_h)
+                    atlas_w *= 2;
+                else
+                    atlas_h *= 2;
             }
         }
         if (!packed) {
             std::println(stderr,
-                "Joint-palette: failed to pack {} inputs into a "
-                "training atlas (last try {}x{}). Inputs may be too "
-                "many or too large.", joint_imgs.size(), atlas_w,
-                atlas_h);
+                         "Joint-palette: failed to pack {} inputs into a "
+                         "training atlas (last try {}x{}). Inputs may be too "
+                         "many or too large.",
+                         joint_imgs.size(),
+                         atlas_w,
+                         atlas_h);
             return exit_code::cant_create;
         }
         // Tighten dims to actually-used extent (smol-atlas may
@@ -6091,24 +6200,19 @@ int run_main(int argc, char* argv[]) {
         const std::size_t train_h = static_cast<std::size_t>(used_h);
         Image train(train_w, train_h);
         auto train_px = train.pixels();
-        std::fill(train_px.begin(), train_px.end(),
-                  Color3f{0.0f, 0.0f, 0.0f});
+        std::fill(train_px.begin(), train_px.end(), Color3f{0.0f, 0.0f, 0.0f});
         for (auto& p : placed) {
             auto& im = joint_imgs[p.img_idx];
             auto src = im.pixels();
             const bool has_alpha = im.has_alpha();
-            auto a = has_alpha ? im.alpha()
-                               : std::span<const float>{};
+            auto a = has_alpha ? im.alpha() : std::span<const float>{};
             for (std::size_t y = 0; y < im.height(); ++y) {
                 for (std::size_t x = 0; x < im.width(); ++x) {
                     const std::size_t si = y * im.width() + x;
-                    if (has_alpha && si < a.size() &&
-                        a[si] < 0.5f)
+                    if (has_alpha && si < a.size() && a[si] < 0.5f)
                         continue;  // leave atlas pixel black
-                    train_px[(static_cast<std::size_t>(p.y) + y) *
-                              train_w +
-                             (static_cast<std::size_t>(p.x) + x)] =
-                        src[si];
+                    train_px[(static_cast<std::size_t>(p.y) + y) * train_w +
+                             (static_cast<std::size_t>(p.x) + x)] = src[si];
                 }
             }
         }
@@ -6130,7 +6234,7 @@ int run_main(int argc, char* argv[]) {
         // alone, which is steps 1+2 of encode_plain_auto's 4-step
         // pipeline).
         api::Options train_opts = make_api_options(*config);
-        train_opts.width  = static_cast<int>(train.width());
+        train_opts.width = static_cast<int>(train.width());
         train_opts.height = static_cast<int>(train.height());
         // No joint-mode recursion in the training call.
         // (joint_inputs / output_each don't live in api::Options
@@ -6143,9 +6247,7 @@ int run_main(int argc, char* argv[]) {
 
         auto train_enc = api::encode_state_image(train, train_opts);
         if (!train_enc.ok()) {
-            std::println(stderr,
-                "Joint-palette training failed: {}",
-                train_enc.error_msg);
+            std::println(stderr, "Joint-palette training failed: {}", train_enc.error_msg);
             return exit_code::cant_create;
         }
         // Pull the trained palette and stamp every free slot in
@@ -6159,37 +6261,39 @@ int run_main(int argc, char* argv[]) {
         // indices ≥ 32 which the validator then rejects.
         std::size_t base_palette_size = std::size_t{1} << config->depth;
         if (config->mode == amiga::Mode::ehb) base_palette_size = 32;
-        const std::size_t lock_count =
-            std::min(trained.size(), base_palette_size);
+        const std::size_t lock_count = std::min(trained.size(), base_palette_size);
         std::size_t added = 0;
         for (std::size_t k = 0; k < lock_count; ++k) {
             if (config->lock_color0 && k == 0) continue;
             bool already = false;
             for (auto& l : config->locks)
                 if (l.index == static_cast<int>(k)) {
-                    already = true; break; }
+                    already = true;
+                    break;
+                }
             for (auto& r : config->reserves)
                 if (r.index == static_cast<int>(k)) {
-                    already = true; break; }
+                    already = true;
+                    break;
+                }
             if (already) continue;
-            auto srgb = color_space::linear_to_srgb(
-                trained[k]).clamped();
+            auto srgb = color_space::linear_to_srgb(trained[k]).clamped();
             api::LockSpec ls;
             ls.index = static_cast<int>(k);
-            ls.r = static_cast<std::uint8_t>(
-                std::round(srgb.r * 255.0f));
-            ls.g = static_cast<std::uint8_t>(
-                std::round(srgb.g * 255.0f));
-            ls.b = static_cast<std::uint8_t>(
-                std::round(srgb.b * 255.0f));
+            ls.r = static_cast<std::uint8_t>(std::round(srgb.r * 255.0f));
+            ls.g = static_cast<std::uint8_t>(std::round(srgb.g * 255.0f));
+            ls.b = static_cast<std::uint8_t>(std::round(srgb.b * 255.0f));
             config->locks.push_back(ls);
             ++added;
         }
         cli_status("Joint palette: trained on {} inputs "
                    "({}x{} atlas, {}-best={}) → {} new locks",
-                   joint_imgs.size(), train_w, train_h,
+                   joint_imgs.size(),
+                   train_w,
+                   train_h,
                    config->best ? "yes" : "no",
-                   config->best ? "yes" : "no", added);
+                   config->best ? "yes" : "no",
+                   added);
     }
 
     // --quantize-from <file>: two-pass workflow. Build the palette
@@ -6203,8 +6307,10 @@ int run_main(int argc, char* argv[]) {
     if (!config->quantize_from.empty()) {
         auto qimg = png_io::load(config->quantize_from);
         if (!qimg) {
-            std::println(stderr, "Error loading --quantize-from {}: {}",
-                         config->quantize_from, qimg.error().message);
+            std::println(stderr,
+                         "Error loading --quantize-from {}: {}",
+                         config->quantize_from,
+                         qimg.error().message);
             return exit_code::no_input;
         }
         auto qparams = amiga::get_mode_params(config->mode);
@@ -6214,17 +6320,15 @@ int run_main(int argc, char* argv[]) {
         // base is 2^(depth-2) since 2 bits are control). Plain modes
         // use 1 << depth.
         std::size_t qmax = std::size_t{1} << config->depth;
-        if (config->mode == amiga::Mode::ehb) qmax = 32;
+        if (config->mode == amiga::Mode::ehb)
+            qmax = 32;
         else if (amiga::is_ham(config->mode))
             qmax = std::size_t{1} << (qparams.bitplane_depth - 2);
-        auto qalgo = (qcs == amiga::Chipset::aga)
-            ? quantize::Algorithm::pnn
-            : quantize::Algorithm::ocs_bruteforce;
-        auto qpal = quantize::quantize(*qimg, qmax, qalgo,
-                                        config->palette_diversity);
+        auto qalgo = (qcs == amiga::Chipset::aga) ? quantize::Algorithm::pnn
+                                                  : quantize::Algorithm::ocs_bruteforce;
+        auto qpal = quantize::quantize(*qimg, qmax, qalgo, config->palette_diversity);
         if (!qpal) {
-            std::println(stderr, "--quantize-from quantize error: {}",
-                         qpal.error().message);
+            std::println(stderr, "--quantize-from quantize error: {}", qpal.error().message);
             return exit_code::cant_create;
         }
         // Build LockSpec entries from the trained palette. lock_color0
@@ -6236,12 +6340,17 @@ int run_main(int argc, char* argv[]) {
             // explicit override on the CLI wins.
             bool already = false;
             for (auto& l : config->locks)
-                if (l.index == static_cast<int>(k)) { already = true; break; }
+                if (l.index == static_cast<int>(k)) {
+                    already = true;
+                    break;
+                }
             for (auto& r : config->reserves)
-                if (r.index == static_cast<int>(k)) { already = true; break; }
+                if (r.index == static_cast<int>(k)) {
+                    already = true;
+                    break;
+                }
             if (already) continue;
-            auto srgb = color_space::linear_to_srgb(
-                qpal->colors[k]).clamped();
+            auto srgb = color_space::linear_to_srgb(qpal->colors[k]).clamped();
             api::LockSpec ls;
             ls.index = static_cast<int>(k);
             ls.r = static_cast<std::uint8_t>(std::round(srgb.r * 255.0f));
@@ -6249,8 +6358,7 @@ int run_main(int argc, char* argv[]) {
             ls.b = static_cast<std::uint8_t>(std::round(srgb.b * 255.0f));
             config->locks.push_back(ls);
         }
-        cli_status("Quant from: {} → {} locked slots",
-                   config->quantize_from, qpal->colors.size());
+        cli_status("Quant from: {} → {} locked slots", config->quantize_from, qpal->colors.size());
     }
 
     // --transparent-color RRGGBB: synthesize an alpha channel where
@@ -6274,13 +6382,16 @@ int run_main(int argc, char* argv[]) {
             std::uint8_t b = static_cast<std::uint8_t>(std::round(srgb.b * 255.0f));
             for (auto& tc : config->transparent_colors) {
                 if (tc[0] == r && tc[1] == g && tc[2] == b) {
-                    a[i] = 0.0f; ++hits; break;
+                    a[i] = 0.0f;
+                    ++hits;
+                    break;
                 }
             }
         }
         image->set_alpha(std::move(a));
         cli_status("Transparent: {} pixel(s) matched sentinel ({} color{})",
-                   hits, config->transparent_colors.size(),
+                   hits,
+                   config->transparent_colors.size(),
                    config->transparent_colors.size() == 1 ? "" : "s");
     }
     // Matte to black before the quantizer / dither. Compositing
@@ -6296,8 +6407,7 @@ int run_main(int argc, char* argv[]) {
     // source of truth in api.cpp::check_best_supported.
     if (config->best) {
         auto probe_opts = make_api_options(*config);
-        if (auto bcheck = api::check_best_supported(probe_opts, config->mode,
-                                                    image->has_alpha());
+        if (auto bcheck = api::check_best_supported(probe_opts, config->mode, image->has_alpha());
             !bcheck) {
             std::println(stderr, "Error: {}", bcheck.error().message);
             return exit_code::usage;
@@ -6362,15 +6472,16 @@ int run_main(int argc, char* argv[]) {
             target_h = round_h(static_cast<double>(target_w) / src_aspect);
         } else {
             auto w_par = (target_w != params.screen_width && params.screen_width > 0)
-                ? par * static_cast<double>(params.screen_width) / static_cast<double>(target_w)
-                : par;
+                             ? par * static_cast<double>(params.screen_width) /
+                                   static_cast<double>(target_w)
+                             : par;
             target_h = round_h(static_cast<double>(target_w) * w_par / src_aspect);
         }
     } else if (config->height) {
         target_h = *config->height;
         if (amiga::is_cga_text(config->mode)) {
-            target_w = static_cast<std::size_t>(std::lround(
-                static_cast<double>(target_h) * src_aspect));
+            target_w = static_cast<std::size_t>(
+                std::lround(static_cast<double>(target_h) * src_aspect));
         } else {
             target_w = static_cast<std::size_t>(
                 std::lround(static_cast<double>(target_h) * src_aspect / par));
@@ -6378,9 +6489,7 @@ int run_main(int argc, char* argv[]) {
     } else {
         // Use mode default width. For lores modes, don't upscale if source
         // is smaller. For hires, always use 640 (that's the point of hires).
-        target_w = params.is_hires
-            ? params.screen_width
-            : std::min(params.screen_width, src_w);
+        target_w = params.is_hires ? params.screen_width : std::min(params.screen_width, src_w);
         target_h = round_h(static_cast<double>(target_w) * par / src_aspect);
         // Fixed-buffer modes (Atari, VGA, CGA): by default stretch-fit the
         // source to the full buffer. With --native-par, preserve source
@@ -6388,21 +6497,18 @@ int run_main(int argc, char* argv[]) {
         // (reduce target_w) to fit inside screen_height. Later padding
         // expands the encoded image to full buffer dimensions with black.
         if (params.screen_height > 0) {
-            bool is_fixed_buffer = amiga::is_atari(config->mode) ||
-                                   amiga::is_vga(config->mode) ||
-                                   amiga::is_cga(config->mode) ||
-                                   amiga::is_ega(config->mode) ||
+            bool is_fixed_buffer = amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
+                                   amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
                                    amiga::is_snes(config->mode) ||
-                                   amiga::is_genesis(config->mode) ||
-                                   amiga::is_c64(config->mode);
+                                   amiga::is_genesis(config->mode) || amiga::is_c64(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
                 // Horizontal-fit overflows vertically — use vertical-fit
                 // (pillarbox) instead so source aspect is preserved.
                 target_h = params.screen_height;
-                target_w = static_cast<std::size_t>(std::lround(
-                    static_cast<double>(target_h) * src_aspect / par));
+                target_w = static_cast<std::size_t>(
+                    std::lround(static_cast<double>(target_h) * src_aspect / par));
                 if (target_w > params.screen_width) {
                     target_w = params.screen_width;
                 }
@@ -6425,24 +6531,32 @@ int run_main(int argc, char* argv[]) {
         auto cw = static_cast<std::size_t>(config->crop_w);
         auto ch = static_cast<std::size_t>(config->crop_h);
         if (cx + cw > image->width() || cy + ch > image->height() || cw == 0 || ch == 0) {
-            std::println(stderr, "Crop region {}x{}+{}+{} exceeds image {}x{}",
-                         cw, ch, cx, cy, image->width(), image->height());
+            std::println(stderr,
+                         "Crop region {}x{}+{}+{} exceeds image {}x{}",
+                         cw,
+                         ch,
+                         cx,
+                         cy,
+                         image->width(),
+                         image->height());
             return 1;
         }
-        crop_x = cx; crop_y = cy; crop_w = cw; crop_h = ch;
+        crop_x = cx;
+        crop_y = cy;
+        crop_w = cw;
+        crop_h = ch;
         will_crop = true;
     } else if (config->crop_auto) {
         auto target_ratio = static_cast<double>(target_w) / static_cast<double>(target_h);
-        auto src_ratio = static_cast<double>(image->width()) /
-                         static_cast<double>(image->height());
+        auto src_ratio = static_cast<double>(image->width()) / static_cast<double>(image->height());
         if (src_ratio > target_ratio) {
             crop_h = image->height();
-            crop_w = static_cast<std::size_t>(
-                static_cast<double>(image->height()) * target_ratio + 0.5);
+            crop_w = static_cast<std::size_t>(static_cast<double>(image->height()) * target_ratio +
+                                              0.5);
         } else {
             crop_w = image->width();
-            crop_h = static_cast<std::size_t>(
-                static_cast<double>(image->width()) / target_ratio + 0.5);
+            crop_h = static_cast<std::size_t>(static_cast<double>(image->width()) / target_ratio +
+                                              0.5);
         }
         crop_x = (image->width() - crop_w) / 2;
         crop_y = (image->height() - crop_h) / 2;
@@ -6463,9 +6577,9 @@ int run_main(int argc, char* argv[]) {
         auto last_y = crop_y + crop_h - 1;
         for (std::size_t y = 0; y < target_h; ++y) {
             auto fy = static_cast<double>(crop_y) +
-                      (static_cast<double>(y) + 0.5) *
-                          static_cast<double>(crop_h) /
-                          static_cast<double>(target_h) - 0.5;
+                      (static_cast<double>(y) + 0.5) * static_cast<double>(crop_h) /
+                          static_cast<double>(target_h) -
+                      0.5;
             if (fy < static_cast<double>(crop_y)) fy = static_cast<double>(crop_y);
             auto sy = std::min(static_cast<std::size_t>(fy), last_y);
             auto sy1 = std::min(sy + 1, last_y);
@@ -6473,20 +6587,20 @@ int run_main(int argc, char* argv[]) {
 
             for (std::size_t x = 0; x < target_w; ++x) {
                 auto fx = static_cast<double>(crop_x) +
-                          (static_cast<double>(x) + 0.5) *
-                              static_cast<double>(crop_w) /
-                              static_cast<double>(target_w) - 0.5;
+                          (static_cast<double>(x) + 0.5) * static_cast<double>(crop_w) /
+                              static_cast<double>(target_w) -
+                          0.5;
                 if (fx < static_cast<double>(crop_x)) fx = static_cast<double>(crop_x);
                 auto sx = std::min(static_cast<std::size_t>(fx), last_x);
                 auto sx1 = std::min(sx + 1, last_x);
                 auto tx = static_cast<float>(fx - static_cast<double>(sx));
 
-                float a00 = image->alpha_at(sx,  sy);
+                float a00 = image->alpha_at(sx, sy);
                 float a10 = image->alpha_at(sx1, sy);
-                float a01 = image->alpha_at(sx,  sy1);
+                float a01 = image->alpha_at(sx, sy1);
                 float a11 = image->alpha_at(sx1, sy1);
-                float a = a00 * (1-tx) * (1-ty) + a10 * tx * (1-ty)
-                        + a01 * (1-tx) * ty     + a11 * tx * ty;
+                float a = a00 * (1 - tx) * (1 - ty) + a10 * tx * (1 - ty) + a01 * (1 - tx) * ty +
+                          a11 * tx * ty;
                 scaled_alpha[y * target_w + x] = a;
             }
         }
@@ -6500,29 +6614,33 @@ int run_main(int argc, char* argv[]) {
                 for (std::size_t x = 0; x < target_w; ++x) {
                     float a = scaled_alpha[y * target_w + x];
                     float threshold = dither::ordered_threshold(adm, x, y);
-                    transparency_mask[y * target_w + x] =
-                        (a + threshold * config->alpha_dither_strength) < (0.5f + config->alpha_threshold);
+                    transparency_mask[y * target_w + x] = (a + threshold *
+                                                                   config->alpha_dither_strength) <
+                                                          (0.5f + config->alpha_threshold);
                 }
             }
         } else {
             for (std::size_t y = 0; y < target_h; ++y) {
                 for (std::size_t x = 0; x < target_w; ++x) {
-                    transparency_mask[y * target_w + x] =
-                        scaled_alpha[y * target_w + x] < (0.5f + config->alpha_threshold);
+                    transparency_mask[y * target_w + x] = scaled_alpha[y * target_w + x] <
+                                                          (0.5f + config->alpha_threshold);
                 }
             }
         }
 
         for (auto v : transparency_mask) {
-            if (v) { has_transparency = true; break; }
+            if (v) {
+                has_transparency = true;
+                break;
+            }
         }
 
         if (has_transparency) {
             cli_status("Alpha:    {} transparent pixels ({})",
-                std::count(transparency_mask.begin(),
-                           transparency_mask.end(), true),
-                config->alpha_dither != dither::Method::none
-                    ? dither_name(config->alpha_dither) : "threshold");
+                       std::count(transparency_mask.begin(), transparency_mask.end(), true),
+                       config->alpha_dither != dither::Method::none
+                           ? dither_name(config->alpha_dither)
+                           : "threshold");
         }
     }
 
@@ -6535,14 +6653,20 @@ int run_main(int argc, char* argv[]) {
         }
         if (config->crop_w > 0 && config->crop_h > 0) {
             cli_status("Crop:     {}x{}+{}+{} -> {}x{}",
-                         crop_w, crop_h, crop_x, crop_y,
-                         cropped->width(), cropped->height());
+                       crop_w,
+                       crop_h,
+                       crop_x,
+                       crop_y,
+                       cropped->width(),
+                       cropped->height());
         } else {
             cli_status("Crop:     auto {}x{} -> {}x{} (center, {:g}:{:g} aspect)",
-                         image->width(), image->height(),
-                         cropped->width(), cropped->height(),
-                         static_cast<double>(target_w),
-                         static_cast<double>(target_h));
+                       image->width(),
+                       image->height(),
+                       cropped->width(),
+                       cropped->height(),
+                       static_cast<double>(target_w),
+                       static_cast<double>(target_h));
         }
         image = *std::move(cropped);
     }
@@ -6565,9 +6689,9 @@ int run_main(int argc, char* argv[]) {
         // user override rather than silently ignoring it.
         if (config->depth_explicit) {
             std::println(stderr,
-                "Error: --depth is not configurable for this mode "
-                "(it's fixed at {} by the target hardware)",
-                amiga::get_mode_params(config->mode).bitplane_depth);
+                         "Error: --depth is not configurable for this mode "
+                         "(it's fixed at {} by the target hardware)",
+                         amiga::get_mode_params(config->mode).bitplane_depth);
             return 1;
         }
         actual_depth = amiga::get_mode_params(config->mode).bitplane_depth;
@@ -6577,21 +6701,17 @@ int run_main(int argc, char* argv[]) {
     // 6-plane DPF frame. Detect early so the Target line reports the
     // actual encoded plane count (6 for OCS DPF, 8 for AGA DPF) rather
     // than the user's --depth or mode-default for the standard path.
-    bool use_dpf_early = config->dual_playfield &&
-                          !amiga::is_ham(config->mode) &&
-                          config->mode != amiga::Mode::ehb &&
-                          !amiga::is_atari(config->mode) &&
-                          !amiga::is_vga(config->mode) &&
-                          !amiga::is_ega(config->mode) &&
-                          !amiga::is_cga(config->mode);
+    bool use_dpf_early = config->dual_playfield && !amiga::is_ham(config->mode) &&
+                         config->mode != amiga::Mode::ehb && !amiga::is_atari(config->mode) &&
+                         !amiga::is_vga(config->mode) && !amiga::is_ega(config->mode) &&
+                         !amiga::is_cga(config->mode);
     int print_depth = static_cast<int>(actual_depth);
     if (use_dpf_early) {
         auto early_chipset = effective_chipset(*config);
         print_depth = (early_chipset == amiga::Chipset::aga) ? 8 : 6;
     }
-    cli_print_target(static_cast<std::size_t>(target_w),
-                     static_cast<std::size_t>(target_h),
-                     print_depth);
+    cli_print_target(
+        static_cast<std::size_t>(target_w), static_cast<std::size_t>(target_h), print_depth);
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
@@ -6621,10 +6741,8 @@ int run_main(int argc, char* argv[]) {
     // pillarboxing is written to the actual hardware buffer width.
     // Skip for cga-text: it accepts arbitrary multiples of 8×2 (scrolling
     // / charmap use cases) — same convention as c64-charset.
-    if (!amiga::is_cga_text(config->mode) &&
-        params.screen_height > 0 &&
-        (image->height() < params.screen_height ||
-         image->width() < params.screen_width)) {
+    if (!amiga::is_cga_text(config->mode) && params.screen_height > 0 &&
+        (image->height() < params.screen_height || image->width() < params.screen_width)) {
         auto w = image->width();
         auto h = image->height();
         auto fw = std::max(image->width(), params.screen_width);
@@ -6639,8 +6757,7 @@ int run_main(int argc, char* argv[]) {
             std::vector<bool> new_mask(fw * fh, true);
             for (std::size_t y = 0; y < h; ++y)
                 for (std::size_t x = 0; x < w; ++x)
-                    new_mask[(y + y_off) * fw + (x + x_off)] =
-                        transparency_mask[y * w + x];
+                    new_mask[(y + y_off) * fw + (x + x_off)] = transparency_mask[y * w + x];
             transparency_mask = std::move(new_mask);
         }
         cli_status("Center:   {}x{} -> {}x{} (pad)", w, h, fw, fh);
@@ -6656,23 +6773,19 @@ int run_main(int argc, char* argv[]) {
     // OCS/AGA Denise is an Amiga concept. Atari, IBM PC, C64, SNES, and
     // Genesis have their own (Shifter, EGA/VGA chip, VIC-II, PPU, VDP) —
     // suppress the misleading "Chipset: OCS" line for those.
-    bool amiga_chipset =
-        !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
-        !amiga::is_ega(config->mode)   && !amiga::is_cga(config->mode)  &&
-        !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
-        !amiga::is_snes(config->mode)  && !amiga::is_genesis(config->mode);
+    bool amiga_chipset = !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
+                         !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
+                         !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
+                         !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode);
     if (amiga_chipset) cli_print_chipset(chipset);
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
     // PF1 (foreground) zeroed and the palette shifted into the upper color
     // registers. Force the encoder to depth 3 (OCS) / 4 (AGA) before any
     // mode-specific branch picks it up.
-    bool use_dpf_std = config->dual_playfield &&
-                       !amiga::is_ham(config->mode) &&
-                       config->mode != amiga::Mode::ehb &&
-                       !amiga::is_atari(config->mode) &&
-                       !amiga::is_vga(config->mode) &&
-                       !amiga::is_ega(config->mode) &&
+    bool use_dpf_std = config->dual_playfield && !amiga::is_ham(config->mode) &&
+                       config->mode != amiga::Mode::ehb && !amiga::is_atari(config->mode) &&
+                       !amiga::is_vga(config->mode) && !amiga::is_ega(config->mode) &&
                        !amiga::is_cga(config->mode);
     if (use_dpf_std) {
         config->depth = (chipset == amiga::Chipset::aga) ? 4 : 3;
@@ -6695,7 +6808,7 @@ int run_main(int argc, char* argv[]) {
         // before the api sees them, so apply locally here.
         if (config->match_range) {
             auto pal_choice = c64::parse_palette(config->c64_palette);
-            auto pal_span   = c64::palette_colors(pal_choice);
+            auto pal_span = c64::palette_colors(pal_choice);
             Palette c64_pal;
             c64_pal.name = "c64";
             c64_pal.colors.assign(pal_span.begin(), pal_span.end());
@@ -6705,14 +6818,20 @@ int run_main(int argc, char* argv[]) {
         neutralize_preprocess(aopts);
         aopts.mode = [&] -> const char* {
             switch (config->mode) {
-            case amiga::Mode::c64_hires:           return "c64-hires";
-            case amiga::Mode::c64_fli:             return "c64-fli";
-            case amiga::Mode::c64_afli:            return "c64-afli";
-            case amiga::Mode::c64_petscii:         return "c64-petscii";
-            case amiga::Mode::c64_charset_hires:   return "c64-charset-hires";
+            case amiga::Mode::c64_hires:
+                return "c64-hires";
+            case amiga::Mode::c64_fli:
+                return "c64-fli";
+            case amiga::Mode::c64_afli:
+                return "c64-afli";
+            case amiga::Mode::c64_petscii:
+                return "c64-petscii";
+            case amiga::Mode::c64_charset_hires:
+                return "c64-charset-hires";
             case amiga::Mode::c64_charset_multicolor:
-                                                   return "c64-charset-multicolor";
-            default:                               return "c64-multicolor";
+                return "c64-charset-multicolor";
+            default:
+                return "c64-multicolor";
             }
         }();
         // Forward width/height to the api ONLY when the user explicitly
@@ -6723,14 +6842,13 @@ int run_main(int argc, char* argv[]) {
         // the encoder would receive 80×200 instead of 160×200 (→ 20×25
         // cells instead of 40×25). With --no-scale the source dims ARE
         // the freeform request, so propagate.
-        bool freeform_request =
-            config->width.has_value() || config->height.has_value() ||
-            config->no_scale;
+        bool freeform_request = config->width.has_value() || config->height.has_value() ||
+                                config->no_scale;
         if (freeform_request) {
-            aopts.width  = static_cast<int>(image->width());
+            aopts.width = static_cast<int>(image->width());
             aopts.height = static_cast<int>(image->height());
         } else {
-            aopts.width  = 0;
+            aopts.width = 0;
             aopts.height = 0;
         }
         aopts.on_progress = make_cli_progress_reporter();
@@ -6749,91 +6867,114 @@ int run_main(int argc, char* argv[]) {
         // width is 4 logical pixels in multicolor variants, 8 elsewhere).
         auto _rw = st.rendered.width();
         auto _rh = st.rendered.height();
-        std::size_t _cell_w =
-            amiga::is_c64_multicolor(config->mode) ? 4 : 8;
+        std::size_t _cell_w = amiga::is_c64_multicolor(config->mode) ? 4 : 8;
         std::size_t _cell_h = 8;
-        std::size_t _cols = (st.c64_cols > 0) ? st.c64_cols
-                                              : (_cell_w > 0 ? _rw / _cell_w : 0);
-        std::size_t _rows = (st.c64_rows > 0) ? st.c64_rows
-                                              : (_cell_h > 0 ? _rh / _cell_h : 0);
+        std::size_t _cols = (st.c64_cols > 0) ? st.c64_cols : (_cell_w > 0 ? _rw / _cell_w : 0);
+        std::size_t _rows = (st.c64_rows > 0) ? st.c64_rows : (_cell_h > 0 ? _rh / _cell_h : 0);
         switch (config->mode) {
         case amiga::Mode::c64_hires:
             cli_status("Mode:     C64 hires ({}×{}, {}×{} cells, "
-                       "2 colors/cell)", _rw, _rh, _cols, _rows); break;
+                       "2 colors/cell)",
+                       _rw,
+                       _rh,
+                       _cols,
+                       _rows);
+            break;
         case amiga::Mode::c64_fli:
             cli_status("Mode:     C64 FLI ({}×{} logical, {}×{} cells, "
                        "multicolor + per-row screen)",
-                       _rw, _rh, _cols, _rows); break;
+                       _rw,
+                       _rh,
+                       _cols,
+                       _rows);
+            break;
         case amiga::Mode::c64_afli:
             cli_status("Mode:     C64 AFLI ({}×{}, {}×{} cells, "
                        "hires + per-row screen)",
-                       _rw, _rh, _cols, _rows); break;
+                       _rw,
+                       _rh,
+                       _cols,
+                       _rows);
+            break;
         case amiga::Mode::c64_petscii:
             cli_status("Mode:     C64 PETSCII ({}×{} text, "
-                       "PN-sRGB blur metric)", _cols, _rows); break;
+                       "PN-sRGB blur metric)",
+                       _cols,
+                       _rows);
+            break;
         case amiga::Mode::c64_charset_hires:
             cli_status("Mode:     C64 charset-hires ({}×{} 8×8 cells, "
-                       "≤256 dedup glyphs)", _cols, _rows); break;
+                       "≤256 dedup glyphs)",
+                       _cols,
+                       _rows);
+            break;
         case amiga::Mode::c64_charset_multicolor:
             cli_status("Mode:     C64 charset-multicolor ({}×{} 4×8 cells, "
-                       "shared mc + per-cell fg)", _cols, _rows); break;
+                       "shared mc + per-cell fg)",
+                       _cols,
+                       _rows);
+            break;
         default:
             cli_status("Mode:     C64 multicolor ({}×{} logical, "
                        "{}×{} cells, 4 colors/cell)",
-                       _rw, _rh, _cols, _rows); break;
+                       _rw,
+                       _rh,
+                       _cols,
+                       _rows);
+            break;
         }
         // C64 fixed VIC-II palette — st.palette holds whichever VIC-II
         // color table the user picked via --c64-palette.
-        if (!st.palette.empty())
-            cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
 
         // Glyph-occupancy line for charset / PETSCII modes (web has the
         // same field). c64_unique_glyphs is reused for charset modes;
         // PETSCII reports the count of unique character codes used (max
         // 256). Skip for hires / multicolor / fli / afli — those are
         // bitmap, not glyph-indexed.
-        if (amiga::is_c64_charset(config->mode) ||
-            config->mode == amiga::Mode::c64_petscii) {
+        if (amiga::is_c64_charset(config->mode) || config->mode == amiga::Mode::c64_petscii) {
             std::size_t cells = _cols * _rows;
             std::size_t used = 0;
             if (config->mode == amiga::Mode::c64_petscii) {
                 // PETSCII raw_frame: bg + 1000 char codes + 1000 fg attrs.
                 std::array<bool, 256> seen{};
                 std::size_t off = (st.raw_frame.size() >= 2 * cells + 1)
-                    ? 1 : 0;  // bg byte prefix on .prg-style raw, optional
+                                      ? 1
+                                      : 0;  // bg byte prefix on .prg-style raw, optional
                 if (st.raw_frame.size() >= cells + off) {
                     for (std::size_t i = 0; i < cells; ++i) {
                         seen[st.raw_frame[off + i]] = true;
                     }
-                    for (bool b : seen) if (b) ++used;
+                    for (bool b : seen)
+                        if (b) ++used;
                 }
             } else {
                 used = st.c64_unique_glyphs;
             }
-            cli_status("Glyphs:   {}/256 occupied, {} cells",
-                       used, cells);
+            cli_status("Glyphs:   {}/256 occupied, {} cells", used, cells);
         }
-        cli_print_encoded_other(
-            std::format("{} bytes (C64 frame)", st.raw_frame.size()),
-            static_cast<std::size_t>(count_unique_colors(st.rendered)),
-            static_cast<double>(st.quant_error),
-            st.psnr, st.ssimulacra2_score);
+        cli_print_encoded_other(std::format("{} bytes (C64 frame)", st.raw_frame.size()),
+                                static_cast<std::size_t>(count_unique_colors(st.rendered)),
+                                static_cast<double>(st.quant_error),
+                                st.psnr,
+                                st.ssimulacra2_score);
         if (config->preview)
-            show_terminal_preview(st.rendered, config->mode,
-                                  /*hires=*/false, /*interlace=*/false,
-                                  st.has_transparency, st.transparency_mask);
+            show_terminal_preview(st.rendered,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false,
+                                  st.has_transparency,
+                                  st.transparency_mask);
         if (config->output_path.empty()) {
             // No -o given (e.g. `--preview` only, or scoring run).
             // Skip all output writing.
         } else if (ends_with(config->output_path, ".bin") ||
-            ends_with(config->output_path, ".raw")) {
+                   ends_with(config->output_path, ".raw")) {
             std::ofstream of(config->output_path, std::ios::binary);
             of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
                      static_cast<std::streamsize>(st.raw_frame.size()));
-            cli_status("Raw:      {} ({} bytes)", config->output_path,
-                       st.raw_frame.size());
-        } else if (ends_with(config->output_path, ".h")
-                   && amiga::is_c64_charset(config->mode)) {
+            cli_status("Raw:      {} ({} bytes)", config->output_path, st.raw_frame.size());
+        } else if (ends_with(config->output_path, ".h") && amiga::is_c64_charset(config->mode)) {
             // Charset .h: reconstruct an EncodeResult from the api state
             // (raw_frame holds the bytes; cols/rows/unique_glyphs/mc1/mc2
             // come back through EncodeState). No re-encoding.
@@ -6848,40 +6989,35 @@ int run_main(int argc, char* argv[]) {
             std::size_t cells = st.c64_cols * st.c64_rows;
             if (st.raw_frame.size() < charset_bytes + 2 * cells) {
                 std::println(stderr,
-                    "C64 charset .h: raw_frame too small ({} < {})",
-                    st.raw_frame.size(), charset_bytes + 2 * cells);
+                             "C64 charset .h: raw_frame too small ({} < {})",
+                             st.raw_frame.size(),
+                             charset_bytes + 2 * cells);
                 return exit_code::internal;
             }
-            ch_enc.bitmap.assign(
-                st.raw_frame.begin(),
-                st.raw_frame.begin()
-                    + static_cast<std::ptrdiff_t>(charset_bytes));
+            ch_enc.bitmap.assign(st.raw_frame.begin(),
+                                 st.raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes));
             ch_enc.screen_ram.assign(
-                st.raw_frame.begin()
-                    + static_cast<std::ptrdiff_t>(charset_bytes),
-                st.raw_frame.begin()
-                    + static_cast<std::ptrdiff_t>(charset_bytes + cells));
+                st.raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes),
+                st.raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes + cells));
             ch_enc.color_ram.assign(
-                st.raw_frame.begin()
-                    + static_cast<std::ptrdiff_t>(charset_bytes + cells),
-                st.raw_frame.begin()
-                    + static_cast<std::ptrdiff_t>(charset_bytes + 2 * cells));
+                st.raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes + cells),
+                st.raw_frame.begin() + static_cast<std::ptrdiff_t>(charset_bytes + 2 * cells));
 
-            auto sym = config->symbol_name.empty()
-                ? std::string("img") : config->symbol_name;
-            auto hdr = c64::charset_header(
-                ch_enc, sym,
-                config->mode == amiga::Mode::c64_charset_multicolor,
-                c64::parse_palette(config->c64_palette));
+            auto sym = config->symbol_name.empty() ? std::string("img") : config->symbol_name;
+            auto hdr = c64::charset_header(ch_enc,
+                                           sym,
+                                           config->mode == amiga::Mode::c64_charset_multicolor,
+                                           c64::parse_palette(config->c64_palette));
             if (!hdr) {
-                std::println(stderr, "Header generate: {}",
-                             hdr.error().message);
+                std::println(stderr, "Header generate: {}", hdr.error().message);
                 return exit_code::internal;
             }
             std::ofstream of(config->output_path);
             of << *hdr;
             cli_status("Header:   {} ({}x{} cells, {} glyphs)",
-                       config->output_path, ch_enc.cols, ch_enc.rows,
+                       config->output_path,
+                       ch_enc.cols,
+                       ch_enc.rows,
                        ch_enc.unique_glyphs);
         } else if (ends_with(config->output_path, ".prg") ||
                    ends_with(config->output_path, ".koa") ||
@@ -6891,34 +7027,31 @@ int run_main(int argc, char* argv[]) {
             auto enc_result = c64::prg::unpack_pipeline_raw(
                 config->mode, st.raw_frame, st.c64_bg_color);
             if (!enc_result) {
-                std::println(stderr, "C64 PRG unpack: {}",
-                             enc_result.error().message);
+                std::println(stderr, "C64 PRG unpack: {}", enc_result.error().message);
                 return exit_code::internal;
             }
             Result<c64::prg::PrgData> prg = [&] {
-                if (ends_with(config->output_path, ".koa"))
-                    return c64::prg::koala_raw(*enc_result);
-                if (ends_with(config->output_path, ".hir"))
-                    return c64::prg::hires_raw(*enc_result);
+                if (ends_with(config->output_path, ".koa")) return c64::prg::koala_raw(*enc_result);
+                if (ends_with(config->output_path, ".hir")) return c64::prg::hires_raw(*enc_result);
                 return c64::prg::from_mode(config->mode, *enc_result);
             }();
             if (!prg) {
-                std::println(stderr, "C64 PRG encode: {}",
-                             prg.error().message);
+                std::println(stderr, "C64 PRG encode: {}", prg.error().message);
                 return exit_code::internal;
             }
             auto wr = c64::prg::write(config->output_path, *prg);
             if (!wr) {
-                std::println(stderr, "C64 PRG write: {}",
-                             wr.error().message);
+                std::println(stderr, "C64 PRG write: {}", wr.error().message);
                 return exit_code::internal;
             }
-            cli_status("PRG:    {} ({} bytes)", config->output_path,
-                       prg->bytes.size());
+            cli_status("PRG:    {} ({} bytes)", config->output_path, prg->bytes.size());
         } else {
-            auto r = save_preview(config->output_path, st.rendered,
-                                  has_transparency, transparency_mask,
-                                  config->mode, /*hires=*/false,
+            auto r = save_preview(config->output_path,
+                                  st.rendered,
+                                  has_transparency,
+                                  transparency_mask,
+                                  config->mode,
+                                  /*hires=*/false,
                                   /*interlace=*/false);
             if (!r) {
                 std::println(stderr, "PNG write error: {}", r.error().message);
@@ -6928,7 +7061,8 @@ int run_main(int argc, char* argv[]) {
         }
         if (!config->depfile.empty() && !config->output_path.empty()) {
             std::array<std::string_view, 2> inputs{
-                config->input_path, config->palette_file,
+                config->input_path,
+                config->palette_file,
             };
             write_depfile(config->depfile, config->output_path, inputs);
         }
@@ -6946,15 +7080,14 @@ int run_main(int argc, char* argv[]) {
         // src_png is just for the header writer.
         auto src_png = png_io::encode(*image);
         if (!src_png) {
-            std::println(stderr, "SNES: source re-encode failed: {}",
-                         src_png.error().message);
+            std::println(stderr, "SNES: source re-encode failed: {}", src_png.error().message);
             return exit_code::internal;
         }
 
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
-        aopts.mode = (config->mode == amiga::Mode::snes_mode7_256)
-            ? "snes-mode7-256" : "snes-mode7-direct";
+        aopts.mode = (config->mode == amiga::Mode::snes_mode7_256) ? "snes-mode7-256"
+                                                                   : "snes-mode7-direct";
         aopts.width = static_cast<int>(image->width());
         aopts.height = static_cast<int>(image->height());
         aopts.on_progress = make_cli_progress_reporter();
@@ -6963,60 +7096,58 @@ int run_main(int argc, char* argv[]) {
         // quantizer benefits from jitter-driven basin sampling). The
         // Direct variant uses RGB443 grid quantization which is
         // deterministic given input, so jittering buys nothing.
-        bool snes_best = config->best &&
-            config->mode == amiga::Mode::snes_mode7_256;
-        auto enc = snes_best
-            ? best_via_encode_state(*image, aopts, *config)
-            : api::encode_state_image(*image, aopts);
+        bool snes_best = config->best && config->mode == amiga::Mode::snes_mode7_256;
+        auto enc = snes_best ? best_via_encode_state(*image, aopts, *config)
+                             : api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "SNES encode error: {}", enc.error_msg);
             return exit_code::internal;
         }
         auto& st = enc.state;
-        cli_print_mode(std::format(
-            "SNES Mode 7 ({}), {}x{} @ 8bpp chunky, 256 colors",
-            (config->mode == amiga::Mode::snes_mode7_256
-                 ? "256-palette BGR555"
-                 : "Direct Color BBGGGRRR"),
-            st.rendered.width(), st.rendered.height()));
+        cli_print_mode(
+            std::format("SNES Mode 7 ({}), {}x{} @ 8bpp chunky, 256 colors",
+                        (config->mode == amiga::Mode::snes_mode7_256 ? "256-palette BGR555"
+                                                                     : "Direct Color BBGGGRRR"),
+                        st.rendered.width(),
+                        st.rendered.height()));
         // SNES Mode 7: 256-palette path has st.palette; Direct Color
         // (BBGGGRRR pixel bytes) carries color inline → palette empty.
-        if (!st.palette.empty())
-            cli_dump_palette(std::span<const Color3f>(st.palette), *config);
-        cli_print_dither(config->dither_method,
-                         make_api_options(*config).dither_strength);
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        cli_print_dither(config->dither_method, make_api_options(*config).dither_strength);
         cli_print_encoded_other(
-            std::format("{} bytes (SNES Mode 7 frame, packed)",
-                        st.raw_frame.size()),
+            std::format("{} bytes (SNES Mode 7 frame, packed)", st.raw_frame.size()),
             static_cast<std::size_t>(count_unique_colors(st.rendered)),
             static_cast<double>(st.quant_error),
-            st.psnr, st.ssimulacra2_score);
+            st.psnr,
+            st.ssimulacra2_score);
 
         if (config->preview)
-            show_terminal_preview(st.rendered, config->mode,
-                                  /*hires=*/false, /*interlace=*/false,
-                                  st.has_transparency, st.transparency_mask);
+            show_terminal_preview(st.rendered,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false,
+                                  st.has_transparency,
+                                  st.transparency_mask);
 
         if (config->output_path.empty()) {
             // No -o (e.g. `--preview` only). Skip output writing.
         } else if (ends_with(config->output_path, ".bin") ||
-            ends_with(config->output_path, ".raw")) {
+                   ends_with(config->output_path, ".raw")) {
             // api::encode_state has already packed the Mode 7 frame
             // (tilemap + tile data) into st.raw_frame. Just write it
             // out + (for 256 mode) emit the .pal companion.
-            cli_status("Tiles:    {} unique tiles in 32×28 cells",
-                         st.genesis_unique_tiles);
+            cli_status("Tiles:    {} unique tiles in 32×28 cells", st.genesis_unique_tiles);
             std::ofstream of(config->output_path, std::ios::binary);
             of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
                      static_cast<std::streamsize>(st.raw_frame.size()));
             if (!of) {
-                std::println(stderr, "SNES write error: {}",
-                             config->output_path);
+                std::println(stderr, "SNES write error: {}", config->output_path);
                 return exit_code::internal;
             }
             cli_status("Raw:      {} ({} bytes = 16384 tilemap + {} tiles)",
-                         config->output_path, st.raw_frame.size(),
-                         st.raw_frame.size() - 16384);
+                       config->output_path,
+                       st.raw_frame.size(),
+                       st.raw_frame.size() - 16384);
 
             if (config->mode == amiga::Mode::snes_mode7_256) {
                 // Companion palette file: same path with .pal extension.
@@ -7031,15 +7162,13 @@ int run_main(int argc, char* argv[]) {
                 std::ofstream pf(pal_path, std::ios::binary);
                 pf.write(reinterpret_cast<const char*>(pal_bytes.data()),
                          static_cast<std::streamsize>(pal_bytes.size()));
-                cli_status("Pal:      {} ({} bytes)",
-                             pal_path.string(), pal_bytes.size());
+                cli_status("Pal:      {} ({} bytes)", pal_path.string(), pal_bytes.size());
             }
         } else if (ends_with(config->output_path, ".h")) {
             // Re-route through api::convert_cheader so the inline SNES
             // header writer there (api.cpp::snes_header) does the work
             // — keeps a single source of truth for the .h layout.
-            auto cr = api::convert_cheader(
-                src_png->data(), src_png->size(), aopts);
+            auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
             if (!cr.error.empty()) {
                 std::println(stderr, "SNES header: {}", cr.error);
                 return exit_code::internal;
@@ -7047,13 +7176,15 @@ int run_main(int argc, char* argv[]) {
             std::ofstream of(config->output_path);
             of.write(reinterpret_cast<const char*>(cr.data.data()),
                      static_cast<std::streamsize>(cr.data.size()));
-            cli_status("Header:   {} ({} bytes)",
-                       config->output_path, cr.data.size());
+            cli_status("Header:   {} ({} bytes)", config->output_path, cr.data.size());
         } else {
             // PNG preview using st.rendered.
-            auto r = save_preview(config->output_path, st.rendered,
-                                  has_transparency, transparency_mask,
-                                  config->mode, /*hires=*/false,
+            auto r = save_preview(config->output_path,
+                                  st.rendered,
+                                  has_transparency,
+                                  transparency_mask,
+                                  config->mode,
+                                  /*hires=*/false,
                                   /*interlace=*/false);
             if (!r) {
                 std::println(stderr, "PNG write error: {}", r.error().message);
@@ -7064,7 +7195,8 @@ int run_main(int argc, char* argv[]) {
 
         if (!config->depfile.empty() && !config->output_path.empty()) {
             std::array<std::string_view, 2> inputs{
-                config->input_path, config->palette_file,
+                config->input_path,
+                config->palette_file,
             };
             write_depfile(config->depfile, config->output_path, inputs);
         }
@@ -7079,8 +7211,7 @@ int run_main(int argc, char* argv[]) {
         }
         auto src_png = png_io::encode(*image);
         if (!src_png) {
-            std::println(stderr, "Genesis: source re-encode failed: {}",
-                         src_png.error().message);
+            std::println(stderr, "Genesis: source re-encode failed: {}", src_png.error().message);
             return exit_code::internal;
         }
 
@@ -7091,17 +7222,27 @@ int run_main(int argc, char* argv[]) {
         // budget. PSNR is ~3 dB below ostromoukhov but VRAM usage
         // halves, which is the right Genesis tradeoff. User can
         // override with --dither.
-        auto genesis_dither = config->dither_explicit
-            ? config->dither_method : dither::Method::opt_checker;
+        auto genesis_dither = config->dither_explicit ? config->dither_method
+                                                      : dither::Method::opt_checker;
 
         auto aopts = make_api_options(*config);
         neutralize_preprocess(aopts);
         switch (config->mode) {
-        case amiga::Mode::genesis_h32:    aopts.mode = "genesis-h32";    break;
-        case amiga::Mode::genesis_h40:    aopts.mode = "genesis-h40";    break;
-        case amiga::Mode::genesis_h32_sh: aopts.mode = "genesis-h32-sh"; break;
-        case amiga::Mode::genesis_h40_sh: aopts.mode = "genesis-h40-sh"; break;
-        default: aopts.mode = "genesis-h40"; break;
+        case amiga::Mode::genesis_h32:
+            aopts.mode = "genesis-h32";
+            break;
+        case amiga::Mode::genesis_h40:
+            aopts.mode = "genesis-h40";
+            break;
+        case amiga::Mode::genesis_h32_sh:
+            aopts.mode = "genesis-h32-sh";
+            break;
+        case amiga::Mode::genesis_h40_sh:
+            aopts.mode = "genesis-h40-sh";
+            break;
+        default:
+            aopts.mode = "genesis-h40";
+            break;
         }
         aopts.dither = std::string{dither_to_options_string(genesis_dither)};
         aopts.width = static_cast<int>(image->width());
@@ -7110,9 +7251,8 @@ int run_main(int argc, char* argv[]) {
         // Float-input route — avoids the 8-bit PNG round-trip.
         // best_via_encode_state still uses the bytes path (it re-encodes
         // each jittered trial); only single-pass migrates here.
-        auto enc = config->best
-            ? best_via_encode_state(*image, aopts, *config)
-            : api::encode_state_image(*image, aopts);
+        auto enc = config->best ? best_via_encode_state(*image, aopts, *config)
+                                : api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
             std::println(stderr, "Genesis encode error: {}", enc.error_msg);
             return exit_code::internal;
@@ -7120,22 +7260,32 @@ int run_main(int argc, char* argv[]) {
         auto& st = enc.state;
         const char* mode_label = nullptr;
         switch (config->mode) {
-        case amiga::Mode::genesis_h32:    mode_label = "H32 256-wide"; break;
-        case amiga::Mode::genesis_h40:    mode_label = "H40 320-wide"; break;
-        case amiga::Mode::genesis_h32_sh: mode_label = "H32 + Shadow"; break;
-        case amiga::Mode::genesis_h40_sh: mode_label = "H40 + Shadow"; break;
-        default:                          mode_label = "Genesis"; break;
+        case amiga::Mode::genesis_h32:
+            mode_label = "H32 256-wide";
+            break;
+        case amiga::Mode::genesis_h40:
+            mode_label = "H40 320-wide";
+            break;
+        case amiga::Mode::genesis_h32_sh:
+            mode_label = "H32 + Shadow";
+            break;
+        case amiga::Mode::genesis_h40_sh:
+            mode_label = "H40 + Shadow";
+            break;
+        default:
+            mode_label = "Genesis";
+            break;
         }
-        cli_print_mode(std::format(
-            "Sega Genesis ({}), {}x{} @ 4bpp tiles, 4 palettes x 16 BGR333",
-            mode_label, st.rendered.width(), st.rendered.height()));
+        cli_print_mode(std::format("Sega Genesis ({}), {}x{} @ 4bpp tiles, 4 palettes x 16 BGR333",
+                                   mode_label,
+                                   st.rendered.width(),
+                                   st.rendered.height()));
         // Genesis: 4 banks × 16 BGR333 colors. genesis_palette_words is
         // the raw CRAM (uint16 0BBB0GGG0RRR0000); decode back to Color3f
         // for the dump so the per-bank colors are visible. Skip empty
         // banks (encoder only fills what it uses).
         if (g_print_palette && !st.genesis_palette_words.empty()) {
-            std::println(stderr,
-                "Palette dump: 4 × 16 BGR333 banks  (Genesis CRAM)");
+            std::println(stderr, "Palette dump: 4 × 16 BGR333 banks  (Genesis CRAM)");
             for (std::size_t bank = 0; bank < 4; ++bank) {
                 std::println(stderr, "  Bank {}:", bank);
                 for (std::size_t i = 0; i < 16; ++i) {
@@ -7148,13 +7298,11 @@ int run_main(int argc, char* argv[]) {
                     int r8 = (r3 << 5) | (r3 << 2) | (r3 >> 1);
                     int g8 = (g3 << 5) | (g3 << 2) | (g3 >> 1);
                     int b8 = (b3 << 5) | (b3 << 2) | (b3 >> 1);
-                    std::println(stderr, "    {:2}: #{:02x}{:02x}{:02x}",
-                                 i, r8, g8, b8);
+                    std::println(stderr, "    {:2}: #{:02x}{:02x}{:02x}", i, r8, g8, b8);
                 }
             }
         }
-        cli_print_dither(genesis_dither,
-                         make_api_options(*config).dither_strength);
+        cli_print_dither(genesis_dither, make_api_options(*config).dither_strength);
         // Tile-dedup stats. The "after dedup" tile count maps directly to
         // VRAM bytes (×32). Real Genesis VRAM is 64 KB total, with the
         // upper bound for plane-A title art around ~1280 tiles before
@@ -7162,43 +7310,47 @@ int run_main(int argc, char* argv[]) {
         if (st.genesis_total_cells > 0) {
             auto unique = st.genesis_unique_tiles;
             auto total = st.genesis_total_cells;
-            float dedup_pct = total > 0
-                ? 100.0f * (1.0f - static_cast<float>(unique) /
-                                    static_cast<float>(total))
-                : 0.0f;
+            float dedup_pct = total > 0 ? 100.0f * (1.0f - static_cast<float>(unique) /
+                                                               static_cast<float>(total))
+                                        : 0.0f;
             cli_status("Tiles:    {} unique / {} cells ({:.1f}% dedup, {} VRAM bytes)",
-                         unique, total, dedup_pct, unique * 32);
+                       unique,
+                       total,
+                       dedup_pct,
+                       unique * 32);
             if (unique > 1280) {
                 cli_status("Warning:  {} unique tiles exceeds the typical "
-                            "~1280 plane-A budget (~40 KB).", unique);
+                           "~1280 plane-A budget (~40 KB).",
+                           unique);
             }
         }
         cli_print_encoded_other(
-            std::format("{} bytes (Genesis tiles + tilemap + CRAM)",
-                        st.raw_frame.size()),
+            std::format("{} bytes (Genesis tiles + tilemap + CRAM)", st.raw_frame.size()),
             static_cast<std::size_t>(count_unique_colors(st.rendered)),
             static_cast<double>(st.quant_error),
-            st.psnr, st.ssimulacra2_score);
+            st.psnr,
+            st.ssimulacra2_score);
 
         if (config->preview)
-            show_terminal_preview(st.rendered, config->mode,
-                                  /*hires=*/false, /*interlace=*/false,
-                                  st.has_transparency, st.transparency_mask);
+            show_terminal_preview(st.rendered,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false,
+                                  st.has_transparency,
+                                  st.transparency_mask);
 
         if (config->output_path.empty()) {
             // No -o (e.g. `--preview` only). Skip output writing.
         } else if (ends_with(config->output_path, ".bin") ||
-            ends_with(config->output_path, ".raw")) {
+                   ends_with(config->output_path, ".raw")) {
             std::ofstream of(config->output_path, std::ios::binary);
             of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
                      static_cast<std::streamsize>(st.raw_frame.size()));
             if (!of) {
-                std::println(stderr, "Genesis write error: {}",
-                             config->output_path);
+                std::println(stderr, "Genesis write error: {}", config->output_path);
                 return exit_code::internal;
             }
-            cli_status("Raw:      {} ({} bytes)",
-                         config->output_path, st.raw_frame.size());
+            cli_status("Raw:      {} ({} bytes)", config->output_path, st.raw_frame.size());
         } else if (ends_with(config->output_path, ".h")) {
             cheader_genesis::GenesisHeaderOptions hopts;
             hopts.tile_bytes = st.genesis_tile_bytes;
@@ -7206,29 +7358,29 @@ int run_main(int argc, char* argv[]) {
             hopts.palette = st.genesis_palette_words;
             hopts.width_pixels = static_cast<std::size_t>(aopts.width);
             hopts.height_pixels = static_cast<std::size_t>(aopts.height);
-            hopts.symbol = config->symbol_name.empty()
-                ? std::string{"genesis_image"} : config->symbol_name;
+            hopts.symbol = config->symbol_name.empty() ? std::string{"genesis_image"}
+                                                       : config->symbol_name;
             auto hdr = cheader_genesis::generate(hopts);
             if (!hdr) {
-                std::println(stderr, "Genesis header error: {}",
-                             hdr.error().message);
+                std::println(stderr, "Genesis header error: {}", hdr.error().message);
                 return exit_code::internal;
             }
             std::ofstream of(config->output_path, std::ios::binary);
             of.write(reinterpret_cast<const char*>(hdr->data()),
                      static_cast<std::streamsize>(hdr->size()));
             if (!of) {
-                std::println(stderr, "Genesis header write error: {}",
-                             config->output_path);
+                std::println(stderr, "Genesis header write error: {}", config->output_path);
                 return exit_code::internal;
             }
-            cli_status("Header:   {} ({} bytes)",
-                         config->output_path, hdr->size());
+            cli_status("Header:   {} ({} bytes)", config->output_path, hdr->size());
         } else {
             // PNG preview.
-            auto r = save_preview(config->output_path, st.rendered,
-                                  has_transparency, transparency_mask,
-                                  config->mode, /*hires=*/false,
+            auto r = save_preview(config->output_path,
+                                  st.rendered,
+                                  has_transparency,
+                                  transparency_mask,
+                                  config->mode,
+                                  /*hires=*/false,
                                   /*interlace=*/false);
             if (!r) {
                 std::println(stderr, "PNG write error: {}", r.error().message);
@@ -7239,7 +7391,8 @@ int run_main(int argc, char* argv[]) {
 
         if (!config->depfile.empty() && !config->output_path.empty()) {
             std::array<std::string_view, 2> inputs{
-                config->input_path, config->palette_file,
+                config->input_path,
+                config->palette_file,
             };
             write_depfile(config->depfile, config->output_path, inputs);
         }
@@ -7254,9 +7407,7 @@ int run_main(int argc, char* argv[]) {
         // hardware-pixel space the encoder expects. Default (no sizing
         // flag): input is already at canonical 640×200 from the
         // upstream scale step — no halve.
-        bool freeform = config->no_scale ||
-                        config->width.has_value() ||
-                        config->height.has_value();
+        bool freeform = config->no_scale || config->width.has_value() || config->height.has_value();
         if (freeform) {
             // Pad to even height first so the halve has clean pairs.
             if ((image->height() % 2) != 0) {
@@ -7272,9 +7423,7 @@ int run_main(int argc, char* argv[]) {
                 for (std::size_t x = 0; x < image->width(); ++x) {
                     auto a = (*image)[x, y * 2];
                     auto b = (*image)[x, y * 2 + 1];
-                    halved[x, y] = {(a.r + b.r) * 0.5f,
-                                    (a.g + b.g) * 0.5f,
-                                    (a.b + b.b) * 0.5f};
+                    halved[x, y] = {(a.r + b.r) * 0.5f, (a.g + b.g) * 0.5f, (a.b + b.b) * 0.5f};
                 }
             }
             *image = std::move(halved);
@@ -7283,22 +7432,22 @@ int run_main(int argc, char* argv[]) {
         // CGA 8x8 font); cell_h is mode-dependent (1 / 2 / 4 / 8).
         constexpr std::size_t ct_cw = 8;
         const std::size_t ct_ch = amiga::cga_text_cell_height(config->mode);
-        std::size_t ct_pw = ((image->width()  + ct_cw - 1) / ct_cw) * ct_cw;
+        std::size_t ct_pw = ((image->width() + ct_cw - 1) / ct_cw) * ct_cw;
         std::size_t ct_ph = ((image->height() + ct_ch - 1) / ct_ch) * ct_ch;
         if (ct_pw != image->width() || ct_ph != image->height()) {
             Image padded(ct_pw, ct_ph);
             for (std::size_t y = 0; y < image->height(); ++y)
                 for (std::size_t x = 0; x < image->width(); ++x)
                     padded[x, y] = (*image)[x, y];
-            cli_status("Center:   {}x{} -> {}x{} (pad)",
-                       image->width(), image->height(), ct_pw, ct_ph);
+            cli_status(
+                "Center:   {}x{} -> {}x{} (pad)", image->width(), image->height(), ct_pw, ct_ph);
             *image = std::move(padded);
         }
-        cli_print_mode(std::format(
-            "CGA text {}x{} ({}x{}, IBM 8x8 ROM glyphs, 16 fg x 16 bg attr)",
-            amiga::cga_text_cols(config->mode),
-            amiga::cga_text_rows(config->mode),
-            image->width(), image->height()));
+        cli_print_mode(std::format("CGA text {}x{} ({}x{}, IBM 8x8 ROM glyphs, 16 fg x 16 bg attr)",
+                                   amiga::cga_text_cols(config->mode),
+                                   amiga::cga_text_rows(config->mode),
+                                   image->width(),
+                                   image->height()));
         // Force transparent source pixels to black before glyph matching,
         // so logos / sprites with alpha cutouts don't contribute stray
         // RGBA-composite colors to the encoded output.
@@ -7317,8 +7466,7 @@ int run_main(int argc, char* argv[]) {
         text_pal.reserve(16);
         // CGA text uses the kCgaHw 16-color IRGB master palette.
         for (std::size_t i = 0; i < 16; ++i) {
-            text_pal.push_back(
-                color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
+            text_pal.push_back(color_space::srgb_hex_to_linear(palette::kCgaHw[i]));
         }
         cli_status("Palette:  16 colors (kCgaHw, CGA text-mode IRGB)");
         cli_dump_palette(std::span<const Color3f>(text_pal), *config);
@@ -7328,28 +7476,27 @@ int run_main(int argc, char* argv[]) {
         // SSIMULACRA2 (-39.31 vs -39.70…-44.63), and `mse+none` beats
         // `mse+ED` on PSNR. Both metrics still *accept* a pre-dithered
         // input if the user opts in via an explicit `--dither <method>`.
-        auto cga_metric =
-            config->cga_text_metric == "mse" ? cga_text::Metric::mse
-                                             : cga_text::Metric::blur;
-        auto cga_dither_method = config->dither_explicit
-            ? config->dither_method : dither::Method::none;
+        auto cga_metric = config->cga_text_metric == "mse" ? cga_text::Metric::mse
+                                                           : cga_text::Metric::blur;
+        auto cga_dither_method = config->dither_explicit ? config->dither_method
+                                                         : dither::Method::none;
         // Resolve the dither strength the CGA-text path will actually use,
         // so the Dither header line agrees with the encoder. Default for
         // this mode is `--dither none`; only when the user opts in does
         // strength matter (per-method tuning + explicit override).
         auto cga_tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = config->mode,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = false,
-            .scap    = false,
-            .copper  = false,
+            .mode = config->mode,
+            .depth = static_cast<int>(config->depth),
+            .dpf = false,
+            .scap = false,
+            .copper = false,
             .chipset = effective_chipset(*config),
-            .method  = cga_dither_method,
+            .method = cga_dither_method,
         });
         float cga_strength = cga_dither_method == dither::Method::none
-            ? 0.0f
-            : (config->dither_strength_explicit
-                ? config->dither_strength : cga_tune.strength);
+                                 ? 0.0f
+                                 : (config->dither_strength_explicit ? config->dither_strength
+                                                                     : cga_tune.strength);
         cli_print_dither(cga_dither_method, cga_strength);
         Image dithered(image->width(), image->height());
         if (cga_dither_method == dither::Method::none) {
@@ -7357,13 +7504,16 @@ int run_main(int argc, char* argv[]) {
                 for (std::size_t x = 0; x < image->width(); ++x)
                     dithered[x, y] = (*image)[x, y];
         } else {
-            auto dith = dither::apply(*image, text_pal, {
-                .method = cga_dither_method,
-                .strength = cga_strength,
-                .error_clamp = config->error_clamp_explicit
-                    ? config->error_clamp : cga_tune.error_clamp,
-                .serpentine = true,
-            });
+            auto dith = dither::apply(*image,
+                                      text_pal,
+                                      {
+                                          .method = cga_dither_method,
+                                          .strength = cga_strength,
+                                          .error_clamp = config->error_clamp_explicit
+                                                             ? config->error_clamp
+                                                             : cga_tune.error_clamp,
+                                          .serpentine = true,
+                                      });
             for (std::size_t y = 0; y < image->height(); ++y)
                 for (std::size_t x = 0; x < image->width(); ++x)
                     dithered[x, y] = text_pal[dith.indices[y * image->width() + x]];
@@ -7373,8 +7523,7 @@ int run_main(int argc, char* argv[]) {
         // When emitting a 16-bit C viewer (.c → ia16-elf-gcc / 8088 XT)
         // for a CGA text mode, constrain the encoder to offset=0.
         int fixed_offset = -1;
-        if (amiga::is_cga_text(config->mode) &&
-            ends_with(config->output_path, ".c"))
+        if (amiga::is_cga_text(config->mode) && ends_with(config->output_path, ".c"))
             fixed_offset = 0;
 
         // --best is a no-op for cga-text: the glyph matcher is
@@ -7385,12 +7534,16 @@ int run_main(int argc, char* argv[]) {
         // metric absorbs; measured 0.16% error reduction at 30s cost.
         // Skip the sweep for this mode and use the single-pass encode.
         auto cga_kernel = cga_text::parse_kernel(config->cga_text_kernel);
-        auto res = cga_text::encode(dithered, config->mode, {}, text_pal,
-                                    fixed_offset, cga_metric, cga_kernel,
+        auto res = cga_text::encode(dithered,
+                                    config->mode,
+                                    {},
+                                    text_pal,
+                                    fixed_offset,
+                                    cga_metric,
+                                    cga_kernel,
                                     make_cli_progress_reporter());
         if (!res) {
-            std::println(stderr, "CGA text encode error: {}",
-                         res.error().message);
+            std::println(stderr, "CGA text encode error: {}", res.error().message);
             return 1;
         }
         // Render once. PSNR / S2 compare in the encoder's hardware-pixel
@@ -7398,15 +7551,12 @@ int run_main(int argc, char* argv[]) {
         // above, so direct comparison is fair.
         auto preview = cga_text::render(*res);
         float cga_psnr = std::numeric_limits<float>::quiet_NaN();
-        float cga_s2   = std::numeric_limits<float>::quiet_NaN();
-        if (preview.width() == image->width() &&
-            preview.height() == image->height()) {
+        float cga_s2 = std::numeric_limits<float>::quiet_NaN();
+        if (preview.width() == image->width() && preview.height() == image->height()) {
             cga_psnr = color_space::compute_psnr_blurred(
-                image->pixels(), preview.pixels(),
-                image->width(), image->height());
+                image->pixels(), preview.pixels(), image->width(), image->height());
             cga_s2 = ssimulacra2::compute(
-                image->pixels(), preview.pixels(),
-                image->width(), image->height());
+                image->pixels(), preview.pixels(), image->width(), image->height());
         }
         // Freeform displays at source-pixel dims (preserve user aspect).
         // Post-double the rendered preview vertically (each hw scanline
@@ -7418,54 +7568,57 @@ int run_main(int argc, char* argv[]) {
             for (std::size_t y = 0; y < preview.height(); ++y) {
                 for (std::size_t x = 0; x < preview.width(); ++x) {
                     auto v = preview[x, y];
-                    doubled[x, y * 2]     = v;
+                    doubled[x, y * 2] = v;
                     doubled[x, y * 2 + 1] = v;
                 }
             }
             preview = std::move(doubled);
         }
-        cli_print_encoded_other(
-            std::format("{} cells ({}×{}), {} bytes (text buffer), "
-                        "CRTC offset {}",
-                        res->cols * res->rows, res->cols, res->rows,
-                        res->data.size(), res->scanline_offset),
-            static_cast<std::size_t>(count_unique_colors(preview)),
-            static_cast<double>(res->total_error),
-            cga_psnr, cga_s2);
+        cli_print_encoded_other(std::format("{} cells ({}×{}), {} bytes (text buffer), "
+                                            "CRTC offset {}",
+                                            res->cols * res->rows,
+                                            res->cols,
+                                            res->rows,
+                                            res->data.size(),
+                                            res->scanline_offset),
+                                static_cast<std::size_t>(count_unique_colors(preview)),
+                                static_cast<double>(res->total_error),
+                                cga_psnr,
+                                cga_s2);
 
         if (!config->output_path.empty()) {
             if (ends_with(config->output_path, ".raw")) {
-                std::ofstream of(std::string(config->output_path),
-                                 std::ios::binary);
+                std::ofstream of(std::string(config->output_path), std::ios::binary);
                 of.write(reinterpret_cast<const char*>(res->data.data()),
                          static_cast<std::streamsize>(res->data.size()));
                 cli_status("Raw:      {} ({} bytes, CGA text {}x{} char+attr"
-                             "; blink must be CLEARED in mode reg 0x3D8 bit 5 "
-                             "so attr bit 7 becomes bg intensity, enabling "
-                             "all 16 bg colors)",
-                             config->output_path, res->data.size(),
-                             res->cols, res->rows);
-            } else if (ends_with(config->output_path, ".c") &&
-                       amiga::is_cga_text(config->mode)) {
+                           "; blink must be CLEARED in mode reg 0x3D8 bit 5 "
+                           "so attr bit 7 becomes bg intensity, enabling "
+                           "all 16 bg colors)",
+                           config->output_path,
+                           res->data.size(),
+                           res->cols,
+                           res->rows);
+            } else if (ends_with(config->output_path, ".c") && amiga::is_cga_text(config->mode)) {
                 // 16-bit C text viewer for real CGA (ia16-elf-gcc, 8088+).
                 // CRTC reprogramming handled inside cheader_dos_c; ROM font
                 // used as-is (scanline_offset forced to 0 at encode time).
                 cheader_dos_c::Options opts{
                     .symbol_name = config->symbol_name.empty()
-                        ? derive_symbol_name(config->output_path)
-                        : config->symbol_name};
-                auto result = cheader_dos_c::save(
-                    config->output_path, config->mode,
-                    res->cols, res->rows,
-                    std::span{res->data.data(), res->data.size()},
-                    {}, opts);
+                                       ? derive_symbol_name(config->output_path)
+                                       : config->symbol_name};
+                auto result = cheader_dos_c::save(config->output_path,
+                                                  config->mode,
+                                                  res->cols,
+                                                  res->rows,
+                                                  std::span{res->data.data(), res->data.size()},
+                                                  {},
+                                                  opts);
                 if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
+                    std::println(stderr, "Viewer write error: {}", result.error().message);
                     return 1;
                 }
-                cli_status("Viewer:   {} (DOS/ia16-elf 16-bit)",
-                             config->output_path);
+                cli_status("Viewer:   {} (DOS/ia16-elf 16-bit)", config->output_path);
             } else {
                 std::vector<bool> empty_mask;
                 Result<void> result;
@@ -7477,13 +7630,16 @@ int run_main(int argc, char* argv[]) {
                 } else {
                     // Default canonical: scale_for_display applies the
                     // sy=2+PAR canonical CRT 4:3 stretch.
-                    result = save_preview(config->output_path, preview,
-                                          false, empty_mask,
-                                          config->mode, false, false);
+                    result = save_preview(config->output_path,
+                                          preview,
+                                          false,
+                                          empty_mask,
+                                          config->mode,
+                                          false,
+                                          false);
                 }
                 if (!result) {
-                    std::println(stderr, "PNG write error: {}",
-                                 result.error().message);
+                    std::println(stderr, "PNG write error: {}", result.error().message);
                     return 1;
                 }
                 cli_status("PNG:      {}", config->output_path);
@@ -7499,12 +7655,11 @@ int run_main(int argc, char* argv[]) {
             if (freeform) {
                 Image composited = preview;
                 if (has_transparency)
-                    composited = composite_on_checkerboard(
-                        composited, transparency_mask);
+                    composited = composite_on_checkerboard(composited, transparency_mask);
                 iterm2_display(composited);
             } else {
-                show_terminal_preview(preview, config->mode, false, false,
-                                      has_transparency, transparency_mask);
+                show_terminal_preview(
+                    preview, config->mode, false, false, has_transparency, transparency_mask);
             }
         }
         return 0;
@@ -7513,15 +7668,17 @@ int run_main(int argc, char* argv[]) {
     // --- HAM modes ---
     if (amiga::is_ham(config->mode)) {
         if (!config->locks.empty() || !config->pins.empty()) {
-            std::println(stderr, "Error: --lock-index / --pin-index-at "
-                                 "are not supported in HAM modes "
-                                 "(palette is dynamic per pixel)");
+            std::println(stderr,
+                         "Error: --lock-index / --pin-index-at "
+                         "are not supported in HAM modes "
+                         "(palette is dynamic per pixel)");
             return 1;
         }
         if (config->fade_in) {
-            std::println(stderr, "Error: --fade-in is not supported in HAM modes "
-                                 "(HAM modify bits carry absolute R/G/B values, "
-                                 "so fading the base palette would corrupt the image)");
+            std::println(stderr,
+                         "Error: --fade-in is not supported in HAM modes "
+                         "(HAM modify bits carry absolute R/G/B values, "
+                         "so fading the base palette would corrupt the image)");
             return 1;
         }
         auto ham_params = amiga::get_mode_params(config->mode);
@@ -7538,16 +7695,16 @@ int run_main(int argc, char* argv[]) {
         auto ham_data_bits = ham_params.bitplane_depth - 2;
         std::size_t ham_base_colors = std::size_t{1} << ham_data_bits;
         if (config->scap && config->mode == amiga::Mode::ham6) {
-            cli_print_mode(std::format("HAM6 + Strips (beam: {})",
-                                        config->ham_beam));
+            cli_print_mode(std::format("HAM6 + Strips (beam: {})", config->ham_beam));
         } else {
-            cli_print_mode(std::format("HAM{} (beam: {})",
-                                        ham_params.bitplane_depth,
-                                        config->ham_beam));
+            cli_print_mode(
+                std::format("HAM{} (beam: {})", ham_params.bitplane_depth, config->ham_beam));
         }
-        cli_print_palette(std::format(
-            "{} base colors, {}-bit MODIFY ({})", ham_base_colors, ham_data_bits,
-            resolve_quantizer_name(config->mode, chipset, config->quantizer)));
+        cli_print_palette(
+            std::format("{} base colors, {}-bit MODIFY ({})",
+                        ham_base_colors,
+                        ham_data_bits,
+                        resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         // Print the strength the encoder will actually use, not the raw
         // CLI default — make_api_options consults dither_tuning, so the
         // log line should reflect that. Builds aopts early just to read
@@ -7584,34 +7741,41 @@ int run_main(int argc, char* argv[]) {
         int ham_unique = count_unique_colors(st.rendered);
         if (config->copper && !st.scanline_changes.empty()) {
             std::size_t total_ch = 0;
-            for (auto& ch : st.scanline_changes) total_ch += ch.size();
+            for (auto& ch : st.scanline_changes)
+                total_ch += ch.size();
             float avg_ch = st.scanline_changes.size() > 0
-                ? static_cast<float>(total_ch) / static_cast<float>(st.scanline_changes.size())
-                : 0.0f;
-            int ham_cap_entries = static_cast<int>(
-                st.scanline_changes.size() * st.changes_per_line);
-            cli_print_encoded(
-                static_cast<int>(st.planes.depth),
-                static_cast<int>(st.planes.total_bytes()),
-                static_cast<int>(st.palette.size()),
-                chipset == amiga::Chipset::aga,
-                ham_cap_entries, /*strips_op_count=*/0,
-                static_cast<int>(st.planes.height),
-                static_cast<int>(st.changes_per_line),
-                ham_unique,
-                std::optional<float>{avg_ch},
-                static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
+                               ? static_cast<float>(total_ch) /
+                                     static_cast<float>(st.scanline_changes.size())
+                               : 0.0f;
+            int ham_cap_entries = static_cast<int>(st.scanline_changes.size() *
+                                                   st.changes_per_line);
+            cli_print_encoded(static_cast<int>(st.planes.depth),
+                              static_cast<int>(st.planes.total_bytes()),
+                              static_cast<int>(st.palette.size()),
+                              chipset == amiga::Chipset::aga,
+                              ham_cap_entries,
+                              /*strips_op_count=*/0,
+                              static_cast<int>(st.planes.height),
+                              static_cast<int>(st.changes_per_line),
+                              ham_unique,
+                              std::optional<float>{avg_ch},
+                              static_cast<double>(st.quant_error),
+                              st.psnr,
+                              st.ssimulacra2_score);
         } else {
-            cli_print_encoded(
-                static_cast<int>(st.planes.depth),
-                static_cast<int>(st.planes.total_bytes()),
-                static_cast<int>(st.palette.size()),
-                chipset == amiga::Chipset::aga,
-                /*sliced_grid_entries=*/0, /*strips_op_count=*/0,
-                static_cast<int>(st.planes.height),
-                /*max_moves=*/0,
-                ham_unique, std::nullopt,
-                static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
+            cli_print_encoded(static_cast<int>(st.planes.depth),
+                              static_cast<int>(st.planes.total_bytes()),
+                              static_cast<int>(st.palette.size()),
+                              chipset == amiga::Chipset::aga,
+                              /*sliced_grid_entries=*/0,
+                              /*strips_op_count=*/0,
+                              static_cast<int>(st.planes.height),
+                              /*max_moves=*/0,
+                              ham_unique,
+                              std::nullopt,
+                              static_cast<double>(st.quant_error),
+                              st.psnr,
+                              st.ssimulacra2_score);
         }
 
         // HAM: dump the (resolved) base palette only after encode finishes
@@ -7620,9 +7784,12 @@ int run_main(int argc, char* argv[]) {
         cli_dump_palette(std::span<const Color3f>(st.palette), *config);
 
         if (config->preview)
-            show_terminal_preview(st.rendered, config->mode,
-                                  config->hires, config->interlace,
-                                  st.has_transparency, st.transparency_mask);
+            show_terminal_preview(st.rendered,
+                                  config->mode,
+                                  config->hires,
+                                  config->interlace,
+                                  st.has_transparency,
+                                  st.transparency_mask);
 
         // Output
         if (!config->output_path.empty()) {
@@ -7642,8 +7809,7 @@ int run_main(int argc, char* argv[]) {
             out.mask_layout = config->mask_layout;
             out.mask_invert = config->mask_invert;
             // HAM+sliced: per-line palette evolution attached to IFF/cheader.
-            if (!st.scanline_palettes.empty())
-                out.scanline_palettes = &st.scanline_palettes;
+            if (!st.scanline_palettes.empty()) out.scanline_palettes = &st.scanline_palettes;
             if (!st.scanline_changes.empty()) {
                 out.scanline_changes = &st.scanline_changes;
                 out.changes_per_line = st.changes_per_line;
@@ -7653,10 +7819,8 @@ int run_main(int argc, char* argv[]) {
             if (config->scap && !st.strips_line_moves.empty()) {
                 out.strips_line_moves = &st.strips_line_moves;
                 bool strips_ham6 = config->mode == amiga::Mode::ham6;
-                auto& table = strips_ham6 ? strips::kStrips6bplHam6
-                                          : strips::kStrips6bplOcs;
-                out.strips_label = strips_ham6 ? "strips_ham6_ocs"
-                                               : "strips_dpf_ocs";
+                auto& table = strips_ham6 ? strips::kStrips6bplHam6 : strips::kStrips6bplOcs;
+                out.strips_label = strips_ham6 ? "strips_ham6_ocs" : "strips_dpf_ocs";
                 out.strips_anchor_hpos = table.line_gate_hpos;
                 out.strips_total_planes = table.total_planes;
             }
@@ -7666,8 +7830,12 @@ int run_main(int argc, char* argv[]) {
 
         // Mask export (HAM mode)
         if (!config->mask_path.empty())
-            save_mask(config->mask_path, transparency_mask,
-                      target_w, target_h, config->mask_invert, config->interlace);
+            save_mask(config->mask_path,
+                      transparency_mask,
+                      target_w,
+                      target_h,
+                      config->mask_invert,
+                      config->interlace);
 
         return 0;
     }
@@ -7688,8 +7856,9 @@ int run_main(int argc, char* argv[]) {
         // --- EHB with copper ---
         if (config->copper) {
             if (!config->locks.empty() || !config->pins.empty()) {
-                std::println(stderr, "Error: --lock-index / --pin-index-at "
-                                     "are not supported with EHB + --copper");
+                std::println(stderr,
+                             "Error: --lock-index / --pin-index-at "
+                             "are not supported with EHB + --copper");
                 return 1;
             }
 
@@ -7700,8 +7869,7 @@ int run_main(int argc, char* argv[]) {
             // gets the same clear error main.cpp's inline path used to
             // emit before the migration.
             auto reserves_in_ehb_cap = palette_locks::validate_reserves(
-                config->reserves, config->locks, /*max_colors=*/32,
-                config->lock_color0);
+                config->reserves, config->locks, /*max_colors=*/32, config->lock_color0);
             if (!reserves_in_ehb_cap) {
                 std::println(stderr, "{}", reserves_in_ehb_cap.error().message);
                 return 1;
@@ -7710,18 +7878,18 @@ int run_main(int argc, char* argv[]) {
             dither::Settings dith;
             dith.method = config->dither_method;
             auto ehb_cap_tune = dither_tuning::defaults_for(dither_tuning::Context{
-                .mode    = config->mode,
-                .depth   = static_cast<int>(config->depth),
-                .dpf     = config->dual_playfield,
-                .scap    = false,
-                .copper  = true,
+                .mode = config->mode,
+                .depth = static_cast<int>(config->depth),
+                .dpf = config->dual_playfield,
+                .scap = false,
+                .copper = true,
                 .chipset = chipset,
-                .method  = config->dither_method,
+                .method = config->dither_method,
             });
-            dith.strength = config->dither_strength_explicit
-                            ? config->dither_strength : ehb_cap_tune.strength;
-            dith.error_clamp = config->error_clamp_explicit
-                              ? config->error_clamp : ehb_cap_tune.error_clamp;
+            dith.strength = config->dither_strength_explicit ? config->dither_strength
+                                                             : ehb_cap_tune.strength;
+            dith.error_clamp = config->error_clamp_explicit ? config->error_clamp
+                                                            : ehb_cap_tune.error_clamp;
 
             // Dither: line is now emitted AFTER Mode/Palette below for
             // consistent header-block ordering.
@@ -7746,8 +7914,7 @@ int run_main(int argc, char* argv[]) {
             aopts.on_progress = make_cli_progress_reporter();
             auto enc = api::encode_state_image(*image, aopts);
             if (!enc.ok()) {
-                std::println(stderr, "EHB+sliced encode error: {}",
-                             enc.error_msg);
+                std::println(stderr, "EHB+sliced encode error: {}", enc.error_msg);
                 return 1;
             }
             // Adapt EncodeState into the EhbSlicedTrial shape the existing
@@ -7772,9 +7939,8 @@ int run_main(int argc, char* argv[]) {
                 cr.avg_changes_per_line = enc.state.copper_changes;
                 cr.max_moves_per_line = enc.state.max_moves_per_line;
                 cr.total_error = enc.state.quant_error;
-                cr.base_palette_quantizer =
-                    resolve_quantizer_name(config->mode, chipset,
-                                            config->quantizer);
+                cr.base_palette_quantizer = resolve_quantizer_name(
+                    config->mode, chipset, config->quantizer);
                 winner = EhbSlicedTrial{
                     std::move(cr),
                     std::move(enc.state.indices),
@@ -7783,20 +7949,16 @@ int run_main(int argc, char* argv[]) {
                 };
             }
 
-
             auto& copper_result_obj = winner->copper_result;
-            cli_print_mode(std::format(
-                "EHB + Sliced ({} changes/line, max {} MOVEs/line)",
-                copper_result_obj.changes_per_line,
-                copper_result_obj.max_moves_per_line));
-            cli_print_palette(std::format(
-                "{} base + {} half-brite = {} colors ({})",
-                copper_result_obj.base_palette.size(),
-                copper_result_obj.base_palette.size(),
-                copper_result_obj.base_palette.size() * 2,
-                copper_result_obj.base_palette_quantizer));
-            cli_dump_palette(std::span<const Color3f>(
-                copper_result_obj.base_palette), *config);
+            cli_print_mode(std::format("EHB + Sliced ({} changes/line, max {} MOVEs/line)",
+                                       copper_result_obj.changes_per_line,
+                                       copper_result_obj.max_moves_per_line));
+            cli_print_palette(std::format("{} base + {} half-brite = {} colors ({})",
+                                          copper_result_obj.base_palette.size(),
+                                          copper_result_obj.base_palette.size(),
+                                          copper_result_obj.base_palette.size() * 2,
+                                          copper_result_obj.base_palette_quantizer));
+            cli_dump_palette(std::span<const Color3f>(copper_result_obj.base_palette), *config);
             cli_print_dither(dith.method, dith.strength);
 
             auto& all_indices = winner->indices;
@@ -7818,26 +7980,29 @@ int run_main(int argc, char* argv[]) {
 
             float ehb_psnr = color_space::compute_psnr_blurred(
                 image->pixels(), rendered.pixels(), w, h);
-            float ehb_s2 = ssimulacra2::compute(
-                image->pixels(), rendered.pixels(), w, h);
-            int ehb_cap_entries = static_cast<int>(
-                h * copper_result->changes_per_line);
-            cli_print_encoded(
-                static_cast<int>(planes->depth),
-                static_cast<int>(planes->total_bytes()),
-                static_cast<int>(copper_result->base_palette.size()),
-                /*aga=*/false,
-                ehb_cap_entries, /*strips_op_count=*/0,
-                static_cast<int>(h),
-                static_cast<int>(copper_result->max_moves_per_line),
-                count_unique_colors(rendered),
-                std::optional<float>{copper_result->avg_changes_per_line},
-                static_cast<double>(total_error), ehb_psnr, ehb_s2);
+            float ehb_s2 = ssimulacra2::compute(image->pixels(), rendered.pixels(), w, h);
+            int ehb_cap_entries = static_cast<int>(h * copper_result->changes_per_line);
+            cli_print_encoded(static_cast<int>(planes->depth),
+                              static_cast<int>(planes->total_bytes()),
+                              static_cast<int>(copper_result->base_palette.size()),
+                              /*aga=*/false,
+                              ehb_cap_entries,
+                              /*strips_op_count=*/0,
+                              static_cast<int>(h),
+                              static_cast<int>(copper_result->max_moves_per_line),
+                              count_unique_colors(rendered),
+                              std::optional<float>{copper_result->avg_changes_per_line},
+                              static_cast<double>(total_error),
+                              ehb_psnr,
+                              ehb_s2);
 
             if (config->preview)
-                show_terminal_preview(rendered, config->mode,
-                                      config->hires, config->interlace,
-                                      has_transparency, transparency_mask);
+                show_terminal_preview(rendered,
+                                      config->mode,
+                                      config->hires,
+                                      config->interlace,
+                                      has_transparency,
+                                      transparency_mask);
 
             // Use base palette for CMAP
             std::vector<Color3f> cmap_palette = copper_result->base_palette;
@@ -7871,8 +8036,12 @@ int run_main(int argc, char* argv[]) {
 
             // Mask export (EHB copper mode)
             if (!config->mask_path.empty())
-                save_mask(config->mask_path, transparency_mask,
-                          target_w, target_h, config->mask_invert, config->interlace);
+                save_mask(config->mask_path,
+                          transparency_mask,
+                          target_w,
+                          target_h,
+                          config->mask_invert,
+                          config->interlace);
 
             return 0;
         }
@@ -7923,13 +8092,22 @@ int run_main(int argc, char* argv[]) {
             fade_dith.method = config->dither_method;
             fade_dith.strength = aopts.dither_strength;
             fade_dith.error_clamp = aopts.error_clamp;
-            fade_sequence = fade_postprocess(
-                *image, config->fade_to_paths, config->fade_frames,
-                config->fade_loop, /*is_ehb=*/true,
-                /*depth=*/6, bitplane::Layout::interleaved,
-                chipset, config->mode, config->interlace, fade_dith,
-                config->lock_color0,
-                st.indices, st.palette, st.planes, st.rendered);
+            fade_sequence = fade_postprocess(*image,
+                                             config->fade_to_paths,
+                                             config->fade_frames,
+                                             config->fade_loop,
+                                             /*is_ehb=*/true,
+                                             /*depth=*/6,
+                                             bitplane::Layout::interleaved,
+                                             chipset,
+                                             config->mode,
+                                             config->interlace,
+                                             fade_dith,
+                                             config->lock_color0,
+                                             st.indices,
+                                             st.palette,
+                                             st.planes,
+                                             st.rendered);
             if (fade_sequence.empty()) return 1;
         }
 
@@ -7940,21 +8118,24 @@ int run_main(int argc, char* argv[]) {
         // inconsistency is the reason this branch can't reuse the
         // same `palette.size() / size()*2` formula. EHB is always
         // 32 + 32 = 64 by definition; print the invariant.
-        cli_print_palette(std::format(
-            "32 base + 32 half-brite = 64 colors ({})",
-            resolve_quantizer_name(config->mode, chipset, config->quantizer)));
+        cli_print_palette(
+            std::format("32 base + 32 half-brite = 64 colors ({})",
+                        resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         cli_dump_palette(std::span<const Color3f>(st.palette), *config);
         cli_print_dither(config->dither_method, aopts.dither_strength);
-        cli_print_encoded(
-            static_cast<int>(st.planes.depth),
-            static_cast<int>(st.planes.total_bytes()),
-            static_cast<int>(st.palette.size()),
-            /*aga=*/false,
-            /*sliced_grid_entries=*/0, /*strips_op_count=*/0,
-            static_cast<int>(st.planes.height), /*max_moves=*/0,
-            count_unique_colors(st.rendered),
-            std::nullopt,
-            static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
+        cli_print_encoded(static_cast<int>(st.planes.depth),
+                          static_cast<int>(st.planes.total_bytes()),
+                          static_cast<int>(st.palette.size()),
+                          /*aga=*/false,
+                          /*sliced_grid_entries=*/0,
+                          /*strips_op_count=*/0,
+                          static_cast<int>(st.planes.height),
+                          /*max_moves=*/0,
+                          count_unique_colors(st.rendered),
+                          std::nullopt,
+                          static_cast<double>(st.quant_error),
+                          st.psnr,
+                          st.ssimulacra2_score);
 
         // EHB only writes the 32 base entries per frame; halve is hw.
         if (!fade_sequence.empty()) {
@@ -7962,29 +8143,35 @@ int run_main(int argc, char* argv[]) {
             for (std::size_t f = 0; f < fade_sequence.size(); ++f) {
                 auto& src = fade_sequence[f];
                 base_only[f].assign(src.begin(),
-                    src.begin() + static_cast<std::ptrdiff_t>(
-                        std::min<std::size_t>(32, src.size())));
+                                    src.begin() + static_cast<std::ptrdiff_t>(
+                                                      std::min<std::size_t>(32, src.size())));
             }
-            cli_print_fade_data(
-                fade_actual_bytes(base_only, /*budget=*/32, chipset),
-                base_only.size(), /*budget=*/32, chipset, "EHB base");
+            cli_print_fade_data(fade_actual_bytes(base_only, /*budget=*/32, chipset),
+                                base_only.size(),
+                                /*budget=*/32,
+                                chipset,
+                                "EHB base");
         }
 
         if (config->preview) {
             if (!fade_sequence.empty()) {
                 fade_animate_preview(st.indices,
-                                     st.rendered.width(), st.rendered.height(),
-                                     fade_sequence, config->mode,
-                                     config->hires, config->interlace,
+                                     st.rendered.width(),
+                                     st.rendered.height(),
+                                     fade_sequence,
+                                     config->mode,
+                                     config->hires,
+                                     config->interlace,
                                      config->fade_loop);
                 // fade_animate_preview loops forever — Ctrl+C exits.
             } else if (config->tile) {
                 auto tiled = tile_3x3_for_preview(st.rendered);
-                show_terminal_preview(tiled, config->mode,
-                                      config->hires, config->interlace);
+                show_terminal_preview(tiled, config->mode, config->hires, config->interlace);
             } else {
-                show_terminal_preview(st.rendered, config->mode,
-                                      config->hires, config->interlace,
+                show_terminal_preview(st.rendered,
+                                      config->mode,
+                                      config->hires,
+                                      config->interlace,
                                       st.has_transparency,
                                       st.transparency_mask);
             }
@@ -8014,8 +8201,7 @@ int run_main(int argc, char* argv[]) {
             // EHB --fade-to: 32-slot per-frame palette MOVEs for viewer.
             if (!fade_sequence.empty() && !config->interlace) {
                 out.fade_per_frame_values = fade_compute_viewer_values_global(
-                    fade_sequence, /*slot_count=*/32,
-                    config->lock_color0, /*aga=*/false);
+                    fade_sequence, /*slot_count=*/32, config->lock_color0, /*aga=*/false);
                 out.fade_ping_pong = !config->fade_loop;
             }
             int rc = write_amiga_output(out);
@@ -8024,35 +8210,36 @@ int run_main(int argc, char* argv[]) {
 
         // Mask export (EHB mode)
         if (!config->mask_path.empty())
-            save_mask(config->mask_path, transparency_mask,
-                      target_w, target_h, config->mask_invert, config->interlace);
+            save_mask(config->mask_path,
+                      transparency_mask,
+                      target_w,
+                      target_h,
+                      config->mask_invert,
+                      config->interlace);
 
         // --output-indexed (EHB mode): write the 0..63 indices from
         // the EHB encode state. Lores has a unified writer further
         // down; EHB returns early before reaching it, so inline the
         // same logic + --transparent-output-slot swap here.
-        if (!config->output_indexed_path.empty() &&
-            !st.indices.empty()) {
-            std::ofstream f(config->output_indexed_path,
-                            std::ios::binary | std::ios::trunc);
+        if (!config->output_indexed_path.empty() && !st.indices.empty()) {
+            std::ofstream f(config->output_indexed_path, std::ios::binary | std::ios::trunc);
             if (!f) {
-                std::println(stderr,
-                    "--output-indexed: cannot open '{}'",
-                    config->output_indexed_path);
+                std::println(
+                    stderr, "--output-indexed: cannot open '{}'", config->output_indexed_path);
                 return 1;
             }
             std::vector<std::uint8_t> out_idx = st.indices;
-            apply_transparent_slot_swap(out_idx, transparency_mask,
-                config->transparent_output_slot);
+            apply_transparent_slot_swap(
+                out_idx, transparency_mask, config->transparent_output_slot);
             f.write(reinterpret_cast<const char*>(out_idx.data()),
                     static_cast<std::streamsize>(out_idx.size()));
             cli_status("Indexed: {} ({} bytes, {}x{}{})",
                        config->output_indexed_path,
                        out_idx.size(),
-                       st.rendered.width(), st.rendered.height(),
+                       st.rendered.width(),
+                       st.rendered.height(),
                        config->transparent_output_slot > 0
-                           ? std::format(", transparent→slot {}",
-                                          config->transparent_output_slot)
+                           ? std::format(", transparent→slot {}", config->transparent_output_slot)
                            : std::string{});
         }
 
@@ -8060,41 +8247,42 @@ int run_main(int argc, char* argv[]) {
         // write loop further down isn't reached because the EHB
         // block returns early. Mirror it here so EHB joint inputs
         // produce per-input .idx / paletted .png files.
-        if (!config->joint_inputs.empty() &&
-            !config->output_each.empty()) {
+        if (!config->joint_inputs.empty() && !config->output_each.empty()) {
             // Positional first — its indices are in st.
-            if (auto rc = write_oe_outputs(
-                    config->output_each,
-                    config->input_path,
-                    st.indices, transparency_mask,
-                    st.palette,
-                    st.rendered.width(), st.rendered.height(),
-                    config->transparent_output_slot);
-                rc != 0) return rc;
+            if (auto rc = write_oe_outputs(config->output_each,
+                                           config->input_path,
+                                           st.indices,
+                                           transparency_mask,
+                                           st.palette,
+                                           st.rendered.width(),
+                                           st.rendered.height(),
+                                           config->transparent_output_slot);
+                rc != 0)
+                return rc;
             // Per-input: re-render each --joint-input against the
             // shared (now-locked) palette via encode_state_image.
             for (std::size_t i = 0; i < config->joint_inputs.size(); ++i) {
                 auto& jp = config->joint_inputs[i];
                 auto& jimg = joint_imgs[i + 1];  // [0] = positional
                 api::Options jopts = make_api_options(*config);
-                jopts.width  = static_cast<int>(jimg.width());
+                jopts.width = static_cast<int>(jimg.width());
                 jopts.height = static_cast<int>(jimg.height());
                 jopts.best = false;  // training already converged
                 auto ji_enc = api::encode_state_image(jimg, jopts);
                 if (!ji_enc.ok()) {
-                    std::println(stderr,
-                        "--joint-input {} encode error: {}", jp,
-                        ji_enc.error_msg);
+                    std::println(stderr, "--joint-input {} encode error: {}", jp, ji_enc.error_msg);
                     return exit_code::cant_create;
                 }
-                if (auto rc = write_oe_outputs(
-                        config->output_each, jp,
-                        ji_enc.state.indices,
-                        ji_enc.state.transparency_mask,
-                        ji_enc.state.palette,
-                        jimg.width(), jimg.height(),
-                        config->transparent_output_slot);
-                    rc != 0) return rc;
+                if (auto rc = write_oe_outputs(config->output_each,
+                                               jp,
+                                               ji_enc.state.indices,
+                                               ji_enc.state.transparency_mask,
+                                               ji_enc.state.palette,
+                                               jimg.width(),
+                                               jimg.height(),
+                                               config->transparent_output_slot);
+                    rc != 0)
+                    return rc;
             }
         }
 
@@ -8107,12 +8295,12 @@ int run_main(int argc, char* argv[]) {
     // (line 4745), HAM has its own copper branch (line 4523). Skip the
     // plain sliced path for those so `--sliced --strips` doesn't fall into
     // depth-5 sliced and produce a 32-color result with EHB-mode confusion.
-    if (config->copper && !config->scap &&
-        !amiga::is_ham(config->mode) &&
+    if (config->copper && !config->scap && !amiga::is_ham(config->mode) &&
         config->mode != amiga::Mode::ehb) {
         if (!config->pins.empty()) {
-            std::println(stderr, "Error: --pin-index-at "
-                                 "is not supported with --copper");
+            std::println(stderr,
+                         "Error: --pin-index-at "
+                         "is not supported with --copper");
             return 1;
         }
         // IFF output with copper is now supported via the PCHG chunk.
@@ -8126,18 +8314,18 @@ int run_main(int argc, char* argv[]) {
         dither::Settings dith;
         dith.method = config->dither_method;
         auto sliced_tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = config->mode,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = config->dual_playfield,
-            .scap    = false,
-            .copper  = true,
+            .mode = config->mode,
+            .depth = static_cast<int>(config->depth),
+            .dpf = config->dual_playfield,
+            .scap = false,
+            .copper = true,
             .chipset = chipset,
-            .method  = config->dither_method,
+            .method = config->dither_method,
         });
-        dith.strength = config->dither_strength_explicit
-                        ? config->dither_strength : sliced_tune.strength;
-        dith.error_clamp = config->error_clamp_explicit
-                          ? config->error_clamp : sliced_tune.error_clamp;
+        dith.strength = config->dither_strength_explicit ? config->dither_strength
+                                                         : sliced_tune.strength;
+        dith.error_clamp = config->error_clamp_explicit ? config->error_clamp
+                                                        : sliced_tune.error_clamp;
 
         // Dither: line is now emitted AFTER Mode/Palette below.
 
@@ -8148,13 +8336,11 @@ int run_main(int argc, char* argv[]) {
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
         for (auto& lock : config->locks) {
             auto idx = static_cast<std::size_t>(lock.index);
-            copper_locks.emplace_back(idx,
-                palette_locks::to_color(lock, chipset, config->mode));
+            copper_locks.emplace_back(idx, palette_locks::to_color(lock, chipset, config->mode));
         }
         auto sliced_max_colors = std::size_t{1} << config->depth;
         auto reserves_in_cap = palette_locks::validate_reserves(
-            config->reserves, config->locks, sliced_max_colors,
-            config->lock_color0);
+            config->reserves, config->locks, sliced_max_colors, config->lock_color0);
         if (!reserves_in_cap) {
             std::println(stderr, "{}", reserves_in_cap.error().message);
             return 1;
@@ -8163,9 +8349,10 @@ int run_main(int argc, char* argv[]) {
         for (auto& r : config->reserves) {
             auto i = static_cast<std::size_t>(r.index);
             if (r.index >= 0 && i < sliced_max_colors) {
-                copper_locks.emplace_back(i, palette_locks::to_color(
-                    api::LockSpec{r.index, r.r, r.g, r.b},
-                    chipset, config->mode));
+                copper_locks.emplace_back(
+                    i,
+                    palette_locks::to_color(
+                        api::LockSpec{r.index, r.r, r.g, r.b}, chipset, config->mode));
                 sliced_excluded.push_back(i);
             }
         }
@@ -8175,21 +8362,28 @@ int run_main(int argc, char* argv[]) {
         // Single-pass encoder factored so best below can replay it
         // under a parallel jitter sweep without duplicating the args.
         auto encode_once = [&](const Image& img,
-                               const dither::Settings& d, int diversity,
-                               std::function<void(float, std::string_view)>
-                                   prog,
+                               const dither::Settings& d,
+                               int diversity,
+                               std::function<void(float, std::string_view)> prog,
                                bool beam_on) {
             return copper::encode_copper(
-                img, config->depth, d, chipset,
-                static_cast<std::size_t>(config->copper_changes), nullptr,
-                config->lock_color0, copper_locks, diversity,
-                skip_initial_lace, config->interlace, /*is_ehb=*/false,
+                img,
+                config->depth,
+                d,
+                chipset,
+                static_cast<std::size_t>(config->copper_changes),
+                nullptr,
+                config->lock_color0,
+                copper_locks,
+                diversity,
+                skip_initial_lace,
+                config->interlace,
+                /*is_ehb=*/false,
                 std::move(prog),
                 config->sliced_spread_radius >= 0
                     ? static_cast<std::size_t>(config->sliced_spread_radius)
                     : std::numeric_limits<std::size_t>::max(),
-                config->sliced_spread_decay >= 0.0f
-                    ? config->sliced_spread_decay : -1.0f,
+                config->sliced_spread_decay >= 0.0f ? config->sliced_spread_decay : -1.0f,
                 config->sliced_vertical_dither,
                 sliced_excluded,
                 parse_quantizer_override(config->quantizer),
@@ -8213,8 +8407,7 @@ int run_main(int argc, char* argv[]) {
             // amplitude can drift the picked palette far enough to
             // introduce per-line swap shimmer that PSNR doesn't see.
             // OCS's discrete 12-bit gamut already snaps small nudges.
-            float jitter_amp = (chipset == amiga::Chipset::aga)
-                ? 0.4f : 1.0f;
+            float jitter_amp = (chipset == amiga::Chipset::aga) ? 0.4f : 1.0f;
             std::optional<CapTrial> best_overall;
             float best_overall_score = -std::numeric_limits<float>::infinity();
             // Two best_sweeps (beam off + on) share a single progress
@@ -8223,16 +8416,22 @@ int run_main(int argc, char* argv[]) {
             int sweep_idx = 0;
             for (bool beam_on : {false, true}) {
                 auto sweep = pipeline::best_sweep<CapTrial>(
-                    *image, dith, config->palette_diversity,
+                    *image,
+                    dith,
+                    config->palette_diversity,
                     /*jitter_count=*/8,
                     [&](const Image& jittered_in,
-                        const dither::Settings& d, int div) -> Result<CapTrial> {
+                        const dither::Settings& d,
+                        int div) -> Result<CapTrial> {
                         auto enc = encode_once(jittered_in, d, div, {}, beam_on);
                         if (!enc) return std::unexpected{enc.error()};
-                        auto preview = pipeline::render_preview(
-                            enc->planes, enc->base_palette,
-                            /*is_ham=*/false, config->interlace, chipset,
-                            &enc->scanline_palettes, enc->changes_per_line);
+                        auto preview = pipeline::render_preview(enc->planes,
+                                                                enc->base_palette,
+                                                                /*is_ham=*/false,
+                                                                config->interlace,
+                                                                chipset,
+                                                                &enc->scanline_palettes,
+                                                                enc->changes_per_line);
                         if (!preview) return std::unexpected{preview.error()};
                         return CapTrial{*std::move(enc), *std::move(preview)};
                     },
@@ -8242,15 +8441,14 @@ int run_main(int argc, char* argv[]) {
                         // Suppress the per-sweep "done" so we get exactly
                         // one terminal "done" after the second sweep.
                         if (s == "done" && sweep_idx == 0) return;
-                        if (inner_progress) inner_progress(
-                            (static_cast<float>(sweep_idx) + p) * 0.5f, s);
+                        if (inner_progress)
+                            inner_progress((static_cast<float>(sweep_idx) + p) * 0.5f, s);
                     },
                     jitter_amp);
                 ++sweep_idx;
                 if (!sweep.has_value()) continue;
                 float s2 = ssimulacra2::compute(
-                    image->pixels(), sweep->rendered.pixels(),
-                    image->width(), image->height());
+                    image->pixels(), sweep->rendered.pixels(), image->width(), image->height());
                 if (s2 > best_overall_score) {
                     best_overall_score = s2;
                     best_overall = std::move(sweep);
@@ -8259,35 +8457,33 @@ int run_main(int argc, char* argv[]) {
             if (best_overall.has_value()) {
                 copper_result = std::move(best_overall->result);
             } else {
-                copper_result = encode_once(*image, dith,
+                copper_result = encode_once(*image,
+                                            dith,
                                             config->palette_diversity,
                                             make_cli_progress_reporter(),
                                             config->sliced_beam);
             }
         } else {
-            copper_result = encode_once(*image, dith,
+            copper_result = encode_once(*image,
+                                        dith,
                                         config->palette_diversity,
                                         make_cli_progress_reporter(),
                                         config->sliced_beam);
         }
         if (!copper_result) {
-            std::println(stderr, "Copper encode error: {}",
-                         copper_result.error().message);
+            std::println(stderr, "Copper encode error: {}", copper_result.error().message);
             return 1;
         }
         // Print actual cpl after orchestration (auto mode may have stretched
         // or fallen back).
-        cli_print_mode(std::format(
-            "{}Sliced ({} changes/line, max {} MOVEs/line)",
-            config->dual_playfield ? "DPF + " : "",
-            copper_result->changes_per_line,
-            copper_result->max_moves_per_line));
-        cli_print_palette(std::format(
-            "{} colors ({})",
-            copper_result->base_palette.size(),
-            copper_result->base_palette_quantizer));
-        cli_dump_palette(std::span<const Color3f>(
-            copper_result->base_palette), *config);
+        cli_print_mode(std::format("{}Sliced ({} changes/line, max {} MOVEs/line)",
+                                   config->dual_playfield ? "DPF + " : "",
+                                   copper_result->changes_per_line,
+                                   copper_result->max_moves_per_line));
+        cli_print_palette(std::format("{} colors ({})",
+                                      copper_result->base_palette.size(),
+                                      copper_result->base_palette_quantizer));
+        cli_dump_palette(std::span<const Color3f>(copper_result->base_palette), *config);
         cli_print_dither(dith.method, dith.strength);
 
         // Apply transparency mask: transparent pixels → index 0
@@ -8298,12 +8494,12 @@ int run_main(int argc, char* argv[]) {
                     if (transparency_mask[i]) (*decoded)[i] = 0;
                 }
                 auto re_encoded = bitplane::encode(*decoded,
-                    copper_result->planes.width, copper_result->planes.height,
-                    copper_result->planes.depth);
+                                                   copper_result->planes.width,
+                                                   copper_result->planes.height,
+                                                   copper_result->planes.depth);
                 if (re_encoded) copper_result->planes = *std::move(re_encoded);
             }
         }
-
 
         // Render preview BEFORE any DPF expansion: render_copper decodes
         // a combined index from all planes, which would land on
@@ -8315,11 +8511,13 @@ int run_main(int argc, char* argv[]) {
         // from what the chip actually displays — most visibly on OCS
         // depth ≤ 4 where the vertical palette dither inflates the
         // per-row-pair diff count past the K budget.
-        auto preview = pipeline::render_preview(
-            copper_result->planes, copper_result->base_palette,
-            /*is_ham=*/false, config->interlace, chipset,
-            &copper_result->scanline_palettes,
-            copper_result->changes_per_line);
+        auto preview = pipeline::render_preview(copper_result->planes,
+                                                copper_result->base_palette,
+                                                /*is_ham=*/false,
+                                                config->interlace,
+                                                chipset,
+                                                &copper_result->scanline_palettes,
+                                                copper_result->changes_per_line);
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
@@ -8333,8 +8531,7 @@ int run_main(int argc, char* argv[]) {
         if (use_dpf_std) {
             auto expanded = bitplane::expand_to_dpf_pf2(copper_result->planes);
             if (!expanded) {
-                std::println(stderr, "DPF expand error: {}",
-                             expanded.error().message);
+                std::println(stderr, "DPF expand error: {}", expanded.error().message);
                 return 1;
             }
             copper_result->planes = *std::move(expanded);
@@ -8357,39 +8554,45 @@ int run_main(int argc, char* argv[]) {
         std::vector<Color3f> cmap_palette = copper_result->base_palette;
 
         float cop_psnr = color_space::compute_psnr_blurred(
-            image->pixels(), preview->pixels(),
-            image->width(), image->height());
+            image->pixels(), preview->pixels(), image->width(), image->height());
         float cop_s2 = ssimulacra2::compute(
-            image->pixels(), preview->pixels(),
-            image->width(), image->height());
-        int cop_cap_entries = static_cast<int>(
-            copper_result->planes.height * copper_result->changes_per_line);
+            image->pixels(), preview->pixels(), image->width(), image->height());
+        int cop_cap_entries = static_cast<int>(copper_result->planes.height *
+                                               copper_result->changes_per_line);
         {
             float used = pipeline::compute_avg_palette_used_per_line(
                 *preview, copper_result->scanline_palettes);
             std::size_t row0 = copper_result->scanline_palettes.empty()
-                ? 0 : copper_result->scanline_palettes[0].size();
+                                   ? 0
+                                   : copper_result->scanline_palettes[0].size();
             if (row0 > 0) {
                 cli_status("Palette:  used {:.1f} of {} slots/line ({:.0f}%)",
-                           used, row0, 100.0f * used / float(row0));
+                           used,
+                           row0,
+                           100.0f * used / float(row0));
             }
         }
-        cli_print_encoded(
-            static_cast<int>(copper_result->planes.depth),
-            static_cast<int>(copper_result->planes.total_bytes()),
-            static_cast<int>(copper_result->base_palette.size()),
-            chipset == amiga::Chipset::aga,
-            cop_cap_entries, /*strips_op_count=*/0,
-            static_cast<int>(copper_result->planes.height),
-            static_cast<int>(copper_result->max_moves_per_line),
-            count_unique_colors(*preview),
-            std::optional<float>{copper_result->avg_changes_per_line},
-            static_cast<double>(copper_result->total_error), cop_psnr, cop_s2);
+        cli_print_encoded(static_cast<int>(copper_result->planes.depth),
+                          static_cast<int>(copper_result->planes.total_bytes()),
+                          static_cast<int>(copper_result->base_palette.size()),
+                          chipset == amiga::Chipset::aga,
+                          cop_cap_entries,
+                          /*strips_op_count=*/0,
+                          static_cast<int>(copper_result->planes.height),
+                          static_cast<int>(copper_result->max_moves_per_line),
+                          count_unique_colors(*preview),
+                          std::optional<float>{copper_result->avg_changes_per_line},
+                          static_cast<double>(copper_result->total_error),
+                          cop_psnr,
+                          cop_s2);
 
         if (config->preview)
-            show_terminal_preview(*preview, config->mode, config->hires,
+            show_terminal_preview(*preview,
+                                  config->mode,
+                                  config->hires,
                                   config->interlace,
-                                  has_transparency, transparency_mask);
+                                  has_transparency,
+                                  transparency_mask);
 
         // Output
         if (!config->output_path.empty()) {
@@ -8418,8 +8621,12 @@ int run_main(int argc, char* argv[]) {
 
         // Mask export (copper mode)
         if (!config->mask_path.empty())
-            save_mask(config->mask_path, transparency_mask,
-                      target_w, target_h, config->mask_invert, config->interlace);
+            save_mask(config->mask_path,
+                      transparency_mask,
+                      target_w,
+                      target_h,
+                      config->mask_invert,
+                      config->interlace);
 
         return 0;
     }
@@ -8437,11 +8644,10 @@ int run_main(int argc, char* argv[]) {
         // HAM6+strips is handled by the HAM branch above, so the gate here
         // only needs to cover the EHB/DPF combos. Keep the error wording
         // explicit about all three legal forms.
-        if ((!strips_dpf && !strips_ehb) || chipset != amiga::Chipset::ocs ||
-            config->interlace) {
+        if ((!strips_dpf && !strips_ehb) || chipset != amiga::Chipset::ocs || config->interlace) {
             std::println(stderr,
-                "Error: --strips requires OCS (no interlace) with either "
-                "--dpf lores depth=3, --mode ehb, or --mode ham6.");
+                         "Error: --strips requires OCS (no interlace) with either "
+                         "--dpf lores depth=3, --mode ehb, or --mode ham6.");
             return 1;
         }
         if (has_transparency) {
@@ -8472,18 +8678,19 @@ int run_main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
 
-        const char* strips_label = strips_ehb
-            ? "OCS EHB 6bpp"
-            : "OCS DPF";
-        cli_print_mode(std::format(
-            "Strips ({}, {} slots, {:.1f} useful swaps/line)",
-            strips_label, st.strips_slot_count, st.copper_changes));
+        const char* strips_label = strips_ehb ? "OCS EHB 6bpp" : "OCS DPF";
+        cli_print_mode(std::format("Strips ({}, {} slots, {:.1f} useful swaps/line)",
+                                   strips_label,
+                                   st.strips_slot_count,
+                                   st.copper_changes));
         if (strips_ehb) {
             // EHB strips: st.palette holds 32 base; halfbrites are derived.
-            cli_print_palette(std::format(
-                "{} base + {} half-brite = {} colors ({})",
-                st.palette.size(), st.palette.size(), st.palette.size() * 2,
-                resolve_quantizer_name(config->mode, chipset, config->quantizer)));
+            cli_print_palette(
+                std::format("{} base + {} half-brite = {} colors ({})",
+                            st.palette.size(),
+                            st.palette.size(),
+                            st.palette.size() * 2,
+                            resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         } else {
             // DPF strips: st.palette is the 16-entry COLOR00..15 register
             // layout (output_palette in scap.cpp). OCS DPF uses both
@@ -8491,62 +8698,67 @@ int run_main(int argc, char* argv[]) {
             // We only encode into PF2 (3 bitplanes → 8 colors), so the
             // PF1 half is zeroed. Report the encoding-palette count.
             std::size_t pf2_colors = std::size_t{1} << 3;  // OCS DPF lores
-            cli_print_palette(std::format(
-                "{} colors (auto, ocs-optimal)", pf2_colors));
+            cli_print_palette(std::format("{} colors (auto, ocs-optimal)", pf2_colors));
         }
         cli_dump_palette(std::span<const Color3f>(st.palette), *config);
         // Resolve the -1.0f dither-strength sentinel through dither_tuning
         // so the printed value matches what the strips encoder actually
         // ran with, not the unresolved CLI default. Mirrors cga / sliced.
         auto strips_tune = dither_tuning::defaults_for(dither_tuning::Context{
-            .mode    = config->mode,
-            .depth   = static_cast<int>(config->depth),
-            .dpf     = config->dual_playfield,
-            .scap    = true,
-            .copper  = true,    // strips layers on sliced
+            .mode = config->mode,
+            .depth = static_cast<int>(config->depth),
+            .dpf = config->dual_playfield,
+            .scap = true,
+            .copper = true,  // strips layers on sliced
             .chipset = chipset,
-            .method  = config->dither_method,
+            .method = config->dither_method,
         });
-        float strips_strength = config->dither_strength_explicit
-            ? config->dither_strength : strips_tune.strength;
+        float strips_strength = config->dither_strength_explicit ? config->dither_strength
+                                                                 : strips_tune.strength;
         cli_print_dither(config->dither_method, strips_strength);
         cli_status("Copper:   hblank avg {:.1f} (max {}), visible avg "
-                     "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
-                     st.strips_avg_hblank_moves_per_line,
-                     st.strips_max_hblank_moves_per_line,
-                     st.strips_avg_visible_moves_per_line,
-                     st.strips_max_visible_moves_per_line,
-                     st.strips_avg_total_moves_per_line,
-                     st.max_moves_per_line);
+                   "{:.1f} (max {}), total avg {:.1f} (max {}/line)",
+                   st.strips_avg_hblank_moves_per_line,
+                   st.strips_max_hblank_moves_per_line,
+                   st.strips_avg_visible_moves_per_line,
+                   st.strips_max_visible_moves_per_line,
+                   st.strips_avg_total_moves_per_line,
+                   st.max_moves_per_line);
         {
-            float used = pipeline::compute_avg_palette_used_per_line(
-                st.rendered, st.scanline_palettes);
-            std::size_t row0 = st.scanline_palettes.empty()
-                ? 0 : st.scanline_palettes[0].size();
+            float used = pipeline::compute_avg_palette_used_per_line(st.rendered,
+                                                                     st.scanline_palettes);
+            std::size_t row0 = st.scanline_palettes.empty() ? 0 : st.scanline_palettes[0].size();
             if (row0 > 0) {
                 cli_status("Palette:  used {:.1f} of {} slots/line ({:.0f}%)",
-                           used, row0, 100.0f * used / float(row0));
+                           used,
+                           row0,
+                           100.0f * used / float(row0));
             }
         }
         int strips_ops = 0;
-        for (auto& moves : st.strips_line_moves) strips_ops += static_cast<int>(moves.size());
-        cli_print_encoded(
-            static_cast<int>(st.planes.depth),
-            static_cast<int>(st.planes.total_bytes()),
-            static_cast<int>(st.palette.size()),
-            /*aga=*/false,
-            /*sliced_grid_entries=*/0,
-            strips_ops,
-            static_cast<int>(st.rendered.height()),
-            static_cast<int>(st.max_moves_per_line),
-            count_unique_colors(st.rendered),
-            std::optional<float>{st.copper_changes},
-            static_cast<double>(st.quant_error), st.psnr, st.ssimulacra2_score);
+        for (auto& moves : st.strips_line_moves)
+            strips_ops += static_cast<int>(moves.size());
+        cli_print_encoded(static_cast<int>(st.planes.depth),
+                          static_cast<int>(st.planes.total_bytes()),
+                          static_cast<int>(st.palette.size()),
+                          /*aga=*/false,
+                          /*sliced_grid_entries=*/0,
+                          strips_ops,
+                          static_cast<int>(st.rendered.height()),
+                          static_cast<int>(st.max_moves_per_line),
+                          count_unique_colors(st.rendered),
+                          std::optional<float>{st.copper_changes},
+                          static_cast<double>(st.quant_error),
+                          st.psnr,
+                          st.ssimulacra2_score);
 
         if (config->preview)
-            show_terminal_preview(st.rendered, config->mode,
-                                  config->hires, config->interlace,
-                                  st.has_transparency, st.transparency_mask);
+            show_terminal_preview(st.rendered,
+                                  config->mode,
+                                  config->hires,
+                                  config->interlace,
+                                  st.has_transparency,
+                                  st.transparency_mask);
 
         if (!config->output_path.empty()) {
             AmigaOutputBundle out;
@@ -8566,15 +8778,13 @@ int run_main(int argc, char* argv[]) {
             out.mask_invert = config->mask_invert;
             out.strips_line_moves = &st.strips_line_moves;
             out.strips_label = strips_ehb ? "strips_ehb_ocs" : "strips_dpf_ocs";
-            auto& table = strips_ehb ? strips::kStrips6bplEhb
-                                     : strips::kStrips6bplOcs;
+            auto& table = strips_ehb ? strips::kStrips6bplEhb : strips::kStrips6bplOcs;
             out.strips_anchor_hpos = table.line_gate_hpos;
             out.strips_total_planes = table.total_planes;
             out.allow_iff = false;
             out.allow_raw = false;
             out.allow_pal = false;
-            out.disallow_message =
-                "Strips output: only .png, .h, and .cpp/.c supported";
+            out.disallow_message = "Strips output: only .png, .h, and .cpp/.c supported";
             int rc = write_amiga_output(out);
             if (rc != 0) return rc;
         }
@@ -8586,13 +8796,13 @@ int run_main(int argc, char* argv[]) {
     // Mode line for the standard bitplane path: short hardware-flavour
     // label so every Amiga / DOS / Atari path prints a Mode: header,
     // matching sliced / strips / HAM / EHB.
-    cli_print_mode(std::format(
-        "{}{} ({}bpp)",
-        config->dual_playfield ? "DPF + " : "",
-        mode_to_options_string(config->mode),
-        config->dual_playfield
-            ? ((chipset == amiga::Chipset::aga) ? 8 : 6)
-            : static_cast<int>(amiga::get_mode_params(config->mode).bitplane_depth)));
+    cli_print_mode(
+        std::format("{}{} ({}bpp)",
+                    config->dual_playfield ? "DPF + " : "",
+                    mode_to_options_string(config->mode),
+                    config->dual_playfield
+                        ? ((chipset == amiga::Chipset::aga) ? 8 : 6)
+                        : static_cast<int>(amiga::get_mode_params(config->mode).bitplane_depth)));
 
     // Force transparent pixels to black before quantization/encoding
     if (has_transparency) {
@@ -8628,7 +8838,7 @@ int run_main(int argc, char* argv[]) {
     auto is_atari_std = amiga::is_atari(config->mode);
     bool user_pal_std = !config->palette_file.empty();
     auto lock_zero_std = !user_pal_std && config->lock_color0 &&
-                             (has_transparency || !is_atari_std);
+                         (has_transparency || !is_atari_std);
 
     // OCS DPF uses the 16-entry CLUT view for --reserve-range /
     // --lock-index / --pin-index-at: CLUT[0..7] = PF1 (zeroed by this
@@ -8643,8 +8853,7 @@ int run_main(int argc, char* argv[]) {
     //   CLUT 1..7 → PF1 (zeroed); silently drop
     //   CLUT 8  → PF2 idx 0  (AGA-DPF dual-write of CLUT 0)
     //   CLUT 9..15 → PF2 idx 1..7
-    bool dpf_clut_indexing =
-        config->dual_playfield && chipset != amiga::Chipset::aga;
+    bool dpf_clut_indexing = config->dual_playfield && chipset != amiga::Chipset::aga;
     auto dpf_clut_to_pf2 = [&](int user_idx) -> std::optional<int> {
         if (user_idx < 0) return std::nullopt;
         auto i = static_cast<std::size_t>(user_idx);
@@ -8652,72 +8861,66 @@ int run_main(int argc, char* argv[]) {
         if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
         return std::nullopt;  // PF1 territory or out-of-range
     };
-    auto translate_dpf_reserves =
-        [&](std::span<const api::ReserveSpec> raw) {
-            std::vector<api::ReserveSpec> out;
-            out.reserve(raw.size());
-            if (!dpf_clut_indexing) {
-                out.assign(raw.begin(), raw.end());
-                return out;
-            }
-            bool slot0_emitted = false;
-            for (auto& r : raw) {
-                auto pf2_idx = dpf_clut_to_pf2(r.index);
-                if (!pf2_idx) continue;
-                if (*pf2_idx == 0) {
-                    // CLUT 0 / CLUT 8 both fold to PF2 idx 0. Skip if
-                    // lock_color0 already owns it (validate_reserves
-                    // would error on the duplicate); also dedupe across
-                    // CLUT 0 + CLUT 8 reservations.
-                    if (lock_zero_std) continue;
-                    if (slot0_emitted) continue;
-                    slot0_emitted = true;
-                }
-                out.push_back({*pf2_idx, r.r, r.g, r.b});
-            }
+    auto translate_dpf_reserves = [&](std::span<const api::ReserveSpec> raw) {
+        std::vector<api::ReserveSpec> out;
+        out.reserve(raw.size());
+        if (!dpf_clut_indexing) {
+            out.assign(raw.begin(), raw.end());
             return out;
-        };
-    auto translate_dpf_locks =
-        [&](std::span<const api::LockSpec> raw) {
-            std::vector<api::LockSpec> out;
-            out.reserve(raw.size());
-            if (!dpf_clut_indexing) {
-                out.assign(raw.begin(), raw.end());
-                return out;
+        }
+        bool slot0_emitted = false;
+        for (auto& r : raw) {
+            auto pf2_idx = dpf_clut_to_pf2(r.index);
+            if (!pf2_idx) continue;
+            if (*pf2_idx == 0) {
+                // CLUT 0 / CLUT 8 both fold to PF2 idx 0. Skip if
+                // lock_color0 already owns it (validate_reserves
+                // would error on the duplicate); also dedupe across
+                // CLUT 0 + CLUT 8 reservations.
+                if (lock_zero_std) continue;
+                if (slot0_emitted) continue;
+                slot0_emitted = true;
             }
-            bool slot0_emitted = false;
-            for (auto& l : raw) {
-                auto pf2_idx = dpf_clut_to_pf2(l.index);
-                if (!pf2_idx) continue;
-                if (*pf2_idx == 0) {
-                    if (slot0_emitted) continue;
-                    slot0_emitted = true;
-                }
-                out.push_back({*pf2_idx, l.r, l.g, l.b});
-            }
+            out.push_back({*pf2_idx, r.r, r.g, r.b});
+        }
+        return out;
+    };
+    auto translate_dpf_locks = [&](std::span<const api::LockSpec> raw) {
+        std::vector<api::LockSpec> out;
+        out.reserve(raw.size());
+        if (!dpf_clut_indexing) {
+            out.assign(raw.begin(), raw.end());
             return out;
-        };
-    auto translate_dpf_pins =
-        [&](std::span<const api::PinSpec> raw) {
-            std::vector<api::PinSpec> out;
-            out.reserve(raw.size());
-            if (!dpf_clut_indexing) {
-                out.assign(raw.begin(), raw.end());
-                return out;
+        }
+        bool slot0_emitted = false;
+        for (auto& l : raw) {
+            auto pf2_idx = dpf_clut_to_pf2(l.index);
+            if (!pf2_idx) continue;
+            if (*pf2_idx == 0) {
+                if (slot0_emitted) continue;
+                slot0_emitted = true;
             }
-            for (auto& p : raw) {
-                auto pf2_idx = dpf_clut_to_pf2(p.index);
-                if (!pf2_idx) continue;  // PF1 pins are unrepresentable
-                out.push_back({*pf2_idx, p.x, p.y});
-            }
+            out.push_back({*pf2_idx, l.r, l.g, l.b});
+        }
+        return out;
+    };
+    auto translate_dpf_pins = [&](std::span<const api::PinSpec> raw) {
+        std::vector<api::PinSpec> out;
+        out.reserve(raw.size());
+        if (!dpf_clut_indexing) {
+            out.assign(raw.begin(), raw.end());
             return out;
-        };
-    std::vector<api::ReserveSpec> pf2_reserves =
-        translate_dpf_reserves(config->reserves);
-    std::vector<api::LockSpec> pf2_locks =
-        translate_dpf_locks(config->locks);
-    std::vector<api::PinSpec> pf2_pins =
-        translate_dpf_pins(config->pins);
+        }
+        for (auto& p : raw) {
+            auto pf2_idx = dpf_clut_to_pf2(p.index);
+            if (!pf2_idx) continue;  // PF1 pins are unrepresentable
+            out.push_back({*pf2_idx, p.x, p.y});
+        }
+        return out;
+    };
+    std::vector<api::ReserveSpec> pf2_reserves = translate_dpf_reserves(config->reserves);
+    std::vector<api::LockSpec> pf2_locks = translate_dpf_locks(config->locks);
+    std::vector<api::PinSpec> pf2_pins = translate_dpf_pins(config->pins);
 
     // Locals that the post-encode emission block (line ~7600+) consumes.
     // Hoisted so both the inline encoder body below AND the --best
@@ -8739,10 +8942,14 @@ int run_main(int argc, char* argv[]) {
         std::println(stderr, "{}", v.error().message);
         return 1;
     }
-    if (auto v = palette_locks::validate_pins(pf2_pins, pf2_locks,
-                                              pf2_reserves, max_colors,
-                                              image->width(), image->height(),
-                                              lock_zero_std); !v) {
+    if (auto v = palette_locks::validate_pins(pf2_pins,
+                                              pf2_locks,
+                                              pf2_reserves,
+                                              max_colors,
+                                              image->width(),
+                                              image->height(),
+                                              lock_zero_std);
+        !v) {
         std::println(stderr, "{}", v.error().message);
         return 1;
     }
@@ -8771,12 +8978,12 @@ int run_main(int argc, char* argv[]) {
     // index swaps per trial as a visual no-op so trial ranking is
     // unaffected.
     bool plain_best_eligible = config->best &&
-        (config->mode == amiga::Mode::lores ||
-         config->mode == amiga::Mode::lores_interlace ||
-         config->mode == amiga::Mode::hires ||
-         config->mode == amiga::Mode::hires_interlace) &&
-        !config->copper && !config->scap && !config->dual_playfield &&
-        !config->tile && !user_pal_std;
+                               (config->mode == amiga::Mode::lores ||
+                                config->mode == amiga::Mode::lores_interlace ||
+                                config->mode == amiga::Mode::hires ||
+                                config->mode == amiga::Mode::hires_interlace) &&
+                               !config->copper && !config->scap && !config->dual_playfield &&
+                               !config->tile && !user_pal_std;
     if (plain_best_eligible) {
         // Float-input — skip the 8-bit PNG round-trip. Same as EHB /
         // strips paths after the encode_state_image migration.
@@ -8787,19 +8994,17 @@ int run_main(int argc, char* argv[]) {
         aopts.on_progress = make_cli_progress_reporter();
         auto enc = api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
-            std::println(stderr, "lores --best encode error: {}",
-                         enc.error_msg);
+            std::println(stderr, "lores --best encode error: {}", enc.error_msg);
             return 1;
         }
         auto& st = enc.state;
         pal.colors = st.palette;
-        pal.name = st.base_palette_quantizer.empty()
-                   ? std::string{"best"} : st.base_palette_quantizer;
+        pal.name = st.base_palette_quantizer.empty() ? std::string{"best"}
+                                                     : st.base_palette_quantizer;
         // 1bpp bypass: api.cpp short-circuits the --best sweep when
         // max_colors==2 (palette fixed to {black, white}), so reflect
         // that in the status line instead of the generic "best".
-        if (max_colors == 2 && pal.colors.size() == 2)
-            pal.name = "bw";
+        if (max_colors == 2 && pal.colors.size() == 2) pal.name = "bw";
         used_palette = st.palette;
         dither_result.indices = st.indices;
         dither_result.total_error = static_cast<float>(st.quant_error);
@@ -8808,463 +9013,465 @@ int run_main(int argc, char* argv[]) {
         dith.method = config->dither_method;
         dith.strength = aopts.dither_strength;
         dith.error_clamp = aopts.error_clamp;
-        bool dos_planar_b = (amiga::is_ega(config->mode) ||
-                              amiga::is_vga(config->mode))
-                             && !amiga::is_chunky(config->mode);
+        bool dos_planar_b = (amiga::is_ega(config->mode) || amiga::is_vga(config->mode)) &&
+                            !amiga::is_chunky(config->mode);
         bp_layout = config->layout_override
-            ? *config->layout_override
-            : (amiga::is_atari(config->mode)
-                ? bitplane::Layout::word_interleaved
-                : dos_planar_b ? bitplane::Layout::standard
-                               : bitplane::Layout::interleaved);
+                        ? *config->layout_override
+                        : (amiga::is_atari(config->mode) ? bitplane::Layout::word_interleaved
+                           : dos_planar_b                ? bitplane::Layout::standard
+                                                         : bitplane::Layout::interleaved);
         plain_best_done = true;
     }
 
-  // Single emit-site for the "auto" palette status (`Palette: N colors
-  // (auto, <quantizer>)` + cli_dump_palette). Set true by every code
-  // path that produces a quantizer-derived palette in `pal`. Special-
-  // case branches (CGA / EGA / Atari hi / user palette) print their
-  // own bespoke "Palette:" line and leave this false.
-  //
-  // Why a flag instead of inlining the print at each site: --best
-  // (plain_best_eligible) and the standard auto branch are two
-  // separate code paths producing the same kind of palette. The prior
-  // bug — `--best --print-palette` silently dumping nothing — happened
-  // because each path inlined its own status reporting, so the auto
-  // dump only got added to the standard branch and --best fell through
-  // the cracks. Single emit-site is the architectural fix.
-  bool emit_auto_palette_status = plain_best_done;
+    // Single emit-site for the "auto" palette status (`Palette: N colors
+    // (auto, <quantizer>)` + cli_dump_palette). Set true by every code
+    // path that produces a quantizer-derived palette in `pal`. Special-
+    // case branches (CGA / EGA / Atari hi / user palette) print their
+    // own bespoke "Palette:" line and leave this false.
+    //
+    // Why a flag instead of inlining the print at each site: --best
+    // (plain_best_eligible) and the standard auto branch are two
+    // separate code paths producing the same kind of palette. The prior
+    // bug — `--best --print-palette` silently dumping nothing — happened
+    // because each path inlined its own status reporting, so the auto
+    // dump only got added to the standard branch and --best fell through
+    // the cracks. Single emit-site is the architectural fix.
+    bool emit_auto_palette_status = plain_best_done;
 
-  if (!plain_best_done) {
-    // CGA: build the fixed 4- or 2-color palette (auto-select variant if asked).
-    if (amiga::is_cga(config->mode) && !user_pal_std) {
-        if (amiga::is_composite(config->mode)) {
-            // Fixed 16-entry composite artifact palette. No variants to pick
-            // from — the NTSC decoder produces these colors from the 4-bit
-            // patterns regardless of any CGA register setting.
-            auto pal16 = palette::cga_composite_palette();
-            pal.colors.assign(pal16.begin(), pal16.end());
-            cli_status("Palette:  CGA composite, 16 colors (NTSC artifact, old CGA)");
-            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
-        } else if (config->mode == amiga::Mode::cga_320) {
-            palette::CgaPalette best = palette::CgaPalette::p1_high;
-            if (config->cga_auto_palette) {
-                // Try all 4 variants; pick the one whose 4-color palette best
-                // covers the image (sum of per-pixel nearest-OKLab-distance).
-                float best_err = std::numeric_limits<float>::infinity();
-                for (auto p : {palette::CgaPalette::p0_low,
-                               palette::CgaPalette::p0_high,
-                               palette::CgaPalette::p1_low,
-                               palette::CgaPalette::p1_high}) {
-                    auto pal4 = palette::cga_build_palette(
-                        p, static_cast<std::uint8_t>(config->cga_bg));
-                    std::array<color_space::OKLab, 4> pal_lab;
-                    for (std::size_t i = 0; i < 4; ++i)
-                        pal_lab[i] = color_space::linear_to_oklab(pal4[i]);
-                    float err = 0.0f;
-                    for (std::size_t y = 0; y < image->height(); ++y) {
-                        for (std::size_t x = 0; x < image->width(); ++x) {
-                            auto lab = color_space::linear_to_oklab((*image)[x, y]);
-                            float best_d = std::numeric_limits<float>::infinity();
-                            for (auto& pl : pal_lab) {
-                                float dL = lab.L - pl.L;
-                                float da = lab.a - pl.a;
-                                float db = lab.b - pl.b;
-                                float d = color_space::fma_dist_sq(dL, da, db);
-                                if (d < best_d) best_d = d;
+    if (!plain_best_done) {
+        // CGA: build the fixed 4- or 2-color palette (auto-select variant if asked).
+        if (amiga::is_cga(config->mode) && !user_pal_std) {
+            if (amiga::is_composite(config->mode)) {
+                // Fixed 16-entry composite artifact palette. No variants to pick
+                // from — the NTSC decoder produces these colors from the 4-bit
+                // patterns regardless of any CGA register setting.
+                auto pal16 = palette::cga_composite_palette();
+                pal.colors.assign(pal16.begin(), pal16.end());
+                cli_status("Palette:  CGA composite, 16 colors (NTSC artifact, old CGA)");
+                cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+            } else if (config->mode == amiga::Mode::cga_320) {
+                palette::CgaPalette best = palette::CgaPalette::p1_high;
+                if (config->cga_auto_palette) {
+                    // Try all 4 variants; pick the one whose 4-color palette best
+                    // covers the image (sum of per-pixel nearest-OKLab-distance).
+                    float best_err = std::numeric_limits<float>::infinity();
+                    for (auto p : {palette::CgaPalette::p0_low,
+                                   palette::CgaPalette::p0_high,
+                                   palette::CgaPalette::p1_low,
+                                   palette::CgaPalette::p1_high}) {
+                        auto pal4 = palette::cga_build_palette(
+                            p, static_cast<std::uint8_t>(config->cga_bg));
+                        std::array<color_space::OKLab, 4> pal_lab;
+                        for (std::size_t i = 0; i < 4; ++i)
+                            pal_lab[i] = color_space::linear_to_oklab(pal4[i]);
+                        float err = 0.0f;
+                        for (std::size_t y = 0; y < image->height(); ++y) {
+                            for (std::size_t x = 0; x < image->width(); ++x) {
+                                auto lab = color_space::linear_to_oklab((*image)[x, y]);
+                                float best_d = std::numeric_limits<float>::infinity();
+                                for (auto& pl : pal_lab) {
+                                    float dL = lab.L - pl.L;
+                                    float da = lab.a - pl.a;
+                                    float db = lab.b - pl.b;
+                                    float d = color_space::fma_dist_sq(dL, da, db);
+                                    if (d < best_d) best_d = d;
+                                }
+                                err += best_d;
                             }
-                            err += best_d;
+                        }
+                        if (err < best_err) {
+                            best_err = err;
+                            best = p;
                         }
                     }
-                    if (err < best_err) { best_err = err; best = p; }
+                    config->cga_palette = static_cast<int>(best);
+                } else {
+                    best = static_cast<palette::CgaPalette>(config->cga_palette);
                 }
-                config->cga_palette = static_cast<int>(best);
+                auto pal4 = palette::cga_build_palette(best,
+                                                       static_cast<std::uint8_t>(config->cga_bg));
+                pal.colors.assign(pal4.begin(), pal4.end());
+                const char* names[] = {"0-low", "0-high", "1-low", "1-high"};
+                cli_status("Palette:  CGA {} (bg=0x{:X}), 4 colors{}",
+                           names[static_cast<int>(best)],
+                           config->cga_bg & 0xF,
+                           config->cga_auto_palette ? " (auto)" : "");
+                cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
             } else {
-                best = static_cast<palette::CgaPalette>(config->cga_palette);
+                // cga_640: 2 colors = bg + white
+                pal.colors = {
+                    color_space::srgb_hex_to_linear(palette::kCgaHw[config->cga_bg & 0xF]),
+                    color_space::srgb_hex_to_linear(palette::kCgaHw[15]),
+                };
+                cli_status("Palette:  CGA mono, 2 colors (bg=0x{:X}, fg=white)",
+                           config->cga_bg & 0xF);
+                cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
             }
-            auto pal4 = palette::cga_build_palette(
-                best, static_cast<std::uint8_t>(config->cga_bg));
-            pal.colors.assign(pal4.begin(), pal4.end());
-            const char* names[] = {"0-low", "0-high", "1-low", "1-high"};
-            cli_status("Palette:  CGA {} (bg=0x{:X}), 4 colors{}",
-                         names[static_cast<int>(best)],
-                         config->cga_bg & 0xF,
-                         config->cga_auto_palette ? " (auto)" : "");
+        } else if (user_pal_std) {
+            auto loaded = palette_io::load_palette(config->palette_file);
+            if (!loaded) {
+                std::println(stderr, "Palette load error: {}", loaded.error().message);
+                return 1;
+            }
+            pal = *std::move(loaded);
+            if (pal.colors.size() > max_colors) pal.colors.resize(max_colors);
+            snap_palette(pal, chipset, config->mode);
+            // JSON palette can carry per-slot lock/reserve flags
+            // (--print-palette-json round-trip). Merge them into
+            // config.locks / config.reserves UNLESS a CLI flag already
+            // targets that slot — CLI overrides the sidecar so users can
+            // tweak without rewriting the JSON. The slot's color comes
+            // from pal.colors[idx].
+            auto cli_lock_at = [&](int idx) {
+                for (auto& l : config->locks)
+                    if (l.index == idx) return true;
+                return false;
+            };
+            auto cli_reserve_at = [&](int idx) {
+                for (auto& r : config->reserves)
+                    if (r.index == idx) return true;
+                return false;
+            };
+            auto rgb_from_color = [&](Color3f c) {
+                auto srgb = color_space::linear_to_srgb(c).clamped();
+                return std::tuple{static_cast<int>(std::round(srgb.r * 255.0f)),
+                                  static_cast<int>(std::round(srgb.g * 255.0f)),
+                                  static_cast<int>(std::round(srgb.b * 255.0f))};
+            };
+            for (int li : pal.locked_indices) {
+                if (li < 0 || static_cast<std::size_t>(li) >= pal.colors.size()) continue;
+                if (cli_lock_at(li) || cli_reserve_at(li)) continue;
+                auto [r, g, b] = rgb_from_color(pal.colors[static_cast<std::size_t>(li)]);
+                config->locks.push_back({li, r, g, b});
+            }
+            for (int ri : pal.reserved_indices) {
+                if (ri < 0 || static_cast<std::size_t>(ri) >= pal.colors.size()) continue;
+                if (cli_lock_at(ri) || cli_reserve_at(ri)) continue;
+                auto [r, g, b] = rgb_from_color(pal.colors[static_cast<std::size_t>(ri)]);
+                config->reserves.push_back({ri, r, g, b});
+            }
+            // Merge JSON pins[] into config.pins. CLI --pin-index-at wins
+            // per-slot (skip JSON pins targeting a slot the user already
+            // pinned via flags). Same precedence rule as locks/reserves above.
+            auto cli_pin_at = [&](int idx) {
+                for (auto& p : config->pins)
+                    if (p.index == idx) return true;
+                return false;
+            };
+            for (auto& jp : pal.pins) {
+                if (cli_pin_at(jp.idx)) continue;
+                config->pins.push_back({jp.idx, jp.x, jp.y});
+            }
+            // Apply CLI locks AND reserves on top of the user palette so a
+            // CLI flag fully respecifies the slot (color + flag), not just
+            // the flag. The JSON-merge step above already skipped any slot
+            // covered by a CLI flag, so this loop only touches CLI-specified
+            // entries.
+            for (auto& lock : config->locks) {
+                auto idx = static_cast<std::size_t>(lock.index);
+                if (idx < pal.colors.size()) {
+                    pal.colors[idx] = palette_locks::to_color(lock, chipset, config->mode);
+                    std_locked[idx] = true;
+                }
+            }
+            for (auto& res : config->reserves) {
+                auto idx = static_cast<std::size_t>(res.index);
+                if (idx < pal.colors.size()) {
+                    pal.colors[idx] = palette_locks::to_color(
+                        api::LockSpec{res.index, res.r, res.g, res.b}, chipset, config->mode);
+                }
+            }
+            cli_status("Palette:  {} colors (loaded from {})", pal.size(), config->palette_file);
+            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+        } else if (amiga::is_atari_hi(config->mode)) {
+            // Monochrome: fixed white + black palette
+            pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
+            cli_status("Palette:  2 colors (monochrome)");
+            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+        } else if (config->mode == amiga::Mode::ega_320 || config->mode == amiga::Mode::ega_640) {
+            // EGA 200-line CGA-compat: palette order must be kCgaHw exactly.
+            // The ATC register layout we emit (CGA-compat IRGB with b4 = I)
+            // assumes palette slot i corresponds to kCgaHw[i]. Going through
+            // assemble_locked_palette with lock_color0 prepends a second
+            // black at slot 0 and shifts the whole palette up by 1, dropping
+            // white off the end — found via ATCPROBE/CGA16 test image.
+            pal.colors.reserve(16);
+            for (auto hex : palette::kCgaHw)
+                pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
+            cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
+            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+        } else if (max_colors == 2 && pf2_locks.empty() && pf2_reserves.empty()) {
+            // 1bpp: skip the quantizer — a 2-centroid median-cut on natural
+            // images picks two near-midtones and crushes contrast. Force
+            // {black, white} so the dither spans the full luminance range.
+            // User locks/reserves take precedence; if either is set, fall
+            // through to the regular quantize path.
+            pal.colors = {Color3f{0.0f, 0.0f, 0.0f}, Color3f{1.0f, 1.0f, 1.0f}};
+            std_locked = {true, true};
+            cli_status("Palette:  2 colors (b/w, 1bpp)");
             cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
         } else {
-            // cga_640: 2 colors = bg + white
-            pal.colors = {
-                color_space::srgb_hex_to_linear(
-                    palette::kCgaHw[config->cga_bg & 0xF]),
-                color_space::srgb_hex_to_linear(palette::kCgaHw[15]),
-            };
-            cli_status("Palette:  CGA mono, 2 colors (bg=0x{:X}, fg=white)",
-                         config->cga_bg & 0xF);
-            cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+            // Slot-budget for the quantizer. See palette_locks::QuantCounts
+            // — subtracts lock_zero + locks + reserves so the quantizer
+            // optimises for exactly the slots it'll fill. Use the PF2-base
+            // translated lock list under --dpf so the count matches the
+            // assemble step below.
+            auto qc = palette_locks::quant_counts_for_assemble(
+                max_colors, pf2_locks, reserve_count_std, lock_zero_std);
+            // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
+            // quantizer centroids collapse to the same gamut slot when snapped —
+            // that's why a 16-color EGA request can end up using only 7-8 colors.
+            // Pre-snap the image to the target gamut so the quantizer's histogram
+            // picks from already-discrete candidates, preserving distinct slots.
+            std::optional<Image> snapped;
+            const Image* quant_src = &*image;
+            if (amiga::is_ega(config->mode)) {
+                snapped.emplace(image->width(), image->height());
+                for (std::size_t y = 0; y < image->height(); ++y)
+                    for (std::size_t x = 0; x < image->width(); ++x)
+                        (*snapped)[x, y] = palette::quantize_to_ega((*image)[x, y]);
+                quant_src = &*snapped;
+            }
+            // gpu_restart_quantize was made deterministic in v1.66.0 (the
+            // GPU does argmin-only and the per-cluster sums happen on the
+            // CPU in a fixed pixel-index order), so chunky VGA + reserves
+            // no longer needs to force median-cut for byte-stability.
+            // resolve_algorithm picks gpu-restart on Apple Metal,
+            // median-cut otherwise.
+            auto quantized = palette_locks::two_pass_quantize(
+                [&](std::size_t k) -> Result<Palette> {
+                    return auto_quantize(*quant_src,
+                                         k,
+                                         chipset,
+                                         config->palette_diversity,
+                                         config->quantizer,
+                                         config->mode);
+                },
+                qc.qcount,
+                qc.kfallback,
+                lock_zero_std);
+            if (!quantized) {
+                std::println(stderr, "Quantize error: {}", quantized.error().message);
+                return 1;
+            }
+            // Snap to mode precision if the quantizer didn't already do it.
+            if (amiga::is_stf(config->mode) || amiga::is_vga(config->mode) ||
+                amiga::is_ega(config->mode))
+                snap_palette(*quantized, chipset, config->mode);
+            // Single-call assemble + reserve overlay (matches api.cpp's
+            // run_pipeline path). All four reserve concerns baked in.
+            // DPF: feed the PF2-base-translated locks AND reserves so the
+            // assemble step writes the colors into the 8-entry PF2 palette
+            // at the right offsets (cli_dump_palette uses the raw 16-entry
+            // config->locks / reserves separately for the 🔒 / 🔖 markers).
+            auto assembled = palette_locks::assemble_with_reserves(*quantized,
+                                                                   pf2_locks,
+                                                                   pf2_reserves,
+                                                                   max_colors,
+                                                                   lock_zero_std,
+                                                                   chipset,
+                                                                   config->mode);
+            pal = std::move(assembled.palette);
+            std_locked = std::move(assembled.locked);
+            emit_auto_palette_status = true;
         }
-    } else if (user_pal_std) {
-        auto loaded = palette_io::load_palette(config->palette_file);
-        if (!loaded) {
-            std::println(stderr, "Palette load error: {}", loaded.error().message);
-            return 1;
+
+        if (config->match_range) {
+            preprocess::match_palette_range(*image, pal);
         }
-        pal = *std::move(loaded);
-        if (pal.colors.size() > max_colors)
-            pal.colors.resize(max_colors);
-        snap_palette(pal, chipset, config->mode);
-        // JSON palette can carry per-slot lock/reserve flags
-        // (--print-palette-json round-trip). Merge them into
-        // config.locks / config.reserves UNLESS a CLI flag already
-        // targets that slot — CLI overrides the sidecar so users can
-        // tweak without rewriting the JSON. The slot's color comes
-        // from pal.colors[idx].
-        auto cli_lock_at = [&](int idx) {
-            for (auto& l : config->locks) if (l.index == idx) return true;
-            return false;
-        };
-        auto cli_reserve_at = [&](int idx) {
-            for (auto& r : config->reserves) if (r.index == idx) return true;
-            return false;
-        };
-        auto rgb_from_color = [&](Color3f c) {
-            auto srgb = color_space::linear_to_srgb(c).clamped();
-            return std::tuple{
-                static_cast<int>(std::round(srgb.r * 255.0f)),
-                static_cast<int>(std::round(srgb.g * 255.0f)),
-                static_cast<int>(std::round(srgb.b * 255.0f))};
-        };
-        for (int li : pal.locked_indices) {
-            if (li < 0 || static_cast<std::size_t>(li) >= pal.colors.size())
-                continue;
-            if (cli_lock_at(li) || cli_reserve_at(li)) continue;
-            auto [r, g, b] = rgb_from_color(pal.colors[static_cast<std::size_t>(li)]);
-            config->locks.push_back({li, r, g, b});
-        }
-        for (int ri : pal.reserved_indices) {
-            if (ri < 0 || static_cast<std::size_t>(ri) >= pal.colors.size())
-                continue;
-            if (cli_lock_at(ri) || cli_reserve_at(ri)) continue;
-            auto [r, g, b] = rgb_from_color(pal.colors[static_cast<std::size_t>(ri)]);
-            config->reserves.push_back({ri, r, g, b});
-        }
-        // Merge JSON pins[] into config.pins. CLI --pin-index-at wins
-        // per-slot (skip JSON pins targeting a slot the user already
-        // pinned via flags). Same precedence rule as locks/reserves above.
-        auto cli_pin_at = [&](int idx) {
-            for (auto& p : config->pins) if (p.index == idx) return true;
-            return false;
-        };
-        for (auto& jp : pal.pins) {
-            if (cli_pin_at(jp.idx)) continue;
-            config->pins.push_back({jp.idx, jp.x, jp.y});
-        }
-        // Apply CLI locks AND reserves on top of the user palette so a
-        // CLI flag fully respecifies the slot (color + flag), not just
-        // the flag. The JSON-merge step above already skipped any slot
-        // covered by a CLI flag, so this loop only touches CLI-specified
-        // entries.
-        for (auto& lock : config->locks) {
-            auto idx = static_cast<std::size_t>(lock.index);
-            if (idx < pal.colors.size()) {
-                pal.colors[idx] = palette_locks::to_color(lock, chipset, config->mode);
-                std_locked[idx] = true;
+
+        // Apply dithering. Pull mode-aware defaults from dither_tuning so
+        // hires / lores-lace / ehb / etc. get the per-mode strength tuned
+        // against SSIMULACRA2 rather than the unsafe-at-low-color
+        // strength=1.0 fallback (which used to runaway-FS at hires d=4).
+        pal_size = std::min(pal.size(), max_colors);
+
+        dith.method = config->dither_method;
+        auto plain_tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode = config->mode,
+            .depth = static_cast<int>(config->depth),
+            .dpf = config->dual_playfield,
+            .scap = false,
+            .copper = false,
+            .chipset = chipset,
+            .method = config->dither_method,
+        });
+        dith.strength = config->dither_strength_explicit ? config->dither_strength
+                                                         : plain_tune.strength;
+        dith.error_clamp = config->error_clamp_explicit ? config->error_clamp
+                                                        : plain_tune.error_clamp;
+
+        // Dither-aware palette refinement: iteratively run the ditherer,
+        // recompute each slot's centroid from the pixels actually assigned
+        // to it, and update the palette. Converges to a palette that's
+        // optimal for the dithered output, not just nearest-color assignment.
+        // Same rationale as api.cpp:
+        //   - chunky VGA (256 colors): 18-bit DAC grid is fine enough that
+        //     median-cut already lands on near-optimal centroids; refine hurts
+        //     PSNR ~2 dB and adds 4× dither passes.
+        //   - EGA: ega_histogram_quantize picks 16 distinct slots from the
+        //     64-entry gamut. Refinement's snap-to-gamut collapses them to ~11
+        //     effective colors and drops PSNR 3+ dB.
+        //   - CGA: hardware-fixed palettes can't be reprogrammed.
+        bool skip_refine = amiga::is_chunky(config->mode) || amiga::is_cga(config->mode) ||
+                           amiga::is_ega(config->mode) || amiga::is_atari_hi(config->mode);
+        if (config->refine_iterations > 0 && config->palette_file.empty() && !skip_refine &&
+            reserve_count_std == 0) {
+            auto refined = quantize::refine_with_dither(
+                *image,
+                Palette{"refined",
+                        {pal.colors.begin(),
+                         pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
+                dith,
+                chipset,
+                config->mode,
+                static_cast<std::size_t>(config->refine_iterations),
+                std_locked);
+            if (refined) {
+                pal.colors = std::move(refined->colors);
+                pal_size = pal.colors.size();
             }
         }
-        for (auto& res : config->reserves) {
-            auto idx = static_cast<std::size_t>(res.index);
-            if (idx < pal.colors.size()) {
-                pal.colors[idx] = palette_locks::to_color(
-                    api::LockSpec{res.index, res.r, res.g, res.b},
-                    chipset, config->mode);
+
+        std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
+
+        cli_print_dither(dith.method, dith.strength);
+
+        // dither_result hoisted to outer scope; just reset state here in
+        // case the --best delegation populated it but we still ran the
+        // inline body (shouldn't happen, but be defensive).
+        dither_result = {};
+        // Build candidate palette: skip reserved slots (and slot 0 if
+        // transparency, the legacy "color 0 = transparent" rule).
+        if (reserve_count_std > 0 || has_transparency) {
+            std::vector<Color3f> cand_pal;
+            std::vector<std::uint8_t> cand_to_full;
+            cand_pal.reserve(pal_size);
+            cand_to_full.reserve(pal_size);
+            for (std::size_t i = 0; i < pal_size; ++i) {
+                if (has_transparency && i == 0) continue;
+                if (reserved_mask_std[i]) continue;
+                cand_pal.push_back(pal.colors[i]);
+                cand_to_full.push_back(static_cast<std::uint8_t>(i));
+            }
+            std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
+            dither_result = dither::apply(*image, dither_span, dith);
+            for (auto& idx : dither_result.indices)
+                idx = cand_to_full[idx];
+            if (has_transparency) {
+                for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
+                    if (transparency_mask[i]) dither_result.indices[i] = 0;
+                }
+            }
+        } else {
+            dither_result = dither::apply(*image, pal_span, dith);
+        }
+
+        // Apply pin-index swaps (post-quantization, post-dither). Use the
+        // PF2-base-translated pins under --dpf — the encoder operates on
+        // the 8-entry PF2 palette; CLUT-layout indices (CLUT 9..15 / 8/0)
+        // were already remapped above.
+        if (!pf2_pins.empty()) {
+            auto pin_result = palette_locks::apply_pins(
+                pal, dither_result.indices, std_locked, pf2_pins, image->width(), image->height());
+            if (!pin_result) {
+                std::println(stderr, "{}", pin_result.error().message);
+                return 1;
             }
         }
-        cli_status("Palette:  {} colors (loaded from {})",
-                     pal.size(), config->palette_file);
-        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
-    } else if (amiga::is_atari_hi(config->mode)) {
-        // Monochrome: fixed white + black palette
-        pal.colors = {Color3f{1.0f, 1.0f, 1.0f}, Color3f{0.0f, 0.0f, 0.0f}};
-        cli_status("Palette:  2 colors (monochrome)");
-        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
-    } else if (config->mode == amiga::Mode::ega_320 ||
-               config->mode == amiga::Mode::ega_640) {
-        // EGA 200-line CGA-compat: palette order must be kCgaHw exactly.
-        // The ATC register layout we emit (CGA-compat IRGB with b4 = I)
-        // assumes palette slot i corresponds to kCgaHw[i]. Going through
-        // assemble_locked_palette with lock_color0 prepends a second
-        // black at slot 0 and shifts the whole palette up by 1, dropping
-        // white off the end — found via ATCPROBE/CGA16 test image.
-        pal.colors.reserve(16);
-        for (auto hex : palette::kCgaHw)
-            pal.colors.push_back(color_space::srgb_hex_to_linear(hex));
-        cli_status("Palette:  16 colors (kCgaHw, EGA CGA-compat IRGB)");
-        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
-    } else if (max_colors == 2 &&
-               pf2_locks.empty() && pf2_reserves.empty()) {
-        // 1bpp: skip the quantizer — a 2-centroid median-cut on natural
-        // images picks two near-midtones and crushes contrast. Force
-        // {black, white} so the dither spans the full luminance range.
-        // User locks/reserves take precedence; if either is set, fall
-        // through to the regular quantize path.
-        pal.colors = {Color3f{0.0f, 0.0f, 0.0f}, Color3f{1.0f, 1.0f, 1.0f}};
-        std_locked = {true, true};
-        cli_status("Palette:  2 colors (b/w, 1bpp)");
-        cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
-    } else {
-        // Slot-budget for the quantizer. See palette_locks::QuantCounts
-        // — subtracts lock_zero + locks + reserves so the quantizer
-        // optimises for exactly the slots it'll fill. Use the PF2-base
-        // translated lock list under --dpf so the count matches the
-        // assemble step below.
-        auto qc = palette_locks::quant_counts_for_assemble(
-            max_colors, pf2_locks, reserve_count_std, lock_zero_std);
-        // For discrete-gamut modes (EGA 64-color, CGA, etc.), the continuous
-        // quantizer centroids collapse to the same gamut slot when snapped —
-        // that's why a 16-color EGA request can end up using only 7-8 colors.
-        // Pre-snap the image to the target gamut so the quantizer's histogram
-        // picks from already-discrete candidates, preserving distinct slots.
-        std::optional<Image> snapped;
-        const Image* quant_src = &*image;
-        if (amiga::is_ega(config->mode)) {
-            snapped.emplace(image->width(), image->height());
-            for (std::size_t y = 0; y < image->height(); ++y)
-                for (std::size_t x = 0; x < image->width(); ++x)
-                    (*snapped)[x, y] = palette::quantize_to_ega((*image)[x, y]);
-            quant_src = &*snapped;
-        }
-        // gpu_restart_quantize was made deterministic in v1.66.0 (the
-        // GPU does argmin-only and the per-cluster sums happen on the
-        // CPU in a fixed pixel-index order), so chunky VGA + reserves
-        // no longer needs to force median-cut for byte-stability.
-        // resolve_algorithm picks gpu-restart on Apple Metal,
-        // median-cut otherwise.
-        auto quantized = palette_locks::two_pass_quantize(
-            [&](std::size_t k) -> Result<Palette> {
-                return auto_quantize(*quant_src, k, chipset,
-                                     config->palette_diversity,
-                                     config->quantizer, config->mode);
-            },
-            qc.qcount, qc.kfallback, lock_zero_std);
-        if (!quantized) {
-            std::println(stderr, "Quantize error: {}", quantized.error().message);
+
+        // Encode to bitplanes (Atari uses word-interleaved layout)
+        // Layout: Atari uses word-interleaved (ST-specific); DOS planar modes
+        // (EGA, VGA 10h/12h) want plane-sequential `standard` so each plane can
+        // be blitted contiguously via the sequencer map mask; Amiga defaults
+        // to line-interleaved for DMA.
+        bool dos_planar = (amiga::is_ega(config->mode) || amiga::is_vga(config->mode)) &&
+                          !amiga::is_chunky(config->mode);
+        bp_layout = config->layout_override
+                        ? *config->layout_override
+                        : (amiga::is_atari(config->mode) ? bitplane::Layout::word_interleaved
+                           : dos_planar                  ? bitplane::Layout::standard
+                                                         : bitplane::Layout::interleaved);
+        planes = bitplane::encode(
+            dither_result.indices, image->width(), image->height(), config->depth, bp_layout);
+        if (!planes) {
+            std::println(stderr, "Encode error: {}", planes.error().message);
             return 1;
         }
-        // Snap to mode precision if the quantizer didn't already do it.
-        if (amiga::is_stf(config->mode) || amiga::is_vga(config->mode) ||
-            amiga::is_ega(config->mode))
-            snap_palette(*quantized, chipset, config->mode);
-        // Single-call assemble + reserve overlay (matches api.cpp's
-        // run_pipeline path). All four reserve concerns baked in.
-        // DPF: feed the PF2-base-translated locks AND reserves so the
-        // assemble step writes the colors into the 8-entry PF2 palette
-        // at the right offsets (cli_dump_palette uses the raw 16-entry
-        // config->locks / reserves separately for the 🔒 / 🔖 markers).
-        auto assembled = palette_locks::assemble_with_reserves(
-            *quantized, pf2_locks, pf2_reserves,
-            max_colors, lock_zero_std, chipset, config->mode);
-        pal = std::move(assembled.palette);
-        std_locked = std::move(assembled.locked);
-        emit_auto_palette_status = true;
-    }
 
-    if (config->match_range) {
-        preprocess::match_palette_range(*image, pal);
-    }
+        used_palette.assign(pal_span.begin(), pal_span.end());
 
-    // Apply dithering. Pull mode-aware defaults from dither_tuning so
-    // hires / lores-lace / ehb / etc. get the per-mode strength tuned
-    // against SSIMULACRA2 rather than the unsafe-at-low-color
-    // strength=1.0 fallback (which used to runaway-FS at hires d=4).
-    pal_size = std::min(pal.size(), max_colors);
-
-    dith.method = config->dither_method;
-    auto plain_tune = dither_tuning::defaults_for(dither_tuning::Context{
-        .mode    = config->mode,
-        .depth   = static_cast<int>(config->depth),
-        .dpf     = config->dual_playfield,
-        .scap    = false,
-        .copper  = false,
-        .chipset = chipset,
-        .method  = config->dither_method,
-    });
-    dith.strength = config->dither_strength_explicit
-        ? config->dither_strength : plain_tune.strength;
-    dith.error_clamp = config->error_clamp_explicit
-        ? config->error_clamp : plain_tune.error_clamp;
-
-    // Dither-aware palette refinement: iteratively run the ditherer,
-    // recompute each slot's centroid from the pixels actually assigned
-    // to it, and update the palette. Converges to a palette that's
-    // optimal for the dithered output, not just nearest-color assignment.
-    // Same rationale as api.cpp:
-    //   - chunky VGA (256 colors): 18-bit DAC grid is fine enough that
-    //     median-cut already lands on near-optimal centroids; refine hurts
-    //     PSNR ~2 dB and adds 4× dither passes.
-    //   - EGA: ega_histogram_quantize picks 16 distinct slots from the
-    //     64-entry gamut. Refinement's snap-to-gamut collapses them to ~11
-    //     effective colors and drops PSNR 3+ dB.
-    //   - CGA: hardware-fixed palettes can't be reprogrammed.
-    bool skip_refine = amiga::is_chunky(config->mode) ||
-                       amiga::is_cga(config->mode) ||
-                       amiga::is_ega(config->mode) ||
-                       amiga::is_atari_hi(config->mode);
-    if (config->refine_iterations > 0 && config->palette_file.empty() &&
-        !skip_refine && reserve_count_std == 0) {
-        auto refined = quantize::refine_with_dither(
-            *image,
-            Palette{"refined", {pal.colors.begin(),
-                                pal.colors.begin() + static_cast<std::ptrdiff_t>(pal_size)}},
-            dith, chipset, config->mode,
-            static_cast<std::size_t>(config->refine_iterations),
-            std_locked);
-        if (refined) {
-            pal.colors = std::move(refined->colors);
-            pal_size = pal.colors.size();
-        }
-    }
-
-    std::span<const Color3f> pal_span{pal.colors.data(), pal_size};
-
-    cli_print_dither(dith.method, dith.strength);
-
-    // dither_result hoisted to outer scope; just reset state here in
-    // case the --best delegation populated it but we still ran the
-    // inline body (shouldn't happen, but be defensive).
-    dither_result = {};
-    // Build candidate palette: skip reserved slots (and slot 0 if
-    // transparency, the legacy "color 0 = transparent" rule).
-    if (reserve_count_std > 0 || has_transparency) {
-        std::vector<Color3f> cand_pal;
-        std::vector<std::uint8_t> cand_to_full;
-        cand_pal.reserve(pal_size);
-        cand_to_full.reserve(pal_size);
-        for (std::size_t i = 0; i < pal_size; ++i) {
-            if (has_transparency && i == 0) continue;
-            if (reserved_mask_std[i]) continue;
-            cand_pal.push_back(pal.colors[i]);
-            cand_to_full.push_back(static_cast<std::uint8_t>(i));
-        }
-        std::span<const Color3f> dither_span{cand_pal.data(), cand_pal.size()};
-        dither_result = dither::apply(*image, dither_span, dith);
-        for (auto& idx : dither_result.indices) idx = cand_to_full[idx];
-        if (has_transparency) {
-            for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
-                if (transparency_mask[i]) dither_result.indices[i] = 0;
-            }
-        }
-    } else {
-        dither_result = dither::apply(*image, pal_span, dith);
-    }
-
-    // Apply pin-index swaps (post-quantization, post-dither). Use the
-    // PF2-base-translated pins under --dpf — the encoder operates on
-    // the 8-entry PF2 palette; CLUT-layout indices (CLUT 9..15 / 8/0)
-    // were already remapped above.
-    if (!pf2_pins.empty()) {
-        auto pin_result = palette_locks::apply_pins(
-            pal, dither_result.indices, std_locked, pf2_pins,
-            image->width(), image->height());
-        if (!pin_result) {
-            std::println(stderr, "{}", pin_result.error().message);
+        // Render preview before any DPF expansion (combined indices read from
+        // the expanded planes would be non-contiguous).
+        preview = pipeline::render_preview(*planes,
+                                           used_palette,
+                                           /*is_ham=*/false,
+                                           config->interlace,
+                                           chipset);
+        if (!preview) {
+            std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
         }
+    }  // end if (!plain_best_done)
+
+    // --output-indexed <path>: chunky raw bytes in scan order
+    // (1 byte per pixel = palette slot index). Runs in BOTH branches —
+    // the standard auto path above and the plain_best_eligible
+    // (api::encode_state_image) path that populates dither_result.indices
+    // from the api state. Writes after dither/pin so the bytes match
+    // the final palette; runs before the --tile crop so non-tile
+    // outputs are unaffected (--tile is excluded from --best anyway).
+    if (!config->output_indexed_path.empty() && !dither_result.indices.empty()) {
+        std::ofstream f(config->output_indexed_path, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            std::println(stderr, "--output-indexed: cannot open '{}'", config->output_indexed_path);
+            return 1;
+        }
+        // Apply --transparent-output-slot swap on a copy so the
+        // in-memory indices stay consistent (slot 0 = transparent)
+        // for any subsequent renders / status output.
+        std::vector<std::uint8_t> out_idx = dither_result.indices;
+        apply_transparent_slot_swap(out_idx, transparency_mask, config->transparent_output_slot);
+        f.write(reinterpret_cast<const char*>(out_idx.data()),
+                static_cast<std::streamsize>(out_idx.size()));
+        cli_status("Indexed: {} ({} bytes, {}x{}{})",
+                   config->output_indexed_path,
+                   out_idx.size(),
+                   image->width(),
+                   image->height(),
+                   config->transparent_output_slot > 0
+                       ? std::format(", transparent→slot {}", config->transparent_output_slot)
+                       : std::string{});
     }
 
-    // Encode to bitplanes (Atari uses word-interleaved layout)
-    // Layout: Atari uses word-interleaved (ST-specific); DOS planar modes
-    // (EGA, VGA 10h/12h) want plane-sequential `standard` so each plane can
-    // be blitted contiguously via the sequencer map mask; Amiga defaults
-    // to line-interleaved for DMA.
-    bool dos_planar = (amiga::is_ega(config->mode) || amiga::is_vga(config->mode))
-                      && !amiga::is_chunky(config->mode);
-    bp_layout = config->layout_override
-        ? *config->layout_override
-        : (amiga::is_atari(config->mode)
-            ? bitplane::Layout::word_interleaved
-            : dos_planar ? bitplane::Layout::standard
-                         : bitplane::Layout::interleaved);
-    planes = bitplane::encode(dither_result.indices,
-                              image->width(), image->height(),
-                              config->depth, bp_layout);
-    if (!planes) {
-        std::println(stderr, "Encode error: {}", planes.error().message);
-        return 1;
+    // Single emit-site for the auto-palette status. See comment ~L7547
+    // for the architectural rationale: BOTH plain_best_eligible (--best
+    // through api::encode_state_image) AND the !plain_best_done auto
+    // branch above set emit_auto_palette_status = true. Special-case
+    // branches (CGA / EGA / Atari hi / user palette) keep the flag
+    // false because they print their own bespoke "Palette:" line.
+    if (emit_auto_palette_status) {
+        // Use the palette's own .name — set by whichever algorithm
+        // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
+        // ega / "best" for the --best winner). Mode-specific precision
+        // is already on the Mode: line above, so don't duplicate.
+        cli_status("Palette:  {} colors (auto, {})", pal.size(), pal.name);
+        // DPF dumps the 16-entry CLUT view (PF1 zeros at 0..7, PF2 at
+        // 8..15), matching --strips DPF and the --reserve-range index
+        // space exposed to the user. Per-slot pixel counts are dropped
+        // here because the dither indices are in PF2-base 0..7 — the
+        // mapping back to CLUT 8..15 would be misleading on PF1 slots.
+        if (dpf_clut_indexing) {
+            std::vector<Color3f> dpf_clut(16, Color3f{0.0f, 0.0f, 0.0f});
+            for (std::size_t k = 0; k < pal.colors.size() && k < 8; ++k)
+                dpf_clut[8 + k] = pal.colors[k];
+            cli_dump_palette(std::span<const Color3f>(dpf_clut), *config);
+        } else {
+            cli_dump_palette(std::span<const Color3f>(pal.colors),
+                             *config,
+                             std::span<const std::uint8_t>(dither_result.indices));
+        }
     }
-
-    used_palette.assign(pal_span.begin(), pal_span.end());
-
-    // Render preview before any DPF expansion (combined indices read from
-    // the expanded planes would be non-contiguous).
-    preview = pipeline::render_preview(
-        *planes, used_palette,
-        /*is_ham=*/false, config->interlace, chipset);
-    if (!preview) {
-        std::println(stderr, "Render error: {}", preview.error().message);
-        return 1;
-    }
-  }  // end if (!plain_best_done)
-
-  // --output-indexed <path>: chunky raw bytes in scan order
-  // (1 byte per pixel = palette slot index). Runs in BOTH branches —
-  // the standard auto path above and the plain_best_eligible
-  // (api::encode_state_image) path that populates dither_result.indices
-  // from the api state. Writes after dither/pin so the bytes match
-  // the final palette; runs before the --tile crop so non-tile
-  // outputs are unaffected (--tile is excluded from --best anyway).
-  if (!config->output_indexed_path.empty() &&
-      !dither_result.indices.empty()) {
-      std::ofstream f(config->output_indexed_path,
-                      std::ios::binary | std::ios::trunc);
-      if (!f) {
-          std::println(stderr, "--output-indexed: cannot open '{}'",
-                       config->output_indexed_path);
-          return 1;
-      }
-      // Apply --transparent-output-slot swap on a copy so the
-      // in-memory indices stay consistent (slot 0 = transparent)
-      // for any subsequent renders / status output.
-      std::vector<std::uint8_t> out_idx = dither_result.indices;
-      apply_transparent_slot_swap(out_idx, transparency_mask,
-          config->transparent_output_slot);
-      f.write(reinterpret_cast<const char*>(out_idx.data()),
-              static_cast<std::streamsize>(out_idx.size()));
-      cli_status("Indexed: {} ({} bytes, {}x{}{})",
-                 config->output_indexed_path,
-                 out_idx.size(),
-                 image->width(), image->height(),
-                 config->transparent_output_slot > 0
-                     ? std::format(", transparent→slot {}",
-                                    config->transparent_output_slot)
-                     : std::string{});
-  }
-
-  // Single emit-site for the auto-palette status. See comment ~L7547
-  // for the architectural rationale: BOTH plain_best_eligible (--best
-  // through api::encode_state_image) AND the !plain_best_done auto
-  // branch above set emit_auto_palette_status = true. Special-case
-  // branches (CGA / EGA / Atari hi / user palette) keep the flag
-  // false because they print their own bespoke "Palette:" line.
-  if (emit_auto_palette_status) {
-    // Use the palette's own .name — set by whichever algorithm
-    // actually ran (median-cut / pnn / ocs-optimal / gpu-restart /
-    // ega / "best" for the --best winner). Mode-specific precision
-    // is already on the Mode: line above, so don't duplicate.
-    cli_status("Palette:  {} colors (auto, {})", pal.size(), pal.name);
-    // DPF dumps the 16-entry CLUT view (PF1 zeros at 0..7, PF2 at
-    // 8..15), matching --strips DPF and the --reserve-range index
-    // space exposed to the user. Per-slot pixel counts are dropped
-    // here because the dither indices are in PF2-base 0..7 — the
-    // mapping back to CLUT 8..15 would be misleading on PF1 slots.
-    if (dpf_clut_indexing) {
-        std::vector<Color3f> dpf_clut(16, Color3f{0.0f, 0.0f, 0.0f});
-        for (std::size_t k = 0; k < pal.colors.size() && k < 8; ++k)
-            dpf_clut[8 + k] = pal.colors[k];
-        cli_dump_palette(std::span<const Color3f>(dpf_clut), *config);
-    } else {
-        cli_dump_palette(std::span<const Color3f>(pal.colors), *config,
-                         std::span<const std::uint8_t>(dither_result.indices));
-    }
-  }
 
     // --tile post-process: crop the 3W x 3H pipeline output back to the
     // center W x H tile. Indices, bitplanes, preview, source image, and
@@ -9316,8 +9523,7 @@ int run_main(int argc, char* argv[]) {
     if (use_dpf_std) {
         auto expanded = bitplane::expand_to_dpf_pf2(planes.value());
         if (!expanded) {
-            std::println(stderr, "DPF expand error: {}",
-                         expanded.error().message);
+            std::println(stderr, "DPF expand error: {}", expanded.error().message);
             return 1;
         }
         planes = *std::move(expanded);
@@ -9327,30 +9533,29 @@ int run_main(int argc, char* argv[]) {
         used_palette = std::move(shifted);
         for (auto& idx : dither_result.indices)
             idx = static_cast<std::uint8_t>(idx + pf2_base);
-
     }
 
     float std_psnr = color_space::compute_psnr_blurred(
-        image->pixels(), preview->pixels(),
-        image->width(), image->height());
+        image->pixels(), preview->pixels(), image->width(), image->height());
     // Mask transparent pixels so the score reflects only the visible
     // region. Reproduces what cpu_fitness already does internally for
     // the --best ranker — keeps the user-visible S2 consistent with
     // the score the ranker optimises against.
     float std_s2 = score_s2_masked(
-        image->pixels(), preview->pixels(),
-        image->width(), image->height(),
-        transparency_mask);
-    cli_print_encoded(
-        static_cast<int>(planes->depth),
-        static_cast<int>(planes->total_bytes()),
-        static_cast<int>(pal.size()),
-        chipset == amiga::Chipset::aga,
-        /*sliced_grid_entries=*/0, /*strips_op_count=*/0,
-        static_cast<int>(planes->height), /*max_moves=*/0,
-        count_unique_colors(*preview),
-        std::nullopt,
-        static_cast<double>(dither_result.total_error), std_psnr, std_s2);
+        image->pixels(), preview->pixels(), image->width(), image->height(), transparency_mask);
+    cli_print_encoded(static_cast<int>(planes->depth),
+                      static_cast<int>(planes->total_bytes()),
+                      static_cast<int>(pal.size()),
+                      chipset == amiga::Chipset::aga,
+                      /*sliced_grid_entries=*/0,
+                      /*strips_op_count=*/0,
+                      static_cast<int>(planes->height),
+                      /*max_moves=*/0,
+                      count_unique_colors(*preview),
+                      std::nullopt,
+                      static_cast<double>(dither_result.total_error),
+                      std_psnr,
+                      std_s2);
 
     // --fade-to: joint k-means clusters (source ⊕ targets) and replaces
     // the bitmap's indices / palette / planes / rendered preview with
@@ -9361,20 +9566,30 @@ int run_main(int argc, char* argv[]) {
     if (!config->fade_to_paths.empty()) {
         bitplane::BitplaneData planes_obj = *std::move(planes);
         Image preview_obj = *std::move(preview);
-        fade_sequence = fade_postprocess(
-            *image, config->fade_to_paths, config->fade_frames,
-            config->fade_loop, /*is_ehb=*/false,
-            config->depth, bp_layout, chipset, config->mode,
-            config->interlace, dith,
-            config->lock_color0,
-            dither_result.indices, used_palette, planes_obj, preview_obj);
+        fade_sequence = fade_postprocess(*image,
+                                         config->fade_to_paths,
+                                         config->fade_frames,
+                                         config->fade_loop,
+                                         /*is_ehb=*/false,
+                                         config->depth,
+                                         bp_layout,
+                                         chipset,
+                                         config->mode,
+                                         config->interlace,
+                                         dith,
+                                         config->lock_color0,
+                                         dither_result.indices,
+                                         used_palette,
+                                         planes_obj,
+                                         preview_obj);
         if (fade_sequence.empty()) return 1;
         planes = std::move(planes_obj);
         preview = std::move(preview_obj);
-        cli_print_fade_data(
-            fade_actual_bytes(fade_sequence, used_palette.size(), chipset),
-            fade_sequence.size(), used_palette.size(),
-            chipset, "global");
+        cli_print_fade_data(fade_actual_bytes(fade_sequence, used_palette.size(), chipset),
+                            fade_sequence.size(),
+                            used_palette.size(),
+                            chipset,
+                            "global");
 
         // Env-gated frame dump for tooling (README GIF, etc.). Set
         // FADE_DUMP_DIR=/some/dir to emit one PNG per fade frame
@@ -9389,19 +9604,18 @@ int run_main(int argc, char* argv[]) {
                 const auto& fpal = fade_sequence[f];
                 for (std::size_t i = 0; i < dither_result.indices.size(); ++i) {
                     auto k = dither_result.indices[i];
-                    px[i] = (k < fpal.size()) ? fpal[k]
-                                              : Color3f{0.0f, 0.0f, 0.0f};
+                    px[i] = (k < fpal.size()) ? fpal[k] : Color3f{0.0f, 0.0f, 0.0f};
                 }
                 auto path = std::format("{}/frame_{:03}.png", dump_dir, f);
-                if (auto r = save_preview(path, frame, false, {}, config->mode,
-                                          config->hires, config->interlace);
+                if (auto r = save_preview(
+                        path, frame, false, {}, config->mode, config->hires, config->interlace);
                     !r) {
-                    std::println(stderr, "[fade-dump] failed to write {}: {}",
-                                 path, r.error().message);
+                    std::println(
+                        stderr, "[fade-dump] failed to write {}: {}", path, r.error().message);
                 }
             }
-            std::println(stderr, "[fade-dump] wrote {} frames to {}",
-                         fade_sequence.size(), dump_dir);
+            std::println(
+                stderr, "[fade-dump] wrote {} frames to {}", fade_sequence.size(), dump_dir);
         }
     }
 
@@ -9411,20 +9625,25 @@ int run_main(int argc, char* argv[]) {
     if (config->preview) {
         if (!fade_sequence.empty()) {
             fade_animate_preview(dither_result.indices,
-                                 image->width(), image->height(),
-                                 fade_sequence, config->mode,
-                                 config->hires, config->interlace,
+                                 image->width(),
+                                 image->height(),
+                                 fade_sequence,
+                                 config->mode,
+                                 config->hires,
+                                 config->interlace,
                                  config->fade_loop);
             // fade_animate_preview loops forever (Ctrl+C exits the
             // process), so control never returns here.
         } else if (config->tile) {
             auto tiled = tile_3x3_for_preview(*preview);
-            show_terminal_preview(tiled, config->mode, config->hires,
-                                  config->interlace);
+            show_terminal_preview(tiled, config->mode, config->hires, config->interlace);
         } else {
-            show_terminal_preview(*preview, config->mode, config->hires,
+            show_terminal_preview(*preview,
+                                  config->mode,
+                                  config->hires,
                                   config->interlace,
-                                  has_transparency, transparency_mask);
+                                  has_transparency,
+                                  transparency_mask);
         }
     }
 
@@ -9434,10 +9653,8 @@ int run_main(int argc, char* argv[]) {
         // routes through the unified write_amiga_output helper. DOS / Atari
         // modes have per-format dispatch below (Degas .pi*, cheader_dos_c
         // 16-bit C viewers, mode-specific .raw writers).
-        bool dos_or_atari = amiga::is_atari(config->mode)
-                         || amiga::is_cga(config->mode)
-                         || amiga::is_ega(config->mode)
-                         || amiga::is_vga(config->mode);
+        bool dos_or_atari = amiga::is_atari(config->mode) || amiga::is_cga(config->mode) ||
+                            amiga::is_ega(config->mode) || amiga::is_vga(config->mode);
         if (!dos_or_atari) {
             AmigaOutputBundle out;
             out.planes = planes.value();
@@ -9463,7 +9680,8 @@ int run_main(int argc, char* argv[]) {
             // --fade-to: per-frame palette MOVEs for the .cpp/.c viewer.
             if (!fade_sequence.empty() && !config->interlace) {
                 out.fade_per_frame_values = fade_compute_viewer_values_global(
-                    fade_sequence, used_palette.size(),
+                    fade_sequence,
+                    used_palette.size(),
                     config->lock_color0,
                     chipset == amiga::Chipset::aga);
                 out.fade_ping_pong = !config->fade_loop;
@@ -9471,36 +9689,34 @@ int run_main(int argc, char* argv[]) {
             int rc = write_amiga_output(out);
             if (rc != 0) return rc;
         } else if (ends_with(config->output_path, ".pi1") ||
-            ends_with(config->output_path, ".pi2") ||
-            ends_with(config->output_path, ".pi3")) {
+                   ends_with(config->output_path, ".pi2") ||
+                   ends_with(config->output_path, ".pi3")) {
             if (!amiga::is_atari(config->mode)) {
                 std::println(stderr, "Error: Degas output requires an Atari ST/STE mode");
                 return 1;
             }
-            auto result = degas::save(config->output_path, planes.value(),
-                                      used_palette, config->mode);
+            auto result = degas::save(
+                config->output_path, planes.value(), used_palette, config->mode);
             if (!result) {
                 std::println(stderr, "Degas write error: {}", result.error().message);
                 return 1;
             }
             cli_status("Degas:    {} (32034 bytes)", config->output_path);
         } else if (ends_with(config->output_path, ".iff") ||
-            ends_with(config->output_path, ".ilbm")) {
+                   ends_with(config->output_path, ".ilbm")) {
             iff::IffOptions iff_opts;
             iff_opts.hires = config->hires;
-                iff_opts.interlace = config->interlace;
+            iff_opts.interlace = config->interlace;
             iff_opts.has_transparency = has_transparency;
             iff_opts.dpf = use_dpf_std;
 
             auto result = iff::save_ilbm(
-                config->output_path, planes.value(), used_palette,
-                config->mode, iff_opts);
+                config->output_path, planes.value(), used_palette, config->mode, iff_opts);
             if (!result) {
                 std::println(stderr, "IFF write error: {}", result.error().message);
                 return 1;
             }
-            cli_status("IFF:    {} ({} bytes)",
-                         config->output_path, planes->total_bytes());
+            cli_status("IFF:    {} ({} bytes)", config->output_path, planes->total_bytes());
         } else if (ends_with(config->output_path, ".h")) {
             auto ch_opts = pipeline::make_ch_opts({
                 .output_path = config->output_path,
@@ -9510,24 +9726,19 @@ int run_main(int argc, char* argv[]) {
                 .aga = (chipset == amiga::Chipset::aga),
                 .fade_in = config->fade_in,
                 .dpf = use_dpf_std,
-                .total_unique_colors =
-                    static_cast<std::size_t>(count_unique_colors(*preview)),
+                .total_unique_colors = static_cast<std::size_t>(count_unique_colors(*preview)),
             });
 
             auto result = cheader::save(
-                config->output_path, planes.value(), used_palette,
-                config->mode, ch_opts);
+                config->output_path, planes.value(), used_palette, config->mode, ch_opts);
             if (!result) {
-                std::println(stderr, "C header write error: {}",
-                             result.error().message);
+                std::println(stderr, "C header write error: {}", result.error().message);
                 return 1;
             }
             cli_status("Header:   {}", config->output_path);
-        } else if (ends_with(config->output_path, ".cpp") ||
-                   ends_with(config->output_path, ".c")) {
-            auto symbol = config->symbol_name.empty()
-                ? derive_symbol_name(config->output_path)
-                : config->symbol_name;
+        } else if (ends_with(config->output_path, ".cpp") || ends_with(config->output_path, ".c")) {
+            auto symbol = config->symbol_name.empty() ? derive_symbol_name(config->output_path)
+                                                      : config->symbol_name;
             // DOS modes: two viewer generators.
             //   .c   → cheader_dos_c  (16-bit real-mode C for ia16-elf-gcc,
             //          runs on 8088 / IBM PC-XT with CGA; CGA graphics
@@ -9539,23 +9750,19 @@ int run_main(int argc, char* argv[]) {
             if (want_c16 && amiga::is_cga(config->mode)) {
                 auto raw = cheader_dos_c::pack_cga_banked(
                     dither_result.indices, target_w, target_h, config->mode);
-                std::uint8_t ctrl2 =
-                    static_cast<std::uint8_t>((config->cga_palette & 0x3) << 4) |
-                    static_cast<std::uint8_t>(config->cga_bg & 0xF);
+                std::uint8_t ctrl2 = static_cast<std::uint8_t>((config->cga_palette & 0x3) << 4) |
+                                     static_cast<std::uint8_t>(config->cga_bg & 0xF);
                 cheader_dos_c::Options opts{
                     .symbol_name = symbol,
                     .cga_mode_ctrl2 = ctrl2,
                 };
                 auto result = cheader_dos_c::save(
-                    config->output_path, config->mode,
-                    target_w, target_h, raw, {}, opts);
+                    config->output_path, config->mode, target_w, target_h, raw, {}, opts);
                 if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
+                    std::println(stderr, "Viewer write error: {}", result.error().message);
                     return 1;
                 }
-                cli_status("Viewer:   {} (DOS/ia16-elf 16-bit, -march=i8086)",
-                             config->output_path);
+                cli_status("Viewer:   {} (DOS/ia16-elf 16-bit, -march=i8086)", config->output_path);
             } else if (want_c16 && (config->mode == amiga::Mode::ega_320 ||
                                     config->mode == amiga::Mode::ega_640 ||
                                     config->mode == amiga::Mode::ega_hi)) {
@@ -9570,28 +9777,31 @@ int run_main(int argc, char* argv[]) {
                         auto rrggbb = palette::linear_to_ega(c);
                         pal_bytes.push_back(palette::ega_to_hw(rrggbb));
                     }
-                    while (pal_bytes.size() < 16) pal_bytes.push_back(0);
+                    while (pal_bytes.size() < 16)
+                        pal_bytes.push_back(0);
                 } else {
                     // ega_320/640 (200-line): CGA-compat IRGB — the 5154
                     // gates ATC bits 5/3 off at 15.75 kHz. Palette locked
                     // to kCgaHw by main.cpp so slot i = IRGB color i.
                     for (std::size_t i = 0; i < 16; ++i) {
-                        pal_bytes.push_back(static_cast<std::uint8_t>(
-                            (i & 0x07) | ((i & 0x08) << 1)));
+                        pal_bytes.push_back(
+                            static_cast<std::uint8_t>((i & 0x07) | ((i & 0x08) << 1)));
                     }
                 }
                 cheader_dos_c::Options opts{.symbol_name = symbol};
-                auto result = cheader_dos_c::save(
-                    config->output_path, config->mode,
-                    target_w, target_h,
-                    planes.value().data, pal_bytes, opts);
+                auto result = cheader_dos_c::save(config->output_path,
+                                                  config->mode,
+                                                  target_w,
+                                                  target_h,
+                                                  planes.value().data,
+                                                  pal_bytes,
+                                                  opts);
                 if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
+                    std::println(stderr, "Viewer write error: {}", result.error().message);
                     return 1;
                 }
                 cli_status("Viewer:   {} (DOS/ia16-elf 16-bit, -march=i80286)",
-                             config->output_path);
+                           config->output_path);
             } else if (want_c16 && (config->mode == amiga::Mode::vga_10h ||
                                     config->mode == amiga::Mode::vga_12h)) {
                 // VGA planar 16-color (mode 10h / 12h). 18-bit DAC, not
@@ -9603,22 +9813,25 @@ int run_main(int argc, char* argv[]) {
                 for (std::size_t i = 0; i < n; ++i) {
                     auto v = palette::linear_to_vga(used_palette[i]);
                     dac.push_back(static_cast<std::uint8_t>((v >> 16) & 0x3F));
-                    dac.push_back(static_cast<std::uint8_t>((v >>  8) & 0x3F));
-                    dac.push_back(static_cast<std::uint8_t>( v        & 0x3F));
+                    dac.push_back(static_cast<std::uint8_t>((v >> 8) & 0x3F));
+                    dac.push_back(static_cast<std::uint8_t>(v & 0x3F));
                 }
-                while (dac.size() < 48) dac.push_back(0);
+                while (dac.size() < 48)
+                    dac.push_back(0);
                 cheader_dos_c::Options opts{.symbol_name = symbol};
-                auto result = cheader_dos_c::save(
-                    config->output_path, config->mode,
-                    target_w, target_h,
-                    planes.value().data, dac, opts);
+                auto result = cheader_dos_c::save(config->output_path,
+                                                  config->mode,
+                                                  target_w,
+                                                  target_h,
+                                                  planes.value().data,
+                                                  dac,
+                                                  opts);
                 if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
+                    std::println(stderr, "Viewer write error: {}", result.error().message);
                     return 1;
                 }
                 cli_status("Viewer:   {} (DOS/ia16-elf 16-bit, -march=i80286)",
-                             config->output_path);
+                           config->output_path);
             } else if (want_c16 && config->mode == amiga::Mode::vga_13h) {
                 // VGA 256-color chunky. Build 768-byte DAC from linear
                 // palette (3 bytes per entry × 256, each 6-bit). Entries
@@ -9628,32 +9841,30 @@ int run_main(int argc, char* argv[]) {
                 for (std::size_t i = 0; i < n; ++i) {
                     auto v = palette::linear_to_vga(used_palette[i]);
                     dac[i * 3 + 0] = static_cast<std::uint8_t>((v >> 16) & 0x3F);
-                    dac[i * 3 + 1] = static_cast<std::uint8_t>((v >>  8) & 0x3F);
-                    dac[i * 3 + 2] = static_cast<std::uint8_t>( v        & 0x3F);
+                    dac[i * 3 + 1] = static_cast<std::uint8_t>((v >> 8) & 0x3F);
+                    dac[i * 3 + 2] = static_cast<std::uint8_t>(v & 0x3F);
                 }
                 std::vector<std::uint8_t> raw(dither_result.indices.begin(),
                                               dither_result.indices.end());
                 cheader_dos_c::Options opts{.symbol_name = symbol};
                 auto result = cheader_dos_c::save(
-                    config->output_path, config->mode,
-                    target_w, target_h, raw, dac, opts);
+                    config->output_path, config->mode, target_w, target_h, raw, dac, opts);
                 if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
+                    std::println(stderr, "Viewer write error: {}", result.error().message);
                     return 1;
                 }
                 cli_status("Viewer:   {} (DOS/ia16-elf 16-bit, -march=i80286)",
-                             config->output_path);
+                           config->output_path);
             } else if (want_c16) {
                 std::println(stderr,
-                    "16-bit C output (.c) supports: CGA graphics + "
-                    "text80x100, EGA 320/640/hi, VGA 13h/10h/12h.");
+                             "16-bit C output (.c) supports: CGA graphics + "
+                             "text80x100, EGA 320/640/hi, VGA 13h/10h/12h.");
                 return 1;
             } else if (amiga::is_vga(config->mode) || amiga::is_ega(config->mode) ||
-                amiga::is_cga(config->mode)) {
+                       amiga::is_cga(config->mode)) {
                 std::println(stderr,
-                    "DOS viewer output: use .c extension "
-                    "(ia16-elf-gcc, 16-bit real mode).");
+                             "DOS viewer output: use .c extension "
+                             "(ia16-elf-gcc, 16-bit real mode).");
                 return 1;
             } else {
                 auto ch_opts = pipeline::make_ch_opts({
@@ -9663,25 +9874,22 @@ int run_main(int argc, char* argv[]) {
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
                     .dpf = use_dpf_std,
-                    .total_unique_colors =
-                        static_cast<std::size_t>(count_unique_colors(*preview)),
+                    .total_unique_colors = static_cast<std::size_t>(count_unique_colors(*preview)),
                 });
                 if (!fade_sequence.empty() && !config->interlace) {
-                    ch_opts.fade_per_frame_values =
-                        fade_compute_viewer_values_global(
-                            fade_sequence, used_palette.size(),
-                            config->lock_color0,
-                            chipset == amiga::Chipset::aga);
+                    ch_opts.fade_per_frame_values = fade_compute_viewer_values_global(
+                        fade_sequence,
+                        used_palette.size(),
+                        config->lock_color0,
+                        chipset == amiga::Chipset::aga);
                     ch_opts.fade_ping_pong = !config->fade_loop;
                 }
 
                 pad_planes_to_mode(planes.value(), config->mode, config->hires);
                 auto result = cheader::save_viewer(
-                    config->output_path, planes.value(), used_palette,
-                    config->mode, ch_opts);
+                    config->output_path, planes.value(), used_palette, config->mode, ch_opts);
                 if (!result) {
-                    std::println(stderr, "Viewer write error: {}",
-                                 result.error().message);
+                    std::println(stderr, "Viewer write error: {}", result.error().message);
                     return 1;
                 }
                 cli_status("Viewer:   {}", config->output_path);
@@ -9690,36 +9898,39 @@ int run_main(int argc, char* argv[]) {
             if (amiga::is_chunky(config->mode)) {
                 save_raw_vga(config->output_path,
                              dither_result.indices,
-                             target_w, target_h,
-                             used_palette, config->mode);
+                             target_w,
+                             target_h,
+                             used_palette,
+                             config->mode);
             } else if (amiga::is_vga_planar(config->mode)) {
-                save_raw_vga_planar(config->output_path, planes.value(),
-                                    used_palette, config->mode);
+                save_raw_vga_planar(
+                    config->output_path, planes.value(), used_palette, config->mode);
             } else if (amiga::is_ega(config->mode)) {
-                save_raw_ega(config->output_path, planes.value(),
-                             used_palette);
+                save_raw_ega(config->output_path, planes.value(), used_palette);
             } else if (amiga::is_cga(config->mode)) {
-                save_raw_cga(config->output_path, dither_result.indices,
-                             target_w, target_h, config->mode);
+                save_raw_cga(
+                    config->output_path, dither_result.indices, target_w, target_h, config->mode);
             } else {
-                save_raw(config->output_path, planes.value(),
-                         used_palette, chipset);
+                save_raw(config->output_path, planes.value(), used_palette, chipset);
             }
         } else if (ends_with(config->output_path, ".pal")) {
-            auto result = palette_io::save_ocs_palette(
-                config->output_path, used_palette);
+            auto result = palette_io::save_ocs_palette(config->output_path, used_palette);
             if (!result) {
-                std::println(stderr, "Palette write error: {}",
-                             result.error().message);
+                std::println(stderr, "Palette write error: {}", result.error().message);
                 return 1;
             }
             cli_status("Pal:      {} ({} colors, {} bytes)",
-                         config->output_path, used_palette.size(),
-                         used_palette.size() * 2);
+                       config->output_path,
+                       used_palette.size(),
+                       used_palette.size() * 2);
         } else {
-            auto result = save_preview(config->output_path, *preview,
-                                       has_transparency, transparency_mask,
-                                       config->mode, config->hires, config->interlace);
+            auto result = save_preview(config->output_path,
+                                       *preview,
+                                       has_transparency,
+                                       transparency_mask,
+                                       config->mode,
+                                       config->hires,
+                                       config->interlace);
             if (!result) {
                 std::println(stderr, "PNG write error: {}", result.error().message);
                 return 1;
@@ -9730,8 +9941,12 @@ int run_main(int argc, char* argv[]) {
 
     // Mask export (standard bitplane mode)
     if (!config->mask_path.empty())
-        save_mask(config->mask_path, transparency_mask,
-                  target_w, target_h, config->mask_invert, config->interlace);
+        save_mask(config->mask_path,
+                  transparency_mask,
+                  target_w,
+                  target_h,
+                  config->mask_invert,
+                  config->interlace);
 
     // Joint-palette mode: render each input (positional + every
     // --joint-input) against the trained shared palette and write
@@ -9744,81 +9959,74 @@ int run_main(int argc, char* argv[]) {
     // Format is selected by the resolved path's extension.
     if (joint_mode && !config->output_each.empty()) {
         namespace fs = std::filesystem;
-        auto resolve = [&](const std::string& pat,
-                           const std::string& src) -> std::string {
+        auto resolve = [&](const std::string& pat, const std::string& src) -> std::string {
             fs::path p(src);
-            std::string dir  = p.parent_path().string();
+            std::string dir = p.parent_path().string();
             std::string name = p.filename().string();  // with extension
             std::string stem = p.stem().string();      // without extension
             if (!pat.empty() && pat[0] == '.') {
-                fs::path o = dir.empty()
-                    ? fs::path(stem + pat)
-                    : fs::path(dir) / (stem + pat);
+                fs::path o = dir.empty() ? fs::path(stem + pat) : fs::path(dir) / (stem + pat);
                 return o.string();
             }
             std::string out = pat;
-            auto repl = [&](std::string_view tok,
-                            std::string_view val) {
+            auto repl = [&](std::string_view tok, std::string_view val) {
                 std::size_t pos = 0;
-                while ((pos = out.find(tok, pos)) !=
-                       std::string::npos) {
+                while ((pos = out.find(tok, pos)) != std::string::npos) {
                     out.replace(pos, tok.size(), val);
                     pos += val.size();
                 }
             };
-            repl("{dir}",  dir);
+            repl("{dir}", dir);
             repl("{stem}", stem);
             repl("{name}", name);  // rarely useful — filename with ext
             return out;
         };
         auto write_outputs = [&](const std::string& src,
-                                  std::span<const std::uint8_t> idx,
-                                  const std::vector<bool>& tmask,
-                                  std::size_t w, std::size_t h) -> int {
+                                 std::span<const std::uint8_t> idx,
+                                 const std::vector<bool>& tmask,
+                                 std::size_t w,
+                                 std::size_t h) -> int {
             for (auto& pat : config->output_each) {
                 auto out_path = resolve(pat, src);
                 if (ends_with(out_path, ".idx")) {
-                    std::ofstream f(out_path,
-                        std::ios::binary | std::ios::trunc);
+                    std::ofstream f(out_path, std::ios::binary | std::ios::trunc);
                     if (!f) {
-                        std::println(stderr,
-                            "--output-each: cannot open '{}'",
-                            out_path);
+                        std::println(stderr, "--output-each: cannot open '{}'", out_path);
                         return exit_code::cant_create;
                     }
                     // Apply --transparent-output-slot swap on a copy.
-                    std::vector<std::uint8_t> out_idx(idx.begin(),
-                                                       idx.end());
-                    apply_transparent_slot_swap(out_idx, tmask,
-                        config->transparent_output_slot);
+                    std::vector<std::uint8_t> out_idx(idx.begin(), idx.end());
+                    apply_transparent_slot_swap(out_idx, tmask, config->transparent_output_slot);
                     f.write(reinterpret_cast<const char*>(out_idx.data()),
                             static_cast<std::streamsize>(out_idx.size()));
-                    cli_status("Joint-out: {} ({} bytes, {}x{}{})",
-                               out_path, out_idx.size(), w, h,
-                               config->transparent_output_slot > 0
-                                   ? std::format(
-                                         ", transparent→slot {}",
-                                         config->transparent_output_slot)
-                                   : std::string{});
+                    cli_status(
+                        "Joint-out: {} ({} bytes, {}x{}{})",
+                        out_path,
+                        out_idx.size(),
+                        w,
+                        h,
+                        config->transparent_output_slot > 0
+                            ? std::format(", transparent→slot {}", config->transparent_output_slot)
+                            : std::string{});
                 } else if (ends_with(out_path, ".png")) {
-                    std::vector<std::uint8_t> idx_v(idx.begin(),
-                                                     idx.end());
-                    auto r = png_io::save_palettized(
-                        out_path, idx_v, pal.colors, w, h,
-                        /*transparent_index=*/-1);
+                    std::vector<std::uint8_t> idx_v(idx.begin(), idx.end());
+                    auto r = png_io::save_palettized(out_path,
+                                                     idx_v,
+                                                     pal.colors,
+                                                     w,
+                                                     h,
+                                                     /*transparent_index=*/-1);
                     if (!r) {
-                        std::println(stderr,
-                            "--output-each: PNG write error: {}",
-                            r.error().message);
+                        std::println(
+                            stderr, "--output-each: PNG write error: {}", r.error().message);
                         return exit_code::cant_create;
                     }
-                    cli_status("Joint-out: {} (paletted, {}x{})",
-                               out_path, w, h);
+                    cli_status("Joint-out: {} (paletted, {}x{})", out_path, w, h);
                 } else {
                     std::println(stderr,
-                        "--output-each: unsupported extension "
-                        "in '{}' (expected .idx or .png)",
-                        out_path);
+                                 "--output-each: unsupported extension "
+                                 "in '{}' (expected .idx or .png)",
+                                 out_path);
                     return exit_code::usage;
                 }
             }
@@ -9827,11 +10035,12 @@ int run_main(int argc, char* argv[]) {
         // Positional first — its indices were already produced by
         // the main encode pipeline. Per-input dither for the rest.
         if (auto rc = write_outputs(config->input_path,
-                                     dither_result.indices,
-                                     transparency_mask,
-                                     image->width(),
-                                     image->height());
-            rc != 0) return rc;
+                                    dither_result.indices,
+                                    transparency_mask,
+                                    image->width(),
+                                    image->height());
+            rc != 0)
+            return rc;
         for (std::size_t i = 0; i < config->joint_inputs.size(); ++i) {
             auto& jp = config->joint_inputs[i];
             auto& jimg = joint_imgs[i + 1];  // [0] is positional
@@ -9839,7 +10048,7 @@ int run_main(int argc, char* argv[]) {
             // already-locked palette. dither / strength / mode flow
             // through the standard make_api_options path.
             api::Options jopts = make_api_options(*config);
-            jopts.width  = static_cast<int>(jimg.width());
+            jopts.width = static_cast<int>(jimg.width());
             jopts.height = static_cast<int>(jimg.height());
             // Don't recurse into joint mode for the per-input
             // encode (this Options doesn't carry joint_inputs;
@@ -9847,16 +10056,16 @@ int run_main(int argc, char* argv[]) {
             jopts.best = false;
             auto enc = api::encode_state_image(jimg, jopts);
             if (!enc.ok()) {
-                std::println(stderr,
-                    "--joint-input {} encode error: {}", jp,
-                    enc.error_msg);
+                std::println(stderr, "--joint-input {} encode error: {}", jp, enc.error_msg);
                 return exit_code::cant_create;
             }
-            if (auto rc = write_outputs(jp, enc.state.indices,
-                                         enc.state.transparency_mask,
-                                         jimg.width(),
-                                         jimg.height());
-                rc != 0) return rc;
+            if (auto rc = write_outputs(jp,
+                                        enc.state.indices,
+                                        enc.state.transparency_mask,
+                                        jimg.width(),
+                                        jimg.height());
+                rc != 0)
+                return rc;
         }
     }
 
@@ -9882,9 +10091,13 @@ int run_main(int argc, char* argv[]) {
             std::string out;
             out.reserve(s.size() + 8);
             for (char c : s) {
-                if (c == '"' || c == '\\') { out += '\\'; out += c; }
-                else if (c == '\n') out += "\\n";
-                else out += c;
+                if (c == '"' || c == '\\') {
+                    out += '\\';
+                    out += c;
+                } else if (c == '\n')
+                    out += "\\n";
+                else
+                    out += c;
             }
             return out;
         };
@@ -9916,9 +10129,9 @@ inline bool cpu_supports_avx2() noexcept {
 #if defined(_MSC_VER)
     int regs[4];
     __cpuid(regs, 0);
-    if (regs[0] < 7) return false;            // structured-feature leaf missing
+    if (regs[0] < 7) return false;  // structured-feature leaf missing
     __cpuidex(regs, 7, 0);
-    return (regs[1] & (1 << 5)) != 0;          // EBX bit 5 = AVX2
+    return (regs[1] & (1 << 5)) != 0;  // EBX bit 5 = AVX2
 #else
     unsigned eax, ebx, ecx, edx;
     if (!__get_cpuid_max(0, nullptr)) return false;
@@ -9926,17 +10139,17 @@ inline bool cpu_supports_avx2() noexcept {
     return (ebx & (1u << 5)) != 0;
 #endif
 }
-} // namespace
+}  // namespace
 #endif
 
 int main(int argc, char* argv[]) {
 #if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
     if (!cpu_supports_avx2()) {
         std::fprintf(stderr,
-            "png2amiga: this build requires AVX2 (Intel Haswell 2013+ "
-            "or AMD Zen 2017+).\n"
-            "Your CPU does not advertise AVX2 via CPUID. Exiting "
-            "instead of crashing on the first SIMD instruction.\n");
+                     "png2amiga: this build requires AVX2 (Intel Haswell 2013+ "
+                     "or AMD Zen 2017+).\n"
+                     "Your CPU does not advertise AVX2 via CPUID. Exiting "
+                     "instead of crashing on the first SIMD instruction.\n");
         return 1;
     }
 #endif

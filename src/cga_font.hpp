@@ -22,14 +22,13 @@ constexpr std::uint8_t cga_glyph_scanline(std::uint8_t ch, std::size_t line) noe
 
 // Font descriptor passed to glyph-matching encoders.
 struct FontRef {
-    const std::uint8_t* data;       // pointer to contiguous glyph bytes
-    std::size_t glyph_height;       // scanlines per glyph
+    const std::uint8_t* data;  // pointer to contiguous glyph bytes
+    std::size_t glyph_height;  // scanlines per glyph
 };
 
 inline constexpr FontRef kFontCga8x8{kCgaFont8x8.data(), 8};
 
-constexpr std::uint8_t font_scanline(const FontRef& f, std::uint8_t ch,
-                                     std::size_t line) noexcept {
+constexpr std::uint8_t font_scanline(const FontRef& f, std::uint8_t ch, std::size_t line) noexcept {
     return f.data[static_cast<std::size_t>(ch) * f.glyph_height +
                   (line < f.glyph_height ? line : line % f.glyph_height)];
 }
@@ -58,8 +57,7 @@ constexpr std::uint64_t glyph_pattern_key(const FontRef& f,
                                           std::size_t offset) noexcept {
     std::uint64_t key = 0;
     for (std::size_t line = 0; line < cell_h; ++line) {
-        key |= static_cast<std::uint64_t>(font_scanline(f, ch, offset + line))
-               << (line * 8);
+        key |= static_cast<std::uint64_t>(font_scanline(f, ch, offset + line)) << (line * 8);
     }
     return key;
 }
@@ -83,11 +81,9 @@ constexpr std::uint64_t glyph_fg_mask(const FontRef& f,
 
 // Fold (key, ~key) into a single representative — the smaller of the
 // two — so inversion-pair classes share one bucket.
-constexpr std::uint64_t glyph_canonical_key(std::uint64_t key,
-                                            std::size_t cell_h) noexcept {
-    std::uint64_t bits_mask = (cell_h >= 8)
-        ? ~std::uint64_t{0}
-        : (std::uint64_t{1} << (cell_h * 8)) - 1;
+constexpr std::uint64_t glyph_canonical_key(std::uint64_t key, std::size_t cell_h) noexcept {
+    std::uint64_t bits_mask = (cell_h >= 8) ? ~std::uint64_t{0}
+                                            : (std::uint64_t{1} << (cell_h * 8)) - 1;
     std::uint64_t inv = (~key) & bits_mask;
     return key < inv ? key : inv;
 }
@@ -102,8 +98,9 @@ struct GlyphCanonicalBitmap {
     }
 };
 
-constexpr GlyphCanonicalBitmap make_glyph_canonical_bitmap(
-    const FontRef& f, std::size_t cell_h, std::size_t offset) noexcept {
+constexpr GlyphCanonicalBitmap make_glyph_canonical_bitmap(const FontRef& f,
+                                                           std::size_t cell_h,
+                                                           std::size_t offset) noexcept {
     GlyphCanonicalBitmap out{};
     // Linear-search "seen" set sized to the worst case (256 unique
     // classes). consteval contexts can't use std::unordered_set, and
@@ -116,12 +113,14 @@ constexpr GlyphCanonicalBitmap make_glyph_canonical_bitmap(
         auto canon = glyph_canonical_key(key, cell_h);
         bool dup = false;
         for (std::size_t k = 0; k < n_seen; ++k) {
-            if (seen[k] == canon) { dup = true; break; }
+            if (seen[k] == canon) {
+                dup = true;
+                break;
+            }
         }
         if (dup) continue;
         seen[n_seen++] = canon;
-        out.bits[static_cast<std::size_t>(i) >> 6] |=
-            std::uint64_t{1} << (i & 63);
+        out.bits[static_cast<std::size_t>(i) >> 6] |= std::uint64_t{1} << (i & 63);
     }
     return out;
 }
@@ -129,11 +128,11 @@ constexpr GlyphCanonicalBitmap make_glyph_canonical_bitmap(
 // CGA cells today are 1 / 2 / 4 / 8 scanlines tall. Index the table
 // by a compact 0..3 slot. font_height = 8, so max offset = 8 - cell_h.
 constexpr std::size_t cga_cell_h_index(std::size_t cell_h) noexcept {
-    return cell_h == 1 ? 0
-         : cell_h == 2 ? 1
-         : cell_h == 4 ? 2
-         : cell_h == 8 ? 3
-                       : 0;  // unreachable for current modes
+    return cell_h == 1   ? 0
+           : cell_h == 2 ? 1
+           : cell_h == 4 ? 2
+           : cell_h == 8 ? 3
+                         : 0;  // unreachable for current modes
 }
 
 // Precomputed canonical bitmaps for kFontCga8x8 across every
@@ -161,7 +160,6 @@ build_cga_canonical_bitmaps() noexcept {
 }
 }  // namespace detail_cga
 
-inline constexpr auto kCgaCanonicalBitmaps =
-    detail_cga::build_cga_canonical_bitmaps();
+inline constexpr auto kCgaCanonicalBitmaps = detail_cga::build_cga_canonical_bitmaps();
 
-} // namespace png2amiga::palette
+}  // namespace png2amiga::palette
