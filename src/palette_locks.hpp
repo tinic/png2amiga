@@ -163,7 +163,7 @@ bool contains_locked_black(const Palette& palette);
 // The returned Palette is then ready for `finalize_palette()` or
 // `assemble_locked_palette()` as appropriate.
 Result<Palette> two_pass_quantize(
-    std::function<Result<Palette>(std::size_t)> quantize_fn,
+    const std::function<Result<Palette>(std::size_t)>& quantize_fn,
     std::size_t kfirst,
     std::size_t kfallback,
     bool lock_color0);

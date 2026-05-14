@@ -1636,7 +1636,9 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     case 3: case 270: q = 3; break;
                     default: break;
                 }
-            } catch (...) {}
+            } catch (...) {  // NOLINT(bugprone-empty-catch)
+                // Parse failure → q stays -1 → handled by the q<0 branch below.
+            }
             if (q < 0) {
                 return std::unexpected{Error{ErrorCode::invalid_dimensions,
                     std::format("--rotate expects 0/1/2/3 or 0/90/180/270 "

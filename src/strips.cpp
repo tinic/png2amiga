@@ -1991,7 +1991,9 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
             // passes default). Reset alongside line_moves so the final
             // counter reflects only the last pass's MOVEs.
             total_moves = 0;
-            total_error = 0.0;
+            // total_error is unconditionally reassigned later in this
+            // pass (line ~2603 / 1330) before any read, so no reset
+            // needed here.
         }
     for (std::size_t y = 0; y < height; ++y) {
         int abs_vpos = static_cast<int>(y) + kVStart;

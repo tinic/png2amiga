@@ -295,7 +295,9 @@ Result<PopSearchResult> run_population_search(
     // reapplies the seed's locked colors via enforce_locks in case
     // of any drift.
     auto seed0 = population[0];
-    std::mt19937 rng(0xa5a5);
+    // Deterministic seed — palette_search must be reproducible across
+    // runs so SSIMULACRA2-ranked sweeps return the same winner.
+    std::mt19937 rng(0xa5a5);  // NOLINT(bugprone-random-generator-seed)
     while (population.size() < static_cast<std::size_t>(opts.pop_size)) {
         auto p = seed0;
         for (std::size_t k = 0; k < p.size(); ++k)

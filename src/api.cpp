@@ -334,7 +334,6 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
             std::swap(width, height);
             std::swap(w, h);
         }
-        pixel_count = width * height;
     }
 
     // --trim is implemented at the CLI level as sugar that sets
@@ -2363,6 +2362,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // subsequent lines.
                 std::vector<std::pair<std::size_t, Color3f>>
                     ehb_sliced_locked;
+                ehb_sliced_locked.reserve(options.locks.size()
+                    + options.reserves.size());
                 std::vector<std::size_t> ehb_cap_excluded;
                 for (auto& l : options.locks) {
                     ehb_sliced_locked.emplace_back(l.index,

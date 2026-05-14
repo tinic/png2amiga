@@ -168,7 +168,7 @@ std::size_t quant_count(std::size_t max_colors,
 }
 
 Result<Palette> two_pass_quantize(
-    std::function<Result<Palette>(std::size_t)> quantize_fn,
+    const std::function<Result<Palette>(std::size_t)>& quantize_fn,
     std::size_t kfirst,
     std::size_t kfallback,
     bool lock_color0) {
