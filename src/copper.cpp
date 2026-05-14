@@ -432,34 +432,63 @@ Result<CopperResult> encode_copper(const Image& image,
     //   d8:   same as d7 (8 banks, K<=B unsaturated)
     // OCS base K=14 already saturates the budget (1 MOVE per change), no room.
     if (override_changes == 0 && chipset == amiga::Chipset::aga) {
-        // Silence progress on the speculative stretch passes — each
-        // bump fires its own 0→100% "done" cycle on the way to the
-        // accepted K, which made AGA sliced print 4 progress lines
-        // (K+3 → overshoot → K+2 → overshoot → K+1 → overshoot → base).
-        // The accepted call below fires the single visible progress.
+        // Stretch passes are NOT silent — at d=7/8 the planner may need
+        // to run up to 3 full encodes to find a K that fits the MOVE
+        // budget. With progress disabled the user stares at 0% for one
+        // or more full encodes' worth of work. Map each attempt into a
+        // sub-range of the bar so the bar still moves smoothly:
+        //   attempt 0 (bump=3): [0.00, 0.25]
+        //   attempt 1 (bump=2): [0.25, 0.50]
+        //   attempt 2 (bump=1): [0.50, 0.75]
+        //   accepted replay:    [last_hi, 1.00]
+        // Suppress the inner "done" so the speculative pass doesn't
+        // collapse the bar to 100% before the next slot opens.
+        int attempts_done = 0;
+        constexpr float kPerSlot = 0.25f;
         for (std::size_t bump = 3; bump >= 1; --bump) {
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
+            float slot_lo = static_cast<float>(attempts_done) * kPerSlot;
+            float slot_hi = slot_lo + kPerSlot;
+            std::function<void(float, std::string_view)> stretch_progress;
+            if (on_progress) {
+                stretch_progress = [outer = on_progress, slot_lo, slot_hi]
+                                   (float p, std::string_view s) {
+                    if (s == "done") return;
+                    outer(slot_lo + (slot_hi - slot_lo)
+                                  * std::clamp(p, 0.0f, 1.0f),
+                          "encoding");
+                };
+            }
             auto stretch = encode_copper(image, depth, dither_settings, chipset,
                                          stretch_k, user_palette, lock_color0,
                                          locked, palette_diversity,
                                          skip_initial_swap_rows, is_lace, is_ehb,
-                                         /*on_progress=*/{}, neighbor_radius,
+                                         stretch_progress, neighbor_radius,
                                          neighbor_decay, vertical_dither,
                                          dither_excluded,
                                          /*quantizer_override=*/std::nullopt,
                                          sliced_beam);
             if (!stretch) return std::unexpected{stretch.error()};
+            ++attempts_done;
             if (stretch->max_moves_per_line <= move_budget) {
-                // Replay the accepted K with progress wired so the
-                // user sees one clean 0→100% bar — the stretch above
-                // was speculative and silent.
+                // Replay the accepted K, mapping its progress into the
+                // remainder of the bar so the user sees a continuous
+                // sweep from where the last speculative ended up to 100%.
                 if (on_progress) {
+                    float replay_lo = static_cast<float>(attempts_done) * kPerSlot;
+                    auto replay_progress = [outer = on_progress, replay_lo]
+                                            (float p, std::string_view s) {
+                        if (s == "done") { outer(1.0f, s); return; }
+                        outer(replay_lo + (1.0f - replay_lo)
+                                        * std::clamp(p, 0.0f, 1.0f),
+                              s);
+                    };
                     return encode_copper(image, depth, dither_settings, chipset,
                                          stretch_k, user_palette, lock_color0,
                                          locked, palette_diversity,
                                          skip_initial_swap_rows, is_lace, is_ehb,
-                                         on_progress, neighbor_radius,
+                                         replay_progress, neighbor_radius,
                                          neighbor_decay, vertical_dither,
                                          dither_excluded,
                                          /*quantizer_override=*/std::nullopt,
