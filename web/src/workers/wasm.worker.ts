@@ -114,9 +114,12 @@ function injectProgressCallback(args: unknown[], id: number, wantProgress: boole
   const opts = args[1]
   if (!wantProgress || !opts || typeof opts !== 'object') return args
   const next = [...args]
+  const t0 = performance.now()
   next[1] = {
     ...(opts as WasmOptions),
     onProgress: (p: number, stage: string) => {
+      const t = ((performance.now() - t0) / 1000).toFixed(2)
+      console.log(`[progress] ${(p * 100).toFixed(1)}% ${t}s ${stage}`)
       self.postMessage({ type: 'progress', id, p, stage })
     },
   } satisfies WasmOptions
