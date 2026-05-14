@@ -361,41 +361,48 @@ don't expose a "pin one slot, quantize the rest" knob, so they're
 free to spend the black-slot bit elsewhere — another small advantage
 that doesn't move the rankings.
 
-| Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
-|-------------|-----------------------------------|----------:|------------:|---------:|
-| **png2amiga** | **lores d=8 AGA + best**       | 32.35     | **83.02**   |    15.04 |
-| png2amiga   | lores d=8 AGA                     | 32.37     | 82.87       |     0.76 |
-| pngquant    | libimagequant 256 (`--speed 1`)   | 33.61     | 80.13       |     0.06 |
-| ffmpeg      | 256 (`palettegen`+FS)†            | 31.18     | 78.61       |     0.06 |
-| png2amiga   | HAM6 + sliced + best              | 30.99     | 76.15       |    21.72 |
-| png2amiga   | HAM6 + sliced                     | 30.50     | 75.60       |     0.25 |
-| ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.81     | 74.82       |    20.18 |
-| png2amiga   | HAM6 (no copper)                  | 30.22     | 72.94       |     0.19 |
-| png2amiga   | HAM6 + best (no copper)           | 30.22     | 72.94       |     9.40 |
-| Netpbm      | pnmquant 256 (`-floyd`)†          | 31.59     | 72.20       |     0.11 |
-| png2amiga   | EHB + strips + best               | 29.39     | 71.60       |    18.55 |
-| ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.45     | 70.41       |     4.08 |
-| ham_convert | HAM6 q7 (max quality, `dither_fs`)| 30.04     | 70.05       |    38.30 |
-| gifsicle    | 256 (`--dither floyd-steinberg`)† | 32.94     | 69.47       |     0.02 |
-| didder      | 256 (`mmcq`+FS edm serpentine)†   | 28.27     | 68.52       |     0.13 |
-| ImageMagick | 256 (`-dither FS`)†               | 30.69     | 66.85       |     0.05 |
-| pngnq       | 256 (NeuQuant + FS, `-s 1`)†      | 31.61     | 65.73       |     0.07 |
-| abc         | HAM6 (`-floyd`)                   | 28.31     | 63.24       |     1.96 |
-| png2amiga   | EHB + best (no copper)            | 23.75     | 62.54       |    13.81 |
-| abc         | SHAM6 (`-floyd`)                  | 26.66     | 60.59       |     1.22 |
-| png2amiga   | lores d=5 + best                  | 23.42     | 57.83       |    16.19 |
-| png2amiga   | EHB (no copper)                   | 25.03     | 52.38       |     0.09 |
-| png2amiga   | lores d=5                         | 24.96     | 51.57       |     0.10 |
-| pngquant    | libimagequant 32 (`--speed 1`)    | 26.08     | 51.14       |     0.48 |
-| ham_convert | EHB (`dither_fs`)                 | 25.82     | 49.68       |     6.06 |
-| ham_convert | ocs32 (`dither_fs`)               | 24.42     | 37.70       |     6.08 |
-| abc         | lores d=5 (`-floyd`, `-bpc 5`)    | 25.35     | 36.32       |     2.30 |
-| ffmpeg      | 32 (`palettegen`+FS)†             | 23.74     | 31.72       |     0.06 |
-| pngnq       | 32 (NeuQuant + FS, `-s 1`)†       | 25.76     | 30.81       |     0.17 |
-| Netpbm      | pnmquant 32 (`-floyd`)†           | 23.96     | 30.08       |     0.53 |
-| didder      | 32 (`mmcq`+FS edm serpentine)†    | 22.56     | 22.19       |     0.10 |
-| ImageMagick | 32 (`-dither FS`)†                | 23.41     | 21.90       |     0.40 |
-| gifsicle    | 32 (`--dither floyd-steinberg`)†  | 20.84     | 15.70       |     0.18 |
+Row swatches group encodings by output color budget so PSNR/S2
+columns can be compared apples-to-apples:
+🟪 HAM6 (16-color base + per-pixel modify, ~4096 effective) ·
+🟦 256 colors ·
+🟩 EHB (32 base + 32 hardware half-brite, 64 effective) ·
+🟧 32 colors.
+
+|     | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
+|:---:|-------------|-----------------------------------|----------:|------------:|---------:|
+| 🟦 | **png2amiga** | **lores d=8 AGA + best**       | 32.35     | **83.02**   |    15.04 |
+| 🟦 | png2amiga   | lores d=8 AGA                     | 32.37     | 82.87       |     0.76 |
+| 🟦 | pngquant    | libimagequant 256 (`--speed 1`)   | 33.61     | 80.13       |     0.06 |
+| 🟦 | ffmpeg      | 256 (`palettegen`+FS)†            | 31.18     | 78.61       |     0.06 |
+| 🟪 | png2amiga   | HAM6 + sliced + best              | 30.99     | 76.15       |    21.72 |
+| 🟪 | png2amiga   | HAM6 + sliced                     | 30.50     | 75.60       |     0.25 |
+| 🟪 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.81     | 74.82       |    20.18 |
+| 🟪 | png2amiga   | HAM6 (no copper)                  | 30.22     | 72.94       |     0.19 |
+| 🟪 | png2amiga   | HAM6 + best (no copper)           | 30.22     | 72.94       |     9.40 |
+| 🟦 | Netpbm      | pnmquant 256 (`-floyd`)†          | 31.59     | 72.20       |     0.11 |
+| 🟩 | png2amiga   | EHB + strips + best               | 29.39     | 71.60       |    18.55 |
+| 🟪 | ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.45     | 70.41       |     4.08 |
+| 🟪 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 30.04     | 70.05       |    38.30 |
+| 🟦 | gifsicle    | 256 (`--dither floyd-steinberg`)† | 32.94     | 69.47       |     0.02 |
+| 🟦 | didder      | 256 (`mmcq`+FS edm serpentine)†   | 28.27     | 68.52       |     0.13 |
+| 🟦 | ImageMagick | 256 (`-dither FS`)†               | 30.69     | 66.85       |     0.05 |
+| 🟦 | pngnq       | 256 (NeuQuant + FS, `-s 1`)†      | 31.61     | 65.73       |     0.07 |
+| 🟪 | abc         | HAM6 (`-floyd`)                   | 28.31     | 63.24       |     1.96 |
+| 🟩 | png2amiga   | EHB + best (no copper)            | 23.75     | 62.54       |    13.81 |
+| 🟪 | abc         | SHAM6 (`-floyd`)                  | 26.66     | 60.59       |     1.22 |
+| 🟧 | png2amiga   | lores d=5 + best                  | 23.42     | 57.83       |    16.19 |
+| 🟩 | png2amiga   | EHB (no copper)                   | 25.03     | 52.38       |     0.09 |
+| 🟧 | png2amiga   | lores d=5                         | 24.96     | 51.57       |     0.10 |
+| 🟧 | pngquant    | libimagequant 32 (`--speed 1`)    | 26.08     | 51.14       |     0.48 |
+| 🟩 | ham_convert | EHB (`dither_fs`)                 | 25.82     | 49.68       |     6.06 |
+| 🟧 | ham_convert | ocs32 (`dither_fs`)               | 24.42     | 37.70       |     6.08 |
+| 🟧 | abc         | lores d=5 (`-floyd`, `-bpc 5`)    | 25.35     | 36.32       |     2.30 |
+| 🟧 | ffmpeg      | 32 (`palettegen`+FS)†             | 23.74     | 31.72       |     0.06 |
+| 🟧 | pngnq       | 32 (NeuQuant + FS, `-s 1`)†       | 25.76     | 30.81       |     0.17 |
+| 🟧 | Netpbm      | pnmquant 32 (`-floyd`)†           | 23.96     | 30.08       |     0.53 |
+| 🟧 | didder      | 32 (`mmcq`+FS edm serpentine)†    | 22.56     | 22.19       |     0.10 |
+| 🟧 | ImageMagick | 32 (`-dither FS`)†                | 23.41     | 21.90       |     0.40 |
+| 🟧 | gifsicle    | 32 (`--dither floyd-steinberg`)†  | 20.84     | 15.70       |     0.18 |
 
 † None of the general-purpose quantizers (pngquant, ImageMagick,
 Netpbm, ffmpeg, gifsicle, pngnq, didder) expose a "force one slot,
