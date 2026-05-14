@@ -431,6 +431,8 @@ Result<CopperResult> encode_copper(const Image& image,
     //   d7:   K+3=6 worst 4*6   = 24  → fails, K+2/K+1 depend on clustering
     //   d8:   same as d7 (8 banks, K<=B unsaturated)
     // OCS base K=14 already saturates the budget (1 MOVE per change), no room.
+    int aga_speculatives_done = 0;
+    constexpr float kPerSlot = 0.25f;
     if (override_changes == 0 && chipset == amiga::Chipset::aga) {
         // Stretch passes are NOT silent — at d=7/8 the planner may need
         // to run up to 3 full encodes to find a K that fits the MOVE
@@ -440,15 +442,13 @@ Result<CopperResult> encode_copper(const Image& image,
         //   attempt 0 (bump=3): [0.00, 0.25]
         //   attempt 1 (bump=2): [0.25, 0.50]
         //   attempt 2 (bump=1): [0.50, 0.75]
-        //   accepted replay:    [last_hi, 1.00]
+        //   accepted replay / fall-through to base K: [last_hi, 1.00]
         // Suppress the inner "done" so the speculative pass doesn't
         // collapse the bar to 100% before the next slot opens.
-        int attempts_done = 0;
-        constexpr float kPerSlot = 0.25f;
         for (std::size_t bump = 3; bump >= 1; --bump) {
             auto stretch_k = base_k + bump;
             if (stretch_k > max_swappable) continue;
-            float slot_lo = static_cast<float>(attempts_done) * kPerSlot;
+            float slot_lo = static_cast<float>(aga_speculatives_done) * kPerSlot;
             float slot_hi = slot_lo + kPerSlot;
             std::function<void(float, std::string_view)> stretch_progress;
             if (on_progress) {
@@ -470,13 +470,14 @@ Result<CopperResult> encode_copper(const Image& image,
                                          /*quantizer_override=*/std::nullopt,
                                          sliced_beam);
             if (!stretch) return std::unexpected{stretch.error()};
-            ++attempts_done;
+            ++aga_speculatives_done;
             if (stretch->max_moves_per_line <= move_budget) {
                 // Replay the accepted K, mapping its progress into the
                 // remainder of the bar so the user sees a continuous
                 // sweep from where the last speculative ended up to 100%.
                 if (on_progress) {
-                    float replay_lo = static_cast<float>(attempts_done) * kPerSlot;
+                    float replay_lo = static_cast<float>(aga_speculatives_done)
+                                    * kPerSlot;
                     auto replay_progress = [outer = on_progress, replay_lo]
                                             (float p, std::string_view s) {
                         if (s == "done") { outer(1.0f, s); return; }
@@ -497,6 +498,19 @@ Result<CopperResult> encode_copper(const Image& image,
                 return stretch;
             }
             // Stretch overshot — try the next-smaller bump, or fall through.
+        }
+        // Fall-through: no speculative K fit, run base_k inline below.
+        // Rescale the inline body's progress into the remaining bar
+        // [aga_speculatives_done * kPerSlot, 1.0] so we don't reset to 0%.
+        if (on_progress && aga_speculatives_done > 0) {
+            float body_lo = static_cast<float>(aga_speculatives_done) * kPerSlot;
+            on_progress = [outer = std::move(on_progress), body_lo]
+                           (float p, std::string_view s) {
+                if (s == "done") { outer(1.0f, s); return; }
+                outer(body_lo + (1.0f - body_lo)
+                              * std::clamp(p, 0.0f, 1.0f),
+                      s);
+            };
         }
     }
 
