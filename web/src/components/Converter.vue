@@ -2501,7 +2501,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <div v-if="!(isCgaText(options.mode) && options.cgaTextMetric !== 'mse')"
+              <div v-if="!(isCgaText(options.mode) && options.cgaTextMetric !== 'mse')
+                          && options.mode !== 'c64-petscii'"
                 class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Dithering algorithm. Ordered methods use fixed patterns; error diffusion propagates quantization error to neighbors.">Dither</label>
                 <div class="col-8">
