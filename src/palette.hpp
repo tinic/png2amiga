@@ -765,8 +765,8 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
         // sRGB sums kept for the AGA fallback path.
         std::array<Color3f, kBaseN> sum_B_s{}, sum_H_s{};
 
-        for (std::size_t i = 0; i < image_pixels.size(); ++i) {
-            auto t = oklab_of(image_pixels[i]);
+        for (auto image_pixel : image_pixels) {
+            auto t = oklab_of(image_pixel);
             std::size_t best = 0;
             float best_d = std::numeric_limits<float>::infinity();
             for (std::size_t k = 0; k < 64; ++k) {
@@ -778,7 +778,7 @@ inline void refine_ehb_base_palette(std::span<Color3f> base_colors,
                 float d  = color_space::fma_dist_sq(dL, da, db);
                 if (d < best_d) { best_d = d; best = k; }
             }
-            auto s = color_space::linear_to_srgb(image_pixels[i]).clamped();
+            auto s = color_space::linear_to_srgb(image_pixel).clamped();
             if (best < kBaseN) {
                 sum_B_lab[best].L += t.L;
                 sum_B_lab[best].a += t.a;

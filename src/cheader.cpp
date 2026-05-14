@@ -1930,8 +1930,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         msg += "\\033[1;33m";  // bold yellow banner
         msg += "                 ___            _\\n";
         msg += "  _ __ _ _  __ _|_  )__ _ _ __ (_)__ _ __ _\\n";
-        msg += " | '_ \\\\ ' \\\\/ _` |/ // _` | '  \\\\| / _` / _` |\\n";
-        msg += " | .__/_||_\\\\__, /___\\\\__,_|_|_|_|_\\\\__, \\\\__,_|\\n";
+        msg += R"( | '_ \\ ' \\/ _` |/ // _` | '  \\| / _` / _` |\n)";
+        msg += R"( | .__/_||_\\__, /___\\__,_|_|_|_|_\\__, \\__,_|\n)";
         msg += " |_|       |___/                 |___/\\n";
         msg += "\\033[0m";
         msg += "\\n";
@@ -1963,7 +1963,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                strips_words * 2);
         }
         msg += "\\n";
-        msg += "  \\033[36mhttps://www.png2amiga.app\\033[0m\\n";
+        msg += R"(  \033[36mhttps://www.png2amiga.app\033[0m\n)";
         msg += "\\n";
 
         // Use DOSBase->Write(Output(), msg, len) via proto/dos.h

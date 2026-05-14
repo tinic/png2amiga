@@ -243,9 +243,9 @@ inline std::vector<Color3f> global_blur_3x3(
 template <std::size_t W, std::size_t H>
 struct CellTaps {
     struct T { std::uint8_t q; float w; };
-    std::array<std::array<T, 9>, W * H> taps;
+    std::array<std::array<T, 9>, W * H> taps{};
 
-    constexpr CellTaps() : taps{} {
+    constexpr CellTaps()  {
         for (std::size_t py = 0; py < H; ++py) {
             for (std::size_t px = 0; px < W; ++px) {
                 std::size_t out = py * W + px;

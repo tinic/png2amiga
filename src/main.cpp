@@ -295,7 +295,7 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
         out += "],\"pins\":[";
         for (std::size_t i = 0; i < cfg.pins.size(); ++i) {
             auto& p = cfg.pins[i];
-            out += std::format("{}{{\"idx\":{},\"x\":{},\"y\":{}}}",
+            out += std::format(R"({}{{"idx":{},"x":{},"y":{}}})",
                                i == 0 ? "" : ",", p.index, p.x, p.y);
         }
         // chipset: explicit if user passed --chipset, else "ocs".
@@ -309,7 +309,7 @@ inline void cli_dump_palette(std::span<const Color3f> colors,
             if (params.bitplane_depth > 6) chipset_str = "aga";
         }
         out += std::format(
-            "],\"depth\":{},\"chipset\":\"{}\",\"mode\":\"{}\"}}",
+            R"(],"depth":{},"chipset":"{}","mode":"{}"}})",
             cfg.depth, chipset_str, mode_to_options_string(cfg.mode));
         std::println("{}", out);
     }
@@ -1299,14 +1299,17 @@ Result<Config> parse_args(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         auto arg = std::string_view(argv[i]);
 
+        // arg parsing runs before any worker threads spawn, so the
+        // textbook mt-safety concern (other threads' destructors not
+        // running) doesn't apply here.
         if (arg == "--help" || arg == "-h") {
             print_usage();
-            std::exit(0);
+            std::exit(0);  // NOLINT(concurrency-mt-unsafe)
         }
 
         if (arg == "--version" || arg == "-V") {
             print_version();
-            std::exit(0);
+            std::exit(0);  // NOLINT(concurrency-mt-unsafe)
         }
 
         if (arg == "--match-range") {
@@ -2172,10 +2175,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.quantize_from = std::string(val);
             }
             else if (arg == "--joint-input" || arg == "--ji") {
-                config.joint_inputs.push_back(std::string(val));
+                config.joint_inputs.emplace_back(val);
             }
             else if (arg == "--output-each" || arg == "--oe") {
-                config.output_each.push_back(std::string(val));
+                config.output_each.emplace_back(val);
             }
             else if (arg == "--mask") {
                 config.mask_path = std::string(val);
@@ -2269,7 +2272,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
     if (config.input_path.empty() && config.strips_probe.empty() &&
         !config.list_modes && !config.list_dithers) {
         print_usage();
-        std::exit(exit_code::usage);
+        std::exit(exit_code::usage);  // NOLINT(concurrency-mt-unsafe)
     }
 
     // strips post-parse fixup. Three supported configurations:
@@ -2376,13 +2379,15 @@ InlineImageProtocol detect_inline_image_protocol() {
     auto contains = [](const char* hay, const char* needle) {
         return hay && std::strstr(hay, needle) != nullptr;
     };
+    // Terminal-protocol detection runs once during CLI init, before any
+    // encoder threads spawn. No concurrent setenv races to worry about.
     auto set = [](const char* name) {
-        auto v = std::getenv(name);
+        auto v = std::getenv(name);  // NOLINT(concurrency-mt-unsafe)
         return v && *v;
     };
 
-    auto term = std::getenv("TERM");
-    auto term_program = std::getenv("TERM_PROGRAM");
+    auto term = std::getenv("TERM");                  // NOLINT(concurrency-mt-unsafe)
+    auto term_program = std::getenv("TERM_PROGRAM");  // NOLINT(concurrency-mt-unsafe)
 
     // Kitty / Ghostty — both speak the Kitty graphics protocol.
     if (contains(term, "kitty"))         return InlineImageProtocol::kitty;
@@ -9375,7 +9380,7 @@ int run_main(int argc, char* argv[]) {
         // FADE_DUMP_DIR=/some/dir to emit one PNG per fade frame
         // (frame_000.png … frame_NNN.png) rendered via the same
         // path the sixel preview animator uses.
-        if (auto* dump_dir = std::getenv("FADE_DUMP_DIR")) {
+        if (auto* dump_dir = std::getenv("FADE_DUMP_DIR")) {  // NOLINT(concurrency-mt-unsafe)
             const auto fw = image->width();
             const auto fh = image->height();
             for (std::size_t f = 0; f < fade_sequence.size(); ++f) {
@@ -9883,7 +9888,7 @@ int run_main(int argc, char* argv[]) {
             }
             return out;
         };
-        std::println("{{\"input\":\"{}\",\"output\":\"{}\",\"status\":\"ok\"}}",
+        std::println(R"({{"input":"{}","output":"{}","status":"ok"}})",
                      js_escape(config->input_path),
                      js_escape(config->output_path));
     }

@@ -50,8 +50,8 @@ Format detect_format(std::span<const std::uint8_t> data) {
 
     // JSON: first non-whitespace character is `{` or `[`. Matches the
     // single-line dump produced by --print-palette-json.
-    for (std::size_t i = 0; i < data.size(); ++i) {
-        char c = static_cast<char>(data[i]);
+    for (unsigned char i : data) {
+        char c = static_cast<char>(i);
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
         if (c == '{' || c == '[') return Format::json;
         break;

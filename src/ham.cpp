@@ -1723,8 +1723,8 @@ std::vector<HamSwap> find_ham_swaps(
         auto encode_one_row = [&](std::span<const Color3f> r) {
             SRGBColor p = ps.empty() ? SRGBColor{0, 0, 0} : ps[0];
             float err = 0.0f;
-            for (std::size_t x = 0; x < r.size(); ++x) {
-                auto res = encode_ham_pixel_impl(p, r[x], pre,
+            for (auto x : r) {
+                auto res = encode_ham_pixel_impl(p, x, pre,
                                             std::span<const SRGBColor>{ps});
                 err += res.error;
                 p = res.result_color;

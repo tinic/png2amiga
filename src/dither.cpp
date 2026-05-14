@@ -1419,8 +1419,7 @@ DitherResult apply_riemersma(
 
     float ec = error_clamp_val;
 
-    for (std::size_t i = 0; i < curve.size(); ++i) {
-        auto [x, y] = curve[i];
+    for (auto [x, y] : curve) {
         auto idx = static_cast<std::size_t>(y) * w + static_cast<std::size_t>(x);
 
         // Sum the queue with exponential weights — newest at qhead-1.

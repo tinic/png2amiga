@@ -1344,8 +1344,8 @@ Result<ScapResult> encode_strips_dpf_ocs(const Image& image,
                 -> std::span<const color_space::OKLab> {
                 auto s = static_cast<std::size_t>(x_strip[x]);
                 auto& pl_lab = strip_pal_lab_per_row[y][s];
-                return std::span<const color_space::OKLab>(
-                    pl_lab.data(), kBaseColors);
+                return {
+                    pl_lab.data(), kBaseColors};
             });
         for (std::size_t y = 0; y < height; ++y) {
             for (std::size_t x = 0; x < width; ++x) {
@@ -2616,8 +2616,8 @@ Result<ScapResult> encode_strips_ehb_ocs(const Image& image,
                 -> std::span<const color_space::OKLab> {
                 auto s = static_cast<std::size_t>(x_strip[x]);
                 auto& eff_lab = strip_eff_lab_per_row[y][s];
-                return std::span<const color_space::OKLab>(
-                    eff_lab.data(), kEffective);
+                return {
+                    eff_lab.data(), kEffective};
             });
         for (std::size_t y = 0; y < height; ++y) {
             for (std::size_t x = 0; x < width; ++x) {

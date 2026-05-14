@@ -807,17 +807,17 @@ Result<CopperResult> encode_copper(const Image& image,
             float w = (dy == 0) ? 1.0f : std::pow(decay, static_cast<float>(dy));
             if (dy == 0) {
                 rows.push_back(row);
-                rows_lab.push_back(all_lab[y]);
+                rows_lab.emplace_back(all_lab[y]);
                 weights.push_back(w);
             } else {
                 if (y >= dy) {
                     rows.push_back(image.row(y - dy));
-                    rows_lab.push_back(all_lab[y - dy]);
+                    rows_lab.emplace_back(all_lab[y - dy]);
                     weights.push_back(w);
                 }
                 if (y + dy < height) {
                     rows.push_back(image.row(y + dy));
-                    rows_lab.push_back(all_lab[y + dy]);
+                    rows_lab.emplace_back(all_lab[y + dy]);
                     weights.push_back(w);
                 }
             }

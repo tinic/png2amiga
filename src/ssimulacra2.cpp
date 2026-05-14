@@ -425,7 +425,7 @@ inline float32x4_t fast_cbrt_v(float32x4_t x) noexcept {
     // outside the SIMD pipe.)
     alignas(16) std::uint32_t bits[4];
     vst1q_u32(bits, xi);
-    for (int j = 0; j < 4; ++j) bits[j] = bits[j] / 3u + 0x2A510554u;
+    for (unsigned int & bit : bits) bit = bit / 3u + 0x2A510554u;
     float32x4_t y = vreinterpretq_f32_u32(vld1q_u32(bits));
     const float32x4_t v_two       = vdupq_n_f32(2.0f);
     const float32x4_t v_one_third = vdupq_n_f32(1.0f / 3.0f);
@@ -1010,14 +1010,14 @@ double final_score(const std::vector<ScaleScores>& scales) {
     double ssim = 0.0;
     std::size_t i = 0;
     for (std::size_t c = 0; c < 3; ++c) {
-        for (std::size_t s = 0; s < scales.size(); ++s) {
+        for (const auto & scale : scales) {
             for (std::size_t n = 0; n < 2; ++n) {
                 ssim += kWeights[i++] *
-                        std::abs(scales[s].ssim_pair[c * 2 + n]);
+                        std::abs(scale.ssim_pair[c * 2 + n]);
                 ssim += kWeights[i++] *
-                        std::abs(scales[s].edgediff_pair[c * 4 + n]);
+                        std::abs(scale.edgediff_pair[c * 4 + n]);
                 ssim += kWeights[i++] *
-                        std::abs(scales[s].edgediff_pair[c * 4 + n + 2]);
+                        std::abs(scale.edgediff_pair[c * 4 + n + 2]);
             }
         }
     }
