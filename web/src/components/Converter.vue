@@ -2457,9 +2457,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- C64 mode only: per-cell error metric. Mirrors png2c64 — all
-                   three operate in sRGB (display space). -->
-              <div v-if="options.chipset === 'c64'" class="grid align-items-center">
+              <!-- PETSCII only: per-cell error metric. Other c64 modes
+                   accept the parameter for API symmetry but ignore it
+                   (encode_multicolor / hires / fli / afli / charset
+                   all use a fixed sRGB MSE-nearest pick) — surfacing
+                   it would imply a toggle that does nothing. -->
+              <div v-if="options.mode === 'c64-petscii'" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold"
                   title="Per-cell error metric for C64 brute-force scoring. Blur = Pappas-Neuhoff perceptual blur (default). MSE = per-pixel sRGB squared error. SSIM = structural similarity. Try them — they pick noticeably different outputs.">
                   Metric
