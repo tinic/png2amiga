@@ -5,3 +5,6 @@ dist/
 playwright-report/
 test-results/
 .playwright/
+AGENTS.md
+logo.h
+logo_mask.h
