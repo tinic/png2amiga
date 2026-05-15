@@ -2273,12 +2273,12 @@ Result<EncodeResult> encode_petscii(const Image& image_in,
                 for (std::size_t p = 0; p < kPetCellN; ++p) {
                     const float a = gp.a[p];
                     const float ma = 1.0f - a;
-                    K1.L = std::fma(blurred[p].L, a, K1.L);
-                    K1.a = std::fma(blurred[p].a, a, K1.a);
-                    K1.b = std::fma(blurred[p].b, a, K1.b);
-                    K2.L = std::fma(blurred[p].L, ma, K2.L);
-                    K2.a = std::fma(blurred[p].a, ma, K2.a);
-                    K2.b = std::fma(blurred[p].b, ma, K2.b);
+                    K1.L = PNG2AMIGA_FMA(blurred[p].L, a, K1.L);
+                    K1.a = PNG2AMIGA_FMA(blurred[p].a, a, K1.a);
+                    K1.b = PNG2AMIGA_FMA(blurred[p].b, a, K1.b);
+                    K2.L = PNG2AMIGA_FMA(blurred[p].L, ma, K2.L);
+                    K2.a = PNG2AMIGA_FMA(blurred[p].a, ma, K2.a);
+                    K2.b = PNG2AMIGA_FMA(blurred[p].b, ma, K2.b);
                 }
                 K1_cg[cell_idx][g] = K1;
                 K2_cg[cell_idx][g] = K2;

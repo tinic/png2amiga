@@ -443,7 +443,7 @@ Palette ocs_bruteforce_quantize(std::span<const Color3f> pixels,
                     const float db = entries_w[i].b - cbw;
                     const float d = png2amiga::color_space::fma_dist_sq(dL, da, db);
                     const float effective = std::min(d, best_dist[i]);
-                    total = std::fma(effective, entries_weight[i], total);
+                    total = PNG2AMIGA_FMA(effective, entries_weight[i], total);
                 }
                 bool cand_gray = is_gray_code(candidate);
                 bool strictly_better = total < lb.best_total - kTieEps;

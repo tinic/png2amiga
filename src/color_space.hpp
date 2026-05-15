@@ -9,6 +9,21 @@
 #include <span>
 #include <vector>
 
+// Native (x86_64 + ARM64) compilers emit a hardware FMA for std::fma at
+// -ffp-contract=fast. WASM doesn't — Emscripten lowers std::fma to a
+// libm `fmaf` libcall (no f32 FMA in the base WASM ISA; the relaxed-
+// SIMD f32x4.relaxed_madd is only the SIMD form). The scalar libcall
+// ate 25.9% of active CPU on an AGA d=8 sliced encode in the Linux
+// Node profile (May 2026, AMD EPYC 7413). On WASM, use plain
+// `a*b + c` — -ffp-contract=fast still permits the compiler to FMA-
+// fuse where the target supports it; on WASM where it doesn't, two
+// cheap mul/add ops beat a libcall.
+#if defined(__EMSCRIPTEN__) || defined(__wasm__)
+    #define PNG2AMIGA_FMA(a, b, c) ((a) * (b) + (c))
+#else
+    #define PNG2AMIGA_FMA(a, b, c) std::fma((a), (b), (c))
+#endif
+
 // Backend select for fast_cbrt4 — mirrors quantize.cpp: WASM SIMD on
 // Emscripten, NEON on AArch64, SSE2 on x86 (covers both MSVC and x86
 // GCC/Clang). Scalar fallback covers everything else.
@@ -304,9 +319,9 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     _mm_store_ps(out, lmsc);
     float l = out[0], m = out[1], s = out[2];
     return {
-        std::fma(0.2104542553f, l, std::fma(0.7936177850f, m, -0.0040720468f * s)),
-        std::fma(1.9779984951f, l, std::fma(-2.4285922050f, m, 0.4505937099f * s)),
-        std::fma(0.0259040371f, l, std::fma(0.7827717662f, m, -0.8086757660f * s)),
+        PNG2AMIGA_FMA(0.2104542553f, l, PNG2AMIGA_FMA(0.7936177850f, m, -0.0040720468f * s)),
+        PNG2AMIGA_FMA(1.9779984951f, l, PNG2AMIGA_FMA(-2.4285922050f, m, 0.4505937099f * s)),
+        PNG2AMIGA_FMA(0.0259040371f, l, PNG2AMIGA_FMA(0.7827717662f, m, -0.8086757660f * s)),
     };
 }
 
@@ -425,9 +440,9 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     vst1q_f32(out, lmsc);
     float l = out[0], m = out[1], s = out[2];
     return {
-        std::fma(0.2104542553f, l, std::fma(0.7936177850f, m, -0.0040720468f * s)),
-        std::fma(1.9779984951f, l, std::fma(-2.4285922050f, m, 0.4505937099f * s)),
-        std::fma(0.0259040371f, l, std::fma(0.7827717662f, m, -0.8086757660f * s)),
+        PNG2AMIGA_FMA(0.2104542553f, l, PNG2AMIGA_FMA(0.7936177850f, m, -0.0040720468f * s)),
+        PNG2AMIGA_FMA(1.9779984951f, l, PNG2AMIGA_FMA(-2.4285922050f, m, 0.4505937099f * s)),
+        PNG2AMIGA_FMA(0.0259040371f, l, PNG2AMIGA_FMA(0.7827717662f, m, -0.8086757660f * s)),
     };
 }
 
@@ -552,9 +567,9 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     wasm_v128_store(out, lmsc);
     float l = out[0], m = out[1], s = out[2];
     return {
-        std::fma(0.2104542553f, l, std::fma(0.7936177850f, m, -0.0040720468f * s)),
-        std::fma(1.9779984951f, l, std::fma(-2.4285922050f, m, 0.4505937099f * s)),
-        std::fma(0.0259040371f, l, std::fma(0.7827717662f, m, -0.8086757660f * s)),
+        PNG2AMIGA_FMA(0.2104542553f, l, PNG2AMIGA_FMA(0.7936177850f, m, -0.0040720468f * s)),
+        PNG2AMIGA_FMA(1.9779984951f, l, PNG2AMIGA_FMA(-2.4285922050f, m, 0.4505937099f * s)),
+        PNG2AMIGA_FMA(0.0259040371f, l, PNG2AMIGA_FMA(0.7827717662f, m, -0.8086757660f * s)),
     };
 }
 
@@ -581,7 +596,7 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
 // the scalar entry point so all callers route through one definition.
 [[gnu::always_inline]]
 inline float fma_dist_sq(float dx, float dy, float dz) noexcept {
-    return std::fma(dx, dx, std::fma(dy, dy, dz * dz));
+    return PNG2AMIGA_FMA(dx, dx, PNG2AMIGA_FMA(dy, dy, dz * dz));
 }
 
 [[gnu::always_inline]]
@@ -591,17 +606,18 @@ inline float fma_dist_sq(OKLab a, OKLab b) noexcept {
 
 [[gnu::always_inline]]
 inline double fma_dist_sq(double dx, double dy, double dz) noexcept {
-    return std::fma(dx, dx, std::fma(dy, dy, dz * dz));
+    return PNG2AMIGA_FMA(dx, dx, PNG2AMIGA_FMA(dy, dy, dz * dz));
 }
 
 // 3-coefficient FMA dot product: c0*x0 + c1*x1 + c2*x2. Used by the OKLab
 // matrix-row computations (3 rows of 3 mul-adds each, twice over for
 // linear<->OKLab). Two std::fma calls + one mul = 3 ops vs the naive
 // 3 mul + 2 add = 5 ops; same throughput on FMA hardware but tighter
-// rounding and better port pressure.
+// rounding and better port pressure. (WASM: routed through PNG2AMIGA_FMA
+// to dodge the fmaf libcall.)
 [[gnu::always_inline]]
 inline float fma_dot3(float c0, float x0, float c1, float x1, float c2, float x2) noexcept {
-    return std::fma(c0, x0, std::fma(c1, x1, c2 * x2));
+    return PNG2AMIGA_FMA(c0, x0, PNG2AMIGA_FMA(c1, x1, c2 * x2));
 }
 
 // 4-lane cube root for OKLab LMS conversion (lane 3 is padding).
@@ -891,9 +907,9 @@ inline OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
 
 inline Color3f oklab_to_linear(OKLab lab) noexcept {
     // Inverse OKLab matrix: L + c1*a + c2*b shape, fold via nested fma.
-    float l_ = std::fma(0.3963377774f, lab.a, std::fma(0.2158037573f, lab.b, lab.L));
-    float m_ = std::fma(-0.1055613458f, lab.a, std::fma(-0.0638541728f, lab.b, lab.L));
-    float s_ = std::fma(-0.0894841775f, lab.a, std::fma(-1.2914855480f, lab.b, lab.L));
+    float l_ = PNG2AMIGA_FMA(0.3963377774f, lab.a, PNG2AMIGA_FMA(0.2158037573f, lab.b, lab.L));
+    float m_ = PNG2AMIGA_FMA(-0.1055613458f, lab.a, PNG2AMIGA_FMA(-0.0638541728f, lab.b, lab.L));
+    float s_ = PNG2AMIGA_FMA(-0.0894841775f, lab.a, PNG2AMIGA_FMA(-1.2914855480f, lab.b, lab.L));
 
     float l = l_ * l_ * l_;
     float m = m_ * m_ * m_;

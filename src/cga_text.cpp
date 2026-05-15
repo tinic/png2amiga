@@ -788,7 +788,7 @@ Result<CgaTextResult> encode(const Image& image,
                 // pair-min over 8-lane (AVX2) / 4-lane (WASM) bg vectors.
                 alignas(32) std::array<float, 16> A;
                 for (std::size_t c = 0; c < 16; ++c)
-                    A[c] = std::fma(K5, pal_norm[c], -2.0f * dot_K2[c]);
+                    A[c] = PNG2AMIGA_FMA(K5, pal_norm[c], -2.0f * dot_K2[c]);
                 const float K3_x2 = 2.0f * K3;
 
 #if PNG2AMIGA_CGA_TEXT_SIMD_AVX2
@@ -805,7 +805,7 @@ Result<CgaTextResult> encode(const Image& image,
                     __m256 best_err_v = _mm256_set1_ps(best.err);
                     __m256i best_fgbg_v = _mm256_setzero_si256();
                     for (std::uint8_t fg = 0; fg < 16; ++fg) {
-                        const float C_fg = std::fma(K4, pal_norm[fg], K0 - 2.0f * dot_K1[fg]);
+                        const float C_fg = PNG2AMIGA_FMA(K4, pal_norm[fg], K0 - 2.0f * dot_K1[fg]);
                         const __m256 vC_fg = _mm256_set1_ps(C_fg);
                         const auto& pal_dot_fg = pal_dot[fg];
                         const __m256i fg_lane = _mm256_set1_epi32(fg << 8);
@@ -877,7 +877,7 @@ Result<CgaTextResult> encode(const Image& image,
                             best_fgbg_v = wasm_v128_bitselect(cur, best_fgbg_v, lt);
                         };
                     for (std::uint8_t fg = 0; fg < 16; ++fg) {
-                        const float C_fg = std::fma(K4, pal_norm[fg], K0 - 2.0f * dot_K1[fg]);
+                        const float C_fg = PNG2AMIGA_FMA(K4, pal_norm[fg], K0 - 2.0f * dot_K1[fg]);
                         const v128_t vC_fg = wasm_f32x4_splat(C_fg);
                         const auto& pal_dot_fg = pal_dot[fg];
                         const v128_t fg_lane = wasm_i32x4_splat(fg << 8);
@@ -911,10 +911,10 @@ Result<CgaTextResult> encode(const Image& image,
                 }
 #else
                 for (std::uint8_t fg = 0; fg < 16; ++fg) {
-                    const float C_fg = std::fma(K4, pal_norm[fg], K0 - 2.0f * dot_K1[fg]);
+                    const float C_fg = PNG2AMIGA_FMA(K4, pal_norm[fg], K0 - 2.0f * dot_K1[fg]);
                     const auto& pal_dot_fg = pal_dot[fg];
                     for (std::uint8_t bg = 0; bg < 16; ++bg) {
-                        const float err = std::fma(K3_x2, pal_dot_fg[bg], C_fg + A[bg]);
+                        const float err = PNG2AMIGA_FMA(K3_x2, pal_dot_fg[bg], C_fg + A[bg]);
                         if (err < best.err) {
                             best.err = err;
                             best.ch = cand.ch;

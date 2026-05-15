@@ -3744,6 +3744,26 @@ int write_amiga_output(AmigaOutputBundle& out) {
     auto& path = out.output_path;
     auto aga = (out.chipset == amiga::Chipset::aga);
 
+    // --mask-layout sanity check: warn loudly if the user set it but the
+    // chosen output format/state can't emit a mask. Formats that honor
+    // it: .bpl / .raw / .bin / .h. Source must actually have alpha.
+    if (!out.mask_layout.empty()) {
+        bool mask_format =
+            ends_with(path, ".bpl") || ends_with(path, ".raw") || ends_with(path, ".bin") ||
+            ends_with(path, ".h");
+        if (!mask_format) {
+            std::println(stderr,
+                         "warning: --mask-layout '{}' is ignored — '{}' format doesn't carry a "
+                         "transparency mask (use .bpl / .raw / .bin / .h to embed one)",
+                         out.mask_layout, path);
+        } else if (!out.has_transparency || out.transparency_mask.empty()) {
+            std::println(stderr,
+                         "warning: --mask-layout '{}' set but the source image has no "
+                         "transparency — nothing to embed",
+                         out.mask_layout);
+        }
+    }
+
     auto build_ch_opts = [&]() {
         auto ch = pipeline::make_ch_opts({
             .output_path = path,
@@ -3809,12 +3829,40 @@ int write_amiga_output(AmigaOutputBundle& out) {
         // the mode default (e.g. 320). Sliced / strips paths are gated
         // against tile, so their planes.width already matches display_w
         // and the previously-present pad call was a no-op.
+        std::vector<std::uint8_t> mask_bytes;
+        bool want_mask = !out.mask_layout.empty()
+                      && out.has_transparency
+                      && !out.transparency_mask.empty()
+                      && out.planes.height > 0
+                      && out.planes.bytes_per_row > 0;
+        if (want_mask) {
+            mask_bytes = build_mask_plane(out.transparency_mask,
+                                          out.planes.width,
+                                          out.planes.height,
+                                          out.planes.bytes_per_row,
+                                          out.mask_invert);
+            ch.mask_plane = mask_bytes;
+            ch.mask_layout = out.mask_layout;
+            // --mask-layout 'replicated' / 'appended' describe a single
+            // interleaved bitplane stream (kingcon `-Interleaved -Mask`
+            // for "replicated", `-Interleaved` + trailing mask for
+            // "appended"). The whole point is that the blitter can DMA
+            // it straight; emitting separate _plane0[]/..._mask[]
+            // arrays would lose that property. Force the cheader
+            // emitter into interleaved mode whenever --mask-layout is
+            // set so the .h output matches the layout's semantics.
+            ch.interleaved = true;
+        }
         auto r = cheader::save(path, out.planes, out.cmap_palette, out.mode, ch);
         if (!r) {
             std::println(stderr, "C header write error: {}", r.error().message);
             return exit_code::cant_create;
         }
-        cli_status("Header:   {}", path);
+        if (want_mask) {
+            cli_status("Header:   {} (interleaved, mask: {})", path, out.mask_layout);
+        } else {
+            cli_status("Header:   {}", path);
+        }
         return 0;
     }
 

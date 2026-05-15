@@ -107,6 +107,22 @@ struct CHeaderOptions {
     std::vector<std::vector<std::uint16_t>> fade_per_frame_values;
     int fade_frame_hold_vbls = 3;
     bool fade_ping_pong = true;  // false → wrap last → first
+
+    // Optional transparency mask, pre-packed into 1bpp big-endian bits
+    // matching planes.bytes_per_row × planes.height. Empty span = no
+    // mask emitted (the .h ends with just the bitplane arrays).
+    //
+    // Layout semantics mirror the raw .bpl writer's --mask-layout:
+    //   "replicated" + interleaved: mask row is injected after EVERY
+    //                                bitplane row inside the single
+    //                                interleaved array (kingcon's
+    //                                blitter A=image / B=mask shape).
+    //   "appended" + interleaved:   one mask row appended after each
+    //                                scanline's bitplane group.
+    //   any layout + non-interleaved: emit a separate `<sym>_mask[]`
+    //                                array of height × words-per-row.
+    std::span<const std::uint8_t> mask_plane;
+    std::string_view mask_layout;
 };
 
 // ---------------------------------------------------------------------------

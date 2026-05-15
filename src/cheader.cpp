@@ -158,29 +158,68 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
 
     auto words_per_row = planes.bytes_per_row / 2;
 
+    // Mask plane is sized to bytes_per_row × height (callers build it
+    // via build_mask_plane). When emitting interleaved + a layout, the
+    // mask weaves into the single _planes[] array per --mask-layout
+    // semantics; otherwise (separate planes, or no layout specified)
+    // it lands in a dedicated _mask[] array further down.
+    auto fetch_row_word = [&](std::size_t plane, std::size_t y, std::size_t w) {
+        auto offset = planes.plane_row_offset(plane, y);
+        auto byte_off = offset + w * 2;
+        auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
+        auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
+        return static_cast<std::uint16_t>((hi << 8) | lo);
+    };
+    auto fetch_mask_word = [&](std::size_t y, std::size_t w) {
+        auto byte_off = y * planes.bytes_per_row + w * 2;
+        auto hi = static_cast<std::uint16_t>(options.mask_plane[byte_off]);
+        auto lo = static_cast<std::uint16_t>(options.mask_plane[byte_off + 1]);
+        return static_cast<std::uint16_t>((hi << 8) | lo);
+    };
+
+    bool have_mask = !options.mask_plane.empty()
+                  && options.mask_plane.size() >= planes.bytes_per_row * planes.height;
+    bool weave_mask_in_planes = have_mask && options.interleaved && !options.mask_layout.empty();
+    bool replicated_layout = options.mask_layout == "replicated";
+
     if (options.interleaved) {
         // Single interleaved array: all planes for row 0, then row 1, etc.
+        // When weaving the mask in:
+        //   replicated → each plane row is followed by a mask row.
+        //   appended   → one mask row appended after each scanline group.
         out += std::format("const UWORD {}_planes[] = {{\n", sym);
 
-        auto words_per_interleaved_row = words_per_row * planes.depth;
-        auto total_words = words_per_interleaved_row * planes.height;
+        std::size_t per_row_planes = planes.depth;
+        if (weave_mask_in_planes) per_row_planes += replicated_layout ? planes.depth : 1;
+        auto total_words = words_per_row * per_row_planes * planes.height;
         std::size_t word_count = 0;
 
         for (std::size_t y = 0; y < planes.height; ++y) {
             out += std::format("    /* row {} */\n", y);
             for (std::size_t p = 0; p < planes.depth; ++p) {
                 out += "    ";
-                auto offset = planes.plane_row_offset(p, y);
                 for (std::size_t w = 0; w < words_per_row; ++w) {
-                    auto byte_off = offset + w * 2;
-                    auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
-                    auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
-                    auto word = static_cast<std::uint16_t>((hi << 8) | lo);
                     ++word_count;
-                    out += std::format("0x{:04X}", word);
-                    if (word_count < total_words) {
-                        out += ",";
+                    out += std::format("0x{:04X}", fetch_row_word(p, y, w));
+                    if (word_count < total_words) out += ",";
+                }
+                out += "\n";
+                if (weave_mask_in_planes && replicated_layout) {
+                    out += "    ";
+                    for (std::size_t w = 0; w < words_per_row; ++w) {
+                        ++word_count;
+                        out += std::format("0x{:04X}", fetch_mask_word(y, w));
+                        if (word_count < total_words) out += ",";
                     }
+                    out += "\n";
+                }
+            }
+            if (weave_mask_in_planes && !replicated_layout) {
+                out += "    ";
+                for (std::size_t w = 0; w < words_per_row; ++w) {
+                    ++word_count;
+                    out += std::format("0x{:04X}", fetch_mask_word(y, w));
+                    if (word_count < total_words) out += ",";
                 }
                 out += "\n";
             }
@@ -197,23 +236,36 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
 
             for (std::size_t y = 0; y < planes.height; ++y) {
                 out += "    ";
-                auto offset = planes.plane_row_offset(p, y);
                 for (std::size_t w = 0; w < words_per_row; ++w) {
-                    auto byte_off = offset + w * 2;
-                    auto hi = static_cast<std::uint16_t>(planes.data[byte_off]);
-                    auto lo = static_cast<std::uint16_t>(planes.data[byte_off + 1]);
-                    auto word = static_cast<std::uint16_t>((hi << 8) | lo);
                     ++word_count;
-                    out += std::format("0x{:04X}", word);
-                    if (word_count < total_words) {
-                        out += ",";
-                    }
+                    out += std::format("0x{:04X}", fetch_row_word(p, y, w));
+                    if (word_count < total_words) out += ",";
                 }
                 out += "\n";
             }
 
             out += "};\n\n";
         }
+    }
+
+    // Standalone mask array — emitted whenever a mask was supplied but
+    // we didn't weave it into an interleaved planes[] (separate-plane
+    // layout, OR interleaved with no specific mask_layout).
+    if (have_mask && !weave_mask_in_planes) {
+        out += std::format("#define {}_HAS_MASK 1\n", SYM);
+        out += std::format("const UWORD {}_mask[] = {{\n", sym);
+        auto total_words = words_per_row * planes.height;
+        std::size_t word_count = 0;
+        for (std::size_t y = 0; y < planes.height; ++y) {
+            out += "    ";
+            for (std::size_t w = 0; w < words_per_row; ++w) {
+                ++word_count;
+                out += std::format("0x{:04X}", fetch_mask_word(y, w));
+                if (word_count < total_words) out += ",";
+            }
+            out += "\n";
+        }
+        out += "};\n\n";
     }
 
     // Palette as OCS 12-bit RGB values (0x0RGB)

@@ -118,6 +118,12 @@ if(EMSCRIPTEN)
         -flto
         -msimd128
         -pthread
+        # Preserve C++ function names in the .wasm so V8's --prof
+        # output and Linux perf jitdump emit readable symbols instead
+        # of wasm-function[NNN] opaque indices. Strips DWARF, keeps
+        # just the WASM name section. Negligible perf impact, ~15 KB
+        # extra in the .wasm.
+        --profiling-funcs
         -sALLOW_MEMORY_GROWTH=1
         -sEXPORT_ES6=1
         -sMODULARIZE=1

@@ -145,7 +145,7 @@ inline void min_dist_update(
         float dL = soa.L[i] - cL;
         float da = soa.a[i] - ca;
         float db = soa.b[i] - cb;
-        float d = std::fma(dL, dL, std::fma(da, da, db * db));
+        float d = PNG2AMIGA_FMA(dL, dL, PNG2AMIGA_FMA(da, da, db * db));
         if (d < pixel_min[i]) pixel_min[i] = d;
     }
 #endif
@@ -262,12 +262,12 @@ inline double dist_min2_sum(const StripPixelsSoA& soa,
         float pL = soa.L[i], pa = soa.a[i], pb = soa.b[i];
         float best = pixel_min_excl[i];
         float dL = pL - bL, da = pa - ba, db = pb - bb;
-        float d = std::fma(dL, dL, std::fma(da, da, db * db));
+        float d = PNG2AMIGA_FMA(dL, dL, PNG2AMIGA_FMA(da, da, db * db));
         if (d < best) best = d;
         dL = pL - hL;
         da = pa - ha;
         db = pb - hb;
-        d = std::fma(dL, dL, std::fma(da, da, db * db));
+        d = PNG2AMIGA_FMA(dL, dL, PNG2AMIGA_FMA(da, da, db * db));
         if (d < best) best = d;
         e += static_cast<double>(best);
     }
@@ -335,7 +335,7 @@ inline double dist_min1_sum(
     double e = 0;
     for (std::size_t i = 0; i < soa.valid_n; ++i) {
         float dL = soa.L[i] - cL, da = soa.a[i] - ca, db = soa.b[i] - cb;
-        float d = std::fma(dL, dL, std::fma(da, da, db * db));
+        float d = PNG2AMIGA_FMA(dL, dL, PNG2AMIGA_FMA(da, da, db * db));
         float best = pixel_min_excl[i];
         if (d < best) best = d;
         e += static_cast<double>(best);
