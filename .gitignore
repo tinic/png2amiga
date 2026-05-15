@@ -47,3 +47,6 @@ test.cpp
 .!*
 /examples/tile/out/
 tools/mode_survey.txt
+AGENTS.md
+/logo.h
+/logo_mask.h
