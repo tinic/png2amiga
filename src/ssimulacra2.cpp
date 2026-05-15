@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 // SIMD backend selection — same gates as src/quantize.cpp.
@@ -448,6 +449,27 @@ inline float32x4_t fast_cbrt_v(float32x4_t x) noexcept {
 }
 #endif
 
+// SIMD fast_cbrt for WASM SIMD 4-lane: bit-trick seed plus 2 Newton
+// iterations. Keep the seed bit-division scalar, matching the AVX2/NEON
+// implementations above, then run the refinement in SIMD.
+#if PNG2AMIGA_BACKEND_WASM_SIMD
+inline v128_t fast_cbrt_v(v128_t x) noexcept {
+    alignas(16) std::uint32_t bits[4];
+    wasm_v128_store(bits, x);
+    for (std::uint32_t& bit : bits)
+        bit = bit / 3u + 0x2A510554u;
+    v128_t y = wasm_v128_load(bits);
+    const v128_t v_two = wasm_f32x4_splat(2.0f);
+    const v128_t v_one_third = wasm_f32x4_splat(1.0f / 3.0f);
+    for (int it = 0; it < 2; ++it) {
+        v128_t yy = wasm_f32x4_mul(y, y);
+        v128_t xydiv = wasm_f32x4_div(x, yy);
+        y = wasm_f32x4_mul(wasm_f32x4_add(wasm_f32x4_mul(v_two, y), xydiv), v_one_third);
+    }
+    return y;
+}
+#endif
+
 // SIMD fast_cbrt for AVX2 8-lane / NEON 4-lane: bit-trick seed plus 2
 // Newton iterations. Same accuracy (~5e-7 over [0, 1.5]) as the
 // scalar version, just batched.
@@ -621,6 +643,50 @@ void to_xyb_planes(const std::vector<Color3f>& src,
         vst1q_f32(py + i, vy);
         vst1q_f32(pb + i, vb);
     }
+#elif PNG2AMIGA_BACKEND_WASM_SIMD
+    const v128_t v_kBias = wasm_f32x4_splat(kBias);
+    const v128_t v_kBiasCbrt = wasm_f32x4_splat(kBiasCbrt);
+    const v128_t c_L_r = wasm_f32x4_splat(0.30f);
+    const v128_t c_L_g = wasm_f32x4_splat(0.622f);
+    const v128_t c_L_b = wasm_f32x4_splat(0.078f);
+    const v128_t c_M_r = wasm_f32x4_splat(0.23f);
+    const v128_t c_M_g = wasm_f32x4_splat(0.692f);
+    const v128_t c_M_b = wasm_f32x4_splat(0.078f);
+    const v128_t c_S_r = wasm_f32x4_splat(0.243422f);
+    const v128_t c_S_g = wasm_f32x4_splat(0.204162f);
+    const v128_t c_S_b = wasm_f32x4_splat(0.552416f);
+    const v128_t v_half = wasm_f32x4_splat(0.5f);
+    const v128_t v_55 = wasm_f32x4_splat(0.55f);
+    const v128_t v_14 = wasm_f32x4_splat(14.0f);
+    const v128_t v_42 = wasm_f32x4_splat(0.42f);
+    const v128_t v_01 = wasm_f32x4_splat(0.01f);
+    const std::size_t simd_end = n & ~3u;
+    for (; i < simd_end; i += 4) {
+        v128_t r = wasm_f32x4_make(ps[i + 0].r, ps[i + 1].r, ps[i + 2].r, ps[i + 3].r);
+        v128_t g = wasm_f32x4_make(ps[i + 0].g, ps[i + 1].g, ps[i + 2].g, ps[i + 3].g);
+        v128_t b = wasm_f32x4_make(ps[i + 0].b, ps[i + 1].b, ps[i + 2].b, ps[i + 3].b);
+        v128_t L = wasm_f32x4_add(
+            wasm_f32x4_mul(c_L_b, b),
+            wasm_f32x4_add(wasm_f32x4_mul(c_L_g, g), wasm_f32x4_mul(c_L_r, r)));
+        v128_t M = wasm_f32x4_add(
+            wasm_f32x4_mul(c_M_b, b),
+            wasm_f32x4_add(wasm_f32x4_mul(c_M_g, g), wasm_f32x4_mul(c_M_r, r)));
+        v128_t S = wasm_f32x4_add(
+            wasm_f32x4_mul(c_S_b, b),
+            wasm_f32x4_add(wasm_f32x4_mul(c_S_g, g), wasm_f32x4_mul(c_S_r, r)));
+        v128_t Lp = wasm_f32x4_sub(fast_cbrt_v(wasm_f32x4_add(L, v_kBias)), v_kBiasCbrt);
+        v128_t Mp = wasm_f32x4_sub(fast_cbrt_v(wasm_f32x4_add(M, v_kBias)), v_kBiasCbrt);
+        v128_t Sp = wasm_f32x4_sub(fast_cbrt_v(wasm_f32x4_add(S, v_kBias)), v_kBiasCbrt);
+        v128_t vx = wasm_f32x4_mul(wasm_f32x4_sub(Lp, Mp), v_half);
+        v128_t vy = wasm_f32x4_mul(wasm_f32x4_add(Lp, Mp), v_half);
+        v128_t vb = Sp;
+        vb = wasm_f32x4_add(wasm_f32x4_sub(vb, vy), v_55);
+        vx = wasm_f32x4_add(wasm_f32x4_mul(vx, v_14), v_42);
+        vy = wasm_f32x4_add(vy, v_01);
+        wasm_v128_store(px + i, vx);
+        wasm_v128_store(py + i, vy);
+        wasm_v128_store(pb + i, vb);
+    }
 #endif
     for (; i < n; ++i) {
         auto p = linear_to_xyb(ps[i]);
@@ -713,6 +779,36 @@ AvgPair ssim_plane(const AlignedFloatVec& mu1,
         sum1 += tmp1[j] + tmp1h[j];
         sum4 += tmp4[j] + tmp4h[j];
     }
+#elif PNG2AMIGA_BACKEND_WASM_SIMD
+    const std::size_t simd_end = n & ~3u;
+    const v128_t v_one = wasm_f32x4_splat(1.0f);
+    const v128_t v_two = wasm_f32x4_splat(2.0f);
+    const v128_t v_kC2 = wasm_f32x4_splat(kC2);
+    const v128_t v_zero = wasm_f32x4_splat(0.0f);
+    alignas(16) float d_lanes[4];
+    for (; i < simd_end; i += 4) {
+        v128_t m1 = wasm_v128_load(p_m1 + i);
+        v128_t m2 = wasm_v128_load(p_m2 + i);
+        v128_t m11 = wasm_f32x4_mul(m1, m1);
+        v128_t m22 = wasm_f32x4_mul(m2, m2);
+        v128_t m12 = wasm_f32x4_mul(m1, m2);
+        v128_t dm = wasm_f32x4_sub(m1, m2);
+        v128_t num_m = wasm_f32x4_sub(v_one, wasm_f32x4_mul(dm, dm));
+        v128_t num_s = wasm_f32x4_add(
+            wasm_f32x4_mul(v_two, wasm_f32x4_sub(wasm_v128_load(p_s12 + i), m12)), v_kC2);
+        v128_t denom_s = wasm_f32x4_add(
+            wasm_f32x4_add(wasm_f32x4_sub(wasm_v128_load(p_s11 + i), m11),
+                           wasm_f32x4_sub(wasm_v128_load(p_s22 + i), m22)),
+            v_kC2);
+        v128_t t = wasm_f32x4_div(wasm_f32x4_mul(num_m, num_s), denom_s);
+        v128_t d = wasm_f32x4_max(wasm_f32x4_sub(v_one, t), v_zero);
+        wasm_v128_store(d_lanes, d);
+        for (float lane : d_lanes) {
+            double dl = static_cast<double>(lane);
+            sum1 += dl;
+            sum4 += tothe4th(dl);
+        }
+    }
 #endif
     for (; i < n; ++i) {
         float m1 = p_m1[i], m2 = p_m2[i];
@@ -796,6 +892,37 @@ EdgeDiff edgediff_plane(const AlignedFloatVec& img1,
     r4 = hsum(acc_r4_lo, acc_r4_hi);
     b1 = hsum(acc_b1_lo, acc_b1_hi);
     b4 = hsum(acc_b4_lo, acc_b4_hi);
+#elif PNG2AMIGA_BACKEND_WASM_SIMD
+    const std::size_t simd_end = n & ~3u;
+    const v128_t v_one = wasm_f32x4_splat(1.0f);
+    const v128_t v_zero = wasm_f32x4_splat(0.0f);
+    const v128_t v_abs = wasm_i32x4_splat(0x7FFFFFFF);
+    alignas(16) float art_lanes[4], lost_lanes[4];
+    for (; i < simd_end; i += 4) {
+        v128_t i1 = wasm_v128_load(p_i1 + i);
+        v128_t m1v = wasm_v128_load(p_m1 + i);
+        v128_t i2 = wasm_v128_load(p_i2 + i);
+        v128_t m2v = wasm_v128_load(p_m2 + i);
+        v128_t a1 = wasm_v128_and(wasm_f32x4_sub(i1, m1v), v_abs);
+        v128_t a2 = wasm_v128_and(wasm_f32x4_sub(i2, m2v), v_abs);
+        v128_t num = wasm_f32x4_sub(a2, a1);
+        v128_t denom = wasm_f32x4_add(v_one, a1);
+        v128_t d1 = wasm_f32x4_div(num, denom);
+        v128_t art = wasm_f32x4_max(d1, v_zero);
+        v128_t lost = wasm_f32x4_max(wasm_f32x4_sub(v_zero, d1), v_zero);
+        wasm_v128_store(art_lanes, art);
+        wasm_v128_store(lost_lanes, lost);
+        for (float lane : art_lanes) {
+            double dl = static_cast<double>(lane);
+            r1 += dl;
+            r4 += tothe4th(dl);
+        }
+        for (float lane : lost_lanes) {
+            double dl = static_cast<double>(lane);
+            b1 += dl;
+            b4 += tothe4th(dl);
+        }
+    }
 #endif
     for (; i < n; ++i) {
         double d1 = (1.0 + std::abs(static_cast<double>(p_i2[i] - p_m2[i]))) /
