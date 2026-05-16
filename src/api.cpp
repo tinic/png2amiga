@@ -1986,20 +1986,56 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     for (auto& c : all_dec) { r += c.r; g += c.g; bl += c.b; }
                     float inv = 1.0f / static_cast<float>(all_dec.size());
                     Color3f mean{r * inv, g * inv, bl * inv};
-                    // Variance = sum of squared per-pixel deviation from
-                    // the cell mean. Cells with low variance look like
-                    // a solid colour; high variance = visible per-pixel
-                    // chroma stripes / shimmer. Use OKLab distance² so
-                    // the metric is perceptual.
-                    auto mean_lab = color_space::linear_to_oklab(mean);
-                    float var = 0.0f;
-                    for (auto& c : all_dec) {
-                        auto lab = color_space::linear_to_oklab(c);
-                        float dL = lab.L - mean_lab.L;
-                        float da = lab.a - mean_lab.a;
-                        float db = lab.b - mean_lab.b;
-                        var += dL * dL + da * da + db * db;
+                    // Stripiness = (# FG↔BG bit transitions in the
+                    // visible glyph) × perceptual fg-bg distance². The
+                    // visible vertical-stripe effect IS the glyph
+                    // pattern showing through — every FG/BG transition
+                    // in the bit pattern, multiplied by how perceptually
+                    // far apart FG and BG are, predicts how prominent
+                    // the stripes will look. attr=AA (fg=bg=lt-green)
+                    // has fg-bg distance 0, so no glyph produces
+                    // stripes; attr=A2 (fg=green, bg=lt-green) has
+                    // moderate distance, so a pattern with 4 transitions
+                    // (e.g. char 0x22 = ") prints visible alternation.
+                    auto fg_lin = palette::cga_composite_palette()[fg];
+                    auto bg_lin = palette::cga_composite_palette()[bg];
+                    // Use solid-RGBI decoded colours (linear), not the
+                    // raw RGBI palette — matches what the cell shows
+                    // when FG / BG pixels stay solid for a stretch.
+                    auto fg_lab = color_space::linear_to_oklab(fg_lin);
+                    auto bg_lab = color_space::linear_to_oklab(bg_lin);
+                    float dL = fg_lab.L - bg_lab.L;
+                    float da = fg_lab.a - bg_lab.a;
+                    float db = fg_lab.b - bg_lab.b;
+                    float fg_bg_dist2 = dL * dL + da * da + db * db;
+                    // Count both horizontal (within-scanline) and
+                    // vertical (between-scanline) FG↔BG transitions.
+                    // Vertical pairs make the cell rows differ, which
+                    // shows as horizontal stripes; horizontal pairs
+                    // make adjacent columns differ → vertical stripes.
+                    // Both kinds are visible stripes the user sees.
+                    int transitions = 0;
+                    for (std::size_t sl = 0; sl < cell_h; ++sl) {
+                        auto glyph = palette::cga_glyph_scanline(
+                            static_cast<std::uint8_t>(ch), sl);
+                        for (std::size_t p = 0; p + 1 < cell_w; ++p) {
+                            bool a = (glyph & (0x80u >> p)) != 0;
+                            bool b = (glyph & (0x80u >> (p + 1))) != 0;
+                            if (a != b) ++transitions;
+                        }
                     }
+                    for (std::size_t sl = 0; sl + 1 < cell_h; ++sl) {
+                        auto g0 = palette::cga_glyph_scanline(
+                            static_cast<std::uint8_t>(ch), sl);
+                        auto g1 = palette::cga_glyph_scanline(
+                            static_cast<std::uint8_t>(ch), sl + 1);
+                        for (std::size_t p = 0; p < cell_w; ++p) {
+                            bool a = (g0 & (0x80u >> p)) != 0;
+                            bool b = (g1 & (0x80u >> p)) != 0;
+                            if (a != b) ++transitions;
+                        }
+                    }
+                    float var = static_cast<float>(transitions) * fg_bg_dist2;
                     cand.push_back({mean, var,
                         static_cast<std::uint16_t>((ch << 8) | attr)});
                 }
@@ -2078,7 +2114,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         //   score = oklab_dist²(source, cand_mean) + α · variance_per_px
         // Hard-coded α for now; if it turns out a useful knob it can
         // become an api/CLI option.
-        constexpr float kAlpha = 0.5f;
+        constexpr float kAlpha = 2.0f;
         const std::size_t cell_px = cell_w * cell_h;
         dither::Method dith_method = parse_dither(options.dither);
         std::vector<std::uint8_t> raw_frame(cols * rows * 2);
