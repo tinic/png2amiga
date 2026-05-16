@@ -37,6 +37,16 @@ namespace png2amiga::cga_text {
 
 namespace {
 
+// Blur-kernel dimensions for the per-cell glyph blur. Hoisted to the
+// namespace anonymous scope because GCC 14.2 ICEs when these are
+// declared inside the cga_text_convert() function and then captured
+// by a nested lambda — `gimplify_var_or_parm_decl` at gimplify.cc:3308
+// fails on the inner gauss1d's by-reference capture of the outer
+// function's `constexpr int`. GCC 15 and clang handle it fine; the
+// hoist costs us nothing.
+constexpr int kBlurKR = 3;             // half-width supports up to 7×7
+constexpr int kBlurKD = 2 * kBlurKR + 1;  // 7
+
 // ---------------------------------------------------------------------------
 // Per-mode default glyph-exclusion predicate — applied when the caller
 // doesn't pass an explicit `restrict_chars` span (i.e. the encoder would
@@ -429,15 +439,13 @@ Result<CgaTextResult> encode(const Image& image,
         //
         // Resolve auto_per_mode → concrete kernel choice.
         const Kernel kRes = resolve_kernel(kernel, mode);
-        constexpr int kKR = 3;            // half-width supports up to 7×7
-        constexpr int kKD = 2 * kKR + 1;  // 7
-        std::array<std::array<float, kKD>, kKD> kBlurKernel{};
+        std::array<std::array<float, kBlurKD>, kBlurKD> kBlurKernel{};
         auto fill_kernel = [&]() {
             for (auto& row : kBlurKernel)
                 row.fill(0.0f);
-            // Helper: emit a 1D Gaussian of size `n` (must be ≤ kKD), σ.
-            auto gauss1d = [&](int n, float sigma, std::array<float, kKD>& out) {
-                std::array<float, kKD> raw{};
+            // Helper: emit a 1D Gaussian of size `n` (must be ≤ kBlurKD), σ.
+            auto gauss1d = [&](int n, float sigma, std::array<float, kBlurKD>& out) {
+                std::array<float, kBlurKD> raw{};
                 int half = n / 2;
                 float sum = 0;
                 for (int i = 0; i < n; ++i) {
@@ -447,31 +455,31 @@ Result<CgaTextResult> encode(const Image& image,
                 }
                 for (int i = 0; i < n; ++i)
                     raw[static_cast<std::size_t>(i)] /= sum;
-                // Center into kKD slot at offset (kKR - half).
-                int off = kKR - half;
+                // Center into kBlurKD slot at offset (kBlurKR - half).
+                int off = kBlurKR - half;
                 for (auto& v : out)
                     v = 0.0f;
                 for (int i = 0; i < n; ++i)
                     out[static_cast<std::size_t>(off + i)] = raw[static_cast<std::size_t>(i)];
             };
             // Build separable kernel kBlurKernel[r][c] = ky[r] * kx[c].
-            auto sep_outer = [&](const std::array<float, kKD>& ky,
-                                 const std::array<float, kKD>& kx) {
-                for (std::size_t r = 0; r < kKD; ++r)
-                    for (std::size_t c = 0; c < kKD; ++c)
+            auto sep_outer = [&](const std::array<float, kBlurKD>& ky,
+                                 const std::array<float, kBlurKD>& kx) {
+                for (std::size_t r = 0; r < kBlurKD; ++r)
+                    for (std::size_t c = 0; c < kBlurKD; ++c)
                         kBlurKernel[r][c] = ky[r] * kx[c];
             };
-            std::array<float, kKD> ky{}, kx{};
-            // Center the 1D weights into the 7-slot array at offset kKR -
+            std::array<float, kBlurKD> ky{}, kx{};
+            // Center the 1D weights into the 7-slot array at offset kBlurKR -
             // half. Used by the binomial branch where we want the exact
             // [1,2,1]/4 weights (Gaussian approximation drifts from the
             // historical default).
-            auto place3 = [&](std::array<float, kKD>& dst, float a, float b, float c) {
+            auto place3 = [&](std::array<float, kBlurKD>& dst, float a, float b, float c) {
                 for (auto& v : dst)
                     v = 0.0f;
-                dst[static_cast<std::size_t>(kKR - 1)] = a;
-                dst[static_cast<std::size_t>(kKR)] = b;
-                dst[static_cast<std::size_t>(kKR + 1)] = c;
+                dst[static_cast<std::size_t>(kBlurKR - 1)] = a;
+                dst[static_cast<std::size_t>(kBlurKR)] = b;
+                dst[static_cast<std::size_t>(kBlurKR + 1)] = c;
             };
             switch (kRes) {
             case Kernel::aniso53:
@@ -519,20 +527,20 @@ Result<CgaTextResult> encode(const Image& image,
             std::uint8_t q;
             float w;
         };
-        constexpr std::size_t kKernTapN = static_cast<std::size_t>(kKD * kKD);  // 25
+        constexpr std::size_t kKernTapN = static_cast<std::size_t>(kBlurKD * kBlurKD);  // 25
         const std::size_t cell_n = 8 * cell_h;
         std::vector<std::array<Tap, kKernTapN>> kernel_taps(cell_n);
         for (std::size_t py = 0; py < cell_h; ++py) {
             for (std::size_t px = 0; px < 8; ++px) {
                 std::size_t p_out = py * 8 + px;
                 std::size_t k = 0;
-                for (int dy = -kKR; dy <= kKR; ++dy) {
+                for (int dy = -kBlurKR; dy <= kBlurKR; ++dy) {
                     int ny = std::clamp(static_cast<int>(py) + dy, 0, static_cast<int>(cell_h) - 1);
-                    for (int dx = -kKR; dx <= kKR; ++dx) {
+                    for (int dx = -kBlurKR; dx <= kBlurKR; ++dx) {
                         int nx = std::clamp(static_cast<int>(px) + dx, 0, 7);
                         kernel_taps[p_out][k++] = {static_cast<std::uint8_t>(ny * 8 + nx),
-                                                   kBlurKernel[static_cast<std::size_t>(dy + kKR)]
-                                                              [static_cast<std::size_t>(dx + kKR)]};
+                                                   kBlurKernel[static_cast<std::size_t>(dy + kBlurKR)]
+                                                              [static_cast<std::size_t>(dx + kBlurKR)]};
                     }
                 }
             }
