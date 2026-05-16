@@ -29,12 +29,19 @@ third_party/vscode-amiga-debug/.
 
 import gzip
 import os
+import re
 import subprocess
 import tempfile
 import shutil
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import sys
+
+# Matches the per-request scratch directory tempfile creates (random
+# 6+ chars after the prefix on Linux). Redacted from compiler stderr
+# before the response is sent so a user-facing error doesn't leak the
+# server's tempfile-prefix scheme.
+_TMPDIR_RE = re.compile(r"/tmp/png2amiga[a-z_]*[A-Za-z0-9]+")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -100,6 +107,13 @@ DOS_COMMAND = os.path.join(_DOS_BOOT_DIR, "COMMAND.COM")
 
 PORT = int(os.environ.get("PORT", "3001"))
 MAX_BODY = 5 * 1024 * 1024  # 5MB max source size
+# Hard cap on the compiler-produced binary that we'll ship back. The
+# Amiga adf is a fixed 901 120 bytes (880 KB), DOS .img is 737 280
+# (720 KB), DOS / Amiga .exe is bounded by what ia16-elf-gcc / m68k-
+# amiga-elf-gcc can emit in their 30 s timeout under the 512 M cgroup.
+# 8 MB clears every legitimate case with margin and bounds the per-
+# request response if a compile pathologically produces a giant binary.
+MAX_OUTPUT = 8 * 1024 * 1024
 
 
 def _sandbox(cmd, tmpdir, extra_binds=(), env=None):
@@ -228,7 +242,12 @@ def compile_dos_image(source_code):
         # Create a blank 720 KB image, then mformat with the FreeDOS
         # boot sector. mformat's -B reads the file once at startup
         # before any chroot — read-binding _DOS_BOOT_DIR is enough.
-        subprocess.run(["truncate", "-s", "737280", img_path], check=True)
+        # Use Python's own truncate so this stays inside the service's
+        # systemd-sandboxed process — every other subprocess in this
+        # function goes through bwrap, an external `truncate` call
+        # would be the lone exception that bypasses it.
+        with open(img_path, "wb") as f:
+            f.truncate(737280)
         subprocess.run(_sandbox(
             ["mformat", "-i", img_path, "-f", "720", "-B", DOS_BOOT12, "::"],
             tmpdir,
@@ -355,6 +374,7 @@ class CompileHandler(BaseHTTPRequestHandler):
             stderr = stderr.replace(GCC_DIR, "<toolchain>")
             if _DOS_ROOT:
                 stderr = stderr.replace(_DOS_ROOT, "<toolchain>")
+            stderr = _TMPDIR_RE.sub("<work>", stderr)
             self.wfile.write(f"Compile error:\n{stderr}".encode())
             return
         except Exception as e:
@@ -363,6 +383,20 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(b"Internal error")
+            return
+
+        # Defence-in-depth output cap. Legitimate outputs are bounded
+        # by the cross-compiler / linker behaviour and the 30 s + 512 M
+        # ceiling on the compile step; this catches pathological cases
+        # that slip through (e.g. a future toolchain that produces a
+        # giant binary inside the time budget) before they go on the
+        # wire. 8 MB > worst legitimate (880 KB adf / 720 KB img).
+        if len(result) > MAX_OUTPUT:
+            self.send_response(500)
+            self._cors_headers()
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Output too large")
             return
 
         ext = {"adf": "adf", "exe": "exe", "dos-exe": "exe", "dos-img": "img"}.get(fmt, "bin")
