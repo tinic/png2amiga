@@ -200,6 +200,20 @@ ModeSetup mode_setup(amiga::Mode m, std::uint8_t cga_mode_ctrl2) {
             "    outb(0x3D9, 0x{:02X});\n",
             cga_mode_ctrl2);
         break;
+    case Mode::cga_composite_hires:
+        s.bios_mode = 0x06;
+        // Mode 6 = CGA 640x200 1bpp, composite output. 0x3D8 bit 4
+        // (0x10) selects hires graphics; bit 1 = graphics; bit 3 =
+        // video enable; bit 2 = 0 keeps colour-burst on. 0x3D9 low
+        // nibble = foreground colour (RGBI 0..15). BG is fixed at
+        // black on CGA mode 6 (hardware can't override).
+        s.palette = std::format(
+            "    /* CGA mode register 0x3D8: hires graphics, colour burst on. */\n"
+            "    outb(0x3D8, 0x1A);\n"
+            "    /* CGA 0x3D9: foreground colour (low nibble) for mode 6. */\n"
+            "    outb(0x3D9, 0x{:02X});\n",
+            cga_mode_ctrl2 & 0x0F);
+        break;
     default:
         // Unsupported on the 16-bit path.
         s.bios_mode = -1;
@@ -779,11 +793,12 @@ Result<std::string> generate(amiga::Mode mode,
         }
         return generate_vga_planar(mode, width, height, raw_frame, palette, sym);
     }
-    if (mode != Mode::cga_320 && mode != Mode::cga_640 && mode != Mode::cga_composite) {
+    if (mode != Mode::cga_320 && mode != Mode::cga_640 &&
+        mode != Mode::cga_composite && mode != Mode::cga_composite_hires) {
         return std::unexpected{Error{ErrorCode::unsupported_mode,
                                      "cheader_dos_c: supported modes are cga_320 / cga_640 / "
-                                     "cga_composite / cga_text80x100 / ega_320 / ega_640 / "
-                                     "ega_hi / vga_13h / vga_10h / vga_12h"}};
+                                     "cga_composite / cga_composite_hires / cga_text80x100 / "
+                                     "ega_320 / ega_640 / ega_hi / vga_13h / vga_10h / vga_12h"}};
     }
     if (raw_frame.size() != 16384) {
         return std::unexpected{Error{
@@ -794,8 +809,10 @@ Result<std::string> generate(amiga::Mode mode,
     const char* mode_name = (mode == Mode::cga_320) ? "cga-320 (320x200x4)"
                             : (mode == Mode::cga_640)
                                 ? "cga-640 (640x200 mono)"
+                            : (mode == Mode::cga_composite_hires)
+                                ? "cga-composite-hires (640x200 1bpp NTSC)"
                                 :
-                                /*composite*/ "cga-composite (160x200x16 NTSC)";
+                                /*composite*/ "cga-composite (320x200x4 NTSC)";
 
     std::string out;
     out.reserve(raw_frame.size() * 6 + 2048);
@@ -847,9 +864,11 @@ std::vector<std::uint8_t> pack_cga_banked(std::span<const std::uint8_t> indices,
                                           std::size_t width,
                                           std::size_t height,
                                           amiga::Mode mode) {
-    bool is_mono = (mode == amiga::Mode::cga_640);
-    bool is_composite = amiga::is_composite(mode);
-    auto buffer_width = is_composite ? std::size_t{320} : width;
+    // cga_composite_hires is 1bpp at 640 wide — packs as monochrome.
+    bool is_mono = (mode == amiga::Mode::cga_640 ||
+                    mode == amiga::Mode::cga_composite_hires);
+    bool is_composite_lores = (mode == amiga::Mode::cga_composite);
+    auto buffer_width = is_composite_lores ? std::size_t{320} : width;
     auto row_bytes = buffer_width / (is_mono ? 8 : 4);
     std::vector<std::uint8_t> buf(16384, 0);
     for (std::size_t y = 0; y < height; ++y) {
@@ -863,7 +882,7 @@ std::vector<std::uint8_t> pack_cga_banked(std::span<const std::uint8_t> indices,
                     byte = static_cast<std::uint8_t>((byte << 1) |
                                                      (indices[y * width + x] != 0 ? 1 : 0));
                 }
-            } else if (is_composite) {
+            } else if (is_composite_lores) {
                 // 320 px × 2bpp = 4 pixels per byte, same layout as
                 // real CGA mode 04. Indices are 0..3 selecting one of
                 // the active palette variant's 4 RGBI colours.

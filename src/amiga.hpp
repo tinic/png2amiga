@@ -50,7 +50,8 @@ enum class Mode : unsigned char {
     // selects which of the fixed palette variants (0/1 × low/high intensity).
     cga_320,         // CGA 320x200, 4 colors from palette 0/1 × low/high
     cga_640,         // CGA 640x200, monochrome (bg + 1 fg)
-    cga_composite,   // CGA 160x200, 16 colors via NTSC composite artifacting
+    cga_composite,   // CGA 320x200 mode 04: 4-colour palette + NTSC artifact decoding
+    cga_composite_hires, // CGA 640x200 mode 06: 1bpp + NTSC artifact decoding (8088 MPH-style)
                      // (stored as 320x200 2bpp; pairs of 2bpp pixels form
                      //  a 4-bit pattern that the NTSC decoder interprets
                      //  as one of 16 colors — used by King's Quest,
@@ -271,6 +272,14 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         // ~140-colour artifact gamut. 16 KB banked framebuffer matches
         // real hardware (and the DOS .c viewer's expectation).
         return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
+    case Mode::cga_composite_hires:
+        // 640x200 hardware mode 06: 1bpp framebuffer at full chroma
+        // sample rate (no clock divisor). BG fixed (typically black),
+        // FG selectable from RGBI 0..15. The chroma cycle aligns 1:1
+        // with logical pixels (4 pixels per cycle = 16 unique 4-pixel
+        // patterns), giving precise control of the artifact gamut —
+        // this is the mode 8088 MPH uses for its colour scenes.
+        return {640, 200, 1, 2, false, false, true, false, 1, 2, 0.417f};
     // CGA text-mode hacks: glyphs selected per-cell, 16 fg x 16 bg attr.
     // Logical display is still 640x200; "depth" is conceptually the 4-bit
     // bg + 4-bit fg attr byte width (not a bitplane count). bitplane_depth
@@ -407,6 +416,7 @@ constexpr bool is_ega(Mode mode) noexcept {
 // Check if a mode is an IBM PC / DOS CGA mode
 constexpr bool is_cga(Mode mode) noexcept {
     return mode == Mode::cga_320 || mode == Mode::cga_640 || mode == Mode::cga_composite ||
+           mode == Mode::cga_composite_hires ||
            mode == Mode::cga_text80x100 || mode == Mode::cga_text80x50 ||
            mode == Mode::cga_text80x25 || mode == Mode::cga_text80x200 ||
            mode == Mode::cga_text40x200 || mode == Mode::cga_text40x100;
@@ -445,7 +455,7 @@ constexpr bool is_c64_charset(Mode mode) noexcept {
 // Affects encoding (pixel pairs → color) and should disable ordered/error
 // dithering in ways that break the artifact pattern.
 constexpr bool is_composite(Mode mode) noexcept {
-    return mode == Mode::cga_composite;
+    return mode == Mode::cga_composite || mode == Mode::cga_composite_hires;
 }
 
 // Check if the mode is a CGA text-mode graphics hack (glyph-per-cell).
