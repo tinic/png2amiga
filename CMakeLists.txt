@@ -66,6 +66,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/strips.cpp
     src/dither_tuning.cpp
     src/palette_locks.cpp
+    src/cga_composite.cpp
     src/cga_text.cpp
     src/cheader_dos_c.cpp
     src/cheader_genesis.cpp

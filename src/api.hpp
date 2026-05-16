@@ -345,6 +345,12 @@ struct Options {
     // "wide77". Only consumed by the blur metric.
     std::string cga_text_kernel = "auto";
 
+    // cga-composite: choose between pre-1983 IBM 5150 chroma-burst
+    // phase ("old", default) and the 1983+ revised card ("new"). All
+    // other analog-stage knobs (hue/sat/contrast/luma) stay at
+    // MartyPC's "stock CGA monitor" preset.
+    bool cga_composite_new_cga = false;
+
     // C64 / VIC-II palette selector. One of: pepto, vice, colodore
     // (default), deekay, godot, c64wiki, levy. Only affects c64-* modes;
     // ignored everywhere else. The VIC-II palette has no unique sRGB

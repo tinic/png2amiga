@@ -1,6 +1,7 @@
 #include "api.hpp"
 #include "amiga.hpp"
 #include "bitplane.hpp"
+#include "cga_composite.hpp"
 #include "cga_text.hpp"
 #include "cheader.hpp"
 #include "cheader_dos_c.hpp"
@@ -1433,6 +1434,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
+        // Composite-mode encoding: pick 4-bit RGBI pixel sequence per
+        // row whose Reenigne-NTSC decoder output best matches source
+        // (OKLab). The decoder is the same one MartyPC / DOSBox / 86Box
+        // use, so the preview matches what real hardware shows on an
+        // NTSC TV.
+        cga_composite::Params cp;
+        cp.new_cga = options.cga_composite_new_cga;
+        cp.cgamode = 0x0A;  // 320×200 graphics, colour-burst on
+        auto ctx = cga_composite::make_context(cp);
+
+        // 1) Pick per-pixel 4-bit RGBI patterns via Floyd-Steinberg
+        //    against the 16-colour RGBI palette (same as the old code).
+        //    The composite hardware emits this as a 2bpp bitstream
+        //    whatever we pick — we just want the choice that minimises
+        //    OKLab error against the source pixel.
         auto pal16 = palette::cga_composite_palette();
         std::vector<Color3f> pal_vec(pal16.begin(), pal16.end());
         dither::Settings dith;
@@ -1440,38 +1456,58 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
         auto dith_result = dither::apply(*image, pal_vec, dith);
+        auto w = image->width(), h = image->height();
+        std::vector<std::uint8_t> pixels_rgbi(dith_result.indices.begin(), dith_result.indices.end());
 
-        Image rendered(image->width(), image->height());
-        for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
-            rendered.pixels()[i] = pal_vec[dith_result.indices[i]];
+        // 2) Render the preview by running the encoded 2bpp pattern
+        //    through the Reenigne NTSC chroma multiplexer — what the
+        //    actual hardware shows on a composite monitor. The 16
+        //    discrete dither-target colours don't survive contact with
+        //    NTSC; alternating-blue → purple, etc.
+        Image rendered(w, h);
+        for (std::size_t y = 0; y < h; ++y) {
+            std::span<const std::uint8_t> row_in(pixels_rgbi.data() + y * w, w);
+            std::span<Color3f>            row_dec(rendered.pixels().data() + y * w, w);
+            cga_composite::decode_line(row_in, row_dec, ctx);
+        }
+        float total_error = 0.0f;
+        for (std::size_t i = 0; i < w * h; ++i) {
+            auto sl = color_space::linear_to_oklab(image->pixels()[i]);
+            auto dl = color_space::linear_to_oklab(rendered.pixels()[i]);
+            float dL = sl.L - dl.L, da = sl.a - dl.a, db = sl.b - dl.b;
+            total_error += dL * dL + da * da + db * db;
+        }
 
         // Pack into banked CGAPIC layout: 16KB total, even rows in 0x0000
         // bank, odd rows in 0x2000 bank. Each byte holds 2 composite pixels
         // (two 4-bit patterns).
-        auto w = image->width(), h = image->height();
         std::vector<std::uint8_t> raw(16384, 0);
         auto row_bytes = 320u / 4u;  // 80 bytes per row (2bpp, 4 px/byte)
         for (std::size_t y = 0; y < h; ++y) {
             auto bank = (y & 1) ? 0x2000u : 0x0000u;
             auto row_off = bank + (y >> 1) * row_bytes;
             for (std::size_t bx = 0; bx < row_bytes; ++bx) {
-                auto p0 = palette::cga_composite_pattern(dith_result.indices[y * w + bx * 2]);
-                auto p1 = palette::cga_composite_pattern(dith_result.indices[y * w + bx * 2 + 1]);
+                auto p0 = pixels_rgbi[y * w + bx * 2] & 0x0F;
+                auto p1 = pixels_rgbi[y * w + bx * 2 + 1] & 0x0F;
                 raw[row_off + bx] = static_cast<std::uint8_t>((p0 << 4) | p1);
             }
         }
 
         PipelineResult result;
         result.rendered = std::move(rendered);
+        // Palette is informational only for composite — the decoded
+        // colour at each pixel depends on neighbours and isn't a
+        // simple index lookup. Hand back the 16-entry classic-CGA RGBI
+        // set so IFF / .h consumers still see something sensible.
         result.palette = std::move(pal_vec);
-        result.indices = std::move(dith_result.indices);
+        result.indices = std::move(pixels_rgbi);
         result.planes.depth = 2;  // 2bpp packed
         result.mode = mode;
         result.hires = false;
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.finalize_psnr(*image, dith_result.total_error);
+        result.finalize_psnr(*image, total_error);
         result.raw_frame = std::move(raw);
         return result;
     }

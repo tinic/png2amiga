@@ -10,6 +10,7 @@
 #include "degas.hpp"
 #include "color_space.hpp"
 #include "console_color.hpp"
+#include "cga_composite.hpp"
 #include "cga_text.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
@@ -945,6 +946,8 @@ struct Config {
     float error_clamp = 0.35f;
     std::string cga_text_metric = "blur";
     std::string cga_text_kernel = "auto";
+    // cga-composite: pick chroma-burst phase. False = 1981 IBM 5150, true = 1983+.
+    bool cga_composite_new_cga = false;
 
     // Chipset
     std::optional<amiga::Chipset> chipset;  // empty = auto-detect from mode
@@ -1253,6 +1256,7 @@ void print_usage() {
         "  --cga-text-metric <m>           blur (default) | mse\n"
         "  --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |\n"
         "                                  aniso73 | aniso35 | aniso37 | wide55 | wide77\n"
+        "  --cga-composite-card <c>        old (1981 IBM, default) | new (1983+)\n"
         "  --c64-palette <p>               pepto | vice | colodore (default) |\n"
         "                                  deekay | godot | c64wiki | levy\n"
         "  --c64-metric <m>                blur (default) | mse\n"
@@ -2154,6 +2158,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                                           val)}};
                 }
                 config.cga_text_kernel = std::string(val);
+            } else if (arg == "--cga-composite-card") {
+                if (val == "old")      config.cga_composite_new_cga = false;
+                else if (val == "new") config.cga_composite_new_cga = true;
+                else return std::unexpected{Error{ErrorCode::unsupported_mode,
+                    std::format("--cga-composite-card expects 'old' or 'new', got '{}'", val)}};
             } else if (arg == "--refine") {
                 config.refine_iterations = std::stoi(std::string(val));
             } else if (arg == "--brightness") {
@@ -2814,6 +2823,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
     opts.cga_text_kernel = cfg.cga_text_kernel;
+    opts.cga_composite_new_cga = cfg.cga_composite_new_cga;
     opts.c64_palette = cfg.c64_palette;
     opts.c64_metric = cfg.c64_metric;
     opts.c64_petscii_graphics_only = cfg.c64_petscii_graphics_only;
@@ -9116,7 +9126,8 @@ int run_main(int argc, char* argv[]) {
                 // patterns regardless of any CGA register setting.
                 auto pal16 = palette::cga_composite_palette();
                 pal.colors.assign(pal16.begin(), pal16.end());
-                cli_status("Palette:  CGA composite, 16 colors (NTSC artifact, old CGA)");
+                cli_status("Palette:  CGA composite, 16 colors (NTSC artifact, {} CGA)",
+                           config->cga_composite_new_cga ? "new" : "old");
                 cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
             } else if (config->mode == amiga::Mode::cga_320) {
                 palette::CgaPalette best = palette::CgaPalette::p1_high;
@@ -9480,6 +9491,26 @@ int run_main(int argc, char* argv[]) {
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
+        }
+        // Composite preview: replace the plain palette-lookup render
+        // with the NTSC chroma-multiplexer output. The actual RGBI
+        // pattern that the dither / encoder picked is already in
+        // `dither_result.indices` — feeding it through cga_composite
+        // ::decode_line gives the user the colours an NTSC monitor
+        // would show, including the artifact purples/cyans that no
+        // 16-colour palette lookup can express.
+        if (config->mode == amiga::Mode::cga_composite && !dither_result.indices.empty()) {
+            cga_composite::Params cp;
+            cp.new_cga = config->cga_composite_new_cga;
+            cp.cgamode = 0x0A;
+            auto ctx = cga_composite::make_context(cp);
+            auto w = preview->width(), h = preview->height();
+            for (std::size_t y = 0; y < h; ++y) {
+                std::span<const std::uint8_t> row_in(
+                    dither_result.indices.data() + y * w, w);
+                std::span<Color3f> row_dec(preview->pixels().data() + y * w, w);
+                cga_composite::decode_line(row_in, row_dec, ctx);
+            }
         }
     }  // end if (!plain_best_done)
 
