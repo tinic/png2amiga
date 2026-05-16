@@ -40,10 +40,31 @@ test (recoil round-trip or --best sweep) bounds the wall.
 Other presets in `CMakePresets.json`:
 - `clang` — same shape, Apple/system clang → `build-clang/`
 - `debug` — `-O0`, assertions on → `build-debug/`
+- `msvc`  — Ninja + Release + MSVC `cl.exe` → `build-msvc/` (Windows only)
 
 Override compilers via `CC=… CXX=… cmake --preset default`. Existing
 `cmake -B build -DCMAKE_CXX_COMPILER=g++-15 .` invocations still work
 identically — the preset is an opt-in shortcut.
+
+### Windows / MSVC
+
+The `msvc` preset requires a developer-command-prompt environment so
+`cl.exe` is on PATH. The local install is VS 2026 Community at:
+
+```
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat
+```
+
+From PowerShell, wrap the build in `cmd /c` so vcvars64 + the build run
+in one shell — PowerShell can't source a batch file's env mutations:
+
+```powershell
+cmd /c '"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul && cmake --preset msvc && cmake --build build-msvc'
+```
+
+A bare `cmake --build build-msvc` from a non-developer shell will fail
+with `fatal error C1083: Cannot open include file: 'cstddef'` — that's
+the giveaway that vcvars64 wasn't loaded.
 
 ## Lint (clang-tidy + cppcheck)
 
