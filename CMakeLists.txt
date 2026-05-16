@@ -2376,7 +2376,7 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     _add_score_test(ham6-sliced   out.iff 73.6 --mode ham6 --sliced)
     _add_score_test(ham6-strips   out.iff 74.4 --mode ham6 --strips)
     _add_score_test(vga13h        out.iff 78.0 --mode vga-13h)
-    _add_score_test(ega320        out.iff -1.0 --mode ega-320)
+    _add_score_test(ega320        out.iff -4.0 --mode ega-320)
     _add_score_test(stf-low       out.pi1 25.1 --mode stf-low)
     _add_score_test(ste-low       out.pi1 36.1 --mode ste-low)
     _add_score_test(dpf           out.iff 11.0 --mode lores --dpf)

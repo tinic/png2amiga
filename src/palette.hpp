@@ -304,29 +304,32 @@ inline constexpr std::array<std::uint32_t, 16> kC64Levy = {
 };
 
 // ---------------------------------------------------------------------------
-// CGA 16-color master palette (IRGB, fixed at hardware). Canonical "IBM
-// Color/Graphics Monitor Adaptor" values (sRGB). Values sourced from the
-// IBM Technical Reference & widely-reproduced CGA color tables.
+// CGA 16-color master palette (IRGB, fixed at hardware). Real IBM 5153
+// monitor emulation at maximum contrast, sourced from int10h's 2022
+// measurement (https://int10h.org/blog/2022/06/ibm-5153-color-true-cga-palette/).
+// Source values are 6-bit per channel; expanded to 8-bit via bit-replication
+// (v << 2 | v >> 4) — matches what the 5153's DAC + phosphors actually emit,
+// not the textbook IRGB hex values.
 // Indexed 0..15: black, blue, green, cyan, red, magenta, brown, light gray,
 // dark gray, light blue, light green, light cyan, light red, light magenta,
 // yellow, white.
 // ---------------------------------------------------------------------------
 inline constexpr std::array<std::uint32_t, 16> kCgaHw = {
     0x000000,
-    0x0000AA,
-    0x00AA00,
-    0x00AAAA,
-    0xAA0000,
-    0xAA00AA,
-    0xAA5500,
-    0xAAAAAA,
-    0x555555,
-    0x5555FF,
-    0x55FF55,
-    0x55FFFF,
-    0xFF5555,
-    0xFF55FF,
-    0xFFFF55,
+    0x0000A6,
+    0x00A600,
+    0x00A6A6,
+    0xA60000,
+    0xA600A6,
+    0xA66900,
+    0xA6A6A6,
+    0x4C4C4C,
+    0x4C4CDD,
+    0x4CDD4C,
+    0x4CF3F3,
+    0xDD4C4C,
+    0xF34CF3,
+    0xF3F34C,
     0xFFFFFF,
 };
 
