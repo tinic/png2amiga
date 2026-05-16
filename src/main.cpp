@@ -318,6 +318,16 @@ inline void cli_print_dither(dither::Method method, float strength) {
     cli_status("Dither:   {} (strength: {:.2f})", dither_name(method), strength);
 }
 
+// Resolve the -1.0f sentinel that make_api_options() leaves in
+// dither_strength when the user didn't pass --dither-strength. The
+// encoder normally resolves it inside api::run_pipeline, but the CLI
+// status line gets printed BEFORE the encoder runs, so we need the
+// same dither_tuning lookup here.
+inline float resolved_dither_strength(const api::Options& opts) {
+    return opts.dither_strength >= 0.0f ? opts.dither_strength
+                                        : api::dither_defaults_for(opts).strength;
+}
+
 // Apply --transparent-color sentinel synthesis to an image: any
 // pixel matching one of the user's RGB triples gets alpha=0.
 // Existing alpha (PNG native) is preserved on non-matching pixels.
@@ -7173,7 +7183,7 @@ int run_main(int argc, char* argv[]) {
         // SNES Mode 7: 256-palette path has st.palette; Direct Color
         // (BBGGGRRR pixel bytes) carries color inline → palette empty.
         if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
-        cli_print_dither(config->dither_method, make_api_options(*config).dither_strength);
+        cli_print_dither(config->dither_method, resolved_dither_strength(make_api_options(*config)));
         cli_print_encoded_other(
             std::format("{} bytes (SNES Mode 7 frame, packed)", st.raw_frame.size()),
             static_cast<std::size_t>(count_unique_colors(st.rendered)),
@@ -7362,7 +7372,7 @@ int run_main(int argc, char* argv[]) {
                 }
             }
         }
-        cli_print_dither(genesis_dither, make_api_options(*config).dither_strength);
+        cli_print_dither(genesis_dither, resolved_dither_strength(make_api_options(*config)));
         // Tile-dedup stats. The "after dedup" tile count maps directly to
         // VRAM bytes (×32). Real Genesis VRAM is 64 KB total, with the
         // upper bound for plane-A title art around ~1280 tiles before
@@ -7774,10 +7784,7 @@ int run_main(int argc, char* argv[]) {
         // log line should reflect that. Builds aopts early just to read
         // the resolved strength; the real make_api_options call below
         // happens after transparency masking so this is a cheap probe.
-        {
-            auto probe_aopts = make_api_options(*config);
-            cli_print_dither(ham_dither, probe_aopts.dither_strength);
-        }
+        cli_print_dither(ham_dither, resolved_dither_strength(make_api_options(*config)));
 
         // Force transparent pixels to black before HAM encoding
         if (has_transparency) {
@@ -8186,7 +8193,7 @@ int run_main(int argc, char* argv[]) {
             std::format("32 base + 32 half-brite = 64 colors ({})",
                         resolve_quantizer_name(config->mode, chipset, config->quantizer)));
         cli_dump_palette(std::span<const Color3f>(st.palette), *config);
-        cli_print_dither(config->dither_method, aopts.dither_strength);
+        cli_print_dither(config->dither_method, resolved_dither_strength(aopts));
         cli_print_encoded(static_cast<int>(st.planes.depth),
                           static_cast<int>(st.planes.total_bytes()),
                           static_cast<int>(st.palette.size()),
