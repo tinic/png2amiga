@@ -1645,6 +1645,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.transparency_mask = tmask;
         result.finalize_psnr(*image, total_error);
         result.raw_frame = std::move(raw);
+        // 0x3D9 byte for the DOS viewer: bit5 = palette select (p0/p1),
+        // bit4 = intensity (low/high), bits 0-3 = bg (= 0). Without this
+        // the viewer leaves whatever palette the BIOS set in place and
+        // MartyPC interprets the 2bpp frame through the wrong 4 colours.
+        result.cga_mode_ctrl2 = static_cast<std::uint8_t>(best_var << 4);
         return result;
     }
 
@@ -5057,7 +5062,8 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
                 raw = result->raw_frame;
             else
                 raw = cheader_dos_c::pack_cga_banked(result->indices, w, h, mode);
-            if (mode == Mode::cga_320 && result->cga_mode_ctrl2 != 0xFF)
+            if ((mode == Mode::cga_320 || mode == Mode::cga_composite) &&
+                result->cga_mode_ctrl2 != 0xFF)
                 opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
         } else if (amiga::is_cga_text(mode)) {
             raw = result->raw_frame;  // char+attr pairs

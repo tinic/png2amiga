@@ -185,13 +185,20 @@ ModeSetup mode_setup(amiga::Mode m, std::uint8_t cga_mode_ctrl2) {
         break;
     case Mode::cga_composite:
         s.bios_mode = 0x04;
-        // Mode 4 = CGA 320x200 4-color. For composite NTSC artifact colors,
-        // we keep the color-burst enabled (mode register 0x3D8 bit 2 = 0) so
-        // the composite monitor's NTSC decoder picks up the chroma and
-        // produces the 16-color artifact palette. BIOS mode-set already
-        // leaves burst on; write it explicitly for idempotence.
-        s.palette = "    /* CGA mode register 0x3D8: clear bit 2 (color burst = on). */\n"
-                    "    outb(0x3D8, 0x0A);\n";
+        // Mode 4 = CGA 320x200 4-color, composite output. Two register
+        // writes: 0x3D8 to keep colour-burst on (NTSC chroma decoder
+        // produces the artifact palette), and 0x3D9 to pin the palette
+        // variant + intensity + bg the encoder quantized against. The
+        // BIOS leaves whatever the previous mode set in 0x3D9 — without
+        // an explicit write, MartyPC and real hardware interpret the
+        // 2bpp framebuffer through the wrong 4-colour palette.
+        s.palette = std::format(
+            "    /* CGA mode register 0x3D8: clear bit 2 (color burst = on). */\n"
+            "    outb(0x3D8, 0x0A);\n"
+            "    /* CGA 0x3D9: palette variant + intensity + bg from the\n"
+            "       encoder's auto-picked variant. */\n"
+            "    outb(0x3D9, 0x{:02X});\n",
+            cga_mode_ctrl2);
         break;
     default:
         // Unsupported on the 16-bit path.
