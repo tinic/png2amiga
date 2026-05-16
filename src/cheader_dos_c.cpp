@@ -710,9 +710,20 @@ Result<std::string> generate(amiga::Mode mode,
     using namespace amiga;
     auto sym = sanitize_symbol(options.symbol_name);
 
-    if (is_cga_text(mode)) {
-        std::size_t expected_cols = cga_text_cols(mode);
-        std::size_t expected_rows = cga_text_rows(mode);
+    // cga_composite_text80x{100,200} borrow the cga_text viewer (CRTC
+    // reprogram, mode 03 entry, blink-off mode 0x09 — same hardware
+    // setup); row count is encoded into the mode name.
+    bool is_composite_text = (mode == Mode::cga_composite_text80x100 ||
+                              mode == Mode::cga_composite_text80x200);
+    if (is_cga_text(mode) || is_composite_text) {
+        std::size_t expected_cols = 80;
+        std::size_t expected_rows;
+        if (mode == Mode::cga_composite_text80x100)      expected_rows = 100;
+        else if (mode == Mode::cga_composite_text80x200) expected_rows = 200;
+        else {
+            expected_cols = cga_text_cols(mode);
+            expected_rows = cga_text_rows(mode);
+        }
         std::size_t expected_bytes = expected_cols * expected_rows * 2;
         // 80x200 (32 KB) overflows the 16 KB CGA video RAM — refuse to
         // emit a viewer that would be silently broken (would display

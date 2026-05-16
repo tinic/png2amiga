@@ -172,6 +172,8 @@ const ALL_MODES: ModeOption[] = [
   { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
   { value: 'cga-composite',    label: 'CGA Composite (320x200)',       chipset: 'cga' },
   { value: 'cga-composite-hires', label: 'CGA Composite Hires (640x200)', chipset: 'cga' },
+  { value: 'cga-composite-text80x100', label: 'CGA Composite Text 80x100 (8088 MPH)', chipset: 'cga' },
+  { value: 'cga-composite-text80x200', label: 'CGA Composite Text 80x200 (32KB)', chipset: 'cga' },
   { value: 'cga-text80x200',   label: 'CGA Text 80x200 (32KB)', chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100 (16KB)', chipset: 'cga' },
   { value: 'cga-text80x50',    label: 'CGA Text 80x50 (8KB)',   chipset: 'cga' },
@@ -777,6 +779,8 @@ const MODE_PAR: Record<string, number> = {
   'cga-640':    0.417,
   'cga-composite': 0.833,
   'cga-composite-hires': 0.417,
+  'cga-composite-text80x100': 0.417,
+  'cga-composite-text80x200': 0.417,
   'cga-text80x200': 0.417,
   'cga-text80x100': 0.417,
   'cga-text80x50':  0.417,
@@ -838,7 +842,9 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'ega-320':         { sx: 2, sy: 2 },
   'vga-13h':         { sx: 2, sy: 2 },
   'cga-composite':   { sx: 2, sy: 2 },  // 320×200 → 640×400 → PAR ~640×480
-  'cga-composite-hires': { sx: 1, sy: 2 },  // 640×200 → 640×400 → PAR ~640×480
+  'cga-composite-hires':     { sx: 1, sy: 2 },  // 640×200 → 640×400 → PAR ~640×480
+  'cga-composite-text80x100':{ sx: 1, sy: 2 },  // 640×200 → 640×400 → PAR ~640×480
+  'cga-composite-text80x200':{ sx: 1, sy: 2 },
   'vga-12h':         { sx: 1, sy: 1 },
   'vga-10h':         { sx: 1, sy: 1 },
   'ega-hi':          { sx: 1, sy: 1 },
@@ -921,6 +927,7 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'stf-hi':  1, 'ste-hi':  1,
   'cga-640': 1,
   'cga-320': 2, 'cga-composite': 2, 'cga-composite-hires': 1,
+  'cga-composite-text80x100': 1, 'cga-composite-text80x200': 1,
   'vga-13h': 8,
 }
 

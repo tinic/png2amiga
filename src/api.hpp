@@ -351,6 +351,7 @@ struct Options {
     // MartyPC's "stock CGA monitor" preset.
     bool cga_composite_new_cga = false;
 
+
     // C64 / VIC-II palette selector. One of: pepto, vice, colodore
     // (default), deekay, godot, c64wiki, levy. Only affects c64-* modes;
     // ignored everywhere else. The VIC-II palette has no unique sRGB

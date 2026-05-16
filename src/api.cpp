@@ -2,6 +2,7 @@
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "cga_composite.hpp"
+#include "cga_glyph_access.hpp"
 #include "cga_text.hpp"
 #include "cheader.hpp"
 #include "cheader_dos_c.hpp"
@@ -91,6 +92,10 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "cga-640") return amiga::Mode::cga_640;
     if (s == "cga-composite") return amiga::Mode::cga_composite;
     if (s == "cga-composite-hires") return amiga::Mode::cga_composite_hires;
+    if (s == "cga-composite-text80x100" || s == "cga-composite-text")
+        return amiga::Mode::cga_composite_text80x100;
+    if (s == "cga-composite-text80x200")
+        return amiga::Mode::cga_composite_text80x200;
     if (s == "cga-text80x100") return amiga::Mode::cga_text80x100;
     if (s == "cga-text80x50") return amiga::Mode::cga_text80x50;
     if (s == "cga-text80x25") return amiga::Mode::cga_text80x25;
@@ -1894,6 +1899,196 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // colour in mode 6 (bg always black). Bits 4/5 are ignored
         // by the CGA in mode 6.
         result.cga_mode_ctrl2 = best_fg & 0x0F;
+        return result;
+    }
+
+    // ---- CGA composite text (80×N cells, NTSC artifact decoding) ----
+    // 8088 MPH's "1024 colours" trick: 80-column colour text mode with
+    // colour-burst on, CRTC reprogrammed for {1, 2, 4, 8}-scanline cells.
+    // The full glyph × attribute search produces an enormous artifact
+    // palette (~65 K (char, attr) candidates → ~1500–3500 perceptually
+    // distinct cell colours after dedup). Encode by dither::apply against
+    // this palette on a (80 × rows) cell-mean source image.
+    if (mode == amiga::Mode::cga_composite_text80x100 ||
+        mode == amiga::Mode::cga_composite_text80x200) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
+        const std::size_t rows =
+            (mode == amiga::Mode::cga_composite_text80x200) ? 200u : 100u;
+        const std::size_t cols = 80;
+        const std::size_t cell_h = 200 / rows;
+        const std::size_t cell_w = 8;
+
+        cga_composite::Params cp;
+        cp.new_cga = options.cga_composite_new_cga;
+        // 0x3D8 register value for 80-col colour text + enable + blink-off:
+        // bit 0 (80col) + bit 3 (enable). bit 2 = 0 → burst on. bit 5 = 0
+        // → bg uses full 4 bits of attr (no blink). bit 1 = 0 → text mode.
+        cp.cgamode = 0x09;
+        auto ctx = cga_composite::make_context(cp);
+
+        // ---- Build the artifact-decoded palette ----
+        // 256 chars × 256 attrs = 65 536 candidates. For each, render the
+        // glyph's top cell_h scanlines as an 8-wide RGBI row per scanline
+        // (FG / BG per bit), decode through the NTSC chroma multiplexer,
+        // and take the cell mean.
+        auto w = image->width(), h = image->height();
+        constexpr std::size_t kCands = 256u * 256u;
+        std::vector<Color3f>      cand_mean(kCands);
+        std::vector<std::uint16_t> cand_char_attr(kCands);  // (char<<8) | attr
+        {
+            std::vector<std::uint8_t> rgbi_row(cell_w);
+            std::vector<Color3f>      dec(cell_w);
+            std::size_t i = 0;
+            for (int ch = 0; ch < 256; ++ch) {
+                for (int attr = 0; attr < 256; ++attr) {
+                    std::uint8_t fg = static_cast<std::uint8_t>(attr & 0xF);
+                    std::uint8_t bg = static_cast<std::uint8_t>((attr >> 4) & 0xF);
+                    float r = 0, g = 0, bl = 0;
+                    for (std::size_t sl = 0; sl < cell_h; ++sl) {
+                        auto glyph = palette::cga_glyph_scanline(
+                            static_cast<std::uint8_t>(ch), sl);
+                        for (std::size_t p = 0; p < cell_w; ++p) {
+                            rgbi_row[p] = (glyph & (0x80u >> p)) ? fg : bg;
+                        }
+                        cga_composite::decode_line(rgbi_row, std::span<Color3f>(dec), ctx);
+                        for (auto& c : dec) { r += c.r; g += c.g; bl += c.b; }
+                    }
+                    float inv = 1.0f / static_cast<float>(cell_w * cell_h);
+                    cand_mean[i] = {r * inv, g * inv, bl * inv};
+                    cand_char_attr[i] = static_cast<std::uint16_t>((ch << 8) | attr);
+                    ++i;
+                }
+            }
+        }
+
+        // Dedupe perceptually (~5 JND bins) — same approach as the gamut
+        // analysis. Reduces ~65 K candidates to ~1.5–3.5 K unique cell
+        // colours, keeping the dither::apply nearest-search tractable.
+        struct DedupedEntry {
+            Color3f mean;
+            std::uint16_t char_attr;
+        };
+        std::vector<DedupedEntry> deduped;
+        deduped.reserve(8192);
+        {
+            // 8-level grid per channel = 512 bins.
+            std::unordered_set<std::uint32_t> seen;
+            seen.reserve(kCands);
+            for (std::size_t k = 0; k < kCands; ++k) {
+                auto srgb = color_space::linear_to_srgb(cand_mean[k]).clamped();
+                std::uint32_t r = static_cast<std::uint32_t>(
+                    std::clamp(int(srgb.r * 255 + 0.5f), 0, 255)) / 32;
+                std::uint32_t g = static_cast<std::uint32_t>(
+                    std::clamp(int(srgb.g * 255 + 0.5f), 0, 255)) / 32;
+                std::uint32_t b = static_cast<std::uint32_t>(
+                    std::clamp(int(srgb.b * 255 + 0.5f), 0, 255)) / 32;
+                std::uint32_t key = (r << 16) | (g << 8) | b;
+                if (seen.insert(key).second) {
+                    deduped.push_back({cand_mean[k], cand_char_attr[k]});
+                }
+            }
+        }
+        std::vector<Color3f> cell_pal;
+        cell_pal.reserve(deduped.size());
+        for (auto& e : deduped) cell_pal.push_back(e.mean);
+
+        // ---- Build the cell-mean source image (cols × rows) ----
+        Image cell_image(cols, rows);
+        for (std::size_t y = 0; y < rows; ++y) {
+            for (std::size_t cx = 0; cx < cols; ++cx) {
+                std::size_t x0 = cx * cell_w;
+                std::size_t y0 = y * cell_h;
+                float sr = 0, sg = 0, sb = 0;
+                for (std::size_t dy = 0; dy < cell_h; ++dy) {
+                    for (std::size_t dx = 0; dx < cell_w; ++dx) {
+                        auto& p = image->pixels()[(y0 + dy) * w + (x0 + dx)];
+                        sr += p.r; sg += p.g; sb += p.b;
+                    }
+                }
+                float inv = 1.0f / static_cast<float>(cell_w * cell_h);
+                cell_image[cx, y] = Color3f{sr * inv, sg * inv, sb * inv};
+            }
+        }
+
+        // ---- Dither against the deduped palette ----
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        auto cell_dither = dither::apply(
+            cell_image, std::span<const Color3f>(cell_pal), dith);
+
+        // ---- Char/attr buffer + indices for downstream ----
+        std::vector<std::uint8_t> raw_frame(cols * rows * 2);
+        for (std::size_t y = 0; y < rows; ++y) {
+            for (std::size_t cx = 0; cx < cols; ++cx) {
+                auto idx = cell_dither.indices[y * cols + cx];
+                auto ca = deduped[idx].char_attr;
+                raw_frame[(y * cols + cx) * 2 + 0] = static_cast<std::uint8_t>(ca >> 8);
+                raw_frame[(y * cols + cx) * 2 + 1] = static_cast<std::uint8_t>(ca & 0xFF);
+            }
+        }
+
+        // ---- Render preview through NTSC at full hardware resolution ----
+        Image rendered(w, h);
+        {
+            std::vector<std::uint8_t> rgbi_row(w);
+            for (std::size_t y = 0; y < h; ++y) {
+                std::size_t cell_y = y / cell_h;
+                std::size_t sl = y % cell_h;
+                for (std::size_t cx = 0; cx < cols; ++cx) {
+                    auto ca = static_cast<std::uint16_t>(
+                        (raw_frame[(cell_y * cols + cx) * 2] << 8) |
+                        raw_frame[(cell_y * cols + cx) * 2 + 1]);
+                    auto ch = static_cast<std::uint8_t>(ca >> 8);
+                    auto attr = static_cast<std::uint8_t>(ca & 0xFF);
+                    std::uint8_t fg = attr & 0xF;
+                    std::uint8_t bg = (attr >> 4) & 0xF;
+                    auto glyph = palette::cga_glyph_scanline(ch, sl);
+                    for (std::size_t p = 0; p < cell_w; ++p) {
+                        rgbi_row[cx * cell_w + p] =
+                            (glyph & (0x80u >> p)) ? fg : bg;
+                    }
+                }
+                std::span<const std::uint8_t> row_in(rgbi_row.data(), w);
+                std::span<Color3f> row_dec(rendered.pixels().data() + y * w, w);
+                cga_composite::decode_line(row_in, row_dec, ctx);
+            }
+        }
+
+        float total_error = 0.0f;
+        for (std::size_t i = 0; i < w * h; ++i) {
+            auto sl = color_space::linear_to_oklab(image->pixels()[i]);
+            auto dl = color_space::linear_to_oklab(rendered.pixels()[i]);
+            float dL = sl.L - dl.L, da = sl.a - dl.a, db = sl.b - dl.b;
+            total_error += dL * dL + da * da + db * db;
+        }
+
+        PipelineResult result;
+        result.rendered = std::move(rendered);
+        // Informational palette: the cell-mean entries the encoder
+        // actually picked from. Useful for --print-palette.
+        std::unordered_set<std::uint32_t> picked_set;
+        for (auto idx : cell_dither.indices) {
+            picked_set.insert(static_cast<std::uint32_t>(idx));
+        }
+        for (auto idx : picked_set)
+            result.palette.push_back(deduped[idx].mean);
+        // indices: per-source-pixel char/attr index isn't meaningful for
+        // a text-mode output. Leave empty; downstream consumers should
+        // use raw_frame (char/attr pairs) instead.
+        result.planes.depth = 4;  // attr byte = 4-bit fg + 4-bit bg
+        result.mode = mode;
+        result.hires = true;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, total_error);
+        result.raw_frame = std::move(raw_frame);
         return result;
     }
 
@@ -5311,7 +5506,9 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
                  mode == Mode::cga_composite_hires) &&
                 result->cga_mode_ctrl2 != 0xFF)
                 opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
-        } else if (amiga::is_cga_text(mode)) {
+        } else if (amiga::is_cga_text(mode) ||
+                   mode == Mode::cga_composite_text80x100 ||
+                   mode == Mode::cga_composite_text80x200) {
             raw = result->raw_frame;  // char+attr pairs
         } else if (mode == Mode::ega_320 || mode == Mode::ega_640 || mode == Mode::ega_hi) {
             raw = result->planes.data;

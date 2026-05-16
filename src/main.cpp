@@ -1142,6 +1142,7 @@ void print_usage() {
         "    Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi\n"
         "    DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |\n"
         "            cga-320 | cga-640 | cga-composite | cga-composite-hires |\n"
+        "            cga-composite-text80x100 | cga-composite-text80x200 |\n"
         "            cga-text80x{{200,100,50,25}}\n"
         "    SNES:   snes-mode7-256 | snes-mode7-direct\n"
         "    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh\n"
@@ -2013,6 +2014,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "cga-composite-hires" || v == "cga-comp-hires" ||
                          v == "cga-composite-640" || v == "cga-composite-hi")
                     config.mode = amiga::Mode::cga_composite_hires;
+                else if (v == "cga-composite-text" || v == "cga-1024" ||
+                         v == "cga-comp-text" || v == "cga-composite-text80x100")
+                    config.mode = amiga::Mode::cga_composite_text80x100;
+                else if (v == "cga-composite-text80x200" || v == "cga-comp-text-hi")
+                    config.mode = amiga::Mode::cga_composite_text80x200;
                 else if (v == "cga-text80x100" || v == "cga-text-1k" || v == "cga-80x100")
                     config.mode = amiga::Mode::cga_text80x100;
                 else if (v == "cga-text80x50" || v == "cga-80x50")
@@ -2695,6 +2701,10 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "cga-composite";
     case amiga::Mode::cga_composite_hires:
         return "cga-composite-hires";
+    case amiga::Mode::cga_composite_text80x100:
+        return "cga-composite-text80x100";
+    case amiga::Mode::cga_composite_text80x200:
+        return "cga-composite-text80x200";
     case amiga::Mode::cga_text80x100:
         return "cga-text80x100";
     case amiga::Mode::cga_text80x50:
@@ -3510,6 +3520,8 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             break;
         case amiga::Mode::cga_640:
         case amiga::Mode::cga_composite_hires:
+        case amiga::Mode::cga_composite_text80x100:
+        case amiga::Mode::cga_composite_text80x200:
         case amiga::Mode::ega_640:
         case amiga::Mode::cga_text80x100:
         case amiga::Mode::cga_text80x50:
@@ -5515,6 +5527,8 @@ int run_main(int argc, char* argv[]) {
                 "cga-640",
                 "cga-composite",
                 "cga-composite-hires",
+                "cga-composite-text80x100",
+                "cga-composite-text80x200",
                 "cga-text80x100",
                 "cga-text80x50",
                 "cga-text80x25",
@@ -7754,6 +7768,81 @@ int run_main(int argc, char* argv[]) {
                 show_terminal_preview(
                     preview, config->mode, false, false, has_transparency, transparency_mask);
             }
+        }
+        return 0;
+    }
+
+    // --- CGA composite text (8088 MPH "1024 colours") ---
+    // Self-contained: encoder lives in api::run_pipeline. Delegate via
+    // api::encode_state_image, then emit outputs from state.
+    if (config->mode == amiga::Mode::cga_composite_text80x100 ||
+        config->mode == amiga::Mode::cga_composite_text80x200) {
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+        auto enc = api::encode_state_image(*image, aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "cga-composite-text encode error: {}", enc.error_msg);
+            return 1;
+        }
+        auto& st = enc.state;
+        cli_status("Palette:  CGA composite text ({}, {} CGA, 80x{} cells)",
+                   "8088 MPH-style",
+                   config->cga_composite_new_cga ? "new" : "old",
+                   config->mode == amiga::Mode::cga_composite_text80x200 ? 200 : 100);
+        cli_print_dither(config->dither_method, config->dither_strength);
+        cli_print_encoded(/*depth=*/4,
+                          /*total_bytes=*/static_cast<int>(st.raw_frame.size()),
+                          /*palette_size=*/static_cast<int>(st.palette.size()),
+                          chipset == amiga::Chipset::aga,
+                          /*cap_entries=*/0,
+                          /*strips_op_count=*/0,
+                          /*height=*/static_cast<int>(st.rendered.height()),
+                          /*changes_per_line=*/0,
+                          count_unique_colors(st.rendered),
+                          std::nullopt,
+                          static_cast<double>(st.quant_error),
+                          st.psnr,
+                          st.ssimulacra2_score);
+
+        // Save preview / .img / .c outputs.
+        if (!config->output_path.empty()) {
+            if (ends_with(config->output_path, ".png")) {
+                auto r = save_preview(config->output_path,
+                                      st.rendered, has_transparency, transparency_mask,
+                                      config->mode, false, false);
+                if (!r) {
+                    std::println(stderr, "PNG: {}", r.error().message);
+                    return 1;
+                }
+                cli_status("PNG:      {}", config->output_path);
+            } else if (ends_with(config->output_path, ".c")) {
+                auto symbol = config->symbol_name.empty()
+                                ? derive_symbol_name(config->output_path)
+                                : config->symbol_name;
+                cheader_dos_c::Options opts{.symbol_name = symbol};
+                auto r = cheader_dos_c::save(
+                    config->output_path, config->mode,
+                    st.rendered.width(), st.rendered.height(),
+                    st.raw_frame, {}, opts);
+                if (!r) {
+                    std::println(stderr, "Viewer write error: {}", r.error().message);
+                    return 1;
+                }
+                cli_status("Viewer:   {} (DOS/ia16-elf 16-bit, mode 03 + CRTC)",
+                           config->output_path);
+            } else {
+                std::println(stderr,
+                             "cga-composite-text supports .png and .c outputs "
+                             "(use .c then build via ia16-elf-gcc, or the web "
+                             "service's .img path).");
+                return 1;
+            }
+        }
+        if (config->preview) {
+            show_terminal_preview(
+                st.rendered, config->mode, false, false, has_transparency, transparency_mask);
         }
         return 0;
     }
