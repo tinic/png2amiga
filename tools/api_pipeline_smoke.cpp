@@ -273,10 +273,17 @@ int main(int argc, char** argv) {
               static_cast<std::streamsize>(png->size()));
     // Debug aid: dump raw indices alongside the PNG so callers can A/B
     // against the CLI's --output-indexed output without re-running.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)  // MSVC deprecation warning for getenv
+#endif
     if (const char* env = std::getenv("API_DUMP_INDICES")) {
         std::ofstream f(env, std::ios::binary);
         f.write(reinterpret_cast<const char*>(state.indices.data()),
                 static_cast<std::streamsize>(state.indices.size()));
     }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
     return 0;
 }
