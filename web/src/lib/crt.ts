@@ -72,6 +72,14 @@ uniform float u_maskPeriod;    // device pixels per RGB triad (≈0.42mm × DPR 
 // Ported from png2c64's crt.js (commits e408658 / d70a705 / 56aaf89 /
 // c27d846).
 uniform float u_palMode;
+// Interlace flicker. Field rate is hardcoded to 60 Hz (NTSC field rate
+// = 30 Hz pair rate, matches typical 60 Hz monitors so each simulated
+// field lands on exactly one display frame). Active = 1.0 means the
+// row currently belongs to the "live" field — gain 1.0. Inactive rows
+// fade to u_phosphorPersist (0.0–1.0). u_time is monotonic seconds.
+uniform float u_interlaceFlicker;
+uniform float u_phosphorPersist;
+uniform float u_time;
 
 // sRGB ↔ linear (gamma 2.2 approximation, ample for the simulation).
 vec3 toLinear(vec3 c) {
@@ -146,6 +154,24 @@ float bloomScan(vec2 pos, float off) {
   return gaus(dst + off, u_hardScan * 0.25);
 }
 
+// Per-source-row interlace gain. The Amiga lace frame is already
+// stored as both fields interleaved (even rows = field 0, odd rows =
+// field 1), so we just have to read the row's parity and compare it
+// to which field is currently "live." Live row → gain 1.0; off-field
+// row → fades to u_phosphorPersist. The 60 Hz field rate (vs 25/30 Hz
+// pair rate) is what makes the flicker visible — well below human
+// flicker fusion (~50 Hz) on high-contrast horizontal edges, which is
+// exactly the artifact a real 1084S exhibits in interlace mode.
+float interlaceRowGain(vec2 pos, float off) {
+  if (u_interlaceFlicker < 0.5) return 1.0;
+  float row = floor(pos.y * u_srcSize.y + off);
+  float rowParity = mod(row, 2.0);
+  // 60 Hz field rate hardcoded — matches typical 60 Hz monitors so each
+  // simulated field gets exactly one display frame.
+  float currentField = mod(floor(u_time * 60.0), 2.0);
+  return (abs(rowParity - currentField) < 0.5) ? 1.0 : u_phosphorPersist;
+}
+
 // Three-line composite: weighted sum of three vertically-adjacent
 // horizontally-filtered rows, each multiplied by its scanline weight.
 // Normalized by the peak-on-scanline weight sum so both progressive
@@ -160,8 +186,13 @@ vec3 tri(vec2 pos) {
   vec3 a = horz3(pos, -1.0);
   vec3 b = horz3(pos,  0.0);
   vec3 c = horz3(pos,  1.0);
+  float ga = interlaceRowGain(pos, -1.0);
+  float gb = interlaceRowGain(pos,  0.0);
+  float gc = interlaceRowGain(pos,  1.0);
   float peakSum = 2.0 * exp2(u_hardScan) + 1.0;
-  return (a * scan(pos, -1.0) + b * scan(pos, 0.0) + c * scan(pos, 1.0)) / peakSum;
+  return (a * ga * scan(pos, -1.0)
+        + b * gb * scan(pos, 0.0)
+        + c * gc * scan(pos, 1.0)) / peakSum;
 }
 
 // Bloom: 5×5-ish wider Gaussian over 5 rows, used to add halation around
@@ -175,14 +206,19 @@ vec3 bloom(vec2 pos) {
   vec3 c = horz5(pos,  0.0);
   vec3 d = horz5(pos,  1.0);
   vec3 e = horz5(pos,  2.0);
+  float ga = interlaceRowGain(pos, -2.0);
+  float gb = interlaceRowGain(pos, -1.0);
+  float gc = interlaceRowGain(pos,  0.0);
+  float gd = interlaceRowGain(pos,  1.0);
+  float ge = interlaceRowGain(pos,  2.0);
   float bs = u_hardScan * 0.25;
   // exp2(s*4) + exp2(s*1) + 1 + exp2(s*1) + exp2(s*4)
   float peakSum = 2.0 * exp2(bs * 4.0) + 2.0 * exp2(bs) + 1.0;
-  return (a * bloomScan(pos, -2.0)
-        + b * bloomScan(pos, -1.0)
-        + c * bloomScan(pos,  0.0)
-        + d * bloomScan(pos,  1.0)
-        + e * bloomScan(pos,  2.0)) / peakSum;
+  return (a * ga * bloomScan(pos, -2.0)
+        + b * gb * bloomScan(pos, -1.0)
+        + c * gc * bloomScan(pos,  0.0)
+        + d * gd * bloomScan(pos,  1.0)
+        + e * ge * bloomScan(pos,  2.0)) / peakSum;
 }
 
 // PAL chroma low-pass + 1-H delay-line averaging. Samples a 5-tap
@@ -326,6 +362,12 @@ export interface CrtRenderer {
   // dot pitch). Default: enough for the cosine to render smoothly
   // (≥3 device px, Nyquist limit). Re-call when DPR changes.
   setMaskPeriod: (periodDevicePx: number) => void
+  // Toggle 60 Hz interlace field flicker. While on, the renderer runs
+  // its own requestAnimationFrame loop and re-renders the cached
+  // texture each frame with an updated u_time, so caller doesn't need
+  // to drive the animation. Turn off when leaving an interlace mode
+  // or hiding the CRT preview.
+  setInterlaceFlicker: (enabled: boolean) => void
   dispose: () => void
 }
 
@@ -401,6 +443,9 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     brightness: gl.getUniformLocation(program, 'u_brightness'),
     palMode:    gl.getUniformLocation(program, 'u_palMode'),
     maskPeriod: gl.getUniformLocation(program, 'u_maskPeriod'),
+    interlaceFlicker: gl.getUniformLocation(program, 'u_interlaceFlicker'),
+    phosphorPersist:  gl.getUniformLocation(program, 'u_phosphorPersist'),
+    time:             gl.getUniformLocation(program, 'u_time'),
   }
   const aPos = gl.getAttribLocation(program, 'a_pos')
 
@@ -410,6 +455,21 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
   // floor below. Caller should setMaskPeriod with the live DPR-driven
   // value before each render.
   let maskPeriod = 3
+  let interlaceFlicker = 0
+  // Off-field row brightness. 0 = full flicker (off rows go black,
+  // headache-inducing); 1 = no flicker. 0.4 keeps the flicker visible
+  // on horizontal edges (which is the artifact we're modeling) while
+  // staying watchable on uniform fields.
+  const phosphorPersist = 0.4
+  // Cached params from the last full render(), so the RAF tick can
+  // re-render with the new u_time without re-uploading the texture or
+  // recomputing per-mode parameters.
+  let lastSrcW = 0, lastSrcH = 0, lastDstW = 0, lastDstH = 0
+  let rafHandle = 0
+  // Wall-clock seconds at renderer creation — subtracted from
+  // performance.now() to keep u_time in a small, well-conditioned float
+  // (avoids precision loss after the page has been open for hours).
+  const epoch = performance.now() / 1000
 
   function setPalMode(enabled: boolean): void {
     palMode = enabled ? 1 : 0
@@ -423,19 +483,31 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     maskPeriod = Math.max(3, Number.isFinite(periodDevicePx) ? periodDevicePx : 3)
   }
 
-  function render(rgba: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): void {
-    if (canvas.width !== dstW)  canvas.width  = dstW
-    if (canvas.height !== dstH) canvas.height = dstH
+  function setInterlaceFlicker(enabled: boolean): void {
+    const want = enabled ? 1 : 0
+    if (want === interlaceFlicker) return
+    interlaceFlicker = want
+    if (want && rafHandle === 0 && lastSrcW > 0) startTickLoop()
+    if (!want && rafHandle !== 0) stopTickLoop()
+  }
 
-    gl.viewport(0, 0, dstW, dstH)
-    gl.clearColor(0, 0, 0, 1)
-    gl.clear(gl.COLOR_BUFFER_BIT)
+  function startTickLoop(): void {
+    const tick = (): void => {
+      // Re-render with the cached source — the texture is still bound
+      // from the last render() call, so just push the new u_time and
+      // redraw. ~10 µs of GPU per frame.
+      if (lastSrcW > 0) drawCached()
+      rafHandle = requestAnimationFrame(tick)
+    }
+    rafHandle = requestAnimationFrame(tick)
+  }
 
-    gl.bindTexture(gl.TEXTURE_2D, tex)
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, srcW, srcH, 0,
-                  gl.RGBA, gl.UNSIGNED_BYTE, rgba)
+  function stopTickLoop(): void {
+    if (rafHandle !== 0) cancelAnimationFrame(rafHandle)
+    rafHandle = 0
+  }
 
+  function drawCached(): void {
     // Per-mode shader parameter tuning. Three regimes:
     //
     //   * lores progressive (320×~200, square-ish): full-strength
@@ -450,8 +522,8 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     //     because both fields fill the tube and the dark gap between
     //     source rows that would normally read as a scanline is
     //     filled in by the alternate field on real hardware.
-    const isHires     = srcW >= 480
-    const isInterlace = srcH >= 280
+    const isHires     = lastSrcW >= 480
+    const isInterlace = lastSrcH >= 280
     const hardScan = isInterlace ? -1 : -8
     const hardPix  = isHires     ? -5 : -3
     // Bloom contributes more in interlace / hires (where the per-row
@@ -466,14 +538,24 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     // looks markedly brighter. Bloom also adds a small DC component
     // (slightly more in progressive after normalization), which
     // contributes ~5 % of the equalization on its own.
-    const brightness = isInterlace ? 1 : 1.2
+    let brightness = isInterlace ? 1 : 1.2
+    // Interlace flicker dims the time-average per row to (1+p)/2.
+    // Compensate so the static brightness matches the no-flicker case
+    // — only the temporal variation differs, not the mean level.
+    if (interlaceFlicker > 0.5) {
+      brightness *= 2 / (1 + phosphorPersist)
+    }
+
+    gl.viewport(0, 0, lastDstW, lastDstH)
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
 
     gl.useProgram(program)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, tex)
     gl.uniform1i(u.src, 0)
-    gl.uniform2f(u.srcSize, srcW, srcH)
-    gl.uniform2f(u.outSize, dstW, dstH)
+    gl.uniform2f(u.srcSize, lastSrcW, lastSrcH)
+    gl.uniform2f(u.outSize, lastDstW, lastDstH)
     gl.uniform1f(u.hardScan,   hardScan)
     gl.uniform1f(u.hardPix,    hardPix)
     gl.uniform1f(u.maskDark,   0.5)
@@ -499,6 +581,9 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.uniform1f(u.brightness, brightness)
     gl.uniform1f(u.palMode,    palMode)
     gl.uniform1f(u.maskPeriod, maskPeriod)
+    gl.uniform1f(u.interlaceFlicker, interlaceFlicker)
+    gl.uniform1f(u.phosphorPersist,  phosphorPersist)
+    gl.uniform1f(u.time,             performance.now() / 1000 - epoch)
 
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
     gl.enableVertexAttribArray(aPos)
@@ -506,7 +591,25 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }
 
+  function render(rgba: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): void {
+    if (canvas.width !== dstW)  canvas.width  = dstW
+    if (canvas.height !== dstH) canvas.height = dstH
+
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, srcW, srcH, 0,
+                  gl.RGBA, gl.UNSIGNED_BYTE, rgba)
+
+    lastSrcW = srcW; lastSrcH = srcH; lastDstW = dstW; lastDstH = dstH
+    drawCached()
+
+    // If flicker should be running but the loop isn't (e.g. caller
+    // toggled flicker on before the first render), kick it off now.
+    if (interlaceFlicker > 0.5 && rafHandle === 0) startTickLoop()
+  }
+
   function dispose(): void {
+    stopTickLoop()
     gl.deleteProgram(program)
     gl.deleteShader(vs)
     gl.deleteShader(fs)
@@ -514,5 +617,5 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.deleteTexture(tex)
   }
 
-  return { render, setPalMode, setMaskPeriod, dispose }
+  return { render, setPalMode, setMaskPeriod, setInterlaceFlicker, dispose }
 }

@@ -1,11 +1,11 @@
-const E=`#version 100
+const D=`#version 100
 attribute vec2 a_pos;
 varying vec2 v_uv;
 void main() {
   v_uv = a_pos * 0.5 + 0.5;
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }
-`,U=`#version 100
+`,G=`#version 100
 precision mediump float;
 varying vec2 v_uv;
 
@@ -29,6 +29,14 @@ uniform float u_maskPeriod;    // device pixels per RGB triad (≈0.42mm × DPR 
 // Ported from png2c64's crt.js (commits e408658 / d70a705 / 56aaf89 /
 // c27d846).
 uniform float u_palMode;
+// Interlace flicker. Field rate is hardcoded to 60 Hz (NTSC field rate
+// = 30 Hz pair rate, matches typical 60 Hz monitors so each simulated
+// field lands on exactly one display frame). Active = 1.0 means the
+// row currently belongs to the "live" field — gain 1.0. Inactive rows
+// fade to u_phosphorPersist (0.0–1.0). u_time is monotonic seconds.
+uniform float u_interlaceFlicker;
+uniform float u_phosphorPersist;
+uniform float u_time;
 
 // sRGB ↔ linear (gamma 2.2 approximation, ample for the simulation).
 vec3 toLinear(vec3 c) {
@@ -103,6 +111,24 @@ float bloomScan(vec2 pos, float off) {
   return gaus(dst + off, u_hardScan * 0.25);
 }
 
+// Per-source-row interlace gain. The Amiga lace frame is already
+// stored as both fields interleaved (even rows = field 0, odd rows =
+// field 1), so we just have to read the row's parity and compare it
+// to which field is currently "live." Live row → gain 1.0; off-field
+// row → fades to u_phosphorPersist. The 60 Hz field rate (vs 25/30 Hz
+// pair rate) is what makes the flicker visible — well below human
+// flicker fusion (~50 Hz) on high-contrast horizontal edges, which is
+// exactly the artifact a real 1084S exhibits in interlace mode.
+float interlaceRowGain(vec2 pos, float off) {
+  if (u_interlaceFlicker < 0.5) return 1.0;
+  float row = floor(pos.y * u_srcSize.y + off);
+  float rowParity = mod(row, 2.0);
+  // 60 Hz field rate hardcoded — matches typical 60 Hz monitors so each
+  // simulated field gets exactly one display frame.
+  float currentField = mod(floor(u_time * 60.0), 2.0);
+  return (abs(rowParity - currentField) < 0.5) ? 1.0 : u_phosphorPersist;
+}
+
 // Three-line composite: weighted sum of three vertically-adjacent
 // horizontally-filtered rows, each multiplied by its scanline weight.
 // Normalized by the peak-on-scanline weight sum so both progressive
@@ -117,8 +143,13 @@ vec3 tri(vec2 pos) {
   vec3 a = horz3(pos, -1.0);
   vec3 b = horz3(pos,  0.0);
   vec3 c = horz3(pos,  1.0);
+  float ga = interlaceRowGain(pos, -1.0);
+  float gb = interlaceRowGain(pos,  0.0);
+  float gc = interlaceRowGain(pos,  1.0);
   float peakSum = 2.0 * exp2(u_hardScan) + 1.0;
-  return (a * scan(pos, -1.0) + b * scan(pos, 0.0) + c * scan(pos, 1.0)) / peakSum;
+  return (a * ga * scan(pos, -1.0)
+        + b * gb * scan(pos, 0.0)
+        + c * gc * scan(pos, 1.0)) / peakSum;
 }
 
 // Bloom: 5×5-ish wider Gaussian over 5 rows, used to add halation around
@@ -132,14 +163,19 @@ vec3 bloom(vec2 pos) {
   vec3 c = horz5(pos,  0.0);
   vec3 d = horz5(pos,  1.0);
   vec3 e = horz5(pos,  2.0);
+  float ga = interlaceRowGain(pos, -2.0);
+  float gb = interlaceRowGain(pos, -1.0);
+  float gc = interlaceRowGain(pos,  0.0);
+  float gd = interlaceRowGain(pos,  1.0);
+  float ge = interlaceRowGain(pos,  2.0);
   float bs = u_hardScan * 0.25;
   // exp2(s*4) + exp2(s*1) + 1 + exp2(s*1) + exp2(s*4)
   float peakSum = 2.0 * exp2(bs * 4.0) + 2.0 * exp2(bs) + 1.0;
-  return (a * bloomScan(pos, -2.0)
-        + b * bloomScan(pos, -1.0)
-        + c * bloomScan(pos,  0.0)
-        + d * bloomScan(pos,  1.0)
-        + e * bloomScan(pos,  2.0)) / peakSum;
+  return (a * ga * bloomScan(pos, -2.0)
+        + b * gb * bloomScan(pos, -1.0)
+        + c * gc * bloomScan(pos,  0.0)
+        + d * gd * bloomScan(pos,  1.0)
+        + e * ge * bloomScan(pos,  2.0)) / peakSum;
 }
 
 // PAL chroma low-pass + 1-H delay-line averaging. Samples a 5-tap
@@ -270,4 +306,4 @@ void main() {
   col *= u_brightness;
   gl_FragColor = vec4(toSrgb(col), 1.0);
 }
-`;function b(o,s,e){const r=o.createShader(s);if(!r)throw new Error("CRT shader create failed");if(o.shaderSource(r,e),o.compileShader(r),!o.getShaderParameter(r,o.COMPILE_STATUS)){const i=o.getShaderInfoLog(r);throw o.deleteShader(r),new Error(`CRT shader compile error: ${i??"(no log)"}`)}return r}function L(o,s,e){const r=o.createProgram();if(!r)throw new Error("CRT program create failed");if(o.attachShader(r,s),o.attachShader(r,e),o.linkProgram(r),!o.getProgramParameter(r,o.LINK_STATUS)){const i=o.getProgramInfoLog(r);throw o.deleteProgram(r),new Error(`CRT program link error: ${i??"(no log)"}`)}return r}function z(o){const s=o.getContext("webgl",{premultipliedAlpha:!1,alpha:!1,antialias:!1,preserveDrawingBuffer:!1});if(!s)throw new Error("WebGL not available");const e=s,r=b(e,e.VERTEX_SHADER,E),i=b(e,e.FRAGMENT_SHADER,U),a=L(e,r,i),h=e.createBuffer();e.bindBuffer(e.ARRAY_BUFFER,h),e.bufferData(e.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),e.STATIC_DRAW);const c=e.createTexture();e.bindTexture(e.TEXTURE_2D,c),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MIN_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MAG_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_S,e.CLAMP_TO_EDGE),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_T,e.CLAMP_TO_EDGE);const t={src:e.getUniformLocation(a,"u_src"),srcSize:e.getUniformLocation(a,"u_srcSize"),outSize:e.getUniformLocation(a,"u_outSize"),hardScan:e.getUniformLocation(a,"u_hardScan"),hardPix:e.getUniformLocation(a,"u_hardPix"),maskDark:e.getUniformLocation(a,"u_maskDark"),maskLight:e.getUniformLocation(a,"u_maskLight"),warpX:e.getUniformLocation(a,"u_warpX"),warpY:e.getUniformLocation(a,"u_warpY"),bloom:e.getUniformLocation(a,"u_bloom"),brightness:e.getUniformLocation(a,"u_brightness"),palMode:e.getUniformLocation(a,"u_palMode"),maskPeriod:e.getUniformLocation(a,"u_maskPeriod")},d=e.getAttribLocation(a,"a_pos");let v=0,g=3;function w(n){v=n?1:0}function _(n){g=Math.max(3,Number.isFinite(n)?n:3)}function x(n,f,p,l,u){o.width!==l&&(o.width=l),o.height!==u&&(o.height=u),e.viewport(0,0,l,u),e.clearColor(0,0,0,1),e.clear(e.COLOR_BUFFER_BIT),e.bindTexture(e.TEXTURE_2D,c),e.pixelStorei(e.UNPACK_FLIP_Y_WEBGL,!0),e.texImage2D(e.TEXTURE_2D,0,e.RGBA,f,p,0,e.RGBA,e.UNSIGNED_BYTE,n);const T=f>=480,m=p>=280,k=m?-1:-8,y=T?-5:-3,P=m?.1:.18,R=m?1:1.2;e.useProgram(a),e.activeTexture(e.TEXTURE0),e.bindTexture(e.TEXTURE_2D,c),e.uniform1i(t.src,0),e.uniform2f(t.srcSize,f,p),e.uniform2f(t.outSize,l,u),e.uniform1f(t.hardScan,k),e.uniform1f(t.hardPix,y),e.uniform1f(t.maskDark,.5),e.uniform1f(t.maskLight,1.5),e.uniform1f(t.warpX,.03),e.uniform1f(t.warpY,.022),e.uniform1f(t.bloom,P),e.uniform1f(t.brightness,R),e.uniform1f(t.palMode,v),e.uniform1f(t.maskPeriod,g),e.bindBuffer(e.ARRAY_BUFFER,h),e.enableVertexAttribArray(d),e.vertexAttribPointer(d,2,e.FLOAT,!1,0,0),e.drawArrays(e.TRIANGLE_STRIP,0,4)}function S(){e.deleteProgram(a),e.deleteShader(r),e.deleteShader(i),e.deleteBuffer(h),e.deleteTexture(c)}return{render:x,setPalMode:w,setMaskPeriod:_,dispose:S}}export{z as createCrtRenderer};
+`;function E(o,c,e){const r=o.createShader(c);if(!r)throw new Error("CRT shader create failed");if(o.shaderSource(r,e),o.compileShader(r),!o.getShaderParameter(r,o.COMPILE_STATUS)){const l=o.getShaderInfoLog(r);throw o.deleteShader(r),new Error(`CRT shader compile error: ${l??"(no log)"}`)}return r}function B(o,c,e){const r=o.createProgram();if(!r)throw new Error("CRT program create failed");if(o.attachShader(r,c),o.attachShader(r,e),o.linkProgram(r),!o.getProgramParameter(r,o.LINK_STATUS)){const l=o.getProgramInfoLog(r);throw o.deleteProgram(r),new Error(`CRT program link error: ${l??"(no log)"}`)}return r}function H(o){const c=o.getContext("webgl",{premultipliedAlpha:!1,alpha:!1,antialias:!1,preserveDrawingBuffer:!1});if(!c)throw new Error("WebGL not available");const e=c,r=E(e,e.VERTEX_SHADER,D),l=E(e,e.FRAGMENT_SHADER,G),t=B(e,r,l),v=e.createBuffer();e.bindBuffer(e.ARRAY_BUFFER,v),e.bufferData(e.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),e.STATIC_DRAW);const m=e.createTexture();e.bindTexture(e.TEXTURE_2D,m),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MIN_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MAG_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_S,e.CLAMP_TO_EDGE),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_T,e.CLAMP_TO_EDGE);const a={src:e.getUniformLocation(t,"u_src"),srcSize:e.getUniformLocation(t,"u_srcSize"),outSize:e.getUniformLocation(t,"u_outSize"),hardScan:e.getUniformLocation(t,"u_hardScan"),hardPix:e.getUniformLocation(t,"u_hardPix"),maskDark:e.getUniformLocation(t,"u_maskDark"),maskLight:e.getUniformLocation(t,"u_maskLight"),warpX:e.getUniformLocation(t,"u_warpX"),warpY:e.getUniformLocation(t,"u_warpY"),bloom:e.getUniformLocation(t,"u_bloom"),brightness:e.getUniformLocation(t,"u_brightness"),palMode:e.getUniformLocation(t,"u_palMode"),maskPeriod:e.getUniformLocation(t,"u_maskPeriod"),interlaceFlicker:e.getUniformLocation(t,"u_interlaceFlicker"),phosphorPersist:e.getUniformLocation(t,"u_phosphorPersist"),time:e.getUniformLocation(t,"u_time")},_=e.getAttribLocation(t,"a_pos");let x=0,k=3,f=0;const y=.4;let u=0,g=0,w=0,b=0,n=0;const z=performance.now()/1e3;function L(i){x=i?1:0}function U(i){k=Math.max(3,Number.isFinite(i)?i:3)}function A(i){const s=i?1:0;s!==f&&(f=s,s&&n===0&&u>0&&S(),!s&&n!==0&&T())}function S(){const i=()=>{u>0&&P(),n=requestAnimationFrame(i)};n=requestAnimationFrame(i)}function T(){n!==0&&cancelAnimationFrame(n),n=0}function P(){const i=u>=480,s=g>=280,d=s?-1:-8,h=i?-5:-3,p=s?.1:.18;let R=s?1:1.2;f>.5&&(R*=2/(1+y)),e.viewport(0,0,w,b),e.clearColor(0,0,0,1),e.clear(e.COLOR_BUFFER_BIT),e.useProgram(t),e.activeTexture(e.TEXTURE0),e.bindTexture(e.TEXTURE_2D,m),e.uniform1i(a.src,0),e.uniform2f(a.srcSize,u,g),e.uniform2f(a.outSize,w,b),e.uniform1f(a.hardScan,d),e.uniform1f(a.hardPix,h),e.uniform1f(a.maskDark,.5),e.uniform1f(a.maskLight,1.5),e.uniform1f(a.warpX,.03),e.uniform1f(a.warpY,.022),e.uniform1f(a.bloom,p),e.uniform1f(a.brightness,R),e.uniform1f(a.palMode,x),e.uniform1f(a.maskPeriod,k),e.uniform1f(a.interlaceFlicker,f),e.uniform1f(a.phosphorPersist,y),e.uniform1f(a.time,performance.now()/1e3-z),e.bindBuffer(e.ARRAY_BUFFER,v),e.enableVertexAttribArray(_),e.vertexAttribPointer(_,2,e.FLOAT,!1,0,0),e.drawArrays(e.TRIANGLE_STRIP,0,4)}function C(i,s,d,h,p){o.width!==h&&(o.width=h),o.height!==p&&(o.height=p),e.bindTexture(e.TEXTURE_2D,m),e.pixelStorei(e.UNPACK_FLIP_Y_WEBGL,!0),e.texImage2D(e.TEXTURE_2D,0,e.RGBA,s,d,0,e.RGBA,e.UNSIGNED_BYTE,i),u=s,g=d,w=h,b=p,P(),f>.5&&n===0&&S()}function F(){T(),e.deleteProgram(t),e.deleteShader(r),e.deleteShader(l),e.deleteBuffer(v),e.deleteTexture(m)}return{render:C,setPalMode:L,setMaskPeriod:U,setInterlaceFlicker:A,dispose:F}}export{H as createCrtRenderer};

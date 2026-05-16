@@ -166,6 +166,11 @@ function renderCrt() {
   // delay-line averaging, chromatic aberration). Amiga modes assume an
   // 1084S RGB monitor — leave PAL mode off.
   crtRenderer.setPalMode(isC64Mode(options.mode))
+  // Interlace flicker — only meaningful for Amiga interlace modes.
+  // The renderer manages its own RAF loop while enabled and re-renders
+  // the cached texture each frame; turn off for non-interlace sources
+  // so the preview stays static and doesn't burn GPU cycles.
+  crtRenderer.setInterlaceFlicker(isInterlace)
   // 1084S dot pitch is 0.42mm. CSS spec is 96 dpi = 3.78 px/mm, so one
   // triad in device pixels = 0.42 × 3.78 × DPR ≈ 1.6 (1×) / 3.2 (Retina) /
   // 4.8 (DPR=3 phones). The renderer floors at 3 (Nyquist for the cosine
