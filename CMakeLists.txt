@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.91.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.92.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -120,10 +120,12 @@ if(EMSCRIPTEN)
         -pthread
         # Preserve C++ function names in the .wasm so V8's --prof
         # output and Linux perf jitdump emit readable symbols instead
-        # of wasm-function[NNN] opaque indices. Strips DWARF, keeps
-        # just the WASM name section. Negligible perf impact, ~15 KB
-        # extra in the .wasm.
-        --profiling-funcs
+        # of wasm-function[NNN] opaque indices. Negligible perf
+        # impact but ~380 KB added (full C++ name section). Gate
+        # behind -DPNG2AMIGA_WASM_PROFILE=ON so release builds stay
+        # under the web bundle-size budget; turn on locally when
+        # profiling.
+        $<$<BOOL:${PNG2AMIGA_WASM_PROFILE}>:--profiling-funcs>
         -sALLOW_MEMORY_GROWTH=1
         -sEXPORT_ES6=1
         -sMODULARIZE=1
