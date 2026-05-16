@@ -232,8 +232,24 @@ vec3 mask(vec2 pos) {
   return mix(vec3(u_maskDark), vec3(u_maskLight), raw);
 }
 
-// Subtle barrel warp. 1084S CRTs are fairly flat compared to a 70s TV
-// so the warp factors are small. Set u_warpX / u_warpY to 0 to disable.
+// Geometric residual warp — what's left of the tube's deflection
+// distortion after the chassis pincushion-correction circuit kicks
+// in. Lottes form: only off-axis points bow, so center-axis lines
+// (the central crosshair) stay straight — matches what a real, well-
+// adjusted 1084S looks like under a service-manual cross-hatch test
+// pattern. kx > ky reflects the 90° tube's larger horizontal
+// deflection angle (≈38.7° H vs ≈31° V on 4:3); horizontal bow is
+// always ≥ vertical bow on a real 1084S. See the warpX/warpY uniform
+// assignments for the numeric derivation.
+//
+// Inverse mapping: warp() takes the output uv and returns the source
+// uv to sample. Positive kx, ky push source-corner samples outside
+// [0,1] → output corners go to the bezel; the visible image bulges
+// at the screen-edge midpoints (a horizontal line near the top of the
+// source appears highest in the middle, lower at its ends). That's
+// the "outward bow" residual a real 1084S exhibits — slight over-
+// correction of the deflection pincushion. Flipping the signs would
+// invert it into the under-corrected (inward bow) regime.
 vec2 warp(vec2 uv) {
   uv = uv * 2.0 - 1.0;
   uv *= vec2(1.0 + (uv.y * uv.y) * u_warpX,
@@ -445,8 +461,23 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.uniform1f(u.hardPix,    hardPix)
     gl.uniform1f(u.maskDark,   0.5)
     gl.uniform1f(u.maskLight,  1.5)
-    gl.uniform1f(u.warpX,      1 / 96)
-    gl.uniform1f(u.warpY,      1 / 72)
+    // Pincushion residual for a well-adjusted 1084S. The Philips CM8833-
+    // family tube has a 90° deflection angle with a 4:3 aspect ratio,
+    // giving horizontal half-angle ≈38.7° and vertical half-angle ≈31°.
+    // Raw deflection geometry (corner = D·tan(θx)/cos(θy)) yields ~17 %
+    // horizontal and ~10 % vertical corner over-excursion before tube
+    // curvature + the chassis pincushion correction coil knock the
+    // residual down. Service-manual tolerances on the 1084S target
+    // ≤3 % corner displacement, so we pick the high end of "well-tuned":
+    //   kx (horizontal corner bow) = 0.030  →  3.0 % H excursion
+    //   ky (vertical corner bow)   = 0.022  →  2.2 % V excursion
+    // The 0.030/0.022 ratio mirrors the tan(38.7°)/tan(31°) ≈ 1.33
+    // asymmetry of the deflection angles — horizontal bows ~30 % more
+    // than vertical, as the real geometry does. For "aged / drifted
+    // consumer set" looks bump both by ~50 %; flip signs for over-
+    // corrected barrel.
+    gl.uniform1f(u.warpX,      0.03)
+    gl.uniform1f(u.warpY,      0.022)
     gl.uniform1f(u.bloom,      bloom)
     gl.uniform1f(u.brightness, brightness)
     gl.uniform1f(u.palMode,    palMode)
