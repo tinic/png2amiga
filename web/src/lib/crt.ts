@@ -63,6 +63,7 @@ uniform float u_warpX;
 uniform float u_warpY;
 uniform float u_bloom;
 uniform float u_brightness;    // post-mask brightness boost
+uniform float u_maskPeriod;    // device pixels per RGB triad (≈0.42mm × DPR × 96/25.4)
 
 // 1084S RGB profile = 0. C64 PAL composite profile = 1. Enables chroma
 // low-pass (U/V horizontal blur + 1-H delay-line vertical averaging),
@@ -205,20 +206,30 @@ vec3 palChroma(vec2 pos) {
   );
 }
 
-// Slot-mask phosphor pattern. Each output pixel sits on one of three
-// phosphor stripes (R, G, or B). The "+ pos.y * 3.0" creates the
-// signature diagonal stagger that distinguishes slot masks from pure
-// vertical aperture grilles. Period of 6 output pixels for the RGB
-// triad gives ~0.42mm dot pitch when the canvas is rendered at the
-// 1084S display size on a typical modern monitor.
+// Slot-mask phosphor pattern. Cosine-modulated rather than hard-edged
+// because real 0.42mm pitch on common displays falls below the 3-stripe
+// hard-mask Nyquist (≤4 device px per triad → each stripe sub-pixel,
+// aliases into chroma noise). The three channels are 120° out of phase
+// so their sum is constant — total luminance is preserved exactly,
+// unlike the old 50/50 ramp that needed u_brightness=1.25 compensation.
+//
+// The diagonal stagger (pos.x += pos.y * period/2) gives the slot-mask
+// look — every second row shifts by half a triad, distinguishing it
+// from a pure aperture grille's vertical stripes. u_maskPeriod is in
+// device pixels and is driven by the caller from
+// (0.42mm × 96/25.4 × DPR), floored at 3 device px so even at extreme
+// low-DPI the cosine stays at-or-above Nyquist.
 vec3 mask(vec2 pos) {
-  pos.x += pos.y * 3.0;
-  vec3 m = vec3(u_maskDark);
-  pos.x = fract(pos.x / 6.0);
-  if (pos.x < 0.333)      m.r = u_maskLight;
-  else if (pos.x < 0.666) m.g = u_maskLight;
-  else                    m.b = u_maskLight;
-  return m;
+  pos.x += pos.y * (u_maskPeriod * 0.5);
+  float phase = pos.x * 6.2831853 / u_maskPeriod;
+  // 120° offsets: R at 0, G at 2π/3, B at 4π/3. The 0.5+0.5*cos maps
+  // each channel into [0, 1] before lerping into [maskDark, maskLight].
+  vec3 raw = vec3(
+    0.5 + 0.5 * cos(phase),
+    0.5 + 0.5 * cos(phase - 2.0943951),
+    0.5 + 0.5 * cos(phase - 4.1887902)
+  );
+  return mix(vec3(u_maskDark), vec3(u_maskLight), raw);
 }
 
 // Subtle barrel warp. 1084S CRTs are fairly flat compared to a 70s TV
@@ -279,6 +290,11 @@ export interface CrtRenderer {
   // chromatic aberration). On for c64 modes (TV via composite), off for
   // amiga modes (1084S RGB monitor). Default: off.
   setPalMode: (enabled: boolean) => void
+  // Set the slot-mask period in *device pixels per RGB triad*. Caller
+  // computes this from the display's pixel density and 0.42mm (1084S
+  // dot pitch). Default: enough for the cosine to render smoothly
+  // (≥3 device px, Nyquist limit). Re-call when DPR changes.
+  setMaskPeriod: (periodDevicePx: number) => void
   dispose: () => void
 }
 
@@ -353,13 +369,27 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     bloom:      gl.getUniformLocation(program, 'u_bloom'),
     brightness: gl.getUniformLocation(program, 'u_brightness'),
     palMode:    gl.getUniformLocation(program, 'u_palMode'),
+    maskPeriod: gl.getUniformLocation(program, 'u_maskPeriod'),
   }
   const aPos = gl.getAttribLocation(program, 'a_pos')
 
   let palMode = 0
+  // Sensible default — typical CSS-96-dpi display at DPR=1 gives
+  // 0.42mm × 3.78 px/mm ≈ 1.6 device px, clamped to the 3-px Nyquist
+  // floor below. Caller should setMaskPeriod with the live DPR-driven
+  // value before each render.
+  let maskPeriod = 3
 
   function setPalMode(enabled: boolean): void {
     palMode = enabled ? 1 : 0
+  }
+
+  function setMaskPeriod(periodDevicePx: number): void {
+    // Floor at 3 — the cosine mask needs ≥3 samples per period to stay
+    // above Nyquist (sum-of-cosines aliases below that and the channels
+    // shift into a single muddy color). Negative / non-finite inputs
+    // would also crash the shader, so reject those.
+    maskPeriod = Math.max(3, Number.isFinite(periodDevicePx) ? periodDevicePx : 3)
   }
 
   function render(rgba: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): void {
@@ -396,10 +426,14 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     // Bloom contributes more in interlace / hires (where the per-row
     // beam is thinner relative to the visible structure).
     const bloom    = isInterlace ? 0.1 : 0.18
-    // Brightness compensates for the mask dimming. With softened
-    // scanlines (interlace) the average level is already higher, so
-    // pull the boost down to keep the look balanced.
-    const brightness = isInterlace ? 1.1 : 1.25
+    // Brightness compensates for the mask dimming. The new cosine
+    // mask preserves total luminance across the RGB triad (sum of
+    // three 120°-offset cosines is constant 1.5 when maskDark=0.5 +
+    // maskLight=1.5), so no compensation is needed — but the eye sees
+    // peaks-not-average for the brighter R/G/B stripes, so keep a
+    // modest boost. Interlace softens scanlines so its average is
+    // already higher; pull the boost down to match.
+    const brightness = isInterlace ? 1 : 1.1
 
     gl.useProgram(program)
     gl.activeTexture(gl.TEXTURE0)
@@ -416,6 +450,7 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.uniform1f(u.bloom,      bloom)
     gl.uniform1f(u.brightness, brightness)
     gl.uniform1f(u.palMode,    palMode)
+    gl.uniform1f(u.maskPeriod, maskPeriod)
 
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
     gl.enableVertexAttribArray(aPos)
@@ -431,5 +466,5 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.deleteTexture(tex)
   }
 
-  return { render, setPalMode, dispose }
+  return { render, setPalMode, setMaskPeriod, dispose }
 }

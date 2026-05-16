@@ -1,11 +1,11 @@
-const y=`#version 100
+const k=`#version 100
 attribute vec2 a_pos;
 varying vec2 v_uv;
 void main() {
   v_uv = a_pos * 0.5 + 0.5;
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }
-`,P=`#version 100
+`,U=`#version 100
 precision mediump float;
 varying vec2 v_uv;
 
@@ -20,6 +20,7 @@ uniform float u_warpX;
 uniform float u_warpY;
 uniform float u_bloom;
 uniform float u_brightness;    // post-mask brightness boost
+uniform float u_maskPeriod;    // device pixels per RGB triad (≈0.42mm × DPR × 96/25.4)
 
 // 1084S RGB profile = 0. C64 PAL composite profile = 1. Enables chroma
 // low-pass (U/V horizontal blur + 1-H delay-line vertical averaging),
@@ -162,20 +163,30 @@ vec3 palChroma(vec2 pos) {
   );
 }
 
-// Slot-mask phosphor pattern. Each output pixel sits on one of three
-// phosphor stripes (R, G, or B). The "+ pos.y * 3.0" creates the
-// signature diagonal stagger that distinguishes slot masks from pure
-// vertical aperture grilles. Period of 6 output pixels for the RGB
-// triad gives ~0.42mm dot pitch when the canvas is rendered at the
-// 1084S display size on a typical modern monitor.
+// Slot-mask phosphor pattern. Cosine-modulated rather than hard-edged
+// because real 0.42mm pitch on common displays falls below the 3-stripe
+// hard-mask Nyquist (≤4 device px per triad → each stripe sub-pixel,
+// aliases into chroma noise). The three channels are 120° out of phase
+// so their sum is constant — total luminance is preserved exactly,
+// unlike the old 50/50 ramp that needed u_brightness=1.25 compensation.
+//
+// The diagonal stagger (pos.x += pos.y * period/2) gives the slot-mask
+// look — every second row shifts by half a triad, distinguishing it
+// from a pure aperture grille's vertical stripes. u_maskPeriod is in
+// device pixels and is driven by the caller from
+// (0.42mm × 96/25.4 × DPR), floored at 3 device px so even at extreme
+// low-DPI the cosine stays at-or-above Nyquist.
 vec3 mask(vec2 pos) {
-  pos.x += pos.y * 3.0;
-  vec3 m = vec3(u_maskDark);
-  pos.x = fract(pos.x / 6.0);
-  if (pos.x < 0.333)      m.r = u_maskLight;
-  else if (pos.x < 0.666) m.g = u_maskLight;
-  else                    m.b = u_maskLight;
-  return m;
+  pos.x += pos.y * (u_maskPeriod * 0.5);
+  float phase = pos.x * 6.2831853 / u_maskPeriod;
+  // 120° offsets: R at 0, G at 2π/3, B at 4π/3. The 0.5+0.5*cos maps
+  // each channel into [0, 1] before lerping into [maskDark, maskLight].
+  vec3 raw = vec3(
+    0.5 + 0.5 * cos(phase),
+    0.5 + 0.5 * cos(phase - 2.0943951),
+    0.5 + 0.5 * cos(phase - 4.1887902)
+  );
+  return mix(vec3(u_maskDark), vec3(u_maskLight), raw);
 }
 
 // Subtle barrel warp. 1084S CRTs are fairly flat compared to a 70s TV
@@ -228,4 +239,4 @@ void main() {
   col *= u_brightness;
   gl_FragColor = vec4(toSrgb(col), 1.0);
 }
-`;function g(o,s,e){const r=o.createShader(s);if(!r)throw new Error("CRT shader create failed");if(o.shaderSource(r,e),o.compileShader(r),!o.getShaderParameter(r,o.COMPILE_STATUS)){const i=o.getShaderInfoLog(r);throw o.deleteShader(r),new Error(`CRT shader compile error: ${i??"(no log)"}`)}return r}function U(o,s,e){const r=o.createProgram();if(!r)throw new Error("CRT program create failed");if(o.attachShader(r,s),o.attachShader(r,e),o.linkProgram(r),!o.getProgramParameter(r,o.LINK_STATUS)){const i=o.getProgramInfoLog(r);throw o.deleteProgram(r),new Error(`CRT program link error: ${i??"(no log)"}`)}return r}function L(o){const s=o.getContext("webgl",{premultipliedAlpha:!1,alpha:!1,antialias:!1,preserveDrawingBuffer:!1});if(!s)throw new Error("WebGL not available");const e=s,r=g(e,e.VERTEX_SHADER,y),i=g(e,e.FRAGMENT_SHADER,P),a=U(e,r,i),f=e.createBuffer();e.bindBuffer(e.ARRAY_BUFFER,f),e.bufferData(e.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),e.STATIC_DRAW);const c=e.createTexture();e.bindTexture(e.TEXTURE_2D,c),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MIN_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MAG_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_S,e.CLAMP_TO_EDGE),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_T,e.CLAMP_TO_EDGE);const t={src:e.getUniformLocation(a,"u_src"),srcSize:e.getUniformLocation(a,"u_srcSize"),outSize:e.getUniformLocation(a,"u_outSize"),hardScan:e.getUniformLocation(a,"u_hardScan"),hardPix:e.getUniformLocation(a,"u_hardPix"),maskDark:e.getUniformLocation(a,"u_maskDark"),maskLight:e.getUniformLocation(a,"u_maskLight"),warpX:e.getUniformLocation(a,"u_warpX"),warpY:e.getUniformLocation(a,"u_warpY"),bloom:e.getUniformLocation(a,"u_bloom"),brightness:e.getUniformLocation(a,"u_brightness"),palMode:e.getUniformLocation(a,"u_palMode")},d=e.getAttribLocation(a,"a_pos");let v=0;function b(u){v=u?1:0}function w(u,p,h,n,l){o.width!==n&&(o.width=n),o.height!==l&&(o.height=l),e.viewport(0,0,n,l),e.clearColor(0,0,0,1),e.clear(e.COLOR_BUFFER_BIT),e.bindTexture(e.TEXTURE_2D,c),e.pixelStorei(e.UNPACK_FLIP_Y_WEBGL,!0),e.texImage2D(e.TEXTURE_2D,0,e.RGBA,p,h,0,e.RGBA,e.UNSIGNED_BYTE,u);const x=p>=480,m=h>=280,T=m?-1:-8,S=x?-5:-3,E=m?.1:.18,R=m?1.1:1.25;e.useProgram(a),e.activeTexture(e.TEXTURE0),e.bindTexture(e.TEXTURE_2D,c),e.uniform1i(t.src,0),e.uniform2f(t.srcSize,p,h),e.uniform2f(t.outSize,n,l),e.uniform1f(t.hardScan,T),e.uniform1f(t.hardPix,S),e.uniform1f(t.maskDark,.5),e.uniform1f(t.maskLight,1.5),e.uniform1f(t.warpX,1/96),e.uniform1f(t.warpY,1/72),e.uniform1f(t.bloom,E),e.uniform1f(t.brightness,R),e.uniform1f(t.palMode,v),e.bindBuffer(e.ARRAY_BUFFER,f),e.enableVertexAttribArray(d),e.vertexAttribPointer(d,2,e.FLOAT,!1,0,0),e.drawArrays(e.TRIANGLE_STRIP,0,4)}function _(){e.deleteProgram(a),e.deleteShader(r),e.deleteShader(i),e.deleteBuffer(f),e.deleteTexture(c)}return{render:w,setPalMode:b,dispose:_}}export{L as createCrtRenderer};
+`;function b(o,s,e){const r=o.createShader(s);if(!r)throw new Error("CRT shader create failed");if(o.shaderSource(r,e),o.compileShader(r),!o.getShaderParameter(r,o.COMPILE_STATUS)){const i=o.getShaderInfoLog(r);throw o.deleteShader(r),new Error(`CRT shader compile error: ${i??"(no log)"}`)}return r}function L(o,s,e){const r=o.createProgram();if(!r)throw new Error("CRT program create failed");if(o.attachShader(r,s),o.attachShader(r,e),o.linkProgram(r),!o.getProgramParameter(r,o.LINK_STATUS)){const i=o.getProgramInfoLog(r);throw o.deleteProgram(r),new Error(`CRT program link error: ${i??"(no log)"}`)}return r}function A(o){const s=o.getContext("webgl",{premultipliedAlpha:!1,alpha:!1,antialias:!1,preserveDrawingBuffer:!1});if(!s)throw new Error("WebGL not available");const e=s,r=b(e,e.VERTEX_SHADER,k),i=b(e,e.FRAGMENT_SHADER,U),a=L(e,r,i),u=e.createBuffer();e.bindBuffer(e.ARRAY_BUFFER,u),e.bufferData(e.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),e.STATIC_DRAW);const n=e.createTexture();e.bindTexture(e.TEXTURE_2D,n),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MIN_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MAG_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_S,e.CLAMP_TO_EDGE),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_T,e.CLAMP_TO_EDGE);const t={src:e.getUniformLocation(a,"u_src"),srcSize:e.getUniformLocation(a,"u_srcSize"),outSize:e.getUniformLocation(a,"u_outSize"),hardScan:e.getUniformLocation(a,"u_hardScan"),hardPix:e.getUniformLocation(a,"u_hardPix"),maskDark:e.getUniformLocation(a,"u_maskDark"),maskLight:e.getUniformLocation(a,"u_maskLight"),warpX:e.getUniformLocation(a,"u_warpX"),warpY:e.getUniformLocation(a,"u_warpY"),bloom:e.getUniformLocation(a,"u_bloom"),brightness:e.getUniformLocation(a,"u_brightness"),palMode:e.getUniformLocation(a,"u_palMode"),maskPeriod:e.getUniformLocation(a,"u_maskPeriod")},d=e.getAttribLocation(a,"a_pos");let v=0,g=3;function w(c){v=c?1:0}function _(c){g=Math.max(3,Number.isFinite(c)?c:3)}function x(c,p,h,l,f){o.width!==l&&(o.width=l),o.height!==f&&(o.height=f),e.viewport(0,0,l,f),e.clearColor(0,0,0,1),e.clear(e.COLOR_BUFFER_BIT),e.bindTexture(e.TEXTURE_2D,n),e.pixelStorei(e.UNPACK_FLIP_Y_WEBGL,!0),e.texImage2D(e.TEXTURE_2D,0,e.RGBA,p,h,0,e.RGBA,e.UNSIGNED_BYTE,c);const S=p>=480,m=h>=280,P=m?-1:-8,R=S?-5:-3,y=m?.1:.18,E=m?1:1.1;e.useProgram(a),e.activeTexture(e.TEXTURE0),e.bindTexture(e.TEXTURE_2D,n),e.uniform1i(t.src,0),e.uniform2f(t.srcSize,p,h),e.uniform2f(t.outSize,l,f),e.uniform1f(t.hardScan,P),e.uniform1f(t.hardPix,R),e.uniform1f(t.maskDark,.5),e.uniform1f(t.maskLight,1.5),e.uniform1f(t.warpX,1/96),e.uniform1f(t.warpY,1/72),e.uniform1f(t.bloom,y),e.uniform1f(t.brightness,E),e.uniform1f(t.palMode,v),e.uniform1f(t.maskPeriod,g),e.bindBuffer(e.ARRAY_BUFFER,u),e.enableVertexAttribArray(d),e.vertexAttribPointer(d,2,e.FLOAT,!1,0,0),e.drawArrays(e.TRIANGLE_STRIP,0,4)}function T(){e.deleteProgram(a),e.deleteShader(r),e.deleteShader(i),e.deleteBuffer(u),e.deleteTexture(n)}return{render:x,setPalMode:w,setMaskPeriod:_,dispose:T}}export{A as createCrtRenderer};

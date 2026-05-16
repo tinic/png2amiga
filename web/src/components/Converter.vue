@@ -166,6 +166,15 @@ function renderCrt() {
   // delay-line averaging, chromatic aberration). Amiga modes assume an
   // 1084S RGB monitor — leave PAL mode off.
   crtRenderer.setPalMode(isC64Mode(options.mode))
+  // 1084S dot pitch is 0.42mm. CSS spec is 96 dpi = 3.78 px/mm, so one
+  // triad in device pixels = 0.42 × 3.78 × DPR ≈ 1.6 (1×) / 3.2 (Retina) /
+  // 4.8 (DPR=3 phones). The renderer floors at 3 (Nyquist for the cosine
+  // mask), so 1× / low-DPI displays cap at "the finest phosphor pitch we
+  // can render," and high-DPR displays approach the real 0.42mm pitch as
+  // pixels get smaller. This is the actual constraint — phosphors finer
+  // than your display can't be reproduced.
+  const maskPeriod = 0.42 * (96 / 25.4) * DPR
+  crtRenderer.setMaskPeriod(maskPeriod)
   crtRenderer.render(lastRgba, lastSrc.w, lastSrc.h, dw, dh)
 }
 const resultInfo = ref('')
