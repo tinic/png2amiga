@@ -1085,24 +1085,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // Reject dither methods that don't apply to the chosen mode rather
-    // than silently fall through to a degraded encode. HAM has no
-    // discrete palette per pixel — the encoder picks SET/MODIFY ops
-    // dynamically — so palette-pair / palette-index methods (yliluoma
-    // family, dbs) silently degenerate. SNES Mode 7
-    // Direct has no palette table at all, same problem for the
-    // yliluoma family. Web frontend has matching auto-fallback gates
-    // (see Converter.vue HAM_INCOMPATIBLE_DITHERS); CLI errors out
-    // because scripted callers picked the dither for a reason.
+    // than silently fall through to a degraded encode. SNES Mode 7
+    // Direct has no palette table at all so palette-aware methods are
+    // rejected; DBS sweeps palette indices and has no HAM equivalent.
+    // HAM modes used to be a blanket reject for yliluoma-family methods
+    // on the "no discrete palette" argument; ham.cpp now builds a per-
+    // pixel reachable set (SET ∪ MODIFY-R/G/B of prev) and feeds it to
+    // the yliluoma pickers, so opt-* / yliluoma / knoll / tri-tone work
+    // on HAM6/HAM7/HAM8 (including --sliced). Web frontend's
+    // HAM_INCOMPATIBLE_DITHERS list should be kept in sync.
     if (auto dm = parse_dither(options.dither); dither::needs_discrete_palette(dm)) {
-        if (amiga::is_ham(mode)) {
+        if (amiga::is_ham(mode) && dm == dither::Method::dbs) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "Dither '" + options.dither +
-                    "' needs a discrete palette "
-                    "and silently degenerates in HAM modes (no per-pixel "
-                    "palette index — encoder picks SET/MODIFY ops). Use "
-                    "atkinson, floyd-steinberg, sierra-lite, jarvis, "
-                    "stucki, or an ordered method.",
+                "Dither 'dbs' sweeps palette indices and has no equivalent "
+                "on HAM modes. Use atkinson, floyd-steinberg, sierra-lite, "
+                "jarvis, stucki, opt-*, yliluoma, or an ordered method.",
             }};
         }
         if (amiga::is_snes_direct(mode) && dither::is_yliluoma(dm)) {

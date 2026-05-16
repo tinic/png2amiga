@@ -247,11 +247,12 @@ bool needs_riemersma_queue(Method method);
 bool is_yliluoma(Method method);
 
 // Methods that need a discrete palette to operate on: yliluoma family
-// (palette-aware ordered) (variable scaling against the
-// nearest palette pair), and DBS (sweeps palette indices). HAM modes
-// have no palette to dither against per pixel — the encoder picks
-// SET/MODIFY ops dynamically — so these methods silently degenerate.
-// Also true of SNES Mode 7 Direct (no palette table at all).
+// (palette-aware ordered) (variable scaling against the nearest palette
+// pair), and DBS (sweeps palette indices). HAM modes have no STATIC
+// palette but ham.cpp builds a per-pixel reachable set (SET ∪ MODIFY-
+// R/G/B variants of prev) and feeds it to the same pickers, so opt-*
+// and yliluoma are supported on HAM6/HAM7/HAM8 (including --sliced).
+// SNES Mode 7 Direct has no palette table at all — still degenerate.
 bool needs_discrete_palette(Method method);
 
 // Per-pixel Yliluoma quantizer. Builds the 64-step mixing plan against

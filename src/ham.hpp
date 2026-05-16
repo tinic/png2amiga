@@ -167,6 +167,23 @@ ScanlineResult encode_scanline_dp_per_strip(std::span<const Color3f> target_row,
                                             std::size_t beam_width,
                                             HamMetric metric);
 
+// Per-strip palette-aware ordered-dither HAM encoder. Drives a yliluoma-
+// family picker (opt-checker / opt-line / opt-vline / opt-line-checker /
+// opt-vline-checker / yliluoma{,1,2} / knoll / tri-tone) over the per-
+// pixel HAM-reachable set (SET ∪ MODIFY-R/G/B variants of prev), using
+// `pres[strip_for_x[x]]` + `base_srgbs[strip_for_x[x]]` at each column.
+// Returns the per-pixel HAM codes; HAM prev state crosses strip
+// boundaries unchanged.
+ScanlineResult encode_scanline_ham_pal_aware_per_strip(
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    dither::Method method,
+    float strength,
+    std::size_t y);
+
 // Triple-pixel refinement post-pass for per-strip encoded scanlines.
 // Same algorithm as the single-palette refine_triple inside ham.cpp,
 // but each pixel's HAM op is scored against pres[strip_for_x[i]] /

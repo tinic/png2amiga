@@ -8,6 +8,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { deflateSync, crc32 } from 'node:zlib'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const OUT_DIR = path.resolve(import.meta.dirname, '../public/dither-thumbs')
 const RAMP_W = 32
@@ -129,7 +130,10 @@ async function main() {
     origErr(...a)
   }
 
-  const { default: createPng2Amiga } = await import(wasmPath)
+  // Node 22 on Windows rejects bare drive-letter paths in dynamic
+  // import() — must be a file:// URL. pathToFileURL is a no-op on
+  // POSIX, so this is safe to apply unconditionally.
+  const { default: createPng2Amiga } = await import(pathToFileURL(wasmPath).href)
   const Module = await createPng2Amiga({ wasmBinary: wasmBytes })
   console.error = origErr
 

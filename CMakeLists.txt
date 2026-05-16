@@ -2293,6 +2293,25 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}
             -- --mode ham6 --dither atkinson)
+    # HAM palette-aware ordered dithers — ham.cpp builds a per-pixel
+    # reachable set (SET ∪ MODIFY-R/G/B of prev) and feeds it to the
+    # yliluoma pickers. Coverage for both single-palette and --sliced.
+    add_test(NAME "api-equiv-ham6-opt-checker"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --dither opt-checker)
+    add_test(NAME "api-equiv-ham6-opt-line"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --dither opt-line)
+    add_test(NAME "api-equiv-ham6-yliluoma"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --dither yliluoma)
+    add_test(NAME "api-equiv-ham6-sliced-opt-checker"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode ham6 --sliced --dither opt-checker)
     add_test(NAME "api-equiv-ehb-stucki"
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}

@@ -217,6 +217,167 @@ inline HamPixelResult encode_ham_pixel_impl(SRGBColor prev,
 }
 
 // ---------------------------------------------------------------------------
+// Palette-aware ordered dithering for HAM modes
+//
+// The opt-* / yliluoma family picks a palette index by ranking pair (or
+// plan) averages against a target — they want a discrete candidate set,
+// not a scalar threshold bias. HAM has no static palette but it does have
+// a per-pixel reachable set: base[0..N) ∪ MODIFY-R(d)/G(d)/B(d) of the
+// previous output pixel for each data value d. Building that set and
+// feeding it to the existing dither::pick_* primitives is exactly what
+// ham_convert (mrsebe) calls "Checks (lines-mixed, optimal)" for HAM6.
+//
+// Cost per pixel: |candidates|² for the O(N²) pair search. HAM6 → 64²
+// ≈ 4K ops, HAM8 → 256² ≈ 65K ops. Per scanline at HAM6/320 that's ~1.3M
+// ops — cheap compared with the DP beam search the non-dithered path
+// runs.
+// ---------------------------------------------------------------------------
+
+// Per-thread scratch for the candidate enumerator: OKLab + parallel HAM
+// code + sRGB-output arrays. Sized once to base + 3 × num_data_values
+// (HAM6 → 64, HAM8 → 256) and reused across rows by each worker.
+struct HamCandidateScratch {
+    std::vector<OKLab> lab;
+    std::vector<SRGBColor> srgb;
+    std::vector<std::uint8_t> code;
+    void resize(std::size_t n) {
+        if (lab.size() != n) {
+            lab.resize(n);
+            srgb.resize(n);
+            code.resize(n);
+        }
+    }
+};
+
+// Fill `s` with the full reachable HAM candidate set given the previous
+// output pixel `prev`. SET candidates first (indices [0, base.size())),
+// then MODIFY-B / MODIFY-R / MODIFY-G runs of `num_data_values` each.
+// Layout is fixed so the parallel `code` array can be derived once and
+// reused across pixels with only the MODIFY-* sRGB entries changing.
+inline void enumerate_ham_candidates(SRGBColor prev,
+                                     const HamPrecomp& pre,
+                                     std::span<const SRGBColor> base_srgb,
+                                     HamCandidateScratch& s) {
+    const std::size_t db = pre.data_bits;
+    const std::size_t nd = pre.num_data_values;
+    const std::size_t n_base = base_srgb.size();
+    s.resize(n_base + 3 * nd);
+
+    for (std::size_t i = 0; i < n_base; ++i) {
+        s.lab[i] = pre.palette_lab[i];
+        s.srgb[i] = base_srgb[i];
+        s.code[i] = make_ham_value(0b00, static_cast<std::uint8_t>(i), db);
+    }
+    auto fill_modify = [&](std::size_t off, std::uint8_t ctrl, auto channel) {
+        for (std::size_t d = 0; d < nd; ++d) {
+            auto v8 = pre.expand_lut[d];
+            SRGBColor c = channel(prev, v8);
+            s.srgb[off + d] = c;
+            s.lab[off + d] = color_space::linear_to_oklab(srgb8_to_linear(c));
+            s.code[off + d] = make_ham_value(ctrl, static_cast<std::uint8_t>(d), db);
+        }
+    };
+    fill_modify(n_base + 0 * nd, 0b01, [](SRGBColor p, std::uint8_t v) {
+        return SRGBColor{p.r, p.g, v};
+    });
+    fill_modify(n_base + 1 * nd, 0b10, [](SRGBColor p, std::uint8_t v) {
+        return SRGBColor{v, p.g, p.b};
+    });
+    fill_modify(n_base + 2 * nd, 0b11, [](SRGBColor p, std::uint8_t v) {
+        return SRGBColor{p.r, v, p.b};
+    });
+}
+
+// Dispatch a yliluoma-family palette-aware picker on the given candidate
+// span. Mirrors dither.cpp's is_yliluoma() coverage 1:1.
+inline std::uint8_t dispatch_palette_aware_pick(dither::Method method,
+                                                const OKLab& target,
+                                                std::span<const OKLab> cand_lab,
+                                                std::size_t x,
+                                                std::size_t y,
+                                                float strength) {
+    using M = dither::Method;
+    switch (method) {
+    case M::opt_checker:       return dither::pick_opt_checker_index(target, cand_lab, x, y, strength);
+    case M::opt_line:          return dither::pick_opt_line_index(target, cand_lab, x, y, strength);
+    case M::opt_line_checker:  return dither::pick_opt_line_checker_index(target, cand_lab, x, y, strength);
+    case M::opt_vline:         return dither::pick_opt_vline_index(target, cand_lab, x, y, strength);
+    case M::opt_vline_checker: return dither::pick_opt_vline_checker_index(target, cand_lab, x, y, strength);
+    case M::yliluoma:          return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/false, strength);
+    case M::yliluoma2:         return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/true,  strength);
+    case M::yliluoma1:         return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/false, strength);
+    case M::knoll:             return dither::pick_knoll_index(target, cand_lab, x, y, strength);
+    case M::tri_tone:          return dither::pick_tri_tone_index(target, cand_lab, x, y, strength);
+    default:                   return 0;  // unreachable — caller gates on is_yliluoma()
+    }
+}
+
+// Per-scanline HAM encoder driven by a palette-aware ordered dither.
+// At each pixel: enumerate the reachable set (SET + MODIFY-{R,G,B}),
+// pair-pick against it, emit the picked code, advance prev. Sequential
+// within a row (HAM's prev-pixel dependency) but rows are independent —
+// caller parallelizes over rows the same way the non-dithered path does.
+ScanlineResult encode_scanline_ham_pal_aware(std::span<const Color3f> target_row,
+                                             SRGBColor start_color,
+                                             const HamPrecomp& pre,
+                                             std::span<const SRGBColor> base_srgb,
+                                             dither::Method method,
+                                             float strength,
+                                             std::size_t y) {
+    thread_local HamCandidateScratch scratch;
+    const std::size_t w = target_row.size();
+    std::vector<std::uint8_t> values(w);
+    float total_err = 0.0f;
+    SRGBColor prev = start_color;
+    for (std::size_t x = 0; x < w; ++x) {
+        enumerate_ham_candidates(prev, pre, base_srgb, scratch);
+        auto target_lab = color_space::linear_to_oklab(target_row[x]);
+        std::span<const OKLab> cand_lab{scratch.lab.data(), scratch.lab.size()};
+        auto idx = dispatch_palette_aware_pick(method, target_lab, cand_lab, x, y, strength);
+        if (idx >= scratch.code.size()) idx = 0;  // defensive — shouldn't happen
+        values[x] = scratch.code[idx];
+        prev = scratch.srgb[idx];
+        total_err += score_oklab2(target_lab, scratch.lab[idx]);
+    }
+    return {std::move(values), total_err};
+}
+
+// Per-strip variant for sliced/strips HAM. Strip lookup `strip_for_x[x]`
+// selects which (pre, base_srgb) pair applies at column x; everything
+// else mirrors the single-palette encoder above. HAM's prev-pixel state
+// crosses strip boundaries unchanged — the chip's MODIFY ops act on the
+// last output pixel regardless of which palette register was active.
+ScanlineResult encode_scanline_ham_pal_aware_per_strip_impl(
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    dither::Method method,
+    float strength,
+    std::size_t y) {
+
+    thread_local HamCandidateScratch scratch;
+    const std::size_t w = target_row.size();
+    std::vector<std::uint8_t> values(w);
+    float total_err = 0.0f;
+    SRGBColor prev = start_color;
+    for (std::size_t x = 0; x < w; ++x) {
+        std::size_t s = (x < strip_for_x.size()) ? strip_for_x[x] : 0;
+        if (s >= pres.size()) s = 0;
+        enumerate_ham_candidates(prev, pres[s], base_srgbs[s], scratch);
+        auto target_lab = color_space::linear_to_oklab(target_row[x]);
+        std::span<const OKLab> cand_lab{scratch.lab.data(), scratch.lab.size()};
+        auto idx = dispatch_palette_aware_pick(method, target_lab, cand_lab, x, y, strength);
+        if (idx >= scratch.code.size()) idx = 0;
+        values[x] = scratch.code[idx];
+        prev = scratch.srgb[idx];
+        total_err += score_oklab2(target_lab, scratch.lab[idx]);
+    }
+    return {std::move(values), total_err};
+}
+
+// ---------------------------------------------------------------------------
 // Choose a base palette for HAM from the image
 // ---------------------------------------------------------------------------
 
@@ -1486,8 +1647,47 @@ Result<HamResult> encode_ham_generic(const Image& image,
     bool use_ordered_dither = (opts.dither_method != dither::Method::none) &&
                               dither::is_ordered(opts.dither_method) &&
                               opts.dither_method != dither::Method::none;
+    bool use_pal_aware_dither = dither::is_yliluoma(opts.dither_method);
 
-    if (use_ordered_dither) {
+    if (use_pal_aware_dither) {
+        // Palette-aware ordered dither (opt-checker / opt-line / yliluoma /
+        // knoll / tri-tone). Per pixel: enumerate the reachable HAM set
+        // (SET ∪ MODIFY-R/G/B variants of prev) and run the picker on it.
+        // Same per-scanline parallelism shape as the non-dithered DP path —
+        // each row is independent.
+        auto strength = opts.dither_strength;
+        auto method = opts.dither_method;
+        std::atomic<std::size_t> next_y{0};
+        std::atomic<double> atomic_err{0.0};
+        auto worker = [&]() {
+            while (true) {
+                auto y = next_y.fetch_add(1);
+                if (y >= h) break;
+                SRGBColor start = base_srgb[0];
+                auto row = image.row(y);
+                auto sl = encode_scanline_ham_pal_aware(
+                    row, start, pre, srgb_span, method, strength, y);
+                std::copy(sl.values.begin(),
+                          sl.values.end(),
+                          ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
+                double old = atomic_err.load(std::memory_order_relaxed);
+                while (!atomic_err.compare_exchange_weak(old,
+                                                         old + static_cast<double>(sl.error))) {}
+            }
+        };
+        auto n_threads = std::max<unsigned>(1, std::thread::hardware_concurrency());
+        if (n_threads > h) n_threads = static_cast<unsigned>(h);
+        if (n_threads == 1) {
+            worker();
+        } else {
+            std::vector<std::jthread> threads;
+            threads.reserve(n_threads);
+            for (unsigned i = 0; i < n_threads; ++i)
+                threads.emplace_back(worker);
+            threads.clear();
+        }
+        total_error += static_cast<float>(atomic_err.load());
+    } else if (use_ordered_dither) {
         // Ordered dithering: apply threshold bias to target colors before encoding.
         auto strength = opts.dither_strength;
         std::atomic<std::size_t> next_y{0};
@@ -2009,6 +2209,7 @@ Result<HamResult> encode_ham_copper_generic(const Image& image,
     bool use_error_diffusion = dither::uses_error_diffusion(opts.dither_method);
     bool use_ordered = (opts.dither_method != dither::Method::none) &&
                        dither::is_ordered(opts.dither_method);
+    bool use_pal_aware = dither::is_yliluoma(opts.dither_method);
 
     // For error diffusion: pre-dither image to chipset precision (same fix
     // as non-copper path). The dithered image is used for both copper palette
@@ -2178,7 +2379,15 @@ Result<HamResult> encode_ham_copper_generic(const Image& image,
                                     data_bits};
 
                 float err;
-                if (use_ordered) {
+                if (use_pal_aware) {
+                    auto sl = encode_scanline_ham_pal_aware(
+                        row, start, line_pre, srgb_span,
+                        opts.dither_method, opts.dither_strength, y);
+                    std::copy(sl.values.begin(),
+                              sl.values.end(),
+                              out.ham_values.begin() + static_cast<std::ptrdiff_t>(y * w));
+                    err = sl.error;
+                } else if (use_ordered) {
                     std::vector<Color3f> dithered_row(w);
                     for (std::size_t x = 0; x < w; ++x) {
                         auto lab = color_space::linear_to_oklab(row[x]);
@@ -2379,6 +2588,19 @@ ScanlineResult encode_scanline_dp_per_strip(std::span<const Color3f> target_row,
                                             HamMetric metric) {
     return encode_scanline_dp_per_strip_impl(
         target_row, start_color, pres, base_srgbs, strip_for_x, beam_width, metric);
+}
+
+ScanlineResult encode_scanline_ham_pal_aware_per_strip(
+    std::span<const Color3f> target_row,
+    SRGBColor start_color,
+    std::span<const HamPrecomp> pres,
+    std::span<const std::span<const SRGBColor>> base_srgbs,
+    std::span<const std::uint16_t> strip_for_x,
+    dither::Method method,
+    float strength,
+    std::size_t y) {
+    return encode_scanline_ham_pal_aware_per_strip_impl(
+        target_row, start_color, pres, base_srgbs, strip_for_x, method, strength, y);
 }
 
 void refine_scanline_triple_per_strip(std::vector<std::uint8_t>& values,

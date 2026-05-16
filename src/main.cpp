@@ -5871,21 +5871,25 @@ int run_main(int argc, char* argv[]) {
 
         // Reject dither methods that don't apply to the chosen mode —
         // but only when the user passed --dither explicitly. The
-        // default (ostromoukhov) hits the same incompatibility on
-        // HAM, so silent auto-fallback there matches the web's
-        // HAM_INCOMPATIBLE_DITHERS watcher and keeps existing scripts
-        // / CMake invocations working without --dither. Explicit
-        // picks fail loud — scripted callers chose them for a reason.
+        // default (ostromoukhov) hits the same incompatibility on some
+        // modes, so silent auto-fallback there keeps existing scripts /
+        // CMake invocations working without --dither. Explicit picks
+        // fail loud — scripted callers chose them for a reason.
+        //
+        // HAM modes used to be rejected here on the "no discrete
+        // palette" argument; ham.cpp now builds a per-pixel reachable
+        // set (SET ∪ MODIFY-R/G/B variants of prev) and feeds it to the
+        // yliluoma pickers, so opt-* / yliluoma / knoll / tri-tone work
+        // on HAM6/HAM7/HAM8 (including --sliced). DBS is still rejected
+        // — it sweeps palette indices, no equivalent on HAM.
         if (config->dither_explicit && dither::needs_discrete_palette(config->dither_method)) {
             auto dname = dither_name(config->dither_method);
-            if (amiga::is_ham(config->mode)) {
+            if (amiga::is_ham(config->mode) && config->dither_method == dither::Method::dbs) {
                 std::println(stderr,
-                             "Error: dither '{}' needs a discrete palette and "
-                             "silently degenerates in HAM modes (no per-pixel "
-                             "palette index — encoder picks SET/MODIFY ops). "
-                             "Use atkinson, floyd-steinberg, sierra-lite, jarvis, "
-                             "stucki, or an ordered method.",
-                             dname);
+                             "Error: dither 'dbs' sweeps palette indices and has "
+                             "no equivalent on HAM modes. Use atkinson, "
+                             "floyd-steinberg, sierra-lite, jarvis, stucki, opt-*, "
+                             "yliluoma, or an ordered method.");
                 return 1;
             }
             if (amiga::is_snes_direct(config->mode) && dither::is_yliluoma(config->dither_method)) {

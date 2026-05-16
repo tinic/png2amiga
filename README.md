@@ -513,7 +513,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.88.0.1066
+png2amiga 1.93.0.1116
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -693,10 +693,8 @@ Build integration:
 Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
 
-Exit codes (sysexits.h):
-  0 ok    1 internal    64 usage    66 no input    73 cannot create
-
 ```
+
 
 ## License
 

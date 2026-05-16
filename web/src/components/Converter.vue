@@ -667,7 +667,10 @@ const YLIL_FAMILY = new Set([
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
   const hide_nonsquare = ht !== null
-  const hide_yliluoma = ht !== null || isSnesDirectMode(options.mode)
+  // SNES Mode 7 Direct has no palette table at all → yliluoma family
+  // has nothing to mix. HAM does support the family (ham.cpp's per-
+  // pixel reachable set), so only Mode 7 Direct hides it now.
+  const hide_yliluoma = isSnesDirectMode(options.mode)
   // DBS sweeps palette indices and so doesn't apply in HAM (no fixed
   // palette) or SNES Mode 7 Direct (RGB443 grid quantisation).
   const hide_dbs = ht !== null || isSnesDirectMode(options.mode)
@@ -894,17 +897,13 @@ function syncNativeParToMode(mode: string, oldMode: string): void {
   if (!fixedNew) options.nativePar = false
 }
 
-// Methods that don't dither in HAM — auto-fallback to atkinson on mode
-// change so the dither dropdown never shows a "selected but inactive"
-// pick. Yliluoma-family methods need a palette index per pixel, which
-// HAM doesn't have (it picks SET/MODIFY ops); DBS sweeps palette indices
-// for the same reason. Plain FS is valid for HAM (used as a pre-pass
-// before the DP beam search).
-const HAM_INCOMPATIBLE_DITHERS = new Set([
-  'yliluoma', 'yliluoma2', 'opt-checker', 'knoll',
-  'tri-tone', 'yliluoma1', 'opt-line', 'opt-line-checker',
-  'opt-vline', 'opt-vline-checker', 'dbs',
-])
+// Methods that don't dither in HAM — auto-fallback on mode change so
+// the dither dropdown never shows a "selected but inactive" pick. The
+// yliluoma family (opt-* / yliluoma / knoll / tri-tone) IS supported on
+// HAM now (ham.cpp builds a per-pixel reachable set and feeds it to the
+// pickers, mirroring ham_convert's "Checks (lines-mixed, optimal)"),
+// so only DBS — which sweeps palette indices — stays incompatible.
+const HAM_INCOMPATIBLE_DITHERS = new Set(['dbs'])
 
 function maybeFallbackHamDither(mode: string): void {
   if (hamType(mode) !== null && HAM_INCOMPATIBLE_DITHERS.has(options.dither)) {

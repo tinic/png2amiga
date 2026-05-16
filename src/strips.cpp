@@ -3348,14 +3348,30 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
         // the swap set is monotonically optimal under the same metric
         // we evaluate here. Run one more DP encode + triple-pixel
         // refinement to produce the final ham_values for this row.
+        //
+        // Palette-aware ordered dither (opt-checker / opt-line /
+        // yliluoma / knoll / tri-tone) replaces the DP encode with a
+        // per-pixel pair-pick over the strip-active reachable set. The
+        // swap planner above still scored via DP — palette-aware
+        // intentionally trades a small amount of single-row optimality
+        // for the visual benefit of the dither pattern, so we let the
+        // planner optimize for "best HAM encoding given these palettes"
+        // and then the final encode applies the dither.
         auto pres_span = std::span<const ham::HamPrecomp>(cur_pres.data(), cur_pres.size());
         auto srgbs_span = std::span<const std::span<const ham::SRGBColor>>(cur_srgb_spans.data(),
                                                                            cur_srgb_spans.size());
         ham::SRGBColor start = cur_srgbs[0].empty() ? ham::SRGBColor{0, 0, 0} : cur_srgbs[0][0];
-        auto sl = ham::encode_scanline_dp_per_strip(
-            row_span, start, pres_span, srgbs_span, idx_span, kBeamWidth, ham_metric);
-        ham::refine_scanline_triple_per_strip(
-            sl.values, row_span, start, pres_span, srgbs_span, idx_span, kTripleBeam, ham_metric);
+        ham::ScanlineResult sl;
+        if (dither::is_yliluoma(dither_settings.method)) {
+            sl = ham::encode_scanline_ham_pal_aware_per_strip(
+                row_span, start, pres_span, srgbs_span, idx_span,
+                dither_settings.method, dither_settings.strength, y);
+        } else {
+            sl = ham::encode_scanline_dp_per_strip(
+                row_span, start, pres_span, srgbs_span, idx_span, kBeamWidth, ham_metric);
+            ham::refine_scanline_triple_per_strip(
+                sl.values, row_span, start, pres_span, srgbs_span, idx_span, kTripleBeam, ham_metric);
+        }
         auto& strip_srgbs = cur_srgbs;
         // Render the per-pixel preview by replaying the encoded values
         // through the strip's palette + HAM rolling state.
