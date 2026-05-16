@@ -133,19 +133,29 @@ async function ensureCrtRenderer(): Promise<CrtRenderer | null> {
 }
 function renderCrt() {
   if (!lastRgba || !crtRenderer) return
-  // Backing-store sizing is decoupled from the displayed (CSS) size.
-  // We need ≥4 output rows per source row for the Gaussian beam to
-  // resolve as scanlines instead of a dot grid (with only 2 rows per
-  // source row, hardScan=-8 alternates ~1→~0 in adjacent rows and
-  // the mask modulates each one independently → dot pattern, not
-  // scanlines). For interlace we soften scanlines anyway so 2 rows
-  // suffices. Width oversamples so the slot mask gets ≥6 output pixels
-  // per RGB triad and reads as continuous stripes.
+  // Backing-store sizing combines two constraints:
+  //   1. Match physical screen pixels (cssSize × devicePixelRatio) so
+  //      the shader's mask — keyed off gl_FragCoord at a 6-pixel period
+  //      per RGB triad — lines up with real phosphor pitch on the
+  //      output device. Without DPR scaling, a Windows 1× monitor would
+  //      get a 4× oversampled backing store that the browser then
+  //      downsamples 2× for display — the mask aliases into giant RGB
+  //      fringes that aren't a real CRT artifact. Retina happened to
+  //      look right by coincidence (cssW × 2 ≈ srcW × 4 for lores).
+  //   2. Floor at ≥4 output rows per source row so hardScan=-8's
+  //      Gaussian renders scanlines as continuous curves instead of a
+  //      dot grid (the mask + scanline beat at 2 rows/src looks like
+  //      scattered dots). Interlace softens scanlines, so 2 suffices.
+  //      Width has a 1×-source floor to guarantee the 3-tap horizontal
+  //      filter can address every source pixel (don't OVERshoot it
+  //      though — backing > CSS×DPR forces a browser downsample which
+  //      aliases the mask back into giant fringes).
+  const DPR = globalThis.window.devicePixelRatio || 1
   const isInterlace = lastSrc.h >= 280
-  const yScale = isInterlace ? 2 : 4
-  const xScale = Math.max(2, Math.ceil(1024 / lastSrc.w))
-  const dw = lastSrc.w * xScale
-  const dh = lastSrc.h * yScale
+  const minDw = lastSrc.w
+  const minDh = lastSrc.h * (isInterlace ? 2 : 4)
+  const dw = Math.max(minDw, Math.round(lastDst.w * DPR))
+  const dh = Math.max(minDh, Math.round(lastDst.h * DPR))
   if (crtCanvasRef.value) {
     // Display size matches the regular preview's lastDst so the mode
     // aspect ratio (lores 2:1, hires 1:2 etc.) is preserved.
