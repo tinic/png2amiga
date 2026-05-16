@@ -106,6 +106,16 @@ DOS_BOOT12  = os.path.join(_DOS_BOOT_DIR, "boot12.bin")
 DOS_KERNEL  = os.path.join(_DOS_BOOT_DIR, "KERNL086.SYS")
 DOS_COMMAND = os.path.join(_DOS_BOOT_DIR, "COMMAND.COM")
 
+# Allowed Origin / Referer prefixes for server-side request rejection
+# (see CompileHandler._origin_allowed) and for the CORS response
+# header (see _cors_headers). Single source of truth — adding a new
+# subdomain means updating only this tuple.
+_ALLOWED_ORIGINS = ("https://www.png2amiga.app", "https://png2amiga.app")
+# Pre-built dict mapping each allowed origin to itself, used by the
+# CORS header path to avoid reflecting user-supplied header bytes
+# into the response (CWE-113 echo-back).
+_ALLOWED_ORIGINS_LOOKUP = {o: o for o in _ALLOWED_ORIGINS}
+
 PORT = int(os.environ.get("PORT", "3001"))
 # Max C source size. Worst legitimate generator output is the largest
 # DOS planar mode (vga-12h = 640×480 × 4 planes, ~977 KB source after
@@ -505,6 +515,14 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
+        # Server-side origin enforcement (see _origin_allowed). CORS
+        # headers alone don't stop curl / scripts — this does. Apply
+        # *before* reading the body so an abusive POST gets dropped
+        # at the front door without spending compile cycles.
+        if not self._origin_allowed():
+            self.send_error(403, "forbidden origin")
+            return
+
         params = parse_qs(parsed.query)
         fmt = params.get("format", ["exe"])[0]
         if fmt not in ("exe", "adf", "dos-exe", "dos-img"):
@@ -594,13 +612,42 @@ class CompileHandler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         # Use the constant from the allow-list, not the raw header value,
         # to avoid reflecting user input into the response (CWE-113).
-        allowed = {"https://www.png2amiga.app": "https://www.png2amiga.app",
-                   "https://png2amiga.app": "https://png2amiga.app"}
-        matched = allowed.get(origin)
+        matched = _ALLOWED_ORIGINS_LOOKUP.get(origin)
         if matched is not None:
             self.send_header("Access-Control-Allow-Origin", matched)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def _origin_allowed(self):
+        """Server-side origin enforcement. CORS headers (above) protect
+        BROWSERS — they block JS from reading a response when Origin
+        doesn't match. They do NOT protect against non-browser clients
+        (curl / scripts) that ignore CORS entirely.
+
+        Reject server-side on the same allowlist using either:
+          1. Origin   — sent by browsers on every cross-site POST and
+                        on most same-site POSTs.
+          2. Referer  — full URL, present on same-site navigations and
+                        nearly all browser-initiated requests.
+
+        Both are trivially forgeable by a determined attacker — this
+        stops casual abuse (scrapers using the service as a free
+        DOS-compile-as-a-service) but is not authentication. The
+        meaningful walls are still the bwrap sandbox + rate limit +
+        symbol allowlist + size cap.
+
+        Returns True when AT LEAST ONE of Origin/Referer is allowed.
+        """
+        origin = self.headers.get("Origin", "")
+        if origin in _ALLOWED_ORIGINS_LOOKUP:
+            return True
+        referer = self.headers.get("Referer", "")
+        for allowed in _ALLOWED_ORIGINS:
+            # Match either the bare origin (rare — most browsers send
+            # at least "/" after) or any URL under it.
+            if referer == allowed or referer.startswith(allowed + "/"):
+                return True
+        return False
 
     def log_message(self, format, *args):
         print(f"[compile] {args[0]}", file=sys.stderr)
