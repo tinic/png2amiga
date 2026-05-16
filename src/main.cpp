@@ -7583,13 +7583,17 @@ int run_main(int argc, char* argv[]) {
                 for (std::size_t x = 0; x < image->width(); ++x)
                     dithered[x, y] = text_pal[dith.indices[y * image->width() + x]];
         }
-        // Real CGA hardware has no custom-font slot (unlike EGA/VGA), so
-        // the viewer can only render ROM glyph scanlines 0..(cell_h-1).
-        // When emitting a 16-bit C viewer (.c → ia16-elf-gcc / 8088 XT)
-        // for a CGA text mode, constrain the encoder to offset=0.
-        int fixed_offset = -1;
-        if (amiga::is_cga_text(config->mode) && ends_with(config->output_path, ".c"))
-            fixed_offset = 0;
+        // Real CGA hardware has no custom-font slot (unlike EGA/VGA),
+        // and the 6845's Raster Address counter always starts at 0
+        // within a character row — there's no "starting scanline"
+        // register. So *every* output path (preview, png, c, exe, img)
+        // can only render ROM glyph scanlines 0..(cell_h-1); pin the
+        // encoder offset to 0 unconditionally. Earlier code only
+        // pinned offset=0 when emitting a .c viewer, which let the
+        // preview show rows 2..3 / 4..5 / etc. that an actual CGA
+        // can't reproduce — see the MartyPC vs preview "first colored
+        // row" discrepancy.
+        int fixed_offset = amiga::is_cga_text(config->mode) ? 0 : -1;
 
         // --best is a no-op for cga-text: the glyph matcher is
         // deterministic given (input, palette), and the palette is

@@ -1383,8 +1383,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (std::size_t x = 0; x < image->width(); ++x)
                     dithered[x, y] = text_pal[dith_result.indices[y * image->width() + x]];
         }
+        // fixed_offset = 0: real CGA's 6845 always starts a character
+        // row at scanline 0 of the ROM glyph, with no programmable
+        // offset. Letting the encoder pick from rows 2..3 / 4..5 /
+        // etc. would give a prettier preview but pixels the actual
+        // hardware can't produce. See main.cpp for the same fix.
         auto res = cga_text::encode(
-            dithered, mode, {}, text_pal, -1, cga_metric, cga_kernel, options.on_progress);
+            dithered, mode, {}, text_pal, /*fixed_offset=*/0, cga_metric, cga_kernel, options.on_progress);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
         // No post-double here: result.rendered stays at hardware-pixel

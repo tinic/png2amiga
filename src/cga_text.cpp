@@ -329,9 +329,16 @@ Result<CgaTextResult> encode(const Image& image,
     const CgaPaletteLab& pal = pal_local;
 
     // Try all possible scanline offsets into the glyph (0..glyph_h - cell_h).
-    // The CRTC can be programmed to start the character row at any scanline,
-    // so what we emit as (char byte + attribute byte) is hardware-legal
-    // regardless of offset — the demo just needs the right CRTC setup.
+    // NOTE on hardware realism: on a real 6845 CRTC (CGA / MDA / EGA in
+    // CGA-emu mode) the Raster Address counter always cycles 0..R9, so
+    // only offset=0 reproduces on actual hardware (or any faithful
+    // emulator — MartyPC, 86Box, real iron). Earlier text claiming
+    // "the CRTC can be programmed to start the character row at any
+    // scanline" was wrong — there's no such register. Callers from
+    // main.cpp / api.cpp pin fixed_offset=0 for CGA-text production
+    // builds. The non-zero offsets are kept here for offline experi-
+    // mentation with custom-font emulators (DOSBox-X --setcga etc.)
+    // where the ROM is replaceable.
     // 256 glyphs × N offsets distinct bit patterns per cell.
     std::size_t n_offsets = (font.glyph_height + 1) - cell_h;
     std::size_t offset_start = 0;
