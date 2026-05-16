@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -151,7 +151,7 @@ function renderCrt() {
   //      though — backing > CSS×DPR forces a browser downsample which
   //      aliases the mask back into giant fringes).
   const DPR = globalThis.window.devicePixelRatio || 1
-  const isInterlace = lastSrc.h >= 280
+  const isInterlace = isInterlaceMode(options.mode)
   const minDw = lastSrc.w
   const minDh = lastSrc.h * (isInterlace ? 2 : 4)
   const dw = Math.max(minDw, Math.round(lastDst.w * DPR))
@@ -166,11 +166,14 @@ function renderCrt() {
   // delay-line averaging, chromatic aberration). Amiga modes assume an
   // 1084S RGB monitor — leave PAL mode off.
   crtRenderer.setPalMode(isC64Mode(options.mode))
-  // Interlace flicker — only meaningful for Amiga interlace modes.
-  // The renderer manages its own RAF loop while enabled and re-renders
-  // the cached texture each frame; turn off for non-interlace sources
+  // Interlace mode — drives visual tuning (softer scanlines, equalized
+  // brightness) and the 60 Hz field-flicker animation. Keyed off the
+  // selected mode (-lace suffix) rather than the source-height heuristic
+  // we used to use, because short interlaced content (e.g. a 320×238
+  // logo) won't trip a height threshold. The renderer manages its own
+  // RAF loop while interlace is on; turn off for non-interlace modes
   // so the preview stays static and doesn't burn GPU cycles.
-  crtRenderer.setInterlaceFlicker(isInterlace)
+  crtRenderer.setInterlaceMode(isInterlaceMode(options.mode))
   // 1084S dot pitch is 0.42mm. CSS spec is 96 dpi = 3.78 px/mm, so one
   // triad in device pixels = 0.42 × 3.78 × DPR ≈ 1.6 (1×) / 3.2 (Retina) /
   // 4.8 (DPR=3 phones). The renderer floors at 3 (Nyquist for the cosine

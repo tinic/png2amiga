@@ -362,12 +362,13 @@ export interface CrtRenderer {
   // dot pitch). Default: enough for the cosine to render smoothly
   // (≥3 device px, Nyquist limit). Re-call when DPR changes.
   setMaskPeriod: (periodDevicePx: number) => void
-  // Toggle 60 Hz interlace field flicker. While on, the renderer runs
-  // its own requestAnimationFrame loop and re-renders the cached
-  // texture each frame with an updated u_time, so caller doesn't need
-  // to drive the animation. Turn off when leaving an interlace mode
-  // or hiding the CRT preview.
-  setInterlaceFlicker: (enabled: boolean) => void
+  // Tell the renderer the source is in an Amiga interlace mode
+  // (-lace suffix). Drives the visual tuning (softer scanlines, less
+  // bloom, equalized brightness) AND enables the 60 Hz field-flicker
+  // animation. While flicker is on the renderer runs its own
+  // requestAnimationFrame loop and re-renders the cached texture each
+  // frame with updated u_time, so caller doesn't drive the animation.
+  setInterlaceMode: (enabled: boolean) => void
   dispose: () => void
 }
 
@@ -483,7 +484,15 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     maskPeriod = Math.max(3, Number.isFinite(periodDevicePx) ? periodDevicePx : 3)
   }
 
-  function setInterlaceFlicker(enabled: boolean): void {
+  // Sticky "the source mode is interlace" flag. Drives BOTH the
+  // flicker animation AND the visual tuning (softer scanlines, less
+  // bloom, equalized brightness). Caller is the source of truth —
+  // the prior source-height heuristic (h ≥ 280) failed on short
+  // interlace content like a 320×238 logo.
+  let isInterlaceMode = false
+
+  function setInterlaceMode(enabled: boolean): void {
+    isInterlaceMode = enabled
     const want = enabled ? 1 : 0
     if (want === interlaceFlicker) return
     interlaceFlicker = want
@@ -518,12 +527,14 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     //     bandwidth than its TV-grade peers, and at hires resolutions
     //     the 3-tap reconstruction would otherwise visibly soften
     //     1-pixel-wide vertical features.
-    //   * interlace (~400+ rows): scanlines flattened toward zero
-    //     because both fields fill the tube and the dark gap between
-    //     source rows that would normally read as a scanline is
-    //     filled in by the alternate field on real hardware.
+    //   * interlace: scanlines flattened toward zero because both
+    //     fields fill the tube and the dark gap between source rows
+    //     that would normally read as a scanline is filled in by the
+    //     alternate field on real hardware. Driven by the caller-
+    //     supplied mode flag, not source height — short interlace
+    //     content (e.g. 320×238 logo) needs the same tuning.
     const isHires     = lastSrcW >= 480
-    const isInterlace = lastSrcH >= 280
+    const isInterlace = isInterlaceMode
     const hardScan = isInterlace ? -1 : -8
     const hardPix  = isHires     ? -5 : -3
     // Bloom contributes more in interlace / hires (where the per-row
@@ -617,5 +628,5 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.deleteTexture(tex)
   }
 
-  return { render, setPalMode, setMaskPeriod, setInterlaceFlicker, dispose }
+  return { render, setPalMode, setMaskPeriod, setInterlaceMode, dispose }
 }
