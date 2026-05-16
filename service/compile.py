@@ -68,18 +68,40 @@ ELF2HUNK = os.path.join(TOOLCHAIN, PLATFORM, "elf2hunk")
 EXE2ADF = os.path.join(TOOLCHAIN, PLATFORM, "exe2adf")
 DH0 = os.path.join(TOOLCHAIN, "dh0")  # startup-sequence + system commands for ADF
 
-# DOS server-side compile path (DJGPP + CWSDPMI) was removed when the
-# generator switched to ia16-elf-gcc (see src/cheader_dos_c.cpp). The
-# .c source the API now returns is compiled locally by the user with
-# `ia16-elf-gcc -march=i80286 -mcmodel=small -Os -o foo.exe foo.c`.
+# --- DOS toolchain (ia16-elf-gcc, TK Chia's PPA build) ---
+# Two-tier lookup:
+#   service/toolchain/dos/ia16/  (production deploy, .debs extracted with
+#                                  dpkg-deb -x — see deploy notes in README)
+#   third_party/ia16-elf/         (optional dev fallback; not currently shipped)
+#
+# The Noble PPA .debs put binaries under usr/bin and the runtime libs
+# (libopcodes / libbfd) under usr/x86_64-linux-gnu/ia16-elf/lib. No rpath
+# is embedded, so we set LD_LIBRARY_PATH at invoke time (bwrap --setenv).
+_LOCAL_TC_DOS  = os.path.join(SCRIPT_DIR, "toolchain", "dos", "ia16")
+_PROJECT_TC_DOS = os.path.join(PROJECT_ROOT, "third_party", "ia16-elf")
+if os.path.isdir(_LOCAL_TC_DOS):
+    _DOS_ROOT = _LOCAL_TC_DOS
+elif os.path.isdir(_PROJECT_TC_DOS):
+    _DOS_ROOT = _PROJECT_TC_DOS
+else:
+    _DOS_ROOT = ""  # DOS path disabled — preflight will warn, requests 503.
+IA16_GCC = os.path.join(_DOS_ROOT, "usr", "bin", "ia16-elf-gcc") if _DOS_ROOT else ""
+IA16_LIB = os.path.join(_DOS_ROOT, "usr", "x86_64-linux-gnu", "ia16-elf", "lib") if _DOS_ROOT else ""
 
 PORT = int(os.environ.get("PORT", "3001"))
 MAX_BODY = 5 * 1024 * 1024  # 5MB max source size
 
 
-def _sandbox(cmd, tmpdir):
-    """Wrap an Amiga-toolchain command in a bubblewrap sandbox."""
-    return [
+def _sandbox(cmd, tmpdir, extra_binds=(), env=None):
+    """Wrap a toolchain command in a bubblewrap sandbox.
+
+    `extra_binds` is an iterable of paths to additionally `--ro-bind`
+    into the sandbox (used by the DOS path for the ia16-elf tree).
+    `env` is a dict of extra environment variables to pass via
+    `--setenv` (used to set LD_LIBRARY_PATH for ia16-elf-as, which
+    has no embedded rpath).
+    """
+    bwrap = [
         "bwrap",
         "--unshare-all",
         "--die-with-parent",
@@ -91,10 +113,55 @@ def _sandbox(cmd, tmpdir):
         "--ro-bind", EXE2ADF, EXE2ADF,
         "--ro-bind", DH0, DH0,
         "--ro-bind", TEMPLATE, TEMPLATE,
+    ]
+    for p in extra_binds:
+        bwrap += ["--ro-bind", p, p]
+    for k, v in (env or {}).items():
+        bwrap += ["--setenv", k, v]
+    bwrap += [
         "--bind", tmpdir, tmpdir,
         "--dev", "/dev",
         "--chdir", tmpdir,
-    ] + cmd
+    ]
+    return bwrap + cmd
+
+
+def compile_dos_viewer(source_code):
+    """Compile a generated DOS viewer .c source to a real-mode 8086+ .exe.
+
+    Uses ia16-elf-gcc (TK Chia's PPA build, extracted under
+    service/toolchain/dos/ia16/). The generated viewer code (see
+    src/cheader_dos_c.cpp) does BIOS calls via inline asm only, so
+    libi86 / dos.h aren't needed; the standard newlib crt0 is enough
+    to land a `main()` and produce an MZ-format `.exe` directly via
+    the binutils MZ writer.
+
+    Same bwrap sandbox shape as the Amiga path: no network, no host
+    filesystem, fresh tmpdir per request, host /usr/lib/lib64 read-
+    only for the linker's host-side dependencies, the ia16 toolchain
+    tree read-only on top.
+    """
+    if not IA16_GCC or not os.path.isfile(IA16_GCC):
+        raise RuntimeError(
+            "DOS toolchain missing — install via dpkg-deb -x of TK Chia's "
+            "ia16-elf-* .debs into service/toolchain/dos/ia16/."
+        )
+    with tempfile.TemporaryDirectory(prefix="png2amiga_dos_") as tmpdir:
+        src_path = os.path.join(tmpdir, "viewer.c")
+        exe_path = os.path.join(tmpdir, "viewer.exe")
+        with open(src_path, "w") as f:
+            f.write(source_code)
+
+        subprocess.run(_sandbox(
+            [IA16_GCC, "-march=i80286", "-mcmodel=small", "-Os",
+             src_path, "-o", exe_path],
+            tmpdir,
+            extra_binds=[_DOS_ROOT],
+            env={"LD_LIBRARY_PATH": IA16_LIB},
+        ), check=True, capture_output=True, timeout=30)
+
+        with open(exe_path, "rb") as f:
+            return f.read()
 
 
 def compile_viewer(source_code, output_format="exe"):
@@ -152,8 +219,8 @@ class CompileHandler(BaseHTTPRequestHandler):
 
         params = parse_qs(parsed.query)
         fmt = params.get("format", ["exe"])[0]
-        if fmt not in ("exe", "adf"):
-            self.send_error(400, "format must be exe | adf")
+        if fmt not in ("exe", "adf", "dos-exe"):
+            self.send_error(400, "format must be exe | adf | dos-exe")
             return
 
         content_length = int(self.headers.get("Content-Length", 0))
@@ -164,7 +231,10 @@ class CompileHandler(BaseHTTPRequestHandler):
         source = self.rfile.read(content_length).decode("utf-8")
 
         try:
-            result = compile_viewer(source, fmt)
+            if fmt == "dos-exe":
+                result = compile_dos_viewer(source)
+            else:
+                result = compile_viewer(source, fmt)
         except (RuntimeError, ValueError) as e:
             # Missing DOS toolchain or malformed source — 400/503-ish.
             self.send_response(503 if isinstance(e, RuntimeError) else 400)
@@ -181,6 +251,8 @@ class CompileHandler(BaseHTTPRequestHandler):
             stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else str(e)
             stderr = stderr.replace(TEMPLATE, "<toolchain>")
             stderr = stderr.replace(GCC_DIR, "<toolchain>")
+            if _DOS_ROOT:
+                stderr = stderr.replace(_DOS_ROOT, "<toolchain>")
             self.wfile.write(f"Compile error:\n{stderr}".encode())
             return
         except Exception as e:
@@ -191,7 +263,7 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Internal error")
             return
 
-        ext = {"adf": "adf", "exe": "exe"}.get(fmt, "bin")
+        ext = {"adf": "adf", "exe": "exe", "dos-exe": "exe"}.get(fmt, "bin")
         # Gzip compress — ADF is 880KB mostly empty, exe has compressible image data
         accept = self.headers.get("Accept-Encoding", "")
         if "gzip" in accept:
@@ -235,6 +307,12 @@ def main():
         if not os.path.isfile(path):
             print(f"Error: {tool} not found at {path}", file=sys.stderr)
             sys.exit(1)
+
+    # Soft requirement for DOS — service stays up if missing, returns 503
+    # to /api/compile?format=dos-exe requests.
+    if not IA16_GCC or not os.path.isfile(IA16_GCC):
+        print(f"Warning: ia16-elf-gcc not found at {IA16_GCC or '<unset>'} — "
+              "DOS .exe compilation disabled", file=sys.stderr)
 
     if not shutil.which("bwrap"):
         print("Error: bubblewrap (bwrap) not found. apt install bubblewrap",
