@@ -2440,6 +2440,12 @@ InlineImageProtocol detect_inline_image_protocol() {
     // the probe needs raw-mode stdin handling on Windows.
     if (set("WT_SESSION")) return InlineImageProtocol::sixel;
 
+    // VS Code integrated terminal — sixel support landed in 1.80 and is
+    // on by default in current builds. TERM_PROGRAM=vscode is set in
+    // every integrated-terminal session (including SSH-remote panes via
+    // the Remote-SSH extension's env injection).
+    if (eq(term_program, "vscode")) return InlineImageProtocol::sixel;
+
     return InlineImageProtocol::none;
 }
 
