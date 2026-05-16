@@ -107,7 +107,14 @@ DOS_KERNEL  = os.path.join(_DOS_BOOT_DIR, "KERNL086.SYS")
 DOS_COMMAND = os.path.join(_DOS_BOOT_DIR, "COMMAND.COM")
 
 PORT = int(os.environ.get("PORT", "3001"))
-MAX_BODY = 5 * 1024 * 1024  # 5MB max source size
+# Max C source size. Worst legitimate generator output is the largest
+# DOS planar mode (vga-12h = 640×480 × 4 planes, ~977 KB source after
+# hex-encoding the four __far plane arrays). Cap at 1.5 MB for ~50%
+# margin — every other mode produces ≤ 1 MB. The Amiga path's source
+# is smaller still (no hex-encoded plane data — Amiga inlines via
+# linker scripts on the host, so the .cpp body is helpers + chunked
+# data ≤ 200 KB). Mirrored in nginx.conf's client_max_body_size.
+MAX_BODY = 1536 * 1024
 # Hard cap on the compiler-produced binary that we'll ship back. The
 # Amiga adf is a fixed 901 120 bytes (880 KB), DOS .img is 737 280
 # (720 KB), DOS / Amiga .exe is bounded by what ia16-elf-gcc / m68k-
@@ -228,13 +235,24 @@ def _verify_viewer_symbols(obj_path):
         # source itself is what we're vetting, not visibility.
         t = sym_type.upper()
         if t == "T":  # text (function)
-            if name not in _VIEWER_FUNC_ALLOWLIST:
+            # gcc optimization passes (constprop / isra / part / cold /
+            # lto_priv) emit clones like "blit_seg_far.constprop.0".
+            # Strip the optimization suffix before the allowlist check —
+            # C symbol names can't legitimately contain a dot, so this
+            # is unambiguous.
+            base = name.split(".", 1)[0]
+            if base not in _VIEWER_FUNC_ALLOWLIST:
                 raise ValueError(
                     f"unexpected function symbol: {name!r} "
                     "(only kPreamble helpers + main are allowed)"
                 )
         elif t in ("D", "R", "B"):  # data / rodata / bss
-            if name not in _VIEWER_DATA_LITERALS and not _VIEWER_DATA_RE.match(name):
+            # Same dot-suffix story as the function case: gcc may
+            # uniquify file-scoped statics across translation units
+            # with ".N" (e.g. "cga_dac.1446"). Strip and compare the
+            # base name only.
+            base = name.split(".", 1)[0]
+            if base not in _VIEWER_DATA_LITERALS and not _VIEWER_DATA_RE.match(base):
                 raise ValueError(
                     f"unexpected data symbol: {name!r} "
                     "(must match <sym>_(data|dac|palette|planeN|planes) "
