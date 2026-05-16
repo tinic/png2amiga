@@ -1,0 +1,66 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "default",
+      "description": "Ninja + Release + GCC 15 (matches CI). Set CC/CXX env to override compilers.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "environment": {
+        "CC":  "$env{CC:-gcc-15}",
+        "CXX": "$env{CXX:-g++-15}"
+      }
+    },
+    {
+      "name": "clang",
+      "inherits": "default",
+      "description": "Same as default but uses Apple/system clang.",
+      "binaryDir": "${sourceDir}/build-clang",
+      "environment": {
+        "CC":  "$env{CC:-clang}",
+        "CXX": "$env{CXX:-clang++}"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "default",
+      "description": "Debug build (assertions on, no NDEBUG, -O0).",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "msvc",
+      "description": "Ninja + Release + MSVC cl.exe. Run inside a vcvars64.bat shell so cl is on PATH (matches winbuilder).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-msvc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER":   "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs":  "${hostSystemName}",
+        "rhs":  "Windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "default", "configurePreset": "default" },
+    { "name": "clang",   "configurePreset": "clang"   },
+    { "name": "debug",   "configurePreset": "debug"   },
+    { "name": "msvc",    "configurePreset": "msvc"    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    }
+  ]
+}

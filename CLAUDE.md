@@ -19,11 +19,23 @@ treat it as part of the same commit as the flag change.
 
 ## Build
 
+Preferred — use the CMake preset (Ninja generator + Release + gcc-15,
+~25% faster clean rebuild than the default Makefile generator, and
+parallelises without `-j`):
+
 ```bash
-cmake -B build -DCMAKE_C_COMPILER=gcc-15 -DCMAKE_CXX_COMPILER=g++-15 .
-cmake --build build
+cmake --preset default            # configure
+cmake --build build               # ninja, all cores
 ctest --test-dir build --output-on-failure
 ```
+
+Other presets in `CMakePresets.json`:
+- `clang` — same shape, Apple/system clang → `build-clang/`
+- `debug` — `-O0`, assertions on → `build-debug/`
+
+Override compilers via `CC=… CXX=… cmake --preset default`. Existing
+`cmake -B build -DCMAKE_CXX_COMPILER=g++-15 .` invocations still work
+identically — the preset is an opt-in shortcut.
 
 ## Lint (clang-tidy + cppcheck)
 
