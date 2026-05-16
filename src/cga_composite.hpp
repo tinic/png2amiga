@@ -61,25 +61,11 @@ Context make_context(const Params& p);
 // used) into linear Color3f via NTSC chroma demodulation. `out` must
 // have at least `in.size()` entries. Operates at one chroma sample per
 // input pixel — match this with mode 06 (640x200, full 14.318 MHz
-// pixel clock). For mode 04 see decode_line_mode04 below.
+// pixel clock).
 void decode_line(std::span<const std::uint8_t> in,
                  std::span<Color3f> out,
                  const Context& ctx,
                  std::uint8_t border = 0);
-
-// Mode 04 variant. Real CGA's clock divisor for 320×200 graphics is 2,
-// so each logical pixel occupies TWO chroma-sample slots in the buffer
-// MartyPC's renderer sees. The chroma cycle is 4 buffer slots = 2
-// logical pixels — feeding logical pixels directly into decode_line
-// puts the cycle at half the real carrier frequency and produces the
-// wrong artifact gamut. This helper takes a logical-pixel row of
-// length N, pixel-doubles it to 2N effective samples, and runs the
-// same chroma decoder; output is 2N decoded samples (one per buffer
-// slot, matching MartyPC's draw_cga_direct_composite_reenigne output).
-void decode_line_mode04(std::span<const std::uint8_t> in_logical,
-                        std::span<Color3f> out_doubled,
-                        const Context& ctx,
-                        std::uint8_t border = 0);
 
 // Pick the 4-bit RGBI pixel sequence whose decode_line() result best
 // matches `src` in OKLab. `out` and `src` are width-N row data.

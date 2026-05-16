@@ -429,20 +429,6 @@ void encode_line(std::span<const Color3f> src,
     for (std::size_t x = cells * 4; x < w; ++x) out[x] = 0;
 }
 
-void decode_line_mode04(std::span<const std::uint8_t> in_logical,
-                        std::span<Color3f> out_doubled,
-                        const Context& ctx,
-                        std::uint8_t border) {
-    auto n = in_logical.size();
-    if (out_doubled.size() < n * 2) return;
-    std::vector<std::uint8_t> doubled(n * 2);
-    for (std::size_t i = 0; i < n; ++i) {
-        doubled[i * 2]     = in_logical[i];
-        doubled[i * 2 + 1] = in_logical[i];
-    }
-    decode_line(doubled, out_doubled, ctx, border);
-}
-
 void apply_monitor_lp(std::span<Color3f> row) {
     auto w = row.size();
     if (w < 2) return;

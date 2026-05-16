@@ -183,23 +183,6 @@ ModeSetup mode_setup(amiga::Mode m, std::uint8_t cga_mode_ctrl2) {
         // fg = text-attr foreground on RGB). BIOS mode-set sufficient.
         s.palette = "    /* CGA 640x200 mono: no palette register to configure. */\n";
         break;
-    case Mode::cga_composite:
-        s.bios_mode = 0x04;
-        // Mode 4 = CGA 320x200 4-color, composite output. Two register
-        // writes: 0x3D8 to keep colour-burst on (NTSC chroma decoder
-        // produces the artifact palette), and 0x3D9 to pin the palette
-        // variant + intensity + bg the encoder quantized against. The
-        // BIOS leaves whatever the previous mode set in 0x3D9 — without
-        // an explicit write, MartyPC and real hardware interpret the
-        // 2bpp framebuffer through the wrong 4-colour palette.
-        s.palette = std::format(
-            "    /* CGA mode register 0x3D8: clear bit 2 (color burst = on). */\n"
-            "    outb(0x3D8, 0x0A);\n"
-            "    /* CGA 0x3D9: palette variant + intensity + bg from the\n"
-            "       encoder's auto-picked variant. */\n"
-            "    outb(0x3D9, 0x{:02X});\n",
-            cga_mode_ctrl2);
-        break;
     case Mode::cga_composite_hires:
         s.bios_mode = 0x06;
         // Mode 6 = CGA 640x200 1bpp, composite output. 0x3D8 bit 4
@@ -710,27 +693,15 @@ Result<std::string> generate(amiga::Mode mode,
     using namespace amiga;
     auto sym = sanitize_symbol(options.symbol_name);
 
-    // cga_composite_text80x{100,200} borrow the cga_text viewer (CRTC
-    // reprogram, mode 03 entry, blink-off mode 0x09 — same hardware
-    // setup); row count is encoded into the mode name.
-    bool is_composite_text = (mode == Mode::cga_composite_text80x100 ||
-                              mode == Mode::cga_composite_text80x200);
-    if (is_cga_text(mode) || is_composite_text) {
-        std::size_t expected_cols = 80;
-        std::size_t expected_rows;
-        if (mode == Mode::cga_composite_text80x100)      expected_rows = 100;
-        else if (mode == Mode::cga_composite_text80x200) expected_rows = 200;
-        else {
-            expected_cols = cga_text_cols(mode);
-            expected_rows = cga_text_rows(mode);
-        }
+    if (is_cga_text(mode)) {
+        std::size_t expected_cols = cga_text_cols(mode);
+        std::size_t expected_rows = cga_text_rows(mode);
         std::size_t expected_bytes = expected_cols * expected_rows * 2;
         // 80x200 (32 KB) overflows the 16 KB CGA video RAM — refuse to
         // emit a viewer that would be silently broken (would display
         // the first 16 KB and read garbage from BIOS data after).
         // Every other variant (including the new 40x200 / 40x100) fits.
-        bool fits = is_composite_text ? (expected_bytes <= 16384u)
-                                       : cga_text_fits_vram(mode);
+        bool fits = cga_text_fits_vram(mode);
         if (!fits) {
             return std::unexpected{
                 Error{ErrorCode::unsupported_mode,
@@ -807,10 +778,10 @@ Result<std::string> generate(amiga::Mode mode,
         return generate_vga_planar(mode, width, height, raw_frame, palette, sym);
     }
     if (mode != Mode::cga_320 && mode != Mode::cga_640 &&
-        mode != Mode::cga_composite && mode != Mode::cga_composite_hires) {
+        mode != Mode::cga_composite_hires) {
         return std::unexpected{Error{ErrorCode::unsupported_mode,
                                      "cheader_dos_c: supported modes are cga_320 / cga_640 / "
-                                     "cga_composite / cga_composite_hires / cga_text80x100 / "
+                                     "cga_composite_hires / cga_text80x100 / "
                                      "ega_320 / ega_640 / ega_hi / vga_13h / vga_10h / vga_12h"}};
     }
     if (raw_frame.size() != 16384) {
@@ -822,10 +793,7 @@ Result<std::string> generate(amiga::Mode mode,
     const char* mode_name = (mode == Mode::cga_320) ? "cga-320 (320x200x4)"
                             : (mode == Mode::cga_640)
                                 ? "cga-640 (640x200 mono)"
-                            : (mode == Mode::cga_composite_hires)
-                                ? "cga-composite-hires (640x200 1bpp NTSC)"
-                                :
-                                /*composite*/ "cga-composite (320x200x4 NTSC)";
+                                : "cga-composite-hires (640x200 1bpp NTSC)";
 
     std::string out;
     out.reserve(raw_frame.size() * 6 + 2048);
@@ -880,9 +848,7 @@ std::vector<std::uint8_t> pack_cga_banked(std::span<const std::uint8_t> indices,
     // cga_composite_hires is 1bpp at 640 wide — packs as monochrome.
     bool is_mono = (mode == amiga::Mode::cga_640 ||
                     mode == amiga::Mode::cga_composite_hires);
-    bool is_composite_lores = (mode == amiga::Mode::cga_composite);
-    auto buffer_width = is_composite_lores ? std::size_t{320} : width;
-    auto row_bytes = buffer_width / (is_mono ? 8 : 4);
+    auto row_bytes = width / (is_mono ? 8 : 4);
     std::vector<std::uint8_t> buf(16384, 0);
     for (std::size_t y = 0; y < height; ++y) {
         std::size_t bank_base = (y & 1) ? 0x2000u : 0x0000u;
@@ -894,14 +860,6 @@ std::vector<std::uint8_t> pack_cga_banked(std::span<const std::uint8_t> indices,
                     auto x = bx * 8 + p;
                     byte = static_cast<std::uint8_t>((byte << 1) |
                                                      (indices[y * width + x] != 0 ? 1 : 0));
-                }
-            } else if (is_composite_lores) {
-                // 320 px × 2bpp = 4 pixels per byte, same layout as
-                // real CGA mode 04. Indices are 0..3 selecting one of
-                // the active palette variant's 4 RGBI colours.
-                for (std::size_t p = 0; p < 4; ++p) {
-                    auto idx = indices[y * width + bx * 4 + p] & 0x3;
-                    byte = static_cast<std::uint8_t>((byte << 2) | idx);
                 }
             } else {
                 for (std::size_t p = 0; p < 4; ++p) {

@@ -235,7 +235,7 @@ describe('modePar', () => {
   it('DOS modes have known PAR overrides', () => {
     expect(modePar('vga-13h')).toBeCloseTo(0.833)
     expect(modePar('ega-640')).toBeCloseTo(0.417)
-    expect(modePar('cga-composite')).toBeCloseTo(0.833)
+    expect(modePar('cga-composite-hires')).toBeCloseTo(0.417)
   })
 })
 
@@ -256,8 +256,8 @@ describe('previewScale', () => {
     expect(previewScale('hires-lace')).toEqual({ sx: 1, sy: 1 })
   })
 
-  it('CGA composite doubles both axes (320-wide preview)', () => {
-    expect(previewScale('cga-composite')).toEqual({ sx: 2, sy: 2 })
+  it('CGA composite hires stretches Y by 2 (640×200 → 640×400)', () => {
+    expect(previewScale('cga-composite-hires')).toEqual({ sx: 1, sy: 2 })
   })
 
   it('VGA 13h doubles both axes', () => {

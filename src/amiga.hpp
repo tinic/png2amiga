@@ -50,10 +50,7 @@ enum class Mode : unsigned char {
     // selects which of the fixed palette variants (0/1 × low/high intensity).
     cga_320,         // CGA 320x200, 4 colors from palette 0/1 × low/high
     cga_640,         // CGA 640x200, monochrome (bg + 1 fg)
-    cga_composite,   // CGA 320x200 mode 04: 4-colour palette + NTSC artifact decoding
     cga_composite_hires, // CGA 640x200 mode 06: 1bpp + NTSC artifact decoding (8088 MPH-style)
-    cga_composite_text80x100, // CGA 80x100 text mode + composite (8088 MPH "1024 colours")
-    cga_composite_text80x200, // CGA 80x200 text mode + composite (32 KB VRAM, preview-only)
                      // (stored as 320x200 2bpp; pairs of 2bpp pixels form
                      //  a 4-bit pattern that the NTSC decoder interprets
                      //  as one of 16 colors — used by King's Quest,
@@ -266,14 +263,6 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
     case Mode::cga_640:
         return {640, 200, 1, 2, false, false, true, false, 1, 2, 0.417f};
-    case Mode::cga_composite:
-        // 320x200 hardware mode 04: 2bpp framebuffer, 4 colours from one
-        // of the CGA palette variants (p0/p1 × low/high). The encoder
-        // dithers against the 4 NTSC-decoded composite colours; the
-        // chroma multiplexer turns the 4-colour pixel stream into the
-        // ~140-colour artifact gamut. 16 KB banked framebuffer matches
-        // real hardware (and the DOS .c viewer's expectation).
-        return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
     case Mode::cga_composite_hires:
         // 640x200 hardware mode 06: 1bpp framebuffer at full chroma
         // sample rate (no clock divisor). BG fixed (typically black),
@@ -287,16 +276,6 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // bg + 4-bit fg attr byte width (not a bitplane count). bitplane_depth
     // reports 16 here so the palette-handling logic uses 16 colors.
     case Mode::cga_text80x100:
-        return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
-    // 80x100 cells + composite NTSC artifact decoding (8088 MPH's "1024
-    // colours" approach). Same hardware buffer + viewer setup as
-    // cga_text80x100, but per-cell (char, attr) is picked from a
-    // sweep-built artifact-decoded palette rather than glyph-matched.
-    case Mode::cga_composite_text80x100:
-        return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
-    // 80x200 cells: 1-scanline cells, 32 KB char/attr buffer → exceeds
-    // CGA's 16 KB VRAM. Preview-only (no .img / .c output).
-    case Mode::cga_composite_text80x200:
         return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
     // 80x50 cells: same hardware buffer dims (640x200, 4-scanline rows
     // via CRTC), half the cell count → 8000 bytes (page-flip friendly).
@@ -427,12 +406,11 @@ constexpr bool is_ega(Mode mode) noexcept {
 
 // Check if a mode is an IBM PC / DOS CGA mode
 constexpr bool is_cga(Mode mode) noexcept {
-    return mode == Mode::cga_320 || mode == Mode::cga_640 || mode == Mode::cga_composite ||
-           mode == Mode::cga_composite_hires ||
-           mode == Mode::cga_composite_text80x100 || mode == Mode::cga_composite_text80x200 ||
-           mode == Mode::cga_text80x100 || mode == Mode::cga_text80x50 ||
-           mode == Mode::cga_text80x25 || mode == Mode::cga_text80x200 ||
-           mode == Mode::cga_text40x200 || mode == Mode::cga_text40x100;
+    return mode == Mode::cga_320 || mode == Mode::cga_640 ||
+           mode == Mode::cga_composite_hires || mode == Mode::cga_text80x100 ||
+           mode == Mode::cga_text80x50 || mode == Mode::cga_text80x25 ||
+           mode == Mode::cga_text80x200 || mode == Mode::cga_text40x200 ||
+           mode == Mode::cga_text40x100;
 }
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
@@ -468,9 +446,7 @@ constexpr bool is_c64_charset(Mode mode) noexcept {
 // Affects encoding (pixel pairs → color) and should disable ordered/error
 // dithering in ways that break the artifact pattern.
 constexpr bool is_composite(Mode mode) noexcept {
-    return mode == Mode::cga_composite || mode == Mode::cga_composite_hires ||
-           mode == Mode::cga_composite_text80x100 ||
-           mode == Mode::cga_composite_text80x200;
+    return mode == Mode::cga_composite_hires;
 }
 
 // Check if the mode is a CGA text-mode graphics hack (glyph-per-cell).

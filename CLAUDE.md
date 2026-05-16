@@ -165,7 +165,7 @@ ST/STE hi-res is hardware-locked to monochrome (white + black). Output to
 |----------|------------|--------|-------|
 | `cga-320` | 320×200  | 4      | Fixed palettes via `--cga-palette` (p0-low/high, p1-low/high); auto-picked if unset |
 | `cga-640` | 640×200  | 2      | Monochrome |
-| `cga-composite` | 160×200 effective | 16 | NTSC artifact colors from 320×200 2bpp |
+| `cga-composite-hires` | 640×200 1bpp | many (NTSC artifacts) | 8088 MPH-style mode 06 colour graphics on a composite monitor |
 | `cga-text80x100` | 80×100 cells | 16 fg×16 bg | Glyph-matched text-mode graphics (AREA 5150 style); IBM CGA 8x8 font |
 | `ega-320` | 320×200 | 16 of 64 | 4-plane IrgbIRGB gamut |
 | `ega-640` | 640×200 | 16 of 64 | 4-plane IrgbIRGB gamut |

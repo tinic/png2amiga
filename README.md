@@ -524,7 +524,7 @@ Modes:
             ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]
     Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi
     DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |
-            cga-320 | cga-640 | cga-composite |
+            cga-320 | cga-640 | cga-composite-hires |
             cga-text80x{200,100,50,25}
     SNES:   snes-mode7-256 | snes-mode7-direct
     Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh

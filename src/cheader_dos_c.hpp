@@ -26,7 +26,7 @@ namespace png2amiga::cheader_dos_c {
 // for CGA graphics modes — 16 KB data + a few hundred bytes of code +
 // newlib crt0) that multiple viewers fit on a single 360 KB disk.
 //
-// Supported modes: CGA graphics (cga_320, cga_640, cga_composite),
+// Supported modes: CGA graphics (cga_320, cga_640, cga_composite_hires),
 // cga_text80x100, EGA graphics (ega_320, ega_640, ega_hi), VGA chunky
 // 13h, VGA planar 10h / 12h.
 // ---------------------------------------------------------------------------
@@ -42,15 +42,16 @@ struct Options {
     // Typical auto-selected values from cga_build_palette:
     //   p0_low  = 0x00  p0_high = 0x10
     //   p1_low  = 0x20  p1_high = 0x30
-    // Only applies to cga_320. Ignored by cga_640 (fixed mono) and
-    // cga_composite (palette irrelevant — NTSC decoder interprets
-    // chroma patterns directly).
+    // Only applies to cga_320 / cga_composite_hires. Ignored by cga_640
+    // (fixed mono). cga_composite_hires stashes the chosen FG (0..15)
+    // in the low nibble — written to 0x3D9 so the chroma decoder sees
+    // it.
     std::uint8_t cga_mode_ctrl2 = 0x30;
 };
 
 // Emit a .c source string.
 //
-//   mode       — CGA graphics (cga_320 / cga_640 / cga_composite),
+//   mode       — CGA graphics (cga_320 / cga_640 / cga_composite_hires),
 //                CGA text (cga_text80x100), EGA graphics
 //                (ega_320 / ega_640 / ega_hi), or VGA
 //                (vga_13h / vga_10h / vga_12h).
@@ -83,10 +84,9 @@ Result<void> save(std::string_view path,
 // Pack chunky palette indices into the 16 KB banked CGAPIC frame that
 // sits at 0xB8000 on a real CGA. Shared utility used by both .raw
 // output and the viewer generator.
-//   cga_640:       1bpp mono, 8 pixels/byte MSB-first (fg = index != 0).
+//   cga_640 / cga_composite_hires: 1bpp mono, 8 pixels/byte MSB-first
+//                  (fg = index != 0).
 //   cga_320:       2bpp packed, 4 pixels/byte MSB-first.
-//   cga_composite: indices 0..15; each byte holds two 4-bit artifact
-//                  nibbles via palette::cga_composite_pattern.
 // Output always 16384 bytes: even rows at offset 0x0000, odd rows at
 // 0x2000, padding zeroed.
 std::vector<std::uint8_t> pack_cga_banked(std::span<const std::uint8_t> indices,

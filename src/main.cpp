@@ -1141,8 +1141,7 @@ void print_usage() {
         "            ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]\n"
         "    Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi\n"
         "    DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |\n"
-        "            cga-320 | cga-640 | cga-composite | cga-composite-hires |\n"
-        "            cga-composite-text80x100 | cga-composite-text80x200 |\n"
+        "            cga-320 | cga-640 | cga-composite-hires |\n"
         "            cga-text80x{{200,100,50,25}}\n"
         "    SNES:   snes-mode7-256 | snes-mode7-direct\n"
         "    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh\n"
@@ -2009,16 +2008,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::cga_320;
                 else if (v == "cga-640" || v == "cga-mono")
                     config.mode = amiga::Mode::cga_640;
-                else if (v == "cga-composite" || v == "cga-comp" || v == "cga-16")
-                    config.mode = amiga::Mode::cga_composite;
-                else if (v == "cga-composite-hires" || v == "cga-comp-hires" ||
+                else if (v == "cga-composite" || v == "cga-comp" ||
+                         v == "cga-composite-hires" || v == "cga-comp-hires" ||
                          v == "cga-composite-640" || v == "cga-composite-hi")
                     config.mode = amiga::Mode::cga_composite_hires;
-                else if (v == "cga-composite-text" || v == "cga-1024" ||
-                         v == "cga-comp-text" || v == "cga-composite-text80x100")
-                    config.mode = amiga::Mode::cga_composite_text80x100;
-                else if (v == "cga-composite-text80x200" || v == "cga-comp-text-hi")
-                    config.mode = amiga::Mode::cga_composite_text80x200;
                 else if (v == "cga-text80x100" || v == "cga-text-1k" || v == "cga-80x100")
                     config.mode = amiga::Mode::cga_text80x100;
                 else if (v == "cga-text80x50" || v == "cga-80x50")
@@ -2697,14 +2690,8 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "cga-320";
     case amiga::Mode::cga_640:
         return "cga-640";
-    case amiga::Mode::cga_composite:
-        return "cga-composite";
     case amiga::Mode::cga_composite_hires:
         return "cga-composite-hires";
-    case amiga::Mode::cga_composite_text80x100:
-        return "cga-composite-text80x100";
-    case amiga::Mode::cga_composite_text80x200:
-        return "cga-composite-text80x200";
     case amiga::Mode::cga_text80x100:
         return "cga-text80x100";
     case amiga::Mode::cga_text80x50:
@@ -3286,10 +3273,6 @@ void save_raw(std::string_view path,
 //   0x2000..0x3F3F = odd rows (1, 3, 5, ..., 199)
 //   0x3F40..0x3FFF = 192 bytes padding
 // cga_640: 1bpp packed, same banked layout. fg pixels are index != 0.
-// cga_composite: logical 160x200 16-color image, each logical pixel encoded
-//   as a 4-bit pattern across two adjacent 2bpp pixels in the 320x200 buffer.
-//   The composite monitor's NTSC decoder interprets the pattern as one of
-//   16 colors. Same banked layout as cga_320.
 // This is the classic CGAPIC format; loads directly into 0xB8000 video RAM.
 void save_raw_cga(std::string_view path,
                   std::span<const std::uint8_t> indices,
@@ -3304,11 +3287,7 @@ void save_raw_cga(std::string_view path,
     }
 
     bool is_mono = (mode == amiga::Mode::cga_640);
-    bool is_composite = (mode == amiga::Mode::cga_composite);
-    // In composite mode `width` is the logical 160 wide; the packed buffer
-    // stores 320 columns of 2bpp.
-    auto buffer_width = is_composite ? 320 : width;
-    auto row_bytes = buffer_width / (is_mono ? 8 : 4);
+    auto row_bytes = width / (is_mono ? 8 : 4);
 
     std::vector<std::uint8_t> buf(16384, 0);
 
@@ -3324,13 +3303,6 @@ void save_raw_cga(std::string_view path,
                     auto idx = indices[y * width + x];
                     byte = static_cast<std::uint8_t>((byte << 1) | (idx != 0 ? 1 : 0));
                 }
-            } else if (is_composite) {
-                // Each byte holds 2 composite pixels (4 packed 2bpp pixels =
-                // two 4-bit patterns). Each logical pixel's 0..15 color index
-                // becomes a 4-bit pattern MSB-first in its half of the byte.
-                auto p0 = palette::cga_composite_pattern(indices[y * width + bx * 2]);
-                auto p1 = palette::cga_composite_pattern(indices[y * width + bx * 2 + 1]);
-                byte = static_cast<std::uint8_t>((p0 << 4) | p1);
             } else {
                 // 4 pixels per byte, 2bpp MSB first.
                 for (std::size_t p = 0; p < 4; ++p) {
@@ -3347,9 +3319,7 @@ void save_raw_cga(std::string_view path,
     cli_status("Raw:      {} ({} bytes, CGA {})",
                path,
                buf.size(),
-               is_mono        ? "mono 640x200 (1bpp banked)"
-               : is_composite ? "composite 160x200x16 (2bpp banked, NTSC artifact)"
-                              : "320x200 (2bpp banked)");
+               is_mono ? "mono 640x200 (1bpp banked)" : "320x200 (2bpp banked)");
 }
 
 // EGA raw output: 4-plane planar (IBM byte-per-row layout, planes interleaved
@@ -3466,7 +3436,7 @@ void save_raw_vga(std::string_view path,
 //        DOS / C64:                     fixed table (DOS_PREVIEW_SCALE)
 //          - cga-320, ega-320, vga-13h, c64-hires/afli/petscii/charset-hires:
 //                                       2×2
-//          - cga-composite, c64-multicolor / fli / charset-multicolor:
+//          - c64-multicolor / fli / charset-multicolor:
 //                                       4×2  (160-wide → 640-wide)
 //          - cga-640, ega-640, cga-text80x100:
 //                                       1×2
@@ -3504,14 +3474,6 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             sx = 2;
             sy = 2;
             break;
-        case amiga::Mode::cga_composite:
-            // 320×200 source × (2, 2) → 640×400 backing, PAR-corrected
-            // to ~640×480 (4:3). The chroma decoder runs at 2× internally
-            // but the rendered preview averages pairs back to 320 wide
-            // so the existing PAR math stays valid.
-            sx = 2;
-            sy = 2;
-            break;
         case amiga::Mode::c64_multicolor:
         case amiga::Mode::c64_fli:
         case amiga::Mode::c64_charset_multicolor:
@@ -3520,8 +3482,6 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             break;
         case amiga::Mode::cga_640:
         case amiga::Mode::cga_composite_hires:
-        case amiga::Mode::cga_composite_text80x100:
-        case amiga::Mode::cga_composite_text80x200:
         case amiga::Mode::ega_640:
         case amiga::Mode::cga_text80x100:
         case amiga::Mode::cga_text80x50:
@@ -5525,10 +5485,7 @@ int run_main(int argc, char* argv[]) {
                 "ega-hi",
                 "cga-320",
                 "cga-640",
-                "cga-composite",
                 "cga-composite-hires",
-                "cga-composite-text80x100",
-                "cga-composite-text80x200",
                 "cga-text80x100",
                 "cga-text80x50",
                 "cga-text80x25",
@@ -7772,81 +7729,6 @@ int run_main(int argc, char* argv[]) {
         return 0;
     }
 
-    // --- CGA composite text (8088 MPH "1024 colours") ---
-    // Self-contained: encoder lives in api::run_pipeline. Delegate via
-    // api::encode_state_image, then emit outputs from state.
-    if (config->mode == amiga::Mode::cga_composite_text80x100 ||
-        config->mode == amiga::Mode::cga_composite_text80x200) {
-        auto aopts = make_api_options(*config);
-        neutralize_preprocess(aopts);
-        aopts.width = static_cast<int>(image->width());
-        aopts.height = static_cast<int>(image->height());
-        auto enc = api::encode_state_image(*image, aopts);
-        if (!enc.ok()) {
-            std::println(stderr, "cga-composite-text encode error: {}", enc.error_msg);
-            return 1;
-        }
-        auto& st = enc.state;
-        cli_status("Palette:  CGA composite text ({}, {} CGA, 80x{} cells)",
-                   "8088 MPH-style",
-                   config->cga_composite_new_cga ? "new" : "old",
-                   config->mode == amiga::Mode::cga_composite_text80x200 ? 200 : 100);
-        cli_print_dither(config->dither_method, config->dither_strength);
-        cli_print_encoded(/*depth=*/4,
-                          /*total_bytes=*/static_cast<int>(st.raw_frame.size()),
-                          /*palette_size=*/static_cast<int>(st.palette.size()),
-                          chipset == amiga::Chipset::aga,
-                          /*cap_entries=*/0,
-                          /*strips_op_count=*/0,
-                          /*height=*/static_cast<int>(st.rendered.height()),
-                          /*changes_per_line=*/0,
-                          count_unique_colors(st.rendered),
-                          std::nullopt,
-                          static_cast<double>(st.quant_error),
-                          st.psnr,
-                          st.ssimulacra2_score);
-
-        // Save preview / .img / .c outputs.
-        if (!config->output_path.empty()) {
-            if (ends_with(config->output_path, ".png")) {
-                auto r = save_preview(config->output_path,
-                                      st.rendered, has_transparency, transparency_mask,
-                                      config->mode, false, false);
-                if (!r) {
-                    std::println(stderr, "PNG: {}", r.error().message);
-                    return 1;
-                }
-                cli_status("PNG:      {}", config->output_path);
-            } else if (ends_with(config->output_path, ".c")) {
-                auto symbol = config->symbol_name.empty()
-                                ? derive_symbol_name(config->output_path)
-                                : config->symbol_name;
-                cheader_dos_c::Options opts{.symbol_name = symbol};
-                auto r = cheader_dos_c::save(
-                    config->output_path, config->mode,
-                    st.rendered.width(), st.rendered.height(),
-                    st.raw_frame, {}, opts);
-                if (!r) {
-                    std::println(stderr, "Viewer write error: {}", r.error().message);
-                    return 1;
-                }
-                cli_status("Viewer:   {} (DOS/ia16-elf 16-bit, mode 03 + CRTC)",
-                           config->output_path);
-            } else {
-                std::println(stderr,
-                             "cga-composite-text supports .png and .c outputs "
-                             "(use .c then build via ia16-elf-gcc, or the web "
-                             "service's .img path).");
-                return 1;
-            }
-        }
-        if (config->preview) {
-            show_terminal_preview(
-                st.rendered, config->mode, false, false, has_transparency, transparency_mask);
-        }
-        return 0;
-    }
-
     // --- HAM modes ---
     if (amiga::is_ham(config->mode)) {
         if (!config->locks.empty() || !config->pins.empty()) {
@@ -9355,92 +9237,6 @@ int run_main(int argc, char* argv[]) {
                 // matter. Re-use cga_palette as the carrier slot.
                 config->cga_palette = best_fg & 0xF;
                 config->cga_bg = 0;
-            } else if (amiga::is_composite(config->mode)) {
-                // Real CGA mode 04: 2bpp framebuffer, 4 colours from one
-                // of the CGA palette variants (p0/p1 × low/high). We
-                // dither against the 4 NTSC-decoded composite colours
-                // (not the idealised RGBI primaries) and pick the
-                // palette variant whose decoded gamut best covers the
-                // source. Storage stays 2bpp = 16 KB banked framebuffer
-                // matching real hardware mode 04.
-                cga_composite::Params cp;
-                cp.new_cga = config->cga_composite_new_cga;
-                cp.cgamode = 0x0A;
-                auto cga_ctx = cga_composite::make_context(cp);
-
-                auto decode_palette4 = [&](std::array<std::uint8_t, 4> rgbi)
-                    -> std::array<Color3f, 4> {
-                    constexpr std::size_t kProbeW = 64;     // logical pixels
-                    constexpr std::size_t kCentre = 56;     // doubled-domain centre
-                    std::vector<std::uint8_t> row(kProbeW);
-                    std::vector<Color3f>      dec(kProbeW * 2);
-                    std::array<Color3f, 4> outp{};
-                    for (std::size_t i = 0; i < 4; ++i) {
-                        std::fill(row.begin(), row.end(), rgbi[i]);
-                        cga_composite::decode_line_mode04(
-                            row, std::span<Color3f>(dec), cga_ctx);
-                        // 16 samples = 4 chroma cycles in the doubled
-                        // domain (= 2 logical chroma cycles).
-                        float r = 0, g = 0, b = 0;
-                        for (std::size_t k = kCentre; k < kCentre + 16; ++k) {
-                            r += dec[k].r;
-                            g += dec[k].g;
-                            b += dec[k].b;
-                        }
-                        outp[i] = Color3f{r / 16.0f, g / 16.0f, b / 16.0f};
-                    }
-                    return outp;
-                };
-
-                static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
-                    {{0,  2,  4,  6}},   // p0_low
-                    {{0, 10, 12, 14}},   // p0_high
-                    {{0,  3,  5,  7}},   // p1_low
-                    {{0, 11, 13, 15}},   // p1_high
-                }};
-                static constexpr std::array<const char*, 4> kCgaPaletteNames = {
-                    "p0_low", "p0_high", "p1_low", "p1_high"
-                };
-
-                std::size_t best_var = 3;
-                float best_cost = std::numeric_limits<float>::max();
-                auto w = image->width(), h = image->height();
-                for (std::size_t v = 0; v < kCgaPalettes.size(); ++v) {
-                    auto pal4 = decode_palette4(kCgaPalettes[v]);
-                    std::array<color_space::OKLab, 4> pal_lab;
-                    for (std::size_t i = 0; i < 4; ++i)
-                        pal_lab[i] = color_space::linear_to_oklab(pal4[i]);
-                    float cost = 0.0f;
-                    for (std::size_t i = 0; i < w * h; ++i) {
-                        auto sl = color_space::linear_to_oklab(image->pixels()[i]);
-                        float bd = std::numeric_limits<float>::max();
-                        for (auto& pl : pal_lab) {
-                            float dL = sl.L - pl.L;
-                            float da = sl.a - pl.a;
-                            float db = sl.b - pl.b;
-                            float d = dL * dL + da * da + db * db;
-                            if (d < bd) bd = d;
-                        }
-                        cost += bd;
-                    }
-                    if (cost < best_cost) {
-                        best_cost = cost;
-                        best_var = v;
-                    }
-                }
-                auto pal4 = decode_palette4(kCgaPalettes[best_var]);
-                pal.colors.assign(pal4.begin(), pal4.end());
-                // Stash the chosen RGBI map on the config so the encode
-                // path can translate dither indices → RGBI stream for
-                // the chroma decoder. Reuses cga_palette + cga_bg in
-                // the same way cga-320 does.
-                cli_status("Palette:  CGA composite ({}, NTSC artifact, {} CGA), 4 colors",
-                           kCgaPaletteNames[best_var],
-                           config->cga_composite_new_cga ? "new" : "old");
-                cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
-                // Save chosen palette via config-side state so the
-                // bitplane / preview path uses the same RGBI mapping.
-                config->cga_palette = static_cast<int>(best_var);
             } else if (config->mode == amiga::Mode::cga_320) {
                 palette::CgaPalette best = palette::CgaPalette::p1_high;
                 if (config->cga_auto_palette) {
@@ -9759,99 +9555,9 @@ int run_main(int argc, char* argv[]) {
             dither_result = dither::apply(*image, pal_span, dith);
         }
 
-        // CGA composite: cell-pattern dither against all 256 reachable
-        // 4-pixel chroma-cycle patterns. Build a (w/4) × h cell-mean
-        // source image and a 256-entry cell-mean palette, then call
-        // dither::apply so the user's selected method (any of the 58)
-        // takes effect natively. Expand 256-cell indices back to 4
-        // per-pixel palette indices (0..3) at the end.
-        if (config->mode == amiga::Mode::cga_composite) {
-            cga_composite::Params cp;
-            cp.new_cga = config->cga_composite_new_cga;
-            cp.cgamode = 0x0A;
-            auto cga_ctx = cga_composite::make_context(cp);
-            static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
-                {{0,  2,  4,  6}},
-                {{0, 10, 12, 14}},
-                {{0,  3,  5,  7}},
-                {{0, 11, 13, 15}},
-            }};
-            std::size_t v = static_cast<std::size_t>(std::clamp(config->cga_palette, 0, 3));
-            const auto& cga_pal_rgbi = kCgaPalettes[v];
-
-            struct CellPattern { std::array<std::uint8_t, 4> px; };
-            std::vector<Color3f>     cell_pal_means(256);
-            std::vector<CellPattern> cell_patterns(256);
-            {
-                constexpr std::size_t kProbeW = 64;     // logical pixels
-                constexpr std::size_t kCentre = 56;     // doubled-domain centre
-                std::vector<std::uint8_t> probe(kProbeW);
-                std::vector<Color3f>      dec(kProbeW * 2);
-                std::size_t out_i = 0;
-                for (int a = 0; a < 4; ++a)
-                for (int b = 0; b < 4; ++b)
-                for (int c = 0; c < 4; ++c)
-                for (int d = 0; d < 4; ++d) {
-                    std::array<std::uint8_t, 4> p4 = {
-                        cga_pal_rgbi[static_cast<std::size_t>(a)],
-                        cga_pal_rgbi[static_cast<std::size_t>(b)],
-                        cga_pal_rgbi[static_cast<std::size_t>(c)],
-                        cga_pal_rgbi[static_cast<std::size_t>(d)],
-                    };
-                    for (std::size_t i = 0; i < kProbeW; ++i) probe[i] = p4[i & 3];
-                    cga_composite::decode_line_mode04(
-                        probe, std::span<Color3f>(dec), cga_ctx);
-                    // 8 samples = 1 full logical 4-pixel cell in the
-                    // doubled domain.
-                    float r = 0, g = 0, bl = 0;
-                    for (std::size_t k = kCentre; k < kCentre + 8; ++k) {
-                        r += dec[k].r; g += dec[k].g; bl += dec[k].b;
-                    }
-                    cell_pal_means[out_i] = {r * 0.125f, g * 0.125f, bl * 0.125f};
-                    cell_patterns[out_i] = {{
-                        static_cast<std::uint8_t>(a),
-                        static_cast<std::uint8_t>(b),
-                        static_cast<std::uint8_t>(c),
-                        static_cast<std::uint8_t>(d),
-                    }};
-                    ++out_i;
-                }
-            }
-
-            auto w = image->width(), h = image->height();
-            std::size_t cw = w / 4;
-            Image cell_image(cw, h);
-            for (std::size_t y = 0; y < h; ++y) {
-                for (std::size_t cx = 0; cx < cw; ++cx) {
-                    std::size_t x = cx * 4;
-                    float sr = 0, sg = 0, sb = 0;
-                    for (std::size_t i = 0; i < 4; ++i) {
-                        sr += image->pixels()[y * w + x + i].r;
-                        sg += image->pixels()[y * w + x + i].g;
-                        sb += image->pixels()[y * w + x + i].b;
-                    }
-                    cell_image[cx, y] = Color3f{sr * 0.25f, sg * 0.25f, sb * 0.25f};
-                }
-            }
-            auto cell_dither = dither::apply(
-                cell_image, std::span<const Color3f>(cell_pal_means), dith);
-
-            dither_result.indices.assign(w * h, 0);
-            for (std::size_t y = 0; y < h; ++y) {
-                for (std::size_t cx = 0; cx < cw; ++cx) {
-                    auto pat_idx = cell_dither.indices[y * cw + cx];
-                    const auto& pat = cell_patterns[pat_idx].px;
-                    std::size_t x = cx * 4;
-                    for (std::size_t i = 0; i < 4; ++i)
-                        dither_result.indices[y * w + x + i] = pat[i];
-                }
-            }
-        }
-
         // CGA composite hires (mode 06): cell-pattern dither against the
-        // 16 reachable 4-pixel patterns of {bg, fg}. Same shape as the
-        // mode-04 cga-composite path above but at full chroma sample
-        // rate (no clock-divisor doubling) and 1bpp output.
+        // 16 reachable 4-pixel patterns of {bg, fg}. Full chroma sample
+        // rate (no clock-divisor doubling), 1bpp output.
         if (config->mode == amiga::Mode::cga_composite_hires) {
             cga_composite::Params cp;
             cp.new_cga = config->cga_composite_new_cga;
@@ -9966,56 +9672,6 @@ int run_main(int argc, char* argv[]) {
         if (!preview) {
             std::println(stderr, "Render error: {}", preview.error().message);
             return 1;
-        }
-        // Composite preview: replace the plain palette-lookup render
-        // with the NTSC chroma-multiplexer output. The actual RGBI
-        // pattern that the dither / encoder picked is already in
-        // `dither_result.indices` — feeding it through cga_composite
-        // ::decode_line gives the user the colours an NTSC monitor
-        // would show, including the artifact purples/cyans that no
-        // 16-colour palette lookup can express. Then a 5-tap [1,4,6,4,1]/16
-        // 1D LP filter simulates a real composite monitor's chroma
-        // bandwidth — the demodulator outputs strong sub-cell stripes
-        // (the chroma carrier survives at full pixel resolution in our
-        // model) but the monitor / eye low-passes them to the cell mean,
-        // which is the artifact colour the user actually perceives.
-        if (config->mode == amiga::Mode::cga_composite && !dither_result.indices.empty()) {
-            cga_composite::Params cp;
-            cp.new_cga = config->cga_composite_new_cga;
-            cp.cgamode = 0x0A;
-            auto ctx = cga_composite::make_context(cp);
-            // Translate the chosen 2bpp palette indices (0..3) to RGBI
-            // via the active CGA palette, then run the chroma decoder
-            // through decode_line_mode04 — that helper handles the
-            // mode-04 clock-divisor-of-2 (each logical pixel duplicated
-            // in the chroma sampler). Output is 2× wide, matching what
-            // MartyPC's draw_cga_direct_composite_reenigne produces.
-            static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
-                {{0,  2,  4,  6}},
-                {{0, 10, 12, 14}},
-                {{0,  3,  5,  7}},
-                {{0, 11, 13, 15}},
-            }};
-            std::size_t v = static_cast<std::size_t>(std::clamp(config->cga_palette, 0, 3));
-            const auto& pal_rgbi = kCgaPalettes[v];
-            auto w = preview->width(), h = preview->height();
-            std::vector<std::uint8_t> rgbi_row(w);
-            std::vector<Color3f>      row_buf(w * 2);
-            for (std::size_t y = 0; y < h; ++y) {
-                for (std::size_t x = 0; x < w; ++x) {
-                    rgbi_row[x] = pal_rgbi[dither_result.indices[y * w + x] & 0x3];
-                }
-                cga_composite::decode_line_mode04(
-                    std::span<const std::uint8_t>(rgbi_row),
-                    std::span<Color3f>(row_buf), ctx);
-                for (std::size_t x = 0; x < w; ++x) {
-                    auto& a = row_buf[x * 2];
-                    auto& b = row_buf[x * 2 + 1];
-                    preview->pixels()[y * w + x] = {
-                        (a.r + b.r) * 0.5f, (a.g + b.g) * 0.5f, (a.b + b.b) * 0.5f,
-                    };
-                }
-            }
         }
         // CGA composite hires preview: plain decode_line (mode 06 runs
         // at full chroma rate, no clock-divisor doubling).

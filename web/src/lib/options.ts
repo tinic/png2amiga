@@ -170,10 +170,7 @@ const ALL_MODES: ModeOption[] = [
   // IBM PC CGA.
   { value: 'cga-320',          label: 'CGA 320x200',           chipset: 'cga' },
   { value: 'cga-640',          label: 'CGA 640x200 mono',      chipset: 'cga' },
-  { value: 'cga-composite',    label: 'CGA Comp 320',          chipset: 'cga' },
   { value: 'cga-composite-hires', label: 'CGA Comp 640',       chipset: 'cga' },
-  { value: 'cga-composite-text80x100', label: 'CGA Comp 80x100', chipset: 'cga' },
-  { value: 'cga-composite-text80x200', label: 'CGA Comp 80x200', chipset: 'cga' },
   { value: 'cga-text80x200',   label: 'CGA Text 80x200', chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100', chipset: 'cga' },
   { value: 'cga-text80x50',    label: 'CGA Text 80x50',  chipset: 'cga' },
@@ -547,7 +544,7 @@ const IBM_EXAMPLES: Example[] = [
   { name: 'logo',     file: 'logo.png',     opts: { chipset: 'ega', mode: 'ega-320', alphaThreshold: 0 } },
   { name: 'space',    file: 'space3.jpg',   opts: { chipset: 'vga', mode: 'vga-10h' } },
   { name: 'photo',    file: 'photo.jpg',    opts: { chipset: 'vga', mode: 'vga-13h' } },
-  { name: 'grungy',   file: 'grungy.jpg',   opts: { chipset: 'cga', mode: 'cga-composite' } },
+  { name: 'grungy',   file: 'grungy.jpg',   opts: { chipset: 'cga', mode: 'cga-composite-hires' } },
   { name: 'fantasy1', file: 'fantasy1.jpg', opts: { chipset: 'cga', mode: 'cga-320' } },
   { name: 'fromthe',  file: 'fromthe.jpg',  opts: { chipset: 'ega', mode: 'ega-hi' } },
   { name: 'asterix',  file: 'asterix.jpg',  opts: { chipset: 'cga', mode: 'cga-text80x100', gamma: 1.2, brightness: -0.1, contrast: 1.6 } },
@@ -777,10 +774,7 @@ const MODE_PAR: Record<string, number> = {
   'ega-hi':     0.73,
   'cga-320':    0.833,
   'cga-640':    0.417,
-  'cga-composite': 0.833,
   'cga-composite-hires': 0.417,
-  'cga-composite-text80x100': 0.417,
-  'cga-composite-text80x200': 0.417,
   'cga-text80x200': 0.417,
   'cga-text80x100': 0.417,
   'cga-text80x50':  0.417,
@@ -841,10 +835,7 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'cga-320':         { sx: 2, sy: 2 },
   'ega-320':         { sx: 2, sy: 2 },
   'vga-13h':         { sx: 2, sy: 2 },
-  'cga-composite':   { sx: 2, sy: 2 },  // 320×200 → 640×400 → PAR ~640×480
   'cga-composite-hires':     { sx: 1, sy: 2 },  // 640×200 → 640×400 → PAR ~640×480
-  'cga-composite-text80x100':{ sx: 1, sy: 2 },  // 640×200 → 640×400 → PAR ~640×480
-  'cga-composite-text80x200':{ sx: 1, sy: 2 },
   'vga-12h':         { sx: 1, sy: 1 },
   'vga-10h':         { sx: 1, sy: 1 },
   'ega-hi':          { sx: 1, sy: 1 },
@@ -926,8 +917,7 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'stf-med': 2, 'ste-med': 2,
   'stf-hi':  1, 'ste-hi':  1,
   'cga-640': 1,
-  'cga-320': 2, 'cga-composite': 2, 'cga-composite-hires': 1,
-  'cga-composite-text80x100': 1, 'cga-composite-text80x200': 1,
+  'cga-320': 2, 'cga-composite-hires': 1,
   'vga-13h': 8,
 }
 
