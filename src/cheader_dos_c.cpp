@@ -729,7 +729,9 @@ Result<std::string> generate(amiga::Mode mode,
         // emit a viewer that would be silently broken (would display
         // the first 16 KB and read garbage from BIOS data after).
         // Every other variant (including the new 40x200 / 40x100) fits.
-        if (!cga_text_fits_vram(mode)) {
+        bool fits = is_composite_text ? (expected_bytes <= 16384u)
+                                       : cga_text_fits_vram(mode);
+        if (!fits) {
             return std::unexpected{
                 Error{ErrorCode::unsupported_mode,
                       std::format("cheader_dos_c: cga-text{}x{} buffer ({} bytes) "

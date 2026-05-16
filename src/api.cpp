@@ -1937,17 +1937,42 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // and take the cell mean.
         auto w = image->width(), h = image->height();
         constexpr std::size_t kCands = 256u * 256u;
-        std::vector<Color3f>      cand_mean(kCands);
-        std::vector<std::uint16_t> cand_char_attr(kCands);  // (char<<8) | attr
+        struct Candidate {
+            Color3f mean;
+            float variance;        // smoothness penalty (lower = smoother)
+            std::uint16_t char_attr;
+        };
+        std::vector<Candidate> cand;
+        cand.reserve(kCands);
+
+        // Filter: skip glyphs whose visible scanlines are pure-alternating
+        // (0x55 or 0xAA). Those produce 2-pixel-period FG/BG on screen,
+        // which lands exactly on the chroma null (7.16 MHz, half the
+        // 3.58 MHz carrier) — the demodulator sees zero chroma and the
+        // visible result is bright-dim 1-pixel alternation = vertical
+        // stripes. Even one scanline with this pattern is enough to make
+        // the cell shimmer, so we reject if ANY top-cell_h scanline is
+        // in {0x55, 0xAA}.
+        auto glyph_is_chroma_null = [&](int ch) {
+            for (std::size_t sl = 0; sl < cell_h; ++sl) {
+                auto b = palette::cga_glyph_scanline(
+                    static_cast<std::uint8_t>(ch), sl);
+                if (b == 0x55 || b == 0xAA) return true;
+            }
+            return false;
+        };
+
         {
             std::vector<std::uint8_t> rgbi_row(cell_w);
             std::vector<Color3f>      dec(cell_w);
-            std::size_t i = 0;
+            std::vector<Color3f>      all_dec;  // all cell_h × cell_w decoded samples
+            all_dec.reserve(cell_w * cell_h);
             for (int ch = 0; ch < 256; ++ch) {
+                if (glyph_is_chroma_null(ch)) continue;
                 for (int attr = 0; attr < 256; ++attr) {
                     std::uint8_t fg = static_cast<std::uint8_t>(attr & 0xF);
                     std::uint8_t bg = static_cast<std::uint8_t>((attr >> 4) & 0xF);
-                    float r = 0, g = 0, bl = 0;
+                    all_dec.clear();
                     for (std::size_t sl = 0; sl < cell_h; ++sl) {
                         auto glyph = palette::cga_glyph_scanline(
                             static_cast<std::uint8_t>(ch), sl);
@@ -1955,19 +1980,36 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                             rgbi_row[p] = (glyph & (0x80u >> p)) ? fg : bg;
                         }
                         cga_composite::decode_line(rgbi_row, std::span<Color3f>(dec), ctx);
-                        for (auto& c : dec) { r += c.r; g += c.g; bl += c.b; }
+                        for (auto& c : dec) all_dec.push_back(c);
                     }
-                    float inv = 1.0f / static_cast<float>(cell_w * cell_h);
-                    cand_mean[i] = {r * inv, g * inv, bl * inv};
-                    cand_char_attr[i] = static_cast<std::uint16_t>((ch << 8) | attr);
-                    ++i;
+                    float r = 0, g = 0, bl = 0;
+                    for (auto& c : all_dec) { r += c.r; g += c.g; bl += c.b; }
+                    float inv = 1.0f / static_cast<float>(all_dec.size());
+                    Color3f mean{r * inv, g * inv, bl * inv};
+                    // Variance = sum of squared per-pixel deviation from
+                    // the cell mean. Cells with low variance look like
+                    // a solid colour; high variance = visible per-pixel
+                    // chroma stripes / shimmer. Use OKLab distance² so
+                    // the metric is perceptual.
+                    auto mean_lab = color_space::linear_to_oklab(mean);
+                    float var = 0.0f;
+                    for (auto& c : all_dec) {
+                        auto lab = color_space::linear_to_oklab(c);
+                        float dL = lab.L - mean_lab.L;
+                        float da = lab.a - mean_lab.a;
+                        float db = lab.b - mean_lab.b;
+                        var += dL * dL + da * da + db * db;
+                    }
+                    cand.push_back({mean, var,
+                        static_cast<std::uint16_t>((ch << 8) | attr)});
                 }
             }
         }
 
-        // Dedupe perceptually (~5 JND bins) — same approach as the gamut
-        // analysis. Reduces ~65 K candidates to ~1.5–3.5 K unique cell
-        // colours, keeping the dither::apply nearest-search tractable.
+        // Dedupe perceptually (~5 JND bins). When multiple (char, attr)
+        // candidates fall in the same bin, keep the one with the LOWEST
+        // intra-cell variance — that's the smoothest glyph for that
+        // colour, so the visible result has minimum per-pixel shimmer.
         struct DedupedEntry {
             Color3f mean;
             std::uint16_t char_attr;
@@ -1975,11 +2017,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::vector<DedupedEntry> deduped;
         deduped.reserve(8192);
         {
-            // 8-level grid per channel = 512 bins.
-            std::unordered_set<std::uint32_t> seen;
-            seen.reserve(kCands);
-            for (std::size_t k = 0; k < kCands; ++k) {
-                auto srgb = color_space::linear_to_srgb(cand_mean[k]).clamped();
+            std::unordered_map<std::uint32_t, std::size_t> bin_to_cand;
+            bin_to_cand.reserve(cand.size());
+            for (std::size_t k = 0; k < cand.size(); ++k) {
+                auto srgb = color_space::linear_to_srgb(cand[k].mean).clamped();
                 std::uint32_t r = static_cast<std::uint32_t>(
                     std::clamp(int(srgb.r * 255 + 0.5f), 0, 255)) / 32;
                 std::uint32_t g = static_cast<std::uint32_t>(
@@ -1987,9 +2028,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 std::uint32_t b = static_cast<std::uint32_t>(
                     std::clamp(int(srgb.b * 255 + 0.5f), 0, 255)) / 32;
                 std::uint32_t key = (r << 16) | (g << 8) | b;
-                if (seen.insert(key).second) {
-                    deduped.push_back({cand_mean[k], cand_char_attr[k]});
+                auto it = bin_to_cand.find(key);
+                if (it == bin_to_cand.end()) {
+                    bin_to_cand[key] = k;
+                } else if (cand[k].variance < cand[it->second].variance) {
+                    it->second = k;
                 }
+            }
+            for (auto& [key, idx] : bin_to_cand) {
+                deduped.push_back({cand[idx].mean, cand[idx].char_attr});
             }
         }
         std::vector<Color3f> cell_pal;
@@ -2014,26 +2061,79 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         }
 
-        // ---- Dither against the deduped palette ----
-        dither::Settings dith;
-        dith.method = parse_dither(options.dither);
-        dith.strength = options.dither_strength;
-        dith.error_clamp = options.error_clamp;
-        auto cell_dither = dither::apply(
-            cell_image, std::span<const Color3f>(cell_pal), dith);
-
-        // ---- Char/attr buffer + indices for downstream ----
+        // ---- Pick (char, attr) per cell ----
+        // For dither methods OTHER than none, fall through to
+        // dither::apply against the deduped cell-mean palette — its
+        // error diffusion handles inter-cell smoothing for gradients
+        // and the within-bin lowest-variance choice keeps the worst
+        // shimmer out.
+        //
+        // For --dither none, the user sees raw nearest-mean picks,
+        // and any patterned glyph picked for a gradient region shows
+        // visible per-pixel chroma rotation. Switch to a custom
+        // variance-weighted nearest-color search over the FULL
+        // candidate set (not the deduped subset) so the encoder can
+        // trade a tiny bit of colour accuracy for a much smoother
+        // glyph at no cost in palette size:
+        //   score = oklab_dist²(source, cand_mean) + α · variance_per_px
+        // Hard-coded α for now; if it turns out a useful knob it can
+        // become an api/CLI option.
+        constexpr float kAlpha = 0.5f;
+        const std::size_t cell_px = cell_w * cell_h;
+        dither::Method dith_method = parse_dither(options.dither);
         std::vector<std::uint8_t> raw_frame(cols * rows * 2);
-        for (std::size_t y = 0; y < rows; ++y) {
-            for (std::size_t cx = 0; cx < cols; ++cx) {
-                auto idx = cell_dither.indices[y * cols + cx];
-                auto ca = deduped[idx].char_attr;
-                raw_frame[(y * cols + cx) * 2 + 0] = static_cast<std::uint8_t>(ca >> 8);
-                raw_frame[(y * cols + cx) * 2 + 1] = static_cast<std::uint8_t>(ca & 0xFF);
+
+        if (dith_method == dither::Method::none) {
+            std::vector<color_space::OKLab> cand_lab(cand.size());
+            std::vector<float> cand_var_per_px(cand.size());
+            for (std::size_t k = 0; k < cand.size(); ++k) {
+                cand_lab[k] = color_space::linear_to_oklab(cand[k].mean);
+                cand_var_per_px[k] = cand[k].variance / static_cast<float>(cell_px);
+            }
+            for (std::size_t y = 0; y < rows; ++y) {
+                for (std::size_t cx = 0; cx < cols; ++cx) {
+                    auto src = color_space::linear_to_oklab(cell_image[cx, y]);
+                    std::size_t best = 0;
+                    float best_score = std::numeric_limits<float>::max();
+                    for (std::size_t k = 0; k < cand.size(); ++k) {
+                        float dL = src.L - cand_lab[k].L;
+                        float da = src.a - cand_lab[k].a;
+                        float db = src.b - cand_lab[k].b;
+                        float dist2 = dL * dL + da * da + db * db;
+                        float score = dist2 + kAlpha * cand_var_per_px[k];
+                        if (score < best_score) {
+                            best_score = score;
+                            best = k;
+                        }
+                    }
+                    auto ca = cand[best].char_attr;
+                    raw_frame[(y * cols + cx) * 2 + 0] = static_cast<std::uint8_t>(ca >> 8);
+                    raw_frame[(y * cols + cx) * 2 + 1] = static_cast<std::uint8_t>(ca & 0xFF);
+                }
+            }
+        } else {
+            dither::Settings dith;
+            dith.method = dith_method;
+            dith.strength = options.dither_strength;
+            dith.error_clamp = options.error_clamp;
+            auto cell_dither = dither::apply(
+                cell_image, std::span<const Color3f>(cell_pal), dith);
+            for (std::size_t y = 0; y < rows; ++y) {
+                for (std::size_t cx = 0; cx < cols; ++cx) {
+                    auto idx = cell_dither.indices[y * cols + cx];
+                    auto ca = deduped[idx].char_attr;
+                    raw_frame[(y * cols + cx) * 2 + 0] = static_cast<std::uint8_t>(ca >> 8);
+                    raw_frame[(y * cols + cx) * 2 + 1] = static_cast<std::uint8_t>(ca & 0xFF);
+                }
             }
         }
 
         // ---- Render preview through NTSC at full hardware resolution ----
+        // The chroma decoder outputs one color per pixel at the 3.58 MHz
+        // carrier — adjacent pixels see different I/Q phases, so a 1:1
+        // preview reads as visible per-pixel chroma stripes. A real CRT
+        // / the eye low-passes these to the cell mean; mirror that with
+        // the same 5-tap monitor LP we use for mode-04 preview.
         Image rendered(w, h);
         {
             std::vector<std::uint8_t> rgbi_row(w);
@@ -2070,14 +2170,25 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         PipelineResult result;
         result.rendered = std::move(rendered);
-        // Informational palette: the cell-mean entries the encoder
-        // actually picked from. Useful for --print-palette.
-        std::unordered_set<std::uint32_t> picked_set;
-        for (auto idx : cell_dither.indices) {
-            picked_set.insert(static_cast<std::uint32_t>(idx));
+        // Informational palette: collect unique cell-mean colours from
+        // the picked raw_frame. Useful for --print-palette.
+        {
+            std::unordered_set<std::uint16_t> picked_ca;
+            for (std::size_t i = 0; i < cols * rows; ++i) {
+                auto ca = static_cast<std::uint16_t>(
+                    (raw_frame[i * 2] << 8) | raw_frame[i * 2 + 1]);
+                picked_ca.insert(ca);
+            }
+            // Walk the original candidate list (NOT deduped) to find
+            // the mean colour for each picked (char, attr).
+            std::unordered_map<std::uint16_t, Color3f> ca_to_mean;
+            ca_to_mean.reserve(cand.size());
+            for (auto& c : cand) ca_to_mean[c.char_attr] = c.mean;
+            for (auto ca : picked_ca) {
+                auto it = ca_to_mean.find(ca);
+                if (it != ca_to_mean.end()) result.palette.push_back(it->second);
+            }
         }
-        for (auto idx : picked_set)
-            result.palette.push_back(deduped[idx].mean);
         // indices: per-source-pixel char/attr index isn't meaningful for
         // a text-mode output. Leave empty; downstream consumers should
         // use raw_frame (char/attr pairs) instead.
