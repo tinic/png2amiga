@@ -1559,23 +1559,47 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                  std::size_t rows_in_field,
                                  int vpos_step,
                                  int vpos_first) {
-            out += std::format("    for (int y = 1; y < {}; y++) {{\n", rows_in_field);
-            out += std::format("        USHORT line = (y - 1) * {} + {};\n", vpos_step, vpos_first);
             // Interlace needs the WAIT HP pushed later (0xE3 = HPOS 226) —
             // with 0xDD (220) the MOVEs land inside the last ~16 lores pixels
             // of the scanline still being drawn. Progressive keeps 0xDD.
-            // Special case: at line==255 use 0xFFDF instead — this specific
-            // pattern activates the copper's "past 0xFF" state so subsequent
-            // WAITs with wrapped vp values (vp=256, 258 ...) match correctly.
             auto hp_byte = is_lace ? "0xE3" : "0xDD";
-            out += std::format("        if (line == 255) {{\n"
-                               "            *{0}++ = 0xFFDF;\n"
-                               "        }} else {{\n"
-                               "            *{0}++ = ((line & 0xFF) << 8) | {1};\n"
-                               "        }}\n",
-                               cl_var,
-                               hp_byte);
-            out += std::format("        *{0}++ = 0xfffe;\n", cl_var);
+            out += std::format("    for (int y = 1; y < {}; y++) {{\n", rows_in_field);
+            if (options.copper_wait_h_only) {
+                // Experimental V-mask path. First WAIT anchors V to the
+                // image's start line; everything after waits on H only,
+                // so the V comparator is permanently irrelevant and the
+                // 0xFFDF past-0xFF wrap marker isn't needed (V never has
+                // to match a wrapped value). IR2=0x80FE: BFD=1, V-mask=0,
+                // H-mask=0x7F, WAIT bit cleared.
+                out += std::format(
+                    "        if (y == 1) {{\n"
+                    "            USHORT line = {1};\n"
+                    "            *{0}++ = ((line & 0xFF) << 8) | {2};\n"
+                    "            *{0}++ = 0xfffe;\n"
+                    "        }} else {{\n"
+                    "            *{0}++ = {2};   /* H-only WAIT (V masked off) */\n"
+                    "            *{0}++ = 0x80fe;\n"
+                    "        }}\n",
+                    cl_var,
+                    vpos_first,
+                    hp_byte);
+            } else {
+                out += std::format("        USHORT line = (y - 1) * {} + {};\n",
+                                   vpos_step,
+                                   vpos_first);
+                // Special case: at line==255 use 0xFFDF — this specific
+                // pattern activates the copper's "past 0xFF" state so
+                // subsequent WAITs with wrapped vp values (vp=256, 258 ...)
+                // match correctly.
+                out += std::format("        if (line == 255) {{\n"
+                                   "            *{0}++ = 0xFFDF;\n"
+                                   "        }} else {{\n"
+                                   "            *{0}++ = ((line & 0xFF) << 8) | {1};\n"
+                                   "        }}\n",
+                                   cl_var,
+                                   hp_byte);
+                out += std::format("        *{0}++ = 0xfffe;\n", cl_var);
+            }
             emit_copper_changes(cl_var, row_expr, aga_banks);
             out += "    }\n\n";
         };
@@ -1612,8 +1636,14 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         // The strips path bakes its own 0xFFDF marker into the static table
         // when needed (see strips_copper_list emitter); suppress here so we
         // don't double-emit and hang past vp=0xFF.
+        // copper_wait_h_only mode skips the per-line wrap marker entirely
+        // (V comparator masked off — wrap doesn't matter inside the loop)
+        // but blank-below's WAIT is V+H, so still needs the marker when
+        // last_line crosses 256.
+        bool loop_emitted_wrap = has_copper && !options.copper_wait_h_only
+                                 && loop_max_line >= 255;
         bool strips_emitted_wrap = has_scap && (last_line >= 256);
-        if (last_line >= 256 && (!has_copper || loop_max_line < 255) && !strips_emitted_wrap) {
+        if (last_line >= 256 && !loop_emitted_wrap && !strips_emitted_wrap) {
             out += "    *cl++ = 0xFFDF; *cl++ = 0xFFFE;"
                    "  // cross 256 boundary\n";
         }
@@ -1795,13 +1825,27 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         if (has_copper) {
             out += "    // Field 2 per-scanline palette changes\n";
             out += std::format("    for (int y = 1; y < {}; y++) {{\n", height / 2);
-            out += std::format("        USHORT line = (y - 1) + {};\n", y_start);
-            out += "        if (line == 255) {\n";
-            out += "            *cl2++ = 0xFFDF;  // activates past-0xFF state\n";
-            out += "        } else {\n";
-            out += "            *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n";
-            out += "        }\n";
-            out += "        *cl2++ = 0xfffe;\n";
+            if (options.copper_wait_h_only) {
+                // Same V-mask logic as per_line_loop: anchor at y==1,
+                // H-only thereafter, no past-0xFF marker needed.
+                out += std::format("        if (y == 1) {{\n"
+                                   "            USHORT line = {};\n"
+                                   "            *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n"
+                                   "            *cl2++ = 0xfffe;\n"
+                                   "        }} else {{\n"
+                                   "            *cl2++ = 0xE3;   /* H-only WAIT */\n"
+                                   "            *cl2++ = 0x80fe;\n"
+                                   "        }}\n",
+                                   y_start);
+            } else {
+                out += std::format("        USHORT line = (y - 1) + {};\n", y_start);
+                out += "        if (line == 255) {\n";
+                out += "            *cl2++ = 0xFFDF;  // activates past-0xFF state\n";
+                out += "        } else {\n";
+                out += "            *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n";
+                out += "        }\n";
+                out += "        *cl2++ = 0xfffe;\n";
+            }
             emit_copper_changes("cl2", "(y * 2 + 1)", aga_banks);
             out += "    }\n\n";
         }
@@ -1810,7 +1854,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             auto field_lines = static_cast<int>(height / 2);
             auto last_line = y_start + field_lines;
             auto loop_max_line = y_start + field_lines - 2;
-            if (last_line >= 256 && (!has_copper || loop_max_line < 255)) {
+            bool loop_emitted_wrap = has_copper && !options.copper_wait_h_only
+                                     && loop_max_line >= 255;
+            if (last_line >= 256 && !loop_emitted_wrap) {
                 out += "    *cl2++ = 0xFFDF; *cl2++ = 0xFFFE;"
                        "  // cross 256 boundary\n";
             }

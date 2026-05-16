@@ -1025,6 +1025,14 @@ struct Config {
                                           // forward window. --best sweeps both
                                           // states automatically; outside --best
                                           // this flag lets the user force-enable.
+    bool copper_wait_h_only = false;      // EXPERIMENTAL: emit per-line WAITs with
+                                          // V-mask=0 (IR2=0x80FE instead of 0xFFFE)
+                                          // for all WAITs past the first. Lets us
+                                          // drop the 0xFFDF past-line-255 wrap
+                                          // marker and opens a path to dynamic
+                                          // H-only fade-in modulation. See cheader
+                                          // .cpp's per_line_loop for the emit-side
+                                          // details.
     bool fade_in = false;                 // 16-step fade-in from black
 
     // Cross-fade: encode the bitmap once, animate the palette through one
@@ -1236,6 +1244,9 @@ void print_usage() {
         "  --sliced                        Per-scanline palette swaps\n"
         "  --slice-changes <0-16>          Swaps per line (0 = auto)\n"
         "  --sliced-vertical-dither        Spread copper transitions across rows\n"
+        "  --copper-wait-h-only            EXPERIMENTAL: mask V comparator on per-\n"
+        "                                  line WAITs past the first. Drops the\n"
+        "                                  0xFFDF line-255 wrap marker.\n"
         "\n"
         "Strip palette (mid-line swaps, OCS lores):\n"
         "  --strips                        Mid-line swaps; pair with --dpf or ehb\n"
@@ -1431,6 +1442,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (arg == "--sliced" || arg == "--copper") {
             // --copper kept as legacy alias for --sliced.
             config.copper = true;
+            continue;
+        }
+
+        if (arg == "--copper-wait-h-only") {
+            config.copper_wait_h_only = true;
             continue;
         }
 
@@ -2809,6 +2825,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.sliced_spread_radius = cfg.sliced_spread_radius;
     opts.sliced_vertical_dither = cfg.sliced_vertical_dither;
     opts.sliced_beam = cfg.sliced_beam;
+    opts.copper_wait_h_only = cfg.copper_wait_h_only;
     opts.sliced_spread_decay = cfg.sliced_spread_decay;
     opts.lock_color0 = cfg.lock_color0;
     opts.dual_playfield = cfg.dual_playfield;
@@ -3738,6 +3755,8 @@ struct AmigaOutputBundle {
     // Fade-to (CLI cross-fade): pre-computed per-frame palette MOVEs
     // for the .cpp/.c viewer to animate at runtime.
     bool fade_in = false;
+    // Experimental: emit per-line WAITs with V-mask=0 past the first.
+    bool copper_wait_h_only = false;
     std::vector<std::vector<std::uint16_t>> fade_per_frame_values;
     bool fade_ping_pong = false;
 
@@ -3791,6 +3810,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
             .aga = aga,
             .fade_in = out.fade_in,
             .dpf = out.dpf,
+            .copper_wait_h_only = out.copper_wait_h_only,
             .total_unique_colors = static_cast<std::size_t>(count_unique_colors(out.rendered)),
         });
         if (out.scanline_changes && !out.scanline_changes->empty()) {
@@ -5231,6 +5251,7 @@ int run_batch(const Config& cfg) {
             .interlace = st.interlace,
             .aga = st.aga,
             .dpf = st.dpf,
+            .copper_wait_h_only = cfg.copper_wait_h_only,
             .total_unique_colors = static_cast<std::size_t>(count_unique_colors(st.rendered)),
         });
         std::span<const bitplane::BitplaneData> extras{frame_planes.data() + 1,
@@ -7877,6 +7898,7 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.copper_wait_h_only = config->copper_wait_h_only;
             out.mask_layout = config->mask_layout;
             out.mask_invert = config->mask_invert;
             // HAM+sliced: per-line palette evolution attached to IFF/cheader.
@@ -8092,6 +8114,7 @@ int run_main(int argc, char* argv[]) {
                 out.output_path = config->output_path;
                 out.symbol_override = config->symbol_name;
                 out.fade_in = config->fade_in;
+                out.copper_wait_h_only = config->copper_wait_h_only;
                 out.mask_layout = config->mask_layout;
                 out.mask_invert = config->mask_invert;
                 out.scanline_changes = &copper_result->scanline_changes;
@@ -8267,6 +8290,7 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.copper_wait_h_only = config->copper_wait_h_only;
             out.mask_layout = config->mask_layout;
             out.mask_invert = config->mask_invert;
             // EHB --fade-to: 32-slot per-frame palette MOVEs for viewer.
@@ -8736,6 +8760,7 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.copper_wait_h_only = config->copper_wait_h_only;
             out.mask_layout = config->mask_layout;
             out.mask_invert = config->mask_invert;
             out.scanline_changes = &copper_result->scanline_changes;
@@ -9964,6 +9989,7 @@ int run_main(int argc, char* argv[]) {
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
+            out.copper_wait_h_only = config->copper_wait_h_only;
             out.mask_layout = config->mask_layout;
             out.mask_invert = config->mask_invert;
             // --fade-to: per-frame palette MOVEs for the .cpp/.c viewer.
@@ -10015,6 +10041,7 @@ int run_main(int argc, char* argv[]) {
                 .aga = (chipset == amiga::Chipset::aga),
                 .fade_in = config->fade_in,
                 .dpf = use_dpf_std,
+                .copper_wait_h_only = config->copper_wait_h_only,
                 .total_unique_colors = static_cast<std::size_t>(count_unique_colors(*preview)),
             });
 
@@ -10163,6 +10190,7 @@ int run_main(int argc, char* argv[]) {
                     .aga = (chipset == amiga::Chipset::aga),
                     .fade_in = config->fade_in,
                     .dpf = use_dpf_std,
+                    .copper_wait_h_only = config->copper_wait_h_only,
                     .total_unique_colors = static_cast<std::size_t>(count_unique_colors(*preview)),
                 });
                 if (!fade_sequence.empty() && !config->interlace) {

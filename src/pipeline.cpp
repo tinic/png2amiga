@@ -261,6 +261,7 @@ cheader::CHeaderOptions make_ch_opts(const ChOptsBase& base) {
     ch.fade_in = base.fade_in;
     ch.dpf = base.dpf;
     ch.interleaved = base.interleaved;
+    ch.copper_wait_h_only = base.copper_wait_h_only;
     ch.total_unique_colors = base.total_unique_colors;
     return ch;
 }

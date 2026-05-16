@@ -4998,6 +4998,7 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
         .symbol_override = options.symbol_name,
         .aga = result->aga,
         .dpf = result->dpf,
+        .copper_wait_h_only = options.copper_wait_h_only,
         .total_unique_colors = static_cast<std::size_t>(count_unique_colors(result->rendered)),
     });
     // sliced per-line copper data, when present.
@@ -5145,6 +5146,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
         .aga = (resolve_chipset(options.chipset, result->mode) == amiga::Chipset::aga),
         .fade_in = true,  // always enable fade-in for web/compile exports
         .dpf = result->dpf,
+        .copper_wait_h_only = options.copper_wait_h_only,
         .total_unique_colors = static_cast<std::size_t>(count_unique_colors(result->rendered)),
     });
     if (result->copper && !result->scanline_changes.empty()) {

@@ -57,6 +57,7 @@ struct ChOptsBase {
     bool fade_in = false;
     bool dpf = false;
     bool interleaved = false;
+    bool copper_wait_h_only = false;
     std::size_t total_unique_colors = 0;  // 0 = caller didn't compute
 };
 

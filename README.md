@@ -513,7 +513,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.97.0.1146
+png2amiga 1.97.0.1148
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -609,6 +609,9 @@ Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):
   --sliced                        Per-scanline palette swaps
   --slice-changes <0-16>          Swaps per line (0 = auto)
   --sliced-vertical-dither        Spread copper transitions across rows
+  --copper-wait-h-only            EXPERIMENTAL: mask V comparator on per-
+                                  line WAITs past the first. Drops the
+                                  0xFFDF line-255 wrap marker.
 
 Strip palette (mid-line swaps, OCS lores):
   --strips                        Mid-line swaps; pair with --dpf or ehb
@@ -695,7 +698,6 @@ Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
 
 ```
-
 
 ## License
 

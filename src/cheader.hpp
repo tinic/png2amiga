@@ -51,6 +51,21 @@ struct CHeaderOptions {
     // Copper: per-scanline register changes (nullptr = no copper)
     const std::vector<std::vector<copper::CopperChange>>* copper_changes = nullptr;
     std::size_t copper_changes_per_line = 0;
+    // Experimental: emit per-line WAITs with the vertical comparator
+    // masked off (IR2 = 0x80FE instead of 0xFFFE). Only the very first
+    // WAIT carries an explicit V to anchor display start; every
+    // subsequent WAIT just waits for the H counter to reach HP again,
+    // which (since the previous MOVE block finishes past HP) fires
+    // exactly once per line. Side effects:
+    //   - The 0xFFDF "past line 255" wrap marker becomes unnecessary
+    //     — V is no longer being compared, so V wraparound at line 256
+    //     doesn't matter. The whole `if (line == 255)` special case
+    //     drops out and frees its slot.
+    //   - Opens a path to dynamic fade-in by modifying just the H byte
+    //     of subsequent WAITs in real time (no V juggling needed).
+    // Off by default — production users keep the proven anchor-every-
+    // line behavior until this has soaked.
+    bool copper_wait_h_only = false;
     // Optional: per-scanline effective palette. When `interlace` is set we
     // rebuild the diffs so each field sees transitions between the rows it
     // actually draws (row y ← row y-2) rather than the default row y-1.

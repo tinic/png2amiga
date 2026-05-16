@@ -203,6 +203,13 @@ struct Options {
     // Copper palette (per-scanline palette changes)
     bool copper = false;     // use per-scanline copper palettes
     int copper_changes = 0;  // override changes/line (0 = auto)
+    // Experimental: emit per-line copper WAITs with vertical comparator
+    // masked off (IR2=0x80FE instead of 0xFFFE). Only the first WAIT
+    // anchors V; every subsequent WAIT waits on H only. Drops the
+    // 0xFFDF wrap marker at line 255 (V is irrelevant so the wrap
+    // doesn't matter), freeing that slot. See CHeaderOptions for the
+    // emit-side details.
+    bool copper_wait_h_only = false;
     // Per-line palette planner neighbor-row smoothing. -1 means use the
     // encode_copper default (radius=4, decay=0.85). Exposed for sweep
     // tooling (--slice-spread-radius / --slice-spread-decay on the CLI).
