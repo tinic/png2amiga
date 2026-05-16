@@ -26,8 +26,16 @@ parallelises without `-j`):
 ```bash
 cmake --preset default                       # configure
 cmake --build build                          # ninja, all cores
-ctest --test-dir build --parallel --output-on-failure   # 40% faster than serial
+ctest --test-dir build --parallel --output-on-failure   # 1.7x-4.9x faster
 ```
+
+`ctest --parallel` (auto-picks core count) is dramatically faster:
+- macOS M-series (8 cores):  119s → 70s  (1.7×)
+- Linux EPYC (48 cores):     149s → 32s  (4.7×)
+- Windows EPYC (24 cores):   103s → 21s  (4.9×)
+
+Going wider than the host core count doesn't help — the longest single
+test (recoil round-trip or --best sweep) bounds the wall.
 
 Other presets in `CMakePresets.json`:
 - `clang` — same shape, Apple/system clang → `build-clang/`
