@@ -1446,24 +1446,27 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         cp.cgamode = 0x0A;
         auto ctx = cga_composite::make_context(cp);
 
-        // Build decoded-RGB palette for a given CGA palette variant.
+        // Build decoded-RGB palette for a given CGA palette variant,
+        // through the mode-04 doubled-sample decoder (real-hardware
+        // chroma sampling rate is 2× the logical pixel rate).
         auto decode_palette4 = [&](std::array<std::uint8_t, 4> rgbi)
             -> std::array<Color3f, 4> {
             constexpr std::size_t kProbeW = 64;
-            constexpr std::size_t kCentre = 28;
+            constexpr std::size_t kCentre = 56;  // doubled-domain centre
             std::vector<std::uint8_t> row(kProbeW);
-            std::vector<Color3f>      dec(kProbeW);
+            std::vector<Color3f>      dec(kProbeW * 2);
             std::array<Color3f, 4> out{};
             for (std::size_t i = 0; i < 4; ++i) {
                 std::fill(row.begin(), row.end(), rgbi[i]);
-                cga_composite::decode_line(row, std::span<Color3f>(dec), ctx);
+                cga_composite::decode_line_mode04(
+                    row, std::span<Color3f>(dec), ctx);
                 float r = 0, g = 0, b = 0;
-                for (std::size_t k = kCentre; k < kCentre + 8; ++k) {
+                for (std::size_t k = kCentre; k < kCentre + 16; ++k) {
                     r += dec[k].r;
                     g += dec[k].g;
                     b += dec[k].b;
                 }
-                out[i] = Color3f{r * 0.125f, g * 0.125f, b * 0.125f};
+                out[i] = Color3f{r / 16.0f, g / 16.0f, b / 16.0f};
             }
             return out;
         };
@@ -1525,10 +1528,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         std::vector<Color3f>     cell_pal_means(256);
         std::vector<CellPattern> cell_patterns(256);
         {
-            constexpr std::size_t kProbeW = 64;
-            constexpr std::size_t kCentre = 28;
+            constexpr std::size_t kProbeW = 64;     // logical pixels
+            constexpr std::size_t kCentre = 56;     // doubled-domain centre
             std::vector<std::uint8_t> row(kProbeW);
-            std::vector<Color3f>      dec(kProbeW);
+            std::vector<Color3f>      dec(kProbeW * 2);
             std::size_t out_i = 0;
             for (int a = 0; a < 4; ++a)
             for (int b = 0; b < 4; ++b)
@@ -1541,12 +1544,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     cga_pal_rgbi[static_cast<std::size_t>(d)],
                 };
                 for (std::size_t i = 0; i < kProbeW; ++i) row[i] = p[i & 3];
-                cga_composite::decode_line(row, std::span<Color3f>(dec), ctx);
+                cga_composite::decode_line_mode04(
+                    row, std::span<Color3f>(dec), ctx);
+                // 8 doubled-domain samples = one full logical 4-pixel
+                // cell as seen by MartyPC's chroma decoder.
                 float r = 0, g = 0, bl = 0;
-                for (std::size_t k = kCentre; k < kCentre + 4; ++k) {
+                for (std::size_t k = kCentre; k < kCentre + 8; ++k) {
                     r += dec[k].r; g += dec[k].g; bl += dec[k].b;
                 }
-                cell_pal_means[out_i] = {r * 0.25f, g * 0.25f, bl * 0.25f};
+                cell_pal_means[out_i] = {r * 0.125f, g * 0.125f, bl * 0.125f};
                 cell_patterns[out_i] = {{
                     static_cast<std::uint8_t>(a),
                     static_cast<std::uint8_t>(b),
@@ -1601,11 +1607,27 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             rgbi_stream[i] = cga_pal_rgbi[idx];
         }
 
+        // Render through decode_line_mode04 (real-CGA chroma sample
+        // rate is 2× the logical pixel rate per mode-04's clock
+        // divisor of 2) and average each pair of doubled-domain
+        // samples back down to logical-pixel resolution. The chroma
+        // cycle matches MartyPC exactly; the average is what a CRT /
+        // the viewer's eye perceives after low-passing the per-sample
+        // chroma stripes. PAR / preview dims stay aligned with the
+        // 320-wide framebuffer.
         Image rendered(w, h);
+        std::vector<Color3f> row_buf(w * 2);
         for (std::size_t y = 0; y < h; ++y) {
             std::span<const std::uint8_t> row_in(rgbi_stream.data() + y * w, w);
-            std::span<Color3f>            row_dec(rendered.pixels().data() + y * w, w);
-            cga_composite::decode_line(row_in, row_dec, ctx);
+            cga_composite::decode_line_mode04(
+                row_in, std::span<Color3f>(row_buf), ctx);
+            for (std::size_t x = 0; x < w; ++x) {
+                auto& a = row_buf[x * 2];
+                auto& b = row_buf[x * 2 + 1];
+                rendered.pixels()[y * w + x] = {
+                    (a.r + b.r) * 0.5f, (a.g + b.g) * 0.5f, (a.b + b.b) * 0.5f,
+                };
+            }
         }
         float total_error = 0.0f;
         for (std::size_t i = 0; i < w * h; ++i) {

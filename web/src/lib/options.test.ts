@@ -256,7 +256,7 @@ describe('previewScale', () => {
     expect(previewScale('hires-lace')).toEqual({ sx: 1, sy: 1 })
   })
 
-  it('CGA composite doubles both axes (320-wide source)', () => {
+  it('CGA composite doubles both axes (320-wide preview)', () => {
     expect(previewScale('cga-composite')).toEqual({ sx: 2, sy: 2 })
   })
 

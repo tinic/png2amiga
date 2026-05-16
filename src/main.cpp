@@ -3491,8 +3491,9 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             break;
         case amiga::Mode::cga_composite:
             // 320×200 source × (2, 2) → 640×400 backing, PAR-corrected
-            // to ~640×480 (4:3). The other modes in this group source
-            // at 160 wide and need sx=4 to reach the same backing size.
+            // to ~640×480 (4:3). The chroma decoder runs at 2× internally
+            // but the rendered preview averages pairs back to 320 wide
+            // so the existing PAR math stays valid.
             sx = 2;
             sy = 2;
             break;
@@ -9196,21 +9197,24 @@ int run_main(int argc, char* argv[]) {
 
                 auto decode_palette4 = [&](std::array<std::uint8_t, 4> rgbi)
                     -> std::array<Color3f, 4> {
-                    constexpr std::size_t kProbeW = 64;
-                    constexpr std::size_t kCentre = 28;
+                    constexpr std::size_t kProbeW = 64;     // logical pixels
+                    constexpr std::size_t kCentre = 56;     // doubled-domain centre
                     std::vector<std::uint8_t> row(kProbeW);
-                    std::vector<Color3f>      dec(kProbeW);
+                    std::vector<Color3f>      dec(kProbeW * 2);
                     std::array<Color3f, 4> outp{};
                     for (std::size_t i = 0; i < 4; ++i) {
                         std::fill(row.begin(), row.end(), rgbi[i]);
-                        cga_composite::decode_line(row, std::span<Color3f>(dec), cga_ctx);
+                        cga_composite::decode_line_mode04(
+                            row, std::span<Color3f>(dec), cga_ctx);
+                        // 16 samples = 4 chroma cycles in the doubled
+                        // domain (= 2 logical chroma cycles).
                         float r = 0, g = 0, b = 0;
-                        for (std::size_t k = kCentre; k < kCentre + 8; ++k) {
+                        for (std::size_t k = kCentre; k < kCentre + 16; ++k) {
                             r += dec[k].r;
                             g += dec[k].g;
                             b += dec[k].b;
                         }
-                        outp[i] = Color3f{r * 0.125f, g * 0.125f, b * 0.125f};
+                        outp[i] = Color3f{r / 16.0f, g / 16.0f, b / 16.0f};
                     }
                     return outp;
                 };
@@ -9606,10 +9610,10 @@ int run_main(int argc, char* argv[]) {
             std::vector<Color3f>     cell_pal_means(256);
             std::vector<CellPattern> cell_patterns(256);
             {
-                constexpr std::size_t kProbeW = 64;
-                constexpr std::size_t kCentre = 28;
+                constexpr std::size_t kProbeW = 64;     // logical pixels
+                constexpr std::size_t kCentre = 56;     // doubled-domain centre
                 std::vector<std::uint8_t> probe(kProbeW);
-                std::vector<Color3f>      dec(kProbeW);
+                std::vector<Color3f>      dec(kProbeW * 2);
                 std::size_t out_i = 0;
                 for (int a = 0; a < 4; ++a)
                 for (int b = 0; b < 4; ++b)
@@ -9622,12 +9626,15 @@ int run_main(int argc, char* argv[]) {
                         cga_pal_rgbi[static_cast<std::size_t>(d)],
                     };
                     for (std::size_t i = 0; i < kProbeW; ++i) probe[i] = p4[i & 3];
-                    cga_composite::decode_line(probe, std::span<Color3f>(dec), cga_ctx);
+                    cga_composite::decode_line_mode04(
+                        probe, std::span<Color3f>(dec), cga_ctx);
+                    // 8 samples = 1 full logical 4-pixel cell in the
+                    // doubled domain.
                     float r = 0, g = 0, bl = 0;
-                    for (std::size_t k = kCentre; k < kCentre + 4; ++k) {
+                    for (std::size_t k = kCentre; k < kCentre + 8; ++k) {
                         r += dec[k].r; g += dec[k].g; bl += dec[k].b;
                     }
-                    cell_pal_means[out_i] = {r * 0.25f, g * 0.25f, bl * 0.25f};
+                    cell_pal_means[out_i] = {r * 0.125f, g * 0.125f, bl * 0.125f};
                     cell_patterns[out_i] = {{
                         static_cast<std::uint8_t>(a),
                         static_cast<std::uint8_t>(b),
@@ -9730,9 +9737,12 @@ int run_main(int argc, char* argv[]) {
             cp.new_cga = config->cga_composite_new_cga;
             cp.cgamode = 0x0A;
             auto ctx = cga_composite::make_context(cp);
-            // Translate the chosen 2bpp palette indices (0..3) to the
-            // 4-bit RGBI value the active CGA palette would produce on
-            // hardware, then run the chroma multiplexer.
+            // Translate the chosen 2bpp palette indices (0..3) to RGBI
+            // via the active CGA palette, then run the chroma decoder
+            // through decode_line_mode04 — that helper handles the
+            // mode-04 clock-divisor-of-2 (each logical pixel duplicated
+            // in the chroma sampler). Output is 2× wide, matching what
+            // MartyPC's draw_cga_direct_composite_reenigne produces.
             static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
                 {{0,  2,  4,  6}},
                 {{0, 10, 12, 14}},
@@ -9743,13 +9753,21 @@ int run_main(int argc, char* argv[]) {
             const auto& pal_rgbi = kCgaPalettes[v];
             auto w = preview->width(), h = preview->height();
             std::vector<std::uint8_t> rgbi_row(w);
+            std::vector<Color3f>      row_buf(w * 2);
             for (std::size_t y = 0; y < h; ++y) {
                 for (std::size_t x = 0; x < w; ++x) {
                     rgbi_row[x] = pal_rgbi[dither_result.indices[y * w + x] & 0x3];
                 }
-                std::span<Color3f> row_dec(preview->pixels().data() + y * w, w);
-                cga_composite::decode_line(std::span<const std::uint8_t>(rgbi_row),
-                                           row_dec, ctx);
+                cga_composite::decode_line_mode04(
+                    std::span<const std::uint8_t>(rgbi_row),
+                    std::span<Color3f>(row_buf), ctx);
+                for (std::size_t x = 0; x < w; ++x) {
+                    auto& a = row_buf[x * 2];
+                    auto& b = row_buf[x * 2 + 1];
+                    preview->pixels()[y * w + x] = {
+                        (a.r + b.r) * 0.5f, (a.g + b.g) * 0.5f, (a.b + b.b) * 0.5f,
+                    };
+                }
             }
         }
     }  // end if (!plain_best_done)
