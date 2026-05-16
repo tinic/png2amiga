@@ -1434,39 +1434,176 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size(); ++i)
                 if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
-        // Composite-mode encoding: pick 4-bit RGBI pixel sequence per
-        // row whose Reenigne-NTSC decoder output best matches source
-        // (OKLab). The decoder is the same one MartyPC / DOSBox / 86Box
-        // use, so the preview matches what real hardware shows on an
-        // NTSC TV.
+        // Real CGA mode 04: 2bpp framebuffer, 4 colours from one of the
+        // CGA palette variants (p0/p1 × low/high intensity). We pick
+        // the variant whose decoded artifact gamut best covers the
+        // source, dither against those 4 decoded colours, store 2bpp
+        // indices, and translate through the active palette to RGBI
+        // for the NTSC decoder. 16KB banked framebuffer → matches the
+        // .c/.cpp DOS viewer's hardware expectation.
         cga_composite::Params cp;
         cp.new_cga = options.cga_composite_new_cga;
-        cp.cgamode = 0x0A;  // 320×200 graphics, colour-burst on
+        cp.cgamode = 0x0A;
         auto ctx = cga_composite::make_context(cp);
 
-        // 1) Pick per-pixel 4-bit RGBI patterns via Floyd-Steinberg
-        //    against the 16-colour RGBI palette (same as the old code).
-        //    The composite hardware emits this as a 2bpp bitstream
-        //    whatever we pick — we just want the choice that minimises
-        //    OKLab error against the source pixel.
-        auto pal16 = palette::cga_composite_palette();
-        std::vector<Color3f> pal_vec(pal16.begin(), pal16.end());
+        // Build decoded-RGB palette for a given CGA palette variant.
+        auto decode_palette4 = [&](std::array<std::uint8_t, 4> rgbi)
+            -> std::array<Color3f, 4> {
+            constexpr std::size_t kProbeW = 64;
+            constexpr std::size_t kCentre = 28;
+            std::vector<std::uint8_t> row(kProbeW);
+            std::vector<Color3f>      dec(kProbeW);
+            std::array<Color3f, 4> out{};
+            for (std::size_t i = 0; i < 4; ++i) {
+                std::fill(row.begin(), row.end(), rgbi[i]);
+                cga_composite::decode_line(row, std::span<Color3f>(dec), ctx);
+                float r = 0, g = 0, b = 0;
+                for (std::size_t k = kCentre; k < kCentre + 8; ++k) {
+                    r += dec[k].r;
+                    g += dec[k].g;
+                    b += dec[k].b;
+                }
+                out[i] = Color3f{r * 0.125f, g * 0.125f, b * 0.125f};
+            }
+            return out;
+        };
+
+        // CGA palette variants. Each is 4 RGBI values that real mode 04
+        // exposes via the BIOS palette + intensity registers.
+        static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
+            {{0,  2,  4,  6}},  // p0_low:  black, green, red, brown
+            {{0, 10, 12, 14}},  // p0_high: black, lt green, lt red, yellow
+            {{0,  3,  5,  7}},  // p1_low:  black, cyan, magenta, lt gray
+            {{0, 11, 13, 15}},  // p1_high: black, lt cyan, lt magenta, white
+        }};
+
+        auto w = image->width(), h = image->height();
+
+        // Pick best palette variant by summed nearest-OKLab cost.
+        std::size_t best_var = 3;  // p1_high default (most artifact-colourful)
+        float best_cost = std::numeric_limits<float>::max();
+        for (std::size_t v = 0; v < kCgaPalettes.size(); ++v) {
+            auto pal4 = decode_palette4(kCgaPalettes[v]);
+            std::array<color_space::OKLab, 4> pal_lab;
+            for (std::size_t i = 0; i < 4; ++i)
+                pal_lab[i] = color_space::linear_to_oklab(pal4[i]);
+            float cost = 0.0f;
+            for (std::size_t i = 0; i < w * h; ++i) {
+                auto sl = color_space::linear_to_oklab(image->pixels()[i]);
+                float bd = std::numeric_limits<float>::max();
+                for (auto& pl : pal_lab) {
+                    float dL = sl.L - pl.L;
+                    float da = sl.a - pl.a;
+                    float db = sl.b - pl.b;
+                    float d = dL * dL + da * da + db * db;
+                    if (d < bd) bd = d;
+                }
+                cost += bd;
+            }
+            if (cost < best_cost) {
+                best_cost = cost;
+                best_var = v;
+            }
+        }
+        const auto& cga_pal_rgbi = kCgaPalettes[best_var];
+        auto pal4 = decode_palette4(cga_pal_rgbi);
+
+        // Cell-pattern dither. Enumerate all 4⁴ = 256 four-pixel patterns
+        // of the 2bpp palette, decode each through the NTSC chroma
+        // multiplexer, take the cell's mean colour as a palette entry.
+        // Build a (w/4) × h "cell image" of source-cell means, then run
+        // dither::apply against the 256-entry cell-mean palette — every
+        // dither method in dither.cpp (FS, Atkinson, Bayer, blue-noise,
+        // structure-aware, …) becomes available natively for this mode.
+        // Finally expand each chosen cell-pattern index back to its
+        // 4 per-pixel palette indices in dither_res.indices.
+        std::vector<Color3f> pal_vec(pal4.begin(), pal4.end());
+
+        struct CellPattern {
+            std::array<std::uint8_t, 4> px;  // palette indices 0..3
+        };
+        std::vector<Color3f>     cell_pal_means(256);
+        std::vector<CellPattern> cell_patterns(256);
+        {
+            constexpr std::size_t kProbeW = 64;
+            constexpr std::size_t kCentre = 28;
+            std::vector<std::uint8_t> row(kProbeW);
+            std::vector<Color3f>      dec(kProbeW);
+            std::size_t out_i = 0;
+            for (int a = 0; a < 4; ++a)
+            for (int b = 0; b < 4; ++b)
+            for (int c = 0; c < 4; ++c)
+            for (int d = 0; d < 4; ++d) {
+                std::array<std::uint8_t, 4> p = {
+                    cga_pal_rgbi[static_cast<std::size_t>(a)],
+                    cga_pal_rgbi[static_cast<std::size_t>(b)],
+                    cga_pal_rgbi[static_cast<std::size_t>(c)],
+                    cga_pal_rgbi[static_cast<std::size_t>(d)],
+                };
+                for (std::size_t i = 0; i < kProbeW; ++i) row[i] = p[i & 3];
+                cga_composite::decode_line(row, std::span<Color3f>(dec), ctx);
+                float r = 0, g = 0, bl = 0;
+                for (std::size_t k = kCentre; k < kCentre + 4; ++k) {
+                    r += dec[k].r; g += dec[k].g; bl += dec[k].b;
+                }
+                cell_pal_means[out_i] = {r * 0.25f, g * 0.25f, bl * 0.25f};
+                cell_patterns[out_i] = {{
+                    static_cast<std::uint8_t>(a),
+                    static_cast<std::uint8_t>(b),
+                    static_cast<std::uint8_t>(c),
+                    static_cast<std::uint8_t>(d),
+                }};
+                ++out_i;
+            }
+        }
+
+        // Build the (w/4) × h cell-mean source image.
+        std::size_t cw = w / 4, ch = h;
+        Image cell_image(cw, ch);
+        for (std::size_t y = 0; y < ch; ++y) {
+            for (std::size_t cx = 0; cx < cw; ++cx) {
+                std::size_t x = cx * 4;
+                float sr = 0, sg = 0, sb = 0;
+                for (std::size_t i = 0; i < 4; ++i) {
+                    sr += image->pixels()[y * w + x + i].r;
+                    sg += image->pixels()[y * w + x + i].g;
+                    sb += image->pixels()[y * w + x + i].b;
+                }
+                cell_image[cx, y] = Color3f{sr * 0.25f, sg * 0.25f, sb * 0.25f};
+            }
+        }
+
+        // Run the user-selected dither method through the standard
+        // pipeline. dither::apply handles every method in dither.cpp.
         dither::Settings dith;
         dith.method = parse_dither(options.dither);
         dith.strength = options.dither_strength;
         dith.error_clamp = options.error_clamp;
-        auto dith_result = dither::apply(*image, pal_vec, dith);
-        auto w = image->width(), h = image->height();
-        std::vector<std::uint8_t> pixels_rgbi(dith_result.indices.begin(), dith_result.indices.end());
+        auto cell_dither = dither::apply(
+            cell_image, std::span<const Color3f>(cell_pal_means), dith);
 
-        // 2) Render the preview by running the encoded 2bpp pattern
-        //    through the Reenigne NTSC chroma multiplexer — what the
-        //    actual hardware shows on a composite monitor. The 16
-        //    discrete dither-target colours don't survive contact with
-        //    NTSC; alternating-blue → purple, etc.
+        // Expand 256-cell indices back to 4 per-pixel palette indices.
+        dither::DitherResult dither_res;
+        dither_res.indices.assign(w * h, 0);
+        for (std::size_t y = 0; y < ch; ++y) {
+            for (std::size_t cx = 0; cx < cw; ++cx) {
+                auto pat_idx = cell_dither.indices[y * cw + cx];
+                const auto& pat = cell_patterns[pat_idx].px;
+                std::size_t x = cx * 4;
+                for (std::size_t i = 0; i < 4; ++i)
+                    dither_res.indices[y * w + x + i] = pat[i];
+            }
+        }
+
+        std::vector<std::uint8_t> rgbi_stream(w * h);
+        for (std::size_t i = 0; i < w * h; ++i) {
+            auto idx = static_cast<std::size_t>(dither_res.indices[i] & 0x3);
+            rgbi_stream[i] = cga_pal_rgbi[idx];
+        }
+
         Image rendered(w, h);
         for (std::size_t y = 0; y < h; ++y) {
-            std::span<const std::uint8_t> row_in(pixels_rgbi.data() + y * w, w);
+            std::span<const std::uint8_t> row_in(rgbi_stream.data() + y * w, w);
             std::span<Color3f>            row_dec(rendered.pixels().data() + y * w, w);
             cga_composite::decode_line(row_in, row_dec, ctx);
         }
@@ -1478,30 +1615,29 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             total_error += dL * dL + da * da + db * db;
         }
 
-        // Pack into banked CGAPIC layout: 16KB total, even rows in 0x0000
-        // bank, odd rows in 0x2000 bank. Each byte holds 2 composite pixels
-        // (two 4-bit patterns).
+        // Real CGA mode 04 framebuffer: 2bpp packed, banked at 0x0000
+        // (even rows) and 0x2000 (odd rows). 320 px × 200 rows × 2 bits
+        // = 16000 bytes data, banked into 16384 total.
         std::vector<std::uint8_t> raw(16384, 0);
-        auto row_bytes = 320u / 4u;  // 80 bytes per row (2bpp, 4 px/byte)
+        auto row_bytes = w / 4;  // 4 pixels per byte at 2bpp
         for (std::size_t y = 0; y < h; ++y) {
-            auto bank = (y & 1) ? 0x2000u : 0x0000u;
-            auto row_off = bank + (y >> 1) * row_bytes;
+            auto bank_base = (y & 1) ? 0x2000u : 0x0000u;
+            auto row_off = bank_base + (y >> 1) * row_bytes;
             for (std::size_t bx = 0; bx < row_bytes; ++bx) {
-                auto p0 = pixels_rgbi[y * w + bx * 2] & 0x0F;
-                auto p1 = pixels_rgbi[y * w + bx * 2 + 1] & 0x0F;
-                raw[row_off + bx] = static_cast<std::uint8_t>((p0 << 4) | p1);
+                std::uint8_t byte = 0;
+                for (std::size_t p = 0; p < 4; ++p) {
+                    auto idx = dither_res.indices[y * w + bx * 4 + p] & 0x3;
+                    byte = static_cast<std::uint8_t>((byte << 2) | idx);
+                }
+                raw[row_off + bx] = byte;
             }
         }
 
         PipelineResult result;
         result.rendered = std::move(rendered);
-        // Palette is informational only for composite — the decoded
-        // colour at each pixel depends on neighbours and isn't a
-        // simple index lookup. Hand back the 16-entry classic-CGA RGBI
-        // set so IFF / .h consumers still see something sensible.
-        result.palette = std::move(pal_vec);
-        result.indices = std::move(pixels_rgbi);
-        result.planes.depth = 2;  // 2bpp packed
+        result.palette = std::vector<Color3f>(pal_vec);
+        result.indices = std::move(dither_res.indices);
+        result.planes.depth = 2;
         result.mode = mode;
         result.hires = false;
         result.interlace = false;
@@ -3204,18 +3340,62 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // --reserve-range entries also feed `locked` so the copper
         // never re-programs them — but their indices ALSO flow into
         // `sliced_excluded` so the dither pass treats them as untouchable.
+        //
+        // OCS DPF: --reserve-range / --lock-index target the 16-entry CLUT
+        // view (CLUT 0..7 = PF1 zeroed, 8..15 = PF2). The encoder operates
+        // on the 8-entry PF2-base palette, so translate before validate /
+        // copper_locks / sliced_excluded — otherwise CLUT 8..15 entries
+        // are silently >=max_colors and dropped. Same mapping as the
+        // standard bitplane DPF path: CLUT 0/8 → PF2 0, CLUT 9..15 → PF2
+        // 1..7, CLUT 1..7 (PF1) → drop.
+        bool dpf_clut_sliced = options.dual_playfield && chipset != amiga::Chipset::aga;
+        auto dpf_clut_to_pf2_sliced = [](int user_idx) -> std::optional<int> {
+            if (user_idx < 0) return std::nullopt;
+            auto i = static_cast<std::size_t>(user_idx);
+            if (i == 0 || i == 8) return 0;
+            if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
+            return std::nullopt;
+        };
+        std::vector<ReserveSpec> sliced_reserves_eff;
+        std::vector<LockSpec> sliced_locks_eff;
+        if (dpf_clut_sliced) {
+            bool slot0_r = false;
+            for (auto& r : options.reserves) {
+                auto pf2 = dpf_clut_to_pf2_sliced(r.index);
+                if (!pf2) continue;
+                if (*pf2 == 0) {
+                    if (options.lock_color0) continue;
+                    if (slot0_r) continue;
+                    slot0_r = true;
+                }
+                sliced_reserves_eff.push_back({*pf2, r.r, r.g, r.b});
+            }
+            bool slot0_l = false;
+            for (auto& l : options.locks) {
+                auto pf2 = dpf_clut_to_pf2_sliced(l.index);
+                if (!pf2) continue;
+                if (*pf2 == 0) {
+                    if (slot0_l) continue;
+                    slot0_l = true;
+                }
+                sliced_locks_eff.push_back({*pf2, l.r, l.g, l.b});
+            }
+        } else {
+            sliced_reserves_eff.assign(options.reserves.begin(), options.reserves.end());
+            sliced_locks_eff.assign(options.locks.begin(), options.locks.end());
+        }
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
-        for (auto& lock : options.locks) {
+        for (auto& lock : sliced_locks_eff) {
             auto idx = static_cast<std::size_t>(lock.index);
             copper_locks.emplace_back(idx, palette_locks::to_color(lock, chipset, mode));
         }
         // Validate reserves against the sliced base palette size (1<<depth).
         auto sliced_max_colors = std::size_t{1} << depth;
         auto reserves_in_cap = palette_locks::validate_reserves(
-            options.reserves, options.locks, sliced_max_colors, options.lock_color0);
+            sliced_reserves_eff, sliced_locks_eff, sliced_max_colors, options.lock_color0);
         if (!reserves_in_cap) return std::unexpected{reserves_in_cap.error()};
         std::vector<std::size_t> sliced_excluded;
-        for (auto& r : options.reserves) {
+        for (auto& r : sliced_reserves_eff) {
             auto i = static_cast<std::size_t>(r.index);
             if (r.index >= 0 && i < sliced_max_colors) {
                 copper_locks.emplace_back(

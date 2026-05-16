@@ -20,10 +20,13 @@ const BUDGETS = [
   // glue. Without pthreads we sit at ~24 KB; with pthreads ~50 KB.
   // Headroom for future Emscripten updates.
   { match: /^png2amiga-.*\.js$/,    max:  64 * 1024, label: 'wasm glue'  },
-  // 2.40 MB up from 2.25 MB — vendored nlohmann/json for spec-
-  // compliant palette JSON parsing (tolerates key reordering /
-  // pretty-printing / comments). Adds ~50 KB to the WASM binary.
-  { match: /^png2amiga-.*\.wasm$/,  max:   2.4 * 1024 * 1024, label: 'wasm binary' },
+  // 2.45 MB up from 2.40 MB — cga-composite mode replaced its fixed
+  // 16-color palette dither with a port of Andrew "reenigne" Jenner's
+  // NTSC chroma-multiplexer (the same decoder MartyPC / DOSBox / 86Box
+  // use). The 1024-entry signal table + IQ rotation + per-row aabb
+  // cell-pattern search adds ~5 KB to the WASM binary in exchange for
+  // an artifact-colour gamut the user actually sees on hardware.
+  { match: /^png2amiga-.*\.wasm$/,  max:   2.45 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
   { match: /^index-.*\.css$/,       max: 500 * 1024, label: 'css'        },

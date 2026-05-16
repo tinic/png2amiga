@@ -3490,6 +3490,12 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             sy = 2;
             break;
         case amiga::Mode::cga_composite:
+            // 320×200 source × (2, 2) → 640×400 backing, PAR-corrected
+            // to ~640×480 (4:3). The other modes in this group source
+            // at 160 wide and need sx=4 to reach the same backing size.
+            sx = 2;
+            sy = 2;
+            break;
         case amiga::Mode::c64_multicolor:
         case amiga::Mode::c64_fli:
         case amiga::Mode::c64_charset_multicolor:
@@ -8412,20 +8418,65 @@ int run_main(int argc, char* argv[]) {
         // --reserve-range entries also feed `locked` (so the copper never
         // re-programs them) AND `sliced_excluded` (so the dither pass treats
         // them as forbidden across all scanlines).
+        //
+        // OCS DPF: --reserve-range / --lock-index target the 16-entry CLUT
+        // view (CLUT 0..7 = PF1 zeroed, 8..15 = PF2). The encoder operates
+        // on the 8-entry PF2-base palette, so translate before validate /
+        // copper_locks / sliced_excluded — otherwise CLUT 8..15 reserves
+        // are silently >=max_colors and get dropped. Same mapping as the
+        // standard bitplane DPF path: CLUT 0/8 → PF2 0, CLUT 9..15 → PF2
+        // 1..7, CLUT 1..7 (PF1) → drop.
+        bool dpf_clut_sliced = config->dual_playfield && chipset != amiga::Chipset::aga;
+        auto dpf_clut_to_pf2_sliced = [](int user_idx) -> std::optional<int> {
+            if (user_idx < 0) return std::nullopt;
+            auto i = static_cast<std::size_t>(user_idx);
+            if (i == 0 || i == 8) return 0;
+            if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
+            return std::nullopt;
+        };
+        std::vector<api::ReserveSpec> sliced_reserves_eff;
+        std::vector<api::LockSpec> sliced_locks_eff;
+        if (dpf_clut_sliced) {
+            bool slot0_r = false;
+            for (auto& r : config->reserves) {
+                auto pf2 = dpf_clut_to_pf2_sliced(r.index);
+                if (!pf2) continue;
+                if (*pf2 == 0) {
+                    if (config->lock_color0) continue;
+                    if (slot0_r) continue;
+                    slot0_r = true;
+                }
+                sliced_reserves_eff.push_back({*pf2, r.r, r.g, r.b});
+            }
+            bool slot0_l = false;
+            for (auto& l : config->locks) {
+                auto pf2 = dpf_clut_to_pf2_sliced(l.index);
+                if (!pf2) continue;
+                if (*pf2 == 0) {
+                    if (slot0_l) continue;
+                    slot0_l = true;
+                }
+                sliced_locks_eff.push_back({*pf2, l.r, l.g, l.b});
+            }
+        } else {
+            sliced_reserves_eff.assign(config->reserves.begin(), config->reserves.end());
+            sliced_locks_eff.assign(config->locks.begin(), config->locks.end());
+        }
+
         std::vector<std::pair<std::size_t, Color3f>> copper_locks;
-        for (auto& lock : config->locks) {
+        for (auto& lock : sliced_locks_eff) {
             auto idx = static_cast<std::size_t>(lock.index);
             copper_locks.emplace_back(idx, palette_locks::to_color(lock, chipset, config->mode));
         }
         auto sliced_max_colors = std::size_t{1} << config->depth;
         auto reserves_in_cap = palette_locks::validate_reserves(
-            config->reserves, config->locks, sliced_max_colors, config->lock_color0);
+            sliced_reserves_eff, sliced_locks_eff, sliced_max_colors, config->lock_color0);
         if (!reserves_in_cap) {
             std::println(stderr, "{}", reserves_in_cap.error().message);
             return 1;
         }
         std::vector<std::size_t> sliced_excluded;
-        for (auto& r : config->reserves) {
+        for (auto& r : sliced_reserves_eff) {
             auto i = static_cast<std::size_t>(r.index);
             if (r.index >= 0 && i < sliced_max_colors) {
                 copper_locks.emplace_back(
@@ -8562,7 +8613,17 @@ int run_main(int argc, char* argv[]) {
         cli_print_palette(std::format("{} colors ({})",
                                       copper_result->base_palette.size(),
                                       copper_result->base_palette_quantizer));
-        cli_dump_palette(std::span<const Color3f>(copper_result->base_palette), *config);
+        // OCS DPF: dump the 16-entry CLUT view (PF1 zeros at 0..7, PF2 at
+        // 8..15) so 🔖/🔒 markers land at the user-visible CLUT indices,
+        // matching the standard bitplane DPF path and --strips DPF.
+        if (dpf_clut_sliced) {
+            std::vector<Color3f> dpf_clut(16, Color3f{0.0f, 0.0f, 0.0f});
+            for (std::size_t k = 0; k < copper_result->base_palette.size() && k < 8; ++k)
+                dpf_clut[8 + k] = copper_result->base_palette[k];
+            cli_dump_palette(std::span<const Color3f>(dpf_clut), *config);
+        } else {
+            cli_dump_palette(std::span<const Color3f>(copper_result->base_palette), *config);
+        }
         cli_print_dither(dith.method, dith.strength);
 
         // Apply transparency mask: transparent pixels → index 0
@@ -9121,14 +9182,88 @@ int run_main(int argc, char* argv[]) {
         // CGA: build the fixed 4- or 2-color palette (auto-select variant if asked).
         if (amiga::is_cga(config->mode) && !user_pal_std) {
             if (amiga::is_composite(config->mode)) {
-                // Fixed 16-entry composite artifact palette. No variants to pick
-                // from — the NTSC decoder produces these colors from the 4-bit
-                // patterns regardless of any CGA register setting.
-                auto pal16 = palette::cga_composite_palette();
-                pal.colors.assign(pal16.begin(), pal16.end());
-                cli_status("Palette:  CGA composite, 16 colors (NTSC artifact, {} CGA)",
+                // Real CGA mode 04: 2bpp framebuffer, 4 colours from one
+                // of the CGA palette variants (p0/p1 × low/high). We
+                // dither against the 4 NTSC-decoded composite colours
+                // (not the idealised RGBI primaries) and pick the
+                // palette variant whose decoded gamut best covers the
+                // source. Storage stays 2bpp = 16 KB banked framebuffer
+                // matching real hardware mode 04.
+                cga_composite::Params cp;
+                cp.new_cga = config->cga_composite_new_cga;
+                cp.cgamode = 0x0A;
+                auto cga_ctx = cga_composite::make_context(cp);
+
+                auto decode_palette4 = [&](std::array<std::uint8_t, 4> rgbi)
+                    -> std::array<Color3f, 4> {
+                    constexpr std::size_t kProbeW = 64;
+                    constexpr std::size_t kCentre = 28;
+                    std::vector<std::uint8_t> row(kProbeW);
+                    std::vector<Color3f>      dec(kProbeW);
+                    std::array<Color3f, 4> outp{};
+                    for (std::size_t i = 0; i < 4; ++i) {
+                        std::fill(row.begin(), row.end(), rgbi[i]);
+                        cga_composite::decode_line(row, std::span<Color3f>(dec), cga_ctx);
+                        float r = 0, g = 0, b = 0;
+                        for (std::size_t k = kCentre; k < kCentre + 8; ++k) {
+                            r += dec[k].r;
+                            g += dec[k].g;
+                            b += dec[k].b;
+                        }
+                        outp[i] = Color3f{r * 0.125f, g * 0.125f, b * 0.125f};
+                    }
+                    return outp;
+                };
+
+                static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
+                    {{0,  2,  4,  6}},   // p0_low
+                    {{0, 10, 12, 14}},   // p0_high
+                    {{0,  3,  5,  7}},   // p1_low
+                    {{0, 11, 13, 15}},   // p1_high
+                }};
+                static constexpr std::array<const char*, 4> kCgaPaletteNames = {
+                    "p0_low", "p0_high", "p1_low", "p1_high"
+                };
+
+                std::size_t best_var = 3;
+                float best_cost = std::numeric_limits<float>::max();
+                auto w = image->width(), h = image->height();
+                for (std::size_t v = 0; v < kCgaPalettes.size(); ++v) {
+                    auto pal4 = decode_palette4(kCgaPalettes[v]);
+                    std::array<color_space::OKLab, 4> pal_lab;
+                    for (std::size_t i = 0; i < 4; ++i)
+                        pal_lab[i] = color_space::linear_to_oklab(pal4[i]);
+                    float cost = 0.0f;
+                    for (std::size_t i = 0; i < w * h; ++i) {
+                        auto sl = color_space::linear_to_oklab(image->pixels()[i]);
+                        float bd = std::numeric_limits<float>::max();
+                        for (auto& pl : pal_lab) {
+                            float dL = sl.L - pl.L;
+                            float da = sl.a - pl.a;
+                            float db = sl.b - pl.b;
+                            float d = dL * dL + da * da + db * db;
+                            if (d < bd) bd = d;
+                        }
+                        cost += bd;
+                    }
+                    if (cost < best_cost) {
+                        best_cost = cost;
+                        best_var = v;
+                    }
+                }
+                auto pal4 = decode_palette4(kCgaPalettes[best_var]);
+                pal.colors.assign(pal4.begin(), pal4.end());
+                // Stash the chosen RGBI map on the config so the encode
+                // path can translate dither indices → RGBI stream for
+                // the chroma decoder. Reuses cga_palette + cga_bg in
+                // the same way cga-320 does.
+                cli_status("Palette:  CGA composite ({}, NTSC artifact, {} CGA), 4 colors",
+                           kCgaPaletteNames[best_var],
                            config->cga_composite_new_cga ? "new" : "old");
                 cli_dump_palette(std::span<const Color3f>(pal.colors), *config);
+                // Save chosen palette via config-side state so the
+                // bitplane / preview path uses the same RGBI mapping.
+                config->cga_palette = static_cast<int>(best_var);
             } else if (config->mode == amiga::Mode::cga_320) {
                 palette::CgaPalette best = palette::CgaPalette::p1_high;
                 if (config->cga_auto_palette) {
@@ -9447,6 +9582,92 @@ int run_main(int argc, char* argv[]) {
             dither_result = dither::apply(*image, pal_span, dith);
         }
 
+        // CGA composite: cell-pattern dither against all 256 reachable
+        // 4-pixel chroma-cycle patterns. Build a (w/4) × h cell-mean
+        // source image and a 256-entry cell-mean palette, then call
+        // dither::apply so the user's selected method (any of the 58)
+        // takes effect natively. Expand 256-cell indices back to 4
+        // per-pixel palette indices (0..3) at the end.
+        if (config->mode == amiga::Mode::cga_composite) {
+            cga_composite::Params cp;
+            cp.new_cga = config->cga_composite_new_cga;
+            cp.cgamode = 0x0A;
+            auto cga_ctx = cga_composite::make_context(cp);
+            static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
+                {{0,  2,  4,  6}},
+                {{0, 10, 12, 14}},
+                {{0,  3,  5,  7}},
+                {{0, 11, 13, 15}},
+            }};
+            std::size_t v = static_cast<std::size_t>(std::clamp(config->cga_palette, 0, 3));
+            const auto& cga_pal_rgbi = kCgaPalettes[v];
+
+            struct CellPattern { std::array<std::uint8_t, 4> px; };
+            std::vector<Color3f>     cell_pal_means(256);
+            std::vector<CellPattern> cell_patterns(256);
+            {
+                constexpr std::size_t kProbeW = 64;
+                constexpr std::size_t kCentre = 28;
+                std::vector<std::uint8_t> probe(kProbeW);
+                std::vector<Color3f>      dec(kProbeW);
+                std::size_t out_i = 0;
+                for (int a = 0; a < 4; ++a)
+                for (int b = 0; b < 4; ++b)
+                for (int c = 0; c < 4; ++c)
+                for (int d = 0; d < 4; ++d) {
+                    std::array<std::uint8_t, 4> p4 = {
+                        cga_pal_rgbi[static_cast<std::size_t>(a)],
+                        cga_pal_rgbi[static_cast<std::size_t>(b)],
+                        cga_pal_rgbi[static_cast<std::size_t>(c)],
+                        cga_pal_rgbi[static_cast<std::size_t>(d)],
+                    };
+                    for (std::size_t i = 0; i < kProbeW; ++i) probe[i] = p4[i & 3];
+                    cga_composite::decode_line(probe, std::span<Color3f>(dec), cga_ctx);
+                    float r = 0, g = 0, bl = 0;
+                    for (std::size_t k = kCentre; k < kCentre + 4; ++k) {
+                        r += dec[k].r; g += dec[k].g; bl += dec[k].b;
+                    }
+                    cell_pal_means[out_i] = {r * 0.25f, g * 0.25f, bl * 0.25f};
+                    cell_patterns[out_i] = {{
+                        static_cast<std::uint8_t>(a),
+                        static_cast<std::uint8_t>(b),
+                        static_cast<std::uint8_t>(c),
+                        static_cast<std::uint8_t>(d),
+                    }};
+                    ++out_i;
+                }
+            }
+
+            auto w = image->width(), h = image->height();
+            std::size_t cw = w / 4;
+            Image cell_image(cw, h);
+            for (std::size_t y = 0; y < h; ++y) {
+                for (std::size_t cx = 0; cx < cw; ++cx) {
+                    std::size_t x = cx * 4;
+                    float sr = 0, sg = 0, sb = 0;
+                    for (std::size_t i = 0; i < 4; ++i) {
+                        sr += image->pixels()[y * w + x + i].r;
+                        sg += image->pixels()[y * w + x + i].g;
+                        sb += image->pixels()[y * w + x + i].b;
+                    }
+                    cell_image[cx, y] = Color3f{sr * 0.25f, sg * 0.25f, sb * 0.25f};
+                }
+            }
+            auto cell_dither = dither::apply(
+                cell_image, std::span<const Color3f>(cell_pal_means), dith);
+
+            dither_result.indices.assign(w * h, 0);
+            for (std::size_t y = 0; y < h; ++y) {
+                for (std::size_t cx = 0; cx < cw; ++cx) {
+                    auto pat_idx = cell_dither.indices[y * cw + cx];
+                    const auto& pat = cell_patterns[pat_idx].px;
+                    std::size_t x = cx * 4;
+                    for (std::size_t i = 0; i < 4; ++i)
+                        dither_result.indices[y * w + x + i] = pat[i];
+                }
+            }
+        }
+
         // Apply pin-index swaps (post-quantization, post-dither). Use the
         // PF2-base-translated pins under --dpf — the encoder operates on
         // the 8-entry PF2 palette; CLUT-layout indices (CLUT 9..15 / 8/0)
@@ -9498,18 +9719,37 @@ int run_main(int argc, char* argv[]) {
         // `dither_result.indices` — feeding it through cga_composite
         // ::decode_line gives the user the colours an NTSC monitor
         // would show, including the artifact purples/cyans that no
-        // 16-colour palette lookup can express.
+        // 16-colour palette lookup can express. Then a 5-tap [1,4,6,4,1]/16
+        // 1D LP filter simulates a real composite monitor's chroma
+        // bandwidth — the demodulator outputs strong sub-cell stripes
+        // (the chroma carrier survives at full pixel resolution in our
+        // model) but the monitor / eye low-passes them to the cell mean,
+        // which is the artifact colour the user actually perceives.
         if (config->mode == amiga::Mode::cga_composite && !dither_result.indices.empty()) {
             cga_composite::Params cp;
             cp.new_cga = config->cga_composite_new_cga;
             cp.cgamode = 0x0A;
             auto ctx = cga_composite::make_context(cp);
+            // Translate the chosen 2bpp palette indices (0..3) to the
+            // 4-bit RGBI value the active CGA palette would produce on
+            // hardware, then run the chroma multiplexer.
+            static constexpr std::array<std::array<std::uint8_t, 4>, 4> kCgaPalettes = {{
+                {{0,  2,  4,  6}},
+                {{0, 10, 12, 14}},
+                {{0,  3,  5,  7}},
+                {{0, 11, 13, 15}},
+            }};
+            std::size_t v = static_cast<std::size_t>(std::clamp(config->cga_palette, 0, 3));
+            const auto& pal_rgbi = kCgaPalettes[v];
             auto w = preview->width(), h = preview->height();
+            std::vector<std::uint8_t> rgbi_row(w);
             for (std::size_t y = 0; y < h; ++y) {
-                std::span<const std::uint8_t> row_in(
-                    dither_result.indices.data() + y * w, w);
+                for (std::size_t x = 0; x < w; ++x) {
+                    rgbi_row[x] = pal_rgbi[dither_result.indices[y * w + x] & 0x3];
+                }
                 std::span<Color3f> row_dec(preview->pixels().data() + y * w, w);
-                cga_composite::decode_line(row_in, row_dec, ctx);
+                cga_composite::decode_line(std::span<const std::uint8_t>(rgbi_row),
+                                           row_dec, ctx);
             }
         }
     }  // end if (!plain_best_done)

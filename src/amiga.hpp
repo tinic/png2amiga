@@ -264,11 +264,13 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     case Mode::cga_640:
         return {640, 200, 1, 2, false, false, true, false, 1, 2, 0.417f};
     case Mode::cga_composite:
-        // Hardware buffer is 320x200 (2bpp packed) but each composite pixel
-        // spans 2 buffer pixels, yielding 160x200 effective resolution with
-        // 16 colors. screen_width is the effective (composite) width; the
-        // chunky-pixel stage encodes to 160x200 then we pair-pack to 320x200.
-        return {160, 200, 4, 16, false, false, false, false, 2, 1, 1.667f};
+        // 320x200 hardware mode 04: 2bpp framebuffer, 4 colours from one
+        // of the CGA palette variants (p0/p1 × low/high). The encoder
+        // dithers against the 4 NTSC-decoded composite colours; the
+        // chroma multiplexer turns the 4-colour pixel stream into the
+        // ~140-colour artifact gamut. 16 KB banked framebuffer matches
+        // real hardware (and the DOS .c viewer's expectation).
+        return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
     // CGA text-mode hacks: glyphs selected per-cell, 16 fg x 16 bg attr.
     // Logical display is still 640x200; "depth" is conceptually the 4-bit
     // bg + 4-bit fg attr byte width (not a bitplane count). bitplane_depth

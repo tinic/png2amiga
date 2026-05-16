@@ -271,5 +271,12 @@ int main(int argc, char** argv) {
     std::ofstream out(out_path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(png->data()),
               static_cast<std::streamsize>(png->size()));
+    // Debug aid: dump raw indices alongside the PNG so callers can A/B
+    // against the CLI's --output-indexed output without re-running.
+    if (const char* env = std::getenv("API_DUMP_INDICES")) {
+        std::ofstream f(env, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(state.indices.data()),
+                static_cast<std::streamsize>(state.indices.size()));
+    }
     return 0;
 }

@@ -66,11 +66,27 @@ void decode_line(std::span<const std::uint8_t> in,
                  std::uint8_t border = 0);
 
 // Pick the 4-bit RGBI pixel sequence whose decode_line() result best
-// matches `src` in OKLab. `out` and `src` are width-N row data. Beam
-// width is internal and fixed at 64 (a 320-wide × 16-candidate sweep
-// on Kodak-24 showed doubling barely moves S2).
+// matches `src` in OKLab. `out` and `src` are width-N row data.
+//
+// Implementation: per-cell ABAB pattern dither. For each 4-pixel cell
+// (the chroma cycle), try every (a, b) pair from the 16 RGBI values
+// → 256 candidate alternating-pair patterns → enumerate the artifact
+// colours they produce (the ~140 unique colours that emerge from
+// NTSC chroma multiplexing on old CGA, not just the 16 RGBI palette).
+// Pick the pair whose decoded cell colour is closest to the source's
+// 4-pixel average in OKLab. This is the same technique behind the
+// "1024 colour CGA" demos — the per-cell pattern programs the artifact
+// colour you want, you don't just dither against 16 RGBI primaries.
 void encode_line(std::span<const Color3f> src,
                  std::span<std::uint8_t> out,  // 0..15 per pixel
                  const Context& ctx);
+
+// Composite-monitor / NTSC chroma bandwidth LP: 5-tap [1,4,6,4,1]/16
+// 1D filter applied in-place. The Reenigne demodulator outputs strong
+// chroma stripes at the carrier period (4 pixels); a real TV's chroma
+// bandwidth + the viewer's eye low-pass these to the cell mean — which
+// is the artifact colour actually perceived. Without this, the PNG
+// preview shows alarming stripes the user never sees on hardware.
+void apply_monitor_lp(std::span<Color3f> row);
 
 }  // namespace png2amiga::cga_composite

@@ -94,6 +94,7 @@ export interface Options {
   scap: boolean
   cgaTextMetric: string
   cgaTextKernel: string
+  cgaCompositeNewCga: boolean
   c64Palette: string
   c64Metric: string
   c64PetsciiGraphicsOnly: boolean
@@ -169,7 +170,7 @@ const ALL_MODES: ModeOption[] = [
   // IBM PC CGA.
   { value: 'cga-320',          label: 'CGA 320x200 (4 colors)',        chipset: 'cga' },
   { value: 'cga-640',          label: 'CGA 640x200 (2 colors, mono)',  chipset: 'cga' },
-  { value: 'cga-composite',    label: 'CGA Composite (160x200)',       chipset: 'cga' },
+  { value: 'cga-composite',    label: 'CGA Composite (320x200)',       chipset: 'cga' },
   { value: 'cga-text80x200',   label: 'CGA Text 80x200 (32KB)', chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100 (16KB)', chipset: 'cga' },
   { value: 'cga-text80x50',    label: 'CGA Text 80x50 (8KB)',   chipset: 'cga' },
@@ -484,6 +485,15 @@ export const CGA_TEXT_DEFAULTS = {
   cgaTextKernel: 'auto',
 }
 
+// CGA composite card revision — shifts the artifact-colour palette.
+//   old: 1981 IBM 5150 (default)
+//   new: 1983+ revised card (different chroma-burst phase + per-channel
+//        intensity term)
+export const CGA_COMPOSITE_CARDS = [
+  { value: false, label: 'Old (1981 IBM 5150)' },
+  { value: true,  label: 'New (1983+ revision)' },
+]
+
 // Platform-grouped example sets. Each chipset within a platform group
 // shares the same physical image files but each set tags its examples
 // with mode + chipset appropriate to that group. Same source assets
@@ -651,6 +661,7 @@ export function defaultOptions(): Options {
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
     ...CGA_TEXT_DEFAULTS,
+    cgaCompositeNewCga: false,
     c64Palette: 'colodore',
     c64Metric:  'blur',
     c64PetsciiGraphicsOnly: false,
@@ -763,7 +774,7 @@ const MODE_PAR: Record<string, number> = {
   'ega-hi':     0.73,
   'cga-320':    0.833,
   'cga-640':    0.417,
-  'cga-composite': 1.667,
+  'cga-composite': 0.833,
   'cga-text80x200': 0.417,
   'cga-text80x100': 0.417,
   'cga-text80x50':  0.417,
@@ -824,7 +835,7 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'cga-320':         { sx: 2, sy: 2 },
   'ega-320':         { sx: 2, sy: 2 },
   'vga-13h':         { sx: 2, sy: 2 },
-  'cga-composite':   { sx: 4, sy: 2 },  // 160×200 → stretch wide
+  'cga-composite':   { sx: 2, sy: 2 },  // 320×200 → 640×400 → PAR ~640×480
   'vga-12h':         { sx: 1, sy: 1 },
   'vga-10h':         { sx: 1, sy: 1 },
   'ega-hi':          { sx: 1, sy: 1 },

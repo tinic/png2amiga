@@ -857,9 +857,13 @@ std::vector<std::uint8_t> pack_cga_banked(std::span<const std::uint8_t> indices,
                                                      (indices[y * width + x] != 0 ? 1 : 0));
                 }
             } else if (is_composite) {
-                auto p0 = palette::cga_composite_pattern(indices[y * width + bx * 2]);
-                auto p1 = palette::cga_composite_pattern(indices[y * width + bx * 2 + 1]);
-                byte = static_cast<std::uint8_t>((p0 << 4) | p1);
+                // 320 px × 2bpp = 4 pixels per byte, same layout as
+                // real CGA mode 04. Indices are 0..3 selecting one of
+                // the active palette variant's 4 RGBI colours.
+                for (std::size_t p = 0; p < 4; ++p) {
+                    auto idx = indices[y * width + bx * 4 + p] & 0x3;
+                    byte = static_cast<std::uint8_t>((byte << 2) | idx);
+                }
             } else {
                 for (std::size_t p = 0; p < 4; ++p) {
                     auto x = bx * 4 + p;

@@ -213,7 +213,7 @@ Run `./build/png2amiga --help` for the full flag reference.
 |------|-----------|--------|-------|
 | `cga-320` | 320×200 | 4 | Fixed palettes (`--cga-palette p0-low/p0-high/p1-low/p1-high`) |
 | `cga-640` | 640×200 | 2 | Monochrome |
-| `cga-composite` | 160×200 effective | 16 | NTSC artifact colors from 320×200 2bpp |
+| `cga-composite` | 320×200 | 16 | Reenigne NTSC chroma multiplexer; `--cga-composite-card old`/`new` |
 | `cga-text80x{200,100,50,25}` / `cga-text40x{200,100}` | 80×N or 40×N cells | 16 fg × 16 bg | Glyph + attribute matching against the IBM CGA 8×8 font; all variants except 80×200 fit in 16 KB CGA VRAM |
 | `ega-320` / `ega-640` / `ega-hi` | 320×200 / 640×200 / 640×350 | 16 of 64 | 4-plane IrgbIRGB gamut |
 | `vga-13h` | 320×200 | 256 | 8bpp chunky, 18-bit DAC |
@@ -513,7 +513,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.93.0.1116
+png2amiga 1.96.1.1133
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -639,6 +639,7 @@ Platform-specific:
   --cga-text-metric <m>           blur (default) | mse
   --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |
                                   aniso73 | aniso35 | aniso37 | wide55 | wide77
+  --cga-composite-card <c>        old (1981 IBM, default) | new (1983+)
   --c64-palette <p>               pepto | vice | colodore (default) |
                                   deekay | godot | c64wiki | levy
   --c64-metric <m>                blur (default) | mse

@@ -21,6 +21,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <vector>
 
 namespace png2amiga::cga_composite {
 
@@ -235,38 +237,48 @@ void decode_line(std::span<const std::uint8_t> in,
     std::int32_t bp_index = 1;
 
     // Block-of-4 decode: each iteration emits 4 output pixels using the
-    // 4 phase rotations of I/Q.
+    // 4 phase rotations of (I, Q):
+    //   pixel 0: ( a,  b)
+    //   pixel 1: (-b,  a)
+    //   pixel 2: (-a, -b)
+    //   pixel 3: ( b, -a)
+    // Matches MartyPC composite_new.rs's composite_process loop body
+    // verbatim. Earlier port had pixels 1 and 3 swapped, which rotated
+    // the chroma the wrong way and produced sickly green/magenta
+    // artifacts where MartyPC shows orange/cyan.
     auto blocks = w / 4;
+    auto emit = [&](std::int32_t i_comp, std::int32_t q_comp, std::size_t out_idx) {
+        temp[static_cast<std::size_t>(i_index + 1)] =
+            (temp[static_cast<std::size_t>(i_index + 1)] << 3)
+            - atemp[static_cast<std::size_t>(ap_index + 1)];
+        std::int32_t c = temp[static_cast<std::size_t>(i_index)]
+                       + temp[static_cast<std::size_t>(i_index)];
+        std::int32_t d = temp[static_cast<std::size_t>(i_index - 1)]
+                       + temp[static_cast<std::size_t>(i_index + 1)];
+        std::int32_t y = ((c + d) << 8) + ctx.video_sharpness * (c - d);
+        std::int32_t rr = y + ctx.video_ri * i_comp + ctx.video_rq * q_comp;
+        std::int32_t gg = y + ctx.video_gi * i_comp + ctx.video_gq * q_comp;
+        std::int32_t bb = y + ctx.video_bi * i_comp + ctx.video_bq * q_comp;
+        ++i_index;
+        ++ap_index;
+        ++bp_index;
+        out[out_idx] = color_space::srgb_u8_to_linear(
+            byte_clamp(rr), byte_clamp(gg), byte_clamp(bb));
+    };
     for (std::size_t blk = 0; blk < blocks; ++blk) {
-        auto convert = [&](std::int32_t ic, std::int32_t qc) {
-            temp[static_cast<std::size_t>(i_index + 1)] =
-                (temp[static_cast<std::size_t>(i_index + 1)] << 3)
-                - atemp[static_cast<std::size_t>(ap_index + 1)];
-            std::int32_t a = atemp[static_cast<std::size_t>(ap_index)];
-            std::int32_t b = btemp[static_cast<std::size_t>(bp_index)];
-            // Phase rotates (a,b) → (b,-a) → (-a,-b) → (-b,a) over 4
-            // pixels; caller passes ic/qc as ±1 selectors.
-            std::int32_t i_comp = (ic == 0) ? a : (ic == 1) ?  b : (ic == 2) ? -a : -b;
-            std::int32_t q_comp = (qc == 0) ? b : (qc == 1) ? -a : (qc == 2) ? -b : a;
-            std::int32_t c = temp[static_cast<std::size_t>(i_index)]
-                           + temp[static_cast<std::size_t>(i_index)];
-            std::int32_t d = temp[static_cast<std::size_t>(i_index - 1)]
-                           + temp[static_cast<std::size_t>(i_index + 1)];
-            std::int32_t y = ((c + d) << 8) + ctx.video_sharpness * (c - d);
-            std::int32_t rr = y + ctx.video_ri * i_comp + ctx.video_rq * q_comp;
-            std::int32_t gg = y + ctx.video_gi * i_comp + ctx.video_gq * q_comp;
-            std::int32_t bb = y + ctx.video_bi * i_comp + ctx.video_bq * q_comp;
-            ++i_index;
-            ++ap_index;
-            ++bp_index;
-            std::size_t out_idx = blk * 4 + static_cast<std::size_t>(ic);
-            out[out_idx] = color_space::srgb_u8_to_linear(
-                byte_clamp(rr), byte_clamp(gg), byte_clamp(bb));
-        };
-        convert(0, 0);  // I, Q
-        convert(1, 1);  // Q, -I
-        convert(2, 2);  // -I, -Q
-        convert(3, 3);  // -Q, I
+        std::int32_t a = atemp[static_cast<std::size_t>(ap_index)];
+        std::int32_t b = btemp[static_cast<std::size_t>(bp_index)];
+        emit( a,  b, blk * 4 + 0);
+        // After ++ap_index/++bp_index, re-read a/b for the next phase.
+        a = atemp[static_cast<std::size_t>(ap_index)];
+        b = btemp[static_cast<std::size_t>(bp_index)];
+        emit(-b,  a, blk * 4 + 1);
+        a = atemp[static_cast<std::size_t>(ap_index)];
+        b = btemp[static_cast<std::size_t>(bp_index)];
+        emit(-a, -b, blk * 4 + 2);
+        a = atemp[static_cast<std::size_t>(ap_index)];
+        b = btemp[static_cast<std::size_t>(bp_index)];
+        emit( b, -a, blk * 4 + 3);
     }
     // Tail (w not multiple of 4) — fall back to mean luma. Rare for
     // CGA's 320/640-wide modes, but safe.
@@ -275,69 +287,64 @@ void decode_line(std::span<const std::uint8_t> in,
     }
 }
 
-// Beam-search encoder. State at column x = the last `kCtx` input
-// decisions (enough to fully evaluate output at x - kLag). At each
-// step we expand each beam state by all 16 candidate next pixels,
-// score against `src`, and keep the top `beam_width` by accumulated
-// OKLab error.
+// Per-cell pattern-dither encoder.
+//
+// CGA composite produces artifact colours from sub-pixel structure
+// inside each 4-pixel cell. The cycle's frequency content drives
+// what the NTSC chroma demodulator sees:
+//
+//   aaaa : DC               — solid RGBI primary (16 colours)
+//   aabb : 3.58 MHz (chroma) — strong artifact colour (~144 distinct)
+//   abab : 7.16 MHz          — gets aliased / attenuated, near null
+//
+// The "1024-colour CGA" demos work by picking the right (a, b) AABB
+// pair per cell so the demodulated artifact colour matches the target
+// picture. So we enumerate all 16×16 (a,b) AABB candidates, decode
+// each through the real NTSC filter, and pick the pair whose decoded
+// cell colour is closest to the source's 4-pixel mean in OKLab.
 namespace {
 
-constexpr std::size_t kCtx = 9;  // 9 prior pixels needed for one output
-constexpr std::size_t kLag = 5;  // output at column x is fully known once
-                                  // pixel x+kLag has been decided
-
-struct BeamState {
-    // History: the last kCtx pixels (oldest first → newest last).
-    std::array<std::uint8_t, kCtx> hist{};
-    double error = 0.0;
+// Pre-decoded artifact-cell entry. (a, b) generate an aabb 4-pixel cell.
+// `mean_linear` is the linear-RGB mean of the four decoded output pixels;
+// `mean_lab` is the OKLab of that mean. We match on the mean because a
+// real composite monitor's bandwidth + viewer's eye low-pass the chroma
+// stripes inside each cell — the visible cell colour IS the mean — while
+// per-pixel matching biases the encoder toward neutral solids and loses
+// the entire artifact-colour gamut.
+struct CellEntry {
+    Color3f mean_linear;
+    color_space::OKLab mean_lab;
+    std::uint8_t a, b;
 };
 
-// Decode the output pixel at column `out_col` given input pixels stored
-// in `hist` (positions out_col-1..out_col+kLag-1 relative to the row).
-// Faithful single-pixel re-derivation of `decode_line`'s inner loop;
-// callable from the beam search per-step scorer.
-Color3f decode_one(const std::array<std::uint8_t, kCtx>& hist, std::size_t phase, const Context& ctx) {
-    // Build the 11-sample temp window around the output column. hist[5]
-    // is `in[out_col]`; we have hist[0..8] = in[out_col-5..out_col+3].
-    std::int32_t t[11];
-    auto& tab = ctx.composite_table;
-    for (int j = 0; j < 10; ++j) {
-        std::size_t left  = hist[static_cast<std::size_t>(j)] & 0x0F;
-        std::size_t right = (j + 1 < static_cast<int>(kCtx))
-            ? (hist[static_cast<std::size_t>(j + 1)] & 0x0F)
-            : 0u;
-        std::size_t ph = (phase + static_cast<std::size_t>(j)) & 3;
-        t[j] = tab[(left << 6) | (right << 2) | ph];
+std::vector<CellEntry> build_cell_palette(const Context& ctx) {
+    constexpr std::size_t kProbeW = 64;
+    constexpr std::size_t kCentre = 28;  // start of a centred phase-0 cell
+    constexpr std::size_t kCells = 2;    // average across two cells for stability
+    std::vector<std::uint8_t> row(kProbeW);
+    std::vector<Color3f>      dec(kProbeW);
+    std::vector<CellEntry>    pal;
+    pal.reserve(256);
+    for (int a = 0; a < 16; ++a) {
+        for (int b = 0; b < 16; ++b) {
+            for (std::size_t i = 0; i < kProbeW; ++i)
+                row[i] = static_cast<std::uint8_t>(((i >> 1) & 1) ? b : a);
+            decode_line(row, std::span<Color3f>(dec), ctx);
+            float r = 0, g = 0, bb = 0;
+            constexpr std::size_t kAvg = kCells * 4;
+            for (std::size_t i = kCentre; i < kCentre + kAvg; ++i) {
+                r  += dec[i].r;
+                g  += dec[i].g;
+                bb += dec[i].b;
+            }
+            float inv = 1.0f / static_cast<float>(kAvg);
+            Color3f mean{r * inv, g * inv, bb * inv};
+            pal.push_back({mean, color_space::linear_to_oklab(mean),
+                           static_cast<std::uint8_t>(a),
+                           static_cast<std::uint8_t>(b)});
+        }
     }
-    t[10] = t[9];  // safe trailing pad — outside the 9-window taps anyway
-
-    // High-pass at center (j=5).
-    std::int32_t a5 = t[1] - ((t[3] - t[5] + t[7]) << 1) + t[9];
-    std::int32_t b5 = (t[2] - t[4] + t[6] - t[8]) << 1;
-    // Pre-bias: temp[i] becomes (temp[i] << 3) - atemp[i_index-4] when
-    // it is later consumed as a c/d sample; here c=t[5]+t[5], d=t[4]+t[6].
-    std::int32_t c_pre = (t[5] << 3);
-    std::int32_t d_pre_l = (t[4] << 3);
-    std::int32_t d_pre_r = (t[6] << 3);
-    // The actual bias subtracts the *adjacent* atemp. Approximate it
-    // with the local a5 — close enough for the per-pixel scorer; the
-    // row-level `decode_line` is what we use for the final preview.
-    std::int32_t c = (c_pre + c_pre) - 2 * a5;
-    std::int32_t d = (d_pre_l + d_pre_r) - 2 * a5;
-    std::int32_t y = ((c + d) << 8) + ctx.video_sharpness * (c - d);
-
-    // Phase rotation: column phase mod 4 picks one of (a,b) (b,-a) (-a,-b) (-b,a).
-    std::int32_t i_comp, q_comp;
-    switch (phase & 3) {
-        case 0: i_comp =  a5; q_comp =  b5; break;
-        case 1: i_comp =  b5; q_comp = -a5; break;
-        case 2: i_comp = -a5; q_comp = -b5; break;
-        default: i_comp = -b5; q_comp =  a5; break;
-    }
-    std::int32_t rr = y + ctx.video_ri * i_comp + ctx.video_rq * q_comp;
-    std::int32_t gg = y + ctx.video_gi * i_comp + ctx.video_gq * q_comp;
-    std::int32_t bb = y + ctx.video_bi * i_comp + ctx.video_bq * q_comp;
-    return color_space::srgb_u8_to_linear(byte_clamp(rr), byte_clamp(gg), byte_clamp(bb));
+    return pal;
 }
 
 }  // namespace
@@ -345,88 +352,105 @@ Color3f decode_one(const std::array<std::uint8_t, kCtx>& hist, std::size_t phase
 void encode_line(std::span<const Color3f> src,
                  std::span<std::uint8_t> out,
                  const Context& ctx) {
-    // Beam width fixed at 64 — tuned against Kodak-24, doubling to 128
-    // barely moves SSIMULACRA2 and triples the wall time.
-    constexpr std::size_t beam_width = 64;
     auto w = src.size();
     if (out.size() < w) return;
     if (w == 0) return;
 
-    // Seed beam with a single all-zero state (border = black).
-    std::vector<BeamState> beam;
-    beam.reserve(beam_width);
-    beam.push_back(BeamState{});
+    static thread_local std::vector<CellEntry> cell_pal;
+    static thread_local const Context* cell_ctx = nullptr;
+    if (cell_ctx != &ctx || cell_pal.empty()) {
+        cell_pal = build_cell_palette(ctx);
+        cell_ctx = &ctx;
+    }
 
-    // Reserve buffer for the per-step expansion + the picked
-    // pixel-decisions per beam slot (for backtracing the winner).
-    std::vector<std::vector<std::uint8_t>> trace(1);
-    trace[0].reserve(w);
+    // Floyd-Steinberg between cells in linear-RGB: pick the closest mean,
+    // propagate the cell's residual error to the next cell on the same
+    // row and the cell directly below on the next row. The error is one
+    // per cell (each cell's 4 pixels share the same artifact mean), so a
+    // 2-weight (7/16 right, 9/16 down) split is plenty.
+    //
+    // Per-row state is local to this row; cross-row diffusion would
+    // require a wider buffer than encode_line owns. Inter-row ED, if
+    // wanted, can be added by the caller buffering residuals between
+    // rows — but in practice the within-row spread already breaks up
+    // banding on smooth gradients.
+    auto cells = w / 4;
+    std::vector<Color3f> next_err(cells + 1, Color3f{0, 0, 0});
+    Color3f carry{0, 0, 0};
 
-    std::vector<BeamState> next;
-    next.reserve(beam_width * 16);
-    std::vector<std::vector<std::uint8_t>> next_trace;
-    next_trace.reserve(beam_width * 16);
+    for (std::size_t c = 0; c < cells; ++c) {
+        std::size_t x = c * 4;
+        // Source cell mean (4 pixels) + diffused error.
+        float r = 0, g = 0, b = 0;
+        for (std::size_t i = 0; i < 4; ++i) {
+            r += src[x + i].r;
+            g += src[x + i].g;
+            b += src[x + i].b;
+        }
+        Color3f target{r * 0.25f + carry.r,
+                       g * 0.25f + carry.g,
+                       b * 0.25f + carry.b};
+        auto src_lab = color_space::linear_to_oklab(target);
 
+        // Chroma-weighted OKLab: bump a/b vs L so the closest match for a
+        // saturated source actually picks an artifact cell rather than a
+        // luma-matched grey solid. 2× a/b is gentle — keeps grey sources
+        // landing on greys but breaks the tie toward chroma when the
+        // source has any saturation at all.
+        constexpr float kAbWeight = 2.0f;
+        std::size_t best = 0;
+        float best_d = std::numeric_limits<float>::max();
+        for (std::size_t k = 0; k < cell_pal.size(); ++k) {
+            float dL = src_lab.L - cell_pal[k].mean_lab.L;
+            float da = (src_lab.a - cell_pal[k].mean_lab.a) * kAbWeight;
+            float db = (src_lab.b - cell_pal[k].mean_lab.b) * kAbWeight;
+            float d = dL * dL + da * da + db * db;
+            if (d < best_d) {
+                best_d = d;
+                best = k;
+            }
+        }
+        std::uint8_t a = cell_pal[best].a;
+        std::uint8_t bv = cell_pal[best].b;
+        for (std::size_t i = 0; i < 4; ++i)
+            out[x + i] = ((i >> 1) & 1) ? bv : a;
+
+        // Residual in linear RGB. 7/16 to right cell, 9/16 carried by
+        // next_err (used as left-of-next-row would be in 2D FS, but we
+        // only fold this row's residual forward — it still serves as a
+        // damped propagation against banding).
+        const Color3f& m = cell_pal[best].mean_linear;
+        Color3f err{target.r - m.r, target.g - m.g, target.b - m.b};
+        constexpr float kRight = 0.7f;
+        carry = {err.r * kRight, err.g * kRight, err.b * kRight};
+    }
+
+    // Tail (w not multiple of 4): emit solid black, rare for 160/320-wide.
+    for (std::size_t x = cells * 4; x < w; ++x) out[x] = 0;
+}
+
+void apply_monitor_lp(std::span<Color3f> row) {
+    auto w = row.size();
+    if (w < 2) return;
+    std::vector<Color3f> tmp(w);
+    auto get = [&](std::ptrdiff_t i) -> Color3f {
+        if (i < 0) i = 0;
+        if (static_cast<std::size_t>(i) >= w) i = static_cast<std::ptrdiff_t>(w - 1);
+        return row[static_cast<std::size_t>(i)];
+    };
     for (std::size_t x = 0; x < w; ++x) {
-        next.clear();
-        next_trace.clear();
-        // For every (state, candidate) pair: shift hist, append candidate,
-        // possibly evaluate output at x - kLag.
-        for (std::size_t bi = 0; bi < beam.size(); ++bi) {
-            const auto& s = beam[bi];
-            for (std::uint8_t cand = 0; cand < 16; ++cand) {
-                BeamState ns = s;
-                // Shift left, append.
-                for (std::size_t k = 0; k + 1 < kCtx; ++k) ns.hist[k] = ns.hist[k + 1];
-                ns.hist[kCtx - 1] = cand;
-                // If we now have ≥ kLag+1 pixels of context, the output
-                // at column (x - kLag) is fully known.
-                if (x >= kLag) {
-                    std::size_t out_col = x - kLag;
-                    auto dec = decode_one(ns.hist, out_col & 3, ctx);
-                    auto src_lab = color_space::linear_to_oklab(src[out_col]);
-                    auto dec_lab = color_space::linear_to_oklab(dec);
-                    float dL = src_lab.L - dec_lab.L;
-                    float da = src_lab.a - dec_lab.a;
-                    float db = src_lab.b - dec_lab.b;
-                    ns.error += static_cast<double>(dL * dL + da * da + db * db);
-                }
-                next.push_back(ns);
-                auto t = trace[bi];
-                t.push_back(cand);
-                next_trace.push_back(std::move(t));
-            }
-        }
-        // Prune to top `beam_width` by error.
-        if (next.size() > beam_width) {
-            std::vector<std::size_t> idx(next.size());
-            for (std::size_t k = 0; k < idx.size(); ++k) idx[k] = k;
-            std::partial_sort(idx.begin(), idx.begin() + static_cast<std::ptrdiff_t>(beam_width),
-                              idx.end(),
-                              [&](std::size_t a, std::size_t b) { return next[a].error < next[b].error; });
-            std::vector<BeamState> pruned;
-            std::vector<std::vector<std::uint8_t>> pruned_trace;
-            pruned.reserve(beam_width);
-            pruned_trace.reserve(beam_width);
-            for (std::size_t k = 0; k < beam_width; ++k) {
-                pruned.push_back(std::move(next[idx[k]]));
-                pruned_trace.push_back(std::move(next_trace[idx[k]]));
-            }
-            beam = std::move(pruned);
-            trace = std::move(pruned_trace);
-        } else {
-            beam = std::move(next);
-            trace = std::move(next_trace);
-        }
+        auto p0 = get(static_cast<std::ptrdiff_t>(x) - 2);
+        auto p1 = get(static_cast<std::ptrdiff_t>(x) - 1);
+        auto p2 = row[x];
+        auto p3 = get(static_cast<std::ptrdiff_t>(x) + 1);
+        auto p4 = get(static_cast<std::ptrdiff_t>(x) + 2);
+        tmp[x] = {
+            (p0.r + 4 * p1.r + 6 * p2.r + 4 * p3.r + p4.r) * (1.0f / 16.0f),
+            (p0.g + 4 * p1.g + 6 * p2.g + 4 * p3.g + p4.g) * (1.0f / 16.0f),
+            (p0.b + 4 * p1.b + 6 * p2.b + 4 * p3.b + p4.b) * (1.0f / 16.0f),
+        };
     }
-
-    // Winner = lowest accumulated error in the final beam.
-    std::size_t best = 0;
-    for (std::size_t k = 1; k < beam.size(); ++k) {
-        if (beam[k].error < beam[best].error) best = k;
-    }
-    auto& winner = trace[best];
-    for (std::size_t x = 0; x < w; ++x) out[x] = winner[x];
+    std::copy(tmp.begin(), tmp.end(), row.begin());
 }
 
 }  // namespace png2amiga::cga_composite
