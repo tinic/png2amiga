@@ -1,9 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/turo/png2amiga/build-gcc15/cmake_install.cmake",
-		"/Users/turo/png2amiga/build-gcc15/third_party/cmake_install.cmake",
-		"/Users/turo/png2amiga/build-gcc15/third_party/libwebp/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

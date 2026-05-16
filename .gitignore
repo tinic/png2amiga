@@ -50,3 +50,7 @@ tools/mode_survey.txt
 AGENTS.md
 /logo.h
 /logo_mask.h
+build-gcc15/
+build-clang/
+build-debug/
+build-msvc/

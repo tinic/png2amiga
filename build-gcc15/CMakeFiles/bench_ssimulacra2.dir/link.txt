@@ -1,1 +1,0 @@
-/opt/homebrew/bin/g++-15 -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/bench_ssimulacra2.dir/tools/bench_ssimulacra2.cpp.o CMakeFiles/bench_ssimulacra2.dir/src/ssimulacra2.cpp.o -o bench_ssimulacra2
