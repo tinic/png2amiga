@@ -1,0 +1,2 @@
+/usr/bin/ar qc libsmol_atlas.a "CMakeFiles/smol_atlas.dir/smol-atlas/smol-atlas.cpp.o"
+/usr/bin/ranlib libsmol_atlas.a

@@ -2417,6 +2417,11 @@ InlineImageProtocol detect_inline_image_protocol() {
 
     auto term = std::getenv("TERM");                  // NOLINT(concurrency-mt-unsafe)
     auto term_program = std::getenv("TERM_PROGRAM");  // NOLINT(concurrency-mt-unsafe)
+    // LC_TERMINAL is iTerm2's portable hint — sshd's default AcceptEnv
+    // includes LC_* (LANG/LC_*), so this variable forwards across SSH
+    // where TERM_PROGRAM does not. Set by iTerm2 to "iTerm2" since
+    // build 3.4.0+ (~2020).
+    auto lc_terminal = std::getenv("LC_TERMINAL");    // NOLINT(concurrency-mt-unsafe)
 
     // Kitty / Ghostty — both speak the Kitty graphics protocol.
     if (contains(term, "kitty")) return InlineImageProtocol::kitty;
@@ -2425,8 +2430,10 @@ InlineImageProtocol detect_inline_image_protocol() {
     if (eq(term_program, "ghostty")) return InlineImageProtocol::kitty;
     if (set("GHOSTTY_RESOURCES_DIR")) return InlineImageProtocol::kitty;
 
-    // iTerm.app — OSC 1337 only.
+    // iTerm.app — OSC 1337. TERM_PROGRAM is set locally; LC_TERMINAL
+    // is what survives an SSH hop. Both should match "iTerm2"-ish.
     if (eq(term_program, "iTerm.app")) return InlineImageProtocol::iterm;
+    if (eq(lc_terminal,  "iTerm2"))    return InlineImageProtocol::iterm;
 
     // Windows Terminal — sixel since 1.22. WT_SESSION is set on every
     // pane; we don't probe DA1 because the env var is sufficient and

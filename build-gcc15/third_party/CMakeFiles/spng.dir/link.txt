@@ -1,0 +1,2 @@
+/usr/bin/ar qc libspng.a CMakeFiles/spng.dir/libspng/spng.c.o
+/usr/bin/ranlib libspng.a
