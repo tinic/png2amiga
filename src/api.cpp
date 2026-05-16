@@ -5300,7 +5300,8 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
         std::vector<std::uint8_t> raw;
         std::vector<std::uint8_t> palette_bytes;
 
-        if (mode == Mode::cga_320 || mode == Mode::cga_640 || mode == Mode::cga_composite) {
+        if (mode == Mode::cga_320 || mode == Mode::cga_640 ||
+            mode == Mode::cga_composite || mode == Mode::cga_composite_hires) {
             // 16 KB banked CGAPIC frame.
             if (!result->raw_frame.empty())
                 raw = result->raw_frame;
