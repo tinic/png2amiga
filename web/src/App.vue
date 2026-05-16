@@ -16,7 +16,6 @@ const version: string = __APP_VERSION__
             <p class="m-0 mt-1 text-sm text-color-secondary">
               Amiga OCS/AGA image converter. Full
               <a href="https://github.com/tinic/png2amiga" target="_blank" class="github-link" @click="track('github-click')">CLI tool <i class="pi pi-github"></i></a>
-              · Sister: <a href="https://png2c64.app" target="_blank" class="github-link">png2c64</a>
             </p>
           </div>
         </div>
