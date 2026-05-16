@@ -148,26 +148,41 @@ float bloomScan(vec2 pos, float off) {
 
 // Three-line composite: weighted sum of three vertically-adjacent
 // horizontally-filtered rows, each multiplied by its scanline weight.
+// Normalized by the peak-on-scanline weight sum so both progressive
+// (sharp scanlines, hardScan=-8 → sum ≈ 1.008) and interlace (soft,
+// hardScan=-1 → sum = 2.0) peak at the source luminance. Without this
+// normalization interlace emits ~2× the light per fragment before the
+// mask even applies, and the mode looks dramatically brighter than
+// progressive. Modulation depth (the visible scanlines) is preserved
+// because the dark-valley fragments still get their off-peak weight
+// sums, which are smaller than the peak we divide by.
 vec3 tri(vec2 pos) {
   vec3 a = horz3(pos, -1.0);
   vec3 b = horz3(pos,  0.0);
   vec3 c = horz3(pos,  1.0);
-  return a * scan(pos, -1.0) + b * scan(pos, 0.0) + c * scan(pos, 1.0);
+  float peakSum = 2.0 * exp2(u_hardScan) + 1.0;
+  return (a * scan(pos, -1.0) + b * scan(pos, 0.0) + c * scan(pos, 1.0)) / peakSum;
 }
 
 // Bloom: 5×5-ish wider Gaussian over 5 rows, used to add halation around
-// bright phosphors (the diffuse glow real CRTs exhibit).
+// bright phosphors (the diffuse glow real CRTs exhibit). Same peak-sum
+// normalization as tri() — bloomScan is hardScan*0.25 so its weight
+// sum varies even more across modes (1.51 progressive vs 3.68 inter-
+// lace at scale -8 vs -1), which would compound the brightness skew.
 vec3 bloom(vec2 pos) {
   vec3 a = horz5(pos, -2.0);
   vec3 b = horz5(pos, -1.0);
   vec3 c = horz5(pos,  0.0);
   vec3 d = horz5(pos,  1.0);
   vec3 e = horz5(pos,  2.0);
-  return a * bloomScan(pos, -2.0)
-       + b * bloomScan(pos, -1.0)
-       + c * bloomScan(pos,  0.0)
-       + d * bloomScan(pos,  1.0)
-       + e * bloomScan(pos,  2.0);
+  float bs = u_hardScan * 0.25;
+  // exp2(s*4) + exp2(s*1) + 1 + exp2(s*1) + exp2(s*4)
+  float peakSum = 2.0 * exp2(bs * 4.0) + 2.0 * exp2(bs) + 1.0;
+  return (a * bloomScan(pos, -2.0)
+        + b * bloomScan(pos, -1.0)
+        + c * bloomScan(pos,  0.0)
+        + d * bloomScan(pos,  1.0)
+        + e * bloomScan(pos,  2.0)) / peakSum;
 }
 
 // PAL chroma low-pass + 1-H delay-line averaging. Samples a 5-tap
@@ -442,14 +457,16 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     // Bloom contributes more in interlace / hires (where the per-row
     // beam is thinner relative to the visible structure).
     const bloom    = isInterlace ? 0.1 : 0.18
-    // Brightness compensates for the mask dimming. The new cosine
-    // mask preserves total luminance across the RGB triad (sum of
-    // three 120°-offset cosines is constant 1.5 when maskDark=0.5 +
-    // maskLight=1.5), so no compensation is needed — but the eye sees
-    // peaks-not-average for the brighter R/G/B stripes, so keep a
-    // modest boost. Interlace softens scanlines so its average is
-    // already higher; pull the boost down to match.
-    const brightness = isInterlace ? 1 : 1.1
+    // Brightness compensation. tri()'s peak-sum normalization makes
+    // both modes peak at the source luminance, but progressive still
+    // has dark valleys between scanlines — average over y is ≈ 0.75
+    // of source vs interlace's ≈ 1.0 (interlace's softer Gaussian has
+    // negligible valleys). Boost progressive ~25 % so the on-screen
+    // average matches across modes; otherwise switching to interlace
+    // looks markedly brighter. Bloom also adds a small DC component
+    // (slightly more in progressive after normalization), which
+    // contributes ~5 % of the equalization on its own.
+    const brightness = isInterlace ? 1 : 1.2
 
     gl.useProgram(program)
     gl.activeTexture(gl.TEXTURE0)

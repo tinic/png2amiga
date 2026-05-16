@@ -105,26 +105,41 @@ float bloomScan(vec2 pos, float off) {
 
 // Three-line composite: weighted sum of three vertically-adjacent
 // horizontally-filtered rows, each multiplied by its scanline weight.
+// Normalized by the peak-on-scanline weight sum so both progressive
+// (sharp scanlines, hardScan=-8 → sum ≈ 1.008) and interlace (soft,
+// hardScan=-1 → sum = 2.0) peak at the source luminance. Without this
+// normalization interlace emits ~2× the light per fragment before the
+// mask even applies, and the mode looks dramatically brighter than
+// progressive. Modulation depth (the visible scanlines) is preserved
+// because the dark-valley fragments still get their off-peak weight
+// sums, which are smaller than the peak we divide by.
 vec3 tri(vec2 pos) {
   vec3 a = horz3(pos, -1.0);
   vec3 b = horz3(pos,  0.0);
   vec3 c = horz3(pos,  1.0);
-  return a * scan(pos, -1.0) + b * scan(pos, 0.0) + c * scan(pos, 1.0);
+  float peakSum = 2.0 * exp2(u_hardScan) + 1.0;
+  return (a * scan(pos, -1.0) + b * scan(pos, 0.0) + c * scan(pos, 1.0)) / peakSum;
 }
 
 // Bloom: 5×5-ish wider Gaussian over 5 rows, used to add halation around
-// bright phosphors (the diffuse glow real CRTs exhibit).
+// bright phosphors (the diffuse glow real CRTs exhibit). Same peak-sum
+// normalization as tri() — bloomScan is hardScan*0.25 so its weight
+// sum varies even more across modes (1.51 progressive vs 3.68 inter-
+// lace at scale -8 vs -1), which would compound the brightness skew.
 vec3 bloom(vec2 pos) {
   vec3 a = horz5(pos, -2.0);
   vec3 b = horz5(pos, -1.0);
   vec3 c = horz5(pos,  0.0);
   vec3 d = horz5(pos,  1.0);
   vec3 e = horz5(pos,  2.0);
-  return a * bloomScan(pos, -2.0)
-       + b * bloomScan(pos, -1.0)
-       + c * bloomScan(pos,  0.0)
-       + d * bloomScan(pos,  1.0)
-       + e * bloomScan(pos,  2.0);
+  float bs = u_hardScan * 0.25;
+  // exp2(s*4) + exp2(s*1) + 1 + exp2(s*1) + exp2(s*4)
+  float peakSum = 2.0 * exp2(bs * 4.0) + 2.0 * exp2(bs) + 1.0;
+  return (a * bloomScan(pos, -2.0)
+        + b * bloomScan(pos, -1.0)
+        + c * bloomScan(pos,  0.0)
+        + d * bloomScan(pos,  1.0)
+        + e * bloomScan(pos,  2.0)) / peakSum;
 }
 
 // PAL chroma low-pass + 1-H delay-line averaging. Samples a 5-tap
@@ -255,4 +270,4 @@ void main() {
   col *= u_brightness;
   gl_FragColor = vec4(toSrgb(col), 1.0);
 }
-`;function b(o,s,e){const r=o.createShader(s);if(!r)throw new Error("CRT shader create failed");if(o.shaderSource(r,e),o.compileShader(r),!o.getShaderParameter(r,o.COMPILE_STATUS)){const i=o.getShaderInfoLog(r);throw o.deleteShader(r),new Error(`CRT shader compile error: ${i??"(no log)"}`)}return r}function L(o,s,e){const r=o.createProgram();if(!r)throw new Error("CRT program create failed");if(o.attachShader(r,s),o.attachShader(r,e),o.linkProgram(r),!o.getProgramParameter(r,o.LINK_STATUS)){const i=o.getProgramInfoLog(r);throw o.deleteProgram(r),new Error(`CRT program link error: ${i??"(no log)"}`)}return r}function A(o){const s=o.getContext("webgl",{premultipliedAlpha:!1,alpha:!1,antialias:!1,preserveDrawingBuffer:!1});if(!s)throw new Error("WebGL not available");const e=s,r=b(e,e.VERTEX_SHADER,E),i=b(e,e.FRAGMENT_SHADER,U),t=L(e,r,i),f=e.createBuffer();e.bindBuffer(e.ARRAY_BUFFER,f),e.bufferData(e.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),e.STATIC_DRAW);const n=e.createTexture();e.bindTexture(e.TEXTURE_2D,n),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MIN_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MAG_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_S,e.CLAMP_TO_EDGE),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_T,e.CLAMP_TO_EDGE);const a={src:e.getUniformLocation(t,"u_src"),srcSize:e.getUniformLocation(t,"u_srcSize"),outSize:e.getUniformLocation(t,"u_outSize"),hardScan:e.getUniformLocation(t,"u_hardScan"),hardPix:e.getUniformLocation(t,"u_hardPix"),maskDark:e.getUniformLocation(t,"u_maskDark"),maskLight:e.getUniformLocation(t,"u_maskLight"),warpX:e.getUniformLocation(t,"u_warpX"),warpY:e.getUniformLocation(t,"u_warpY"),bloom:e.getUniformLocation(t,"u_bloom"),brightness:e.getUniformLocation(t,"u_brightness"),palMode:e.getUniformLocation(t,"u_palMode"),maskPeriod:e.getUniformLocation(t,"u_maskPeriod")},d=e.getAttribLocation(t,"a_pos");let v=0,g=3;function w(c){v=c?1:0}function _(c){g=Math.max(3,Number.isFinite(c)?c:3)}function x(c,h,p,l,u){o.width!==l&&(o.width=l),o.height!==u&&(o.height=u),e.viewport(0,0,l,u),e.clearColor(0,0,0,1),e.clear(e.COLOR_BUFFER_BIT),e.bindTexture(e.TEXTURE_2D,n),e.pixelStorei(e.UNPACK_FLIP_Y_WEBGL,!0),e.texImage2D(e.TEXTURE_2D,0,e.RGBA,h,p,0,e.RGBA,e.UNSIGNED_BYTE,c);const S=h>=480,m=p>=280,y=m?-1:-8,P=S?-5:-3,R=m?.1:.18,k=m?1:1.1;e.useProgram(t),e.activeTexture(e.TEXTURE0),e.bindTexture(e.TEXTURE_2D,n),e.uniform1i(a.src,0),e.uniform2f(a.srcSize,h,p),e.uniform2f(a.outSize,l,u),e.uniform1f(a.hardScan,y),e.uniform1f(a.hardPix,P),e.uniform1f(a.maskDark,.5),e.uniform1f(a.maskLight,1.5),e.uniform1f(a.warpX,.03),e.uniform1f(a.warpY,.022),e.uniform1f(a.bloom,R),e.uniform1f(a.brightness,k),e.uniform1f(a.palMode,v),e.uniform1f(a.maskPeriod,g),e.bindBuffer(e.ARRAY_BUFFER,f),e.enableVertexAttribArray(d),e.vertexAttribPointer(d,2,e.FLOAT,!1,0,0),e.drawArrays(e.TRIANGLE_STRIP,0,4)}function T(){e.deleteProgram(t),e.deleteShader(r),e.deleteShader(i),e.deleteBuffer(f),e.deleteTexture(n)}return{render:x,setPalMode:w,setMaskPeriod:_,dispose:T}}export{A as createCrtRenderer};
+`;function b(o,s,e){const r=o.createShader(s);if(!r)throw new Error("CRT shader create failed");if(o.shaderSource(r,e),o.compileShader(r),!o.getShaderParameter(r,o.COMPILE_STATUS)){const i=o.getShaderInfoLog(r);throw o.deleteShader(r),new Error(`CRT shader compile error: ${i??"(no log)"}`)}return r}function L(o,s,e){const r=o.createProgram();if(!r)throw new Error("CRT program create failed");if(o.attachShader(r,s),o.attachShader(r,e),o.linkProgram(r),!o.getProgramParameter(r,o.LINK_STATUS)){const i=o.getProgramInfoLog(r);throw o.deleteProgram(r),new Error(`CRT program link error: ${i??"(no log)"}`)}return r}function z(o){const s=o.getContext("webgl",{premultipliedAlpha:!1,alpha:!1,antialias:!1,preserveDrawingBuffer:!1});if(!s)throw new Error("WebGL not available");const e=s,r=b(e,e.VERTEX_SHADER,E),i=b(e,e.FRAGMENT_SHADER,U),a=L(e,r,i),h=e.createBuffer();e.bindBuffer(e.ARRAY_BUFFER,h),e.bufferData(e.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),e.STATIC_DRAW);const c=e.createTexture();e.bindTexture(e.TEXTURE_2D,c),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MIN_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MAG_FILTER,e.NEAREST),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_S,e.CLAMP_TO_EDGE),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_T,e.CLAMP_TO_EDGE);const t={src:e.getUniformLocation(a,"u_src"),srcSize:e.getUniformLocation(a,"u_srcSize"),outSize:e.getUniformLocation(a,"u_outSize"),hardScan:e.getUniformLocation(a,"u_hardScan"),hardPix:e.getUniformLocation(a,"u_hardPix"),maskDark:e.getUniformLocation(a,"u_maskDark"),maskLight:e.getUniformLocation(a,"u_maskLight"),warpX:e.getUniformLocation(a,"u_warpX"),warpY:e.getUniformLocation(a,"u_warpY"),bloom:e.getUniformLocation(a,"u_bloom"),brightness:e.getUniformLocation(a,"u_brightness"),palMode:e.getUniformLocation(a,"u_palMode"),maskPeriod:e.getUniformLocation(a,"u_maskPeriod")},d=e.getAttribLocation(a,"a_pos");let v=0,g=3;function w(n){v=n?1:0}function _(n){g=Math.max(3,Number.isFinite(n)?n:3)}function x(n,f,p,l,u){o.width!==l&&(o.width=l),o.height!==u&&(o.height=u),e.viewport(0,0,l,u),e.clearColor(0,0,0,1),e.clear(e.COLOR_BUFFER_BIT),e.bindTexture(e.TEXTURE_2D,c),e.pixelStorei(e.UNPACK_FLIP_Y_WEBGL,!0),e.texImage2D(e.TEXTURE_2D,0,e.RGBA,f,p,0,e.RGBA,e.UNSIGNED_BYTE,n);const T=f>=480,m=p>=280,k=m?-1:-8,y=T?-5:-3,P=m?.1:.18,R=m?1:1.2;e.useProgram(a),e.activeTexture(e.TEXTURE0),e.bindTexture(e.TEXTURE_2D,c),e.uniform1i(t.src,0),e.uniform2f(t.srcSize,f,p),e.uniform2f(t.outSize,l,u),e.uniform1f(t.hardScan,k),e.uniform1f(t.hardPix,y),e.uniform1f(t.maskDark,.5),e.uniform1f(t.maskLight,1.5),e.uniform1f(t.warpX,.03),e.uniform1f(t.warpY,.022),e.uniform1f(t.bloom,P),e.uniform1f(t.brightness,R),e.uniform1f(t.palMode,v),e.uniform1f(t.maskPeriod,g),e.bindBuffer(e.ARRAY_BUFFER,h),e.enableVertexAttribArray(d),e.vertexAttribPointer(d,2,e.FLOAT,!1,0,0),e.drawArrays(e.TRIANGLE_STRIP,0,4)}function S(){e.deleteProgram(a),e.deleteShader(r),e.deleteShader(i),e.deleteBuffer(h),e.deleteTexture(c)}return{render:x,setPalMode:w,setMaskPeriod:_,dispose:S}}export{z as createCrtRenderer};
