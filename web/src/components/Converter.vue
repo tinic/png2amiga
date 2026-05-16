@@ -2151,7 +2151,11 @@ async function compileAndDownload(format: string) {
     if (result.error) { errorMsg.value = result.error; return }
     const blob = await postCompile(format, viewerSourceFromResult(result))
     if (!blob) return
-    downloadBlob(blob, baseStem() + '.' + format, 'application/octet-stream')
+    // Map service-side format string to file extension. dos-exe and exe
+    // are different code paths server-side but both produce `.exe`
+    // payloads from the user's POV.
+    const ext = format === 'dos-exe' ? 'exe' : format
+    downloadBlob(blob, baseStem() + '.' + ext, 'application/octet-stream')
     exportCount++
     track('export', { format, mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
@@ -2672,18 +2676,25 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button :label="options.mode.endsWith('-hi') ? 'pi3' : options.mode.endsWith('-med') ? 'pi2' : 'pi1'" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadDegas"
                 title="Download as Degas Elite file for Atari ST/STE." />
             </div>
-            <!-- IBM PC DOS export buttons: PNG preview + raw + DJGPP cpp viewer. -->
+            <!-- IBM PC DOS export buttons. exe goes via the server's
+                 ia16-elf-gcc bwrap sandbox; c is the generated source
+                 for users who want to compile locally with their own
+                 ia16-elf-gcc; raw is the bare pixel/palette bytes. -->
             <div v-if="isDosMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
+              <Button label="exe" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-exe')"
+                title="Download a real-mode 16-bit MS-DOS .exe that displays the image. Builds server-side via ia16-elf-gcc; press any key to exit." />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
                 :title="isEgaMode(options.mode)
                   ? 'Download raw EGA planar data: 4 bitplanes + 16-byte IrgbIRGB palette (DMA-ready for 0xA0000).'
                   : isVgaMode(options.mode)
                   ? 'Download raw VGA planar data: 4 bitplanes + 16×3-byte 6-bit DAC palette (feed to 0x3C9).'
                   : 'Download raw CGA banked planar data (cga-320: 4-color 2bpp; cga-640: 2-color 1bpp).'" />
-              <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
-                title="Download a DJGPP-compilable .cpp viewer (sets video mode, loads palette, blits image, waits for key, restores text mode). Build: i586-pc-msdosdjgpp-g++ -O2 -o out.exe out.cpp" />
+            </div>
+            <div v-if="isDosMode(options.mode)" class="flex gap-2">
+              <Button label="c" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
+                title="Download the freestanding 16-bit DOS C viewer source. Build locally: ia16-elf-gcc -march=i80286 -mcmodel=small -Os -o out.exe viewer.c" />
             </div>
             <!-- C64 export buttons: PNG preview + .prg displayer + format-specific raw. -->
             <div v-if="isC64Mode(options.mode) && !isC64CharsetMode(options.mode)" class="flex gap-2">
