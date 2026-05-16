@@ -2151,10 +2151,10 @@ async function compileAndDownload(format: string) {
     if (result.error) { errorMsg.value = result.error; return }
     const blob = await postCompile(format, viewerSourceFromResult(result))
     if (!blob) return
-    // Map service-side format string to file extension. dos-exe and exe
-    // are different code paths server-side but both produce `.exe`
-    // payloads from the user's POV.
-    const ext = format === 'dos-exe' ? 'exe' : format
+    // Map service-side format string to file extension. dos-exe / dos-
+    // img are distinct code paths server-side but the user-facing file
+    // extension is just exe / img.
+    const ext = format.startsWith('dos-') ? format.slice(4) : format
     downloadBlob(blob, baseStem() + '.' + ext, 'application/octet-stream')
     exportCount++
     track('export', { format, mode: options.mode, exportCount })
@@ -2676,25 +2676,29 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button :label="options.mode.endsWith('-hi') ? 'pi3' : options.mode.endsWith('-med') ? 'pi2' : 'pi1'" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadDegas"
                 title="Download as Degas Elite file for Atari ST/STE." />
             </div>
-            <!-- IBM PC DOS export buttons. exe goes via the server's
-                 ia16-elf-gcc bwrap sandbox; c is the generated source
-                 for users who want to compile locally with their own
-                 ia16-elf-gcc; raw is the bare pixel/palette bytes. -->
+            <!-- IBM PC DOS export buttons. img is a 720KB bootable
+                 FAT12 floppy (FreeDOS + AUTOEXEC.BAT + the viewer) —
+                 drop into MartyPC / real hardware and it runs. exe is
+                 the same viewer alone for users with their own boot
+                 setup. c is the generated source for local compile;
+                 raw is the bare pixel/palette bytes. -->
             <div v-if="isDosMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button label="exe" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-exe')"
+              <Button label="img" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-img')"
+                title="Download a bootable 720KB FAT12 floppy image (FreeDOS kernel + COMMAND.COM + the viewer on AUTOEXEC). Drop into MartyPC or write to a real floppy and it runs." />
+              <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-exe')"
                 title="Download a real-mode 16-bit MS-DOS .exe that displays the image. Builds server-side via ia16-elf-gcc; press any key to exit." />
+            </div>
+            <div v-if="isDosMode(options.mode)" class="flex gap-2">
+              <Button label="c" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
+                title="Download the freestanding 16-bit DOS C viewer source. Build locally: ia16-elf-gcc -march=i80286 -mcmodel=small -Os -o out.exe viewer.c" />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
                 :title="isEgaMode(options.mode)
                   ? 'Download raw EGA planar data: 4 bitplanes + 16-byte IrgbIRGB palette (DMA-ready for 0xA0000).'
                   : isVgaMode(options.mode)
                   ? 'Download raw VGA planar data: 4 bitplanes + 16×3-byte 6-bit DAC palette (feed to 0x3C9).'
                   : 'Download raw CGA banked planar data (cga-320: 4-color 2bpp; cga-640: 2-color 1bpp).'" />
-            </div>
-            <div v-if="isDosMode(options.mode)" class="flex gap-2">
-              <Button label="c" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
-                title="Download the freestanding 16-bit DOS C viewer source. Build locally: ia16-elf-gcc -march=i80286 -mcmodel=small -Os -o out.exe viewer.c" />
             </div>
             <!-- C64 export buttons: PNG preview + .prg displayer + format-specific raw. -->
             <div v-if="isC64Mode(options.mode) && !isC64CharsetMode(options.mode)" class="flex gap-2">

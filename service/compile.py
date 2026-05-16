@@ -88,6 +88,16 @@ else:
 IA16_GCC = os.path.join(_DOS_ROOT, "usr", "bin", "ia16-elf-gcc") if _DOS_ROOT else ""
 IA16_LIB = os.path.join(_DOS_ROOT, "usr", "x86_64-linux-gnu", "ia16-elf", "lib") if _DOS_ROOT else ""
 
+# FreeDOS boot files for the bootable .img path. Sourced from a FreeDOS
+# 1.3 install (KERNL086.SYS is the 8086-compatible kernel — works on
+# every CPU from the original PC up through modern emulators; we rename
+# it to KERNEL.SYS on the floppy because that's what boot12.bin searches
+# the root dir for). boot12.bin is the standard FreeDOS FAT12 boot sector.
+_DOS_BOOT_DIR = os.path.join(SCRIPT_DIR, "toolchain", "dos")
+DOS_BOOT12  = os.path.join(_DOS_BOOT_DIR, "boot12.bin")
+DOS_KERNEL  = os.path.join(_DOS_BOOT_DIR, "KERNL086.SYS")
+DOS_COMMAND = os.path.join(_DOS_BOOT_DIR, "COMMAND.COM")
+
 PORT = int(os.environ.get("PORT", "3001"))
 MAX_BODY = 5 * 1024 * 1024  # 5MB max source size
 
@@ -164,6 +174,96 @@ def compile_dos_viewer(source_code):
             return f.read()
 
 
+def compile_dos_image(source_code):
+    """Compile a generated DOS viewer source and pack it into a 720 KB
+    bootable FAT12 floppy .img — drop into MartyPC, real hardware, etc.
+
+    Disk layout (FreeDOS 1.3 boot chain):
+      sector 0:    boot12.bin (FreeDOS FAT12 boot sector → loads KERNEL.SYS)
+      KERNEL.SYS   the 8086-compatible FreeDOS kernel (was KERNL086.SYS)
+      COMMAND.COM  the FreeDOS shell
+      AUTOEXEC.BAT runs VIEWER.EXE on boot
+      VIEWER.EXE   the actual image displayer
+
+    DOSBox's CGA emulation isn't accurate enough for some artifact-color
+    paths; MartyPC reproduces the real chip behavior, and a self-
+    bootable floppy makes the round-trip "convert → drop disk → see it"
+    one click on the web side.
+    """
+    if not IA16_GCC or not os.path.isfile(IA16_GCC):
+        raise RuntimeError(
+            "DOS toolchain missing — install via dpkg-deb -x of TK Chia's "
+            "ia16-elf-* .debs into service/toolchain/dos/ia16/."
+        )
+    for f in (DOS_BOOT12, DOS_KERNEL, DOS_COMMAND):
+        if not os.path.isfile(f):
+            raise RuntimeError(f"FreeDOS boot file missing: {f}")
+    if not shutil.which("mformat") or not shutil.which("mcopy"):
+        raise RuntimeError("mtools missing — apt install mtools")
+
+    with tempfile.TemporaryDirectory(prefix="png2amiga_dosimg_") as tmpdir:
+        src_path = os.path.join(tmpdir, "viewer.c")
+        exe_path = os.path.join(tmpdir, "viewer.exe")
+        img_path = os.path.join(tmpdir, "out.img")
+        autoexec_path = os.path.join(tmpdir, "AUTOEXEC.BAT")
+
+        with open(src_path, "w") as f:
+            f.write(source_code)
+        # AUTOEXEC.BAT uses CRLF + final CR/LF — DOS shell parsers are
+        # picky about trailing line terminators. @ECHO OFF + the viewer
+        # name. The viewer's main() ends with set_mode(0x03) so control
+        # returns to the COMMAND prompt with text mode restored.
+        with open(autoexec_path, "wb") as f:
+            f.write(b"@ECHO OFF\r\nVIEWER.EXE\r\n")
+
+        # Compile via ia16-elf-gcc (same path as compile_dos_viewer).
+        subprocess.run(_sandbox(
+            [IA16_GCC, "-march=i80286", "-mcmodel=small", "-Os",
+             src_path, "-o", exe_path],
+            tmpdir,
+            extra_binds=[_DOS_ROOT],
+            env={"LD_LIBRARY_PATH": IA16_LIB},
+        ), check=True, capture_output=True, timeout=30)
+
+        # Create a blank 720 KB image, then mformat with the FreeDOS
+        # boot sector. mformat's -B reads the file once at startup
+        # before any chroot — read-binding _DOS_BOOT_DIR is enough.
+        subprocess.run(["truncate", "-s", "737280", img_path], check=True)
+        subprocess.run(_sandbox(
+            ["mformat", "-i", img_path, "-f", "720", "-B", DOS_BOOT12, "::"],
+            tmpdir,
+            extra_binds=[_DOS_BOOT_DIR],
+        ), check=True, capture_output=True, timeout=10)
+
+        # Copy KERNEL.SYS FIRST — old FreeDOS boot sectors expect it at
+        # cluster 2 (start of data area). Modern boot12.bin scans the
+        # root dir, so order matters less, but the convention is cheap
+        # to honour and bullet-proof. `-D o` overwrites if the file
+        # already exists; `-n` skips the "already exists" prompt.
+        for src, dst in (
+            (DOS_KERNEL,   "::KERNEL.SYS"),
+            (DOS_COMMAND,  "::COMMAND.COM"),
+            (autoexec_path,"::AUTOEXEC.BAT"),
+            (exe_path,     "::VIEWER.EXE"),
+        ):
+            subprocess.run(_sandbox(
+                ["mcopy", "-i", img_path, "-D", "o", src, dst],
+                tmpdir,
+                extra_binds=[_DOS_BOOT_DIR],
+            ), check=True, capture_output=True, timeout=10)
+
+        # KERNEL.SYS is conventionally marked system+hidden+read-only on
+        # FreeDOS install floppies. Not strictly required for boot, but
+        # matches stock layouts so a `dir` from the prompt looks normal.
+        subprocess.run(_sandbox(
+            ["mattrib", "-i", img_path, "+s", "+h", "+r", "::KERNEL.SYS"],
+            tmpdir,
+        ), check=True, capture_output=True, timeout=10)
+
+        with open(img_path, "rb") as f:
+            return f.read()
+
+
 def compile_viewer(source_code, output_format="exe"):
     """Compile viewer source to .exe or .adf. Returns binary bytes."""
     with tempfile.TemporaryDirectory(prefix="png2amiga_") as tmpdir:
@@ -219,8 +319,8 @@ class CompileHandler(BaseHTTPRequestHandler):
 
         params = parse_qs(parsed.query)
         fmt = params.get("format", ["exe"])[0]
-        if fmt not in ("exe", "adf", "dos-exe"):
-            self.send_error(400, "format must be exe | adf | dos-exe")
+        if fmt not in ("exe", "adf", "dos-exe", "dos-img"):
+            self.send_error(400, "format must be exe | adf | dos-exe | dos-img")
             return
 
         content_length = int(self.headers.get("Content-Length", 0))
@@ -233,6 +333,8 @@ class CompileHandler(BaseHTTPRequestHandler):
         try:
             if fmt == "dos-exe":
                 result = compile_dos_viewer(source)
+            elif fmt == "dos-img":
+                result = compile_dos_image(source)
             else:
                 result = compile_viewer(source, fmt)
         except (RuntimeError, ValueError) as e:
@@ -263,7 +365,7 @@ class CompileHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Internal error")
             return
 
-        ext = {"adf": "adf", "exe": "exe", "dos-exe": "exe"}.get(fmt, "bin")
+        ext = {"adf": "adf", "exe": "exe", "dos-exe": "exe", "dos-img": "img"}.get(fmt, "bin")
         # Gzip compress — ADF is 880KB mostly empty, exe has compressible image data
         accept = self.headers.get("Accept-Encoding", "")
         if "gzip" in accept:
