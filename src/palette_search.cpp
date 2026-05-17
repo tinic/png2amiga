@@ -128,7 +128,8 @@ float cpu_fitness(const Image& source,
                   const dither::Settings& dith,
                   const std::vector<bool>& dither_exclude_mask = {},
                   const std::vector<bool>& tmask = {},
-                  const dither::PrecomputedImage* precomputed = nullptr) {
+                  const dither::PrecomputedImage* precomputed = nullptr,
+                  const ssimulacra2::PrecomputedSource* s2_pre = nullptr) {
     const std::size_t W = source.width();
     const std::size_t H = source.height();
     const bool has_excl = std::any_of(
@@ -185,21 +186,27 @@ float cpu_fitness(const Image& source,
     if (has_trans) {
         // Score against the source with transparent pixels masked to
         // black on both sides, so SSIMULACRA2 doesn't penalise the
-        // (ignored) transparent regions.
+        // (ignored) transparent regions. The rendered side must be
+        // zeroed at transparent pixels even when s2_pre is wired —
+        // palette[0] may not be {0,0,0} unless lock_color0 was set.
+        for (std::size_t i = 0; i < px.size(); ++i) {
+            if (i < tmask.size() && tmask[i]) px[i] = Color3f{0, 0, 0};
+        }
+        if (s2_pre) {
+            return ssimulacra2::compute(*s2_pre, rendered_tls.pixels());
+        }
         if (src_masked_tls.width() != W || src_masked_tls.height() != H) {
             src_masked_tls = Image(W, H);
         }
         auto src_px = src_masked_tls.pixels();
         auto orig_px = source.pixels();
         for (std::size_t i = 0; i < src_px.size(); ++i) {
-            if (i < tmask.size() && tmask[i]) {
-                src_px[i] = Color3f{0, 0, 0};
-                px[i] = Color3f{0, 0, 0};
-            } else {
-                src_px[i] = orig_px[i];
-            }
+            src_px[i] = (i < tmask.size() && tmask[i]) ? Color3f{0, 0, 0} : orig_px[i];
         }
         return ssimulacra2::compute(src_masked_tls.pixels(), rendered_tls.pixels(), W, H);
+    }
+    if (s2_pre) {
+        return ssimulacra2::compute(*s2_pre, rendered_tls.pixels());
     }
     return ssimulacra2::compute(source.pixels(), rendered_tls.pixels(), W, H);
 }
@@ -321,6 +328,29 @@ Result<PopSearchResult> run_population_search(const Image& source,
     dither::PrecomputedImage precomputed;
     precomputed.build(source);
 
+    // Same hoist for SSIMULACRA2's source-side pipeline (downsample →
+    // XYB → mu1/s11 per channel per scale). uProf 2026-05-17 attributed
+    // ~16% of total --best CPU to these source-invariant computations
+    // running per candidate. When the source has alpha, transparent
+    // pixels must be black on both sides — build the precompute against
+    // a masked copy of the source so cpu_fitness can skip the per-call
+    // src_masked construction.
+    ssimulacra2::PrecomputedSource s2_pre;
+    {
+        const bool has_trans = !opts.tmask.empty();
+        if (has_trans) {
+            std::vector<Color3f> masked(source.width() * source.height());
+            auto src_px = source.pixels();
+            for (std::size_t i = 0; i < masked.size(); ++i) {
+                masked[i] = (i < opts.tmask.size() && opts.tmask[i]) ? Color3f{0, 0, 0}
+                                                                     : src_px[i];
+            }
+            s2_pre.prepare(masked, source.width(), source.height());
+        } else {
+            s2_pre.prepare(source.pixels(), source.width(), source.height());
+        }
+    }
+
     auto score_all = [&]() {
         pipeline::parallel_for(population.size(), [&](std::size_t i) {
             if (!needs_score[i]) return;
@@ -333,14 +363,16 @@ Result<PopSearchResult> run_population_search(const Image& source,
                                         dith,
                                         opts.dither_exclude_mask,
                                         opts.tmask,
-                                        &precomputed);
+                                        &precomputed,
+                                        &s2_pre);
             } else {
                 scores[i] = cpu_fitness(source,
                                         std::span<const Color3f>(population[i]),
                                         dith,
                                         opts.dither_exclude_mask,
                                         opts.tmask,
-                                        &precomputed);
+                                        &precomputed,
+                                        &s2_pre);
             }
         });
     };

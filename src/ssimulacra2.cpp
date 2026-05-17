@@ -1015,7 +1015,9 @@ ScaleScores compute_one_scale(const AlignedFloatVec& X1,
                               const AlignedFloatVec& B2,
                               std::size_t w,
                               std::size_t h,
-                              Scratch& sc) {
+                              Scratch& sc,
+                              const std::array<AlignedFloatVec, 3>* pre_mu1 = nullptr,
+                              const std::array<AlignedFloatVec, 3>* pre_s11 = nullptr) {
     ScaleScores out{};
     std::array<const AlignedFloatVec*, 3> p1{&X1, &Y1, &B1};
     std::array<const AlignedFloatVec*, 3> p2{&X2, &Y2, &B2};
@@ -1023,18 +1025,29 @@ ScaleScores compute_one_scale(const AlignedFloatVec& X1,
     for (std::size_t c = 0; c < 3; ++c) {
         auto& a = *p1[c];
         auto& b = *p2[c];
-        gaussian_blur(a, sc.mu1, sc.tmp, w, h);
+        const AlignedFloatVec* mu1_ptr;
+        const AlignedFloatVec* s11_ptr;
+        if (pre_mu1 && pre_s11) {
+            mu1_ptr = &(*pre_mu1)[c];
+            s11_ptr = &(*pre_s11)[c];
+        } else {
+            gaussian_blur(a, sc.mu1, sc.tmp, w, h);
+            multiply(a, a, sc.prod);
+            gaussian_blur(sc.prod, sc.s11, sc.tmp, w, h);
+            mu1_ptr = &sc.mu1;
+            s11_ptr = &sc.s11;
+        }
+        const auto& mu1 = *mu1_ptr;
+        const auto& s11 = *s11_ptr;
         gaussian_blur(b, sc.mu2, sc.tmp, w, h);
-        multiply(a, a, sc.prod);
-        gaussian_blur(sc.prod, sc.s11, sc.tmp, w, h);
         multiply(b, b, sc.prod);
         gaussian_blur(sc.prod, sc.s22, sc.tmp, w, h);
         multiply(a, b, sc.prod);
         gaussian_blur(sc.prod, sc.s12, sc.tmp, w, h);
-        auto ssim = ssim_plane(sc.mu1, sc.mu2, sc.s11, sc.s22, sc.s12, w, h);
+        auto ssim = ssim_plane(mu1, sc.mu2, s11, sc.s22, sc.s12, w, h);
         out.ssim_pair[c * 2 + 0] = ssim.mean1;
         out.ssim_pair[c * 2 + 1] = ssim.mean4;
-        auto ed = edgediff_plane(a, sc.mu1, b, sc.mu2, w, h);
+        auto ed = edgediff_plane(a, mu1, b, sc.mu2, w, h);
         out.edgediff_pair[c * 4 + 0] = ed.ring.mean1;
         out.edgediff_pair[c * 4 + 1] = ed.ring.mean4;
         out.edgediff_pair[c * 4 + 2] = ed.blur.mean1;
@@ -1183,47 +1196,38 @@ double final_score(const std::vector<ScaleScores>& scales) {
     return ssim;
 }
 
-}  // namespace
+// Reference loops 6 scales: 1:1, 1:2, 1:4, 1:8, 1:16, 1:32.
+// At each scale the input is downsampled in LINEAR sRGB, then converted
+// to XYB. We mirror that exactly.
+constexpr int kNumScales = 6;
 
-float compute(std::span<const Color3f> orig,
-              std::span<const Color3f> distorted,
-              std::size_t width,
-              std::size_t height) {
+// Shared by both compute() overloads. When src_pre is non-null its
+// per-scale XYB planes and mu1/s11 are used in place of the source
+// downsample → to_xyb → blur chain; distorted side still runs.
+float compute_impl(std::span<const Color3f> orig,
+                   std::span<const Color3f> distorted,
+                   std::size_t width,
+                   std::size_t height,
+                   const PrecomputedSource* src_pre) {
     auto n = width * height;
-    if (n == 0 || orig.size() < n || distorted.size() < n) return 0.0f;
+    if (n == 0 || distorted.size() < n) return 0.0f;
+    if (!src_pre && orig.size() < n) return 0.0f;
 
-    // Reference loops 6 scales: 1:1, 1:2, 1:4, 1:8, 1:16, 1:32.
-    // At each scale the input is downsampled in LINEAR sRGB, then converted
-    // to XYB. We mirror that exactly.
-    constexpr int kNumScales = 6;
-    // thread_local: keep the source-copy allocation alive across
-    // calls. Same rationale as the Scratch arena below — `lin1`/`lin2`
-    // hold the full source image (and shrink as scales downsample),
-    // so freshly constructing them every call costs the allocator a
-    // ~68KB block × 2 per call.
     thread_local std::vector<Color3f> lin1, lin2;
-    if (lin1.size() < n) lin1.resize(n);
     if (lin2.size() < n) lin2.resize(n);
-    std::copy(orig.begin(), orig.begin() + static_cast<std::ptrdiff_t>(n), lin1.begin());
+    if (!src_pre) {
+        if (lin1.size() < n) lin1.resize(n);
+        std::copy(orig.begin(), orig.begin() + static_cast<std::ptrdiff_t>(n), lin1.begin());
+    }
     std::copy(distorted.begin(), distorted.begin() + static_cast<std::ptrdiff_t>(n), lin2.begin());
     std::size_t w = width, h = height;
     std::vector<ScaleScores> per_scale;
     per_scale.reserve(kNumScales);
-    // All scratch buffers live for the duration of compute() AND
-    // ACROSS compute() calls — `thread_local` keeps the allocations
-    // alive between invocations so the --best inner loop (and
-    // population search) doesn't pay malloc cost on every iteration.
-    // AMD uProf showed the per-call construction (the previous
-    // commit's `Scratch sc;`) still cost 70% of CPU because each
-    // call's destructor freed the 7 vector<float>s × 68KB and the
-    // next call re-committed pages. thread_local pins the pages.
-    //
-    // Threading: each thread gets its own arena, so callers running
-    // best_sweep across cores via parallel_for won't contend.
     thread_local Scratch sc;
     sc.reserve_to(w * h);
+    // X1/Y1/B1 unused when src_pre is non-null (we use pre.scales[s].X/Y/B).
     thread_local AlignedFloatVec X1, Y1, B1, X2, Y2, B2;
-    if (X1.size() < w * h) {
+    if (!src_pre && X1.size() < w * h) {
         X1.resize(w * h);
         Y1.resize(w * h);
         B1.resize(w * h);
@@ -1233,30 +1237,106 @@ float compute(std::span<const Color3f> orig,
         Y2.resize(w * h);
         B2.resize(w * h);
     }
-    // next1/next2 are also thread_local so their capacity persists
-    // across compute() calls. Size them to n up front; the swap-based
-    // double-buffer below keeps capacity constant (only `size()`
-    // shrinks via swap with a smaller buffer, and the next call's
-    // `resize(n)` is a no-op when capacity is already n).
     thread_local std::vector<Color3f> next1, next2;
-    if (next1.size() < n) next1.resize(n);
+    if (!src_pre && next1.size() < n) next1.resize(n);
     if (next2.size() < n) next2.resize(n);
     for (int scale = 0; scale < kNumScales; ++scale) {
         if (w < 8 || h < 8) break;
         if (scale > 0) {
             std::size_t nw = 0, nh = 0;
-            downsample_2x_linear(lin1, w, h, next1, nw, nh);
+            if (!src_pre) {
+                downsample_2x_linear(lin1, w, h, next1, nw, nh);
+                lin1.swap(next1);
+            }
             downsample_2x_linear(lin2, w, h, next2, nw, nh);
-            lin1.swap(next1);
             lin2.swap(next2);
+            if (src_pre) {
+                nw = (w + 1) / 2;
+                nh = (h + 1) / 2;
+            }
             w = nw;
             h = nh;
         }
-        to_xyb_planes(lin1, w, h, X1, Y1, B1);
         to_xyb_planes(lin2, w, h, X2, Y2, B2);
-        per_scale.push_back(compute_one_scale(X1, Y1, B1, X2, Y2, B2, w, h, sc));
+        if (src_pre) {
+            if (scale >= src_pre->n_active) break;
+            const auto& pscale = src_pre->scales[static_cast<std::size_t>(scale)];
+            per_scale.push_back(compute_one_scale(pscale.X,
+                                                  pscale.Y,
+                                                  pscale.B,
+                                                  X2,
+                                                  Y2,
+                                                  B2,
+                                                  w,
+                                                  h,
+                                                  sc,
+                                                  &pscale.mu1,
+                                                  &pscale.s11));
+        } else {
+            to_xyb_planes(lin1, w, h, X1, Y1, B1);
+            per_scale.push_back(compute_one_scale(X1, Y1, B1, X2, Y2, B2, w, h, sc));
+        }
     }
     return static_cast<float>(final_score(per_scale));
+}
+
+}  // namespace
+
+float compute(std::span<const Color3f> orig,
+              std::span<const Color3f> distorted,
+              std::size_t width,
+              std::size_t height) {
+    return compute_impl(orig, distorted, width, height, nullptr);
+}
+
+float compute(const PrecomputedSource& src_pre, std::span<const Color3f> distorted) {
+    return compute_impl({}, distorted, src_pre.width, src_pre.height, &src_pre);
+}
+
+void PrecomputedSource::prepare(std::span<const Color3f> src, std::size_t w_in, std::size_t h_in) {
+    auto n_in = w_in * h_in;
+    if (n_in == 0 || src.size() < n_in) {
+        n_active = 0;
+        width = 0;
+        height = 0;
+        return;
+    }
+    width = w_in;
+    height = h_in;
+    std::vector<Color3f> lin(n_in);
+    std::copy(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(n_in), lin.begin());
+    std::vector<Color3f> next;
+    std::size_t w = w_in, h = h_in;
+    AlignedFloatVec tmp;
+    n_active = 0;
+    for (int scale = 0; scale < kMaxScales; ++scale) {
+        if (w < 8 || h < 8) break;
+        if (scale > 0) {
+            std::size_t nw = 0, nh = 0;
+            downsample_2x_linear(lin, w, h, next, nw, nh);
+            lin.swap(next);
+            w = nw;
+            h = nh;
+        }
+        auto& s = scales[static_cast<std::size_t>(scale)];
+        s.w = w;
+        s.h = h;
+        to_xyb_planes(lin, w, h, s.X, s.Y, s.B);
+        // Per-channel mu1 (gaussian blur of channel) and s11 (gaussian
+        // blur of channel × channel). Reuse a single scratch buffer
+        // for the squared input.
+        AlignedFloatVec prod;
+        std::array<const AlignedFloatVec*, 3> planes{&s.X, &s.Y, &s.B};
+        for (std::size_t c = 0; c < 3; ++c) {
+            const auto& a = *planes[c];
+            if (s.mu1[c].size() < w * h) s.mu1[c].resize(w * h);
+            if (s.s11[c].size() < w * h) s.s11[c].resize(w * h);
+            gaussian_blur(a, s.mu1[c], tmp, w, h);
+            multiply(a, a, prod);
+            gaussian_blur(prod, s.s11[c], tmp, w, h);
+        }
+        ++n_active;
+    }
 }
 
 }  // namespace png2amiga::ssimulacra2
