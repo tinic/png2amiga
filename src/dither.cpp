@@ -35,6 +35,20 @@
 
 namespace png2amiga::dither {
 
+void PrecomputedImage::build(const Image& image) {
+    const std::size_t w = image.width();
+    const std::size_t h = image.height();
+    if (width == w && height == h && image_s.size() == w * h) return;
+    width = w;
+    height = h;
+    image_s.resize(w * h);
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            image_s[y * w + x] = color_space::linear_to_srgb(image[x, y]).clamped();
+        }
+    }
+}
+
 namespace {
 
 // ===========================================================================
@@ -1003,7 +1017,8 @@ DitherResult apply_error_diffusion(const Image& image,
                                    float strength,
                                    float error_clamp_val,
                                    bool serpentine,
-                                   std::span<const DiffusionEntry> kernel) {
+                                   std::span<const DiffusionEntry> kernel,
+                                   const PrecomputedImage* precomputed = nullptr) {
 
     auto w = image.width();
     auto h = image.height();
@@ -1017,7 +1032,6 @@ DitherResult apply_error_diffusion(const Image& image,
     // (vector::resize keeps capacity). Each parallel_for worker has its
     // own TLS instance, so no contention.
     thread_local std::vector<Color3f> image_s_tls;
-    thread_local std::vector<OKLab> image_lab_tls;
     thread_local std::vector<Color3f> palette_s_tls;
     thread_local std::vector<Color3f> err_buf_s_tls;
 
@@ -1025,29 +1039,36 @@ DitherResult apply_error_diffusion(const Image& image,
     result.indices.resize(w * h);
     result.total_error = 0.0f;
 
-    image_s_tls.resize(w * h);
-    image_lab_tls.resize(w * h);
     palette_s_tls.resize(palette_lab.size());
     err_buf_s_tls.assign(w * h, Color3f{0, 0, 0});  // must zero between calls
 
-    auto& image_s = image_s_tls;
-    auto& image_lab = image_lab_tls;
     auto& palette_s = palette_s_tls;
     auto& err_buf_s = err_buf_s_tls;
 
-    // Precompute image in sRGB and OKLab. Picker still chooses
-    // perceptually (OKLab); residual conservation runs in sRGB
-    // (gamma-encoded) — see diffuse_raw_buffer for the rationale.
+    // Pop search wires a per-image precompute through cpu_fitness so
+    // the W×H scalar powf(x, 1/2.4) sRGB-encode of the source — branch-
+    // bound at ~5 s of pop_search wall on M3 (Instruments 2026-05) —
+    // happens once per image instead of once per palette candidate.
+    // When no precompute is threaded in, fall back to local TLS encode
+    // (other dither::apply callers, recoil round-trip tests, etc.).
+    const Color3f* image_s = nullptr;
+    if (precomputed && precomputed->width == w && precomputed->height == h
+        && precomputed->image_s.size() == w * h) {
+        image_s = precomputed->image_s.data();
+    } else {
+        image_s_tls.resize(w * h);
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                image_s_tls[y * w + x] = color_space::linear_to_srgb(image[x, y]).clamped();
+            }
+        }
+        image_s = image_s_tls.data();
+    }
+
+    // Palette precompute stays per-call — it changes every invocation.
     for (std::size_t i = 0; i < palette_lab.size(); ++i) {
         palette_s[i] =
             color_space::linear_to_srgb(color_space::oklab_to_linear(palette_lab[i])).clamped();
-    }
-    for (std::size_t y = 0; y < h; ++y) {
-        for (std::size_t x = 0; x < w; ++x) {
-            auto lin = image[x, y];
-            image_s[y * w + x] = color_space::linear_to_srgb(lin).clamped();
-            image_lab[y * w + x] = color_space::linear_to_oklab(lin);
-        }
     }
 
     // SoA palette is built once on the stack and reused for all 68K
@@ -2878,7 +2899,10 @@ DitherResult apply_none(const Image& image, std::span<const OKLab> palette_lab) 
 // Public API
 // ===========================================================================
 
-DitherResult apply(const Image& image, std::span<const Color3f> palette, const Settings& settings) {
+DitherResult apply(const Image& image,
+                   std::span<const Color3f> palette,
+                   const Settings& settings,
+                   const PrecomputedImage* precomputed) {
 
     auto palette_lab = precompute_palette_lab(palette);
     std::span<const OKLab> pal_span{palette_lab};
@@ -3006,35 +3030,40 @@ DitherResult apply(const Image& image, std::span<const Color3f> palette, const S
                                      settings.strength,
                                      settings.error_clamp,
                                      settings.serpentine,
-                                     floyd_steinberg_kernel);
+                                     floyd_steinberg_kernel,
+                                     precomputed);
     case Method::atkinson:
         return apply_error_diffusion(image,
                                      pal_span,
                                      settings.strength,
                                      settings.error_clamp,
                                      settings.serpentine,
-                                     atkinson_kernel);
+                                     atkinson_kernel,
+                                     precomputed);
     case Method::sierra_lite:
         return apply_error_diffusion(image,
                                      pal_span,
                                      settings.strength,
                                      settings.error_clamp,
                                      settings.serpentine,
-                                     sierra_lite_kernel);
+                                     sierra_lite_kernel,
+                                     precomputed);
     case Method::stucki:
         return apply_error_diffusion(image,
                                      pal_span,
                                      settings.strength,
                                      settings.error_clamp,
                                      settings.serpentine,
-                                     stucki_kernel);
+                                     stucki_kernel,
+                                     precomputed);
     case Method::jarvis:
         return apply_error_diffusion(image,
                                      pal_span,
                                      settings.strength,
                                      settings.error_clamp,
                                      settings.serpentine,
-                                     jarvis_kernel);
+                                     jarvis_kernel,
+                                     precomputed);
 
     case Method::dbs:
         return apply_dbs(image, pal_span, settings);

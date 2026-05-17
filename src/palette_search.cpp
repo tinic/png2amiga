@@ -127,7 +127,8 @@ float cpu_fitness(const Image& source,
                   std::span<const Color3f> palette,
                   const dither::Settings& dith,
                   const std::vector<bool>& dither_exclude_mask = {},
-                  const std::vector<bool>& tmask = {}) {
+                  const std::vector<bool>& tmask = {},
+                  const dither::PrecomputedImage* precomputed = nullptr) {
     const std::size_t W = source.width();
     const std::size_t H = source.height();
     const bool has_excl = std::any_of(
@@ -163,7 +164,10 @@ float cpu_fitness(const Image& source,
         }
         if (cand_pal_tls.empty()) cand_pal_tls.push_back(Color3f{0, 0, 0});
         dr = dither::apply(
-            source, std::span<const Color3f>(cand_pal_tls.data(), cand_pal_tls.size()), dith);
+            source,
+            std::span<const Color3f>(cand_pal_tls.data(), cand_pal_tls.size()),
+            dith,
+            precomputed);
         for (auto& idx : dr.indices)
             idx = cand_to_full_tls[idx];
         if (has_trans) {
@@ -171,7 +175,7 @@ float cpu_fitness(const Image& source,
                 if (tmask[i]) dr.indices[i] = 0;
         }
     } else {
-        dr = dither::apply(source, palette, dith);
+        dr = dither::apply(source, palette, dith, precomputed);
     }
 
     auto px = rendered_tls.pixels();
@@ -309,6 +313,14 @@ Result<PopSearchResult> run_population_search(const Image& source,
     // in `scores[i]` — we just skip the re-evaluation. Reduces per-gen
     // S2 calls by `n_keep` (e.g. 16/64 = 25% on the default pop=64).
     std::vector<bool> needs_score(population.size(), true);
+
+    // Source image is fixed across the entire pop_search run. apply()'s
+    // inner sRGB-encode of the source (scalar libsystem powf, branch-
+    // bound at ~5 s of wall on M3 / Instruments 2026-05) used to run
+    // 2560×; hoist it here so it runs once.
+    dither::PrecomputedImage precomputed;
+    precomputed.build(source);
+
     auto score_all = [&]() {
         pipeline::parallel_for(population.size(), [&](std::size_t i) {
             if (!needs_score[i]) return;
@@ -320,13 +332,15 @@ Result<PopSearchResult> run_population_search(const Image& source,
                                         std::span<const Color3f>(full.colors),
                                         dith,
                                         opts.dither_exclude_mask,
-                                        opts.tmask);
+                                        opts.tmask,
+                                        &precomputed);
             } else {
                 scores[i] = cpu_fitness(source,
                                         std::span<const Color3f>(population[i]),
                                         dith,
                                         opts.dither_exclude_mask,
-                                        opts.tmask);
+                                        opts.tmask,
+                                        &precomputed);
             }
         });
     };
@@ -442,8 +456,10 @@ Result<PopSearchResult> run_population_search(const Image& source,
             cand_to_full.push_back(static_cast<std::uint8_t>(i));
         }
         if (cand_pal.empty()) cand_pal.push_back(Color3f{0, 0, 0});
-        dr = dither::apply(
-            source, std::span<const Color3f>(cand_pal.data(), cand_pal.size()), dith);
+        dr = dither::apply(source,
+                           std::span<const Color3f>(cand_pal.data(), cand_pal.size()),
+                           dith,
+                           &precomputed);
         for (auto& idx : dr.indices)
             idx = cand_to_full[idx];
         if (has_trans) {
@@ -451,7 +467,7 @@ Result<PopSearchResult> run_population_search(const Image& source,
                 if (opts.tmask[i]) dr.indices[i] = 0;
         }
     } else {
-        dr = dither::apply(source, dither_pal, dith);
+        dr = dither::apply(source, dither_pal, dith, &precomputed);
     }
     Image rendered(source.width(), source.height());
     {

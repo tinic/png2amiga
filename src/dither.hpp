@@ -141,7 +141,27 @@ struct DitherResult {
     float total_error{};                // sum of perceptual squared error
 };
 
-DitherResult apply(const Image& image, std::span<const Color3f> palette, const Settings& settings);
+// Per-image precompute reused across many apply() calls with the same
+// source image but different palettes (pop_search's hot loop). Built
+// once outside the loop; passing a non-null pointer to apply() skips
+// the per-call sRGB-encode of the source image — which is otherwise
+// scalar libsystem powf(x, 1/2.4) per channel per pixel, branch-bound
+// at ~5 s of pop_search wall on Apple Silicon. Currently consumed
+// only by the error-diffusion path; harmless to pass to apply() under
+// any other dither method (ignored).
+struct PrecomputedImage {
+    std::vector<Color3f> image_s;  // sRGB-encoded source, clamped to [0,1]
+    std::size_t width = 0;
+    std::size_t height = 0;
+
+    // Idempotent — no-op if width/height already match the image.
+    void build(const Image& image);
+};
+
+DitherResult apply(const Image& image,
+                   std::span<const Color3f> palette,
+                   const Settings& settings,
+                   const PrecomputedImage* precomputed = nullptr);
 
 // ---------------------------------------------------------------------------
 // Returns true if the method is an ordered (non-error-diffusion) method.
