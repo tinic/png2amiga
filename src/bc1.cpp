@@ -489,31 +489,35 @@ inline bool refit_endpoints(const Sample16& s,
                             const std::uint8_t sel[16],
                             std::uint8_t e0[3],
                             std::uint8_t e1[3]) {
-    // Weights × 3 (scaled to integer-friendly form): (3,0) (0,3) (2,1) (1,2)
-    constexpr int W0[4] = {3, 0, 2, 1};
-    constexpr int W1[4] = {0, 3, 1, 2};
-    float A00 = 0, A01 = 0, A11 = 0;
-    float B0[3] = {0, 0, 0};
-    float B1[3] = {0, 0, 0};
+    // Count pixels per selector + sum sRGB per (selector, channel). The
+    // A matrix depends only on the counts (closed-form below), and the
+    // RHS reduces to a small linear combination of the per-selector
+    // pixel sums — much cheaper than the prior per-pixel float math
+    // (uProf 2026-05-18: refit_endpoints was 1.74s / 7s wall on x64).
+    int n[4] = {0, 0, 0, 0};
+    int sum[4][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
     for (int p = 0; p < 16; ++p) {
         int k = sel[p];
-        float w0 = float(W0[k]) * (1.0f / 3.0f);
-        float w1 = float(W1[k]) * (1.0f / 3.0f);
-        A00 += w0 * w0;
-        A01 += w0 * w1;
-        A11 += w1 * w1;
-        for (int ch = 0; ch < 3; ++ch) {
-            float v = float(s.srgb8[p][ch]);
-            B0[ch] += w0 * v;
-            B1[ch] += w1 * v;
-        }
+        ++n[k];
+        sum[k][0] += s.srgb8[p][0];
+        sum[k][1] += s.srgb8[p][1];
+        sum[k][2] += s.srgb8[p][2];
     }
+    // A = sum of w·wᵀ over selectors. Weights: sel 0 → (1,0), sel 1 →
+    // (0,1), sel 2 → (2/3, 1/3), sel 3 → (1/3, 2/3). Closed form:
+    float A00 = float(n[0]) + (4.f / 9.f) * float(n[2]) + (1.f / 9.f) * float(n[3]);
+    float A11 = float(n[1]) + (1.f / 9.f) * float(n[2]) + (4.f / 9.f) * float(n[3]);
+    float A01 = (2.f / 9.f) * float(n[2] + n[3]);
     float det = A00 * A11 - A01 * A01;
-    if (std::abs(det) < 1e-6f) return false;  // singular — keep current endpoints
-    float inv_det = 1.0f / det;
+    if (std::abs(det) < 1e-6f) return false;
+    float inv_det = 1.f / det;
     for (int ch = 0; ch < 3; ++ch) {
-        float c0_f = (A11 * B0[ch] - A01 * B1[ch]) * inv_det;
-        float c1_f = (-A01 * B0[ch] + A00 * B1[ch]) * inv_det;
+        // B0 = Σ w0(sel) · v = (3·sum0 + 2·sum2 + sum3) / 3
+        // B1 = Σ w1(sel) · v = (3·sum1 + sum2 + 2·sum3) / 3
+        float B0 = (3.f * float(sum[0][ch]) + 2.f * float(sum[2][ch]) + float(sum[3][ch])) * (1.f / 3.f);
+        float B1 = (3.f * float(sum[1][ch]) + float(sum[2][ch]) + 2.f * float(sum[3][ch])) * (1.f / 3.f);
+        float c0_f = (A11 * B0 - A01 * B1) * inv_det;
+        float c1_f = (-A01 * B0 + A00 * B1) * inv_det;
         e0[ch] = clamp_u8(int(std::lround(c0_f)));
         e1[ch] = clamp_u8(int(std::lround(c1_f)));
     }
