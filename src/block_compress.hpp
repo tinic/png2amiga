@@ -23,6 +23,7 @@
 // feedback_oklab_to_srgb_migration.md), so OKLab is the right default.
 
 #include "color_space.hpp"
+#include "dither.hpp"
 #include "types.hpp"
 
 #include <algorithm>
@@ -165,42 +166,45 @@ inline float score_block(const BlockSample<W, H>& src, const std::uint8_t (&dec_
 // per-block mean residual (source_block_mean − decoded_block_mean) in OKLab.
 // Existing ETC2/ASTC encoders treat blocks independently and accept the
 // resulting per-block stepping at block boundaries. We treat the block
-// grid as a coarse image and run Floyd–Steinberg on it: the per-block
-// residual nudges neighbour blocks' target colours before they're encoded.
+// grid as a coarse image and run an error-diffusion kernel on it: the
+// per-block residual nudges neighbour blocks' target colours before
+// they're encoded.
 //
-// This nudges per-block decisions toward a globally smoother result —
-// boundaries between blocks get attenuated because the next block's
-// target was already shifted to absorb some of the upstream error.
+// The kernel comes from dither::error_diffusion_kernel(method) — same
+// 58-method catalog the per-pixel dithering uses. Floyd-Steinberg is the
+// default; Atkinson / Stucki / Jarvis / Sierra-Lite / etc. are all
+// valid choices (a sweep across kernels is something for the bench
+// harness to pick the best per content type). This obeys the HARD RULE
+// in feedback_never_hardcode_fs — kernels are NOT hand-coded here.
 //
 // Hypothesis from project_ham_aware_ed.md: on continuous-tone content
 // SSIMULACRA2 rewards spatial-correlation smoothness much more than PSNR
 // does; block-grid ED should win SSIMULACRA2 with PSNR barely moving.
-// Verify via bench_etc2.sh once a baseline encoder ships.
 
 struct BlockGridEdOptions {
-    float strength = 0.5f;     // 0 = off, 1 = full FS-on-blocks
-    float error_clamp = 4.0f;  // OKLab² ΔE limit per channel
+    float strength = 0.5f;     // 0 = off, 1 = full kernel strength
+    float error_clamp = 4.0f;  // OKLab L/a/b shift cap per channel
     bool serpentine = true;    // alternate row direction
+    dither::Method method = dither::Method::floyd_steinberg;
 };
 
 inline void propagate_block_residual(BlockGrid<color_space::OKLab>& targets,
                                      BlockCoord coord,
                                      color_space::OKLab residual,
+                                     std::span<const dither::DiffusionEntry> kernel,
                                      const BlockGridEdOptions& opt,
                                      bool reverse_row) {
     auto clamp = [&](float v) { return std::clamp(v, -opt.error_clamp, opt.error_clamp); };
-    auto nudge = [&](int cx, int cy, float w) {
-        if (cx < 0 || cy < 0 || cx >= targets.cols() || cy >= targets.rows()) return;
+    for (const auto& e : kernel) {
+        int sx = reverse_row ? -e.dx : e.dx;
+        int cx = coord.x + sx;
+        int cy = coord.y + e.dy;
+        if (cx < 0 || cy < 0 || cx >= targets.cols() || cy >= targets.rows()) continue;
+        float w = e.weight * opt.strength;
         targets[cx, cy].L += clamp(residual.L * w);
         targets[cx, cy].a += clamp(residual.a * w);
         targets[cx, cy].b += clamp(residual.b * w);
-    };
-    float s = opt.strength * (1.0f / 16.0f);
-    int dx = reverse_row ? -1 : 1;
-    nudge(coord.x + dx, coord.y, 7.0f * s);
-    nudge(coord.x - dx, coord.y + 1, 3.0f * s);
-    nudge(coord.x, coord.y + 1, 5.0f * s);
-    nudge(coord.x + dx, coord.y + 1, 1.0f * s);
+    }
 }
 
 }  // namespace png2amiga::block_compress

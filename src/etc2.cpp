@@ -523,11 +523,19 @@ struct Sample16 {
     color_space::OKLab lab[16];
 };
 
+// Load 16 source pixels into the sample buffer, optionally with an OKLab
+// shift applied to s.lab[]. The shift is the block-grid ED accumulator
+// for this block — added only to the OKLab targets the encoder scores
+// against, NOT to s.srgb8 (which feeds the base-color seed). This means
+// the encoder still seeds from the true source colour but then picks
+// modifiers/selectors that target the shifted OKLab points — exactly
+// the FS semantics, but on the block grid.
 void load_sample(Sample16& s,
                  std::span<const std::uint8_t> padded_rgb,
                  std::size_t pad_w,
                  int px,
-                 int py) {
+                 int py,
+                 color_space::OKLab shift = {0.f, 0.f, 0.f}) {
     for (int dy = 0; dy < 4; ++dy) {
         for (int dx = 0; dx < 4; ++dx) {
             std::size_t idx = (std::size_t(py + dy) * pad_w + std::size_t(px + dx)) * 3u;
@@ -535,7 +543,10 @@ void load_sample(Sample16& s,
             s.srgb8[i][0] = padded_rgb[idx + 0u];
             s.srgb8[i][1] = padded_rgb[idx + 1u];
             s.srgb8[i][2] = padded_rgb[idx + 2u];
-            s.lab[i] = color_space::srgb8_to_oklab(s.srgb8[i][0], s.srgb8[i][1], s.srgb8[i][2]);
+            auto raw = color_space::srgb8_to_oklab(s.srgb8[i][0], s.srgb8[i][1], s.srgb8[i][2]);
+            s.lab[i].L = raw.L + shift.L;
+            s.lab[i].a = raw.a + shift.a;
+            s.lab[i].b = raw.b + shift.b;
         }
     }
 }
@@ -1081,14 +1092,59 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgb_srgb8,
         }
     }
 
+    // Block-grid error diffusion — the project's main quality wager over
+    // existing ETC2 encoders, which treat blocks independently. After each
+    // block commits, the per-block mean residual in OKLab is fed through
+    // the SAME error-diffusion kernel catalog dither.cpp uses for per-
+    // pixel ED. Defaults to Floyd-Steinberg; --dither / Options.block_ed
+    // .method picks any of the supported kernels (Atkinson, Stucki,
+    // Jarvis, Sierra-Lite). Serpentine row order flips dx per row.
+    const bool use_block_ed = options.block_ed.strength > 0.0f;
+    auto ed_kernel = dither::error_diffusion_kernel(options.block_ed.method);
+    if (ed_kernel.empty()) {
+        // Method has no diffusion kernel (ordered / none) — disable
+        // block ED rather than silently doing nothing wrong.
+    }
+    block_compress::BlockGrid<color_space::OKLab> err_carry(res.block_cols, res.block_rows);
+    for (auto& v : err_carry.as_span()) v = {0.f, 0.f, 0.f};
+
     Sample16 s{};
     float total_err = 0.0f;
     auto run_one = [&](auto metric_tag) {
         constexpr block_compress::BlockMetric M = decltype(metric_tag)::value;
         for (int by = 0; by < res.block_rows; ++by) {
-            for (int bx = 0; bx < res.block_cols; ++bx) {
-                load_sample(s, padded, pw, bx * kBlockW, by * kBlockH);
+            bool reverse_row = use_block_ed && options.block_ed.serpentine && (by & 1);
+            int bx_start = reverse_row ? res.block_cols - 1 : 0;
+            int bx_end = reverse_row ? -1 : res.block_cols;
+            int bx_step = reverse_row ? -1 : 1;
+            for (int bx = bx_start; bx != bx_end; bx += bx_step) {
+                color_space::OKLab shift = use_block_ed ? err_carry[bx, by]
+                                                        : color_space::OKLab{0.f, 0.f, 0.f};
+                load_sample(s, padded, pw, bx * kBlockW, by * kBlockH, shift);
+
                 Candidate c = encode_block<M>(s, options);
+
+                if (use_block_ed) {
+                    // Per-block residual in OKLab. target = s.lab (shifted),
+                    // decoded = mean OKLab of c.decoded.
+                    float tL = 0.f, ta = 0.f, tb = 0.f;
+                    float dL = 0.f, da = 0.f, db = 0.f;
+                    for (int i = 0; i < 16; ++i) {
+                        tL += s.lab[i].L; ta += s.lab[i].a; tb += s.lab[i].b;
+                        auto dec_lab = color_space::srgb8_to_oklab(
+                            c.decoded[i][0], c.decoded[i][1], c.decoded[i][2]);
+                        dL += dec_lab.L; da += dec_lab.a; db += dec_lab.b;
+                    }
+                    color_space::OKLab residual{(tL - dL) * (1.f / 16.f),
+                                                (ta - da) * (1.f / 16.f),
+                                                (tb - db) * (1.f / 16.f)};
+                    if (!ed_kernel.empty()) {
+                        block_compress::propagate_block_residual(
+                            err_carry, {bx, by}, residual, ed_kernel,
+                            options.block_ed, reverse_row);
+                    }
+                }
+
                 std::size_t bidx = static_cast<std::size_t>(by) * bcols +
                                    static_cast<std::size_t>(bx);
                 res.blocks[bidx] = c.block;

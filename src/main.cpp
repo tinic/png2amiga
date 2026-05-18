@@ -924,6 +924,11 @@ struct Config {
     // PSNR. See api::Options.
     std::string ham_metric = "oklab2";
 
+    // ETC2 (--mode etc2) knobs. Defaults mirror etc2::Options.
+    int etc2_effort = 2;
+    float etc2_block_ed = 0.5f;
+    std::string etc2_metric = "oklab2";
+
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
     // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
     // keeps the winner. Active in HAM6/HAM8, plain EHB, sliced palette,
@@ -1262,6 +1267,12 @@ void print_usage() {
         "  --fade-frames <2-256>           Frames per segment (default: 16)\n"
         "  --fade-loop                     Loop forward (source→...→target→source); else\n"
         "                                  ping-pong (source→...→target→...→source).\n"
+        "\n"
+        "ETC2 (--mode etc2 → .ktx2):\n"
+        "  --etc2-effort <0-3>             Search depth (default: 2)\n"
+        "  --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5;\n"
+        "                                  0 disables). Kernel from --dither.\n"
+        "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
         "\n"
         "HAM:\n"
         "  --ham-beam <1-256>              DP search beam (default: 48)\n"
@@ -2138,6 +2149,22 @@ Result<Config> parse_args(int argc, char* argv[]) {
                                                  std::format("Invalid --ham-metric '{}': use "
                                                              "'srgb-mse' (default) or 'oklab2'",
                                                              config.ham_metric)}};
+                }
+            } else if (arg == "--etc2-effort") {
+                config.etc2_effort = std::atoi(std::string(val).c_str());
+                if (config.etc2_effort < 0) config.etc2_effort = 0;
+                if (config.etc2_effort > 3) config.etc2_effort = 3;
+            } else if (arg == "--etc2-block-ed") {
+                config.etc2_block_ed = std::strtof(std::string(val).c_str(), nullptr);
+                if (config.etc2_block_ed < 0.f) config.etc2_block_ed = 0.f;
+                if (config.etc2_block_ed > 1.5f) config.etc2_block_ed = 1.5f;
+            } else if (arg == "--etc2-metric") {
+                config.etc2_metric = std::string(val);
+                if (config.etc2_metric != "srgb-mse" && config.etc2_metric != "oklab2") {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                                 std::format("Invalid --etc2-metric '{}': use "
+                                                             "'srgb-mse' or 'oklab2' (default)",
+                                                             config.etc2_metric)}};
                 }
             } else if (arg == "--palette-diversity") {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
@@ -5515,7 +5542,15 @@ int run_etc2(const Config& cfg) {
 
     // Encode.
     etc2::Options eopts;
-    eopts.metric = block_compress::BlockMetric::oklab2;
+    eopts.metric = (cfg.etc2_metric == "srgb-mse")
+                       ? block_compress::BlockMetric::srgb_mse
+                       : block_compress::BlockMetric::oklab2;
+    eopts.effort = cfg.etc2_effort;
+    eopts.block_ed.strength = cfg.etc2_block_ed;
+    // Block-grid ED uses the SAME --dither method as the per-pixel ED
+    // path (Floyd-Steinberg default; Atkinson / Stucki / Jarvis / Sierra-
+    // Lite / etc. all valid — see feedback_never_hardcode_fs).
+    eopts.block_ed.method = cfg.dither_method;
     auto enc = etc2::encode_image(rgb_srgb8, W, H, eopts);
 
     // Decode-roundtrip for the in-process score.
