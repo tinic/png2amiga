@@ -5560,7 +5560,7 @@ int run_main(int argc, char* argv[]) {
         cli_status("png2amiga {} — dither methods:", png2amiga::version);
         cli_status("  ED:        floyd-steinberg (default), atkinson, sierra-lite,");
         cli_status("             stucki, jarvis, gilbert, riemersma,");
-        cli_status("             floyd-steinberg-experimental (OKLab residual; opt-in)");
+        cli_status("             floyd-steinberg-oklab");
         cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker,");
         cli_status("             opt-vline, opt-vline-checker, tri-tone,");
         cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
@@ -5938,19 +5938,6 @@ int run_main(int argc, char* argv[]) {
             config->dither_method = dither::Method::atkinson;
         }
 
-        // fs-experimental's OKLab residual doesn't compose well with HAM's
-        // sRGB-axis MODIFY ops or EHB's sRGB DAC halving — the available
-        // move-set can't discharge residual in the axes the OKLab
-        // accumulator carries it. Fall back to plain FS on these modes.
-        if (config->dither_method == dither::Method::floyd_steinberg_experimental &&
-            (amiga::is_ham(config->mode) || amiga::get_mode_params(config->mode).is_ehb)) {
-            if (config->dither_explicit) {
-                std::println(stderr,
-                             "Warning: floyd-steinberg-experimental regresses on "
-                             "HAM/EHB; using floyd-steinberg instead.");
-            }
-            config->dither_method = dither::Method::floyd_steinberg;
-        }
 
         // HAM modes with explicit --chipset ocs that need AGA
         if (amiga::is_ham(config->mode) && config->chipset.has_value() &&
