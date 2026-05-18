@@ -820,11 +820,16 @@ inline void quantise_endpoint_m6(const std::uint8_t e8[4],
 // global block score — picking sRGB-best when OKLab² is the metric
 // leaves quality on the table on saturated content.
 template<block_compress::BlockMetric M>
-inline void pick_selectors_m6(const Sample16& s,
-                              const std::uint8_t e0_full[4],
-                              const std::uint8_t e1_full[4],
-                              std::uint8_t out_sel[16],
-                              std::uint8_t decoded[16][4]) {
+// Returns the total block err in the same units as score_decoded — caller
+// can use this directly without re-calling score_decoded on the decoded
+// array (score_decoded would re-run the sRGB→OKLab conversion on the same
+// paint colours and re-walk all 16 pixels, doubling the cost). On macOS
+// this was the #1 hotspot.
+inline float pick_selectors_m6(const Sample16& s,
+                               const std::uint8_t e0_full[4],
+                               const std::uint8_t e1_full[4],
+                               std::uint8_t out_sel[16],
+                               std::uint8_t decoded[16][4]) {
     std::uint8_t paint[16][4];
     for (int w_i = 0; w_i < 16; ++w_i) {
         int w = kWeight4[w_i];
@@ -852,6 +857,7 @@ inline void pick_selectors_m6(const Sample16& s,
             }
         }
     }
+    float tot = 0.0f;
     for (int p = 0; p < 16; ++p) {
         int best_w = 0;
         float best_e = std::numeric_limits<float>::infinity();
@@ -887,7 +893,15 @@ inline void pick_selectors_m6(const Sample16& s,
         decoded[p][1] = paint[best_w][1];
         decoded[p][2] = paint[best_w][2];
         decoded[p][3] = paint[best_w][3];
+        // For sRGB-MSE mode, score_decoded does `sum / 65536` at the end;
+        // pick here returns the same scaled sum to match.
+        if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+            tot += best_e * (1.f / 65536.f);
+        } else {
+            tot += best_e;
+        }
     }
+    return tot;
 }
 
 // Lloyd refit for Mode 6: given current selectors, solve the 2×2 LSQ
@@ -1237,6 +1251,11 @@ inline float pick_selectors_m1(const Sample16& s,
         decoded[p][3] = 255;
         tot += best_e;
     }
+    // Match score_decoded's normalisation for srgb_mse so callers can use
+    // the returned value directly without re-scoring.
+    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+        tot *= (1.f / 65536.f);
+    }
     return tot;
 }
 
@@ -1334,8 +1353,7 @@ inline Candidate encode_mode1(const Sample16& s) {
         }
         std::uint8_t sel[16];
         std::uint8_t decoded[16][4];
-        pick_selectors_m1<M>(s, sub, e0_full, e1_full, sel, decoded);
-        float err = score_decoded<M>(s, decoded);
+        float err = pick_selectors_m1<M>(s, sub, e0_full, e1_full, sel, decoded);
 
         // Loop: normalise anchors → re-quantise endpoints (which may
         // shift by 1 LSB) → re-pick selectors → repeat until selectors
@@ -1363,7 +1381,7 @@ inline Candidate encode_mode1(const Sample16& s) {
             }
             std::uint8_t new_sel[16];
             std::uint8_t new_dec[16][4];
-            pick_selectors_m1<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
+            err = pick_selectors_m1<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
             // Check anchor selectors. If both < 4 AND selectors stable
             // vs prior iter, converged.
             bool stable = (new_sel[0] < 4) && (new_sel[kAnchor2[part]] < 4);
@@ -1374,7 +1392,6 @@ inline Candidate encode_mode1(const Sample16& s) {
             std::memcpy(decoded, new_dec, sizeof(new_dec));
             if (stable) break;
         }
-        err = score_decoded<M>(s, decoded);
 
         // Force-fix anchor selectors to < 4. The endpoint swap +
         // selector complement is decode-invariant (kWeight3[s] +
@@ -1510,6 +1527,9 @@ inline float pick_selectors_m3(const Sample16& s,
         decoded[p][3] = 255;
         tot += best_e;
     }
+    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+        tot *= (1.f / 65536.f);
+    }
     return tot;
 }
 
@@ -1631,8 +1651,7 @@ inline Candidate encode_mode3(const Sample16& s) {
         }
         std::uint8_t sel[16];
         std::uint8_t decoded[16][4];
-        pick_selectors_m3<M>(s, sub, e0_full, e1_full, sel, decoded);
-        float err = score_decoded<M>(s, decoded);
+        float err = pick_selectors_m3<M>(s, sub, e0_full, e1_full, sel, decoded);
 
         // Anchor convergence loop (mirrors Mode 1 — 4 iters max).
         for (int iter = 0; iter < 4; ++iter) {
@@ -1655,7 +1674,7 @@ inline Candidate encode_mode3(const Sample16& s) {
             }
             std::uint8_t new_sel[16];
             std::uint8_t new_dec[16][4];
-            pick_selectors_m3<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
+            err = pick_selectors_m3<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
             bool stable = (new_sel[0] < 2) && (new_sel[kAnchor2[part]] < 2);
             if (stable) {
                 for (int i = 0; i < 16; ++i) if (new_sel[i] != sel[i]) { stable = false; break; }
@@ -1664,7 +1683,6 @@ inline Candidate encode_mode3(const Sample16& s) {
             std::memcpy(decoded, new_dec, sizeof(new_dec));
             if (stable) break;
         }
-        err = score_decoded<M>(s, decoded);
 
         // Force-fix anchor selectors to < 2.
         for (int ss = 0; ss < 2; ++ss) {
@@ -1798,6 +1816,9 @@ inline float pick_selectors_m0(const Sample16& s,
         decoded[p][3] = 255;
         tot += best_e;
     }
+    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+        tot *= (1.f / 65536.f);
+    }
     return tot;
 }
 
@@ -1884,8 +1905,7 @@ inline Candidate encode_mode0(const Sample16& s) {
         }
         std::uint8_t sel[16];
         std::uint8_t decoded[16][4];
-        pick_selectors_m0<M>(s, sub, e0_full, e1_full, sel, decoded);
-        float err = score_decoded<M>(s, decoded);
+        float err = pick_selectors_m0<M>(s, sub, e0_full, e1_full, sel, decoded);
 
         int anc1 = kAnchor3a[part];
         int anc2 = kAnchor3b[part];
@@ -1909,7 +1929,7 @@ inline Candidate encode_mode0(const Sample16& s) {
             }
             std::uint8_t new_sel[16];
             std::uint8_t new_dec[16][4];
-            pick_selectors_m0<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
+            err = pick_selectors_m0<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
             bool stable = (new_sel[0] < 4) && (new_sel[anc1] < 4) && (new_sel[anc2] < 4);
             if (stable) {
                 for (int i = 0; i < 16; ++i) if (new_sel[i] != sel[i]) { stable = false; break; }
@@ -1918,7 +1938,6 @@ inline Candidate encode_mode0(const Sample16& s) {
             std::memcpy(decoded, new_dec, sizeof(new_dec));
             if (stable) break;
         }
-        err = score_decoded<M>(s, decoded);
 
         // Force-fix anchor selectors.
         int anchors[3] = {0, anc1, anc2};
@@ -2035,6 +2054,9 @@ inline float pick_selectors_m2(const Sample16& s,
         decoded[p][3] = 255;
         tot += best_e;
     }
+    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+        tot *= (1.f / 65536.f);
+    }
     return tot;
 }
 
@@ -2110,8 +2132,7 @@ inline Candidate encode_mode2(const Sample16& s) {
         }
         std::uint8_t sel[16];
         std::uint8_t decoded[16][4];
-        pick_selectors_m2<M>(s, sub, e0_full, e1_full, sel, decoded);
-        float err = score_decoded<M>(s, decoded);
+        float err = pick_selectors_m2<M>(s, sub, e0_full, e1_full, sel, decoded);
 
         int anc1 = kAnchor3a[part];
         int anc2 = kAnchor3b[part];
@@ -2135,7 +2156,7 @@ inline Candidate encode_mode2(const Sample16& s) {
             }
             std::uint8_t new_sel[16];
             std::uint8_t new_dec[16][4];
-            pick_selectors_m2<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
+            err = pick_selectors_m2<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
             bool stable = (new_sel[0] < 2) && (new_sel[anc1] < 2) && (new_sel[anc2] < 2);
             if (stable) {
                 for (int i = 0; i < 16; ++i) if (new_sel[i] != sel[i]) { stable = false; break; }
@@ -2144,7 +2165,6 @@ inline Candidate encode_mode2(const Sample16& s) {
             std::memcpy(decoded, new_dec, sizeof(new_dec));
             if (stable) break;
         }
-        err = score_decoded<M>(s, decoded);
 
         int anchors[3] = {0, anc1, anc2};
         for (int ss = 0; ss < 3; ++ss) {
@@ -2738,10 +2758,11 @@ Candidate encode_block(const Sample16& s, const Options& /*opts*/) {
         expand7p(v7_e1[2], p1), expand7p(v7_e1[3], p1)};
 
     // 3. Pick per-pixel 4-bit selectors against the 16-level ramp.
+    // pick_selectors_m6 returns the same err score_decoded would compute,
+    // so we skip the redundant rescore (score_decoded was the #1 hotspot).
     std::uint8_t sel[16];
     std::uint8_t decoded[16][4];
-    pick_selectors_m6<M>(s, e0_full, e1_full, sel, decoded);
-    float err = score_decoded<M>(s, decoded);
+    float err = pick_selectors_m6<M>(s, e0_full, e1_full, sel, decoded);
 
     // 3b. Lloyd refit: re-fit endpoints from current selectors via 2×2
     // LSQ, re-quantise to (v7, P), re-pick selectors. Iterate until
@@ -2768,8 +2789,7 @@ Candidate encode_block(const Sample16& s, const Options& /*opts*/) {
         if (same) break;
         std::uint8_t new_sel[16];
         std::uint8_t new_dec[16][4];
-        pick_selectors_m6<M>(s, new_e0_full, new_e1_full, new_sel, new_dec);
-        float new_err = score_decoded<M>(s, new_dec);
+        float new_err = pick_selectors_m6<M>(s, new_e0_full, new_e1_full, new_sel, new_dec);
         if (new_err >= err - 1e-7f) break;
         err = new_err;
         std::memcpy(e0_full, new_e0_full, 4);
@@ -2793,15 +2813,14 @@ Candidate encode_block(const Sample16& s, const Options& /*opts*/) {
     e0_full[2] = expand7p(v7_e0[2], p0); e0_full[3] = expand7p(v7_e0[3], p0);
     e1_full[0] = expand7p(v7_e1[0], p1); e1_full[1] = expand7p(v7_e1[1], p1);
     e1_full[2] = expand7p(v7_e1[2], p1); e1_full[3] = expand7p(v7_e1[3], p1);
-    pick_selectors_m6<M>(s, e0_full, e1_full, sel, decoded);
+    Candidate m6;
+    m6.err = pick_selectors_m6<M>(s, e0_full, e1_full, sel, decoded);
     normalise_anchor_m6(e0_full, e1_full, sel);
     quantise_endpoint_m6(e0_full, v7_e0, p0);
     quantise_endpoint_m6(e1_full, v7_e1, p1);
 
-    Candidate m6;
     pack_mode6(v7_e0, p0, v7_e1, p1, sel, m6.block);
     std::memcpy(m6.decoded, decoded, sizeof(decoded));
-    m6.err = score_decoded<M>(s, m6.decoded);
 
     // Mode 1: 2-subset, 6-bit endpoints + shared P, 3-bit selectors.
     // Mode 3: 2-subset, 7-bit endpoints + per-endpoint P, 2-bit selectors.
