@@ -712,6 +712,16 @@ export function isSnesMode(mode: string): boolean {
 export function isGenesisMode(mode: string): boolean {
   return mode.startsWith('genesis-')
 }
+// ETC2 RGB8 — block-compressed texture format (4 bpp, 8-byte 4×4 blocks).
+// Not an Amiga / retro mode. Output is .ktx2 with vkFormat
+// VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK. None of the per-pixel Amiga knobs
+// (palette quantization, dither at pixel level, chipset, depth, copper,
+// sliced, strips, EHB, HAM, interlace) apply — gate them off in the UI.
+// The --dither method IS honoured but only as the block-grid ED kernel
+// (see src/etc2.cpp's encode_image + Options::block_ed.method).
+export function isEtc2Mode(mode: string): boolean {
+  return mode === 'etc2' || mode === 'etc2-rgb' || mode === 'etc2-rgb8'
+}
 export function isC64Mode(mode: string): boolean {
   return mode.startsWith('c64-')
 }
