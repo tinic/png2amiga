@@ -708,67 +708,152 @@ inline void refine_lloyd_for_table(const Sample16& s,
     }
 }
 
+// Beam candidate: a (base_packed, table) configuration carrying its
+// converged selectors + err. Top-K of these are maintained across the
+// search so multiple local optima get explored, not just the basin the
+// jitter seed happened to find. Analogous to HAM's beam_width state
+// list (ham.cpp encode_scanline_dp_t).
+struct BeamCand {
+    int base_packed[3];
+    int table;
+    int selectors[8];
+    float err;
+};
+
+// Insert into a sorted-by-err beam buffer (ascending). Beam capacity K
+// caps the total; insertion is O(K) (linear scan + shift).
+template<std::size_t K>
+inline void beam_insert(std::array<BeamCand, K>& beam, int& size, const BeamCand& c) {
+    const int cap = static_cast<int>(K);
+    if (size == cap && c.err >= beam[K - 1].err) return;
+    int pos;
+    if (size < cap) {
+        beam[std::size_t(size)] = c;
+        pos = size;
+        ++size;
+    } else {
+        beam[K - 1] = c;
+        pos = cap - 1;
+    }
+    while (pos > 0 && beam[std::size_t(pos)].err < beam[std::size_t(pos - 1)].err) {
+        std::swap(beam[std::size_t(pos)], beam[std::size_t(pos - 1)]);
+        --pos;
+    }
+}
+
+template<block_compress::BlockMetric M, bool Differential, std::size_t K>
+inline void explore_candidate(const Sample16& s,
+                              const int sub_idx[8],
+                              int br, int bg, int bbb,
+                              int table,
+                              std::array<BeamCand, K>& beam,
+                              int& beam_size,
+                              int packed_max) {
+    std::uint8_t base8[3];
+    if constexpr (Differential) {
+        base8[0] = expand5(std::uint32_t(br));
+        base8[1] = expand5(std::uint32_t(bg));
+        base8[2] = expand5(std::uint32_t(bbb));
+    } else {
+        base8[0] = expand4(std::uint32_t(br));
+        base8[1] = expand4(std::uint32_t(bg));
+        base8[2] = expand4(std::uint32_t(bbb));
+    }
+    int sel[8];
+    float err = pick_selectors_and_score<M>(s, sub_idx, base8, table, sel);
+    int refined[3] = {br, bg, bbb};
+    refine_lloyd_for_table<M, Differential>(s, sub_idx, table, refined, sel, err, packed_max);
+
+    BeamCand c;
+    c.base_packed[0] = refined[0];
+    c.base_packed[1] = refined[1];
+    c.base_packed[2] = refined[2];
+    c.table = table;
+    for (int i = 0; i < 8; ++i) c.selectors[i] = sel[i];
+    c.err = err;
+    beam_insert(beam, beam_size, c);
+}
+
 template<block_compress::BlockMetric M, bool Differential>
 SubResult encode_subblock_etc1(const Sample16& s,
                                const int sub_idx[8],
                                const int base_seed_packed[3]) {
-    SubResult best{};
-    best.err = std::numeric_limits<float>::infinity();
     constexpr int kPackedMax = Differential ? 31 : 15;
-
-    // Search a small jitter window around the seed (±2 levels per channel).
-    // Tight enough to stay cheap; wide enough to escape +/-1 rounding bias.
-    // After each (base, table) candidate, run Lloyd-style refinement to
-    // converge on the true local optimum for that table.
     constexpr int kJitter = 2;
+    constexpr int kBeam = 16;
+    constexpr int kExpandPasses = 2;
+
+    std::array<BeamCand, kBeam> beam{};
+    for (auto& c : beam) c.err = std::numeric_limits<float>::infinity();
+    int beam_size = 0;
+
+    // --- Phase 1: initial jitter+Lloyd sweep, but maintain top-K beam
+    // instead of single best. Same 1000-candidate space as before; just
+    // tracks the K best in sorted order.
     for (int dr = -kJitter; dr <= kJitter; ++dr) {
         int br = std::clamp(base_seed_packed[0] + dr, 0, kPackedMax);
         for (int dg = -kJitter; dg <= kJitter; ++dg) {
             int bg = std::clamp(base_seed_packed[1] + dg, 0, kPackedMax);
             for (int dbb = -kJitter; dbb <= kJitter; ++dbb) {
                 int bb = std::clamp(base_seed_packed[2] + dbb, 0, kPackedMax);
-                std::uint8_t base8[3];
-                if constexpr (Differential) {
-                    base8[0] = expand5(std::uint32_t(br));
-                    base8[1] = expand5(std::uint32_t(bg));
-                    base8[2] = expand5(std::uint32_t(bb));
-                } else {
-                    base8[0] = expand4(std::uint32_t(br));
-                    base8[1] = expand4(std::uint32_t(bg));
-                    base8[2] = expand4(std::uint32_t(bb));
-                }
                 for (int t = 0; t < 8; ++t) {
-                    int sel[8];
-                    float tot = pick_selectors_and_score<M>(s, sub_idx, base8, t, sel);
-
-                    // Lloyd refine: tighten base toward the per-table optimum.
-                    int refined_packed[3] = {br, bg, bb};
-                    refine_lloyd_for_table<M, Differential>(
-                        s, sub_idx, t, refined_packed, sel, tot, kPackedMax);
-
-                    if (tot < best.err) {
-                        best.err = tot;
-                        if constexpr (Differential) {
-                            best.base[0] = expand5(std::uint32_t(refined_packed[0]));
-                            best.base[1] = expand5(std::uint32_t(refined_packed[1]));
-                            best.base[2] = expand5(std::uint32_t(refined_packed[2]));
-                        } else {
-                            best.base[0] = expand4(std::uint32_t(refined_packed[0]));
-                            best.base[1] = expand4(std::uint32_t(refined_packed[1]));
-                            best.base[2] = expand4(std::uint32_t(refined_packed[2]));
-                        }
-                        best.base_packed[0] = refined_packed[0];
-                        best.base_packed[1] = refined_packed[1];
-                        best.base_packed[2] = refined_packed[2];
-                        best.table = t;
-                        for (int i = 0; i < 8; ++i) {
-                            best.selectors[i] = sel[i];
-                            best.pixel_indices[i] = sub_idx[i];
-                        }
-                    }
+                    explore_candidate<M, Differential, kBeam>(
+                        s, sub_idx, br, bg, bb, t, beam, beam_size, kPackedMax);
                 }
             }
         }
+    }
+
+    // --- Phase 2: beam expansion. For each member of the current top-K,
+    // try ±1 perturbations on each channel (6 variants) + each of the 7
+    // OTHER modifier tables (with the same base). Insert each result
+    // back into the beam — extends the search beyond the ±2 jitter
+    // window via beam-driven exploration.
+    for (int pass = 0; pass < kExpandPasses; ++pass) {
+        std::array<BeamCand, kBeam> snap = beam;
+        int snap_n = beam_size;
+        for (int k = 0; k < snap_n; ++k) {
+            const auto& c = snap[std::size_t(k)];
+            // ±1 perturbations per channel.
+            for (int ch = 0; ch < 3; ++ch) {
+                for (int delta : {-1, +1}) {
+                    int nb[3] = {c.base_packed[0], c.base_packed[1], c.base_packed[2]};
+                    int nv = nb[ch] + delta;
+                    if (nv < 0 || nv > kPackedMax) continue;
+                    nb[ch] = nv;
+                    explore_candidate<M, Differential, kBeam>(
+                        s, sub_idx, nb[0], nb[1], nb[2], c.table, beam, beam_size, kPackedMax);
+                }
+            }
+            // Try other modifier tables at this base.
+            for (int t = 0; t < 8; ++t) {
+                if (t == c.table) continue;
+                explore_candidate<M, Differential, kBeam>(
+                    s, sub_idx, c.base_packed[0], c.base_packed[1], c.base_packed[2], t,
+                    beam, beam_size, kPackedMax);
+            }
+        }
+    }
+
+    // --- Phase 3: extract the overall best.
+    SubResult best{};
+    best.err = beam[0].err;
+    if constexpr (Differential) {
+        best.base[0] = expand5(std::uint32_t(beam[0].base_packed[0]));
+        best.base[1] = expand5(std::uint32_t(beam[0].base_packed[1]));
+        best.base[2] = expand5(std::uint32_t(beam[0].base_packed[2]));
+    } else {
+        best.base[0] = expand4(std::uint32_t(beam[0].base_packed[0]));
+        best.base[1] = expand4(std::uint32_t(beam[0].base_packed[1]));
+        best.base[2] = expand4(std::uint32_t(beam[0].base_packed[2]));
+    }
+    best.base_packed[0] = beam[0].base_packed[0];
+    best.base_packed[1] = beam[0].base_packed[1];
+    best.base_packed[2] = beam[0].base_packed[2];
+    best.table = beam[0].table;
+    for (int i = 0; i < 8; ++i) {
+        best.selectors[i] = beam[0].selectors[i];
+        best.pixel_indices[i] = sub_idx[i];
     }
     return best;
 }
