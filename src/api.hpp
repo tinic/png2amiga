@@ -523,6 +523,24 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options);
 
+// Convert raw image data and return KTX2 bytes containing an ETC2 RGB8
+// compressed texture. Used by --mode etc2 in the CLI and by the WASM
+// frontend. Bypasses the Amiga bitplane / palette / dither pipeline —
+// ETC2's per-block encoding is independent of all those concepts.
+// Honoured options:
+//   options.width / options.height (preserves source aspect when one given)
+//   options.dither — selects the block-grid ED kernel (Floyd-Steinberg
+//                    default; Atkinson / Stucki / Jarvis / Sierra-Lite
+//                    all valid via dither::Method)
+//   options.best  — pre-image jitter sweep with N=8 trials ranked by
+//                    SSIMULACRA2 (mirrors project_cap_best_design.md)
+// Plus ETC2-specific knobs accessible via Options (etc2 sub-namespace TBD —
+// for now api passes through the encoder's defaults; CLI threads its
+// own --etc2-* flags directly via main.cpp's run_etc2()).
+ConvertResult convert_ktx2(const std::uint8_t* input_data,
+                           std::size_t input_size,
+                           const Options& options);
+
 // c64 only: convert and return a runnable C64 .prg with embedded
 // 6502 displayer (Koala for c64-multicolor, Art-Studio for c64-hires,
 // FLI/AFLI/PETSCII as appropriate). Charset modes are not yet

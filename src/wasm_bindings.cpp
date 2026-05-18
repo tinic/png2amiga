@@ -298,6 +298,26 @@ val js_convert_iff(val input_array, val js_opts) {
     return obj;
 }
 
+// JS API: convertKtx2(Uint8Array, options) -> { data: Uint8Array(KTX2), width, height, error }
+// ETC2 RGB8 in a KTX2 container. Single 2D mip level, no supercompression,
+// vkFormat = VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK (148).
+val js_convert_ktx2(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_ktx2(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
 // JS API: convertHeader(Uint8Array, options, symbolName) -> { data: Uint8Array(text), width,
 // height, error }
 val js_convert_header(val input_array, val js_opts, std::string symbol_name) {
@@ -492,6 +512,7 @@ EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convert", &js_convert);
     function("convertRGBA", &js_convert_rgba);
     function("convertIFF", &js_convert_iff);
+    function("convertKtx2", &js_convert_ktx2);
     function("convertHeader", &js_convert_header);
     function("convertViewer", &js_convert_viewer);
     function("convertDegas", &js_convert_degas);

@@ -5636,23 +5636,14 @@ int run_etc2(const Config& cfg) {
     float s2 = ssimulacra2::compute(
         src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
 
-    // PSNR via in-process gaussian-blurred-sRGB residual (matches what
-    // the other modes report via the "Encoded:" line — see
-    // ssimulacra2.cpp for the helper).
-    float psnr = 0.0f;
-    {
-        double mse = 0.0;
-        for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
-            Color3f a = color_space::linear_to_srgb(src.pixels()[i]).clamped();
-            Color3f b = color_space::linear_to_srgb(decoded_lin[i]).clamped();
-            double dr = double(a.r - b.r);
-            double dg = double(a.g - b.g);
-            double db = double(a.b - b.b);
-            mse += dr * dr + dg * dg + db * db;
-        }
-        mse /= double(decoded_lin.size() * 3);
-        psnr = (mse > 0.0) ? float(-10.0 * std::log10(mse)) : 99.99f;
-    }
+    // PSNR via color_space::compute_psnr_blurred — same formula --score-vs
+    // uses, so the "Encoded:" line is apples-to-apples comparable with
+    // PSNR numbers reported by `--score-vs` for competitor encoders.
+    // (An earlier in-place MSE formula here under-reported by ~10 dB
+    // relative to the score-vs path; that mismatch is what made etcpak
+    // look 9 dB ahead in early comparisons.)
+    float psnr =
+        color_space::compute_psnr_blurred(src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
 
     // Wrap blocks into KTX2 container.
     static_assert(sizeof(etc2::Block) == etc2::kBlockBytes,

@@ -25,6 +25,8 @@
 #include "palette_search.hpp"
 #include "ssimulacra2.hpp"
 #include "pipeline.hpp"
+#include "etc2.hpp"
+#include "ktx2.hpp"
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
@@ -5439,6 +5441,103 @@ ConvertResult make_mask_result(std::vector<std::uint8_t> data, const PipelineRes
 }
 
 }  // namespace
+
+ConvertResult convert_ktx2(const std::uint8_t* input_data,
+                           std::size_t input_size,
+                           const Options& options) {
+    // Decode source. Same dispatch as the main pipeline — WebP via libwebp,
+    // everything else via stb_image.
+    int w{}, h{};
+    bool is_webp = input_size >= 12 && std::memcmp(input_data, "RIFF", 4) == 0 &&
+                   std::memcmp(input_data + 8, "WEBP", 4) == 0;
+    unsigned char* raw = nullptr;
+    if (is_webp) {
+        raw = WebPDecodeRGBA(input_data, input_size, &w, &h);
+    } else {
+        int channels{};
+        raw = stbi_load_from_memory(input_data, static_cast<int>(input_size), &w, &h,
+                                    &channels, 4);
+    }
+    if (!raw) return make_error("Failed to decode image");
+    auto free_raw = [&]() {
+        if (is_webp) WebPFree(raw); else stbi_image_free(raw);
+    };
+    if (w <= 0 || h <= 0) { free_raw(); return make_error("Empty image"); }
+
+    // Optional resize honouring options.width / options.height.
+    int target_w = w;
+    int target_h = h;
+    if (options.width > 0 || options.height > 0) {
+        double aspect = double(h) / double(w);
+        target_w = options.width > 0 ? options.width
+                                     : int(std::lround(double(options.height) / aspect));
+        target_h = options.height > 0 ? options.height
+                                      : int(std::lround(double(target_w) * aspect));
+    }
+
+    // RGBA8 → linear Color3f Image (so scale::resample can run in linear).
+    const std::size_t sw = std::size_t(w);
+    const std::size_t sh = std::size_t(h);
+    Image src{sw, sh};
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            std::size_t i = (std::size_t(y) * std::size_t(w) + std::size_t(x)) * 4u;
+            src[std::size_t(x), std::size_t(y)] = color_space::srgb_to_linear(Color3f{
+                float(raw[i + 0]) * (1.f / 255.f),
+                float(raw[i + 1]) * (1.f / 255.f),
+                float(raw[i + 2]) * (1.f / 255.f),
+            });
+        }
+    }
+    free_raw();
+
+    if (target_w != w || target_h != h) {
+        auto resized = scale::resample(src, std::size_t(target_w), std::size_t(target_h));
+        if (!resized) return make_error("resample failed");
+        src = *std::move(resized);
+    }
+
+    const int W = int(src.width());
+    const int H = int(src.height());
+
+    // Pack linear → sRGB8 row-major RGB.
+    std::vector<std::uint8_t> rgb_srgb8(std::size_t(W) * std::size_t(H) * 3u);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            Color3f s = color_space::linear_to_srgb(src[std::size_t(x), std::size_t(y)]).clamped();
+            std::size_t k = (std::size_t(y) * std::size_t(W) + std::size_t(x)) * 3u;
+            rgb_srgb8[k + 0u] = std::uint8_t(s.r * 255.0f + 0.5f);
+            rgb_srgb8[k + 1u] = std::uint8_t(s.g * 255.0f + 0.5f);
+            rgb_srgb8[k + 2u] = std::uint8_t(s.b * 255.0f + 0.5f);
+        }
+    }
+
+    // Encode + wrap in KTX2 container.
+    etc2::Options eopts;
+    eopts.metric = block_compress::BlockMetric::oklab2;
+    eopts.block_ed.method = parse_dither(options.dither);
+    auto enc = etc2::encode_image(rgb_srgb8, W, H, eopts);
+
+    std::span<const std::uint8_t> block_bytes(
+        reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+        enc.blocks.size() * std::size_t(etc2::kBlockBytes));
+    ktx2::Inputs ki;
+    ki.format = ktx2::VkFormat::etc2_r8g8b8_srgb_block;
+    ki.block_dim = {etc2::kBlockW, etc2::kBlockH, 1};
+    ki.image_w = W;
+    ki.image_h = H;
+    ki.bytes_per_block = etc2::kBlockBytes;
+    ki.block_bytes = block_bytes;
+    auto file_bytes = ktx2::write(ki);
+
+    ConvertResult r;
+    r.data = std::move(file_bytes);
+    r.width = W;
+    r.height = H;
+    r.depth = 4;       // 4 bpp fixed
+    r.colors = 0;      // no palette
+    return r;
+}
 
 ConvertResult convert_mask(const std::uint8_t* input_data,
                            std::size_t input_size,
