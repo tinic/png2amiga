@@ -860,8 +860,7 @@ inline const std::array<std::array<f32x4, 256>, 3>& srgb_lms_lut() noexcept {
 
 // LMS (as f32x4, lane 3 unused) for an 8-bit sRGB color. Splits per channel
 // so callers with one varying channel can cache the other two.
-[[gnu::always_inline]]
-inline f32x4 srgb8_to_lms(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept {
+PNG2AMIGA_INLINE_HOT f32x4 srgb8_to_lms(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept {
     auto& t = detail::srgb_lms_lut();
     return t[0][r] + t[1][g] + t[2][b];
 }
@@ -889,8 +888,7 @@ inline OKLab srgb8_to_oklab(std::uint8_t r, std::uint8_t g, std::uint8_t b) noex
 struct OKLabBatch4 {
     OKLab labs[4];
 };
-[[gnu::always_inline]]
-inline OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
+PNG2AMIGA_INLINE_HOT OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
     f32x4 cL = fast_cbrt4(L);
     f32x4 cM = fast_cbrt4(M);
     f32x4 cS = fast_cbrt4(S);
@@ -907,8 +905,7 @@ inline OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
 
 // 4-pixel batched sRGB8 → OKLab. Drop-in for four srgb8_to_oklab() calls;
 // shares the cbrt cost via lms4_to_oklab4 (3 cbrt4 vs 4).
-[[gnu::always_inline]]
-inline OKLabBatch4 srgb8_to_oklab_batch4(const std::uint8_t rgb[4][3]) noexcept {
+PNG2AMIGA_INLINE_HOT OKLabBatch4 srgb8_to_oklab_batch4(const std::uint8_t rgb[4][3]) noexcept {
     f32x4 lms0 = srgb8_to_lms(rgb[0][0], rgb[0][1], rgb[0][2]);
     f32x4 lms1 = srgb8_to_lms(rgb[1][0], rgb[1][1], rgb[1][2]);
     f32x4 lms2 = srgb8_to_lms(rgb[2][0], rgb[2][1], rgb[2][2]);
