@@ -78,6 +78,11 @@ enum class Method : unsigned char {
     stucki,
     jarvis,
 
+    // Experimental ED bench (will host successive variants):
+    //   v1 — coupled OKLab residual: qe is one perceptual 3-vector,
+    //        kernel is standard FS, accumulator is OKLab not sRGB.
+    floyd_steinberg_experimental,
+
     // Advanced error diffusion
     gilbert,            // Gilbert space-filling-curve error diffusion
     riemersma,          // Riemersma curve dither (exponential-decay error queue)
