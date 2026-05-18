@@ -629,31 +629,55 @@ inline float pick_selectors_and_score(const Sample16& s,
         paint_srgb[s_i][1] = clamp_u8(int(base8[1]) + m);
         paint_srgb[s_i][2] = clamp_u8(int(base8[2]) + m);
     }
-    color_space::OKLab paint_lab[4];
+    // SoA layout for the per-pixel distance inner loop — gives the
+    // compiler a contiguous 4-element vector to auto-SIMD per channel.
+    // On ARM64/NEON, AVX2, and WASM SIMD, this reliably lowers to one
+    // load + vsub + 2× vfma + vminps per pixel iter.
+    alignas(16) float paint_L[4], paint_A[4], paint_B[4];
+    alignas(16) std::uint8_t paint_R8[4], paint_G8[4], paint_B8[4];
     if constexpr (M == block_compress::BlockMetric::oklab2) {
         for (int s_i = 0; s_i < 4; ++s_i) {
-            paint_lab[s_i] = color_space::srgb8_to_oklab(
+            auto lab = color_space::srgb8_to_oklab(
                 paint_srgb[s_i][0], paint_srgb[s_i][1], paint_srgb[s_i][2]);
+            paint_L[s_i] = lab.L;
+            paint_A[s_i] = lab.a;
+            paint_B[s_i] = lab.b;
+        }
+    } else {
+        for (int s_i = 0; s_i < 4; ++s_i) {
+            paint_R8[s_i] = paint_srgb[s_i][0];
+            paint_G8[s_i] = paint_srgb[s_i][1];
+            paint_B8[s_i] = paint_srgb[s_i][2];
         }
     }
     float tot = 0.0f;
     for (int p = 0; p < 8; ++p) {
         int src_i = sub_idx[p];
-        float best_e = std::numeric_limits<float>::infinity();
-        int best_s = 0;
-        for (int s_i = 0; s_i < 4; ++s_i) {
-            float e;
-            if constexpr (M == block_compress::BlockMetric::srgb_mse) {
-                int dr2 = int(s.srgb8[src_i][0]) - int(paint_srgb[s_i][0]);
-                int dg2 = int(s.srgb8[src_i][1]) - int(paint_srgb[s_i][1]);
-                int db2 = int(s.srgb8[src_i][2]) - int(paint_srgb[s_i][2]);
-                e = float(dr2 * dr2 + dg2 * dg2 + db2 * db2);
-            } else {
-                e = color_space::fma_dist_sq(s.lab[src_i].L - paint_lab[s_i].L,
-                                             s.lab[src_i].a - paint_lab[s_i].a,
-                                             s.lab[src_i].b - paint_lab[s_i].b);
+        float e[4];
+        if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+            int sr = int(s.srgb8[src_i][0]);
+            int sg = int(s.srgb8[src_i][1]);
+            int sb = int(s.srgb8[src_i][2]);
+            for (int s_i = 0; s_i < 4; ++s_i) {
+                int dr2 = sr - int(paint_R8[s_i]);
+                int dg2 = sg - int(paint_G8[s_i]);
+                int db2 = sb - int(paint_B8[s_i]);
+                e[s_i] = float(dr2 * dr2 + dg2 * dg2 + db2 * db2);
             }
-            if (e < best_e) { best_e = e; best_s = s_i; }
+        } else {
+            float sL = s.lab[src_i].L, sA = s.lab[src_i].a, sB = s.lab[src_i].b;
+            for (int s_i = 0; s_i < 4; ++s_i) {
+                float dL = sL - paint_L[s_i];
+                float dA = sA - paint_A[s_i];
+                float dB = sB - paint_B[s_i];
+                e[s_i] = dL * dL + dA * dA + dB * dB;
+            }
+        }
+        // Branchless argmin over 4 — compiler emits vminps + vcmpps + ctz/clz.
+        int best_s = 0;
+        float best_e = e[0];
+        for (int s_i = 1; s_i < 4; ++s_i) {
+            if (e[s_i] < best_e) { best_e = e[s_i]; best_s = s_i; }
         }
         out_sel[p] = best_s;
         tot += best_e;
@@ -1334,7 +1358,13 @@ Candidate encode_t(const Sample16& s) {
                 paint[2][ch] = C1e[ch];
                 paint[3][ch] = clamp_u8(int(C1e[ch]) - d);
             }
-            // Per-pixel argmin over 4 paints.
+            color_space::OKLab paint_lab[4];
+            if constexpr (M == block_compress::BlockMetric::oklab2) {
+                for (int p = 0; p < 4; ++p) {
+                    paint_lab[p] = color_space::srgb8_to_oklab(
+                        paint[p][0], paint[p][1], paint[p][2]);
+                }
+            }
             int sel[16];
             float tot_err = 0.0f;
             for (int i = 0; i < 16; ++i) {
@@ -1348,11 +1378,9 @@ Candidate encode_t(const Sample16& s) {
                         int db = int(s.srgb8[i][2]) - int(paint[p][2]);
                         e = float(dr * dr + dg * dg + db * db);
                     } else {
-                        color_space::OKLab plab = color_space::srgb8_to_oklab(
-                            paint[p][0], paint[p][1], paint[p][2]);
-                        e = color_space::fma_dist_sq(s.lab[i].L - plab.L,
-                                                     s.lab[i].a - plab.a,
-                                                     s.lab[i].b - plab.b);
+                        e = color_space::fma_dist_sq(s.lab[i].L - paint_lab[p].L,
+                                                     s.lab[i].a - paint_lab[p].a,
+                                                     s.lab[i].b - paint_lab[p].b);
                     }
                     if (e < be) { be = e; bp = p; }
                 }
@@ -1489,6 +1517,13 @@ Candidate encode_h(const Sample16& s) {
             paint[2][ch] = clamp_u8(int(C1e[ch]) + d);
             paint[3][ch] = clamp_u8(int(C1e[ch]) - d);
         }
+        color_space::OKLab paint_lab[4];
+        if constexpr (M == block_compress::BlockMetric::oklab2) {
+            for (int p = 0; p < 4; ++p) {
+                paint_lab[p] = color_space::srgb8_to_oklab(
+                    paint[p][0], paint[p][1], paint[p][2]);
+            }
+        }
         int sel[16];
         float tot_err = 0.0f;
         for (int i = 0; i < 16; ++i) {
@@ -1502,11 +1537,9 @@ Candidate encode_h(const Sample16& s) {
                     int db = int(s.srgb8[i][2]) - int(paint[p][2]);
                     e = float(dr * dr + dg * dg + db * db);
                 } else {
-                    color_space::OKLab plab = color_space::srgb8_to_oklab(
-                        paint[p][0], paint[p][1], paint[p][2]);
-                    e = color_space::fma_dist_sq(s.lab[i].L - plab.L,
-                                                 s.lab[i].a - plab.a,
-                                                 s.lab[i].b - plab.b);
+                    e = color_space::fma_dist_sq(s.lab[i].L - paint_lab[p].L,
+                                                 s.lab[i].a - paint_lab[p].a,
+                                                 s.lab[i].b - paint_lab[p].b);
                 }
                 if (e < be) { be = e; bp = p; }
             }
