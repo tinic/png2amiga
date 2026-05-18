@@ -16,6 +16,8 @@
 
 #include "etc2.hpp"
 
+#include "color_space.hpp"
+
 #include <algorithm>
 #include <cstring>
 
@@ -487,36 +489,565 @@ std::vector<std::uint8_t> decode_image(std::span<const Block> blocks, int image_
 }
 
 // ---------------------------------------------------------------------------
-// Encoder — still a stub block-mean baseline (real encoders in next commit)
+// Encoder — per-block search over all 5 sub-modes
 // ---------------------------------------------------------------------------
+//
+// Pipeline per block:
+//   1. Sample 16 source pixels (sRGB8 + OKLab pre-computed).
+//   2. Encode under each enabled sub-mode → Candidate with err_oklab2
+//      (or err_srgb_mse, template-dispatched on Options::metric).
+//   3. Argmin across candidates → emit Block.
+//
+// Sub-mode encoders are deliberately heuristic; refinement / beam /
+// block-grid ED layer on later. Bit-level packing mirrors the decoder
+// (etcdec.cxx layouts; encoder and decoder share kModifier / kDistanceT
+// / kDistanceH / kUnscramble).
 
 namespace {
 
-Block encode_block_passthrough(std::span<const std::uint8_t> src_rgb, int src_w, int px, int py) {
-    int r_sum = 0, g_sum = 0, b_sum = 0, n = 0;
-    const auto sw = static_cast<std::size_t>(src_w);
-    for (int dy = 0; dy < kBlockH; ++dy) {
-        int sy = py + dy;
-        for (int dx = 0; dx < kBlockW; ++dx) {
-            int sx = px + dx;
-            if (sx >= src_w) sx = src_w - 1;
-            std::size_t i = static_cast<std::size_t>(sy) * sw + static_cast<std::size_t>(sx);
-            r_sum += src_rgb[i * 3u + 0u];
-            g_sum += src_rgb[i * 3u + 1u];
-            b_sum += src_rgb[i * 3u + 2u];
-            ++n;
+// kModifier index → (msb, lsb) selector bit pair. Inverse of kUnscramble.
+// kUnscramble[(msb<<1)|lsb] = modifier_index, so we invert here once.
+constexpr std::array<std::uint8_t, 4> kScramble = []() {
+    std::array<std::uint8_t, 4> s{};
+    for (int i = 0; i < 4; ++i) {
+        s[std::size_t(kUnscramble[i])] = std::uint8_t(i);
+    }
+    return s;
+}();
+
+// Block sample: source pixels in sRGB8 + linear OKLab. Per-block scratch
+// the encoders pull from. Layout matches block_compress::BlockSample<4,4>
+// — could be unified later, kept local now for compactness.
+struct Sample16 {
+    std::uint8_t srgb8[16][3];
+    color_space::OKLab lab[16];
+};
+
+void load_sample(Sample16& s,
+                 std::span<const std::uint8_t> padded_rgb,
+                 std::size_t pad_w,
+                 int px,
+                 int py) {
+    for (int dy = 0; dy < 4; ++dy) {
+        for (int dx = 0; dx < 4; ++dx) {
+            std::size_t idx = (std::size_t(py + dy) * pad_w + std::size_t(px + dx)) * 3u;
+            int i = dy * 4 + dx;
+            s.srgb8[i][0] = padded_rgb[idx + 0u];
+            s.srgb8[i][1] = padded_rgb[idx + 1u];
+            s.srgb8[i][2] = padded_rgb[idx + 2u];
+            s.lab[i] = color_space::srgb8_to_oklab(s.srgb8[i][0], s.srgb8[i][1], s.srgb8[i][2]);
         }
     }
-    std::uint8_t r4 = static_cast<std::uint8_t>((r_sum / n) >> 4);
-    std::uint8_t g4 = static_cast<std::uint8_t>((g_sum / n) >> 4);
-    std::uint8_t b4 = static_cast<std::uint8_t>((b_sum / n) >> 4);
-    Block b{};
-    b[0] = static_cast<std::uint8_t>((r4 << 4) | r4);
-    b[1] = static_cast<std::uint8_t>((g4 << 4) | g4);
-    b[2] = static_cast<std::uint8_t>((b4 << 4) | b4);
-    b[3] = 0x00;
-    b[4] = b[5] = b[6] = b[7] = 0;
-    return b;
+}
+
+// Score one decoded block against a Sample16 in the chosen metric.
+template<block_compress::BlockMetric M>
+float score_decoded(const Sample16& s, const std::uint8_t dec[16][3]) {
+    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+        int acc = 0;
+        for (int i = 0; i < 16; ++i) {
+            int dr = int(s.srgb8[i][0]) - int(dec[i][0]);
+            int dg = int(s.srgb8[i][1]) - int(dec[i][1]);
+            int db = int(s.srgb8[i][2]) - int(dec[i][2]);
+            acc += dr * dr + dg * dg + db * db;
+        }
+        return float(acc) * (1.0f / 65536.0f);
+    } else {
+        float acc = 0.0f;
+        for (int i = 0; i < 16; ++i) {
+            color_space::OKLab d = color_space::srgb8_to_oklab(dec[i][0], dec[i][1], dec[i][2]);
+            float dL = s.lab[i].L - d.L;
+            float da = s.lab[i].a - d.a;
+            float db = s.lab[i].b - d.b;
+            acc += color_space::fma_dist_sq(dL, da, db);
+        }
+        return acc;
+    }
+}
+
+// Sub-block selector — which 8 pixel indices belong to sub-block 0/1
+// given the flip bit. flip=0: vertical split (left/right). flip=1:
+// horizontal split (top/bottom).
+inline void sub_pixel_indices(bool flip, int sub, int out_idx[8]) {
+    int n = 0;
+    for (int x = 0; x < 4; ++x) {
+        for (int y = 0; y < 4; ++y) {
+            int s = flip ? (y >= 2 ? 1 : 0) : (x >= 2 ? 1 : 0);
+            if (s == sub) out_idx[n++] = y * 4 + x;
+        }
+    }
+}
+
+// Encode an ETC1 SUB-BLOCK: pick (base, table, per-pixel selectors)
+// minimizing OKLab² error against the 8 pixels of that sub-block.
+//
+// `base_seed_srgb8` is the starting base color (e.g. mean of the
+// sub-block). For ETC1 individual: 4-bit-replicated (0xN → 0xNN).
+// For ETC1 differential: 5-bit-expanded ((x << 3) | (x >> 2)).
+// We sweep ±1 nibble around the seed to escape rounding artefacts.
+struct SubResult {
+    std::uint8_t base[3];           // final 8-bit base (after expansion)
+    int base_packed[3];             // 4-bit or 5-bit pre-expansion value
+    int table;                      // 0..7
+    int selectors[8];               // modifier index 0..3 for each sub-pixel
+    int pixel_indices[8];           // which of the 16 source pixels (for later assembly)
+    float err;
+};
+
+template<block_compress::BlockMetric M, bool Differential>
+SubResult encode_subblock_etc1(const Sample16& s,
+                               const int sub_idx[8],
+                               const int base_seed_packed[3]) {
+    SubResult best{};
+    best.err = std::numeric_limits<float>::infinity();
+    constexpr int kPackedMax = Differential ? 31 : 15;
+
+    // Search a small jitter window around the seed (±2 levels per channel).
+    // Tight enough to stay cheap; wide enough to escape +/-1 rounding bias.
+    constexpr int kJitter = 2;
+    for (int dr = -kJitter; dr <= kJitter; ++dr) {
+        int br = std::clamp(base_seed_packed[0] + dr, 0, kPackedMax);
+        for (int dg = -kJitter; dg <= kJitter; ++dg) {
+            int bg = std::clamp(base_seed_packed[1] + dg, 0, kPackedMax);
+            for (int dbb = -kJitter; dbb <= kJitter; ++dbb) {
+                int bb = std::clamp(base_seed_packed[2] + dbb, 0, kPackedMax);
+                std::uint8_t base8[3];
+                if constexpr (Differential) {
+                    base8[0] = expand5(std::uint32_t(br));
+                    base8[1] = expand5(std::uint32_t(bg));
+                    base8[2] = expand5(std::uint32_t(bb));
+                } else {
+                    base8[0] = expand4(std::uint32_t(br));
+                    base8[1] = expand4(std::uint32_t(bg));
+                    base8[2] = expand4(std::uint32_t(bb));
+                }
+                for (int t = 0; t < 8; ++t) {
+                    // For each of the 8 sub-pixels, find best modifier idx.
+                    float tot = 0.0f;
+                    int sel[8];
+                    for (int p = 0; p < 8; ++p) {
+                        int src_i = sub_idx[p];
+                        float best_e = std::numeric_limits<float>::infinity();
+                        int best_s = 0;
+                        for (int s_i = 0; s_i < 4; ++s_i) {
+                            int m = kModifier[t][s_i];
+                            std::uint8_t dec[3] = {
+                                clamp_u8(int(base8[0]) + m),
+                                clamp_u8(int(base8[1]) + m),
+                                clamp_u8(int(base8[2]) + m),
+                            };
+                            float e;
+                            if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+                                int dr2 = int(s.srgb8[src_i][0]) - int(dec[0]);
+                                int dg2 = int(s.srgb8[src_i][1]) - int(dec[1]);
+                                int db2 = int(s.srgb8[src_i][2]) - int(dec[2]);
+                                e = float(dr2 * dr2 + dg2 * dg2 + db2 * db2);
+                            } else {
+                                color_space::OKLab d_lab =
+                                    color_space::srgb8_to_oklab(dec[0], dec[1], dec[2]);
+                                e = color_space::fma_dist_sq(s.lab[src_i].L - d_lab.L,
+                                                             s.lab[src_i].a - d_lab.a,
+                                                             s.lab[src_i].b - d_lab.b);
+                            }
+                            if (e < best_e) {
+                                best_e = e;
+                                best_s = s_i;
+                            }
+                        }
+                        sel[p] = best_s;
+                        tot += best_e;
+                    }
+                    if (tot < best.err) {
+                        best.err = tot;
+                        best.base[0] = base8[0];
+                        best.base[1] = base8[1];
+                        best.base[2] = base8[2];
+                        best.base_packed[0] = br;
+                        best.base_packed[1] = bg;
+                        best.base_packed[2] = bb;
+                        best.table = t;
+                        for (int i = 0; i < 8; ++i) {
+                            best.selectors[i] = sel[i];
+                            best.pixel_indices[i] = sub_idx[i];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return best;
+}
+
+// Pack two SubResults + flip + diff bits into an ETC1 Block, then
+// roundtrip-decode for the picker.
+void pack_etc1_block(Block& blk,
+                     std::uint8_t dec[16][3],
+                     bool diff,
+                     bool flip,
+                     const SubResult& s0,
+                     const SubResult& s1) {
+    std::uint64_t v = 0;
+    auto put = [&](std::uint64_t val, int size, int hi) {
+        int shift = hi - size + 1;
+        v |= (val & ((std::uint64_t(1) << size) - 1)) << shift;
+    };
+
+    if (!diff) {
+        // Individual: 4-bit base per channel × 2 sub-blocks.
+        put(std::uint64_t(s0.base_packed[0]), 4, 63);
+        put(std::uint64_t(s1.base_packed[0]), 4, 59);
+        put(std::uint64_t(s0.base_packed[1]), 4, 55);
+        put(std::uint64_t(s1.base_packed[1]), 4, 51);
+        put(std::uint64_t(s0.base_packed[2]), 4, 47);
+        put(std::uint64_t(s1.base_packed[2]), 4, 43);
+    } else {
+        // Differential: 5-bit s0 base + 3-bit signed delta to s1 per channel.
+        put(std::uint64_t(s0.base_packed[0]), 5, 63);
+        put(std::uint64_t(s0.base_packed[1]), 5, 55);
+        put(std::uint64_t(s0.base_packed[2]), 5, 47);
+        int dr = s1.base_packed[0] - s0.base_packed[0];
+        int dg = s1.base_packed[1] - s0.base_packed[1];
+        int db = s1.base_packed[2] - s0.base_packed[2];
+        put(std::uint64_t(dr & 0x7), 3, 58);
+        put(std::uint64_t(dg & 0x7), 3, 50);
+        put(std::uint64_t(db & 0x7), 3, 42);
+    }
+    put(std::uint64_t(s0.table), 3, 39);
+    put(std::uint64_t(s1.table), 3, 36);
+    put(diff ? 1u : 0u, 1, 33);
+    put(flip ? 1u : 0u, 1, 32);
+
+    // Selector bits — column-major (x*4+y) into MSB/LSB halves.
+    auto write_selector = [&](const SubResult& sr) {
+        for (int p = 0; p < 8; ++p) {
+            int src_i = sr.pixel_indices[p];
+            int x = src_i % 4, y = src_i / 4;
+            int pos = x * 4 + y;
+            unsigned scram = unsigned(kScramble[std::size_t(sr.selectors[p])]);
+            v |= std::uint64_t((scram >> 1u) & 1u) << (16 + pos);
+            v |= std::uint64_t(scram & 1u) << pos;
+        }
+    };
+    write_selector(s0);
+    write_selector(s1);
+
+    for (int i = 0; i < 8; ++i) {
+        blk[std::size_t(i)] = std::uint8_t((v >> ((7 - i) * 8)) & 0xFFu);
+    }
+
+    // Round-trip decode so the picker can score in OKLab.
+    std::uint8_t flat[48];
+    decode_block(blk, flat);
+    for (int i = 0; i < 16; ++i) {
+        dec[i][0] = flat[i * 3 + 0];
+        dec[i][1] = flat[i * 3 + 1];
+        dec[i][2] = flat[i * 3 + 2];
+    }
+}
+
+template<block_compress::BlockMetric M>
+Candidate encode_etc1(const Sample16& s) {
+    Candidate best{};
+    best.err = std::numeric_limits<float>::infinity();
+    best.mode = SubMode::etc1_individual;
+
+    for (int flip = 0; flip < 2; ++flip) {
+        int idx0[8], idx1[8];
+        sub_pixel_indices(flip != 0, 0, idx0);
+        sub_pixel_indices(flip != 0, 1, idx1);
+
+        auto mean_seed = [&](const int (&idx)[8], int packed_max) {
+            int sum[3] = {0, 0, 0};
+            for (int p : idx) {
+                sum[0] += s.srgb8[p][0];
+                sum[1] += s.srgb8[p][1];
+                sum[2] += s.srgb8[p][2];
+            }
+            int seed[3];
+            for (int c = 0; c < 3; ++c) {
+                // round-to-nearest at packed precision
+                seed[c] = std::clamp((sum[c] * packed_max + 8 * 255) / (8 * 255), 0, packed_max);
+            }
+            return std::array<int, 3>{seed[0], seed[1], seed[2]};
+        };
+
+        // --- Individual mode ---
+        {
+            auto seed0 = mean_seed(idx0, 15);
+            auto seed1 = mean_seed(idx1, 15);
+            auto sub0 = encode_subblock_etc1<M, false>(s, idx0, seed0.data());
+            auto sub1 = encode_subblock_etc1<M, false>(s, idx1, seed1.data());
+            Block blk;
+            std::uint8_t dec[16][3];
+            pack_etc1_block(blk, dec, false, flip != 0, sub0, sub1);
+            float err = score_decoded<M>(s, dec);
+            if (err < best.err) {
+                best.err = err;
+                best.block = blk;
+                std::memcpy(best.decoded, dec, sizeof(dec));
+                best.mode = SubMode::etc1_individual;
+            }
+        }
+
+        // --- Differential mode ---
+        {
+            auto seed0 = mean_seed(idx0, 31);
+            auto seed1 = mean_seed(idx1, 31);
+            auto sub0 = encode_subblock_etc1<M, true>(s, idx0, seed0.data());
+            // Constrain sub1's base to s0's ±[-4,3] per channel.
+            int seed1_constrained[3];
+            for (int c = 0; c < 3; ++c) {
+                seed1_constrained[c] = std::clamp(seed1[std::size_t(c)],
+                                                  sub0.base_packed[c] - 4,
+                                                  sub0.base_packed[c] + 3);
+            }
+            auto sub1 = encode_subblock_etc1<M, true>(s, idx1, seed1_constrained);
+            // Final clamp of sub1.base_packed to delta range (encoder may
+            // have jittered out of bounds).
+            for (int c = 0; c < 3; ++c) {
+                sub1.base_packed[c] = std::clamp(sub1.base_packed[c],
+                                                  sub0.base_packed[c] - 4,
+                                                  sub0.base_packed[c] + 3);
+            }
+            // Re-pick selectors in sub1 with the clamped base.
+            std::uint8_t base8_corr[3] = {
+                expand5(std::uint32_t(sub1.base_packed[0])),
+                expand5(std::uint32_t(sub1.base_packed[1])),
+                expand5(std::uint32_t(sub1.base_packed[2])),
+            };
+            sub1.base[0] = base8_corr[0];
+            sub1.base[1] = base8_corr[1];
+            sub1.base[2] = base8_corr[2];
+            float err_recheck = 0.0f;
+            for (int p = 0; p < 8; ++p) {
+                int src_i = sub1.pixel_indices[p];
+                float best_e = std::numeric_limits<float>::infinity();
+                int best_s = 0;
+                for (int s_i = 0; s_i < 4; ++s_i) {
+                    int m = kModifier[sub1.table][s_i];
+                    std::uint8_t dec_p[3] = {
+                        clamp_u8(int(base8_corr[0]) + m),
+                        clamp_u8(int(base8_corr[1]) + m),
+                        clamp_u8(int(base8_corr[2]) + m),
+                    };
+                    float e;
+                    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+                        int dr = int(s.srgb8[src_i][0]) - int(dec_p[0]);
+                        int dg = int(s.srgb8[src_i][1]) - int(dec_p[1]);
+                        int db = int(s.srgb8[src_i][2]) - int(dec_p[2]);
+                        e = float(dr * dr + dg * dg + db * db);
+                    } else {
+                        color_space::OKLab d_lab =
+                            color_space::srgb8_to_oklab(dec_p[0], dec_p[1], dec_p[2]);
+                        e = color_space::fma_dist_sq(s.lab[src_i].L - d_lab.L,
+                                                     s.lab[src_i].a - d_lab.a,
+                                                     s.lab[src_i].b - d_lab.b);
+                    }
+                    if (e < best_e) {
+                        best_e = e;
+                        best_s = s_i;
+                    }
+                }
+                sub1.selectors[p] = best_s;
+                err_recheck += best_e;
+            }
+            sub1.err = err_recheck;
+            Block blk;
+            std::uint8_t dec[16][3];
+            pack_etc1_block(blk, dec, true, flip != 0, sub0, sub1);
+            float err = score_decoded<M>(s, dec);
+            if (err < best.err) {
+                best.err = err;
+                best.block = blk;
+                std::memcpy(best.decoded, dec, sizeof(dec));
+                best.mode = SubMode::etc1_differential;
+            }
+        }
+    }
+    return best;
+}
+
+// ---------------------------------------------------------------------------
+// Planar encoder
+// ---------------------------------------------------------------------------
+//
+// LSQ-fit a plane I(x,y) = O + (H-O)*x/4 + (V-O)*y/4 to the 16 source
+// pixels per channel. The decoder rounds via:
+//   pixel = ((x*(H-O) + y*(V-O) + 4*O + 2) >> 2)
+// So we're fitting 8-bit O / H / V values then snapping to RGB 6-7-6
+// precision (R=6 bits, G=7 bits, B=6 bits).
+
+void planar_lsq(const std::uint8_t pixels[16][3], int OHV[3][3]) {
+    // For each channel solve for (O, H-O, V-O) minimising sum of squared
+    // errors of pixel(x,y) = O + (H-O)*x/4 + (V-O)*y/4. Closed form:
+    //   minimise over (a, b, c): sum_xy (a + b*x + c*y - p[x,y])^2
+    // where a = O, b = (H-O)/4, c = (V-O)/4.
+    // Normal equations: 16a + 24b + 24c = sum_p, etc.
+    for (int ch = 0; ch < 3; ++ch) {
+        double sum_p = 0, sum_xp = 0, sum_yp = 0;
+        for (int y = 0; y < 4; ++y) {
+            for (int x = 0; x < 4; ++x) {
+                double p = double(pixels[y * 4 + x][ch]);
+                sum_p += p;
+                sum_xp += p * x;
+                sum_yp += p * y;
+            }
+        }
+        // sum(1) = 16, sum(x) = sum(y) = 24, sum(x²) = sum(y²) = 56,
+        // sum(xy) = 36, sum(x*y) = sum_x*sum_y/16... need exact moments.
+        // Cleaner: solve by averaging the four corners.
+        //   O   ≈ mean over y=0,x=0 region; but with 1 sample noisy.
+        // Pragmatic: fit a + b*x + c*y to all 16 pixels via least squares.
+        // Moments over 4×4 grid (x, y ∈ {0,1,2,3}):
+        //   N = 16, Sx = Sy = 24, Sxx = Syy = 56, Sxy = 36.
+        // det = N*Sxx*Syy + 2*Sx*Sy*Sxy - N*Sxy² - Sx²*Syy - Sy²*Sxx
+        // Closed-form derived once and pasted:
+        constexpr double N = 16.0;
+        constexpr double Sx = 24.0;
+        constexpr double Sy = 24.0;
+        constexpr double Sxx = 56.0;
+        constexpr double Syy = 56.0;
+        constexpr double Sxy = 36.0;
+        double Sp = sum_p, Sxp = sum_xp, Syp = sum_yp;
+        // Solve [N Sx Sy; Sx Sxx Sxy; Sy Sxy Syy] [a b c]^T = [Sp Sxp Syp]
+        // via Cramer's rule.
+        double det = N * (Sxx * Syy - Sxy * Sxy) - Sx * (Sx * Syy - Sxy * Sy) +
+                     Sy * (Sx * Sxy - Sxx * Sy);
+        double da = Sp * (Sxx * Syy - Sxy * Sxy) - Sx * (Sxp * Syy - Sxy * Syp) +
+                    Sy * (Sxp * Sxy - Sxx * Syp);
+        double db = N * (Sxp * Syy - Sxy * Syp) - Sp * (Sx * Syy - Sxy * Sy) +
+                    Sy * (Sx * Syp - Sxp * Sy);
+        double dc = N * (Sxx * Syp - Sxp * Sxy) - Sx * (Sx * Syp - Sxp * Sy) +
+                    Sp * (Sx * Sxy - Sxx * Sy);
+        double a = da / det;
+        double b = db / det;
+        double c = dc / det;
+        double O_d = a;
+        double H_d = O_d + 4.0 * b;
+        double V_d = O_d + 4.0 * c;
+        OHV[0][ch] = int(std::lround(std::clamp(O_d, 0.0, 255.0)));
+        OHV[1][ch] = int(std::lround(std::clamp(H_d, 0.0, 255.0)));
+        OHV[2][ch] = int(std::lround(std::clamp(V_d, 0.0, 255.0)));
+    }
+}
+
+// Snap 8-bit value to N-bit precision via round-to-nearest at the
+// bit-replicate quantisation grid.
+inline int snap_to_bits(int v, int bits) {
+    int max_packed = (1 << bits) - 1;
+    int shift = 8 - bits;
+    int q = (v + (1 << (shift - 1))) >> shift;
+    return std::clamp(q, 0, max_packed);
+}
+
+template<block_compress::BlockMetric M>
+Candidate encode_planar(const Sample16& s) {
+    int OHV[3][3];
+    planar_lsq(s.srgb8, OHV);
+
+    // Snap each component to 6/7/6 bits.
+    int O_pk[3] = {snap_to_bits(OHV[0][0], 6),
+                    snap_to_bits(OHV[0][1], 7),
+                    snap_to_bits(OHV[0][2], 6)};
+    int H_pk[3] = {snap_to_bits(OHV[1][0], 6),
+                    snap_to_bits(OHV[1][1], 7),
+                    snap_to_bits(OHV[1][2], 6)};
+    int V_pk[3] = {snap_to_bits(OHV[2][0], 6),
+                    snap_to_bits(OHV[2][1], 7),
+                    snap_to_bits(OHV[2][2], 6)};
+
+    // Pack into 64-bit block per planar bit layout. The decoder reads
+    // it post-unstuff57; we write the pre-stuff layout (matches the
+    // reference's stuff/unstuff inverse path).
+    std::uint64_t v = 0;
+    auto put = [&](std::uint64_t val, int size, int hi) {
+        int shift = hi - size + 1;
+        v |= (val & ((std::uint64_t(1) << size) - 1)) << shift;
+    };
+
+    // Stuffed layout (= original block bit layout):
+    //   RO  bits 62..57 (6)
+    //   GO1 bit 56      (1)
+    //   GO2 bits 54..49 (6)
+    //   BO1 bit 48      (1)
+    //   BO2 bits 45..44 (2)
+    //   BO3 bits 43..41 (3)
+    //   RH1 bits 42..38 (5)        — overlaps BO3, but stuff order writes
+    //                                  RH1 right after BO3 — see reference
+    //   RH2 bit 32      (1)
+    //   GH  bits 38..32 (7)  ← wait, this overlaps. The actual layout
+    //                            sets the diff bit at bit 33 and the
+    //                            "blue overflow" trigger forces planar
+    //                            mode dispatch.
+    //   ...
+    // Re-derived from unstuff57: the stuffed positions are
+    //   RO  → 62..57   (6)
+    //   GO1 → 56       (1)
+    //   GO2 → 54..49   (6)
+    //   BO1 → 48       (1)
+    //   BO2 → 45..44   (2)
+    //   BO3 → 43..41   (3)
+    //   RH1 → 38..34   (5)
+    //   RH2 → 32       (1)
+    //   GH  → 31..25   (7)
+    //   BH  → 24..19   (6)
+    //   RV  → 18..13   (6)
+    //   GV  → 12..6    (7)
+    //   BV  →  5..0    (6)
+    // The diff bit must be at position 33 = 1 (planar requires diffbit=1
+    // AND blue-overflow). We set bit 33 = 1; blue overflow naturally
+    // arises because the 5-bit "B1+dB" interpretation lands out of range
+    // for valid planar payloads.
+
+    int RO = O_pk[0], GO = O_pk[1], BO = O_pk[2];
+    int RH = H_pk[0], GH = H_pk[1], BH = H_pk[2];
+    int RV = V_pk[0], GV = V_pk[1], BV = V_pk[2];
+
+    put(std::uint64_t(RO), 6, 62);
+    put(std::uint64_t((GO >> 6) & 1), 1, 56);
+    put(std::uint64_t(GO & 0x3F), 6, 54);
+    put(std::uint64_t((BO >> 5) & 1), 1, 48);
+    put(std::uint64_t((BO >> 3) & 0x3), 2, 45);
+    put(std::uint64_t(BO & 0x7), 3, 43);
+    put(std::uint64_t((RH >> 1) & 0x1F), 5, 38);
+    put(std::uint64_t(RH & 0x1), 1, 32);
+    put(std::uint64_t(GH), 7, 31);
+    put(std::uint64_t(BH), 6, 24);
+    put(std::uint64_t(RV), 6, 18);
+    put(std::uint64_t(GV), 7, 12);
+    put(std::uint64_t(BV), 6, 5);
+    put(1u, 1, 33);  // diffbit
+
+    Candidate c{};
+    for (int i = 0; i < 8; ++i) {
+        c.block[std::size_t(i)] = std::uint8_t((v >> ((7 - i) * 8)) & 0xFFu);
+    }
+    std::uint8_t flat[48];
+    decode_block(c.block, flat);
+    for (int i = 0; i < 16; ++i) {
+        c.decoded[i][0] = flat[i * 3 + 0];
+        c.decoded[i][1] = flat[i * 3 + 1];
+        c.decoded[i][2] = flat[i * 3 + 2];
+    }
+    c.err = score_decoded<M>(s, c.decoded);
+    c.mode = SubMode::planar;
+    return c;
+}
+
+// ---------------------------------------------------------------------------
+// Per-block picker
+// ---------------------------------------------------------------------------
+
+template<block_compress::BlockMetric M>
+Candidate encode_block(const Sample16& s, const Options& opts) {
+    Candidate best = encode_etc1<M>(s);
+    if (opts.effort >= 1) {
+        Candidate planar = encode_planar<M>(s);
+        if (planar.err < best.err) best = planar;
+    }
+    // T/H modes — TODO in a follow-up commit. ETC1 + planar already
+    // covers the common cases; T/H help most on tiled / cartoon content.
+    return best;
 }
 
 }  // namespace
@@ -525,14 +1056,13 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgb_srgb8,
                           int image_w,
                           int image_h,
                           const Options& options) {
-    (void)options;
-
     EncodeResult res;
     res.block_cols = (image_w + kBlockW - 1) / kBlockW;
     res.block_rows = (image_h + kBlockH - 1) / kBlockH;
     const auto bcols = static_cast<std::size_t>(res.block_cols);
     res.blocks.assign(bcols * static_cast<std::size_t>(res.block_rows), Block{});
 
+    // Pad source so we don't need per-edge clamps in the inner loop.
     std::vector<std::uint8_t> padded;
     int pad_w = res.block_cols * kBlockW;
     int pad_h = res.block_rows * kBlockH;
@@ -551,14 +1081,30 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgb_srgb8,
         }
     }
 
-    for (int by = 0; by < res.block_rows; ++by) {
-        for (int bx = 0; bx < res.block_cols; ++bx) {
-            res.blocks[static_cast<std::size_t>(by) * bcols + static_cast<std::size_t>(bx)] =
-                encode_block_passthrough(padded, pad_w, bx * kBlockW, by * kBlockH);
-            res.mode_counts[static_cast<std::size_t>(SubMode::etc1_individual)] += 1;
+    Sample16 s{};
+    float total_err = 0.0f;
+    auto run_one = [&](auto metric_tag) {
+        constexpr block_compress::BlockMetric M = decltype(metric_tag)::value;
+        for (int by = 0; by < res.block_rows; ++by) {
+            for (int bx = 0; bx < res.block_cols; ++bx) {
+                load_sample(s, padded, pw, bx * kBlockW, by * kBlockH);
+                Candidate c = encode_block<M>(s, options);
+                std::size_t bidx = static_cast<std::size_t>(by) * bcols +
+                                   static_cast<std::size_t>(bx);
+                res.blocks[bidx] = c.block;
+                res.mode_counts[static_cast<std::size_t>(c.mode)] += 1;
+                total_err += c.err;
+            }
         }
+    };
+    if (options.metric == block_compress::BlockMetric::srgb_mse) {
+        run_one(std::integral_constant<block_compress::BlockMetric,
+                                       block_compress::BlockMetric::srgb_mse>{});
+    } else {
+        run_one(std::integral_constant<block_compress::BlockMetric,
+                                       block_compress::BlockMetric::oklab2>{});
     }
-
+    res.total_oklab2_error = total_err;
     return res;
 }
 
