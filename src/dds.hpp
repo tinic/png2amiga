@@ -25,6 +25,8 @@ namespace png2amiga::dds {
 enum class Format : std::uint32_t {
     bc1_rgb_unorm,    // FourCC "DXT1"
     bc1_rgb_srgb,     // FourCC "DXT1" + miscFlags2 sRGB hint
+    bc3_unorm,        // FourCC "DXT5"
+    bc3_srgb,         // FourCC "DXT5" (sRGB tag only carried via DXGI when used)
     bc7_unorm,        // DX10 + DXGI_FORMAT_BC7_UNORM (98)
     bc7_srgb,         // DX10 + DXGI_FORMAT_BC7_UNORM_SRGB (99)
 };

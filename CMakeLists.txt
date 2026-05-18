@@ -79,6 +79,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/etc2.cpp
     src/bc1.cpp
     src/bc7.cpp
+    src/bc3.cpp
     src/ktx2.cpp
     src/dds.cpp
     src/api.cpp
