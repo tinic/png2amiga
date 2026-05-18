@@ -204,83 +204,110 @@ std::vector<std::uint8_t> write(const Inputs& in) {
 
     auto dfd = build_dfd(in);
 
-    // If supercompression requested, zstd-compress the block payload first.
-    // Per KTX2 §3.10.5 the level data stored is the compressed stream and
-    // byteLength reflects that; uncompressedByteLength carries the original
-    // size so decoders can pre-allocate. Compression level 19 — top quality
-    // tier short of --ultra; matters once per image, decode is unaffected.
-    std::vector<std::uint8_t> compressed;
-    const std::uint8_t* level_data = in.block_bytes.data();
-    std::size_t level_data_size = in.block_bytes.size();
-    if (in.supercompress_zstd) {
-        std::size_t bound = ZSTD_compressBound(in.block_bytes.size());
-        compressed.resize(bound);
-        std::size_t written = ZSTD_compress(compressed.data(), bound,
-                                            in.block_bytes.data(),
-                                            in.block_bytes.size(),
-                                            19);
-        if (!ZSTD_isError(written)) {
-            compressed.resize(written);
-            level_data = compressed.data();
-            level_data_size = compressed.size();
+    // Collect levels: prefer in.levels if non-empty, otherwise wrap block_bytes
+    // as a single level. levels[0] = base (largest), levels[i+1] is the next
+    // smaller mip.
+    std::vector<std::span<const std::uint8_t>> level_inputs;
+    if (!in.levels.empty()) {
+        for (const auto& lv : in.levels) {
+            level_inputs.emplace_back(lv);
         }
+    } else {
+        level_inputs.emplace_back(in.block_bytes);
+    }
+    const std::size_t level_count = level_inputs.size();
+
+    // Per-level: optional zstd compression (lossless). Each level is compressed
+    // independently so partial loads stay possible.
+    std::vector<std::vector<std::uint8_t>> compressed_levels(level_count);
+    std::vector<const std::uint8_t*> level_data_ptr(level_count);
+    std::vector<std::size_t> level_data_size(level_count);
+    std::vector<std::size_t> level_uncompressed_size(level_count);
+    for (std::size_t i = 0; i < level_count; ++i) {
+        level_uncompressed_size[i] = level_inputs[i].size();
+        if (in.supercompress_zstd && !level_inputs[i].empty()) {
+            std::size_t bound = ZSTD_compressBound(level_inputs[i].size());
+            compressed_levels[i].resize(bound);
+            std::size_t written = ZSTD_compress(compressed_levels[i].data(), bound,
+                                                level_inputs[i].data(),
+                                                level_inputs[i].size(),
+                                                19);
+            if (!ZSTD_isError(written)) {
+                compressed_levels[i].resize(written);
+                level_data_ptr[i] = compressed_levels[i].data();
+                level_data_size[i] = compressed_levels[i].size();
+                continue;
+            }
+        }
+        level_data_ptr[i] = level_inputs[i].data();
+        level_data_size[i] = level_inputs[i].size();
     }
 
-    // Reserve once for everything to avoid reallocation; we'll back-patch
-    // the byte offsets into the header after the levels' bytes land.
-    std::size_t total = kHeaderSize + kLevelIndexEntrySize + dfd.size() + level_data_size;
+    std::size_t total_data = 0;
+    for (auto s : level_data_size) total_data += s;
+    std::size_t total = kHeaderSize + kLevelIndexEntrySize * level_count +
+                        dfd.size() + total_data;
     out.reserve(total);
 
     // --- Header (80 bytes) -------------------------------------------------
     for (std::uint8_t c : kIdentifier) out.push_back(c);
-    put_u32(out, static_cast<std::uint32_t>(in.format));  // vkFormat
-    put_u32(out, 1);                                      // typeSize (compressed block formats use 1)
+    put_u32(out, static_cast<std::uint32_t>(in.format));
+    put_u32(out, 1);                                      // typeSize
     put_u32(out, static_cast<std::uint32_t>(in.image_w));
     put_u32(out, static_cast<std::uint32_t>(in.image_h));
-    put_u32(out, 0);                                      // pixelDepth = 0 for 2D
-    put_u32(out, 0);                                      // layerCount = 0 for non-array
-    put_u32(out, 1);                                      // faceCount = 1
-    put_u32(out, 1);                                      // levelCount = 1
-    put_u32(out, in.supercompress_zstd ? 2u : 0u);        // supercompressionScheme
+    put_u32(out, 0);                                      // pixelDepth
+    put_u32(out, 0);                                      // layerCount
+    put_u32(out, 1);                                      // faceCount
+    put_u32(out, static_cast<std::uint32_t>(level_count));
+    put_u32(out, in.supercompress_zstd ? 2u : 0u);
     std::size_t dfd_offset_pos = out.size();
-    put_u32(out, 0);                                      // dfdByteOffset (patched)
-    put_u32(out, static_cast<std::uint32_t>(dfd.size())); // dfdByteLength
+    put_u32(out, 0);
+    put_u32(out, static_cast<std::uint32_t>(dfd.size()));
     std::size_t kvd_offset_pos = out.size();
-    put_u32(out, 0);                                      // kvdByteOffset (patched)
-    put_u32(out, 0);                                      // kvdByteLength (empty)
-    put_u64(out, 0);                                      // sgdByteOffset
-    put_u64(out, 0);                                      // sgdByteLength
+    put_u32(out, 0);
+    put_u32(out, 0);
+    put_u64(out, 0);
+    put_u64(out, 0);
 
-    // --- Level index (24 bytes per level, 1 level) -------------------------
-    std::size_t level_byte_offset_pos = out.size();
-    put_u64(out, 0);                                                          // byteOffset (patched)
-    put_u64(out, static_cast<std::uint64_t>(level_data_size));                // byteLength (compressed if zstd)
-    put_u64(out, static_cast<std::uint64_t>(in.block_bytes.size()));          // uncompressedByteLength
+    // --- Level index --- (one 24-byte entry per level, indexed level[0..N-1]
+    // = level 0..N-1 in natural numbering; byteOffsets patched after we
+    // know the actual file layout)
+    std::vector<std::size_t> level_byte_offset_pos(level_count);
+    for (std::size_t i = 0; i < level_count; ++i) {
+        level_byte_offset_pos[i] = out.size();
+        put_u64(out, 0);                                                   // byteOffset (patched)
+        put_u64(out, static_cast<std::uint64_t>(level_data_size[i]));      // byteLength
+        put_u64(out, static_cast<std::uint64_t>(level_uncompressed_size[i]));
+    }
 
     // --- DFD ---------------------------------------------------------------
     std::uint32_t dfd_offset = static_cast<std::uint32_t>(out.size());
     out.insert(out.end(), dfd.begin(), dfd.end());
-
-    // --- KVD ---------------------------------------------------------------
-    // Per KTX2 spec: when kvdByteLength == 0, kvdByteOffset MUST be 0
-    // (not the position-after-DFD). The Khronos `ktx validate` flags this.
     std::uint32_t kvd_offset = 0;
 
     // --- Mip level data ----------------------------------------------------
-    // KTX2 spec requires level data to be 8-byte-aligned relative to file
-    // start (for the largest scalar in any vkFormat). Compressed-block
-    // formats have typeSize=1 so alignment is 1, but tools (libktx) prefer
-    // 8-byte for portability. We pad here.
+    // KTX2 §3.10.4: levels stored smallest-first so base level lies at the
+    // file's end. levelIndex[i] still points at level i in natural numbering;
+    // we patch each entry's byteOffset to the actual file location.
     while ((out.size() & 7u) != 0u) out.push_back(0);
-    std::uint64_t level_offset = out.size();
 
-    out.insert(out.end(), level_data, level_data + level_data_size);
+    std::vector<std::uint64_t> level_offset(level_count);
+    for (std::size_t i = level_count; i-- > 0;) {
+        // 8-byte align before each level (libktx convention).
+        while ((out.size() & 7u) != 0u) out.push_back(0);
+        level_offset[i] = out.size();
+        if (level_data_size[i] > 0) {
+            out.insert(out.end(), level_data_ptr[i],
+                       level_data_ptr[i] + level_data_size[i]);
+        }
+    }
 
-    // --- Patch the back-references in the header --------------------------
+    // --- Patch back-references --------------------------------------------
     write_u32_at(out, dfd_offset_pos, dfd_offset);
     write_u32_at(out, kvd_offset_pos, kvd_offset);
-    write_u64_at(out, level_byte_offset_pos, level_offset);
-
+    for (std::size_t i = 0; i < level_count; ++i) {
+        write_u64_at(out, level_byte_offset_pos[i], level_offset[i]);
+    }
     return out;
 }
 

@@ -942,6 +942,11 @@ struct Config {
     // --no-ktx2-zstd for raw byte output (bench harness comparisons).
     bool ktx2_zstd = true;
 
+    // Mipmap level count for KTX2 output. 0 = single level (base only),
+    // -1 = auto (full chain down to 4×4 for block formats). Positive
+    // values cap at the auto count.
+    int mips = 0;
+
     // Channel-assembly preprocessing: when any of --r/--g/--b/--a point
     // at a PNG, the converter loads each, takes the red channel as the
     // single-channel value, and assembles a 4-channel RGBA buffer that
@@ -1407,6 +1412,24 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--ktx2-zstd") {
             config.ktx2_zstd = true;
+            continue;
+        }
+        if (arg == "--mips") {
+            // Bare --mips = auto (full chain). --mips N caps at N. We
+            // only consume the next arg if it parses as a pure positive
+            // integer; otherwise treat as bare --mips so paths don't
+            // accidentally get eaten.
+            config.mips = -1;
+            if (i + 1 < argc) {
+                std::string_view nxt = argv[i + 1];
+                bool all_digit = !nxt.empty();
+                for (char c : nxt) if (c < '0' || c > '9') { all_digit = false; break; }
+                if (all_digit) {
+                    int n = std::atoi(argv[i + 1]);
+                    if (n > 0) config.mips = n;
+                    ++i;
+                }
+            }
             continue;
         }
 
@@ -5562,6 +5585,60 @@ int run_batch(const Config& cfg) {
 // ETC2 (KTX2) dispatch — bypasses the Amiga bitplane pipeline since
 // nothing about palette quantization / dither / bitplanes / IFF applies
 // to a fixed-rate texture-compression format. Loads the source PNG/JPEG,
+// Build a KTX2 mipmap chain by downsampling `base_image` and re-encoding each
+// level via `encode_one`. Level 0 is supplied externally (the caller has
+// already encoded it). channels is 3 (RGB) or 4 (RGBA) — matches what
+// encode_one expects. mips_arg: 0 = no chain, -1 = auto (down to ≥4×4), >0 =
+// cap N. Returns empty vector on no-op or error.
+template <typename EncodeFn>
+std::vector<std::vector<std::uint8_t>>
+build_mip_chain(const Image& base_image,
+                int channels,
+                int mips_arg,
+                const std::vector<std::uint8_t>& base_bytes,
+                EncodeFn&& encode_one) {
+    std::vector<std::vector<std::uint8_t>> levels;
+    if (mips_arg == 0) return levels;
+    int auto_levels = 1;
+    for (int w = int(base_image.width()), h = int(base_image.height());
+         w > 4 && h > 4; w /= 2, h /= 2) ++auto_levels;
+    int n_levels = (mips_arg < 0) ? auto_levels : std::min(mips_arg, auto_levels);
+    levels.emplace_back(base_bytes);
+
+    Image cur = base_image;
+    for (int lv = 1; lv < n_levels; ++lv) {
+        std::size_t nw = std::max<std::size_t>(cur.width() / 2u, 4u);
+        std::size_t nh = std::max<std::size_t>(cur.height() / 2u, 4u);
+        auto down = scale::resample(cur, nw, nh);
+        if (!down) return {};
+        cur = *std::move(down);
+        int lw = int(cur.width()), lh = int(cur.height());
+        const bool ha = cur.has_alpha();
+        auto la = cur.alpha();
+        std::vector<std::uint8_t> px(std::size_t(lw) * std::size_t(lh) * std::size_t(channels));
+        for (int y = 0; y < lh; ++y) {
+            for (int x = 0; x < lw; ++x) {
+                Color3f sc =
+                    color_space::linear_to_srgb(cur[std::size_t(x), std::size_t(y)]).clamped();
+                std::size_t i =
+                    (std::size_t(y) * std::size_t(lw) + std::size_t(x)) * std::size_t(channels);
+                px[i + 0u] = std::uint8_t(sc.r * 255.0f + 0.5f);
+                px[i + 1u] = std::uint8_t(sc.g * 255.0f + 0.5f);
+                px[i + 2u] = std::uint8_t(sc.b * 255.0f + 0.5f);
+                if (channels == 4) {
+                    px[i + 3u] = ha
+                        ? std::uint8_t(std::clamp(
+                              la[std::size_t(y) * std::size_t(lw) + std::size_t(x)],
+                              0.f, 1.f) * 255.f + 0.5f)
+                        : std::uint8_t(255u);
+                }
+            }
+        }
+        levels.push_back(encode_one(px, lw, lh));
+    }
+    return levels;
+}
+
 // optionally rescales to --width/--height (preserving source aspect),
 // hands off to etc2::encode_image, wraps the block stream in KTX2, and
 // writes the .ktx2 file. Reports the same "Encoded:" status shape as
@@ -5738,13 +5815,32 @@ int run_etc2(const Config& cfg) {
     std::span<const std::uint8_t> block_bytes(
         reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
         enc.blocks.size() * std::size_t(etc2::kBlockBytes));
+
+    std::vector<std::uint8_t> base_bytes_vec(block_bytes.begin(), block_bytes.end());
+    auto etc2_encode_level = [&](const std::vector<std::uint8_t>& rgb, int lw, int lh) {
+        auto enc_lv = etc2::encode_image(rgb, lw, lh, eopts);
+        std::vector<std::uint8_t> out(enc_lv.blocks.size() * std::size_t(etc2::kBlockBytes));
+        std::memcpy(out.data(), enc_lv.blocks.data(), out.size());
+        return out;
+    };
+    auto mip_levels =
+        build_mip_chain(src, 3, cfg.mips, base_bytes_vec, etc2_encode_level);
+    if (cfg.mips != 0 && mip_levels.empty()) {
+        std::println(stderr, "Error: mipmap generation failed");
+        return exit_code::cant_create;
+    }
+
     ktx2::Inputs ki;
     ki.format = ktx2::VkFormat::etc2_r8g8b8_srgb_block;
     ki.block_dim = {etc2::kBlockW, etc2::kBlockH, 1};
     ki.image_w = W;
     ki.image_h = H;
     ki.bytes_per_block = etc2::kBlockBytes;
-    ki.block_bytes = block_bytes;
+    if (mip_levels.empty()) {
+        ki.block_bytes = block_bytes;
+    } else {
+        ki.levels = std::move(mip_levels);
+    }
     ki.supercompress_zstd = cfg.ktx2_zstd;
     auto file_bytes = ktx2::write(ki);
 
@@ -5868,13 +5964,32 @@ int run_bc1(const Config& cfg) {
     std::span<const std::uint8_t> block_bytes(
         reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
         enc.blocks.size() * std::size_t(bc1::kBlockBytes));
+
+    std::vector<std::uint8_t> base_bytes_vec(block_bytes.begin(), block_bytes.end());
+    auto bc1_encode_level = [&](const std::vector<std::uint8_t>& rgb, int lw, int lh) {
+        auto enc_lv = bc1::encode_image(rgb, lw, lh, bopts);
+        std::vector<std::uint8_t> out(enc_lv.blocks.size() * std::size_t(bc1::kBlockBytes));
+        std::memcpy(out.data(), enc_lv.blocks.data(), out.size());
+        return out;
+    };
+    auto mip_levels =
+        build_mip_chain(src, 3, cfg.mips, base_bytes_vec, bc1_encode_level);
+    if (cfg.mips != 0 && mip_levels.empty()) {
+        std::println(stderr, "Error: mipmap generation failed");
+        return exit_code::cant_create;
+    }
+
     ktx2::Inputs ki;
     ki.format = ktx2::VkFormat::bc1_rgb_srgb_block;
     ki.block_dim = {bc1::kBlockW, bc1::kBlockH, 1};
     ki.image_w = W;
     ki.image_h = H;
     ki.bytes_per_block = bc1::kBlockBytes;
-    ki.block_bytes = block_bytes;
+    if (mip_levels.empty()) {
+        ki.block_bytes = block_bytes;
+    } else {
+        ki.levels = std::move(mip_levels);
+    }
     ki.supercompress_zstd = cfg.ktx2_zstd;
     auto file_bytes = ktx2::write(ki);
 
@@ -5997,13 +6112,32 @@ int run_bc7(const Config& cfg) {
     std::span<const std::uint8_t> block_bytes(
         reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
         enc.blocks.size() * std::size_t(bc7::kBlockBytes));
+
+    std::vector<std::uint8_t> base_bytes_vec(block_bytes.begin(), block_bytes.end());
+    auto bc7_encode_level = [&](const std::vector<std::uint8_t>& rgba, int lw, int lh) {
+        auto enc_lv = bc7::encode_image(rgba, lw, lh, bopts);
+        std::vector<std::uint8_t> out(enc_lv.blocks.size() * std::size_t(bc7::kBlockBytes));
+        std::memcpy(out.data(), enc_lv.blocks.data(), out.size());
+        return out;
+    };
+    auto mip_levels =
+        build_mip_chain(src, 4, cfg.mips, base_bytes_vec, bc7_encode_level);
+    if (cfg.mips != 0 && mip_levels.empty()) {
+        std::println(stderr, "Error: mipmap generation failed");
+        return exit_code::cant_create;
+    }
+
     ktx2::Inputs ki;
     ki.format = ktx2::VkFormat::bc7_srgb_block;
     ki.block_dim = {bc7::kBlockW, bc7::kBlockH, 1};
     ki.image_w = W;
     ki.image_h = H;
     ki.bytes_per_block = bc7::kBlockBytes;
-    ki.block_bytes = block_bytes;
+    if (mip_levels.empty()) {
+        ki.block_bytes = block_bytes;
+    } else {
+        ki.levels = std::move(mip_levels);
+    }
     ki.supercompress_zstd = cfg.ktx2_zstd;
     auto file_bytes = ktx2::write(ki);
 

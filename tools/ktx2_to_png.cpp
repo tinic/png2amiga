@@ -153,8 +153,8 @@ int main(int argc, char* argv[]) {
     Ktx2Image img;
     if (!parse_ktx2(file_bytes, img)) return 1;
 
-    if (img.levels.size() != 1) {
-        std::fprintf(stderr, "ktx2_to_png: %zu mip levels — only level 0 will be decoded\n",
+    if (img.levels.size() > 1) {
+        std::fprintf(stderr, "ktx2_to_png: %zu mip levels — decoding level 0 (base)\n",
                      img.levels.size());
     }
     const auto& lvl = img.levels[0];

@@ -70,7 +70,16 @@ struct Inputs {
     int image_w{};
     int image_h{};
     int bytes_per_block = 8;
+    // Base-level block payload. Used when `levels` is empty (single-level
+    // KTX2). For multi-level (mipmap) output, populate `levels` instead.
     std::span<const std::uint8_t> block_bytes;
+
+    // Optional mipmap levels. levels[0] = base (largest), levels[i+1] is
+    // half the size in each dim, down to 4×4 for block-compressed formats.
+    // When non-empty, takes precedence over block_bytes — caller is
+    // responsible for matching the geometry against image_w/image_h.
+    std::vector<std::vector<std::uint8_t>> levels;
+
     // KTX2 supercompressionScheme. 0 = none (default), 2 = ZStandard.
     // zstd shrinks block data by ~30-50% on natural images and more on
     // synthetic / flat content. Quality is preserved bit-exact since this
