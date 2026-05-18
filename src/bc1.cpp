@@ -458,6 +458,109 @@ inline RGB565 to_rgb565(const std::uint8_t e[3]) {
     };
 }
 
+// Selector permutation search — the rgbcx "orderings" trick.
+//
+// After Lloyd converges on (c0, c1), the per-pixel argmin assignment is
+// the local optimum for THAT (c0, c1). But a different selector
+// assignment can refit to a different (c0_new, c1_new) that scores
+// better overall — Lloyd can't escape into that basin since it only
+// considers small endpoint perturbations.
+//
+// We enumerate all 680 monotonic partitions (0 ≤ a ≤ b ≤ c ≤ 16) of
+// the pixels sorted by projection onto the c0→c1 axis. For each:
+//   - The 2×2 LSQ matrix for the refit depends only on partition
+//     counts (n0, n2, n3, n1) — closed-form O(1).
+//   - The per-channel RHS reduces to differences of prefix sums of
+//     the sorted pixel values — also O(1) per channel.
+//   - Solve, quantise, pick selectors, score. Keep the global best.
+//
+// This is much wider than Lloyd's basin but still completes in a few
+// milliseconds at full image scale.
+template<block_compress::BlockMetric M>
+inline void selector_perm_search(const Sample16& s,
+                                 RGB565& c0_inout, RGB565& c1_inout,
+                                 std::uint8_t sel_inout[16],
+                                 std::uint8_t dec_inout[16][3],
+                                 float& err_inout) {
+    std::uint8_t e0[3], e1[3];
+    c0_inout.expand8(e0);
+    c1_inout.expand8(e1);
+    auto lab0 = color_space::srgb8_to_oklab(e0[0], e0[1], e0[2]);
+    auto lab1 = color_space::srgb8_to_oklab(e1[0], e1[1], e1[2]);
+    float ax = lab1.L - lab0.L;
+    float ay = lab1.a - lab0.a;
+    float az = lab1.b - lab0.b;
+    if (ax * ax + ay * ay + az * az < 1e-9f) return;
+
+    // Project each pixel onto the c0→c1 OKLab axis, sort ascending.
+    float proj[16];
+    int idx[16];
+    for (int p = 0; p < 16; ++p) {
+        idx[p] = p;
+        proj[p] = (s.lab[p].L - lab0.L) * ax +
+                 (s.lab[p].a - lab0.a) * ay +
+                 (s.lab[p].b - lab0.b) * az;
+    }
+    std::sort(idx, idx + 16,
+              [&](int a, int b) { return proj[a] < proj[b]; });
+
+    // Prefix sums of sRGB8 values in sorted order — group sums become
+    // O(1) per partition.
+    int psum[17][3];
+    psum[0][0] = psum[0][1] = psum[0][2] = 0;
+    for (int i = 0; i < 16; ++i) {
+        psum[i + 1][0] = psum[i][0] + int(s.srgb8[idx[i]][0]);
+        psum[i + 1][1] = psum[i][1] + int(s.srgb8[idx[i]][1]);
+        psum[i + 1][2] = psum[i][2] + int(s.srgb8[idx[i]][2]);
+    }
+
+    for (int a = 0; a <= 16; ++a) {
+        for (int b = a; b <= 16; ++b) {
+            for (int c = b; c <= 16; ++c) {
+                int n0 = a, n2 = b - a, n3 = c - b, n1 = 16 - c;
+                // 2×2 LSQ matrix (×9 scaling absorbed into the float).
+                float A00 = float(n0) + (4.f / 9.f) * float(n2)
+                                     + (1.f / 9.f) * float(n3);
+                float A11 = float(n1) + (1.f / 9.f) * float(n2)
+                                     + (4.f / 9.f) * float(n3);
+                float A01 = (2.f / 9.f) * float(n2 + n3);
+                float det = A00 * A11 - A01 * A01;
+                if (std::abs(det) < 1e-6f) continue;
+                float inv_det = 1.f / det;
+                std::uint8_t e0n[3], e1n[3];
+                for (int ch = 0; ch < 3; ++ch) {
+                    int s0 = psum[a][ch];
+                    int s2 = psum[b][ch] - psum[a][ch];
+                    int s3 = psum[c][ch] - psum[b][ch];
+                    int s1 = psum[16][ch] - psum[c][ch];
+                    float B0 = float(s0) + (2.f / 3.f) * float(s2)
+                                        + (1.f / 3.f) * float(s3);
+                    float B1 = float(s1) + (1.f / 3.f) * float(s2)
+                                        + (2.f / 3.f) * float(s3);
+                    float c0f = (A11 * B0 - A01 * B1) * inv_det;
+                    float c1f = (-A01 * B0 + A00 * B1) * inv_det;
+                    e0n[ch] = clamp_u8(int(std::lround(c0f)));
+                    e1n[ch] = clamp_u8(int(std::lround(c1f)));
+                }
+                RGB565 tc0 = to_rgb565(e0n);
+                RGB565 tc1 = to_rgb565(e1n);
+                if (tc0.raw() == c0_inout.raw() &&
+                    tc1.raw() == c1_inout.raw()) continue;
+                std::uint8_t tsel[16];
+                std::uint8_t tdec[16][3];
+                float terr = pick_selectors_and_score<M>(s, tc0, tc1, tsel, tdec);
+                if (terr < err_inout) {
+                    err_inout = terr;
+                    c0_inout = tc0;
+                    c1_inout = tc1;
+                    std::memcpy(sel_inout, tsel, 16);
+                    std::memcpy(dec_inout, tdec, sizeof(tdec));
+                }
+            }
+        }
+    }
+}
+
 // Pack a finished (c0, c1, selectors[16]) into the 8-byte BC1 block.
 // mode_3c=false: 4-color block, enforces raw_c0 > raw_c1 (swap+remap if
 // needed; perturbs c1 down one quanta when c0 == c1).
@@ -595,6 +698,15 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
     }
 
     Candidate out;
+    // Selector permutation search — exhaustive partition search wins
+    // PSNR universally but regresses S2 on pixel-art / limited-palette
+    // content (per-block OKLab² optimum diverges from perceptual quality
+    // when block-internal structure dominates). Gate behind effort=3.
+    if (opts.effort >= 3) {
+        selector_perm_search<M>(s, c0, c1, sel, decoded, err);
+        lloyd_refine(c0, c1, sel, decoded, err);
+    }
+
     // 3-color mode trial: same (c0, c1) converged from the 4-color
     // search; just swap the paint set to {c0, c1, midpoint, x} and
     // constrain selectors to {0, 1, 2}. Wins on blocks that are
