@@ -3065,7 +3065,7 @@ DitherResult apply(const Image& image,
                                      jarvis_kernel,
                                      precomputed);
 
-    case Method::floyd_steinberg_experimental: {
+    case Method::floyd_steinberg_oklab: {
         // Experimental coupled-OKLab path: delegate to diffuse_raw_buffer
         // with a plain palette-nearest picker. The shared scaffold branches
         // internally on the experimental method and routes the residual
@@ -3304,7 +3304,7 @@ std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
         return floyd_steinberg_kernel;
     case Method::riemersma:
         return floyd_steinberg_kernel;
-    case Method::floyd_steinberg_experimental:
+    case Method::floyd_steinberg_oklab:
         return floyd_steinberg_kernel;
     default:
         return {};
@@ -3502,9 +3502,9 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
     bool needs_riem = is_diff && needs_riemersma_queue(settings.method);
     // v1 coupled-OKLab residual: qe is one perceptual 3-vector, accumulator
     // lives in OKLab not sRGB. Picker contract is unchanged.
-    bool is_experimental = settings.method == Method::floyd_steinberg_experimental;
+    bool is_oklab = settings.method == Method::floyd_steinberg_oklab;
 
-    auto bias_map = (is_diff && !is_experimental)
+    auto bias_map = (is_diff && !is_oklab)
                         ? compute_structure_bias(image, settings.method)
                         : std::vector<float>{};
 
@@ -3535,7 +3535,7 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
     // structural difference behind their stronger-looking ED on
     // low-bit-depth output (EHB / OCS16).
     std::vector<Color3f> err_buf_s;
-    if (is_diff && !is_experimental) err_buf_s.assign(w * h, Color3f{0, 0, 0});
+    if (is_diff && !is_oklab) err_buf_s.assign(w * h, Color3f{0, 0, 0});
     std::array<Color3f, RIEM_QSIZE> riem_queue_s{};
 
     // Experimental path: OKLab accumulator (L, a, b stored per pixel).
@@ -3543,7 +3543,7 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
     // range of L in display-content OKLab. Both still scalar-tunable via
     // the same --error-clamp knob for now; will split if blow-ups warrant.
     std::vector<color_space::OKLab> err_buf_lab;
-    if (is_diff && is_experimental)
+    if (is_diff && is_oklab)
         err_buf_lab.assign(w * h, color_space::OKLab{0.0f, 0.0f, 0.0f});
 
     float total_error = 0.0f;
@@ -3569,7 +3569,7 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
             color_space::OKLab target{};
             Color3f target_s{0.0f, 0.0f, 0.0f};
 
-            if (is_experimental) {
+            if (is_oklab) {
                 // Coupled-OKLab residual: read accumulated perceptual
                 // error directly into the picker's space, no sRGB
                 // round-trip. ec is split per-axis.
@@ -3621,7 +3621,7 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
             total_error += color_space::fma_dist_sq(dL, da, db);
 
             if (is_diff) {
-                if (is_experimental) {
+                if (is_oklab) {
                     // qe = (target − chosen) — leftover residual, matching
                     // the sRGB path's semantics, just in OKLab.
                     float qe_L = (target.L - picked.chosen_lab.L) * settings.strength;
@@ -3966,7 +3966,7 @@ constexpr MethodNameRow kMethodNames[] = {
     {"cluster-noise", Method::cluster_noise},
     {"fractal16", Method::fractal16},
     {"floyd-steinberg", Method::floyd_steinberg},
-    {"floyd-steinberg-experimental", Method::floyd_steinberg_experimental},
+    {"floyd-steinberg-oklab", Method::floyd_steinberg_oklab},
     {"atkinson", Method::atkinson},
     {"sierra-lite", Method::sierra_lite},
     {"stucki", Method::stucki},

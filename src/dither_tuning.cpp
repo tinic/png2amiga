@@ -366,7 +366,7 @@ Defaults defaults_for(const Context& ctx) {
     switch (ctx.method) {
     case dither::Method::floyd_steinberg:
         return Defaults{0.76f, 0.35f};  // S2 56.80
-    case dither::Method::floyd_steinberg_experimental:
+    case dither::Method::floyd_steinberg_oklab:
         // 25-image DIV2K (lores d=5, prescaled to 320 wide) — peak at 0.8.
         // ec is a safety net only; the OKLab residual self-bounds.
         return Defaults{0.80f, 0.35f};
