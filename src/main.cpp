@@ -929,6 +929,7 @@ struct Config {
     float etc2_block_ed = 0.5f;
     std::string etc2_metric = "oklab2";
     int etc2_refine = 0;
+    int etc2_jitter = 2;
 
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
     // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
@@ -1271,6 +1272,9 @@ void print_usage() {
         "\n"
         "ETC2 (--mode etc2 → .ktx2):\n"
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
+        "  --etc2-jitter <0-15>            Per-sub-block base-color search half-\n"
+        "                                  width in nibble units (default: 2;\n"
+        "                                  (2N+1)^3 candidates per sub-block)\n"
         "  --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5;\n"
         "                                  0 disables). Kernel from --dither.\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
@@ -2159,6 +2163,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.etc2_block_ed = std::strtof(std::string(val).c_str(), nullptr);
                 if (config.etc2_block_ed < 0.f) config.etc2_block_ed = 0.f;
                 if (config.etc2_block_ed > 1.5f) config.etc2_block_ed = 1.5f;
+            } else if (arg == "--etc2-jitter") {
+                config.etc2_jitter = std::atoi(std::string(val).c_str());
+                if (config.etc2_jitter < 0) config.etc2_jitter = 0;
+                if (config.etc2_jitter > 15) config.etc2_jitter = 15;
             } else if (arg == "--etc2-refine") {
                 config.etc2_refine = std::atoi(std::string(val).c_str());
                 if (config.etc2_refine < 0) config.etc2_refine = 0;
@@ -5561,6 +5569,7 @@ int run_etc2(const Config& cfg) {
     eopts.effort = cfg.etc2_effort;
     eopts.block_ed.strength = cfg.etc2_block_ed;
     eopts.refine_passes = cfg.etc2_refine;
+    eopts.jitter = cfg.etc2_jitter;
     // Block-grid ED uses the SAME --dither method as the per-pixel ED
     // path (Floyd-Steinberg default; Atkinson / Stucki / Jarvis / Sierra-
     // Lite / etc. all valid — see feedback_never_hardcode_fs).

@@ -74,6 +74,13 @@ struct Options {
     // by per-block error are carried forward through the per-mode search.
     int beam = 32;
 
+    // ETC1 sub-block jitter window — half-width in nibble units around the
+    // sub-block mean. Total candidates per sub-block ≈ (2N+1)³ × 8 tables.
+    // Increasing this widens the search space (helps content with fine
+    // gradient detail where the optimal base color is far from the block
+    // mean) at the cost of (2N+1)³ growth — see project_etc2_competitive_status.
+    int jitter = 2;
+
     // Block-grid Floyd-Steinberg propagation (project's key wager).
     // 0.0 disables; 1.0 is full FS strength on the block grid.
     block_compress::BlockGridEdOptions block_ed;

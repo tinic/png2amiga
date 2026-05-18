@@ -777,11 +777,12 @@ inline void explore_candidate(const Sample16& s,
 template<block_compress::BlockMetric M, bool Differential>
 SubResult encode_subblock_etc1(const Sample16& s,
                                const int sub_idx[8],
-                               const int base_seed_packed[3]) {
+                               const int base_seed_packed[3],
+                               int jitter) {
     constexpr int kPackedMax = Differential ? 31 : 15;
-    constexpr int kJitter = 2;
     constexpr int kBeam = 16;
     constexpr int kExpandPasses = 2;
+    const int kJitter = std::clamp(jitter, 0, kPackedMax);
 
     std::array<BeamCand, kBeam> beam{};
     for (auto& c : beam) c.err = std::numeric_limits<float>::infinity();
@@ -926,7 +927,7 @@ void pack_etc1_block(Block& blk,
 }
 
 template<block_compress::BlockMetric M>
-Candidate encode_etc1(const Sample16& s) {
+Candidate encode_etc1(const Sample16& s, int jitter) {
     Candidate best{};
     best.err = std::numeric_limits<float>::infinity();
     best.mode = SubMode::etc1_individual;
@@ -955,8 +956,8 @@ Candidate encode_etc1(const Sample16& s) {
         {
             auto seed0 = mean_seed(idx0, 15);
             auto seed1 = mean_seed(idx1, 15);
-            auto sub0 = encode_subblock_etc1<M, false>(s, idx0, seed0.data());
-            auto sub1 = encode_subblock_etc1<M, false>(s, idx1, seed1.data());
+            auto sub0 = encode_subblock_etc1<M, false>(s, idx0, seed0.data(), jitter);
+            auto sub1 = encode_subblock_etc1<M, false>(s, idx1, seed1.data(), jitter);
             Block blk;
             std::uint8_t dec[16][3];
             pack_etc1_block(blk, dec, false, flip != 0, sub0, sub1);
@@ -973,7 +974,7 @@ Candidate encode_etc1(const Sample16& s) {
         {
             auto seed0 = mean_seed(idx0, 31);
             auto seed1 = mean_seed(idx1, 31);
-            auto sub0 = encode_subblock_etc1<M, true>(s, idx0, seed0.data());
+            auto sub0 = encode_subblock_etc1<M, true>(s, idx0, seed0.data(), jitter);
             // Constrain sub1's base to s0's ±[-4,3] per channel.
             int seed1_constrained[3];
             for (int c = 0; c < 3; ++c) {
@@ -981,7 +982,7 @@ Candidate encode_etc1(const Sample16& s) {
                                                   sub0.base_packed[c] - 4,
                                                   sub0.base_packed[c] + 3);
             }
-            auto sub1 = encode_subblock_etc1<M, true>(s, idx1, seed1_constrained);
+            auto sub1 = encode_subblock_etc1<M, true>(s, idx1, seed1_constrained, jitter);
             // Final clamp of sub1.base_packed to delta range (encoder may
             // have jittered out of bounds).
             for (int c = 0; c < 3; ++c) {
@@ -1608,7 +1609,7 @@ Candidate encode_h(const Sample16& s) {
 
 template<block_compress::BlockMetric M>
 Candidate encode_block(const Sample16& s, const Options& opts) {
-    Candidate best = encode_etc1<M>(s);
+    Candidate best = encode_etc1<M>(s, opts.jitter);
     if (opts.effort >= 1) {
         Candidate planar = encode_planar<M>(s);
         if (planar.err < best.err) best = planar;
