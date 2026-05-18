@@ -78,9 +78,11 @@ enum class Method : unsigned char {
     stucki,
     jarvis,
 
-    // Experimental ED bench (will host successive variants):
-    //   v1 — coupled OKLab residual: qe is one perceptual 3-vector,
-    //        kernel is standard FS, accumulator is OKLab not sRGB.
+    // Experimental ED bench: OKLab residual transport (vs the canonical
+    // sRGB residual). qe is one perceptual 3-vector, kernel is standard
+    // FS, accumulator lives in OKLab. Default strength 0.8 (tuned).
+    // Photographic content wins ~0.3-1.0 ΔS2 on 25-image DIV2K; hard-
+    // edge / flat-region graphics (logos) regress, so opt-in only.
     floyd_steinberg_experimental,
 
     // Advanced error diffusion
