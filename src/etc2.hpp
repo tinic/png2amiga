@@ -78,10 +78,13 @@ struct Options {
     // 0.0 disables; 1.0 is full FS strength on the block grid.
     block_compress::BlockGridEdOptions block_ed;
 
-    // Multi-block joint refinement post-pass. 0 = off; 1 = 3-block window;
-    // 2 = 9-block window. Targets visible block-edge seams that single-block
-    // greedy encoders produce.
-    int refine_window = 1;
+    // Multi-block joint refinement passes. 0 = off (default; the picker
+    // already runs every sub-mode). N > 0 runs N additional passes where
+    // each block's encoding is re-tried with edge-pixel targets biased
+    // toward the average of (original source, neighbour blocks' decoded
+    // pixels at the shared boundary). Reduces visible per-block seams
+    // by making each block coherent with its neighbours.
+    int refine_passes = 0;
 
     // --best path: multi-trial pre-image jitter sweep, rank by SSIMULACRA2.
     // 0 = off; N = N trials in parallel.

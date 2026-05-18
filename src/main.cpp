@@ -928,6 +928,7 @@ struct Config {
     int etc2_effort = 2;
     float etc2_block_ed = 0.5f;
     std::string etc2_metric = "oklab2";
+    int etc2_refine = 0;
 
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
     // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
@@ -2158,6 +2159,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.etc2_block_ed = std::strtof(std::string(val).c_str(), nullptr);
                 if (config.etc2_block_ed < 0.f) config.etc2_block_ed = 0.f;
                 if (config.etc2_block_ed > 1.5f) config.etc2_block_ed = 1.5f;
+            } else if (arg == "--etc2-refine") {
+                config.etc2_refine = std::atoi(std::string(val).c_str());
+                if (config.etc2_refine < 0) config.etc2_refine = 0;
+                if (config.etc2_refine > 8) config.etc2_refine = 8;
             } else if (arg == "--etc2-metric") {
                 config.etc2_metric = std::string(val);
                 if (config.etc2_metric != "srgb-mse" && config.etc2_metric != "oklab2") {
@@ -5555,6 +5560,7 @@ int run_etc2(const Config& cfg) {
                        : block_compress::BlockMetric::oklab2;
     eopts.effort = cfg.etc2_effort;
     eopts.block_ed.strength = cfg.etc2_block_ed;
+    eopts.refine_passes = cfg.etc2_refine;
     // Block-grid ED uses the SAME --dither method as the per-pixel ED
     // path (Floyd-Steinberg default; Atkinson / Stucki / Jarvis / Sierra-
     // Lite / etc. all valid — see feedback_never_hardcode_fs).
@@ -5910,14 +5916,28 @@ int run_main(int argc, char* argv[]) {
             }
             distorted_img = std::move(*distorted);
         }
-        // Matte both sides to black before scoring — same treatment
-        // the encoder applies before the quantizer / dither runs
-        // (see matte_to_black above). Without this, alpha-0 magenta
-        // sentinels in the reference vs black in the distorted
-        // .idx (slot 0 = transparent) would tank the score for
-        // pixels neither side actually cares about. Symmetric so
-        // the reference and distorted are evaluated under the same
-        // assumptions.
+        // Alpha harmonisation. Three cases:
+        //   (a) Both have alpha → matte both to black at their own alpha-0
+        //       pixels (existing path; right for source-with-transparency
+        //       vs encoded-with-transparency — e.g. logo.png).
+        //   (b) Only reference has alpha → matte the reference at its own
+        //       transparent pixels; treat distorted as opaque. Score reflects
+        //       how well distorted represents the source's content.
+        //   (c) Only distorted has alpha → DROP distorted's alpha (do not
+        //       matte). Keep distorted's RGB values as the decoder produced
+        //       them (which may include (0,0,0) at alpha=0 padding pixels,
+        //       e.g. etcpak's -v decoder marks block-aligned padding rows
+        //       with alpha=0 + RGB=black). This makes the score align with
+        //       Cloudinary's reference SSIMULACRA2, which also ignores
+        //       alpha on PNG load. The previous symmetric matte_to_black
+        //       would zero those distorted pixels to black explicitly via
+        //       our matte path; that was a no-op compared to the RGB
+        //       already being black, but it did set alpha=0 → our blur's
+        //       zero-pad boundary then over-amplified the seam at the
+        //       padding row, producing scores ~36 points off the reference.
+        if (!reference->has_alpha() && distorted_img.has_alpha()) {
+            distorted_img.set_alpha({});  // RGB stays as-is
+        }
         matte_to_black(*reference);
         matte_to_black(distorted_img);
         float psnr = color_space::compute_psnr_blurred(

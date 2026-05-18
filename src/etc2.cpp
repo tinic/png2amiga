@@ -1676,6 +1676,118 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgb_srgb8,
         res.mode_counts[i] = mode_counts_atom[i].load(std::memory_order_relaxed);
     }
     res.total_oklab2_error = total_err_atom.load(std::memory_order_relaxed);
+
+    // ---- Joint multi-block refinement passes ----------------------------
+    // For each pass: visit each block, build a per-pixel target where edge
+    // pixels get pulled toward the average of (original source, decoded
+    // pixels from the neighbour block on the OTHER side of that edge).
+    // Re-encode the block with these biased targets; accept iff err drops
+    // vs the current block's err. This reduces visible block-boundary
+    // seams (the per-block-mean ED already shifts targets at the coarse
+    // level; this is the fine-grained edge-aware version).
+    auto refine_one_pass = [&](auto metric_tag) {
+        constexpr block_compress::BlockMetric M = decltype(metric_tag)::value;
+        std::atomic<float> delta_err{0.0f};
+        std::atomic<int> n_replaced{0};
+        // Snapshot the current decoded pixels so writes from one block's
+        // refine don't ripple into its neighbours' refine (deterministic).
+        std::vector<Block> prev_blocks = res.blocks;
+        // Process strips in parallel (same partitioning as encode pass).
+        pipeline::parallel_for(std::size_t(n_strips), [&](std::size_t strip) {
+            const int by_lo = int(strip) * rows_per_strip;
+            const int by_hi = std::min(by_lo + rows_per_strip, res.block_rows);
+            Sample16 s{};
+            float local_delta = 0.0f;
+            int local_replaced = 0;
+            for (int by = by_lo; by < by_hi; ++by) {
+                for (int bx = 0; bx < res.block_cols; ++bx) {
+                    // Build edge-biased Sample16. Start from un-shifted source.
+                    load_sample(s, padded, pw, bx * kBlockW, by * kBlockH,
+                                {0.f, 0.f, 0.f});
+                    // For each of 4 sides, if a neighbour exists, decode it and
+                    // pull our edge pixels' OKLab targets toward the average of
+                    // (source, neighbour decoded edge).
+                    auto blend_edge = [&](int nbx, int nby,
+                                          int our_edge_pixel_offset,
+                                          int our_edge_step,
+                                          int their_edge_pixel_offset,
+                                          int their_edge_step,
+                                          int npixels) {
+                        if (nbx < 0 || nby < 0 || nbx >= res.block_cols ||
+                            nby >= res.block_rows) return;
+                        std::size_t nb_idx = std::size_t(nby) * bcols + std::size_t(nbx);
+                        std::uint8_t nb_dec[16 * 3];
+                        decode_block(prev_blocks[nb_idx], nb_dec);
+                        for (int k = 0; k < npixels; ++k) {
+                            int our_i = our_edge_pixel_offset + k * our_edge_step;
+                            int their_i = their_edge_pixel_offset + k * their_edge_step;
+                            color_space::OKLab their_lab = color_space::srgb8_to_oklab(
+                                nb_dec[their_i * 3 + 0],
+                                nb_dec[their_i * 3 + 1],
+                                nb_dec[their_i * 3 + 2]);
+                            // Blend: half toward neighbour, half source.
+                            s.lab[our_i].L = 0.5f * s.lab[our_i].L + 0.5f * their_lab.L;
+                            s.lab[our_i].a = 0.5f * s.lab[our_i].a + 0.5f * their_lab.a;
+                            s.lab[our_i].b = 0.5f * s.lab[our_i].b + 0.5f * their_lab.b;
+                        }
+                    };
+                    // Left edge: x=0 col (pixels 0, 4, 8, 12) vs left-neighbour
+                    // right col (pixels 3, 7, 11, 15).
+                    blend_edge(bx - 1, by,  0, 4,  3, 4, 4);
+                    // Right edge.
+                    blend_edge(bx + 1, by,  3, 4,  0, 4, 4);
+                    // Top edge: y=0 row (pixels 0, 1, 2, 3) vs above-neighbour
+                    // bottom row (pixels 12..15).
+                    blend_edge(bx, by - 1, 0, 1, 12, 1, 4);
+                    // Bottom edge.
+                    blend_edge(bx, by + 1, 12, 1, 0, 1, 4);
+
+                    Candidate c = encode_block<M>(s, options);
+                    // Re-score against the ORIGINAL source (not the blended
+                    // target) so we only accept refinements that genuinely
+                    // beat the existing per-block error on truthful source.
+                    Sample16 s_true{};
+                    load_sample(s_true, padded, pw, bx * kBlockW, by * kBlockH,
+                                {0.f, 0.f, 0.f});
+                    float verified = score_decoded<M>(s_true, c.decoded);
+                    std::size_t bidx = std::size_t(by) * bcols + std::size_t(bx);
+                    // Score the CURRENT block under the same metric for fair
+                    // comparison.
+                    std::uint8_t cur_dec[16 * 3];
+                    decode_block(prev_blocks[bidx], cur_dec);
+                    std::uint8_t cur_decoded[16][3];
+                    for (int i = 0; i < 16; ++i) {
+                        cur_decoded[i][0] = cur_dec[i * 3 + 0];
+                        cur_decoded[i][1] = cur_dec[i * 3 + 1];
+                        cur_decoded[i][2] = cur_dec[i * 3 + 2];
+                    }
+                    float cur_err = score_decoded<M>(s_true, cur_decoded);
+                    if (verified < cur_err) {
+                        res.blocks[bidx] = c.block;
+                        local_delta += (verified - cur_err);
+                        ++local_replaced;
+                    }
+                }
+            }
+            float prev = delta_err.load(std::memory_order_relaxed);
+            while (!delta_err.compare_exchange_weak(prev, prev + local_delta,
+                                                     std::memory_order_relaxed)) {
+            }
+            n_replaced.fetch_add(local_replaced, std::memory_order_relaxed);
+        });
+        // delta_err is negative = improvement; replaced count is informative.
+    };
+    if (options.refine_passes > 0) {
+        for (int p = 0; p < options.refine_passes; ++p) {
+            if (options.metric == block_compress::BlockMetric::srgb_mse) {
+                refine_one_pass(std::integral_constant<block_compress::BlockMetric,
+                                                       block_compress::BlockMetric::srgb_mse>{});
+            } else {
+                refine_one_pass(std::integral_constant<block_compress::BlockMetric,
+                                                       block_compress::BlockMetric::oklab2>{});
+            }
+        }
+    }
     return res;
 }
 
