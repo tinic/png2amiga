@@ -616,30 +616,42 @@ inline float pick_selectors_and_score(const Sample16& s,
                                       const std::uint8_t base8[3],
                                       int table,
                                       int out_sel[8]) {
+    // Hoist: the 4 decoded paint colours depend only on (base, table) —
+    // SAME 4 values for all 8 sub-pixels. Compute once, reuse 8 times.
+    // The previous loop did 32 srgb8_to_oklab calls per (base, table);
+    // this drops it to 4 — the hottest inner-loop op on a (base, table)
+    // candidate. profile shows OKLab convert is the dominant cost; this
+    // is an 8× reduction on that specific hot path.
+    std::uint8_t paint_srgb[4][3];
+    for (int s_i = 0; s_i < 4; ++s_i) {
+        int m = kModifier[table][s_i];
+        paint_srgb[s_i][0] = clamp_u8(int(base8[0]) + m);
+        paint_srgb[s_i][1] = clamp_u8(int(base8[1]) + m);
+        paint_srgb[s_i][2] = clamp_u8(int(base8[2]) + m);
+    }
+    color_space::OKLab paint_lab[4];
+    if constexpr (M == block_compress::BlockMetric::oklab2) {
+        for (int s_i = 0; s_i < 4; ++s_i) {
+            paint_lab[s_i] = color_space::srgb8_to_oklab(
+                paint_srgb[s_i][0], paint_srgb[s_i][1], paint_srgb[s_i][2]);
+        }
+    }
     float tot = 0.0f;
     for (int p = 0; p < 8; ++p) {
         int src_i = sub_idx[p];
         float best_e = std::numeric_limits<float>::infinity();
         int best_s = 0;
         for (int s_i = 0; s_i < 4; ++s_i) {
-            int m = kModifier[table][s_i];
-            std::uint8_t dec[3] = {
-                clamp_u8(int(base8[0]) + m),
-                clamp_u8(int(base8[1]) + m),
-                clamp_u8(int(base8[2]) + m),
-            };
             float e;
             if constexpr (M == block_compress::BlockMetric::srgb_mse) {
-                int dr2 = int(s.srgb8[src_i][0]) - int(dec[0]);
-                int dg2 = int(s.srgb8[src_i][1]) - int(dec[1]);
-                int db2 = int(s.srgb8[src_i][2]) - int(dec[2]);
+                int dr2 = int(s.srgb8[src_i][0]) - int(paint_srgb[s_i][0]);
+                int dg2 = int(s.srgb8[src_i][1]) - int(paint_srgb[s_i][1]);
+                int db2 = int(s.srgb8[src_i][2]) - int(paint_srgb[s_i][2]);
                 e = float(dr2 * dr2 + dg2 * dg2 + db2 * db2);
             } else {
-                color_space::OKLab d_lab =
-                    color_space::srgb8_to_oklab(dec[0], dec[1], dec[2]);
-                e = color_space::fma_dist_sq(s.lab[src_i].L - d_lab.L,
-                                             s.lab[src_i].a - d_lab.a,
-                                             s.lab[src_i].b - d_lab.b);
+                e = color_space::fma_dist_sq(s.lab[src_i].L - paint_lab[s_i].L,
+                                             s.lab[src_i].a - paint_lab[s_i].a,
+                                             s.lab[src_i].b - paint_lab[s_i].b);
             }
             if (e < best_e) { best_e = e; best_s = s_i; }
         }
