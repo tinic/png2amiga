@@ -5480,9 +5480,16 @@ ConvertResult convert_ktx2(const std::uint8_t* input_data,
     }
 
     // RGBA8 → linear Color3f Image (so scale::resample can run in linear).
+    // Preserve source alpha plane if any pixel is non-opaque.
     const std::size_t sw = std::size_t(w);
     const std::size_t sh = std::size_t(h);
     Image src{sw, sh};
+    bool any_transparent = false;
+    for (std::size_t i = 0; i < sw * sh; ++i) {
+        if (raw[i * 4u + 3u] < 255) { any_transparent = true; break; }
+    }
+    std::vector<float> alpha_plane;
+    if (any_transparent) alpha_plane.resize(sw * sh);
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             std::size_t i = (std::size_t(y) * std::size_t(w) + std::size_t(x)) * 4u;
@@ -5491,8 +5498,13 @@ ConvertResult convert_ktx2(const std::uint8_t* input_data,
                 float(raw[i + 1]) * (1.f / 255.f),
                 float(raw[i + 2]) * (1.f / 255.f),
             });
+            if (any_transparent) {
+                alpha_plane[std::size_t(y) * sw + std::size_t(x)] =
+                    float(raw[i + 3]) * (1.f / 255.f);
+            }
         }
     }
+    if (any_transparent) src.set_alpha(std::move(alpha_plane));
     free_raw();
 
     if (target_w != w || target_h != h) {
@@ -5523,13 +5535,18 @@ ConvertResult convert_ktx2(const std::uint8_t* input_data,
     ki.image_h = H;
     std::vector<std::uint8_t> blocks_storage;
     if (mode == amiga::Mode::bc7) {
-        // BC7 takes RGBA — pack a 4-channel buffer (alpha = 255).
+        // BC7 takes RGBA — pack a 4-channel buffer, honouring source
+        // alpha if present. Not premultiplied.
         std::vector<std::uint8_t> rgba_srgb8(std::size_t(W) * std::size_t(H) * 4u);
+        const bool has_alpha = src.has_alpha();
+        auto src_alpha = src.alpha();
         for (std::size_t i = 0; i < rgb_srgb8.size() / 3; ++i) {
             rgba_srgb8[i * 4u + 0u] = rgb_srgb8[i * 3u + 0u];
             rgba_srgb8[i * 4u + 1u] = rgb_srgb8[i * 3u + 1u];
             rgba_srgb8[i * 4u + 2u] = rgb_srgb8[i * 3u + 2u];
-            rgba_srgb8[i * 4u + 3u] = 255u;
+            rgba_srgb8[i * 4u + 3u] = has_alpha
+                ? std::uint8_t(std::clamp(src_alpha[i], 0.f, 1.f) * 255.f + 0.5f)
+                : std::uint8_t(255u);
         }
         bc7::Options bopts;
         bopts.metric = block_compress::BlockMetric::oklab2;

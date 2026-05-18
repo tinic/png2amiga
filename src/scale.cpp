@@ -95,6 +95,23 @@ Image scale_horizontal(const Image& src, std::size_t dst_width) {
         }
     }
 
+    if (src.has_alpha()) {
+        std::vector<float> dst_a(dst_width * src_h);
+        auto src_a = src.alpha();
+        for (std::size_t y = 0; y < src_h; ++y) {
+            for (std::size_t x = 0; x < dst_width; ++x) {
+                const auto& r = rows[x];
+                float a = 0.f;
+                for (int k = 0; k < r.count; ++k) {
+                    auto sx = static_cast<std::size_t>(r.first + k);
+                    a += src_a[y * src_w + sx] * r.w[static_cast<std::size_t>(k)];
+                }
+                dst_a[y * dst_width + x] = std::clamp(a, 0.f, 1.f);
+            }
+        }
+        dst.set_alpha(std::move(dst_a));
+    }
+
     return dst;
 }
 
@@ -115,6 +132,23 @@ Image scale_vertical(const Image& src, std::size_t dst_height) {
             }
             dst[x, y] = sum.clamped();
         }
+    }
+
+    if (src.has_alpha()) {
+        std::vector<float> dst_a(src_w * dst_height);
+        auto src_a = src.alpha();
+        for (std::size_t y = 0; y < dst_height; ++y) {
+            const auto& r = rows[y];
+            for (std::size_t x = 0; x < src_w; ++x) {
+                float a = 0.f;
+                for (int k = 0; k < r.count; ++k) {
+                    auto sy = static_cast<std::size_t>(r.first + k);
+                    a += src_a[sy * src_w + x] * r.w[static_cast<std::size_t>(k)];
+                }
+                dst_a[y * src_w + x] = std::clamp(a, 0.f, 1.f);
+            }
+        }
+        dst.set_alpha(std::move(dst_a));
     }
 
     return dst;

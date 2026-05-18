@@ -5899,9 +5899,11 @@ int run_bc7(const Config& cfg) {
         return exit_code::cant_create;
     }
 
-    // png_io::load drops alpha (Image is RGB-only). For BC7, force the
-    // alpha channel to 255 for now — the load path keeps source PNG
-    // alpha in a separate has_transparency field we don't surface here.
+    // Pack RGB + source alpha into RGBA8. Source alpha is not
+    // premultiplied — BC7 encodes RGB and A as independent channels and
+    // the user is in charge of any premul they want pre-encoding.
+    const bool has_alpha = src.has_alpha();
+    auto src_alpha = src.alpha();
     std::vector<std::uint8_t> rgba_srgb8(std::size_t(W) * std::size_t(H) * 4u);
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
@@ -5911,7 +5913,10 @@ int run_bc7(const Config& cfg) {
             rgba_srgb8[i + 0u] = std::uint8_t(sc.r * 255.0f + 0.5f);
             rgba_srgb8[i + 1u] = std::uint8_t(sc.g * 255.0f + 0.5f);
             rgba_srgb8[i + 2u] = std::uint8_t(sc.b * 255.0f + 0.5f);
-            rgba_srgb8[i + 3u] = 255u;
+            rgba_srgb8[i + 3u] = has_alpha
+                ? std::uint8_t(std::clamp(src_alpha[std::size_t(y) * std::size_t(W) + std::size_t(x)],
+                                          0.f, 1.f) * 255.f + 0.5f)
+                : std::uint8_t(255u);
         }
     }
 

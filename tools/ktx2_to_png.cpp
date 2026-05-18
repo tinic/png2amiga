@@ -228,23 +228,28 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Crop the padded result to (W, H) and convert RGBA→RGB for PNG output.
-    std::vector<std::uint8_t> rgb(std::size_t(W) * std::size_t(H) * 3u);
+    // Crop the padded result to (W, H). For BC7 (RGBA-native) keep all 4
+    // channels in the output PNG so a non-trivial source alpha plane
+    // round-trips through the file. ETC2 / BC1 are RGB-only formats; we
+    // strip alpha (all-255 anyway) to avoid bloating their PNG output.
+    const int out_ch = decode_bc7 ? 4 : 3;
+    std::vector<std::uint8_t> out_bytes(std::size_t(W) * std::size_t(H) * std::size_t(out_ch));
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
             std::size_t src = (std::size_t(y) * std::size_t(padded_w) + std::size_t(x)) * 4u;
-            std::size_t dst = (std::size_t(y) * std::size_t(W) + std::size_t(x)) * 3u;
-            rgb[dst + 0] = rgba[src + 0];
-            rgb[dst + 1] = rgba[src + 1];
-            rgb[dst + 2] = rgba[src + 2];
+            std::size_t dst = (std::size_t(y) * std::size_t(W) + std::size_t(x)) * std::size_t(out_ch);
+            out_bytes[dst + 0] = rgba[src + 0];
+            out_bytes[dst + 1] = rgba[src + 1];
+            out_bytes[dst + 2] = rgba[src + 2];
+            if (out_ch == 4) out_bytes[dst + 3] = rgba[src + 3];
         }
     }
 
-    if (!stbi_write_png(argv[2], W, H, 3, rgb.data(), W * 3)) {
+    if (!stbi_write_png(argv[2], W, H, out_ch, out_bytes.data(), W * out_ch)) {
         std::fprintf(stderr, "ktx2_to_png: stbi_write_png failed for %s\n", argv[2]);
         return 73;
     }
-    std::fprintf(stderr, "ktx2_to_png: wrote %s (%dx%d, %d blocks, vkFormat %u)\n",
-                 argv[2], W, H, int(expected_blocks), img.vk_format);
+    std::fprintf(stderr, "ktx2_to_png: wrote %s (%dx%d %dch, %d blocks, vkFormat %u)\n",
+                 argv[2], W, H, out_ch, int(expected_blocks), img.vk_format);
     return 0;
 }
