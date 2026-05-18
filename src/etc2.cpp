@@ -1046,6 +1046,201 @@ Candidate encode_planar(const Sample16& s) {
 }
 
 // ---------------------------------------------------------------------------
+// T-mode encoder
+// ---------------------------------------------------------------------------
+//
+// 2 base colors C0, C1 (each 4-bit per channel = RGB444) + distance index.
+// Paint colors: { C0, C1+d, C1, C1-d }. The encoder runs k=2 k-means in
+// OKLab on the 16 source pixels, snaps cluster means to 4-bit precision,
+// then sweeps the 8 distance values + 2 (C0,C1) orderings.
+//
+// Dispatch trigger: T-mode is signalled by diff bit = 1 AND R5+dR<0 OR
+// R5+dR>31. With R0a (high 2 bits of R0) at raw bits 60..59 and R0b (low
+// 2) at raw bits 57..56, the encoder picks raw bits 63..61 (the high
+// 3 of R5) and raw bit 58 (sign bit of dR) such that the dispatcher
+// always picks T-mode regardless of (R0a, R0b). Cases:
+//
+//   - R0a + R0b < 4: raw 63..61 = 0, bit58 = 1 → R5+dR < 0 (downward).
+//   - else:          raw 63..61 = 7, bit58 = 0 → R5+dR > 31 (upward).
+//
+// Verified by exhaustive enumeration of R0 ∈ [0,15] × dispatcher rules.
+
+void cluster_k2_oklab(const Sample16& s, std::uint8_t c0[3], std::uint8_t c1[3]) {
+    // Initialise with two extreme pixels — pick the pair with largest OKLab
+    // distance. Cheap (16² = 256 distances) and avoids local-minimum traps.
+    int i0 = 0, i1 = 0;
+    float best_d = -1.0f;
+    for (int i = 0; i < 16; ++i) {
+        for (int j = i + 1; j < 16; ++j) {
+            float d = color_space::fma_dist_sq(s.lab[i].L - s.lab[j].L,
+                                                s.lab[i].a - s.lab[j].a,
+                                                s.lab[i].b - s.lab[j].b);
+            if (d > best_d) { best_d = d; i0 = i; i1 = j; }
+        }
+    }
+    color_space::OKLab m0 = s.lab[i0];
+    color_space::OKLab m1 = s.lab[i1];
+
+    // Two Lloyd iterations are sufficient on k=2 with good initialisation.
+    for (int iter = 0; iter < 4; ++iter) {
+        float sum0[3] = {0}, sum1[3] = {0};
+        int n0 = 0, n1 = 0;
+        for (int i = 0; i < 16; ++i) {
+            float d0 = color_space::fma_dist_sq(s.lab[i].L - m0.L,
+                                                 s.lab[i].a - m0.a,
+                                                 s.lab[i].b - m0.b);
+            float d1 = color_space::fma_dist_sq(s.lab[i].L - m1.L,
+                                                 s.lab[i].a - m1.a,
+                                                 s.lab[i].b - m1.b);
+            if (d0 <= d1) {
+                sum0[0] += s.srgb8[i][0]; sum0[1] += s.srgb8[i][1]; sum0[2] += s.srgb8[i][2];
+                ++n0;
+            } else {
+                sum1[0] += s.srgb8[i][0]; sum1[1] += s.srgb8[i][1]; sum1[2] += s.srgb8[i][2];
+                ++n1;
+            }
+        }
+        if (n0 == 0) { n0 = 1; sum0[0] = s.srgb8[i0][0]; sum0[1] = s.srgb8[i0][1]; sum0[2] = s.srgb8[i0][2]; }
+        if (n1 == 0) { n1 = 1; sum1[0] = s.srgb8[i1][0]; sum1[1] = s.srgb8[i1][1]; sum1[2] = s.srgb8[i1][2]; }
+        std::uint8_t a0[3] = {std::uint8_t(int(sum0[0] / n0)),
+                              std::uint8_t(int(sum0[1] / n0)),
+                              std::uint8_t(int(sum0[2] / n0))};
+        std::uint8_t a1[3] = {std::uint8_t(int(sum1[0] / n1)),
+                              std::uint8_t(int(sum1[1] / n1)),
+                              std::uint8_t(int(sum1[2] / n1))};
+        m0 = color_space::srgb8_to_oklab(a0[0], a0[1], a0[2]);
+        m1 = color_space::srgb8_to_oklab(a1[0], a1[1], a1[2]);
+        c0[0] = a0[0]; c0[1] = a0[1]; c0[2] = a0[2];
+        c1[0] = a1[0]; c1[1] = a1[1]; c1[2] = a1[2];
+    }
+}
+
+inline int snap_4bit(int v) { return std::clamp((v + 8) >> 4, 0, 15); }
+
+template<block_compress::BlockMetric M>
+Candidate encode_t(const Sample16& s) {
+    std::uint8_t c0_8[3], c1_8[3];
+    cluster_k2_oklab(s, c0_8, c1_8);
+
+    Candidate best{};
+    best.err = std::numeric_limits<float>::infinity();
+    best.mode = SubMode::t_mode;
+
+    // Try both orderings of (C0, C1) — paint geometry isn't symmetric.
+    for (int swap = 0; swap < 2; ++swap) {
+        const std::uint8_t* C0 = swap ? c1_8 : c0_8;
+        const std::uint8_t* C1 = swap ? c0_8 : c1_8;
+        int R0_4 = snap_4bit(C0[0]);
+        int G0_4 = snap_4bit(C0[1]);
+        int B0_4 = snap_4bit(C0[2]);
+        int R1_4 = snap_4bit(C1[0]);
+        int G1_4 = snap_4bit(C1[1]);
+        int B1_4 = snap_4bit(C1[2]);
+        std::uint8_t C0e[3] = {expand4(std::uint32_t(R0_4)),
+                                expand4(std::uint32_t(G0_4)),
+                                expand4(std::uint32_t(B0_4))};
+        std::uint8_t C1e[3] = {expand4(std::uint32_t(R1_4)),
+                                expand4(std::uint32_t(G1_4)),
+                                expand4(std::uint32_t(B1_4))};
+
+        for (int d_idx = 0; d_idx < 8; ++d_idx) {
+            int d = kDistanceT[d_idx];
+            std::uint8_t paint[4][3];
+            paint[0][0] = C0e[0]; paint[0][1] = C0e[1]; paint[0][2] = C0e[2];
+            for (int ch = 0; ch < 3; ++ch) {
+                paint[1][ch] = clamp_u8(int(C1e[ch]) + d);
+                paint[2][ch] = C1e[ch];
+                paint[3][ch] = clamp_u8(int(C1e[ch]) - d);
+            }
+            // Per-pixel argmin over 4 paints.
+            int sel[16];
+            float tot_err = 0.0f;
+            for (int i = 0; i < 16; ++i) {
+                float be = std::numeric_limits<float>::infinity();
+                int bp = 0;
+                for (int p = 0; p < 4; ++p) {
+                    float e;
+                    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+                        int dr = int(s.srgb8[i][0]) - int(paint[p][0]);
+                        int dg = int(s.srgb8[i][1]) - int(paint[p][1]);
+                        int db = int(s.srgb8[i][2]) - int(paint[p][2]);
+                        e = float(dr * dr + dg * dg + db * db);
+                    } else {
+                        color_space::OKLab plab = color_space::srgb8_to_oklab(
+                            paint[p][0], paint[p][1], paint[p][2]);
+                        e = color_space::fma_dist_sq(s.lab[i].L - plab.L,
+                                                     s.lab[i].a - plab.a,
+                                                     s.lab[i].b - plab.b);
+                    }
+                    if (e < be) { be = e; bp = p; }
+                }
+                sel[i] = bp;
+                tot_err += be;
+            }
+
+            // Compare against best so far — pack only if better.
+            if (tot_err < best.err) {
+                Block blk{};
+                std::uint64_t v = 0;
+                auto put = [&](std::uint64_t val, int size, int hi) {
+                    int shift = hi - size + 1;
+                    v |= (val & ((std::uint64_t(1) << size) - 1)) << shift;
+                };
+
+                int R0a = (R0_4 >> 2) & 0x3;
+                int R0b = R0_4 & 0x3;
+                bool downward = (R0a + R0b) < 4;
+                std::uint64_t raw_63_61 = downward ? 0 : 7;
+                std::uint64_t bit58 = downward ? 1 : 0;
+
+                put(raw_63_61, 3, 63);   // R5 high 3 bits — dispatch helper
+                put(std::uint64_t(R0a), 2, 60);  // R0a — bits 60..59
+                put(bit58, 1, 58);              // dR sign bit
+                put(std::uint64_t(R0b), 2, 57); // R0b — bits 57..56
+                put(std::uint64_t(G0_4), 4, 55);
+                put(std::uint64_t(B0_4), 4, 51);
+                put(std::uint64_t(R1_4), 4, 47);
+                put(std::uint64_t(G1_4), 4, 43);
+                put(std::uint64_t(B1_4), 4, 39);
+                put(std::uint64_t((d_idx >> 1) & 0x3), 2, 35);
+                put(std::uint64_t(d_idx & 0x1), 1, 32);
+                put(1u, 1, 33);  // diffbit
+
+                // Selector bits (raw 0..3, no unscramble for T-mode).
+                for (int idx = 0; idx < 16; ++idx) {
+                    int x = idx % 4, y = idx / 4;
+                    int pos = x * 4 + y;
+                    unsigned sc = unsigned(sel[idx]);
+                    v |= std::uint64_t((sc >> 1u) & 1u) << (16 + pos);
+                    v |= std::uint64_t(sc & 1u) << pos;
+                }
+                for (int i = 0; i < 8; ++i) {
+                    blk[std::size_t(i)] = std::uint8_t((v >> ((7 - i) * 8)) & 0xFFu);
+                }
+                // Sanity round-trip via the decoder — guarantees we score
+                // against what the GPU actually renders.
+                std::uint8_t flat[48];
+                decode_block(blk, flat);
+                std::uint8_t dec[16][3];
+                for (int i = 0; i < 16; ++i) {
+                    dec[i][0] = flat[i * 3 + 0];
+                    dec[i][1] = flat[i * 3 + 1];
+                    dec[i][2] = flat[i * 3 + 2];
+                }
+                float verified = score_decoded<M>(s, dec);
+                if (verified < best.err) {
+                    best.err = verified;
+                    best.block = blk;
+                    std::memcpy(best.decoded, dec, sizeof(dec));
+                    best.mode = SubMode::t_mode;
+                }
+            }
+        }
+    }
+    return best;
+}
+
+// ---------------------------------------------------------------------------
 // Per-block picker
 // ---------------------------------------------------------------------------
 
@@ -1055,9 +1250,15 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
     if (opts.effort >= 1) {
         Candidate planar = encode_planar<M>(s);
         if (planar.err < best.err) best = planar;
+        Candidate t = encode_t<M>(s);
+        if (t.err < best.err) best = t;
     }
-    // T/H modes — TODO in a follow-up commit. ETC1 + planar already
-    // covers the common cases; T/H help most on tiled / cartoon content.
+    // H-mode is the gap left in the per-block search — the dispatcher
+    // routes via col0 ≥ col1 lexicographic comparison on a packed
+    // 12-bit value, which constrains the encoder's choice of base
+    // colours. Implementing it correctly needs the same dispatch-trigger
+    // analysis T-mode got. Deferred to a follow-up commit; the existing
+    // 4-mode picker (ETC1 ind/diff + planar + T) covers the main bases.
     return best;
 }
 
