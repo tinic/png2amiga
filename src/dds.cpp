@@ -130,14 +130,16 @@ std::vector<std::uint8_t> write(const Inputs& in) {
         put_u32(out, 0);
     }
 
+    // sRGB hint is carried in DXGI format for BC7; BC1 legacy DXT1 has no
+    // sRGB bit (consumers infer or use the misc flags). is_srgb() exists
+    // for future BC1 sRGB tagging; reference it so the symbol isn't elided.
+    (void)is_srgb(in.format);
+
     // --- Level data, LARGEST first ----
     for (auto lv : levels) {
         out.insert(out.end(), lv.begin(), lv.end());
     }
 
-    (void)is_srgb;  // sRGB hint is carried in DXGI format for BC7; BC1
-                    // legacy DXT1 has no sRGB bit (consumers infer or use
-                    // the misc flags).
     return out;
 }
 

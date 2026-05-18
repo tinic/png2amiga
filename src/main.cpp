@@ -41,6 +41,8 @@
 #include "stb_image_write.h"
 
 #ifdef _WIN32
+#  define NOMINMAX  // keep windows.h from leaking min/max macros
+#  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
 #else
 #  include <unistd.h>
@@ -5639,7 +5641,11 @@ build_mip_chain(const Image& base_image,
 // hands off to etc2::encode_image, wraps the block stream in KTX2, and
 // writes the .ktx2 file. Reports the same "Encoded:" status shape as
 // the other modes so the bench harness can grep for it.
-int run_etc2(const Config& cfg) {
+int run_etc2(Config cfg) {
+    if (cfg.output_path.empty() && !cfg.preview && !cfg.input_path.empty()) {
+        std::filesystem::path in_p(cfg.input_path);
+        cfg.output_path = (in_p.parent_path() / in_p.stem()).string() + ".ktx2";
+    }
     // Output path is optional: --preview alone (no output) is fine, and any
     // file output must be .ktx2. When --preview is set, we decode the encoded
     // blocks back to RGB and show them in the terminal — same shape as the
@@ -5877,15 +5883,15 @@ int run_etc2(const Config& cfg) {
 // BC1 (DXT1) dispatch — same shape as run_etc2 but using bc1::encode_image
 // and the BC1 vkFormat. Shares the load/resize/pack/score/KTX2-wrap
 // pattern. No --best path yet (will add when first useful).
-int run_bc1(const Config& cfg) {
+int run_bc1(Config cfg) {
+    if (cfg.output_path.empty() && !cfg.preview && !cfg.input_path.empty()) {
+        std::filesystem::path in_p(cfg.input_path);
+        cfg.output_path = (in_p.parent_path() / in_p.stem()).string() + ".ktx2";
+    }
     const bool out_dds = !cfg.output_path.empty() && ends_with(cfg.output_path, ".dds");
     const bool out_ktx2 = !cfg.output_path.empty() && ends_with(cfg.output_path, ".ktx2");
     if (!cfg.output_path.empty() && !out_dds && !out_ktx2) {
         std::println(stderr, "Error: --mode bc1 output path must end in .ktx2 or .dds");
-        return exit_code::usage;
-    }
-    if (cfg.output_path.empty() && !cfg.preview) {
-        std::println(stderr, "Error: --mode bc1 needs an output (.ktx2 or .dds) or --preview");
         return exit_code::usage;
     }
     auto loaded = png_io::load(cfg.input_path);
@@ -6029,15 +6035,19 @@ int run_bc1(const Config& cfg) {
 // BC7 (RGBA) dispatch — mirrors run_bc1 but with the 4-channel input
 // path (BC7 has full alpha support; we pack source RGBA into the
 // encoder which currently emits Mode 6 blocks).
-int run_bc7(const Config& cfg) {
+int run_bc7(Config cfg) {
+    // Default the output path to <input_stem>.ktx2 if nothing was given —
+    // matches the typical Unix tool convention (`gzip foo` → foo.gz). The
+    // user can pass --preview to bypass file output entirely or supply a
+    // .dds output to use the DDS container instead.
+    if (cfg.output_path.empty() && !cfg.preview && !cfg.input_path.empty()) {
+        std::filesystem::path in_p(cfg.input_path);
+        cfg.output_path = (in_p.parent_path() / in_p.stem()).string() + ".ktx2";
+    }
     const bool out_dds = !cfg.output_path.empty() && ends_with(cfg.output_path, ".dds");
     const bool out_ktx2 = !cfg.output_path.empty() && ends_with(cfg.output_path, ".ktx2");
     if (!cfg.output_path.empty() && !out_dds && !out_ktx2) {
         std::println(stderr, "Error: --mode bc7 output path must end in .ktx2 or .dds");
-        return exit_code::usage;
-    }
-    if (cfg.output_path.empty() && !cfg.preview) {
-        std::println(stderr, "Error: --mode bc7 needs an output (.ktx2 or .dds) or --preview");
         return exit_code::usage;
     }
     auto loaded = png_io::load(cfg.input_path);
