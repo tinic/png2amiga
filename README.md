@@ -626,9 +626,9 @@ Cross-fade (lores/hires/EHB; --preview animates):
   --fade-loop                     Loop forward (source→...→target→source); else
                                   ping-pong (source→...→target→...→source).
 
-ETC2 (--mode etc2 → .ktx2):
+ETC2 / BC1 (--mode etc2|bc1 → .ktx2):
   --etc2-effort <0-3>             Search depth (default: 2)
-  --etc2-jitter <0-15>            Base-color search width (default: 1)
+  --etc2-jitter <0-15>            Endpoint search width (default: 1)
   --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5)
   --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)
 

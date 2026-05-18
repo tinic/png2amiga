@@ -32,6 +32,9 @@ namespace png2amiga::ktx2 {
 // Vulkan vkFormat values we use (matches VK_FORMAT_* from vulkan_core.h).
 // Listed explicitly so we don't pull in Vulkan headers from a converter.
 enum class VkFormat : std::uint32_t {
+    // BC1 (DXT1) RGB block formats.
+    bc1_rgb_unorm_block = 133,      // VK_FORMAT_BC1_RGB_UNORM_BLOCK
+    bc1_rgb_srgb_block = 134,       // VK_FORMAT_BC1_RGB_SRGB_BLOCK
     etc2_r8g8b8_unorm_block = 147,  // VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK
     etc2_r8g8b8_srgb_block = 148,   // VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK
     // ASTC LDR sRGB block formats — wired in for the planned ASTC port,

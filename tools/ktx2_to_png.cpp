@@ -1,22 +1,25 @@
-// ktx2_to_png — decode a KTX2 file containing ETC2 RGB8 blocks back to
-// PNG using iOrange's standalone reference decoder (third_party/etcdec).
+// ktx2_to_png — decode a KTX2 file (ETC2 RGB or BC1 RGB) back to PNG
+// using iOrange's standalone reference decoders (third_party/etcdec for
+// ETC2, third_party/bcdec for BC1).
 //
 // Purpose: independent verification of the encoder's output. Our own
-// decoder (src/etc2.cpp) is a line-for-line port of Ericsson's etcdec
-// reference, so any block we encode should also decode byte-identically
-// through the iOrange reference (which is a different port of the same
-// spec). If outputs ever diverge, that's a real correctness signal.
+// decoders are line-for-line ports of their respective references; any
+// block we encode should decode byte-identically through this neutral
+// third-party tool. If outputs ever diverge, that's a real correctness
+// signal.
 //
 // Usage:
 //   ktx2_to_png input.ktx2 output.png
 //
-// Limitations:
-//   - Single 2D mip level only (matches our encoder's output)
-//   - vkFormat must be VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK (147) or SRGB (148)
-//   - No supercompression, no array layers, no cubemap faces
+// Supported vkFormats:
+//   147 / 148  VK_FORMAT_ETC2_R8G8B8_UNORM/SRGB_BLOCK
+//   133 / 134  VK_FORMAT_BC1_RGB_UNORM/SRGB_BLOCK
 
 #define ETCDEC_IMPLEMENTATION 1
 #include "etcdec/etcdec.h"
+
+#define BCDEC_IMPLEMENTATION 1
+#include "bcdec/bcdec.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION 1
 #include "stb_image_write.h"
@@ -29,6 +32,8 @@
 
 namespace {
 
+constexpr std::uint32_t kVkFormatBc1RgbUnorm = 133;
+constexpr std::uint32_t kVkFormatBc1RgbSrgb = 134;
 constexpr std::uint32_t kVkFormatEtc2RgbUnorm = 147;
 constexpr std::uint32_t kVkFormatEtc2RgbSrgb = 148;
 
@@ -95,9 +100,13 @@ bool parse_ktx2(const std::vector<std::uint8_t>& f, Ktx2Image& out) {
         std::fprintf(stderr, "ktx2_to_png: supercompression not supported\n");
         return false;
     }
-    if (out.vk_format != kVkFormatEtc2RgbUnorm && out.vk_format != kVkFormatEtc2RgbSrgb) {
+    const bool is_etc2 = (out.vk_format == kVkFormatEtc2RgbUnorm ||
+                          out.vk_format == kVkFormatEtc2RgbSrgb);
+    const bool is_bc1 = (out.vk_format == kVkFormatBc1RgbUnorm ||
+                         out.vk_format == kVkFormatBc1RgbSrgb);
+    if (!is_etc2 && !is_bc1) {
         std::fprintf(stderr,
-                     "ktx2_to_png: unsupported vkFormat %u (need 147 ETC2_RGB_UNORM or 148 SRGB)\n",
+                     "ktx2_to_png: unsupported vkFormat %u (need 147/148 ETC2 or 133/134 BC1)\n",
                      out.vk_format);
         return false;
     }
@@ -142,7 +151,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Decode 4×4 ETC2 RGB blocks via etcdec into a tightly-packed RGBA8 buffer.
+    // Decode 4×4 blocks via the matching reference decoder into a
+    // tightly-packed RGBA8 buffer. ETC2 path uses etcdec; BC1 uses bcdec.
     const int W = int(img.width);
     const int H = int(img.height);
     const int bcols = (W + 3) / 4;
@@ -151,7 +161,7 @@ int main(int argc, char* argv[]) {
     const std::size_t expected_blocks = std::size_t(bcols) * std::size_t(brows);
     if (lvl.byte_length < expected_blocks * kBlockBytes) {
         std::fprintf(stderr,
-                     "ktx2_to_png: level data too short for %dx%d ETC2 (got %llu need %zu)\n",
+                     "ktx2_to_png: level data too short for %dx%d (got %llu need %zu)\n",
                      W, H,
                      static_cast<unsigned long long>(lvl.byte_length),
                      expected_blocks * std::size_t(kBlockBytes));
@@ -162,6 +172,8 @@ int main(int argc, char* argv[]) {
     const int padded_w = bcols * 4;
     const int padded_h = brows * 4;
     std::vector<std::uint8_t> rgba(std::size_t(padded_w) * std::size_t(padded_h) * 4u, 0);
+    const bool decode_bc1 = (img.vk_format == kVkFormatBc1RgbUnorm ||
+                             img.vk_format == kVkFormatBc1RgbSrgb);
     for (int by = 0; by < brows; ++by) {
         for (int bx = 0; bx < bcols; ++bx) {
             const std::uint8_t* blk =
@@ -169,7 +181,11 @@ int main(int argc, char* argv[]) {
             std::uint8_t* dst =
                 rgba.data() + (std::size_t(by * 4) * std::size_t(padded_w) + std::size_t(bx * 4)) * 4u;
             int pitch = padded_w * 4;
-            etcdec_etc_rgb(blk, dst, pitch);
+            if (decode_bc1) {
+                bcdec_bc1(blk, dst, pitch);
+            } else {
+                etcdec_etc_rgb(blk, dst, pitch);
+            }
         }
     }
 

@@ -25,6 +25,7 @@
 #include "palette_search.hpp"
 #include "ssimulacra2.hpp"
 #include "pipeline.hpp"
+#include "bc1.hpp"
 #include "etc2.hpp"
 #include "ktx2.hpp"
 #include "png_io.hpp"
@@ -113,6 +114,7 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "c64-charset-hires") return amiga::Mode::c64_charset_hires;
     if (s == "c64-charset-multicolor") return amiga::Mode::c64_charset_multicolor;
     if (s == "etc2" || s == "etc2-rgb" || s == "etc2-rgb8") return amiga::Mode::etc2;
+    if (s == "bc1" || s == "dxt1" || s == "bc1-rgb") return amiga::Mode::bc1;
     return amiga::Mode::lores;
 }
 
@@ -5512,22 +5514,38 @@ ConvertResult convert_ktx2(const std::uint8_t* input_data,
         }
     }
 
-    // Encode + wrap in KTX2 container.
-    etc2::Options eopts;
-    eopts.metric = block_compress::BlockMetric::oklab2;
-    eopts.block_ed.method = parse_dither(options.dither);
-    auto enc = etc2::encode_image(rgb_srgb8, W, H, eopts);
-
-    std::span<const std::uint8_t> block_bytes(
-        reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
-        enc.blocks.size() * std::size_t(etc2::kBlockBytes));
+    // Dispatch by mode — both ETC2 and BC1 share the same KTX2 wrapping.
+    auto mode = parse_mode(options.mode);
     ktx2::Inputs ki;
-    ki.format = ktx2::VkFormat::etc2_r8g8b8_srgb_block;
-    ki.block_dim = {etc2::kBlockW, etc2::kBlockH, 1};
     ki.image_w = W;
     ki.image_h = H;
-    ki.bytes_per_block = etc2::kBlockBytes;
-    ki.block_bytes = block_bytes;
+    std::vector<std::uint8_t> blocks_storage;
+    if (mode == amiga::Mode::bc1) {
+        bc1::Options bopts;
+        bopts.metric = block_compress::BlockMetric::oklab2;
+        bopts.block_ed.method = parse_dither(options.dither);
+        auto enc = bc1::encode_image(rgb_srgb8, W, H, bopts);
+        blocks_storage.assign(
+            reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+            reinterpret_cast<const std::uint8_t*>(enc.blocks.data()) +
+                enc.blocks.size() * std::size_t(bc1::kBlockBytes));
+        ki.format = ktx2::VkFormat::bc1_rgb_srgb_block;
+        ki.block_dim = {bc1::kBlockW, bc1::kBlockH, 1};
+        ki.bytes_per_block = bc1::kBlockBytes;
+    } else {
+        etc2::Options eopts;
+        eopts.metric = block_compress::BlockMetric::oklab2;
+        eopts.block_ed.method = parse_dither(options.dither);
+        auto enc = etc2::encode_image(rgb_srgb8, W, H, eopts);
+        blocks_storage.assign(
+            reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+            reinterpret_cast<const std::uint8_t*>(enc.blocks.data()) +
+                enc.blocks.size() * std::size_t(etc2::kBlockBytes));
+        ki.format = ktx2::VkFormat::etc2_r8g8b8_srgb_block;
+        ki.block_dim = {etc2::kBlockW, etc2::kBlockH, 1};
+        ki.bytes_per_block = etc2::kBlockBytes;
+    }
+    ki.block_bytes = std::span<const std::uint8_t>(blocks_storage);
     auto file_bytes = ktx2::write(ki);
 
     ConvertResult r;

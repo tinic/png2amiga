@@ -150,6 +150,11 @@ enum class Mode : unsigned char {
     // ssimulacra2 ranker) transfers cleanly to per-block encoding.
     etc2,
 
+    // BC1 (DXT1) RGB block-compressed texture. 4×4 blocks, 4 bpp.
+    // KTX2 container; VK_FORMAT_BC1_RGB_UNORM_BLOCK / _SRGB_BLOCK.
+    // Same per-block search + block-grid ED pipeline as etc2.
+    bc1,
+
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,  // 256×224, 4 palette lines × 16 BGR333 entries each.
                   //  Tile-based: 8×8 4bpp tiles + tilemap; each tile
@@ -356,6 +361,7 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // is nominal (4 bpp = ETC2's actual bit-cost per pixel). max_colors=0
     // signals "no palette".
     case Mode::etc2:
+    case Mode::bc1:
         return {0, 0, 4, 0, false, false, false, false, 1, 1, 1.0f};
     // S/H modes: same buffer, ~128 effective colors via per-tile shadow.
     case Mode::genesis_h32_sh:
@@ -433,6 +439,15 @@ constexpr bool is_cga(Mode mode) noexcept {
 // Amiga-specific knobs (palette, depth, chipset, copper, sliced, strips,
 // EHB, HAM, dither, interlace) apply.
 constexpr bool is_etc2(Mode mode) noexcept { return mode == Mode::etc2; }
+
+// BC1 (DXT1) RGB block compression — same bypass treatment as etc2.
+constexpr bool is_bc1(Mode mode) noexcept { return mode == Mode::bc1; }
+
+// Any GPU block-compression mode (ETC2, BC1, future BC7 / ASTC). Convenient
+// shorthand for "skip the Amiga pipeline; emit a KTX2 container."
+constexpr bool is_block_compressed(Mode mode) noexcept {
+    return is_etc2(mode) || is_bc1(mode);
+}
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
 constexpr bool is_c64(Mode mode) noexcept {
@@ -563,7 +578,7 @@ constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
     if (is_ham(mode)) return get_mode_params(mode).bitplane_depth;
     if (mode == Mode::ehb) return 6;
     if (is_atari(mode)) return get_mode_params(mode).bitplane_depth;
-    if (is_etc2(mode)) return 4;  // ETC2 is fixed 4 bpp
+    if (is_block_compressed(mode)) return 4;  // ETC2 / BC1 are fixed 4 bpp
 
     // AGA standard modes
     if (chipset == Chipset::aga) return 8;

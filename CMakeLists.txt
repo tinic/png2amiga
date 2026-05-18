@@ -77,6 +77,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/pipeline.cpp
     src/ssimulacra2.cpp
     src/etc2.cpp
+    src/bc1.cpp
     src/ktx2.cpp
     src/api.cpp
     src/ocs_cand_table.cpp
@@ -234,6 +235,7 @@ else()
     target_include_directories(ktx2_to_png PRIVATE
         third_party
         third_party/etcdec
+        third_party/bcdec
         ${CMAKE_BINARY_DIR}/generated)
     # Vendor headers — silence their warnings; our --warnings-as-errors
     # would otherwise refuse them.
@@ -1082,6 +1084,21 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     )
     set_tests_properties("smoke-etc2-thirdparty-decode-png"
         PROPERTIES DEPENDS "smoke-etc2-thirdparty-decode")
+
+    # BC1 round-trip — same shape as the ETC2 test, decoder is bcdec.h.
+    add_test(
+        NAME "smoke-bc1-thirdparty-decode"
+        COMMAND png2amiga --mode bc1 ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/bc1_thirdparty.ktx2
+    )
+    add_test(
+        NAME "smoke-bc1-thirdparty-decode-png"
+        COMMAND ktx2_to_png
+                ${CMAKE_BINARY_DIR}/bc1_thirdparty.ktx2
+                ${CMAKE_BINARY_DIR}/bc1_thirdparty.png
+    )
+    set_tests_properties("smoke-bc1-thirdparty-decode-png"
+        PROPERTIES DEPENDS "smoke-bc1-thirdparty-decode")
 
     # --tile: pre-replicate input 3x3, run pipeline, crop centre. Verify
     # that the encoded .h has the requested centre dimensions (W x H,
