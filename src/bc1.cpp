@@ -359,7 +359,7 @@ inline void bbox_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3])
 // extremes (returning the actual sRGB8 pixel values at those positions).
 // Vs sRGB-space PCA: the axis is perceptually-weighted, so the
 // endpoints align with the direction the OKLab² scorer rewards.
-inline void pca_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
+inline void pca_seed_oklab(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
     // Mean in OKLab.
     float mL = 0, mA = 0, mB = 0;
     for (int i = 0; i < 16; ++i) {
@@ -407,6 +407,77 @@ inline void pca_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) 
     }
     e0[0] = s.srgb8[imin][0]; e0[1] = s.srgb8[imin][1]; e0[2] = s.srgb8[imin][2];
     e1[0] = s.srgb8[imax][0]; e1[1] = s.srgb8[imax][1]; e1[2] = s.srgb8[imax][2];
+}
+
+// sRGB-space PCA — same as pca_seed_oklab but covariance computed in
+// 8-bit sRGB. Different basin for blocks where the dominant sRGB axis
+// disagrees with the OKLab axis (saturated colours, near-grayscale).
+// Currently unused (kept for future --best multi-trial path).
+[[maybe_unused]] inline void pca_seed_srgb(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
+    float mx = 0, my = 0, mz = 0;
+    for (int i = 0; i < 16; ++i) {
+        mx += float(s.srgb8[i][0]);
+        my += float(s.srgb8[i][1]);
+        mz += float(s.srgb8[i][2]);
+    }
+    mx *= 1.f / 16.f; my *= 1.f / 16.f; mz *= 1.f / 16.f;
+    float cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+    for (int i = 0; i < 16; ++i) {
+        float dx = float(s.srgb8[i][0]) - mx;
+        float dy = float(s.srgb8[i][1]) - my;
+        float dz = float(s.srgb8[i][2]) - mz;
+        cxx += dx * dx; cxy += dx * dy; cxz += dx * dz;
+        cyy += dy * dy; cyz += dy * dz;
+        czz += dz * dz;
+    }
+    if (cxx + cyy + czz < 1e-3f) { bbox_seed(s, e0, e1); return; }
+    float vx = cxx + cxy + cxz;
+    float vy = cxy + cyy + cyz;
+    float vz = cxz + cyz + czz;
+    for (int it = 0; it < 4; ++it) {
+        float nx = cxx * vx + cxy * vy + cxz * vz;
+        float ny = cxy * vx + cyy * vy + cyz * vz;
+        float nz = cxz * vx + cyz * vy + czz * vz;
+        float m = std::max({std::abs(nx), std::abs(ny), std::abs(nz)});
+        if (m < 1e-6f) { bbox_seed(s, e0, e1); return; }
+        float inv = 1.f / m;
+        vx = nx * inv; vy = ny * inv; vz = nz * inv;
+    }
+    float pmin = std::numeric_limits<float>::infinity();
+    float pmax = -std::numeric_limits<float>::infinity();
+    int imin = 0, imax = 0;
+    for (int i = 0; i < 16; ++i) {
+        float dx = float(s.srgb8[i][0]) - mx;
+        float dy = float(s.srgb8[i][1]) - my;
+        float dz = float(s.srgb8[i][2]) - mz;
+        float t = dx * vx + dy * vy + dz * vz;
+        if (t < pmin) { pmin = t; imin = i; }
+        if (t > pmax) { pmax = t; imax = i; }
+    }
+    e0[0] = s.srgb8[imin][0]; e0[1] = s.srgb8[imin][1]; e0[2] = s.srgb8[imin][2];
+    e1[0] = s.srgb8[imax][0]; e1[1] = s.srgb8[imax][1]; e1[2] = s.srgb8[imax][2];
+}
+
+// Farthest-pair seed in OKLab: the two pixels with the largest OKLab²
+// distance. A purely "structural" seed that ignores covariance and
+// goes for the most extreme observed difference. Useful for blocks
+// with two well-separated colour clusters where PCA averages them.
+// Currently unused (kept for future --best multi-trial path).
+[[maybe_unused]] inline void farthest_pair_seed(const Sample16& s,
+                                                std::uint8_t e0[3], std::uint8_t e1[3]) {
+    int bi = 0, bj = 1;
+    float best = -1.f;
+    for (int i = 0; i < 15; ++i) {
+        for (int j = i + 1; j < 16; ++j) {
+            float dL = s.lab[i].L - s.lab[j].L;
+            float dA = s.lab[i].a - s.lab[j].a;
+            float dB = s.lab[i].b - s.lab[j].b;
+            float d = dL * dL + dA * dA + dB * dB;
+            if (d > best) { best = d; bi = i; bj = j; }
+        }
+    }
+    e0[0] = s.srgb8[bi][0]; e0[1] = s.srgb8[bi][1]; e0[2] = s.srgb8[bi][2];
+    e1[0] = s.srgb8[bj][0]; e1[1] = s.srgb8[bj][1]; e1[2] = s.srgb8[bj][2];
 }
 
 // Lloyd-style closed-form refit: given fixed selectors, solve the 2-var
@@ -621,14 +692,10 @@ inline void pack_block(RGB565 c0, RGB565 c1,
 //   6. Pack
 template<block_compress::BlockMetric M>
 Candidate encode_block(const Sample16& s, const Options& opts) {
-    std::uint8_t seed_e0[3], seed_e1[3];
-    pca_seed(s, seed_e0, seed_e1);
-
-    RGB565 c0 = to_rgb565(seed_e0);
-    RGB565 c1 = to_rgb565(seed_e1);
-    std::uint8_t sel[16];
-    std::uint8_t decoded[16][3];
-    float err = pick_selectors_and_score<M>(s, c0, c1, sel, decoded);
+    RGB565 c0{}, c1{};
+    std::uint8_t sel[16] = {};
+    std::uint8_t decoded[16][3] = {};
+    float err = std::numeric_limits<float>::infinity();
 
     // Lloyd refinement.
     auto lloyd_refine = [&](RGB565& cc0, RGB565& cc1,
@@ -651,6 +718,15 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
             std::memcpy(ldec, new_dec, sizeof(new_dec));
         }
     };
+
+    // Seed + initial pick. OKLab PCA is the default — empirically tied
+    // with multi-seed (sRGB-PCA / farthest-pair) at significantly higher
+    // wall cost, so single-seed wins on the speed-vs-S2 frontier.
+    std::uint8_t seed_e0[3], seed_e1[3];
+    pca_seed_oklab(s, seed_e0, seed_e1);
+    c0 = to_rgb565(seed_e0);
+    c1 = to_rgb565(seed_e1);
+    err = pick_selectors_and_score<M>(s, c0, c1, sel, decoded);
     if (opts.effort >= 1) lloyd_refine(c0, c1, sel, decoded, err);
 
     // Jitter sweep around the converged endpoints in RGB565 space.
