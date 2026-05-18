@@ -1110,15 +1110,15 @@ Candidate encode_block(const Sample16& s, const Options& /*opts*/) {
     std::memcpy(m6.decoded, decoded, sizeof(decoded));
     m6.err = score_decoded<M>(s, m6.decoded);
 
-    // Mode 1 (2-subset, partition table) — DISABLED. The encoder
-    // produces blocks that round-trip correctly through OUR decoder
-    // (in-memory decoded[] matches bit-decode), and bcdec roundtrips
-    // gray / 2-region / gradient blocks correctly. But on natural-
-    // image blocks (asterix DIV2K) bcdec decodes Mode 1 blocks to
-    // different pixel values than our decoder reads — a subtle bit-
-    // layout disagreement we haven't yet isolated. Mode 6 alone is
-    // already +2 PSNR / +6 S2 over BC1, so it's worth shipping cleanly
-    // and revisiting Mode 1 separately. project_bc7_mode1_bug.md.
+    // Mode 1 is GATED OFF — see project_bc7_status.md. Mode 1 encoder
+    // produces blocks where the in-memory decoded[] disagrees with
+    // both our decode_block and bcdec output on natural-image blocks
+    // (5-unit channel diffs at pixel 15 / anchor pixels). Math
+    // invariant of swap+complement should preserve paint values
+    // exactly, but doesn't in practice. Bug confined to the force-fix
+    // anchor-swap → decoded[] consistency path. Mode 6 alone is +2
+    // PSNR / +6 S2 over BC1 and ships cleanly; revisit Mode 1 with a
+    // focused per-block trace in a dedicated session.
     return m6;
 }
 
