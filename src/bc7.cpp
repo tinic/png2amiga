@@ -54,6 +54,54 @@ constexpr std::uint8_t clamp_u8(int v) {
     return std::uint8_t(std::clamp(v, 0, 255));
 }
 
+// 64-entry partition table for 2-subset modes (Mode 1 / Mode 3 / Mode
+// 7). Each entry maps pixel (i = row, j = col) to subset (0 or 1).
+// Linearised to a 16-element array per partition; pixel index = y*4+x.
+// Values taken verbatim from the D3D11.3 BC7 spec / bcdec table 0.
+constexpr std::uint8_t kPartition2[64][16] = {
+    {0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1}, {0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1},
+    {0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1}, {0,0,0,1,0,0,1,1,0,0,1,1,0,1,1,1},
+    {0,0,0,0,0,0,0,1,0,0,0,1,0,0,1,1}, {0,0,1,1,0,1,1,1,0,1,1,1,1,1,1,1},
+    {0,0,0,1,0,0,1,1,0,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,1,0,0,1,1,0,1,1,1},
+    {0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1}, {0,0,1,1,0,1,1,1,1,1,1,1,1,1,1,1},
+    {0,0,0,0,0,0,0,1,0,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,1},
+    {0,0,0,1,0,1,1,1,1,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1},
+    {0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1},
+    {0,0,0,0,1,0,0,0,1,1,1,0,1,1,1,1}, {0,1,1,1,0,0,0,1,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,0,0,0,1,1,1,0}, {0,1,1,1,0,0,1,1,0,0,0,1,0,0,0,0},
+    {0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0}, {0,0,0,0,1,0,0,0,1,1,0,0,1,1,1,0},
+    {0,0,0,0,0,0,0,0,1,0,0,0,1,1,0,0}, {0,1,1,1,0,0,1,1,0,0,1,1,0,0,0,1},
+    {0,0,1,1,0,0,0,1,0,0,0,1,0,0,0,0}, {0,0,0,0,1,0,0,0,1,0,0,0,1,1,0,0},
+    {0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0}, {0,0,1,1,0,1,1,0,0,1,1,0,1,1,0,0},
+    {0,0,0,1,0,1,1,1,1,1,1,0,1,0,0,0}, {0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
+    {0,1,1,1,0,0,0,1,1,0,0,0,1,1,1,0}, {0,0,1,1,1,0,0,1,1,0,0,1,1,1,0,0},
+    {0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1}, {0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1},
+    {0,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0}, {0,0,1,1,0,0,1,1,1,1,0,0,1,1,0,0},
+    {0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0}, {0,1,0,1,0,1,0,1,1,0,1,0,1,0,1,0},
+    {0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1}, {0,1,0,1,1,0,1,0,1,0,1,0,0,1,0,1},
+    {0,1,1,1,0,0,1,1,1,1,0,0,1,1,1,0}, {0,0,0,1,0,0,1,1,1,1,0,0,1,0,0,0},
+    {0,0,1,1,0,0,1,0,0,1,0,0,1,1,0,0}, {0,0,1,1,1,0,1,1,1,1,0,1,1,1,0,0},
+    {0,1,1,0,1,0,0,1,1,0,0,1,0,1,1,0}, {0,0,1,1,1,1,0,0,1,1,0,0,0,0,1,1},
+    {0,1,1,0,0,1,1,0,1,0,0,1,1,0,0,1}, {0,0,0,0,0,1,1,0,0,1,1,0,0,0,0,0},
+    {0,1,0,0,1,1,1,0,0,1,0,0,0,0,0,0}, {0,0,1,0,0,1,1,1,0,0,1,0,0,0,0,0},
+    {0,0,0,0,0,1,0,0,1,1,1,0,0,1,0,0}, {0,1,1,0,1,1,0,0,1,0,0,1,0,0,1,1},
+    {0,0,1,1,0,1,1,0,1,1,0,0,1,0,0,1}, {0,1,1,0,0,0,1,1,1,0,0,1,1,1,0,0},
+    {0,0,1,1,1,0,0,1,1,1,0,0,0,1,1,0}, {0,1,1,0,1,1,0,0,1,1,0,0,1,0,0,1},
+    {0,1,1,0,0,0,1,1,0,0,1,1,1,0,0,1}, {0,1,1,1,1,1,1,0,1,0,0,0,0,0,0,1},
+    {0,0,0,1,1,0,0,0,1,1,1,0,0,1,1,1}, {0,0,0,0,1,1,1,1,0,0,1,1,0,0,1,1},
+    {0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0}, {0,0,1,0,0,0,1,0,1,1,1,0,1,1,1,0},
+    {0,1,0,0,0,1,0,0,0,1,1,1,0,1,1,1}
+};
+
+// Subset-1 anchor pixel per partition (subset-0 anchor is always pixel 0).
+// The anchor pixel's selector loses its MSB (3 bits → 2 bits in Mode 1).
+constexpr std::uint8_t kAnchor2[64] = {
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15,  2,  8,  2,  2,  8,  8, 15,  2,  8,  2,  2,  8,  8,  2,  2,
+    15, 15,  6,  8,  2,  8, 15, 15,  2,  8,  2,  2,  2, 15, 15,  6,
+     6,  2,  6,  8, 15, 15,  2,  2, 15, 15, 15, 15, 15,  2,  2, 15
+};
+
 // Bit accumulator for 128-bit BC7 blocks. Writes go little-endian into
 // `bytes` (the BC7 spec is LSB-first, byte 0 lowest).
 struct BitWriter {
@@ -87,6 +135,87 @@ struct BitReader {
 // Decode 7-bit + P-bit to 8-bit.
 constexpr std::uint8_t expand7p(std::uint32_t v7, std::uint32_t p) {
     return std::uint8_t((v7 << 1) | (p & 1u));
+}
+
+// Mode 1 decoder — 2 subsets, 6-bit endpoints + shared P-bit per
+// subset, 3-bit selectors with kWeight3 ramp. RGB only (alpha = 255).
+// Forward decl from the encoder side — defined in same TU.
+constexpr std::uint8_t kPartition2_dec[64][16] = {
+    {0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1}, {0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1},
+    {0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1}, {0,0,0,1,0,0,1,1,0,0,1,1,0,1,1,1},
+    {0,0,0,0,0,0,0,1,0,0,0,1,0,0,1,1}, {0,0,1,1,0,1,1,1,0,1,1,1,1,1,1,1},
+    {0,0,0,1,0,0,1,1,0,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,1,0,0,1,1,0,1,1,1},
+    {0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1}, {0,0,1,1,0,1,1,1,1,1,1,1,1,1,1,1},
+    {0,0,0,0,0,0,0,1,0,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,1},
+    {0,0,0,1,0,1,1,1,1,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1},
+    {0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1},
+    {0,0,0,0,1,0,0,0,1,1,1,0,1,1,1,1}, {0,1,1,1,0,0,0,1,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,1,0,0,0,1,1,1,0}, {0,1,1,1,0,0,1,1,0,0,0,1,0,0,0,0},
+    {0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0}, {0,0,0,0,1,0,0,0,1,1,0,0,1,1,1,0},
+    {0,0,0,0,0,0,0,0,1,0,0,0,1,1,0,0}, {0,1,1,1,0,0,1,1,0,0,1,1,0,0,0,1},
+    {0,0,1,1,0,0,0,1,0,0,0,1,0,0,0,0}, {0,0,0,0,1,0,0,0,1,0,0,0,1,1,0,0},
+    {0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0}, {0,0,1,1,0,1,1,0,0,1,1,0,1,1,0,0},
+    {0,0,0,1,0,1,1,1,1,1,1,0,1,0,0,0}, {0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
+    {0,1,1,1,0,0,0,1,1,0,0,0,1,1,1,0}, {0,0,1,1,1,0,0,1,1,0,0,1,1,1,0,0},
+    {0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1}, {0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1},
+    {0,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0}, {0,0,1,1,0,0,1,1,1,1,0,0,1,1,0,0},
+    {0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0}, {0,1,0,1,0,1,0,1,1,0,1,0,1,0,1,0},
+    {0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1}, {0,1,0,1,1,0,1,0,1,0,1,0,0,1,0,1},
+    {0,1,1,1,0,0,1,1,1,1,0,0,1,1,1,0}, {0,0,0,1,0,0,1,1,1,1,0,0,1,0,0,0},
+    {0,0,1,1,0,0,1,0,0,1,0,0,1,1,0,0}, {0,0,1,1,1,0,1,1,1,1,0,1,1,1,0,0},
+    {0,1,1,0,1,0,0,1,1,0,0,1,0,1,1,0}, {0,0,1,1,1,1,0,0,1,1,0,0,0,0,1,1},
+    {0,1,1,0,0,1,1,0,1,0,0,1,1,0,0,1}, {0,0,0,0,0,1,1,0,0,1,1,0,0,0,0,0},
+    {0,1,0,0,1,1,1,0,0,1,0,0,0,0,0,0}, {0,0,1,0,0,1,1,1,0,0,1,0,0,0,0,0},
+    {0,0,0,0,0,1,0,0,1,1,1,0,0,1,0,0}, {0,1,1,0,1,1,0,0,1,0,0,1,0,0,1,1},
+    {0,0,1,1,0,1,1,0,1,1,0,0,1,0,0,1}, {0,1,1,0,0,0,1,1,1,0,0,1,1,1,0,0},
+    {0,0,1,1,1,0,0,1,1,1,0,0,0,1,1,0}, {0,1,1,0,1,1,0,0,1,1,0,0,1,0,0,1},
+    {0,1,1,0,0,0,1,1,0,0,1,1,1,0,0,1}, {0,1,1,1,1,1,1,0,1,0,0,0,0,0,0,1},
+    {0,0,0,1,1,0,0,0,1,1,1,0,0,1,1,1}, {0,0,0,0,1,1,1,1,0,0,1,1,0,0,1,1},
+    {0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0}, {0,0,1,0,0,0,1,0,1,1,1,0,1,1,1,0},
+    {0,1,0,0,0,1,0,0,0,1,1,1,0,1,1,1}
+};
+constexpr std::uint8_t kAnchor2_dec[64] = {
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15,  2,  8,  2,  2,  8,  8, 15,  2,  8,  2,  2,  8,  8,  2,  2,
+    15, 15,  6,  8,  2,  8, 15, 15,  2,  8,  2,  2,  2, 15, 15,  6,
+     6,  2,  6,  8, 15, 15,  2,  2, 15, 15, 15, 15, 15,  2,  2, 15
+};
+void decode_mode1(const Block& blk, std::uint8_t out[kBlockPixels * 4]) {
+    BitReader br{blk.data(), 2};  // skip mode prefix (bits 0..1)
+    int partition = int(br.get(6));
+    // Endpoints: 4 endpoints (subset 0 e0, e1; subset 1 e0, e1), each 3 ch × 6 bits.
+    // Bit order: per channel (R, G, B), four endpoints in order.
+    int v6[4][3];
+    for (int ch = 0; ch < 3; ++ch) {
+        for (int e = 0; e < 4; ++e) v6[e][ch] = int(br.get(6));
+    }
+    int p[2];
+    p[0] = int(br.get(1));
+    p[1] = int(br.get(1));
+    // Expand: v7 = (v6<<1)|p_subset, e8 = (v7<<1) | (v7>>6).
+    std::uint8_t e8[4][3];
+    for (int ee = 0; ee < 4; ++ee) {
+        int subset_p = p[ee / 2];
+        for (int ch = 0; ch < 3; ++ch) {
+            int v7 = (v6[ee][ch] << 1) | subset_p;
+            e8[ee][ch] = std::uint8_t((v7 << 1) | (v7 >> 6));
+        }
+    }
+    int anchor1 = kAnchor2_dec[partition];
+    for (int i = 0; i < kBlockPixels; ++i) {
+        int ss = kPartition2_dec[partition][i];
+        int bits = (i == 0 || i == anchor1) ? 2 : 3;
+        int sel = int(br.get(bits));
+        int w = kWeight3[sel];
+        int inv = 64 - w;
+        int e_lo = ss * 2;       // subset's e0
+        int e_hi = ss * 2 + 1;   // subset's e1
+        for (int ch = 0; ch < 3; ++ch) {
+            out[i * 4 + ch] = std::uint8_t(
+                (inv * int(e8[e_lo][ch]) + w * int(e8[e_hi][ch]) + 32) >> 6);
+        }
+        out[i * 4 + 3] = 255;
+    }
 }
 
 // Mode 6 decoder.
@@ -130,6 +259,10 @@ void decode_block(const Block& blk, std::uint8_t out[kBlockPixels * 4]) {
     }
     if (mode == 6) {
         decode_mode6(blk, out);
+        return;
+    }
+    if (mode == 1) {
+        decode_mode1(blk, out);
         return;
     }
     // Unsupported mode (only Mode 6 emitted by our encoder today;
@@ -490,6 +623,141 @@ inline bool refit_endpoints_m6(const Sample16& s,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Mode 1 helpers — 2 subsets, partition table, 6-bit endpoints + shared
+// P-bit per subset, 3-bit selectors (kWeight3 ramp).
+// ---------------------------------------------------------------------------
+
+// Expand 6-bit value + P-bit (shared with paired endpoint) to 8-bit.
+// Decode formula: v7 = (v6<<1)|p; e8 = (v7<<1) | (v7>>6) (bit-replication
+// of the high bit into the low bit revealed by the left shift).
+constexpr std::uint8_t expand6p(std::uint32_t v6, std::uint32_t p) {
+    std::uint32_t v7 = (v6 << 1) | (p & 1u);
+    return std::uint8_t((v7 << 1) | (v7 >> 6));
+}
+
+// Quantise one Mode-1 subset's endpoint pair (e0, e1) in 8-bit space to
+// 6-bit values + a single shared P-bit. Picks the P-bit minimising
+// total quantisation error across both endpoints' 3 RGB channels.
+[[maybe_unused]] inline void quantise_subset_m1(const std::uint8_t e0_8[3],
+                               const std::uint8_t e1_8[3],
+                               std::uint8_t v6_e0[3],
+                               std::uint8_t v6_e1[3],
+                               std::uint32_t& p_bit) {
+    float err_p[2] = {0.f, 0.f};
+    std::uint8_t v6_e0_p[2][3];
+    std::uint8_t v6_e1_p[2][3];
+    for (std::uint32_t p = 0; p < 2; ++p) {
+        for (int ch = 0; ch < 3; ++ch) {
+            int e0 = int(e0_8[ch]);
+            int e1 = int(e1_8[ch]);
+            // For Mode 1 the expand maps v6+p → e8 = (((v6<<1)|p)<<1) | (...>>6).
+            // Best v6 minimising |expand6p(v6, p) - e8| — invert by stepping
+            // candidate v6 values and picking the closest match.
+            int best0 = 0;
+            int best0_d = std::numeric_limits<int>::max();
+            int best1 = 0;
+            int best1_d = std::numeric_limits<int>::max();
+            // 6-bit range = 64 values. Linear scan is fine at this size,
+            // but a closed-form approximation: v6 ≈ (e8 - (p>>0 ? bias : 0)) / 4.
+            // For correctness, run a 2-entry probe around the closed-form guess.
+            int guess = std::clamp((e0 - int(p)) >> 2, 0, 63);
+            for (int dv = -1; dv <= 1; ++dv) {
+                int v = std::clamp(guess + dv, 0, 63);
+                int rec = int(expand6p(std::uint32_t(v), p));
+                int d = (rec - e0) * (rec - e0);
+                if (d < best0_d) { best0_d = d; best0 = v; }
+            }
+            int guess1 = std::clamp((e1 - int(p)) >> 2, 0, 63);
+            for (int dv = -1; dv <= 1; ++dv) {
+                int v = std::clamp(guess1 + dv, 0, 63);
+                int rec = int(expand6p(std::uint32_t(v), p));
+                int d = (rec - e1) * (rec - e1);
+                if (d < best1_d) { best1_d = d; best1 = v; }
+            }
+            v6_e0_p[p][ch] = std::uint8_t(best0);
+            v6_e1_p[p][ch] = std::uint8_t(best1);
+            err_p[p] += float(best0_d + best1_d);
+        }
+    }
+    int pick = (err_p[0] <= err_p[1]) ? 0 : 1;
+    for (int ch = 0; ch < 3; ++ch) {
+        v6_e0[ch] = v6_e0_p[pick][ch];
+        v6_e1[ch] = v6_e1_p[pick][ch];
+    }
+    p_bit = std::uint32_t(pick);
+}
+
+// PCA seed in OKLab for a SUBSET of pixels — same shape as
+// pca_seed_rgba but restricted to the subset's pixel indices.
+[[maybe_unused]] inline void pca_seed_subset(const Sample16& s,
+                            const std::uint8_t pixel_idx[16],
+                            int n_pixels,
+                            std::uint8_t e0[3],
+                            std::uint8_t e1[3]) {
+    if (n_pixels <= 0) {
+        e0[0] = e0[1] = e0[2] = 0;
+        e1[0] = e1[1] = e1[2] = 255;
+        return;
+    }
+    if (n_pixels == 1) {
+        int p = pixel_idx[0];
+        e0[0] = e1[0] = s.rgba8[p][0];
+        e0[1] = e1[1] = s.rgba8[p][1];
+        e0[2] = e1[2] = s.rgba8[p][2];
+        return;
+    }
+    float mL = 0, mA = 0, mB = 0;
+    for (int i = 0; i < n_pixels; ++i) {
+        int p = pixel_idx[i];
+        mL += s.lab[p].L; mA += s.lab[p].a; mB += s.lab[p].b;
+    }
+    float inv_n = 1.f / float(n_pixels);
+    mL *= inv_n; mA *= inv_n; mB *= inv_n;
+    float cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+    for (int i = 0; i < n_pixels; ++i) {
+        int p = pixel_idx[i];
+        float dx = s.lab[p].L - mL;
+        float dy = s.lab[p].a - mA;
+        float dz = s.lab[p].b - mB;
+        cxx += dx * dx; cxy += dx * dy; cxz += dx * dz;
+        cyy += dy * dy; cyz += dy * dz;
+        czz += dz * dz;
+    }
+    if (cxx + cyy + czz < 1e-7f) {
+        int p = pixel_idx[0];
+        e0[0] = e1[0] = s.rgba8[p][0];
+        e0[1] = e1[1] = s.rgba8[p][1];
+        e0[2] = e1[2] = s.rgba8[p][2];
+        return;
+    }
+    float vx = cxx + cxy + cxz;
+    float vy = cxy + cyy + cyz;
+    float vz = cxz + cyz + czz;
+    for (int it = 0; it < 4; ++it) {
+        float nx = cxx * vx + cxy * vy + cxz * vz;
+        float ny = cxy * vx + cyy * vy + cyz * vz;
+        float nz = cxz * vx + cyz * vy + czz * vz;
+        float m = std::max({std::abs(nx), std::abs(ny), std::abs(nz)});
+        if (m < 1e-9f) break;
+        float inv = 1.f / m;
+        vx = nx * inv; vy = ny * inv; vz = nz * inv;
+    }
+    float pmin = std::numeric_limits<float>::infinity();
+    float pmax = -std::numeric_limits<float>::infinity();
+    int imin = pixel_idx[0], imax = pixel_idx[0];
+    for (int i = 0; i < n_pixels; ++i) {
+        int p = pixel_idx[i];
+        float t = (s.lab[p].L - mL) * vx +
+                  (s.lab[p].a - mA) * vy +
+                  (s.lab[p].b - mB) * vz;
+        if (t < pmin) { pmin = t; imin = p; }
+        if (t > pmax) { pmax = t; imax = p; }
+    }
+    e0[0] = s.rgba8[imin][0]; e0[1] = s.rgba8[imin][1]; e0[2] = s.rgba8[imin][2];
+    e1[0] = s.rgba8[imax][0]; e1[1] = s.rgba8[imax][1]; e1[2] = s.rgba8[imax][2];
+}
+
 // Anchor-bit fix: BC7 Mode 6 reserves the MSB of pixel-0's selector
 // (must be 0). If the picked selector for pixel 0 has its MSB set
 // (selector ≥ 8), we must swap endpoints e0 ↔ e1 and complement all
@@ -523,6 +791,239 @@ inline void pack_mode6(const std::uint8_t v7_e0[4], std::uint32_t p0,
     // Selectors: pixel 0 = 3 bits, pixels 1..15 = 4 bits.
     bw.put(sel[0] & 0x7u, 3);
     for (int i = 1; i < 16; ++i) bw.put(sel[i] & 0xFu, 4);
+}
+
+// Mode 1 selector pick: 8-level interpolation (kWeight3). Each subset
+// has its own (e0, e1) endpoint pair; per-pixel select via the active
+// metric, restricted to that pixel's subset's paint set.
+template<block_compress::BlockMetric M>
+inline float pick_selectors_m1(const Sample16& s,
+                               const std::uint8_t sub[16],
+                               const std::uint8_t e0_full[2][3],
+                               const std::uint8_t e1_full[2][3],
+                               std::uint8_t out_sel[16],
+                               std::uint8_t decoded[16][4]) {
+    // Per-subset 8-level paint set.
+    std::uint8_t paint[2][8][3];
+    for (int ss = 0; ss < 2; ++ss) {
+        for (int w_i = 0; w_i < 8; ++w_i) {
+            int w = kWeight3[w_i];
+            int inv = 64 - w;
+            for (int ch = 0; ch < 3; ++ch) {
+                paint[ss][w_i][ch] =
+                    std::uint8_t((inv * int(e0_full[ss][ch]) + w * int(e1_full[ss][ch]) + 32) >> 6);
+            }
+        }
+    }
+    float paint_L[2][8], paint_A[2][8], paint_B[2][8];
+    if constexpr (M == block_compress::BlockMetric::oklab2) {
+        for (int ss = 0; ss < 2; ++ss) {
+            for (int g = 0; g < 8; g += 4) {
+                std::uint8_t rgb4[4][3];
+                for (int j = 0; j < 4; ++j) {
+                    rgb4[j][0] = paint[ss][g + j][0];
+                    rgb4[j][1] = paint[ss][g + j][1];
+                    rgb4[j][2] = paint[ss][g + j][2];
+                }
+                auto labs = color_space::srgb8_to_oklab_batch4(rgb4);
+                for (int j = 0; j < 4; ++j) {
+                    paint_L[ss][g + j] = labs.labs[j].L;
+                    paint_A[ss][g + j] = labs.labs[j].a;
+                    paint_B[ss][g + j] = labs.labs[j].b;
+                }
+            }
+        }
+    }
+    float tot = 0.0f;
+    for (int p = 0; p < 16; ++p) {
+        int ss = sub[p];
+        int best_w = 0;
+        float best_e = std::numeric_limits<float>::infinity();
+        if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+            int sr = int(s.rgba8[p][0]);
+            int sg = int(s.rgba8[p][1]);
+            int sb = int(s.rgba8[p][2]);
+            for (int w_i = 0; w_i < 8; ++w_i) {
+                int dr = sr - int(paint[ss][w_i][0]);
+                int dg = sg - int(paint[ss][w_i][1]);
+                int db = sb - int(paint[ss][w_i][2]);
+                float e = float(dr * dr + dg * dg + db * db);
+                if (e < best_e) { best_e = e; best_w = w_i; }
+            }
+        } else {
+            float sL = s.lab[p].L, sA = s.lab[p].a, sB = s.lab[p].b;
+            for (int w_i = 0; w_i < 8; ++w_i) {
+                float dL = sL - paint_L[ss][w_i];
+                float dA = sA - paint_A[ss][w_i];
+                float dB = sB - paint_B[ss][w_i];
+                float e = dL * dL + dA * dA + dB * dB;
+                if (e < best_e) { best_e = e; best_w = w_i; }
+            }
+        }
+        out_sel[p] = std::uint8_t(best_w);
+        decoded[p][0] = paint[ss][best_w][0];
+        decoded[p][1] = paint[ss][best_w][1];
+        decoded[p][2] = paint[ss][best_w][2];
+        decoded[p][3] = 255;
+        tot += best_e;
+    }
+    return tot;
+}
+
+// Mode 1 anchor normalisation: each subset's anchor pixel must have
+// selector MSB = 0 (loses 1 bit). If anchor's selector >= 4, swap that
+// subset's endpoints + complement that subset's selectors (s → 7 - s).
+[[maybe_unused]] inline void normalise_anchors_m1([[maybe_unused]] int anchor_subset1,
+                                 std::uint8_t e0_full[2][3],
+                                 std::uint8_t e1_full[2][3],
+                                 const std::uint8_t sub[16],
+                                 std::uint8_t sel[16]) {
+    for (int ss = 0; ss < 2; ++ss) {
+        int anchor = (ss == 0) ? 0 : anchor_subset1;
+        if (sel[anchor] >= 4) {
+            for (int ch = 0; ch < 3; ++ch) std::swap(e0_full[ss][ch], e1_full[ss][ch]);
+            for (int i = 0; i < 16; ++i) {
+                if (sub[i] == ss) sel[i] = std::uint8_t(7 - sel[i]);
+            }
+        }
+    }
+}
+
+// Pack a finished Mode 1 block.
+[[maybe_unused]] inline void pack_mode1(int partition,
+                       const std::uint8_t v6_e0[2][3],
+                       const std::uint8_t v6_e1[2][3],
+                       std::uint32_t p_bits[2],
+                       [[maybe_unused]] const std::uint8_t sub[16],
+                       const std::uint8_t sel[16],
+                       Block& out) {
+    out.fill(0);
+    BitWriter bw{out, 0};
+    // Mode prefix: bit 0 = 0, bit 1 = 1 → byte 0 low bits = 0b10 = 0x02.
+    bw.put(0, 1);
+    bw.put(1, 1);
+    bw.put(std::uint32_t(partition), 6);
+    // Endpoints: channel-major (R, G, B), endpoint-minor (e0[ss=0], e0[ss=1], e1[ss=0], e1[ss=1]).
+    // Wait — per bcdec the read order is endpoint-major within channel:
+    //   for i in 0..2 (channel): for j in 0..numEndpoints (4): read.
+    // numEndpoints = 2 * numSubsets = 4. Order: (0,0), (0,1), (0,2), (0,3) for R; etc.
+    // Index mapping: endpoint j = 0..3 → subset j/2, side j%2.
+    for (int ch = 0; ch < 3; ++ch) {
+        bw.put(v6_e0[0][ch], 6);  // subset 0, e0
+        bw.put(v6_e1[0][ch], 6);  // subset 0, e1
+        bw.put(v6_e0[1][ch], 6);  // subset 1, e0
+        bw.put(v6_e1[1][ch], 6);  // subset 1, e1
+    }
+    // P-bits: 4 total, one per endpoint, but for Mode 1 the spec
+    // pairs them per-subset (endpoints 0+1 share P0, endpoints 2+3 share P1).
+    // bcdec reads 2 bits and applies them to endpoint pairs.
+    bw.put(p_bits[0], 1);
+    bw.put(p_bits[1], 1);
+    // Selectors: 16 pixels × 3 bits = 48, minus 2 anchor MSBs = 46.
+    int anchor1 = kAnchor2[partition];
+    for (int p = 0; p < 16; ++p) {
+        int bits = (p == 0 || p == anchor1) ? 2 : 3;
+        bw.put(sel[p] & ((1u << bits) - 1u), bits);
+    }
+}
+
+// Try Mode 1 across all 64 partitions; return best candidate.
+template<block_compress::BlockMetric M>
+inline Candidate encode_mode1(const Sample16& s) {
+    Candidate best{};
+    best.err = std::numeric_limits<float>::infinity();
+
+    // Skip Mode 1 for blocks with non-trivial alpha — Mode 1 is RGB only.
+    for (int i = 0; i < 16; ++i) {
+        if (s.alpha[i] != 255) return best;
+    }
+
+    for (int part = 0; part < 64; ++part) {
+        std::uint8_t sub[16];
+        std::uint8_t idx_ss[2][16];
+        int n_ss[2] = {0, 0};
+        for (int p = 0; p < 16; ++p) {
+            int ss = kPartition2[part][p];
+            sub[p] = std::uint8_t(ss);
+            idx_ss[ss][n_ss[ss]++] = std::uint8_t(p);
+        }
+        if (n_ss[0] == 0 || n_ss[1] == 0) continue;  // degenerate
+
+        // Per-subset PCA seed + Lloyd refit.
+        std::uint8_t e0_full[2][3], e1_full[2][3];
+        std::uint8_t v6_e0[2][3], v6_e1[2][3];
+        std::uint32_t p_bits[2] = {0, 0};
+        for (int ss = 0; ss < 2; ++ss) {
+            std::uint8_t seed_e0[3], seed_e1[3];
+            pca_seed_subset(s, idx_ss[ss], n_ss[ss], seed_e0, seed_e1);
+            quantise_subset_m1(seed_e0, seed_e1, v6_e0[ss], v6_e1[ss], p_bits[ss]);
+            for (int ch = 0; ch < 3; ++ch) {
+                e0_full[ss][ch] = expand6p(v6_e0[ss][ch], p_bits[ss]);
+                e1_full[ss][ch] = expand6p(v6_e1[ss][ch], p_bits[ss]);
+            }
+        }
+        std::uint8_t sel[16];
+        std::uint8_t decoded[16][4];
+        pick_selectors_m1<M>(s, sub, e0_full, e1_full, sel, decoded);
+        float err = score_decoded<M>(s, decoded);
+
+        // Loop: normalise anchors → re-quantise endpoints (which may
+        // shift by 1 LSB) → re-pick selectors → repeat until selectors
+        // are stable AND anchor selectors are < 4. The endpoint swap +
+        // selector complement is decode-invariant (kWeight3[s] +
+        // kWeight3[7-s] == 64) so this terminates fast — usually in 1-2
+        // iters.
+        for (int iter = 0; iter < 4; ++iter) {
+            normalise_anchors_m1(kAnchor2[part], e0_full, e1_full, sub, sel);
+            for (int ss = 0; ss < 2; ++ss) {
+                std::uint8_t e0_8[3] = {e0_full[ss][0], e0_full[ss][1], e0_full[ss][2]};
+                std::uint8_t e1_8[3] = {e1_full[ss][0], e1_full[ss][1], e1_full[ss][2]};
+                quantise_subset_m1(e0_8, e1_8, v6_e0[ss], v6_e1[ss], p_bits[ss]);
+                for (int ch = 0; ch < 3; ++ch) {
+                    e0_full[ss][ch] = expand6p(v6_e0[ss][ch], p_bits[ss]);
+                    e1_full[ss][ch] = expand6p(v6_e1[ss][ch], p_bits[ss]);
+                }
+            }
+            std::uint8_t new_sel[16];
+            std::uint8_t new_dec[16][4];
+            pick_selectors_m1<M>(s, sub, e0_full, e1_full, new_sel, new_dec);
+            // Check anchor selectors. If both < 4 AND selectors stable
+            // vs prior iter, converged.
+            bool stable = (new_sel[0] < 4) && (new_sel[kAnchor2[part]] < 4);
+            if (stable) {
+                for (int i = 0; i < 16; ++i) if (new_sel[i] != sel[i]) { stable = false; break; }
+            }
+            std::memcpy(sel, new_sel, 16);
+            std::memcpy(decoded, new_dec, sizeof(new_dec));
+            if (stable) break;
+        }
+        err = score_decoded<M>(s, decoded);
+
+        // Force-fix anchor selectors to < 4. The endpoint swap +
+        // selector complement is decode-invariant (kWeight3[s] +
+        // kWeight3[7-s] == 64) so the decoded paint values for every
+        // pixel in the subset are preserved. Run as a final guarantee
+        // since the convergence loop above can leave anchor >= 4 in
+        // some boundary cases (re-quantise round-trip shifts the
+        // endpoints by 1 LSB which can flip the argmin direction).
+        for (int ss = 0; ss < 2; ++ss) {
+            int anchor = (ss == 0) ? 0 : kAnchor2[part];
+            if (sel[anchor] >= 4) {
+                for (int ch = 0; ch < 3; ++ch) {
+                    std::swap(v6_e0[ss][ch], v6_e1[ss][ch]);
+                }
+                for (int i = 0; i < 16; ++i) {
+                    if (sub[i] == ss) sel[i] = std::uint8_t(7 - sel[i]);
+                }
+            }
+        }
+        if (err < best.err) {
+            best.err = err;
+            std::memcpy(best.decoded, decoded, sizeof(decoded));
+            pack_mode1(part, v6_e0, v6_e1, p_bits, sub, sel, best.block);
+        }
+    }
+    return best;
 }
 
 template<block_compress::BlockMetric M>
@@ -604,11 +1105,21 @@ Candidate encode_block(const Sample16& s, const Options& /*opts*/) {
     quantise_endpoint_m6(e0_full, v7_e0, p0);
     quantise_endpoint_m6(e1_full, v7_e1, p1);
 
-    Candidate c;
-    pack_mode6(v7_e0, p0, v7_e1, p1, sel, c.block);
-    std::memcpy(c.decoded, decoded, sizeof(decoded));
-    c.err = score_decoded<M>(s, c.decoded);
-    return c;
+    Candidate m6;
+    pack_mode6(v7_e0, p0, v7_e1, p1, sel, m6.block);
+    std::memcpy(m6.decoded, decoded, sizeof(decoded));
+    m6.err = score_decoded<M>(s, m6.decoded);
+
+    // Mode 1 (2-subset, partition table) — DISABLED. The encoder
+    // produces blocks that round-trip correctly through OUR decoder
+    // (in-memory decoded[] matches bit-decode), and bcdec roundtrips
+    // gray / 2-region / gradient blocks correctly. But on natural-
+    // image blocks (asterix DIV2K) bcdec decodes Mode 1 blocks to
+    // different pixel values than our decoder reads — a subtle bit-
+    // layout disagreement we haven't yet isolated. Mode 6 alone is
+    // already +2 PSNR / +6 S2 over BC1, so it's worth shipping cleanly
+    // and revisiting Mode 1 separately. project_bc7_mode1_bug.md.
+    return m6;
 }
 
 }  // namespace
