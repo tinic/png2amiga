@@ -540,6 +540,7 @@ void load_sample(Sample16& s,
                  int px,
                  int py,
                  color_space::OKLab shift = {0.f, 0.f, 0.f}) {
+    // Step 1: copy sRGB8 (one row of the 4-wide block at a time).
     for (int dy = 0; dy < 4; ++dy) {
         for (int dx = 0; dx < 4; ++dx) {
             std::size_t idx = (std::size_t(py + dy) * pad_w + std::size_t(px + dx)) * 3u;
@@ -547,10 +548,21 @@ void load_sample(Sample16& s,
             s.srgb8[i][0] = padded_rgb[idx + 0u];
             s.srgb8[i][1] = padded_rgb[idx + 1u];
             s.srgb8[i][2] = padded_rgb[idx + 2u];
-            auto raw = color_space::srgb8_to_oklab(s.srgb8[i][0], s.srgb8[i][1], s.srgb8[i][2]);
-            s.lab[i].L = raw.L + shift.L;
-            s.lab[i].a = raw.a + shift.a;
-            s.lab[i].b = raw.b + shift.b;
+        }
+    }
+    // Step 2: batched OKLab convert (4 pixels per row, 4 rows = 4 batches).
+    for (int g = 0; g < 16; g += 4) {
+        std::uint8_t rgb4[4][3];
+        for (int j = 0; j < 4; ++j) {
+            rgb4[j][0] = s.srgb8[g + j][0];
+            rgb4[j][1] = s.srgb8[g + j][1];
+            rgb4[j][2] = s.srgb8[g + j][2];
+        }
+        auto labs = color_space::srgb8_to_oklab_batch4(rgb4);
+        for (int j = 0; j < 4; ++j) {
+            s.lab[g + j].L = labs.labs[j].L + shift.L;
+            s.lab[g + j].a = labs.labs[j].a + shift.a;
+            s.lab[g + j].b = labs.labs[j].b + shift.b;
         }
     }
 }
@@ -569,12 +581,21 @@ float score_decoded(const Sample16& s, const std::uint8_t dec[16][3]) {
         return float(acc) * (1.0f / 65536.0f);
     } else {
         float acc = 0.0f;
-        for (int i = 0; i < 16; ++i) {
-            color_space::OKLab d = color_space::srgb8_to_oklab(dec[i][0], dec[i][1], dec[i][2]);
-            float dL = s.lab[i].L - d.L;
-            float da = s.lab[i].a - d.a;
-            float db = s.lab[i].b - d.b;
-            acc += color_space::fma_dist_sq(dL, da, db);
+        for (int g = 0; g < 16; g += 4) {
+            std::uint8_t rgb4[4][3];
+            for (int j = 0; j < 4; ++j) {
+                rgb4[j][0] = dec[g + j][0];
+                rgb4[j][1] = dec[g + j][1];
+                rgb4[j][2] = dec[g + j][2];
+            }
+            auto labs = color_space::srgb8_to_oklab_batch4(rgb4);
+            for (int j = 0; j < 4; ++j) {
+                const auto& d = labs.labs[j];
+                float dL = s.lab[g + j].L - d.L;
+                float da = s.lab[g + j].a - d.a;
+                float db = s.lab[g + j].b - d.b;
+                acc += color_space::fma_dist_sq(dL, da, db);
+            }
         }
         return acc;
     }
@@ -636,12 +657,12 @@ inline float pick_selectors_and_score(const Sample16& s,
     alignas(16) float paint_L[4], paint_A[4], paint_B[4];
     alignas(16) std::uint8_t paint_R8[4], paint_G8[4], paint_B8[4];
     if constexpr (M == block_compress::BlockMetric::oklab2) {
+        // Batched 4-pixel sRGB8 → OKLab: 3 cbrt4 instead of 4 scalar paths.
+        auto labs = color_space::srgb8_to_oklab_batch4(paint_srgb);
         for (int s_i = 0; s_i < 4; ++s_i) {
-            auto lab = color_space::srgb8_to_oklab(
-                paint_srgb[s_i][0], paint_srgb[s_i][1], paint_srgb[s_i][2]);
-            paint_L[s_i] = lab.L;
-            paint_A[s_i] = lab.a;
-            paint_B[s_i] = lab.b;
+            paint_L[s_i] = labs.labs[s_i].L;
+            paint_A[s_i] = labs.labs[s_i].a;
+            paint_B[s_i] = labs.labs[s_i].b;
         }
     } else {
         for (int s_i = 0; s_i < 4; ++s_i) {
@@ -1360,10 +1381,8 @@ Candidate encode_t(const Sample16& s) {
             }
             color_space::OKLab paint_lab[4];
             if constexpr (M == block_compress::BlockMetric::oklab2) {
-                for (int p = 0; p < 4; ++p) {
-                    paint_lab[p] = color_space::srgb8_to_oklab(
-                        paint[p][0], paint[p][1], paint[p][2]);
-                }
+                auto labs = color_space::srgb8_to_oklab_batch4(paint);
+                for (int p = 0; p < 4; ++p) paint_lab[p] = labs.labs[p];
             }
             int sel[16];
             float tot_err = 0.0f;
@@ -1519,10 +1538,8 @@ Candidate encode_h(const Sample16& s) {
         }
         color_space::OKLab paint_lab[4];
         if constexpr (M == block_compress::BlockMetric::oklab2) {
-            for (int p = 0; p < 4; ++p) {
-                paint_lab[p] = color_space::srgb8_to_oklab(
-                    paint[p][0], paint[p][1], paint[p][2]);
-            }
+            auto labs = color_space::srgb8_to_oklab_batch4(paint);
+            for (int p = 0; p < 4; ++p) paint_lab[p] = labs.labs[p];
         }
         int sel[16];
         float tot_err = 0.0f;

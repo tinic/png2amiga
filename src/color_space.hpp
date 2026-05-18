@@ -905,6 +905,20 @@ inline OKLabBatch4 lms4_to_oklab4(f32x4 L, f32x4 M, f32x4 S) noexcept {
     return out;
 }
 
+// 4-pixel batched sRGB8 → OKLab. Drop-in for four srgb8_to_oklab() calls;
+// shares the cbrt cost via lms4_to_oklab4 (3 cbrt4 vs 4).
+[[gnu::always_inline]]
+inline OKLabBatch4 srgb8_to_oklab_batch4(const std::uint8_t rgb[4][3]) noexcept {
+    f32x4 lms0 = srgb8_to_lms(rgb[0][0], rgb[0][1], rgb[0][2]);
+    f32x4 lms1 = srgb8_to_lms(rgb[1][0], rgb[1][1], rgb[1][2]);
+    f32x4 lms2 = srgb8_to_lms(rgb[2][0], rgb[2][1], rgb[2][2]);
+    f32x4 lms3 = srgb8_to_lms(rgb[3][0], rgb[3][1], rgb[3][2]);
+    f32x4 L = f32x4{lms0[0], lms1[0], lms2[0], lms3[0]};
+    f32x4 M = f32x4{lms0[1], lms1[1], lms2[1], lms3[1]};
+    f32x4 S = f32x4{lms0[2], lms1[2], lms2[2], lms3[2]};
+    return lms4_to_oklab4(L, M, S);
+}
+
 inline Color3f oklab_to_linear(OKLab lab) noexcept {
     // Inverse OKLab matrix: L + c1*a + c2*b shape, fold via nested fma.
     float l_ = PNG2AMIGA_FMA(0.3963377774f, lab.a, PNG2AMIGA_FMA(0.2158037573f, lab.b, lab.L));
