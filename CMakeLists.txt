@@ -223,6 +223,22 @@ else()
         target_compile_options(bench_ssimulacra2 PRIVATE -g)
     endif()
 
+    # ktx2_to_png: independent ETC2 decode verification tool using
+    # iOrange's etcdec.h (third_party/etcdec) reference decoder. Takes
+    # one of our --mode etc2 outputs, decodes via a different ETC2
+    # implementation, writes PNG. Used in tests/CI to confirm our
+    # encoder's bit-exact ETC2 output round-trips through a neutral
+    # third party (our own src/etc2.cpp decoder is a port of Ericsson's
+    # reference; etcdec.h is a separate port — they should agree).
+    add_executable(ktx2_to_png tools/ktx2_to_png.cpp)
+    target_include_directories(ktx2_to_png PRIVATE
+        third_party
+        third_party/etcdec
+        ${CMAKE_BINARY_DIR}/generated)
+    # Vendor headers — silence their warnings; our --warnings-as-errors
+    # would otherwise refuse them.
+    target_compile_options(ktx2_to_png PRIVATE -w)
+
     # bench_pow24: scalar vs polynomial vs AVX2 8-wide pow24 timing —
     # used to decide whether replacing std::pow inside the dither hot
     # loop is worth shipping. Header-only on color_space.hpp; no extra
@@ -1035,6 +1051,27 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     )
     set_tests_properties("smoke-ham6-strips-h-content"
                          PROPERTIES DEPENDS "smoke-ham6-strips-h")
+
+    # ETC2 round-trip: encode our --mode etc2 output, then decode it via
+    # iOrange's etcdec.h (independent third-party reference; lives in
+    # third_party/etcdec). The decode succeeding + producing a non-empty
+    # PNG confirms the KTX2 file is well-formed and our blocks are valid
+    # ETC2. Bit-identical decode vs our own decoder is implied because
+    # both are line-for-line ports of Ericsson's reference, but going
+    # through a separate codebase gives us a true third-party gate.
+    add_test(
+        NAME "smoke-etc2-thirdparty-decode"
+        COMMAND png2amiga --mode etc2 ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/etc2_thirdparty.ktx2
+    )
+    add_test(
+        NAME "smoke-etc2-thirdparty-decode-png"
+        COMMAND ktx2_to_png
+                ${CMAKE_BINARY_DIR}/etc2_thirdparty.ktx2
+                ${CMAKE_BINARY_DIR}/etc2_thirdparty.png
+    )
+    set_tests_properties("smoke-etc2-thirdparty-decode-png"
+        PROPERTIES DEPENDS "smoke-etc2-thirdparty-decode")
 
     # --tile: pre-replicate input 3x3, run pipeline, crop centre. Verify
     # that the encoded .h has the requested centre dimensions (W x H,
