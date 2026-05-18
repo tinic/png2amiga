@@ -715,25 +715,23 @@ inline float pick_selectors_and_score(const Sample16& s,
 template<block_compress::BlockMetric M, bool Differential>
 inline void refine_lloyd_for_table(const Sample16& s,
                                    const int sub_idx[8],
+                                   const int src_sum[3],
                                    int table,
                                    int base_packed[3],
                                    int sel[8],
                                    float& err_out,
                                    int packed_max) {
     constexpr int kIters = 4;
+    // sum_p (S[p] - mod[T][sel[p]]) = src_sum - sum_m. src_sum is the
+    // sub-block source-sum (caller-hoisted, invariant across iters and
+    // across (br, bg, bb, t) explores).
+    const int m0 = kModifier[table][0], m1 = kModifier[table][1];
+    const int m2 = kModifier[table][2], m3 = kModifier[table][3];
+    const int mtab[4] = {m0, m1, m2, m3};
     for (int it = 0; it < kIters; ++it) {
-        // Re-fit base: pick best base such that
-        // sum_p (S[p] - clamp(base + mod[T][sel[p]]))² is minimised.
-        // Closed-form ignoring clamp: base_ch = mean(S_ch - mod[T][sel[p]]).
-        // Then snap to encodable grid + clamp.
-        int sum[3] = {0, 0, 0};
-        for (int p = 0; p < 8; ++p) {
-            int src_i = sub_idx[p];
-            int m = kModifier[table][sel[p]];
-            sum[0] += int(s.srgb8[src_i][0]) - m;
-            sum[1] += int(s.srgb8[src_i][1]) - m;
-            sum[2] += int(s.srgb8[src_i][2]) - m;
-        }
+        int sum_m = mtab[sel[0]] + mtab[sel[1]] + mtab[sel[2]] + mtab[sel[3]]
+                  + mtab[sel[4]] + mtab[sel[5]] + mtab[sel[6]] + mtab[sel[7]];
+        int sum[3] = {src_sum[0] - sum_m, src_sum[1] - sum_m, src_sum[2] - sum_m};
         int base8_new[3];
         int base_packed_new[3];
         for (int c = 0; c < 3; ++c) {
@@ -801,6 +799,7 @@ inline void beam_insert(std::array<BeamCand, K>& beam, int& size, const BeamCand
 template<block_compress::BlockMetric M, bool Differential, std::size_t K>
 inline void explore_candidate(const Sample16& s,
                               const int sub_idx[8],
+                              const int src_sum[3],
                               int br, int bg, int bbb,
                               int table,
                               std::array<BeamCand, K>& beam,
@@ -819,7 +818,7 @@ inline void explore_candidate(const Sample16& s,
     int sel[8];
     float err = pick_selectors_and_score<M>(s, sub_idx, base8, table, sel);
     int refined[3] = {br, bg, bbb};
-    refine_lloyd_for_table<M, Differential>(s, sub_idx, table, refined, sel, err, packed_max);
+    refine_lloyd_for_table<M, Differential>(s, sub_idx, src_sum, table, refined, sel, err, packed_max);
 
     BeamCand c;
     c.base_packed[0] = refined[0];
@@ -845,6 +844,16 @@ SubResult encode_subblock_etc1(const Sample16& s,
     for (auto& c : beam) c.err = std::numeric_limits<float>::infinity();
     int beam_size = 0;
 
+    // Hoist src_sum once for Lloyd refinement — sum_p s.srgb8[sub_idx[p]][c]
+    // is invariant across all explore_candidate calls AND across Lloyd iters.
+    int src_sum[3] = {0, 0, 0};
+    for (int p = 0; p < 8; ++p) {
+        int i = sub_idx[p];
+        src_sum[0] += int(s.srgb8[i][0]);
+        src_sum[1] += int(s.srgb8[i][1]);
+        src_sum[2] += int(s.srgb8[i][2]);
+    }
+
     // --- Phase 1: initial jitter+Lloyd sweep, but maintain top-K beam
     // instead of single best. Same 1000-candidate space as before; just
     // tracks the K best in sorted order.
@@ -856,7 +865,7 @@ SubResult encode_subblock_etc1(const Sample16& s,
                 int bb = std::clamp(base_seed_packed[2] + dbb, 0, kPackedMax);
                 for (int t = 0; t < 8; ++t) {
                     explore_candidate<M, Differential, kBeam>(
-                        s, sub_idx, br, bg, bb, t, beam, beam_size, kPackedMax);
+                        s, sub_idx, src_sum, br, bg, bb, t, beam, beam_size, kPackedMax);
                 }
             }
         }
@@ -880,14 +889,14 @@ SubResult encode_subblock_etc1(const Sample16& s,
                     if (nv < 0 || nv > kPackedMax) continue;
                     nb[ch] = nv;
                     explore_candidate<M, Differential, kBeam>(
-                        s, sub_idx, nb[0], nb[1], nb[2], c.table, beam, beam_size, kPackedMax);
+                        s, sub_idx, src_sum, nb[0], nb[1], nb[2], c.table, beam, beam_size, kPackedMax);
                 }
             }
             // Try other modifier tables at this base.
             for (int t = 0; t < 8; ++t) {
                 if (t == c.table) continue;
                 explore_candidate<M, Differential, kBeam>(
-                    s, sub_idx, c.base_packed[0], c.base_packed[1], c.base_packed[2], t,
+                    s, sub_idx, src_sum, c.base_packed[0], c.base_packed[1], c.base_packed[2], t,
                     beam, beam_size, kPackedMax);
             }
         }
