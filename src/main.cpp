@@ -36,6 +36,9 @@
 
 #include <constixel.hpp>
 
+#include "stb_image.h"
+#include "stb_image_write.h"
+
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -939,6 +942,17 @@ struct Config {
     // --no-ktx2-zstd for raw byte output (bench harness comparisons).
     bool ktx2_zstd = true;
 
+    // Channel-assembly preprocessing: when any of --r/--g/--b/--a point
+    // at a PNG, the converter loads each, takes the red channel as the
+    // single-channel value, and assembles a 4-channel RGBA buffer that
+    // replaces the normal input. Use case: game texture packing
+    // (R=roughness, G=metallic, B=AO, A=height etc.). Empty = unused for
+    // that channel (filled with 0 for RGB, 255 for A).
+    std::string channel_r_path;
+    std::string channel_g_path;
+    std::string channel_b_path;
+    std::string channel_a_path;
+
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
     // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
     // keeps the winner. Active in HAM6/HAM8, plain EHB, sliced palette,
@@ -1393,6 +1407,26 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--ktx2-zstd") {
             config.ktx2_zstd = true;
+            continue;
+        }
+
+        // Channel-assembly inputs (game texture packs etc.). Each is the
+        // path to a PNG whose red channel becomes one channel of the
+        // assembled RGBA buffer.
+        if ((arg == "--r" || arg == "--red") && i + 1 < argc) {
+            config.channel_r_path = argv[++i];
+            continue;
+        }
+        if ((arg == "--g" || arg == "--green") && i + 1 < argc) {
+            config.channel_g_path = argv[++i];
+            continue;
+        }
+        if ((arg == "--b" || arg == "--blue") && i + 1 < argc) {
+            config.channel_b_path = argv[++i];
+            continue;
+        }
+        if ((arg == "--a" || arg == "--alpha") && i + 1 < argc) {
+            config.channel_a_path = argv[++i];
             continue;
         }
 
@@ -2346,10 +2380,21 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 // the output dir + format come from --batch / --batch-format.
                 config.batch_inputs.emplace_back(arg);
             } else {
-                if (positional == 0)
-                    config.input_path = std::string(arg);
-                else if (positional == 1)
-                    config.output_path = std::string(arg);
+                // Channel-assembly mode (--r/--g/--b/--a) takes no input
+                // positional — it builds its own input. The first
+                // positional is the output path.
+                bool assembling = !config.channel_r_path.empty() ||
+                                  !config.channel_g_path.empty() ||
+                                  !config.channel_b_path.empty() ||
+                                  !config.channel_a_path.empty();
+                if (assembling) {
+                    if (positional == 0) config.output_path = std::string(arg);
+                } else {
+                    if (positional == 0)
+                        config.input_path = std::string(arg);
+                    else if (positional == 1)
+                        config.output_path = std::string(arg);
+                }
             }
             ++positional;
         }
@@ -2395,8 +2440,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (config.input_path.empty()) config.input_path = "<batch>";
     }
 
+    bool assembling = !config.channel_r_path.empty() || !config.channel_g_path.empty() ||
+                      !config.channel_b_path.empty() || !config.channel_a_path.empty();
     if (config.input_path.empty() && config.strips_probe.empty() && !config.list_modes &&
-        !config.list_dithers) {
+        !config.list_dithers && !assembling) {
         print_usage();
         std::exit(exit_code::usage);  // NOLINT(concurrency-mt-unsafe)
     }
@@ -5998,6 +6045,77 @@ int run_main(int argc, char* argv[]) {
     g_print_palette_json = config->print_palette_json;
     g_json = config->json;
     g_preview_scale = resolve_preview_scale(config->preview_scale);
+
+    // Channel-assembly preprocessing. When any of --r/--g/--b/--a is set,
+    // load each named PNG, take its red channel, assemble into a single
+    // RGBA8 buffer at the LCM of all input dimensions (only matching sizes
+    // for now — mismatched sizes would need a resample policy), write to
+    // a temp PNG, and use that as the actual input. Works for every mode
+    // since the rest of the pipeline sees a normal PNG.
+    if (!config->channel_r_path.empty() || !config->channel_g_path.empty() ||
+        !config->channel_b_path.empty() || !config->channel_a_path.empty()) {
+        struct ChannelIn {
+            std::string path;
+            int idx;  // 0=R 1=G 2=B 3=A
+        };
+        std::vector<ChannelIn> sources;
+        if (!config->channel_r_path.empty()) sources.push_back({config->channel_r_path, 0});
+        if (!config->channel_g_path.empty()) sources.push_back({config->channel_g_path, 1});
+        if (!config->channel_b_path.empty()) sources.push_back({config->channel_b_path, 2});
+        if (!config->channel_a_path.empty()) sources.push_back({config->channel_a_path, 3});
+
+        int W = 0, H = 0;
+        std::vector<std::vector<std::uint8_t>> loaded(sources.size());
+        for (std::size_t s = 0; s < sources.size(); ++s) {
+            int w{}, h{}, ch{};
+            unsigned char* px = stbi_load(sources[s].path.c_str(), &w, &h, &ch, 4);
+            if (!px) {
+                std::println(stderr, "Error: channel input '{}' failed to load: {}",
+                             sources[s].path, stbi_failure_reason());
+                return exit_code::cant_create;
+            }
+            if (W == 0) { W = w; H = h; }
+            else if (w != W || h != H) {
+                std::println(stderr,
+                             "Error: channel input '{}' is {}x{}, expected {}x{} "
+                             "(all --r/--g/--b/--a inputs must share dimensions)",
+                             sources[s].path, w, h, W, H);
+                stbi_image_free(px);
+                return exit_code::cant_create;
+            }
+            loaded[s].assign(px, px + std::size_t(w) * std::size_t(h) * 4u);
+            stbi_image_free(px);
+        }
+
+        // Assemble: RGB = 0 (or specified channel value), A = 255 (or specified).
+        std::vector<std::uint8_t> rgba(std::size_t(W) * std::size_t(H) * 4u);
+        for (std::size_t i = 0; i < std::size_t(W) * std::size_t(H); ++i) {
+            rgba[i * 4u + 0] = 0;
+            rgba[i * 4u + 1] = 0;
+            rgba[i * 4u + 2] = 0;
+            rgba[i * 4u + 3] = 255;
+        }
+        for (std::size_t s = 0; s < sources.size(); ++s) {
+            int dst_ch = sources[s].idx;
+            for (std::size_t i = 0; i < std::size_t(W) * std::size_t(H); ++i) {
+                rgba[i * 4u + std::size_t(dst_ch)] = loaded[s][i * 4u + 0];
+            }
+        }
+
+        // Write to a unique temp PNG path; pipeline picks it up as normal input.
+        char tmpl[] = "/tmp/png2amiga_assembled_XXXXXX.png";
+        int fd = mkstemps(tmpl, 4);
+        if (fd < 0) {
+            std::println(stderr, "Error: could not create temp file for assembled input");
+            return exit_code::cant_create;
+        }
+        close(fd);
+        if (!stbi_write_png(tmpl, W, H, 4, rgba.data(), W * 4)) {
+            std::println(stderr, "Error: could not write assembled input PNG");
+            return exit_code::cant_create;
+        }
+        config->input_path = tmpl;
+    }
 
     // ETC2 (KTX2) — fixed-rate block format; bypass the Amiga pipeline.
     if (config->mode == amiga::Mode::etc2) {
