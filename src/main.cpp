@@ -934,6 +934,11 @@ struct Config {
     int etc2_jitter = 1;
     bool etc2_jitter_explicit = false;  // user --etc2-jitter overrides --best auto-bump
 
+    // KTX2 supercompression (zstd, scheme=2). Default on — lossless
+    // 30-50% size shrink on natural images, no quality cost. Set
+    // --no-ktx2-zstd for raw byte output (bench harness comparisons).
+    bool ktx2_zstd = true;
+
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
     // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
     // keeps the winner. Active in HAM6/HAM8, plain EHB, sliced palette,
@@ -1379,6 +1384,15 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--match-range") {
             config.match_range = true;
+            continue;
+        }
+
+        if (arg == "--no-ktx2-zstd") {
+            config.ktx2_zstd = false;
+            continue;
+        }
+        if (arg == "--ktx2-zstd") {
+            config.ktx2_zstd = true;
             continue;
         }
 
@@ -5684,6 +5698,7 @@ int run_etc2(const Config& cfg) {
     ki.image_h = H;
     ki.bytes_per_block = etc2::kBlockBytes;
     ki.block_bytes = block_bytes;
+    ki.supercompress_zstd = cfg.ktx2_zstd;
     auto file_bytes = ktx2::write(ki);
 
     if (!cfg.output_path.empty()) {
@@ -5813,6 +5828,7 @@ int run_bc1(const Config& cfg) {
     ki.image_h = H;
     ki.bytes_per_block = bc1::kBlockBytes;
     ki.block_bytes = block_bytes;
+    ki.supercompress_zstd = cfg.ktx2_zstd;
     auto file_bytes = ktx2::write(ki);
 
     if (!cfg.output_path.empty()) {
@@ -5936,6 +5952,7 @@ int run_bc7(const Config& cfg) {
     ki.image_h = H;
     ki.bytes_per_block = bc7::kBlockBytes;
     ki.block_bytes = block_bytes;
+    ki.supercompress_zstd = cfg.ktx2_zstd;
     auto file_bytes = ktx2::write(ki);
 
     if (!cfg.output_path.empty()) {

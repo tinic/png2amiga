@@ -22,6 +22,8 @@
 #define BCDEC_IMPLEMENTATION 1
 #include "bcdec/bcdec.h"
 
+#include <zstd.h>
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION 1
 #include "stb_image_write.h"
 
@@ -58,12 +60,14 @@ std::uint64_t read_u64_le(const std::uint8_t* p) {
 struct Ktx2Level {
     std::uint64_t byte_offset;
     std::uint64_t byte_length;
+    std::uint64_t uncompressed_byte_length;
 };
 
 struct Ktx2Image {
     std::uint32_t vk_format;
     std::uint32_t width;
     std::uint32_t height;
+    std::uint32_t supercompression;
     std::vector<Ktx2Level> levels;
     std::vector<std::uint8_t> bytes;
 };
@@ -99,8 +103,11 @@ bool parse_ktx2(const std::vector<std::uint8_t>& f, Ktx2Image& out) {
         std::fprintf(stderr, "ktx2_to_png: cubemap textures not supported\n");
         return false;
     }
-    if (supercompression != 0) {
-        std::fprintf(stderr, "ktx2_to_png: supercompression not supported\n");
+    out.supercompression = supercompression;
+    if (supercompression != 0 && supercompression != 2) {
+        std::fprintf(stderr,
+                     "ktx2_to_png: supercompression scheme %u not supported (only 0=none, 2=zstd)\n",
+                     supercompression);
         return false;
     }
     const bool is_etc2 = (out.vk_format == kVkFormatEtc2RgbUnorm ||
@@ -121,7 +128,7 @@ bool parse_ktx2(const std::vector<std::uint8_t>& f, Ktx2Image& out) {
         const std::uint8_t* p = f.data() + 80 + i * 24u;
         out.levels[i].byte_offset = read_u64_le(p);
         out.levels[i].byte_length = read_u64_le(p + 8);
-        // uncompressedByteLength at p + 16 — ignored (no supercompression).
+        out.levels[i].uncompressed_byte_length = read_u64_le(p + 16);
     }
     out.bytes = f;
     return true;
@@ -156,6 +163,29 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // If supercompressed, decompress the level into a contiguous buffer.
+    std::vector<std::uint8_t> decompressed;
+    const std::uint8_t* blocks_ptr = img.bytes.data() + lvl.byte_offset;
+    std::size_t blocks_len = lvl.byte_length;
+    if (img.supercompression == 2) {
+        decompressed.resize(lvl.uncompressed_byte_length);
+        std::size_t got = ZSTD_decompress(decompressed.data(), decompressed.size(),
+                                          blocks_ptr, blocks_len);
+        if (ZSTD_isError(got)) {
+            std::fprintf(stderr, "ktx2_to_png: zstd decompress failed: %s\n",
+                         ZSTD_getErrorName(got));
+            return 1;
+        }
+        if (got != lvl.uncompressed_byte_length) {
+            std::fprintf(stderr,
+                         "ktx2_to_png: zstd produced %zu bytes, expected %llu\n",
+                         got, static_cast<unsigned long long>(lvl.uncompressed_byte_length));
+            return 1;
+        }
+        blocks_ptr = decompressed.data();
+        blocks_len = decompressed.size();
+    }
+
     // Decode 4×4 blocks via the matching reference decoder into a
     // tightly-packed RGBA8 buffer. ETC2 path uses etcdec; BC1 uses bcdec.
     const int W = int(img.width);
@@ -165,15 +195,14 @@ int main(int argc, char* argv[]) {
     const int kBlockBytes = (img.vk_format == kVkFormatBc7Unorm ||
                              img.vk_format == kVkFormatBc7Srgb) ? 16 : 8;
     const std::size_t expected_blocks = std::size_t(bcols) * std::size_t(brows);
-    if (lvl.byte_length < expected_blocks * std::size_t(kBlockBytes)) {
+    if (blocks_len < expected_blocks * std::size_t(kBlockBytes)) {
         std::fprintf(stderr,
-                     "ktx2_to_png: level data too short for %dx%d (got %llu need %zu)\n",
-                     W, H,
-                     static_cast<unsigned long long>(lvl.byte_length),
+                     "ktx2_to_png: level data too short for %dx%d (got %zu need %zu)\n",
+                     W, H, blocks_len,
                      expected_blocks * std::size_t(kBlockBytes));
         return 1;
     }
-    const std::uint8_t* blocks = img.bytes.data() + lvl.byte_offset;
+    const std::uint8_t* blocks = blocks_ptr;
 
     const int padded_w = bcols * 4;
     const int padded_h = brows * 4;

@@ -101,7 +101,7 @@ if(EMSCRIPTEN)
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga_wasm PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_link_libraries(png2amiga_wasm PRIVATE stb spng zstd webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     # -pthread enables std::thread / std::jthread / std::mutex / std::atomic
     # in WASM via Emscripten's pthreads-on-web-workers shim. Requires the
     # browser to be cross-origin isolated (COOP/COEP headers, see
@@ -179,7 +179,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(api_pipeline_smoke PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_link_libraries(api_pipeline_smoke PRIVATE stb spng zstd webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     target_compile_options(api_pipeline_smoke PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # palette_search: experimental population-based palette search for
@@ -198,7 +198,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(palette_search PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_link_libraries(palette_search PRIVATE stb spng zstd webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     target_compile_options(palette_search PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # bench_ssimulacra2: standalone microbench for the SSIMULACRA2
@@ -238,6 +238,7 @@ else()
         third_party/etcdec
         third_party/bcdec
         ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(ktx2_to_png PRIVATE zstd)
     # Vendor headers — silence their warnings; our --warnings-as-errors
     # would otherwise refuse them.
     target_compile_options(ktx2_to_png PRIVATE -w)
@@ -278,7 +279,7 @@ else()
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel smol_atlas nlohmann_json)
+    target_link_libraries(png2amiga PRIVATE stb spng zstd webp_headers webpdecode webpdspdecode webputilsdecode constixel smol_atlas nlohmann_json)
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # SIMD baseline for the hand-vectorized kernels in quantize.cpp /

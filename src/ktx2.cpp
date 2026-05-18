@@ -6,6 +6,8 @@
 
 #include "ktx2.hpp"
 
+#include <zstd.h>
+
 #include <cstring>
 
 namespace png2amiga::ktx2 {
@@ -202,10 +204,31 @@ std::vector<std::uint8_t> write(const Inputs& in) {
 
     auto dfd = build_dfd(in);
 
+    // If supercompression requested, zstd-compress the block payload first.
+    // Per KTX2 §3.10.5 the level data stored is the compressed stream and
+    // byteLength reflects that; uncompressedByteLength carries the original
+    // size so decoders can pre-allocate. Compression level 19 — top quality
+    // tier short of --ultra; matters once per image, decode is unaffected.
+    std::vector<std::uint8_t> compressed;
+    const std::uint8_t* level_data = in.block_bytes.data();
+    std::size_t level_data_size = in.block_bytes.size();
+    if (in.supercompress_zstd) {
+        std::size_t bound = ZSTD_compressBound(in.block_bytes.size());
+        compressed.resize(bound);
+        std::size_t written = ZSTD_compress(compressed.data(), bound,
+                                            in.block_bytes.data(),
+                                            in.block_bytes.size(),
+                                            19);
+        if (!ZSTD_isError(written)) {
+            compressed.resize(written);
+            level_data = compressed.data();
+            level_data_size = compressed.size();
+        }
+    }
+
     // Reserve once for everything to avoid reallocation; we'll back-patch
     // the byte offsets into the header after the levels' bytes land.
-    std::size_t image_data_size = in.block_bytes.size();
-    std::size_t total = kHeaderSize + kLevelIndexEntrySize + dfd.size() + image_data_size;
+    std::size_t total = kHeaderSize + kLevelIndexEntrySize + dfd.size() + level_data_size;
     out.reserve(total);
 
     // --- Header (80 bytes) -------------------------------------------------
@@ -218,7 +241,7 @@ std::vector<std::uint8_t> write(const Inputs& in) {
     put_u32(out, 0);                                      // layerCount = 0 for non-array
     put_u32(out, 1);                                      // faceCount = 1
     put_u32(out, 1);                                      // levelCount = 1
-    put_u32(out, 0);                                      // supercompressionScheme = none
+    put_u32(out, in.supercompress_zstd ? 2u : 0u);        // supercompressionScheme
     std::size_t dfd_offset_pos = out.size();
     put_u32(out, 0);                                      // dfdByteOffset (patched)
     put_u32(out, static_cast<std::uint32_t>(dfd.size())); // dfdByteLength
@@ -230,10 +253,9 @@ std::vector<std::uint8_t> write(const Inputs& in) {
 
     // --- Level index (24 bytes per level, 1 level) -------------------------
     std::size_t level_byte_offset_pos = out.size();
-    put_u64(out, 0);                                      // byteOffset (patched)
-    put_u64(out, static_cast<std::uint64_t>(image_data_size));  // byteLength
-    put_u64(out, static_cast<std::uint64_t>(image_data_size));  // uncompressedByteLength
-                                                                // (no supercompression → equal)
+    put_u64(out, 0);                                                          // byteOffset (patched)
+    put_u64(out, static_cast<std::uint64_t>(level_data_size));                // byteLength (compressed if zstd)
+    put_u64(out, static_cast<std::uint64_t>(in.block_bytes.size()));          // uncompressedByteLength
 
     // --- DFD ---------------------------------------------------------------
     std::uint32_t dfd_offset = static_cast<std::uint32_t>(out.size());
@@ -252,7 +274,7 @@ std::vector<std::uint8_t> write(const Inputs& in) {
     while ((out.size() & 7u) != 0u) out.push_back(0);
     std::uint64_t level_offset = out.size();
 
-    out.insert(out.end(), in.block_bytes.begin(), in.block_bytes.end());
+    out.insert(out.end(), level_data, level_data + level_data_size);
 
     // --- Patch the back-references in the header --------------------------
     write_u32_at(out, dfd_offset_pos, dfd_offset);

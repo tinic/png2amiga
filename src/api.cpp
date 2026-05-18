@@ -5568,6 +5568,7 @@ ConvertResult convert_ktx2(const std::uint8_t* input_data,
         ki.bytes_per_block = etc2::kBlockBytes;
     }
     ki.block_bytes = std::span<const std::uint8_t>(blocks_storage);
+    ki.supercompress_zstd = true;  // lossless 30-50% size shrink
     auto file_bytes = ktx2::write(ki);
 
     ConvertResult r;

@@ -10,3 +10,6 @@
 [submodule "third_party/constixel"]
 	path = third_party/constixel
 	url = https://github.com/tinic/constixel.git
+[submodule "third_party/zstd"]
+	path = third_party/zstd
+	url = https://github.com/facebook/zstd.git

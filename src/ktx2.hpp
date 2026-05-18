@@ -71,6 +71,11 @@ struct Inputs {
     int image_h{};
     int bytes_per_block = 8;
     std::span<const std::uint8_t> block_bytes;
+    // KTX2 supercompressionScheme. 0 = none (default), 2 = ZStandard.
+    // zstd shrinks block data by ~30-50% on natural images and more on
+    // synthetic / flat content. Quality is preserved bit-exact since this
+    // is post-encoding lossless compression.
+    bool supercompress_zstd = false;
 };
 
 // Build the .ktx2 file as a byte vector.

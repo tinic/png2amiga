@@ -11,7 +11,8 @@
 set(_p2a_required_submodule_files
     "${CMAKE_CURRENT_SOURCE_DIR}/libwebp/CMakeLists.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/ssimulacra2/README.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/constixel/constixel.hpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/constixel/constixel.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib/zstd.h")
 set(_p2a_need_init FALSE)
 foreach(_p2a_f IN LISTS _p2a_required_submodule_files)
     if(NOT EXISTS "${_p2a_f}")
@@ -108,6 +109,34 @@ target_include_directories(constixel SYSTEM INTERFACE
 add_library(nlohmann_json INTERFACE)
 target_include_directories(nlohmann_json SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/json)
+
+# zstd — KTX2 supercompressionScheme=2 backing. We pin to v1.5.7 (submodule),
+# build only the lib/ static archive. Their build/cmake tree is overkill for
+# embedding, so we glob the canonical source list ourselves. This mirrors
+# zstd's own libzstd.mk file list.
+file(GLOB _zstd_common  CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib/common/*.c")
+file(GLOB _zstd_compress CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib/compress/*.c")
+file(GLOB _zstd_decompress CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib/decompress/*.c")
+add_library(zstd STATIC ${_zstd_common} ${_zstd_compress} ${_zstd_decompress})
+target_include_directories(zstd SYSTEM PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib
+    ${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib/common)
+# Strip optional features: no legacy formats, no dict builder, no threading.
+# ZSTD_DISABLE_ASM avoids huf_decompress_amd64.S which needs special build
+# rules and only helps decode speed.
+target_compile_definitions(zstd PRIVATE
+    ZSTD_DISABLE_ASM=1
+    ZSTD_LEGACY_SUPPORT=0
+    ZSTD_DISABLE_DICTBUILDER=1)
+# zstd's source uses unprefixed warnings we don't want polluting our build.
+if(NOT MSVC)
+    target_compile_options(zstd PRIVATE -w)
+else()
+    target_compile_options(zstd PRIVATE /w)
+endif()
+if(EMSCRIPTEN)
+    target_compile_options(zstd PRIVATE -pthread)
+endif()
 
 # smol-atlas: 2D rectangular bin packer (Shelf Best Height Fit heuristic),
 # vendored as a single-file pair in smol-atlas/. Used by --joint-input mode
