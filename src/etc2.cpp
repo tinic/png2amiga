@@ -605,6 +605,105 @@ struct SubResult {
     float err;
 };
 
+// Inline helpers for the per-(base, table) inner loop.
+template<block_compress::BlockMetric M>
+inline float pick_selectors_and_score(const Sample16& s,
+                                      const int sub_idx[8],
+                                      const std::uint8_t base8[3],
+                                      int table,
+                                      int out_sel[8]) {
+    float tot = 0.0f;
+    for (int p = 0; p < 8; ++p) {
+        int src_i = sub_idx[p];
+        float best_e = std::numeric_limits<float>::infinity();
+        int best_s = 0;
+        for (int s_i = 0; s_i < 4; ++s_i) {
+            int m = kModifier[table][s_i];
+            std::uint8_t dec[3] = {
+                clamp_u8(int(base8[0]) + m),
+                clamp_u8(int(base8[1]) + m),
+                clamp_u8(int(base8[2]) + m),
+            };
+            float e;
+            if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+                int dr2 = int(s.srgb8[src_i][0]) - int(dec[0]);
+                int dg2 = int(s.srgb8[src_i][1]) - int(dec[1]);
+                int db2 = int(s.srgb8[src_i][2]) - int(dec[2]);
+                e = float(dr2 * dr2 + dg2 * dg2 + db2 * db2);
+            } else {
+                color_space::OKLab d_lab =
+                    color_space::srgb8_to_oklab(dec[0], dec[1], dec[2]);
+                e = color_space::fma_dist_sq(s.lab[src_i].L - d_lab.L,
+                                             s.lab[src_i].a - d_lab.a,
+                                             s.lab[src_i].b - d_lab.b);
+            }
+            if (e < best_e) { best_e = e; best_s = s_i; }
+        }
+        out_sel[p] = best_s;
+        tot += best_e;
+    }
+    return tot;
+}
+
+// Lloyd-style refinement for a fixed table: alternate (1) re-pick
+// selectors given current base, (2) re-fit base as the (mean of
+// (source − modifier[sel])) snapped to the encodable grid. Converges
+// to the local optimum for this table in 3–4 iterations. This is the
+// piece etcpak/etc2comp do that we were missing — it closes most of
+// the per-sub-block PSNR gap vs jitter-only search.
+template<block_compress::BlockMetric M, bool Differential>
+inline void refine_lloyd_for_table(const Sample16& s,
+                                   const int sub_idx[8],
+                                   int table,
+                                   int base_packed[3],
+                                   int sel[8],
+                                   float& err_out,
+                                   int packed_max) {
+    constexpr int kIters = 4;
+    for (int it = 0; it < kIters; ++it) {
+        // Re-fit base: pick best base such that
+        // sum_p (S[p] - clamp(base + mod[T][sel[p]]))² is minimised.
+        // Closed-form ignoring clamp: base_ch = mean(S_ch - mod[T][sel[p]]).
+        // Then snap to encodable grid + clamp.
+        int sum[3] = {0, 0, 0};
+        for (int p = 0; p < 8; ++p) {
+            int src_i = sub_idx[p];
+            int m = kModifier[table][sel[p]];
+            sum[0] += int(s.srgb8[src_i][0]) - m;
+            sum[1] += int(s.srgb8[src_i][1]) - m;
+            sum[2] += int(s.srgb8[src_i][2]) - m;
+        }
+        int base8_new[3];
+        int base_packed_new[3];
+        for (int c = 0; c < 3; ++c) {
+            int mean = (sum[c] + 4) >> 3;  // /8 with rounding
+            mean = std::clamp(mean, 0, 255);
+            if constexpr (Differential) {
+                // 5-bit: round to nearest /(8 levels of expansion).
+                int q = (mean * 31 + 127) >> 8;  // ≈ mean / (255/31)
+                base_packed_new[c] = std::clamp(q, 0, packed_max);
+                base8_new[c] = int(expand5(std::uint32_t(base_packed_new[c])));
+            } else {
+                int q = (mean + 8) >> 4;
+                base_packed_new[c] = std::clamp(q, 0, packed_max);
+                base8_new[c] = int(expand4(std::uint32_t(base_packed_new[c])));
+            }
+        }
+        // Re-pick selectors with new base, compute new error.
+        std::uint8_t base8_u8[3] = {std::uint8_t(base8_new[0]),
+                                     std::uint8_t(base8_new[1]),
+                                     std::uint8_t(base8_new[2])};
+        int new_sel[8];
+        float new_err = pick_selectors_and_score<M>(s, sub_idx, base8_u8, table, new_sel);
+        if (new_err >= err_out - 1e-6f) break;  // converged
+        err_out = new_err;
+        base_packed[0] = base_packed_new[0];
+        base_packed[1] = base_packed_new[1];
+        base_packed[2] = base_packed_new[2];
+        for (int i = 0; i < 8; ++i) sel[i] = new_sel[i];
+    }
+}
+
 template<block_compress::BlockMetric M, bool Differential>
 SubResult encode_subblock_etc1(const Sample16& s,
                                const int sub_idx[8],
@@ -615,6 +714,8 @@ SubResult encode_subblock_etc1(const Sample16& s,
 
     // Search a small jitter window around the seed (±2 levels per channel).
     // Tight enough to stay cheap; wide enough to escape +/-1 rounding bias.
+    // After each (base, table) candidate, run Lloyd-style refinement to
+    // converge on the true local optimum for that table.
     constexpr int kJitter = 2;
     for (int dr = -kJitter; dr <= kJitter; ++dr) {
         int br = std::clamp(base_seed_packed[0] + dr, 0, kPackedMax);
@@ -633,49 +734,28 @@ SubResult encode_subblock_etc1(const Sample16& s,
                     base8[2] = expand4(std::uint32_t(bb));
                 }
                 for (int t = 0; t < 8; ++t) {
-                    // For each of the 8 sub-pixels, find best modifier idx.
-                    float tot = 0.0f;
                     int sel[8];
-                    for (int p = 0; p < 8; ++p) {
-                        int src_i = sub_idx[p];
-                        float best_e = std::numeric_limits<float>::infinity();
-                        int best_s = 0;
-                        for (int s_i = 0; s_i < 4; ++s_i) {
-                            int m = kModifier[t][s_i];
-                            std::uint8_t dec[3] = {
-                                clamp_u8(int(base8[0]) + m),
-                                clamp_u8(int(base8[1]) + m),
-                                clamp_u8(int(base8[2]) + m),
-                            };
-                            float e;
-                            if constexpr (M == block_compress::BlockMetric::srgb_mse) {
-                                int dr2 = int(s.srgb8[src_i][0]) - int(dec[0]);
-                                int dg2 = int(s.srgb8[src_i][1]) - int(dec[1]);
-                                int db2 = int(s.srgb8[src_i][2]) - int(dec[2]);
-                                e = float(dr2 * dr2 + dg2 * dg2 + db2 * db2);
-                            } else {
-                                color_space::OKLab d_lab =
-                                    color_space::srgb8_to_oklab(dec[0], dec[1], dec[2]);
-                                e = color_space::fma_dist_sq(s.lab[src_i].L - d_lab.L,
-                                                             s.lab[src_i].a - d_lab.a,
-                                                             s.lab[src_i].b - d_lab.b);
-                            }
-                            if (e < best_e) {
-                                best_e = e;
-                                best_s = s_i;
-                            }
-                        }
-                        sel[p] = best_s;
-                        tot += best_e;
-                    }
+                    float tot = pick_selectors_and_score<M>(s, sub_idx, base8, t, sel);
+
+                    // Lloyd refine: tighten base toward the per-table optimum.
+                    int refined_packed[3] = {br, bg, bb};
+                    refine_lloyd_for_table<M, Differential>(
+                        s, sub_idx, t, refined_packed, sel, tot, kPackedMax);
+
                     if (tot < best.err) {
                         best.err = tot;
-                        best.base[0] = base8[0];
-                        best.base[1] = base8[1];
-                        best.base[2] = base8[2];
-                        best.base_packed[0] = br;
-                        best.base_packed[1] = bg;
-                        best.base_packed[2] = bb;
+                        if constexpr (Differential) {
+                            best.base[0] = expand5(std::uint32_t(refined_packed[0]));
+                            best.base[1] = expand5(std::uint32_t(refined_packed[1]));
+                            best.base[2] = expand5(std::uint32_t(refined_packed[2]));
+                        } else {
+                            best.base[0] = expand4(std::uint32_t(refined_packed[0]));
+                            best.base[1] = expand4(std::uint32_t(refined_packed[1]));
+                            best.base[2] = expand4(std::uint32_t(refined_packed[2]));
+                        }
+                        best.base_packed[0] = refined_packed[0];
+                        best.base_packed[1] = refined_packed[1];
+                        best.base_packed[2] = refined_packed[2];
                         best.table = t;
                         for (int i = 0; i < 8; ++i) {
                             best.selectors[i] = sel[i];
@@ -1241,6 +1321,199 @@ Candidate encode_t(const Sample16& s) {
 }
 
 // ---------------------------------------------------------------------------
+// H-mode encoder
+// ---------------------------------------------------------------------------
+//
+// 2 base colours C0, C1 (each 4-bit per channel) + 3-bit distance.
+// Paint colours: { C0+d, C0-d, C1+d, C1-d }. Distance index's LOW bit is
+// IMPLICIT — derived by the decoder from (col0_lex ≥ col1_lex) where
+// col_lex is the packed 12-bit (R<<8)|(G<<4)|B value. Encoder must
+// arrange (C0,C1) so this matches the wanted dist_lo, swapping the pair
+// if not — paint set is symmetric under C0↔C1 (just relabel selectors).
+//
+// Dispatch trigger: diffbit=1 + R5+dR ∈ [0,31] + G5+dG ∉ [0,31].
+// dR is FIXED by the payload (raw 58..56 = G0_4 >> 1, so dR is a function
+// of G0_4 alone). raw 63 picks R5 ∈ {R0_4, 16+R0_4} — we pick whichever
+// keeps R5+dR in range. G's overflow trigger uses the free bits
+// raw 55..53 (G5 high 3) and raw 50 (dG sign); we brute-force the 16
+// combinations and pick one that makes G5+dG ∉ [0,31].
+
+template<block_compress::BlockMetric M>
+Candidate encode_h(const Sample16& s) {
+    std::uint8_t c0_8[3], c1_8[3];
+    cluster_k2_oklab(s, c0_8, c1_8);
+
+    Candidate best{};
+    best.err = std::numeric_limits<float>::infinity();
+    best.mode = SubMode::h_mode;
+
+    int R0_4 = snap_4bit(c0_8[0]);
+    int G0_4 = snap_4bit(c0_8[1]);
+    int B0_4 = snap_4bit(c0_8[2]);
+    int R1_4 = snap_4bit(c1_8[0]);
+    int G1_4 = snap_4bit(c1_8[1]);
+    int B1_4 = snap_4bit(c1_8[2]);
+
+    auto col_lex = [](int R, int G, int B) { return (R << 8) | (G << 4) | B; };
+
+    for (int d_idx = 0; d_idx < 8; ++d_idx) {
+        int dist_lo_wanted = d_idx & 1;
+        int dist_hi = d_idx >> 1;
+        int Rc0 = R0_4, Gc0 = G0_4, Bc0 = B0_4;
+        int Rc1 = R1_4, Gc1 = G1_4, Bc1 = B1_4;
+        int lex0 = col_lex(Rc0, Gc0, Bc0);
+        int lex1 = col_lex(Rc1, Gc1, Bc1);
+        bool need_geq = dist_lo_wanted == 1;
+        if ((lex0 >= lex1) != need_geq) {
+            // Swap C0 ↔ C1 to match the implicit distance LO bit.
+            std::swap(Rc0, Rc1);
+            std::swap(Gc0, Gc1);
+            std::swap(Bc0, Bc1);
+            lex0 = col_lex(Rc0, Gc0, Bc0);
+            lex1 = col_lex(Rc1, Gc1, Bc1);
+            if ((lex0 >= lex1) != need_geq) continue;  // can't satisfy
+        }
+        int d = kDistanceH[d_idx];
+        std::uint8_t C0e[3] = {expand4(std::uint32_t(Rc0)),
+                                expand4(std::uint32_t(Gc0)),
+                                expand4(std::uint32_t(Bc0))};
+        std::uint8_t C1e[3] = {expand4(std::uint32_t(Rc1)),
+                                expand4(std::uint32_t(Gc1)),
+                                expand4(std::uint32_t(Bc1))};
+        std::uint8_t paint[4][3];
+        for (int ch = 0; ch < 3; ++ch) {
+            paint[0][ch] = clamp_u8(int(C0e[ch]) + d);
+            paint[1][ch] = clamp_u8(int(C0e[ch]) - d);
+            paint[2][ch] = clamp_u8(int(C1e[ch]) + d);
+            paint[3][ch] = clamp_u8(int(C1e[ch]) - d);
+        }
+        int sel[16];
+        float tot_err = 0.0f;
+        for (int i = 0; i < 16; ++i) {
+            float be = std::numeric_limits<float>::infinity();
+            int bp = 0;
+            for (int p = 0; p < 4; ++p) {
+                float e;
+                if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+                    int dr = int(s.srgb8[i][0]) - int(paint[p][0]);
+                    int dg = int(s.srgb8[i][1]) - int(paint[p][1]);
+                    int db = int(s.srgb8[i][2]) - int(paint[p][2]);
+                    e = float(dr * dr + dg * dg + db * db);
+                } else {
+                    color_space::OKLab plab = color_space::srgb8_to_oklab(
+                        paint[p][0], paint[p][1], paint[p][2]);
+                    e = color_space::fma_dist_sq(s.lab[i].L - plab.L,
+                                                 s.lab[i].a - plab.a,
+                                                 s.lab[i].b - plab.b);
+                }
+                if (e < be) { be = e; bp = p; }
+            }
+            sel[i] = bp;
+            tot_err += be;
+        }
+        if (tot_err < best.err) {
+            // Pack H-mode block. dR is FIXED by G0_4 (raw 58..56 are
+            // G0_4's high 3 bits per unstuff58). Free bits: raw 63
+            // (chooses R5 ∈ {R0_4, 16+R0_4}, set to keep R safe), and
+            // raw 55..53 + raw 50 (4 bits — brute-force which combo
+            // overflows G).
+            int g0_hi3 = (Gc0 >> 1) & 0x7;
+            int dR_signed = (g0_hi3 < 4) ? g0_hi3 : (g0_hi3 - 8);  // sign-extend 3-bit
+            int raw63 = (g0_hi3 >= 4) ? 1 : 0;
+            int R5 = raw63 * 16 + Rc0;
+            int R_test = R5 + dR_signed;
+            if (R_test < 0 || R_test > 31) continue;  // shouldn't happen by choice of raw63
+
+            // Per unstuff58:
+            //   raw 52       = G0_4 bit 0           (fixed by payload)
+            //   raw 51       = B0_4 bit 3           (fixed)
+            //   raw 49..47   = B0_4 bits 2..0       (fixed)
+            //   raw 48       = B0_4 bit 1           (fixed; overlaps dG bit 0!)
+            // dG = sign_extend(raw 50..48, 3) = sign_extend(s ++ B0_4_bit2 ++ B0_4_bit1, 3).
+            // So dG's LOW 2 bits are fixed by B0_4; only the sign bit (raw 50)
+            // is free. We brute-force (raw 55..53) × (raw 50) = 16 combos.
+            int b0_bit3 = (Bc0 >> 3) & 1;
+            int b0_bit2 = (Bc0 >> 2) & 1;
+            int b0_bit1 = (Bc0 >> 1) & 1;
+            // sign=0 → dG = 2·b0_bit2 + b0_bit1 ∈ [0, 3]
+            // sign=1 → dG = -4 + 2·b0_bit2 + b0_bit1 ∈ [-4, -1]
+            int g0_lo = Gc0 & 1;
+
+            int chosen_free = -1;
+            int chosen_sign = -1;
+            for (int s_bit = 0; s_bit < 2 && chosen_free < 0; ++s_bit) {
+                int dG = (s_bit == 0)
+                             ? (2 * b0_bit2 + b0_bit1)
+                             : (-4 + 2 * b0_bit2 + b0_bit1);
+                for (int F = 0; F < 8; ++F) {
+                    int G5 = 4 * F + 2 * g0_lo + b0_bit3;
+                    int G_test = G5 + dG;
+                    if (G_test < 0 || G_test > 31) {
+                        chosen_free = F;
+                        chosen_sign = s_bit;
+                        break;
+                    }
+                }
+            }
+            if (chosen_free < 0) continue;  // no trigger combination works
+
+            std::uint64_t v = 0;
+            auto put = [&](std::uint64_t val, int size, int hi) {
+                int shift = hi - size + 1;
+                v |= (val & ((std::uint64_t(1) << size) - 1)) << shift;
+            };
+            put(std::uint64_t(raw63), 1, 63);
+            put(std::uint64_t(Rc0), 4, 62);                 // R0_4 → raw 62..59
+            put(std::uint64_t(g0_hi3), 3, 58);              // G0_4 >> 1 → raw 58..56
+            put(std::uint64_t(chosen_free), 3, 55);         // free G5 high → raw 55..53
+            put(std::uint64_t(g0_lo), 1, 52);               // G0_4 & 1
+            put(std::uint64_t(b0_bit3), 1, 51);             // B0_4 bit 3
+            put(std::uint64_t(chosen_sign), 1, 50);         // dG sign bit
+            put(std::uint64_t(b0_bit2), 1, 49);             // B0_4 bit 2
+            put(std::uint64_t(b0_bit1), 1, 48);             // B0_4 bit 1
+            put(std::uint64_t(Bc0 & 1), 1, 47);             // B0_4 bit 0
+            put(std::uint64_t(Rc1), 4, 46);                 // R1_4 → raw 46..43
+            put(std::uint64_t(Gc1), 4, 42);                 // G1_4 → raw 42..39
+            put(std::uint64_t(Bc1), 4, 38);                 // B1_4 → raw 38..35
+            put(std::uint64_t((dist_hi >> 1) & 1), 1, 34);  // dist HI bit 1 → raw 34
+            put(1u, 1, 33);                                 // diffbit
+            put(std::uint64_t(dist_hi & 1), 1, 32);         // dist HI bit 0 → raw 32
+
+            for (int idx = 0; idx < 16; ++idx) {
+                int x = idx % 4, y = idx / 4;
+                int pos = x * 4 + y;
+                unsigned sc = unsigned(sel[idx]);
+                v |= std::uint64_t((sc >> 1u) & 1u) << (16 + pos);
+                v |= std::uint64_t(sc & 1u) << pos;
+            }
+
+            Block blk{};
+            for (int i = 0; i < 8; ++i) {
+                blk[std::size_t(i)] = std::uint8_t((v >> ((7 - i) * 8)) & 0xFFu);
+            }
+            // Round-trip verify via decoder (also catches any spec drift).
+            std::uint8_t flat[48];
+            decode_block(blk, flat);
+            if (classify(blk) != SubMode::h_mode) continue;  // dispatch failed
+            std::uint8_t dec[16][3];
+            for (int i = 0; i < 16; ++i) {
+                dec[i][0] = flat[i * 3 + 0];
+                dec[i][1] = flat[i * 3 + 1];
+                dec[i][2] = flat[i * 3 + 2];
+            }
+            float verified = score_decoded<M>(s, dec);
+            if (verified < best.err) {
+                best.err = verified;
+                best.block = blk;
+                std::memcpy(best.decoded, dec, sizeof(dec));
+                best.mode = SubMode::h_mode;
+            }
+        }
+    }
+    return best;
+}
+
+// ---------------------------------------------------------------------------
 // Per-block picker
 // ---------------------------------------------------------------------------
 
@@ -1259,13 +1532,9 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
     if (opts.effort >= 3) {
         Candidate t = encode_t<M>(s);
         if (t.err < best.err) best = t;
+        Candidate h = encode_h<M>(s);
+        if (h.err < best.err) best = h;
     }
-    // H-mode is the gap left in the per-block search — the dispatcher
-    // routes via col0 ≥ col1 lexicographic comparison on a packed
-    // 12-bit value, which constrains the encoder's choice of base
-    // colours. Implementing it correctly needs the same dispatch-trigger
-    // analysis T-mode got. Deferred to a follow-up commit; the existing
-    // 4-mode picker (ETC1 ind/diff + planar + T) covers the main bases.
     return best;
 }
 
