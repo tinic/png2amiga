@@ -2403,21 +2403,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 // the output dir + format come from --batch / --batch-format.
                 config.batch_inputs.emplace_back(arg);
             } else {
-                // Channel-assembly mode (--r/--g/--b/--a) takes no input
-                // positional — it builds its own input. The first
-                // positional is the output path.
-                bool assembling = !config.channel_r_path.empty() ||
-                                  !config.channel_g_path.empty() ||
-                                  !config.channel_b_path.empty() ||
-                                  !config.channel_a_path.empty();
-                if (assembling) {
-                    if (positional == 0) config.output_path = std::string(arg);
-                } else {
-                    if (positional == 0)
-                        config.input_path = std::string(arg);
-                    else if (positional == 1)
-                        config.output_path = std::string(arg);
-                }
+                if (positional == 0)
+                    config.input_path = std::string(arg);
+                else if (positional == 1)
+                    config.output_path = std::string(arg);
             }
             ++positional;
         }
@@ -6180,14 +6169,44 @@ int run_main(int argc, char* argv[]) {
     g_json = config->json;
     g_preview_scale = resolve_preview_scale(config->preview_scale);
 
-    // Channel-assembly preprocessing. When any of --r/--g/--b/--a is set,
-    // load each named PNG, take its red channel, assemble into a single
-    // RGBA8 buffer at the LCM of all input dimensions (only matching sizes
-    // for now — mismatched sizes would need a resample policy), write to
-    // a temp PNG, and use that as the actual input. Works for every mode
-    // since the rest of the pipeline sees a normal PNG.
-    if (!config->channel_r_path.empty() || !config->channel_g_path.empty() ||
-        !config->channel_b_path.empty() || !config->channel_a_path.empty()) {
+    // Channel-assembly preprocessing. Three input shapes:
+    //   1. Base input + channel overrides:
+    //        png2amiga in.png --a alpha.png out.ktx2
+    //      → load in.png, replace alpha channel with alpha.png's red
+    //   2. Full per-channel assembly (no base input):
+    //        png2amiga --r r.png --g g.png --b b.png out.ktx2
+    //      → assemble RGBA from per-channel PNGs (unset → 0 RGB / 255 A)
+    //   3. Hybrid:
+    //        png2amiga in.png --r mask.png out.ktx2
+    //      → load in.png's GBA, replace R with mask.png's red
+    //
+    // In shape #2 (no base input), the user only provides the output
+    // positional. parse_args stored it as input_path; swap it to
+    // output_path here.
+    bool assembling = !config->channel_r_path.empty() || !config->channel_g_path.empty() ||
+                      !config->channel_b_path.empty() || !config->channel_a_path.empty();
+    if (assembling && config->output_path.empty() && !config->input_path.empty()) {
+        // The single positional is actually the output; no base input.
+        config->output_path = std::move(config->input_path);
+        config->input_path.clear();
+    }
+    if (assembling) {
+        // Optional base input.
+        int W = 0, H = 0;
+        std::vector<std::uint8_t> base_rgba;
+        if (!config->input_path.empty()) {
+            int ch{};
+            unsigned char* px =
+                stbi_load(config->input_path.c_str(), &W, &H, &ch, 4);
+            if (!px) {
+                std::println(stderr, "Error: base input '{}' failed to load: {}",
+                             config->input_path, stbi_failure_reason());
+                return exit_code::cant_create;
+            }
+            base_rgba.assign(px, px + std::size_t(W) * std::size_t(H) * 4u);
+            stbi_image_free(px);
+        }
+
         struct ChannelIn {
             std::string path;
             int idx;  // 0=R 1=G 2=B 3=A
@@ -6198,7 +6217,6 @@ int run_main(int argc, char* argv[]) {
         if (!config->channel_b_path.empty()) sources.push_back({config->channel_b_path, 2});
         if (!config->channel_a_path.empty()) sources.push_back({config->channel_a_path, 3});
 
-        int W = 0, H = 0;
         std::vector<std::vector<std::uint8_t>> loaded(sources.size());
         for (std::size_t s = 0; s < sources.size(); ++s) {
             int w{}, h{}, ch{};
@@ -6211,8 +6229,8 @@ int run_main(int argc, char* argv[]) {
             if (W == 0) { W = w; H = h; }
             else if (w != W || h != H) {
                 std::println(stderr,
-                             "Error: channel input '{}' is {}x{}, expected {}x{} "
-                             "(all --r/--g/--b/--a inputs must share dimensions)",
+                             "Error: channel input '{}' is {}x{}, base/expected {}x{} "
+                             "(all inputs must share dimensions)",
                              sources[s].path, w, h, W, H);
                 stbi_image_free(px);
                 return exit_code::cant_create;
@@ -6221,13 +6239,18 @@ int run_main(int argc, char* argv[]) {
             stbi_image_free(px);
         }
 
-        // Assemble: RGB = 0 (or specified channel value), A = 255 (or specified).
+        // Assemble: start from base (or default fill) then apply each
+        // per-channel override.
         std::vector<std::uint8_t> rgba(std::size_t(W) * std::size_t(H) * 4u);
-        for (std::size_t i = 0; i < std::size_t(W) * std::size_t(H); ++i) {
-            rgba[i * 4u + 0] = 0;
-            rgba[i * 4u + 1] = 0;
-            rgba[i * 4u + 2] = 0;
-            rgba[i * 4u + 3] = 255;
+        if (!base_rgba.empty()) {
+            rgba = std::move(base_rgba);
+        } else {
+            for (std::size_t i = 0; i < std::size_t(W) * std::size_t(H); ++i) {
+                rgba[i * 4u + 0] = 0;
+                rgba[i * 4u + 1] = 0;
+                rgba[i * 4u + 2] = 0;
+                rgba[i * 4u + 3] = 255;
+            }
         }
         for (std::size_t s = 0; s < sources.size(); ++s) {
             int dst_ch = sources[s].idx;
