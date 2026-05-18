@@ -48,12 +48,17 @@ bool is_bc7(Format f) {
     return f == Format::bc7_unorm || f == Format::bc7_srgb;
 }
 
+bool is_bc2(Format f) {
+    return f == Format::bc2_unorm || f == Format::bc2_srgb;
+}
+
 bool is_bc3(Format f) {
     return f == Format::bc3_unorm || f == Format::bc3_srgb;
 }
 
 bool is_srgb(Format f) {
-    return f == Format::bc1_rgb_srgb || f == Format::bc3_srgb || f == Format::bc7_srgb;
+    return f == Format::bc1_rgb_srgb || f == Format::bc2_srgb ||
+           f == Format::bc3_srgb || f == Format::bc7_srgb;
 }
 
 std::uint32_t dxgi_for(Format f) {
@@ -106,6 +111,8 @@ std::vector<std::uint8_t> write(const Inputs& in) {
         put_fourcc(out, "DX10");
     } else if (is_bc3(in.format)) {
         put_fourcc(out, "DXT5");
+    } else if (is_bc2(in.format)) {
+        put_fourcc(out, "DXT3");
     } else {
         // BC1 = "DXT1".
         put_fourcc(out, "DXT1");

@@ -21,6 +21,7 @@ constexpr std::uint8_t kIdentifier[12] = {
 // KDFS color-model IDs (KDFS v1.3 §15.1).
 // KHR_DF_MODEL_* values from khr_df.h.
 constexpr std::uint32_t kModelBc1a = 128;
+constexpr std::uint32_t kModelBc2 = 129;        // KHR_DF_MODEL_BC2
 constexpr std::uint32_t kModelBc3 = 130;        // KHR_DF_MODEL_BC3
 constexpr std::uint32_t kModelBc7 = 134;
 constexpr std::uint32_t kModelEtc2 = 161;
@@ -45,6 +46,7 @@ constexpr std::uint8_t kEtc2ChannelColor = 2;
 // VK_FORMAT_BC1_RGB_*.)
 constexpr std::uint8_t kBc1ChannelColor = 0;
 
+constexpr std::uint8_t kBc2ChannelColor = 0;
 // KHR_DF_CHANNEL_BC3_COLOR / _ALPHA. We store as a single RGBA sample
 // (channel type "color") same as BC7 — the decoder splits internally.
 constexpr std::uint8_t kBc3ChannelColor = 0;
@@ -83,6 +85,7 @@ void write_u64_at(std::vector<std::uint8_t>& out, std::size_t at, std::uint64_t 
 bool is_srgb_transfer(VkFormat fmt) {
     switch (fmt) {
     case VkFormat::bc1_rgb_srgb_block:
+    case VkFormat::bc2_srgb_block:
     case VkFormat::bc3_srgb_block:
     case VkFormat::bc7_srgb_block:
     case VkFormat::etc2_r8g8b8_srgb_block:
@@ -92,6 +95,7 @@ bool is_srgb_transfer(VkFormat fmt) {
     case VkFormat::astc_8x8_srgb_block:
         return true;
     case VkFormat::bc1_rgb_unorm_block:
+    case VkFormat::bc2_unorm_block:
     case VkFormat::bc3_unorm_block:
     case VkFormat::bc7_unorm_block:
     case VkFormat::etc2_r8g8b8_unorm_block:
@@ -105,6 +109,9 @@ std::uint32_t color_model_for(VkFormat fmt) {
     case VkFormat::bc1_rgb_srgb_block:
     case VkFormat::bc1_rgb_unorm_block:
         return kModelBc1a;
+    case VkFormat::bc2_srgb_block:
+    case VkFormat::bc2_unorm_block:
+        return kModelBc2;
     case VkFormat::bc3_srgb_block:
     case VkFormat::bc3_unorm_block:
         return kModelBc3;
@@ -129,6 +136,9 @@ std::uint8_t channel_type_for(VkFormat fmt) {
     case VkFormat::bc1_rgb_srgb_block:
     case VkFormat::bc1_rgb_unorm_block:
         return kBc1ChannelColor;
+    case VkFormat::bc2_srgb_block:
+    case VkFormat::bc2_unorm_block:
+        return kBc2ChannelColor;
     case VkFormat::bc3_srgb_block:
     case VkFormat::bc3_unorm_block:
         return kBc3ChannelColor;

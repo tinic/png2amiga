@@ -35,6 +35,9 @@ enum class VkFormat : std::uint32_t {
     // BC1 (DXT1) RGB block formats.
     bc1_rgb_unorm_block = 133,      // VK_FORMAT_BC1_RGB_UNORM_BLOCK
     bc1_rgb_srgb_block = 134,       // VK_FORMAT_BC1_RGB_SRGB_BLOCK
+    // BC2 (DXT3) RGBA block formats.
+    bc2_unorm_block = 135,          // VK_FORMAT_BC2_UNORM_BLOCK
+    bc2_srgb_block = 136,           // VK_FORMAT_BC2_SRGB_BLOCK
     // BC3 (DXT5) RGBA block formats.
     bc3_unorm_block = 137,          // VK_FORMAT_BC3_UNORM_BLOCK
     bc3_srgb_block = 138,           // VK_FORMAT_BC3_SRGB_BLOCK

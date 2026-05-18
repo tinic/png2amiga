@@ -37,6 +37,8 @@ namespace {
 
 constexpr std::uint32_t kVkFormatBc1RgbUnorm = 133;
 constexpr std::uint32_t kVkFormatBc1RgbSrgb = 134;
+constexpr std::uint32_t kVkFormatBc2Unorm = 135;
+constexpr std::uint32_t kVkFormatBc2Srgb = 136;
 constexpr std::uint32_t kVkFormatBc3Unorm = 137;
 constexpr std::uint32_t kVkFormatBc3Srgb = 138;
 constexpr std::uint32_t kVkFormatBc7Unorm = 145;
@@ -116,14 +118,17 @@ bool parse_ktx2(const std::vector<std::uint8_t>& f, Ktx2Image& out) {
                           out.vk_format == kVkFormatEtc2RgbSrgb);
     const bool is_bc1 = (out.vk_format == kVkFormatBc1RgbUnorm ||
                          out.vk_format == kVkFormatBc1RgbSrgb);
+    const bool is_bc2 = (out.vk_format == kVkFormatBc2Unorm ||
+                         out.vk_format == kVkFormatBc2Srgb);
     const bool is_bc3 = (out.vk_format == kVkFormatBc3Unorm ||
                          out.vk_format == kVkFormatBc3Srgb);
     const bool is_bc7 = (out.vk_format == kVkFormatBc7Unorm ||
                          out.vk_format == kVkFormatBc7Srgb);
-    if (!is_etc2 && !is_bc1 && !is_bc3 && !is_bc7) {
+    if (!is_etc2 && !is_bc1 && !is_bc2 && !is_bc3 && !is_bc7) {
         std::fprintf(stderr,
                      "ktx2_to_png: unsupported vkFormat %u "
-                     "(need 147/148 ETC2, 133/134 BC1, 137/138 BC3, or 145/146 BC7)\n",
+                     "(need 147/148 ETC2, 133/134 BC1, 135/136 BC2, "
+                     "137/138 BC3, or 145/146 BC7)\n",
                      out.vk_format);
         return false;
     }
@@ -200,7 +205,9 @@ int main(int argc, char* argv[]) {
     const bool is16bpp = (img.vk_format == kVkFormatBc7Unorm ||
                           img.vk_format == kVkFormatBc7Srgb ||
                           img.vk_format == kVkFormatBc3Unorm ||
-                          img.vk_format == kVkFormatBc3Srgb);
+                          img.vk_format == kVkFormatBc3Srgb ||
+                          img.vk_format == kVkFormatBc2Unorm ||
+                          img.vk_format == kVkFormatBc2Srgb);
     const int kBlockBytes = is16bpp ? 16 : 8;
     const std::size_t expected_blocks = std::size_t(bcols) * std::size_t(brows);
     if (blocks_len < expected_blocks * std::size_t(kBlockBytes)) {
@@ -217,6 +224,8 @@ int main(int argc, char* argv[]) {
     std::vector<std::uint8_t> rgba(std::size_t(padded_w) * std::size_t(padded_h) * 4u, 0);
     const bool decode_bc1 = (img.vk_format == kVkFormatBc1RgbUnorm ||
                              img.vk_format == kVkFormatBc1RgbSrgb);
+    const bool decode_bc2 = (img.vk_format == kVkFormatBc2Unorm ||
+                             img.vk_format == kVkFormatBc2Srgb);
     const bool decode_bc3 = (img.vk_format == kVkFormatBc3Unorm ||
                              img.vk_format == kVkFormatBc3Srgb);
     const bool decode_bc7 = (img.vk_format == kVkFormatBc7Unorm ||
@@ -232,6 +241,8 @@ int main(int argc, char* argv[]) {
                 bcdec_bc7(blk, dst, pitch);
             } else if (decode_bc3) {
                 bcdec_bc3(blk, dst, pitch);
+            } else if (decode_bc2) {
+                bcdec_bc2(blk, dst, pitch);
             } else if (decode_bc1) {
                 bcdec_bc1(blk, dst, pitch);
             } else {
@@ -244,9 +255,9 @@ int main(int argc, char* argv[]) {
     // channels in the output PNG so a non-trivial source alpha plane
     // round-trips through the file. ETC2 / BC1 are RGB-only formats; we
     // strip alpha (all-255 anyway) to avoid bloating their PNG output.
-    // BC3 and BC7 carry alpha; keep 4 channels in the decoded PNG.
+    // BC2 / BC3 / BC7 carry alpha; keep 4 channels in the decoded PNG.
     // ETC2 / BC1 are RGB-only — drop alpha (always 255 anyway).
-    const int out_ch = (decode_bc7 || decode_bc3) ? 4 : 3;
+    const int out_ch = (decode_bc7 || decode_bc3 || decode_bc2) ? 4 : 3;
     std::vector<std::uint8_t> out_bytes(std::size_t(W) * std::size_t(H) * std::size_t(out_ch));
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {

@@ -155,6 +155,11 @@ enum class Mode : unsigned char {
     // Same per-block search + block-grid ED pipeline as etc2.
     bc1,
 
+    // BC2 (DXT3) RGBA block-compressed texture. 4×4 blocks, 8 bpp.
+    // BC1 RGB color block + 16 × 4-bit explicit alpha (no interp).
+    // KTX2 VK_FORMAT_BC2_*_BLOCK or DDS FourCC "DXT3".
+    bc2,
+
     // BC3 (DXT5) RGBA block-compressed texture. 4×4 blocks, 8 bpp.
     // BC1 RGB color block + BC4-style 8-bit alpha block. KTX2
     // VK_FORMAT_BC3_*_BLOCK or DDS FourCC "DXT5".
@@ -373,6 +378,7 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     case Mode::etc2:
     case Mode::bc1:
         return {0, 0, 4, 0, false, false, false, false, 1, 1, 1.0f};
+    case Mode::bc2:
     case Mode::bc3:
     case Mode::bc7:
         return {0, 0, 8, 0, false, false, false, false, 1, 1, 1.0f};
@@ -455,6 +461,7 @@ constexpr bool is_etc2(Mode mode) noexcept { return mode == Mode::etc2; }
 
 // BC1 (DXT1) RGB block compression — same bypass treatment as etc2.
 constexpr bool is_bc1(Mode mode) noexcept { return mode == Mode::bc1; }
+constexpr bool is_bc2(Mode mode) noexcept { return mode == Mode::bc2; }
 constexpr bool is_bc3(Mode mode) noexcept { return mode == Mode::bc3; }
 
 // BC7 RGBA block compression — same bypass treatment as etc2.
@@ -463,7 +470,8 @@ constexpr bool is_bc7(Mode mode) noexcept { return mode == Mode::bc7; }
 // Any GPU block-compression mode (ETC2, BC1, BC7, future ASTC). Convenient
 // shorthand for "skip the Amiga pipeline; emit a KTX2 container."
 constexpr bool is_block_compressed(Mode mode) noexcept {
-    return is_etc2(mode) || is_bc1(mode) || is_bc3(mode) || is_bc7(mode);
+    return is_etc2(mode) || is_bc1(mode) || is_bc2(mode) || is_bc3(mode) ||
+           is_bc7(mode);
 }
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
@@ -595,7 +603,7 @@ constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
     if (is_ham(mode)) return get_mode_params(mode).bitplane_depth;
     if (mode == Mode::ehb) return 6;
     if (is_atari(mode)) return get_mode_params(mode).bitplane_depth;
-    if (is_bc7(mode) || is_bc3(mode)) return 8;  // BC7 / BC3 are fixed 8 bpp
+    if (is_bc7(mode) || is_bc3(mode) || is_bc2(mode)) return 8;  // BC2/3/7 fixed 8 bpp
     if (is_block_compressed(mode)) return 4;     // ETC2 / BC1 are fixed 4 bpp
 
     // AGA standard modes

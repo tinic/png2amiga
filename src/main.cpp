@@ -15,6 +15,7 @@
 #include "copper.hpp"
 #include "dither.hpp"
 #include "bc1.hpp"
+#include "bc2.hpp"
 #include "bc3.hpp"
 #include "bc7.hpp"
 #include "etc2.hpp"
@@ -2178,6 +2179,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::etc2;
                 else if (v == "bc1" || v == "dxt1" || v == "bc1-rgb")
                     config.mode = amiga::Mode::bc1;
+                else if (v == "bc2" || v == "dxt3" || v == "bc2-rgba")
+                    config.mode = amiga::Mode::bc2;
                 else if (v == "bc3" || v == "dxt5" || v == "bc3-rgba")
                     config.mode = amiga::Mode::bc3;
                 else if (v == "bc7" || v == "bc7-rgba")
@@ -6373,6 +6376,165 @@ int run_bc3(Config cfg) {
     return exit_code::ok;
 }
 
+// BC2 (DXT3) dispatch — same shape as run_bc3, just calls
+// bc2::encode_image / bc2::decode_image. The alpha half is 4-bit
+// explicit (no endpoint coding) so there's no Options knob beyond
+// what BC1 takes.
+int run_bc2(Config cfg) {
+    if (cfg.output_path.empty() && !cfg.preview && !cfg.input_path.empty()) {
+        std::filesystem::path in_p(cfg.input_path);
+        cfg.output_path = (in_p.parent_path() / in_p.stem()).string() + ".ktx2";
+    }
+    const bool out_dds = !cfg.output_path.empty() && ends_with(cfg.output_path, ".dds");
+    const bool out_ktx2 = !cfg.output_path.empty() && ends_with(cfg.output_path, ".ktx2");
+    if (!cfg.output_path.empty() && !out_dds && !out_ktx2) {
+        std::println(stderr, "Error: --mode bc2 output path must end in .ktx2 or .dds");
+        return exit_code::usage;
+    }
+    Image src;
+    if (cfg.preloaded_input) {
+        src = *std::move(cfg.preloaded_input);
+    } else {
+        auto loaded = png_io::load(cfg.input_path);
+        if (!loaded) {
+            std::println(stderr, "Error: cannot read '{}': {}",
+                         cfg.input_path, loaded.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(loaded);
+    }
+    if (cfg.width.has_value() || cfg.height.has_value()) {
+        double aspect = double(src.height()) / double(src.width());
+        int tw = cfg.width.has_value() ? int(*cfg.width)
+                                       : int(std::lround(double(*cfg.height) / aspect));
+        int th = cfg.height.has_value() ? int(*cfg.height)
+                                        : int(std::lround(double(tw) * aspect));
+        auto resized = scale::resample(src, std::size_t(tw), std::size_t(th));
+        if (!resized) {
+            std::println(stderr, "Error: resample failed: {}", resized.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(resized);
+    }
+
+    const int W = int(src.width());
+    const int H = int(src.height());
+    if (W <= 0 || H <= 0) {
+        std::println(stderr, "Error: empty source image");
+        return exit_code::cant_create;
+    }
+
+    const bool has_alpha = src.has_alpha();
+    auto src_alpha = src.alpha();
+    std::vector<std::uint8_t> rgba_srgb8(std::size_t(W) * std::size_t(H) * 4u);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            Color3f lin = src[std::size_t(x), std::size_t(y)];
+            Color3f sc = color_space::linear_to_srgb(lin).clamped();
+            std::size_t i = (std::size_t(y) * std::size_t(W) + std::size_t(x)) * 4u;
+            rgba_srgb8[i + 0u] = std::uint8_t(sc.r * 255.0f + 0.5f);
+            rgba_srgb8[i + 1u] = std::uint8_t(sc.g * 255.0f + 0.5f);
+            rgba_srgb8[i + 2u] = std::uint8_t(sc.b * 255.0f + 0.5f);
+            rgba_srgb8[i + 3u] = has_alpha
+                ? std::uint8_t(std::clamp(src_alpha[std::size_t(y) * std::size_t(W) + std::size_t(x)],
+                                          0.f, 1.f) * 255.f + 0.5f)
+                : std::uint8_t(255u);
+        }
+    }
+
+    bc2::Options bopts;
+    bopts.metric = (cfg.etc2_metric == "srgb-mse")
+                       ? block_compress::BlockMetric::srgb_mse
+                       : block_compress::BlockMetric::oklab2;
+    bopts.effort = cfg.etc2_effort;
+    bopts.jitter = cfg.etc2_jitter;
+    bopts.block_ed.strength = cfg.etc2_block_ed;
+    bopts.block_ed.method = cfg.dither_method;
+
+    auto enc = bc2::encode_image(rgba_srgb8, W, H, bopts);
+
+    auto decoded_rgba = bc2::decode_image(enc.blocks, W, H);
+    std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
+    for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
+        decoded_lin[i] = color_space::srgb_to_linear(Color3f{
+            float(decoded_rgba[i * 4u + 0u]) * (1.0f / 255.0f),
+            float(decoded_rgba[i * 4u + 1u]) * (1.0f / 255.0f),
+            float(decoded_rgba[i * 4u + 2u]) * (1.0f / 255.0f),
+        });
+    }
+    float s2 = ssimulacra2::compute(
+        src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
+    float psnr =
+        color_space::compute_psnr_blurred(src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
+
+    static_assert(sizeof(bc2::Block) == bc2::kBlockBytes,
+                  "bc2::Block must be a plain 16-byte array");
+    std::span<const std::uint8_t> block_bytes(
+        reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+        enc.blocks.size() * std::size_t(bc2::kBlockBytes));
+
+    std::vector<std::uint8_t> base_bytes_vec(block_bytes.begin(), block_bytes.end());
+    auto bc2_encode_level = [&](const std::vector<std::uint8_t>& rgba, int lw, int lh) {
+        auto enc_lv = bc2::encode_image(rgba, lw, lh, bopts);
+        std::vector<std::uint8_t> out(enc_lv.blocks.size() * std::size_t(bc2::kBlockBytes));
+        std::memcpy(out.data(), enc_lv.blocks.data(), out.size());
+        return out;
+    };
+    auto mip_levels =
+        build_mip_chain(src, 4, cfg.mips, base_bytes_vec, bc2_encode_level);
+    if (cfg.mips != 0 && mip_levels.empty()) {
+        std::println(stderr, "Error: mipmap generation failed");
+        return exit_code::cant_create;
+    }
+
+    std::vector<std::uint8_t> file_bytes;
+    if (out_dds) {
+        dds::Inputs di;
+        di.format = dds::Format::bc2_srgb;
+        di.image_w = W;
+        di.image_h = H;
+        di.bytes_per_block = bc2::kBlockBytes;
+        if (mip_levels.empty()) di.block_bytes = block_bytes;
+        else                    di.levels = std::move(mip_levels);
+        file_bytes = dds::write(di);
+    } else {
+        ktx2::Inputs ki;
+        ki.format = ktx2::VkFormat::bc2_srgb_block;
+        ki.block_dim = {bc2::kBlockW, bc2::kBlockH, 1};
+        ki.image_w = W;
+        ki.image_h = H;
+        ki.bytes_per_block = bc2::kBlockBytes;
+        if (mip_levels.empty()) ki.block_bytes = block_bytes;
+        else                    ki.levels = std::move(mip_levels);
+        ki.supercompress_zstd = cfg.ktx2_zstd;
+        file_bytes = ktx2::write(ki);
+    }
+
+    if (!cfg.output_path.empty()) {
+        std::ofstream of(cfg.output_path, std::ios::binary);
+        if (!of) {
+            std::println(stderr, "Error: cannot write '{}'", cfg.output_path);
+            return exit_code::cant_create;
+        }
+        of.write(reinterpret_cast<const char*>(file_bytes.data()),
+                 std::streamsize(file_bytes.size()));
+    }
+
+    cli_status(
+        "Encoded:  BC2 {}×{}, {} blocks ({} bytes){}{}, error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
+        W, H, int(enc.blocks.size()), fmt_size(int(file_bytes.size())),
+        cfg.output_path.empty() ? "" : ", file: ",
+        cfg.output_path,
+        double(enc.total_oklab2_error),
+        psnr, s2);
+
+    if (cfg.preview) {
+        Image preview(std::size_t(W), std::size_t(H), decoded_lin);
+        show_terminal_preview(preview, amiga::Mode::bc2);
+    }
+    return exit_code::ok;
+}
+
 }  // namespace
 
 int run_main(int argc, char* argv[]) {
@@ -6516,6 +6678,9 @@ int run_main(int argc, char* argv[]) {
     }
     if (config->mode == amiga::Mode::bc1) {
         return run_bc1(*config);
+    }
+    if (config->mode == amiga::Mode::bc2) {
+        return run_bc2(*config);
     }
     if (config->mode == amiga::Mode::bc3) {
         return run_bc3(*config);
