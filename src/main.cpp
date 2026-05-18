@@ -14,6 +14,8 @@
 #include "cga_text.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
+#include "etc2.hpp"
+#include "ktx2.hpp"
 #include "dither_tuning.hpp"
 #include "strips.hpp"
 #include "ssimulacra2.hpp"
@@ -5451,6 +5453,142 @@ int run_batch(const Config& cfg) {
     return exit_code::ok;
 }
 
+// ETC2 (KTX2) dispatch — bypasses the Amiga bitplane pipeline since
+// nothing about palette quantization / dither / bitplanes / IFF applies
+// to a fixed-rate texture-compression format. Loads the source PNG/JPEG,
+// optionally rescales to --width/--height (preserving source aspect),
+// hands off to etc2::encode_image, wraps the block stream in KTX2, and
+// writes the .ktx2 file. Reports the same "Encoded:" status shape as
+// the other modes so the bench harness can grep for it.
+int run_etc2(const Config& cfg) {
+    if (!ends_with(cfg.output_path, ".ktx2")) {
+        std::println(stderr, "Error: --mode etc2 requires .ktx2 output extension");
+        return exit_code::usage;
+    }
+    auto loaded = png_io::load(cfg.input_path);
+    if (!loaded) {
+        std::println(stderr, "Error: cannot read '{}': {}",
+                     cfg.input_path, loaded.error().message);
+        return exit_code::cant_create;
+    }
+    Image src = *std::move(loaded);
+
+    // Optional --width / --height rescale. Preserve source aspect when
+    // only one dimension is given. The ETC2 encoder pads the source up
+    // to the 4×4 block grid internally (replicate-pad at edges).
+    if (cfg.width.has_value() || cfg.height.has_value()) {
+        double aspect = double(src.height()) / double(src.width());
+        int tw = cfg.width.has_value()
+                     ? int(*cfg.width)
+                     : int(std::lround(double(*cfg.height) / aspect));
+        int th = cfg.height.has_value()
+                     ? int(*cfg.height)
+                     : int(std::lround(double(tw) * aspect));
+        auto resized = scale::resample(src, std::size_t(tw), std::size_t(th));
+        if (!resized) {
+            std::println(stderr, "Error: resample failed: {}", resized.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(resized);
+    }
+
+    const int W = int(src.width());
+    const int H = int(src.height());
+    if (W <= 0 || H <= 0) {
+        std::println(stderr, "Error: empty source image");
+        return exit_code::cant_create;
+    }
+
+    // Pack linear Color3f → sRGB8 row-major RGB (what etc2::encode_image
+    // expects). Clamping happens inside linear_to_srgb.
+    std::vector<std::uint8_t> rgb_srgb8(std::size_t(W) * std::size_t(H) * 3u);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            Color3f lin = src[std::size_t(x), std::size_t(y)];
+            Color3f s = color_space::linear_to_srgb(lin).clamped();
+            std::size_t i = (std::size_t(y) * std::size_t(W) + std::size_t(x)) * 3u;
+            rgb_srgb8[i + 0u] = std::uint8_t(s.r * 255.0f + 0.5f);
+            rgb_srgb8[i + 1u] = std::uint8_t(s.g * 255.0f + 0.5f);
+            rgb_srgb8[i + 2u] = std::uint8_t(s.b * 255.0f + 0.5f);
+        }
+    }
+
+    // Encode.
+    etc2::Options eopts;
+    eopts.metric = block_compress::BlockMetric::oklab2;
+    auto enc = etc2::encode_image(rgb_srgb8, W, H, eopts);
+
+    // Decode-roundtrip for the in-process score.
+    auto decoded_rgb8 = etc2::decode_image(enc.blocks, W, H);
+    std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
+    for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
+        decoded_lin[i] = color_space::srgb_to_linear(Color3f{
+            float(decoded_rgb8[i * 3u + 0u]) * (1.0f / 255.0f),
+            float(decoded_rgb8[i * 3u + 1u]) * (1.0f / 255.0f),
+            float(decoded_rgb8[i * 3u + 2u]) * (1.0f / 255.0f),
+        });
+    }
+    float s2 = ssimulacra2::compute(
+        src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
+
+    // PSNR via in-process gaussian-blurred-sRGB residual (matches what
+    // the other modes report via the "Encoded:" line — see
+    // ssimulacra2.cpp for the helper).
+    float psnr = 0.0f;
+    {
+        double mse = 0.0;
+        for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
+            Color3f a = color_space::linear_to_srgb(src.pixels()[i]).clamped();
+            Color3f b = color_space::linear_to_srgb(decoded_lin[i]).clamped();
+            double dr = double(a.r - b.r);
+            double dg = double(a.g - b.g);
+            double db = double(a.b - b.b);
+            mse += dr * dr + dg * dg + db * db;
+        }
+        mse /= double(decoded_lin.size() * 3);
+        psnr = (mse > 0.0) ? float(-10.0 * std::log10(mse)) : 99.99f;
+    }
+
+    // Wrap blocks into KTX2 container.
+    static_assert(sizeof(etc2::Block) == etc2::kBlockBytes,
+                  "etc2::Block must be a plain 8-byte array");
+    std::span<const std::uint8_t> block_bytes(
+        reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+        enc.blocks.size() * std::size_t(etc2::kBlockBytes));
+    ktx2::Inputs ki;
+    ki.format = ktx2::VkFormat::etc2_r8g8b8_srgb_block;
+    ki.block_dim = {etc2::kBlockW, etc2::kBlockH, 1};
+    ki.image_w = W;
+    ki.image_h = H;
+    ki.bytes_per_block = etc2::kBlockBytes;
+    ki.block_bytes = block_bytes;
+    auto file_bytes = ktx2::write(ki);
+
+    {
+        std::ofstream of(cfg.output_path, std::ios::binary);
+        if (!of) {
+            std::println(stderr, "Error: cannot write '{}'", cfg.output_path);
+            return exit_code::cant_create;
+        }
+        of.write(reinterpret_cast<const char*>(file_bytes.data()),
+                 std::streamsize(file_bytes.size()));
+    }
+
+    // Status line shape mirrors cli_print_encoded_other so bench scripts
+    // can scrape uniformly. ETC2 has no palette — colors=0.
+    cli_status(
+        "Encoded:  ETC2 {}×{}, {} blocks ({} bytes), file: {}, error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
+        W,
+        H,
+        int(enc.blocks.size()),
+        fmt_size(int(file_bytes.size())),
+        cfg.output_path,
+        double(enc.total_oklab2_error),
+        psnr,
+        s2);
+    return exit_code::ok;
+}
+
 }  // namespace
 
 int run_main(int argc, char* argv[]) {
@@ -5464,6 +5602,11 @@ int run_main(int argc, char* argv[]) {
     g_print_palette_json = config->print_palette_json;
     g_json = config->json;
     g_preview_scale = resolve_preview_scale(config->preview_scale);
+
+    // ETC2 (KTX2) — fixed-rate block format; bypass the Amiga pipeline.
+    if (config->mode == amiga::Mode::etc2) {
+        return run_etc2(*config);
+    }
 
     // --no-scale + .cpp/.c viewer is incoherent: the generated viewer
     // sets BPLCON0/DDFSTRT/DDFSTOP/BPLxMOD for a specific Amiga screen
