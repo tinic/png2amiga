@@ -1250,6 +1250,13 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
     if (opts.effort >= 1) {
         Candidate planar = encode_planar<M>(s);
         if (planar.err < best.err) best = planar;
+    }
+    // T-mode is opt-in via --etc2-effort 3 — its hard 2-colour
+    // quantisation can win OKLab² per block but lose SSIMULACRA2 on
+    // continuous-tone content (same pattern as PSNR-vs-S2 tension in
+    // project_ham_aware_ed.md). Cartoon / high-contrast tile content
+    // gains from it though, so we keep the option.
+    if (opts.effort >= 3) {
         Candidate t = encode_t<M>(s);
         if (t.err < best.err) best = t;
     }
