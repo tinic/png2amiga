@@ -40,6 +40,12 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 
+#ifdef _WIN32
+#  include <windows.h>
+#else
+#  include <unistd.h>
+#endif
+
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -6284,18 +6290,26 @@ int run_main(int argc, char* argv[]) {
         }
 
         // Write to a unique temp PNG path; pipeline picks it up as normal input.
-        char tmpl[] = "/tmp/png2amiga_assembled_XXXXXX.png";
-        int fd = mkstemps(tmpl, 4);
-        if (fd < 0) {
-            std::println(stderr, "Error: could not create temp file for assembled input");
+        // Portable: std::filesystem::temp_directory_path + a pid-based suffix.
+        // Single-shot tool so true uniqueness isn't critical; this is good
+        // enough to avoid collisions across concurrent invocations on the
+        // same host.
+        auto tmpdir = std::filesystem::temp_directory_path();
+        auto pid = std::uint64_t(
+#ifdef _WIN32
+            GetCurrentProcessId()
+#else
+            getpid()
+#endif
+        );
+        auto tmp_path = tmpdir / std::format("png2amiga_assembled_{}.png", pid);
+        auto tmp_str = tmp_path.string();
+        if (!stbi_write_png(tmp_str.c_str(), W, H, 4, rgba.data(), W * 4)) {
+            std::println(stderr, "Error: could not write assembled input PNG to '{}'",
+                         tmp_str);
             return exit_code::cant_create;
         }
-        close(fd);
-        if (!stbi_write_png(tmpl, W, H, 4, rgba.data(), W * 4)) {
-            std::println(stderr, "Error: could not write assembled input PNG");
-            return exit_code::cant_create;
-        }
-        config->input_path = tmpl;
+        config->input_path = tmp_str;
     }
 
     // ETC2 (KTX2) — fixed-rate block format; bypass the Amiga pipeline.
