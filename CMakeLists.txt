@@ -239,6 +239,16 @@ else()
     # would otherwise refuse them.
     target_compile_options(ktx2_to_png PRIVATE -w)
 
+    # ktx1_to_png: same decode path, KTX1 input. Consumes etc2comp's
+    # output (which writes KTX1, not KTX2) so cross-encoder benches can
+    # score etc2comp on the same etcdec → score-vs pipeline as our KTX2.
+    add_executable(ktx1_to_png tools/ktx1_to_png.cpp)
+    target_include_directories(ktx1_to_png PRIVATE
+        third_party
+        third_party/etcdec
+        ${CMAKE_BINARY_DIR}/generated)
+    target_compile_options(ktx1_to_png PRIVATE -w)
+
     # bench_pow24: scalar vs polynomial vs AVX2 8-wide pow24 timing —
     # used to decide whether replacing std::pow inside the dither hot
     # loop is worth shipping. Header-only on color_space.hpp; no extra
