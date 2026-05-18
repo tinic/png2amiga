@@ -3548,6 +3548,11 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
 
     float total_error = 0.0f;
     auto ec = settings.error_clamp;
+    // OKLab accumulator: L axis uses ec as-is; a/b halved because their
+    // typical range is half of L's. A 5×4 sweep (ec_L ∈ {0.20..0.60},
+    // ratio ∈ {0.25..2.0}) on 25-image DIV2K showed the clamp never
+    // binds in practice — the kernel + OKLab residual self-bound. Kept
+    // as a safety net.
     auto ec_L = ec;
     auto ec_ab = ec * 0.5f;
 

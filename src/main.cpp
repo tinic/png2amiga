@@ -5560,7 +5560,7 @@ int run_main(int argc, char* argv[]) {
         cli_status("png2amiga {} — dither methods:", png2amiga::version);
         cli_status("  ED:        floyd-steinberg (default), atkinson, sierra-lite,");
         cli_status("             stucki, jarvis, gilbert, riemersma,");
-        cli_status("             floyd-steinberg-experimental (coupled-OKLab WIP)");
+        cli_status("             floyd-steinberg-experimental (OKLab residual; opt-in)");
         cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker,");
         cli_status("             opt-vline, opt-vline-checker, tri-tone,");
         cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
