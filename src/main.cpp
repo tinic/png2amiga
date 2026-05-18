@@ -15,6 +15,7 @@
 #include "copper.hpp"
 #include "dither.hpp"
 #include "bc1.hpp"
+#include "bc7.hpp"
 #include "etc2.hpp"
 #include "ktx2.hpp"
 #include "dither_tuning.hpp"
@@ -1272,7 +1273,7 @@ void print_usage() {
         "  --fade-loop                     Loop forward (source→...→target→source); else\n"
         "                                  ping-pong (source→...→target→...→source).\n"
         "\n"
-        "ETC2 / BC1 (--mode etc2|bc1 → .ktx2):\n"
+        "ETC2 / BC1 / BC7 (--mode etc2|bc1|bc7 → .ktx2):\n"
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Endpoint search width (default: 1)\n"
         "  --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5)\n"
@@ -2100,6 +2101,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::etc2;
                 else if (v == "bc1" || v == "dxt1" || v == "bc1-rgb")
                     config.mode = amiga::Mode::bc1;
+                else if (v == "bc7" || v == "bc7-rgba")
+                    config.mode = amiga::Mode::bc7;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -5837,6 +5840,129 @@ int run_bc1(const Config& cfg) {
     return exit_code::ok;
 }
 
+// BC7 (RGBA) dispatch — mirrors run_bc1 but with the 4-channel input
+// path (BC7 has full alpha support; we pack source RGBA into the
+// encoder which currently emits Mode 6 blocks).
+int run_bc7(const Config& cfg) {
+    if (!cfg.output_path.empty() && !ends_with(cfg.output_path, ".ktx2")) {
+        std::println(stderr, "Error: --mode bc7 output path must end in .ktx2");
+        return exit_code::usage;
+    }
+    if (cfg.output_path.empty() && !cfg.preview) {
+        std::println(stderr, "Error: --mode bc7 needs an output (.ktx2) or --preview");
+        return exit_code::usage;
+    }
+    auto loaded = png_io::load(cfg.input_path);
+    if (!loaded) {
+        std::println(stderr, "Error: cannot read '{}': {}",
+                     cfg.input_path, loaded.error().message);
+        return exit_code::cant_create;
+    }
+    Image src = *std::move(loaded);
+
+    if (cfg.width.has_value() || cfg.height.has_value()) {
+        double aspect = double(src.height()) / double(src.width());
+        int tw = cfg.width.has_value()
+                     ? int(*cfg.width)
+                     : int(std::lround(double(*cfg.height) / aspect));
+        int th = cfg.height.has_value()
+                     ? int(*cfg.height)
+                     : int(std::lround(double(tw) * aspect));
+        auto resized = scale::resample(src, std::size_t(tw), std::size_t(th));
+        if (!resized) {
+            std::println(stderr, "Error: resample failed: {}", resized.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(resized);
+    }
+
+    const int W = int(src.width());
+    const int H = int(src.height());
+    if (W <= 0 || H <= 0) {
+        std::println(stderr, "Error: empty source image");
+        return exit_code::cant_create;
+    }
+
+    // png_io::load drops alpha (Image is RGB-only). For BC7, force the
+    // alpha channel to 255 for now — the load path keeps source PNG
+    // alpha in a separate has_transparency field we don't surface here.
+    std::vector<std::uint8_t> rgba_srgb8(std::size_t(W) * std::size_t(H) * 4u);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            Color3f lin = src[std::size_t(x), std::size_t(y)];
+            Color3f sc = color_space::linear_to_srgb(lin).clamped();
+            std::size_t i = (std::size_t(y) * std::size_t(W) + std::size_t(x)) * 4u;
+            rgba_srgb8[i + 0u] = std::uint8_t(sc.r * 255.0f + 0.5f);
+            rgba_srgb8[i + 1u] = std::uint8_t(sc.g * 255.0f + 0.5f);
+            rgba_srgb8[i + 2u] = std::uint8_t(sc.b * 255.0f + 0.5f);
+            rgba_srgb8[i + 3u] = 255u;
+        }
+    }
+
+    bc7::Options bopts;
+    bopts.metric = (cfg.etc2_metric == "srgb-mse")
+                       ? block_compress::BlockMetric::srgb_mse
+                       : block_compress::BlockMetric::oklab2;
+    bopts.effort = cfg.etc2_effort;
+    bopts.jitter = cfg.etc2_jitter;
+    bopts.block_ed.strength = cfg.etc2_block_ed;
+    bopts.block_ed.method = cfg.dither_method;
+
+    auto enc = bc7::encode_image(rgba_srgb8, W, H, bopts);
+
+    auto decoded_rgba = bc7::decode_image(enc.blocks, W, H);
+    std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
+    for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
+        decoded_lin[i] = color_space::srgb_to_linear(Color3f{
+            float(decoded_rgba[i * 4u + 0u]) * (1.0f / 255.0f),
+            float(decoded_rgba[i * 4u + 1u]) * (1.0f / 255.0f),
+            float(decoded_rgba[i * 4u + 2u]) * (1.0f / 255.0f),
+        });
+    }
+    float s2 = ssimulacra2::compute(
+        src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
+    float psnr =
+        color_space::compute_psnr_blurred(src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
+
+    static_assert(sizeof(bc7::Block) == bc7::kBlockBytes,
+                  "bc7::Block must be a plain 16-byte array");
+    std::span<const std::uint8_t> block_bytes(
+        reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+        enc.blocks.size() * std::size_t(bc7::kBlockBytes));
+    ktx2::Inputs ki;
+    ki.format = ktx2::VkFormat::bc7_srgb_block;
+    ki.block_dim = {bc7::kBlockW, bc7::kBlockH, 1};
+    ki.image_w = W;
+    ki.image_h = H;
+    ki.bytes_per_block = bc7::kBlockBytes;
+    ki.block_bytes = block_bytes;
+    auto file_bytes = ktx2::write(ki);
+
+    if (!cfg.output_path.empty()) {
+        std::ofstream of(cfg.output_path, std::ios::binary);
+        if (!of) {
+            std::println(stderr, "Error: cannot write '{}'", cfg.output_path);
+            return exit_code::cant_create;
+        }
+        of.write(reinterpret_cast<const char*>(file_bytes.data()),
+                 std::streamsize(file_bytes.size()));
+    }
+
+    cli_status(
+        "Encoded:  BC7 {}×{}, {} blocks ({} bytes){}{}, error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
+        W, H, int(enc.blocks.size()), fmt_size(int(file_bytes.size())),
+        cfg.output_path.empty() ? "" : ", file: ",
+        cfg.output_path,
+        double(enc.total_oklab2_error),
+        psnr, s2);
+
+    if (cfg.preview) {
+        Image preview(std::size_t(W), std::size_t(H), decoded_lin);
+        show_terminal_preview(preview, amiga::Mode::bc7);
+    }
+    return exit_code::ok;
+}
+
 }  // namespace
 
 int run_main(int argc, char* argv[]) {
@@ -5857,6 +5983,9 @@ int run_main(int argc, char* argv[]) {
     }
     if (config->mode == amiga::Mode::bc1) {
         return run_bc1(*config);
+    }
+    if (config->mode == amiga::Mode::bc7) {
+        return run_bc7(*config);
     }
 
     // --no-scale + .cpp/.c viewer is incoherent: the generated viewer

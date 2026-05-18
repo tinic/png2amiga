@@ -12,8 +12,9 @@
 //   ktx2_to_png input.ktx2 output.png
 //
 // Supported vkFormats:
-//   147 / 148  VK_FORMAT_ETC2_R8G8B8_UNORM/SRGB_BLOCK
-//   133 / 134  VK_FORMAT_BC1_RGB_UNORM/SRGB_BLOCK
+//   147 / 148  VK_FORMAT_ETC2_R8G8B8_UNORM/SRGB_BLOCK    (8 B/block)
+//   133 / 134  VK_FORMAT_BC1_RGB_UNORM/SRGB_BLOCK        (8 B/block)
+//   145 / 146  VK_FORMAT_BC7_UNORM/SRGB_BLOCK            (16 B/block)
 
 #define ETCDEC_IMPLEMENTATION 1
 #include "etcdec/etcdec.h"
@@ -34,6 +35,8 @@ namespace {
 
 constexpr std::uint32_t kVkFormatBc1RgbUnorm = 133;
 constexpr std::uint32_t kVkFormatBc1RgbSrgb = 134;
+constexpr std::uint32_t kVkFormatBc7Unorm = 145;
+constexpr std::uint32_t kVkFormatBc7Srgb = 146;
 constexpr std::uint32_t kVkFormatEtc2RgbUnorm = 147;
 constexpr std::uint32_t kVkFormatEtc2RgbSrgb = 148;
 
@@ -104,9 +107,11 @@ bool parse_ktx2(const std::vector<std::uint8_t>& f, Ktx2Image& out) {
                           out.vk_format == kVkFormatEtc2RgbSrgb);
     const bool is_bc1 = (out.vk_format == kVkFormatBc1RgbUnorm ||
                          out.vk_format == kVkFormatBc1RgbSrgb);
-    if (!is_etc2 && !is_bc1) {
+    const bool is_bc7 = (out.vk_format == kVkFormatBc7Unorm ||
+                         out.vk_format == kVkFormatBc7Srgb);
+    if (!is_etc2 && !is_bc1 && !is_bc7) {
         std::fprintf(stderr,
-                     "ktx2_to_png: unsupported vkFormat %u (need 147/148 ETC2 or 133/134 BC1)\n",
+                     "ktx2_to_png: unsupported vkFormat %u (need 147/148 ETC2, 133/134 BC1, or 145/146 BC7)\n",
                      out.vk_format);
         return false;
     }
@@ -157,9 +162,10 @@ int main(int argc, char* argv[]) {
     const int H = int(img.height);
     const int bcols = (W + 3) / 4;
     const int brows = (H + 3) / 4;
-    constexpr int kBlockBytes = 8;
+    const int kBlockBytes = (img.vk_format == kVkFormatBc7Unorm ||
+                             img.vk_format == kVkFormatBc7Srgb) ? 16 : 8;
     const std::size_t expected_blocks = std::size_t(bcols) * std::size_t(brows);
-    if (lvl.byte_length < expected_blocks * kBlockBytes) {
+    if (lvl.byte_length < expected_blocks * std::size_t(kBlockBytes)) {
         std::fprintf(stderr,
                      "ktx2_to_png: level data too short for %dx%d (got %llu need %zu)\n",
                      W, H,
@@ -174,14 +180,18 @@ int main(int argc, char* argv[]) {
     std::vector<std::uint8_t> rgba(std::size_t(padded_w) * std::size_t(padded_h) * 4u, 0);
     const bool decode_bc1 = (img.vk_format == kVkFormatBc1RgbUnorm ||
                              img.vk_format == kVkFormatBc1RgbSrgb);
+    const bool decode_bc7 = (img.vk_format == kVkFormatBc7Unorm ||
+                             img.vk_format == kVkFormatBc7Srgb);
     for (int by = 0; by < brows; ++by) {
         for (int bx = 0; bx < bcols; ++bx) {
             const std::uint8_t* blk =
-                blocks + (std::size_t(by) * std::size_t(bcols) + std::size_t(bx)) * kBlockBytes;
+                blocks + (std::size_t(by) * std::size_t(bcols) + std::size_t(bx)) * std::size_t(kBlockBytes);
             std::uint8_t* dst =
                 rgba.data() + (std::size_t(by * 4) * std::size_t(padded_w) + std::size_t(bx * 4)) * 4u;
             int pitch = padded_w * 4;
-            if (decode_bc1) {
+            if (decode_bc7) {
+                bcdec_bc7(blk, dst, pitch);
+            } else if (decode_bc1) {
                 bcdec_bc1(blk, dst, pitch);
             } else {
                 etcdec_etc_rgb(blk, dst, pitch);

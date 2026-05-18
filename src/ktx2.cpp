@@ -19,6 +19,7 @@ constexpr std::uint8_t kIdentifier[12] = {
 // KDFS color-model IDs (KDFS v1.3 §15.1).
 // KHR_DF_MODEL_* values from khr_df.h.
 constexpr std::uint32_t kModelBc1a = 128;
+constexpr std::uint32_t kModelBc7 = 134;
 constexpr std::uint32_t kModelEtc2 = 161;
 constexpr std::uint32_t kModelAstc = 162;
 
@@ -40,6 +41,9 @@ constexpr std::uint8_t kEtc2ChannelColor = 2;
 // (BC1A_ALPHA = 1 is used for the 1-bit-alpha BC1A variant, not for
 // VK_FORMAT_BC1_RGB_*.)
 constexpr std::uint8_t kBc1ChannelColor = 0;
+
+// KHR_DF_CHANNEL_BC7_COLOR = 0 — the single RGBA sample for BC7 blocks.
+constexpr std::uint8_t kBc7ChannelColor = 0;
 
 // Helpers — pack little-endian integers into the output buffer.
 void put_u16(std::vector<std::uint8_t>& out, std::uint16_t v) {
@@ -72,6 +76,7 @@ void write_u64_at(std::vector<std::uint8_t>& out, std::size_t at, std::uint64_t 
 bool is_srgb_transfer(VkFormat fmt) {
     switch (fmt) {
     case VkFormat::bc1_rgb_srgb_block:
+    case VkFormat::bc7_srgb_block:
     case VkFormat::etc2_r8g8b8_srgb_block:
     case VkFormat::astc_4x4_srgb_block:
     case VkFormat::astc_5x5_srgb_block:
@@ -79,6 +84,7 @@ bool is_srgb_transfer(VkFormat fmt) {
     case VkFormat::astc_8x8_srgb_block:
         return true;
     case VkFormat::bc1_rgb_unorm_block:
+    case VkFormat::bc7_unorm_block:
     case VkFormat::etc2_r8g8b8_unorm_block:
     default:
         return false;
@@ -90,6 +96,9 @@ std::uint32_t color_model_for(VkFormat fmt) {
     case VkFormat::bc1_rgb_srgb_block:
     case VkFormat::bc1_rgb_unorm_block:
         return kModelBc1a;
+    case VkFormat::bc7_srgb_block:
+    case VkFormat::bc7_unorm_block:
+        return kModelBc7;
     case VkFormat::etc2_r8g8b8_srgb_block:
     case VkFormat::etc2_r8g8b8_unorm_block:
         return kModelEtc2;
@@ -108,6 +117,9 @@ std::uint8_t channel_type_for(VkFormat fmt) {
     case VkFormat::bc1_rgb_srgb_block:
     case VkFormat::bc1_rgb_unorm_block:
         return kBc1ChannelColor;
+    case VkFormat::bc7_srgb_block:
+    case VkFormat::bc7_unorm_block:
+        return kBc7ChannelColor;
     default:
         return kEtc2ChannelColor;
     }

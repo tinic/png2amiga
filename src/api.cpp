@@ -26,6 +26,7 @@
 #include "ssimulacra2.hpp"
 #include "pipeline.hpp"
 #include "bc1.hpp"
+#include "bc7.hpp"
 #include "etc2.hpp"
 #include "ktx2.hpp"
 #include "png_io.hpp"
@@ -115,6 +116,7 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "c64-charset-multicolor") return amiga::Mode::c64_charset_multicolor;
     if (s == "etc2" || s == "etc2-rgb" || s == "etc2-rgb8") return amiga::Mode::etc2;
     if (s == "bc1" || s == "dxt1" || s == "bc1-rgb") return amiga::Mode::bc1;
+    if (s == "bc7" || s == "bc7-rgba") return amiga::Mode::bc7;
     return amiga::Mode::lores;
 }
 
@@ -5514,13 +5516,33 @@ ConvertResult convert_ktx2(const std::uint8_t* input_data,
         }
     }
 
-    // Dispatch by mode — both ETC2 and BC1 share the same KTX2 wrapping.
+    // Dispatch by mode — ETC2, BC1, BC7 share the same KTX2 wrapping.
     auto mode = parse_mode(options.mode);
     ktx2::Inputs ki;
     ki.image_w = W;
     ki.image_h = H;
     std::vector<std::uint8_t> blocks_storage;
-    if (mode == amiga::Mode::bc1) {
+    if (mode == amiga::Mode::bc7) {
+        // BC7 takes RGBA — pack a 4-channel buffer (alpha = 255).
+        std::vector<std::uint8_t> rgba_srgb8(std::size_t(W) * std::size_t(H) * 4u);
+        for (std::size_t i = 0; i < rgb_srgb8.size() / 3; ++i) {
+            rgba_srgb8[i * 4u + 0u] = rgb_srgb8[i * 3u + 0u];
+            rgba_srgb8[i * 4u + 1u] = rgb_srgb8[i * 3u + 1u];
+            rgba_srgb8[i * 4u + 2u] = rgb_srgb8[i * 3u + 2u];
+            rgba_srgb8[i * 4u + 3u] = 255u;
+        }
+        bc7::Options bopts;
+        bopts.metric = block_compress::BlockMetric::oklab2;
+        bopts.block_ed.method = parse_dither(options.dither);
+        auto enc = bc7::encode_image(rgba_srgb8, W, H, bopts);
+        blocks_storage.assign(
+            reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+            reinterpret_cast<const std::uint8_t*>(enc.blocks.data()) +
+                enc.blocks.size() * std::size_t(bc7::kBlockBytes));
+        ki.format = ktx2::VkFormat::bc7_srgb_block;
+        ki.block_dim = {bc7::kBlockW, bc7::kBlockH, 1};
+        ki.bytes_per_block = bc7::kBlockBytes;
+    } else if (mode == amiga::Mode::bc1) {
         bc1::Options bopts;
         bopts.metric = block_compress::BlockMetric::oklab2;
         bopts.block_ed.method = parse_dither(options.dither);

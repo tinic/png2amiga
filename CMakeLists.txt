@@ -78,6 +78,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/ssimulacra2.cpp
     src/etc2.cpp
     src/bc1.cpp
+    src/bc7.cpp
     src/ktx2.cpp
     src/api.cpp
     src/ocs_cand_table.cpp
@@ -1099,6 +1100,21 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     )
     set_tests_properties("smoke-bc1-thirdparty-decode-png"
         PROPERTIES DEPENDS "smoke-bc1-thirdparty-decode")
+
+    # BC7 round-trip — same shape as BC1, decoder is bcdec_bc7.
+    add_test(
+        NAME "smoke-bc7-thirdparty-decode"
+        COMMAND png2amiga --mode bc7 ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/bc7_thirdparty.ktx2
+    )
+    add_test(
+        NAME "smoke-bc7-thirdparty-decode-png"
+        COMMAND ktx2_to_png
+                ${CMAKE_BINARY_DIR}/bc7_thirdparty.ktx2
+                ${CMAKE_BINARY_DIR}/bc7_thirdparty.png
+    )
+    set_tests_properties("smoke-bc7-thirdparty-decode-png"
+        PROPERTIES DEPENDS "smoke-bc7-thirdparty-decode")
 
     # --tile: pre-replicate input 3x3, run pipeline, crop centre. Verify
     # that the encoded .h has the requested centre dimensions (W x H,

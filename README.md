@@ -626,7 +626,7 @@ Cross-fade (lores/hires/EHB; --preview animates):
   --fade-loop                     Loop forward (source→...→target→source); else
                                   ping-pong (source→...→target→...→source).
 
-ETC2 / BC1 (--mode etc2|bc1 → .ktx2):
+ETC2 / BC1 / BC7 (--mode etc2|bc1|bc7 → .ktx2):
   --etc2-effort <0-3>             Search depth (default: 2)
   --etc2-jitter <0-15>            Endpoint search width (default: 1)
   --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5)
