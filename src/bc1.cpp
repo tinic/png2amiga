@@ -852,7 +852,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgb_srgb8,
     std::atomic<float> total_err_atom{0.0f};
 
     auto run_one = [&](auto metric_tag) {
-        constexpr block_compress::BlockMetric M = decltype(metric_tag)::value;
+        [[maybe_unused]] constexpr block_compress::BlockMetric M = decltype(metric_tag)::value;
         pipeline::parallel_for(std::size_t(n_strips), [&](std::size_t strip) {
             const int by_lo = int(strip) * rows_per_strip;
             const int by_hi = std::min(by_lo + rows_per_strip, res.block_rows);
