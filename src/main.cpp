@@ -2079,6 +2079,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "c64-charset-multicolor" || v == "c64-charset-mc" ||
                          v == "charset-multicolor")
                     config.mode = amiga::Mode::c64_charset_multicolor;
+                else if (v == "etc2" || v == "etc2-rgb" || v == "etc2-rgb8")
+                    config.mode = amiga::Mode::etc2;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer

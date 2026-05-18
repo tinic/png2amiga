@@ -142,6 +142,14 @@ enum class Mode : unsigned char {
                              //   colors per cell (1 shared bg + 2 shared
                              //   mc colors + 1 per-cell fg).
 
+    // ETC2 RGB8 — modern texture-compression block format (4 bpp, 8-byte
+    // 4×4 blocks). 5 per-block sub-modes (ETC1 individual, ETC1 differential,
+    // T, H, planar). Output container is KTX2; vkFormat
+    // VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK. Not an Amiga mode — lives here
+    // because the rest of the project's perceptual pipeline (OKLab + the
+    // ssimulacra2 ranker) transfers cleanly to per-block encoding.
+    etc2,
+
     // Sega Genesis / Mega Drive — VDP tile-bitmap title art.
     genesis_h32,  // 256×224, 4 palette lines × 16 BGR333 entries each.
                   //  Tile-based: 8×8 4bpp tiles + tilemap; each tile
@@ -343,6 +351,12 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {256, 224, 4, 64, false, false, false, false, 1, 1, 1.167f};
     case Mode::genesis_h40:
         return {320, 224, 4, 64, false, false, false, false, 1, 1, 0.933f};
+    // ETC2 RGB8 — block compression, no fixed hardware buffer.
+    // screen_width=0 → derive from --width or source. bitplane_depth=4
+    // is nominal (4 bpp = ETC2's actual bit-cost per pixel). max_colors=0
+    // signals "no palette".
+    case Mode::etc2:
+        return {0, 0, 4, 0, false, false, false, false, 1, 1, 1.0f};
     // S/H modes: same buffer, ~128 effective colors via per-tile shadow.
     case Mode::genesis_h32_sh:
         return {256, 224, 4, 128, false, false, false, false, 1, 1, 1.167f};
@@ -412,6 +426,13 @@ constexpr bool is_cga(Mode mode) noexcept {
            mode == Mode::cga_text80x200 || mode == Mode::cga_text40x200 ||
            mode == Mode::cga_text40x100;
 }
+
+// ETC2 — block-compressed texture format. Not an Amiga mode, but lives
+// in this enum so the existing pipeline (load → preprocess → encode)
+// can route to it without a parallel dispatch layer. None of the
+// Amiga-specific knobs (palette, depth, chipset, copper, sliced, strips,
+// EHB, HAM, dither, interlace) apply.
+constexpr bool is_etc2(Mode mode) noexcept { return mode == Mode::etc2; }
 
 // Check if a mode is a Commodore 64 / VIC-II mode.
 constexpr bool is_c64(Mode mode) noexcept {
@@ -538,10 +559,11 @@ constexpr std::size_t max_depth(Chipset chipset) noexcept {
 // HAM/EHB have fixed depths (not user-configurable).
 // Standard modes: OCS lores=5, hires=4; AGA=8.
 constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
-    // HAM/EHB/Atari depths are fixed by the mode, not user-configurable
+    // HAM/EHB/Atari/ETC2 depths are fixed by the mode, not user-configurable
     if (is_ham(mode)) return get_mode_params(mode).bitplane_depth;
     if (mode == Mode::ehb) return 6;
     if (is_atari(mode)) return get_mode_params(mode).bitplane_depth;
+    if (is_etc2(mode)) return 4;  // ETC2 is fixed 4 bpp
 
     // AGA standard modes
     if (chipset == Chipset::aga) return 8;

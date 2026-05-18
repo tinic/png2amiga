@@ -76,6 +76,8 @@ set(PNG2AMIGA_CORE_SOURCES
     src/c64_prg.cpp
     src/pipeline.cpp
     src/ssimulacra2.cpp
+    src/etc2.cpp
+    src/ktx2.cpp
     src/api.cpp
     src/ocs_cand_table.cpp
 )

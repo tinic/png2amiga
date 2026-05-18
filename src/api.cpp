@@ -110,6 +110,7 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "c64-petscii") return amiga::Mode::c64_petscii;
     if (s == "c64-charset-hires") return amiga::Mode::c64_charset_hires;
     if (s == "c64-charset-multicolor") return amiga::Mode::c64_charset_multicolor;
+    if (s == "etc2" || s == "etc2-rgb" || s == "etc2-rgb8") return amiga::Mode::etc2;
     return amiga::Mode::lores;
 }
 
