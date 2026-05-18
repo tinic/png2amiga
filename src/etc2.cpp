@@ -17,9 +17,13 @@
 #include "etc2.hpp"
 
 #include "color_space.hpp"
+#include "pipeline.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstring>
+#include <thread>
 
 namespace png2amiga::etc2 {
 
@@ -1575,60 +1579,91 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgb_srgb8,
     // the SAME error-diffusion kernel catalog dither.cpp uses for per-
     // pixel ED. Defaults to Floyd-Steinberg; --dither / Options.block_ed
     // .method picks any of the supported kernels (Atkinson, Stucki,
-    // Jarvis, Sierra-Lite). Serpentine row order flips dx per row.
+    // Jarvis, Sierra-Lite).
+    //
+    // Threading: block rows are partitioned into N_threads strips, each
+    // run in parallel via pipeline::parallel_for. Within each strip the
+    // ED carry is honoured row-by-row (serpentine flip still applies).
+    // ED carry STOPS at strip boundaries — quality cost is small (a few
+    // horizontal seams per image, hidden by SSIMULACRA2 spatial blur).
+    // Output is deterministic: strips have fixed by-row ranges and each
+    // strip's results land at a unique block-index range in res.blocks.
     const bool use_block_ed = options.block_ed.strength > 0.0f;
     auto ed_kernel = dither::error_diffusion_kernel(options.block_ed.method);
-    if (ed_kernel.empty()) {
-        // Method has no diffusion kernel (ordered / none) — disable
-        // block ED rather than silently doing nothing wrong.
-    }
-    block_compress::BlockGrid<color_space::OKLab> err_carry(res.block_cols, res.block_rows);
-    for (auto& v : err_carry.as_span()) v = {0.f, 0.f, 0.f};
 
-    Sample16 s{};
-    float total_err = 0.0f;
+    int n_strips = int(std::max(std::thread::hardware_concurrency(), 1u));
+    n_strips = std::min(n_strips, res.block_rows);
+    if (n_strips < 1) n_strips = 1;
+    const int rows_per_strip = (res.block_rows + n_strips - 1) / n_strips;
+
+    std::atomic<float> total_err_atom{0.0f};
+    std::array<std::atomic<int>, 5> mode_counts_atom{};
+
     auto run_one = [&](auto metric_tag) {
         constexpr block_compress::BlockMetric M = decltype(metric_tag)::value;
-        for (int by = 0; by < res.block_rows; ++by) {
-            bool reverse_row = use_block_ed && options.block_ed.serpentine && (by & 1);
-            int bx_start = reverse_row ? res.block_cols - 1 : 0;
-            int bx_end = reverse_row ? -1 : res.block_cols;
-            int bx_step = reverse_row ? -1 : 1;
-            for (int bx = bx_start; bx != bx_end; bx += bx_step) {
-                color_space::OKLab shift = use_block_ed ? err_carry[bx, by]
-                                                        : color_space::OKLab{0.f, 0.f, 0.f};
-                load_sample(s, padded, pw, bx * kBlockW, by * kBlockH, shift);
+        pipeline::parallel_for(std::size_t(n_strips), [&](std::size_t strip) {
+            const int by_lo = int(strip) * rows_per_strip;
+            const int by_hi = std::min(by_lo + rows_per_strip, res.block_rows);
+            if (by_lo >= by_hi) return;
 
-                Candidate c = encode_block<M>(s, options);
+            // Per-strip ED carry (small; reset to zero).
+            block_compress::BlockGrid<color_space::OKLab> err_carry(
+                res.block_cols, by_hi - by_lo);
+            for (auto& v : err_carry.as_span()) v = {0.f, 0.f, 0.f};
 
-                if (use_block_ed) {
-                    // Per-block residual in OKLab. target = s.lab (shifted),
-                    // decoded = mean OKLab of c.decoded.
-                    float tL = 0.f, ta = 0.f, tb = 0.f;
-                    float dL = 0.f, da = 0.f, db = 0.f;
-                    for (int i = 0; i < 16; ++i) {
-                        tL += s.lab[i].L; ta += s.lab[i].a; tb += s.lab[i].b;
-                        auto dec_lab = color_space::srgb8_to_oklab(
-                            c.decoded[i][0], c.decoded[i][1], c.decoded[i][2]);
-                        dL += dec_lab.L; da += dec_lab.a; db += dec_lab.b;
-                    }
-                    color_space::OKLab residual{(tL - dL) * (1.f / 16.f),
-                                                (ta - da) * (1.f / 16.f),
-                                                (tb - db) * (1.f / 16.f)};
-                    if (!ed_kernel.empty()) {
+            Sample16 s{};
+            float strip_err = 0.0f;
+            std::array<int, 5> strip_mode_counts{};
+
+            for (int by = by_lo; by < by_hi; ++by) {
+                const int local_by = by - by_lo;
+                bool reverse_row = use_block_ed && options.block_ed.serpentine &&
+                                   (local_by & 1);
+                int bx_start = reverse_row ? res.block_cols - 1 : 0;
+                int bx_end = reverse_row ? -1 : res.block_cols;
+                int bx_step = reverse_row ? -1 : 1;
+                for (int bx = bx_start; bx != bx_end; bx += bx_step) {
+                    color_space::OKLab shift =
+                        use_block_ed ? err_carry[bx, local_by]
+                                     : color_space::OKLab{0.f, 0.f, 0.f};
+                    load_sample(s, padded, pw, bx * kBlockW, by * kBlockH, shift);
+
+                    Candidate c = encode_block<M>(s, options);
+
+                    if (use_block_ed && !ed_kernel.empty()) {
+                        float tL = 0.f, ta = 0.f, tb = 0.f;
+                        float dL = 0.f, da = 0.f, db = 0.f;
+                        for (int i = 0; i < 16; ++i) {
+                            tL += s.lab[i].L; ta += s.lab[i].a; tb += s.lab[i].b;
+                            auto dec_lab = color_space::srgb8_to_oklab(
+                                c.decoded[i][0], c.decoded[i][1], c.decoded[i][2]);
+                            dL += dec_lab.L; da += dec_lab.a; db += dec_lab.b;
+                        }
+                        color_space::OKLab residual{(tL - dL) * (1.f / 16.f),
+                                                    (ta - da) * (1.f / 16.f),
+                                                    (tb - db) * (1.f / 16.f)};
                         block_compress::propagate_block_residual(
-                            err_carry, {bx, by}, residual, ed_kernel,
+                            err_carry, {bx, local_by}, residual, ed_kernel,
                             options.block_ed, reverse_row);
                     }
-                }
 
-                std::size_t bidx = static_cast<std::size_t>(by) * bcols +
-                                   static_cast<std::size_t>(bx);
-                res.blocks[bidx] = c.block;
-                res.mode_counts[static_cast<std::size_t>(c.mode)] += 1;
-                total_err += c.err;
+                    std::size_t bidx = static_cast<std::size_t>(by) * bcols +
+                                       static_cast<std::size_t>(bx);
+                    res.blocks[bidx] = c.block;
+                    strip_mode_counts[std::size_t(c.mode)] += 1;
+                    strip_err += c.err;
+                }
             }
-        }
+            // Merge strip-local counters via atomics.
+            for (std::size_t i = 0; i < 5; ++i) {
+                mode_counts_atom[i].fetch_add(strip_mode_counts[i],
+                                              std::memory_order_relaxed);
+            }
+            float prev = total_err_atom.load(std::memory_order_relaxed);
+            while (!total_err_atom.compare_exchange_weak(
+                prev, prev + strip_err, std::memory_order_relaxed)) {
+            }
+        });
     };
     if (options.metric == block_compress::BlockMetric::srgb_mse) {
         run_one(std::integral_constant<block_compress::BlockMetric,
@@ -1637,7 +1672,10 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgb_srgb8,
         run_one(std::integral_constant<block_compress::BlockMetric,
                                        block_compress::BlockMetric::oklab2>{});
     }
-    res.total_oklab2_error = total_err;
+    for (std::size_t i = 0; i < 5; ++i) {
+        res.mode_counts[i] = mode_counts_atom[i].load(std::memory_order_relaxed);
+    }
+    res.total_oklab2_error = total_err_atom.load(std::memory_order_relaxed);
     return res;
 }
 
