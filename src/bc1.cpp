@@ -259,17 +259,38 @@ inline void compute_paints(RGB565 c0, RGB565 c1, std::uint8_t paint[4][3]) {
     }
 }
 
+// 3-color mode: paint[2] = midpoint, paint[3] = unused (transparent in
+// the BC1A variant). For our RGB-only encoder we treat selector 3 as
+// forbidden and constrain the per-pixel argmin to {0, 1, 2}. Useful for
+// blocks that are essentially 2-color + a midpoint band, where the
+// 4-color 1/3-2/3 quartiles overshoot the actual colour distribution.
+inline void compute_paints_3c(RGB565 c0, RGB565 c1, std::uint8_t paint[4][3]) {
+    c0.expand8(paint[0]);
+    c1.expand8(paint[1]);
+    for (int ch = 0; ch < 3; ++ch) {
+        paint[2][ch] = std::uint8_t((int(paint[0][ch]) + int(paint[1][ch]) + 1) / 2);
+        paint[3][ch] = 0;  // sentinel; never picked
+    }
+}
+
 // Pick the per-pixel selector that minimises block error for the given
 // endpoints. Returns total error in the active metric and writes 16
 // selector indices into out_sel.
-template<block_compress::BlockMetric M>
+// Mode3c=false → 4-color block (4 paints, all selectors valid).
+// Mode3c=true  → 3-color block (paint[3] is the unused punchthrough
+// slot — selectors are constrained to {0, 1, 2}).
+template<block_compress::BlockMetric M, bool Mode3c = false>
 float pick_selectors_and_score(const Sample16& s,
                                RGB565 c0,
                                RGB565 c1,
                                std::uint8_t out_sel[16],
                                std::uint8_t decoded[16][3]) {
     std::uint8_t paint[4][3];
-    compute_paints(c0, c1, paint);
+    if constexpr (Mode3c) {
+        compute_paints_3c(c0, c1, paint);
+    } else {
+        compute_paints(c0, c1, paint);
+    }
 
     alignas(16) float paint_L[4], paint_A[4], paint_B[4];
     if constexpr (M == block_compress::BlockMetric::oklab2) {
@@ -305,7 +326,9 @@ float pick_selectors_and_score(const Sample16& s,
         }
         int best_k = 0;
         float best_e = e[0];
-        for (int k = 1; k < 4; ++k) {
+        // 3-color mode forbids selector 3 — exclude it from argmin.
+        const int k_end = Mode3c ? 3 : 4;
+        for (int k = 1; k < k_end; ++k) {
             if (e[k] < best_e) { best_e = e[k]; best_k = k; }
         }
         out_sel[p] = std::uint8_t(best_k);
@@ -331,36 +354,33 @@ inline void bbox_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3])
     }
 }
 
-// PCA-based endpoint seed: project pixels onto the dominant covariance
-// axis and take the extremes. Better than bbox for blocks whose colour
-// distribution isn't axis-aligned in RGB (most natural-image blocks).
-// The axis is in 8-bit sRGB space; endpoints land near actual pixel
-// values along the axis instead of at the bounding box corners.
+// PCA-based endpoint seed in OKLab space. Project pixels onto the
+// dominant perceptual covariance axis and take the OKLab-projection
+// extremes (returning the actual sRGB8 pixel values at those positions).
+// Vs sRGB-space PCA: the axis is perceptually-weighted, so the
+// endpoints align with the direction the OKLab² scorer rewards.
 inline void pca_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
-    // Mean.
-    float mx = 0, my = 0, mz = 0;
+    // Mean in OKLab.
+    float mL = 0, mA = 0, mB = 0;
     for (int i = 0; i < 16; ++i) {
-        mx += float(s.srgb8[i][0]);
-        my += float(s.srgb8[i][1]);
-        mz += float(s.srgb8[i][2]);
+        mL += s.lab[i].L; mA += s.lab[i].a; mB += s.lab[i].b;
     }
-    mx *= 1.f / 16.f; my *= 1.f / 16.f; mz *= 1.f / 16.f;
-    // Covariance matrix (symmetric 3×3).
+    mL *= 1.f / 16.f; mA *= 1.f / 16.f; mB *= 1.f / 16.f;
+    // Covariance matrix (symmetric 3×3) in OKLab.
     float cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
     for (int i = 0; i < 16; ++i) {
-        float dx = float(s.srgb8[i][0]) - mx;
-        float dy = float(s.srgb8[i][1]) - my;
-        float dz = float(s.srgb8[i][2]) - mz;
+        float dx = s.lab[i].L - mL;
+        float dy = s.lab[i].a - mA;
+        float dz = s.lab[i].b - mB;
         cxx += dx * dx; cxy += dx * dy; cxz += dx * dz;
         cyy += dy * dy; cyz += dy * dz;
         czz += dz * dz;
     }
-    if (cxx + cyy + czz < 1e-3f) {
+    if (cxx + cyy + czz < 1e-7f) {
         bbox_seed(s, e0, e1);
         return;
     }
-    // Power iteration: 4 sweeps suffice for clean convergence to the
-    // dominant eigenvector at this block size.
+    // Power iteration: 4 sweeps suffice for clean convergence at 16 px.
     float vx = cxx + cxy + cxz;
     float vy = cxy + cyy + cyz;
     float vz = cxz + cyz + czz;
@@ -369,18 +389,18 @@ inline void pca_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) 
         float ny = cxy * vx + cyy * vy + cyz * vz;
         float nz = cxz * vx + cyz * vy + czz * vz;
         float m = std::max({std::abs(nx), std::abs(ny), std::abs(nz)});
-        if (m < 1e-6f) { bbox_seed(s, e0, e1); return; }
+        if (m < 1e-9f) { bbox_seed(s, e0, e1); return; }
         float inv = 1.f / m;
         vx = nx * inv; vy = ny * inv; vz = nz * inv;
     }
-    // Project all pixels onto the axis; track min and max projections.
+    // Project all pixels onto the OKLab axis; track min/max projections.
     float pmin = std::numeric_limits<float>::infinity();
     float pmax = -std::numeric_limits<float>::infinity();
     int imin = 0, imax = 0;
     for (int i = 0; i < 16; ++i) {
-        float dx = float(s.srgb8[i][0]) - mx;
-        float dy = float(s.srgb8[i][1]) - my;
-        float dz = float(s.srgb8[i][2]) - mz;
+        float dx = s.lab[i].L - mL;
+        float dy = s.lab[i].a - mA;
+        float dz = s.lab[i].b - mB;
         float t = dx * vx + dy * vy + dz * vz;
         if (t < pmin) { pmin = t; imin = i; }
         if (t > pmax) { pmax = t; imax = i; }
@@ -439,29 +459,46 @@ inline RGB565 to_rgb565(const std::uint8_t e[3]) {
 }
 
 // Pack a finished (c0, c1, selectors[16]) into the 8-byte BC1 block.
-// Enforces raw_c0 > raw_c1 (4-color mode) — swaps endpoints + remaps
-// selectors if needed; perturbs c1 down one quanta when c0 == c1.
+// mode_3c=false: 4-color block, enforces raw_c0 > raw_c1 (swap+remap if
+// needed; perturbs c1 down one quanta when c0 == c1).
+// mode_3c=true:  3-color block, enforces raw_c0 ≤ raw_c1 (swap+remap if
+// needed; selectors must be in {0, 1, 2} — 0/1 swap on endpoint swap).
 inline void pack_block(RGB565 c0, RGB565 c1,
                        const std::uint8_t selectors[16],
-                       Block& out) {
+                       Block& out,
+                       bool mode_3c = false) {
     std::uint16_t raw0 = c0.raw();
     std::uint16_t raw1 = c1.raw();
     std::uint8_t sel[16];
     std::memcpy(sel, selectors, sizeof(sel));
-    if (raw0 < raw1) {
-        std::swap(c0, c1);
-        std::swap(raw0, raw1);
-        // After swap, paints 0/1 swap and 2/3 swap.
-        for (int i = 0; i < 16; ++i) sel[i] = std::uint8_t(sel[i] ^ 0x1u);
-    }
-    if (raw0 == raw1) {
-        // Perturb c1 down by one quanta to stay in 4-color mode.
-        if (c1.b5 > 0) --c1.b5;
-        else if (c1.g6 > 0) --c1.g6;
-        else if (c1.r5 > 0) --c1.r5;
-        else { ++c0.b5; }  // c0 is also (0,0,0) — bump it instead
-        raw0 = c0.raw();
-        raw1 = c1.raw();
+    if (mode_3c) {
+        // 3-color mode requires raw_c0 ≤ raw_c1.
+        if (raw0 > raw1) {
+            std::swap(c0, c1);
+            std::swap(raw0, raw1);
+            // After swap, paint 0 ↔ 1; paint 2 (midpoint) unchanged.
+            for (int i = 0; i < 16; ++i) {
+                if (sel[i] < 2) sel[i] = std::uint8_t(sel[i] ^ 0x1u);
+            }
+        }
+        // If raw0 == raw1, the block is genuinely monochrome — 3-color
+        // mode with c0=c1 makes all three valid paints the same colour,
+        // selector 0/1/2 give identical results. No perturbation needed.
+    } else {
+        // 4-color mode requires raw_c0 > raw_c1.
+        if (raw0 < raw1) {
+            std::swap(c0, c1);
+            std::swap(raw0, raw1);
+            for (int i = 0; i < 16; ++i) sel[i] = std::uint8_t(sel[i] ^ 0x1u);
+        }
+        if (raw0 == raw1) {
+            if (c1.b5 > 0) --c1.b5;
+            else if (c1.g6 > 0) --c1.g6;
+            else if (c1.r5 > 0) --c1.r5;
+            else { ++c0.b5; }
+            raw0 = c0.raw();
+            raw1 = c1.raw();
+        }
     }
     write_u16le(out, 0, raw0);
     write_u16le(out, 2, raw1);
@@ -558,7 +595,26 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
     }
 
     Candidate out;
-    pack_block(c0, c1, sel, out.block);
+    // 3-color mode trial: same (c0, c1) converged from the 4-color
+    // search; just swap the paint set to {c0, c1, midpoint, x} and
+    // constrain selectors to {0, 1, 2}. Wins on blocks that are
+    // essentially two colours + a midpoint band, where the 4-color
+    // 1/3-2/3 quartiles overshoot the actual distribution. Cost: one
+    // pick_selectors_and_score call per block.
+    bool use_3c = false;
+    if (opts.effort >= 1) {
+        std::uint8_t sel3c[16];
+        std::uint8_t dec3c[16][3];
+        float err3c = pick_selectors_and_score<M, true>(s, c0, c1, sel3c, dec3c);
+        if (err3c < err) {
+            err = err3c;
+            use_3c = true;
+            std::memcpy(sel, sel3c, sizeof(sel));
+            std::memcpy(decoded, dec3c, sizeof(decoded));
+        }
+    }
+
+    pack_block(c0, c1, sel, out.block, use_3c);
     std::memcpy(out.decoded, decoded, sizeof(decoded));
     out.err = err;
     return out;
