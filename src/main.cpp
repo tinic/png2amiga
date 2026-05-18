@@ -38,15 +38,6 @@
 #include <constixel.hpp>
 
 #include "stb_image.h"
-#include "stb_image_write.h"
-
-#ifdef _WIN32
-#  define NOMINMAX  // keep windows.h from leaking min/max macros
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#else
-#  include <unistd.h>
-#endif
 
 #include <cctype>
 #include <chrono>
