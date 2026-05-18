@@ -929,7 +929,8 @@ struct Config {
     float etc2_block_ed = 0.5f;
     std::string etc2_metric = "oklab2";
     int etc2_refine = 0;
-    int etc2_jitter = 2;
+    int etc2_jitter = 1;
+    bool etc2_jitter_explicit = false;  // user --etc2-jitter overrides --best auto-bump
 
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
     // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
@@ -1273,8 +1274,9 @@ void print_usage() {
         "ETC2 (--mode etc2 → .ktx2):\n"
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Per-sub-block base-color search half-\n"
-        "                                  width in nibble units (default: 2;\n"
-        "                                  (2N+1)^3 candidates per sub-block)\n"
+        "                                  width in nibble units (default: 1;\n"
+        "                                  --best auto-bumps to 4 unless set\n"
+        "                                  explicitly. (2N+1)^3 candidates.)\n"
         "  --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5;\n"
         "                                  0 disables). Kernel from --dither.\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
@@ -2167,6 +2169,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.etc2_jitter = std::atoi(std::string(val).c_str());
                 if (config.etc2_jitter < 0) config.etc2_jitter = 0;
                 if (config.etc2_jitter > 15) config.etc2_jitter = 15;
+                config.etc2_jitter_explicit = true;
             } else if (arg == "--etc2-refine") {
                 config.etc2_refine = std::atoi(std::string(val).c_str());
                 if (config.etc2_refine < 0) config.etc2_refine = 0;
@@ -5586,6 +5589,12 @@ int run_etc2(const Config& cfg) {
         return etc2::encode_image(rgb, W, H, eopts);
     };
     if (cfg.best) {
+        // --best auto-bumps the per-sub-block jitter to 4 (max-S2 setting
+        // measured on asterix.png; S2 saturates around jitter=4) unless
+        // the user explicitly set --etc2-jitter, in which case respect
+        // their override. Cost grows as (2N+1)³, so this is reserved for
+        // the explicit --best path.
+        if (!cfg.etc2_jitter_explicit) eopts.jitter = 4;
         constexpr int N = 8;
         std::size_t N_sz = std::size_t{N};
         std::vector<Image> jittered;
