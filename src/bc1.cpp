@@ -317,8 +317,8 @@ float pick_selectors_and_score(const Sample16& s,
     return tot;
 }
 
-// Bounding-box endpoint seed in 8-bit sRGB space. Cheap to compute; the
-// rgbcx-style "best on PCA axis" path is incremental quality on top.
+// Bounding-box endpoint seed in 8-bit sRGB space. Cheap fallback used
+// when PCA reports a degenerate (~zero variance) block.
 inline void bbox_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
     e0[0] = 255; e0[1] = 255; e0[2] = 255;
     e1[0] = 0;   e1[1] = 0;   e1[2] = 0;
@@ -329,6 +329,64 @@ inline void bbox_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3])
             if (v > e1[ch]) e1[ch] = v;
         }
     }
+}
+
+// PCA-based endpoint seed: project pixels onto the dominant covariance
+// axis and take the extremes. Better than bbox for blocks whose colour
+// distribution isn't axis-aligned in RGB (most natural-image blocks).
+// The axis is in 8-bit sRGB space; endpoints land near actual pixel
+// values along the axis instead of at the bounding box corners.
+inline void pca_seed(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
+    // Mean.
+    float mx = 0, my = 0, mz = 0;
+    for (int i = 0; i < 16; ++i) {
+        mx += float(s.srgb8[i][0]);
+        my += float(s.srgb8[i][1]);
+        mz += float(s.srgb8[i][2]);
+    }
+    mx *= 1.f / 16.f; my *= 1.f / 16.f; mz *= 1.f / 16.f;
+    // Covariance matrix (symmetric 3×3).
+    float cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+    for (int i = 0; i < 16; ++i) {
+        float dx = float(s.srgb8[i][0]) - mx;
+        float dy = float(s.srgb8[i][1]) - my;
+        float dz = float(s.srgb8[i][2]) - mz;
+        cxx += dx * dx; cxy += dx * dy; cxz += dx * dz;
+        cyy += dy * dy; cyz += dy * dz;
+        czz += dz * dz;
+    }
+    if (cxx + cyy + czz < 1e-3f) {
+        bbox_seed(s, e0, e1);
+        return;
+    }
+    // Power iteration: 4 sweeps suffice for clean convergence to the
+    // dominant eigenvector at this block size.
+    float vx = cxx + cxy + cxz;
+    float vy = cxy + cyy + cyz;
+    float vz = cxz + cyz + czz;
+    for (int it = 0; it < 4; ++it) {
+        float nx = cxx * vx + cxy * vy + cxz * vz;
+        float ny = cxy * vx + cyy * vy + cyz * vz;
+        float nz = cxz * vx + cyz * vy + czz * vz;
+        float m = std::max({std::abs(nx), std::abs(ny), std::abs(nz)});
+        if (m < 1e-6f) { bbox_seed(s, e0, e1); return; }
+        float inv = 1.f / m;
+        vx = nx * inv; vy = ny * inv; vz = nz * inv;
+    }
+    // Project all pixels onto the axis; track min and max projections.
+    float pmin = std::numeric_limits<float>::infinity();
+    float pmax = -std::numeric_limits<float>::infinity();
+    int imin = 0, imax = 0;
+    for (int i = 0; i < 16; ++i) {
+        float dx = float(s.srgb8[i][0]) - mx;
+        float dy = float(s.srgb8[i][1]) - my;
+        float dz = float(s.srgb8[i][2]) - mz;
+        float t = dx * vx + dy * vy + dz * vz;
+        if (t < pmin) { pmin = t; imin = i; }
+        if (t > pmax) { pmax = t; imax = i; }
+    }
+    e0[0] = s.srgb8[imin][0]; e0[1] = s.srgb8[imin][1]; e0[2] = s.srgb8[imin][2];
+    e1[0] = s.srgb8[imax][0]; e1[1] = s.srgb8[imax][1]; e1[2] = s.srgb8[imax][2];
 }
 
 // Lloyd-style closed-form refit: given fixed selectors, solve the 2-var
@@ -424,7 +482,7 @@ inline void pack_block(RGB565 c0, RGB565 c1,
 template<block_compress::BlockMetric M>
 Candidate encode_block(const Sample16& s, const Options& opts) {
     std::uint8_t seed_e0[3], seed_e1[3];
-    bbox_seed(s, seed_e0, seed_e1);
+    pca_seed(s, seed_e0, seed_e1);
 
     RGB565 c0 = to_rgb565(seed_e0);
     RGB565 c1 = to_rgb565(seed_e1);
@@ -433,27 +491,35 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
     float err = pick_selectors_and_score<M>(s, c0, c1, sel, decoded);
 
     // Lloyd refinement.
-    const int kIters = (opts.effort >= 1) ? 4 : 0;
-    for (int it = 0; it < kIters; ++it) {
-        std::uint8_t new_e0[3], new_e1[3];
-        if (!refit_endpoints(s, sel, new_e0, new_e1)) break;
-        RGB565 nc0 = to_rgb565(new_e0);
-        RGB565 nc1 = to_rgb565(new_e1);
-        if (nc0.raw() == c0.raw() && nc1.raw() == c1.raw()) break;
-        std::uint8_t new_sel[16];
-        std::uint8_t new_dec[16][3];
-        float new_err = pick_selectors_and_score<M>(s, nc0, nc1, new_sel, new_dec);
-        if (new_err >= err - 1e-7f) break;
-        c0 = nc0; c1 = nc1;
-        err = new_err;
-        std::memcpy(sel, new_sel, sizeof(sel));
-        std::memcpy(decoded, new_dec, sizeof(decoded));
-    }
+    auto lloyd_refine = [&](RGB565& cc0, RGB565& cc1,
+                            std::uint8_t lsel[16],
+                            std::uint8_t ldec[16][3],
+                            float& lerr) {
+        for (int it = 0; it < 4; ++it) {
+            std::uint8_t new_e0[3], new_e1[3];
+            if (!refit_endpoints(s, lsel, new_e0, new_e1)) break;
+            RGB565 nc0 = to_rgb565(new_e0);
+            RGB565 nc1 = to_rgb565(new_e1);
+            if (nc0.raw() == cc0.raw() && nc1.raw() == cc1.raw()) break;
+            std::uint8_t new_sel[16];
+            std::uint8_t new_dec[16][3];
+            float new_err = pick_selectors_and_score<M>(s, nc0, nc1, new_sel, new_dec);
+            if (new_err >= lerr - 1e-7f) break;
+            cc0 = nc0; cc1 = nc1;
+            lerr = new_err;
+            std::memcpy(lsel, new_sel, sizeof(new_sel));
+            std::memcpy(ldec, new_dec, sizeof(new_dec));
+        }
+    };
+    if (opts.effort >= 1) lloyd_refine(c0, c1, sel, decoded, err);
 
     // Jitter sweep around the converged endpoints in RGB565 space.
+    // Each candidate gets a full Lloyd refit, so the sweep explores
+    // distinct local-optima basins rather than just neighbouring lattice
+    // points. Cost: (2J+1)³ × 2 × Lloyd iters per block, but BC1 is fast
+    // enough at full image scale that this stays well under budget.
     if (opts.effort >= 2 && opts.jitter > 0) {
         const int J = std::clamp(opts.jitter, 1, 4);
-        RGB565 best_c0 = c0, best_c1 = c1;
         for (int dr0 = -J; dr0 <= J; ++dr0) {
             int r0 = int(c0.r5) + dr0;
             if (r0 < 0 || r0 > 31) continue;
@@ -463,22 +529,25 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
                 for (int db0 = -J; db0 <= J; ++db0) {
                     int b0 = int(c0.b5) + db0;
                     if (b0 < 0 || b0 > 31) continue;
-                    // For c1: only perturb in the SAME direction (axis-aligned
-                    // ±J) — full 6D would be O((2J+1)^6) candidates.
                     for (int sign = -1; sign <= 1; sign += 2) {
                         int r1 = int(c1.r5) + sign * dr0;
                         int g1 = int(c1.g6) + sign * dg0;
                         int b1 = int(c1.b5) + sign * db0;
-                        if (r1 < 0 || r1 > 31 || g1 < 0 || g1 > 63 || b1 < 0 || b1 > 31) continue;
+                        if (r1 < 0 || r1 > 31 || g1 < 0 || g1 > 63 ||
+                            b1 < 0 || b1 > 31) continue;
                         RGB565 tc0{std::uint8_t(r0), std::uint8_t(g0), std::uint8_t(b0)};
                         RGB565 tc1{std::uint8_t(r1), std::uint8_t(g1), std::uint8_t(b1)};
                         std::uint8_t tsel[16];
                         std::uint8_t tdec[16][3];
                         float tot = pick_selectors_and_score<M>(s, tc0, tc1, tsel, tdec);
+                        // Lloyd-refine this candidate (typical 1-2 iters
+                        // before convergence; usually a no-op if seed
+                        // already optimal).
+                        lloyd_refine(tc0, tc1, tsel, tdec, tot);
                         if (tot < err) {
                             err = tot;
-                            best_c0 = tc0;
-                            best_c1 = tc1;
+                            c0 = tc0;
+                            c1 = tc1;
                             std::memcpy(sel, tsel, sizeof(sel));
                             std::memcpy(decoded, tdec, sizeof(decoded));
                         }
@@ -486,8 +555,6 @@ Candidate encode_block(const Sample16& s, const Options& opts) {
                 }
             }
         }
-        c0 = best_c0;
-        c1 = best_c1;
     }
 
     Candidate out;
