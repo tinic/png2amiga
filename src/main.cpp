@@ -5559,10 +5559,72 @@ int run_etc2(const Config& cfg) {
     // path (Floyd-Steinberg default; Atkinson / Stucki / Jarvis / Sierra-
     // Lite / etc. all valid — see feedback_never_hardcode_fs).
     eopts.block_ed.method = cfg.dither_method;
-    auto enc = etc2::encode_image(rgb_srgb8, W, H, eopts);
+
+    // --best: N-trial pre-image jitter sweep ranked by SSIMULACRA2, in
+    // parallel via pipeline::parallel_for. Mirrors the cap_best_sweep
+    // pattern (project_cap_best_design.md). Default 8 trials; per-pixel
+    // jitter amplitude 1.0 (OCS scale). Each trial re-runs the whole
+    // ETC2 encode so it's expensive — ~N× the no-best wall time.
+    etc2::EncodeResult enc;
+    std::vector<std::uint8_t> decoded_rgb8;
+    auto encode_one = [&](const std::vector<std::uint8_t>& rgb) {
+        return etc2::encode_image(rgb, W, H, eopts);
+    };
+    if (cfg.best) {
+        constexpr int N = 8;
+        std::size_t N_sz = std::size_t{N};
+        std::vector<Image> jittered;
+        jittered.reserve(N_sz);
+        for (int i = 0; i < N; ++i) {
+            jittered.push_back(
+                (i == 0) ? src : pipeline::jitter_image(src, std::uint32_t(i), 1.0f));
+        }
+        std::vector<etc2::EncodeResult> results(N_sz);
+        std::vector<float> scores(N_sz, -1.0f);
+        std::mutex mu;
+        pipeline::parallel_for(N_sz, [&](std::size_t i) {
+            // Repack jittered linear → sRGB8 (per trial).
+            std::vector<std::uint8_t> rgb(std::size_t(W) * std::size_t(H) * 3u);
+            for (int y = 0; y < H; ++y) {
+                for (int x = 0; x < W; ++x) {
+                    Color3f s_lin = jittered[i][std::size_t(x), std::size_t(y)];
+                    Color3f s_srgb =
+                        color_space::linear_to_srgb(s_lin).clamped();
+                    std::size_t k =
+                        (std::size_t(y) * std::size_t(W) + std::size_t(x)) * 3u;
+                    rgb[k + 0u] = std::uint8_t(s_srgb.r * 255.0f + 0.5f);
+                    rgb[k + 1u] = std::uint8_t(s_srgb.g * 255.0f + 0.5f);
+                    rgb[k + 2u] = std::uint8_t(s_srgb.b * 255.0f + 0.5f);
+                }
+            }
+            auto er = encode_one(rgb);
+            auto dec = etc2::decode_image(er.blocks, W, H);
+            std::vector<Color3f> dec_lin(std::size_t(W) * std::size_t(H));
+            for (std::size_t k = 0; k < dec_lin.size(); ++k) {
+                dec_lin[k] = color_space::srgb_to_linear(Color3f{
+                    float(dec[k * 3u + 0u]) * (1.0f / 255.0f),
+                    float(dec[k * 3u + 1u]) * (1.0f / 255.0f),
+                    float(dec[k * 3u + 2u]) * (1.0f / 255.0f),
+                });
+            }
+            float s2_score = ssimulacra2::compute(
+                src.pixels(), dec_lin, std::size_t(W), std::size_t(H));
+            std::lock_guard lk(mu);
+            results[i] = std::move(er);
+            scores[i] = s2_score;
+        });
+        // Pick highest S2.
+        int best_i = 0;
+        for (int i = 1; i < N; ++i) {
+            if (scores[std::size_t(i)] > scores[std::size_t(best_i)]) best_i = i;
+        }
+        enc = std::move(results[std::size_t(best_i)]);
+    } else {
+        enc = encode_one(rgb_srgb8);
+    }
 
     // Decode-roundtrip for the in-process score.
-    auto decoded_rgb8 = etc2::decode_image(enc.blocks, W, H);
+    decoded_rgb8 = etc2::decode_image(enc.blocks, W, H);
     std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
     for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
         decoded_lin[i] = color_space::srgb_to_linear(Color3f{
