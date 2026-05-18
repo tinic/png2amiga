@@ -18,6 +18,7 @@
 #include "bc7.hpp"
 #include "etc2.hpp"
 #include "ktx2.hpp"
+#include "dds.hpp"
 #include "dither_tuning.hpp"
 #include "strips.hpp"
 #include "ssimulacra2.hpp"
@@ -5871,12 +5872,14 @@ int run_etc2(const Config& cfg) {
 // and the BC1 vkFormat. Shares the load/resize/pack/score/KTX2-wrap
 // pattern. No --best path yet (will add when first useful).
 int run_bc1(const Config& cfg) {
-    if (!cfg.output_path.empty() && !ends_with(cfg.output_path, ".ktx2")) {
-        std::println(stderr, "Error: --mode bc1 output path must end in .ktx2");
+    const bool out_dds = !cfg.output_path.empty() && ends_with(cfg.output_path, ".dds");
+    const bool out_ktx2 = !cfg.output_path.empty() && ends_with(cfg.output_path, ".ktx2");
+    if (!cfg.output_path.empty() && !out_dds && !out_ktx2) {
+        std::println(stderr, "Error: --mode bc1 output path must end in .ktx2 or .dds");
         return exit_code::usage;
     }
     if (cfg.output_path.empty() && !cfg.preview) {
-        std::println(stderr, "Error: --mode bc1 needs an output (.ktx2) or --preview");
+        std::println(stderr, "Error: --mode bc1 needs an output (.ktx2 or .dds) or --preview");
         return exit_code::usage;
     }
     auto loaded = png_io::load(cfg.input_path);
@@ -5968,19 +5971,29 @@ int run_bc1(const Config& cfg) {
         return exit_code::cant_create;
     }
 
-    ktx2::Inputs ki;
-    ki.format = ktx2::VkFormat::bc1_rgb_srgb_block;
-    ki.block_dim = {bc1::kBlockW, bc1::kBlockH, 1};
-    ki.image_w = W;
-    ki.image_h = H;
-    ki.bytes_per_block = bc1::kBlockBytes;
-    if (mip_levels.empty()) {
-        ki.block_bytes = block_bytes;
+    std::vector<std::uint8_t> file_bytes_storage;
+    if (out_dds) {
+        dds::Inputs di;
+        di.format = dds::Format::bc1_rgb_srgb;
+        di.image_w = W;
+        di.image_h = H;
+        di.bytes_per_block = bc1::kBlockBytes;
+        if (mip_levels.empty()) di.block_bytes = block_bytes;
+        else                    di.levels = std::move(mip_levels);
+        file_bytes_storage = dds::write(di);
     } else {
-        ki.levels = std::move(mip_levels);
+        ktx2::Inputs ki;
+        ki.format = ktx2::VkFormat::bc1_rgb_srgb_block;
+        ki.block_dim = {bc1::kBlockW, bc1::kBlockH, 1};
+        ki.image_w = W;
+        ki.image_h = H;
+        ki.bytes_per_block = bc1::kBlockBytes;
+        if (mip_levels.empty()) ki.block_bytes = block_bytes;
+        else                    ki.levels = std::move(mip_levels);
+        ki.supercompress_zstd = cfg.ktx2_zstd;
+        file_bytes_storage = ktx2::write(ki);
     }
-    ki.supercompress_zstd = cfg.ktx2_zstd;
-    auto file_bytes = ktx2::write(ki);
+    const std::vector<std::uint8_t>& file_bytes = file_bytes_storage;
 
     if (!cfg.output_path.empty()) {
         std::ofstream of(cfg.output_path, std::ios::binary);
@@ -6011,12 +6024,14 @@ int run_bc1(const Config& cfg) {
 // path (BC7 has full alpha support; we pack source RGBA into the
 // encoder which currently emits Mode 6 blocks).
 int run_bc7(const Config& cfg) {
-    if (!cfg.output_path.empty() && !ends_with(cfg.output_path, ".ktx2")) {
-        std::println(stderr, "Error: --mode bc7 output path must end in .ktx2");
+    const bool out_dds = !cfg.output_path.empty() && ends_with(cfg.output_path, ".dds");
+    const bool out_ktx2 = !cfg.output_path.empty() && ends_with(cfg.output_path, ".ktx2");
+    if (!cfg.output_path.empty() && !out_dds && !out_ktx2) {
+        std::println(stderr, "Error: --mode bc7 output path must end in .ktx2 or .dds");
         return exit_code::usage;
     }
     if (cfg.output_path.empty() && !cfg.preview) {
-        std::println(stderr, "Error: --mode bc7 needs an output (.ktx2) or --preview");
+        std::println(stderr, "Error: --mode bc7 needs an output (.ktx2 or .dds) or --preview");
         return exit_code::usage;
     }
     auto loaded = png_io::load(cfg.input_path);
@@ -6116,19 +6131,28 @@ int run_bc7(const Config& cfg) {
         return exit_code::cant_create;
     }
 
-    ktx2::Inputs ki;
-    ki.format = ktx2::VkFormat::bc7_srgb_block;
-    ki.block_dim = {bc7::kBlockW, bc7::kBlockH, 1};
-    ki.image_w = W;
-    ki.image_h = H;
-    ki.bytes_per_block = bc7::kBlockBytes;
-    if (mip_levels.empty()) {
-        ki.block_bytes = block_bytes;
+    std::vector<std::uint8_t> file_bytes;
+    if (out_dds) {
+        dds::Inputs di;
+        di.format = dds::Format::bc7_srgb;
+        di.image_w = W;
+        di.image_h = H;
+        di.bytes_per_block = bc7::kBlockBytes;
+        if (mip_levels.empty()) di.block_bytes = block_bytes;
+        else                    di.levels = std::move(mip_levels);
+        file_bytes = dds::write(di);
     } else {
-        ki.levels = std::move(mip_levels);
+        ktx2::Inputs ki;
+        ki.format = ktx2::VkFormat::bc7_srgb_block;
+        ki.block_dim = {bc7::kBlockW, bc7::kBlockH, 1};
+        ki.image_w = W;
+        ki.image_h = H;
+        ki.bytes_per_block = bc7::kBlockBytes;
+        if (mip_levels.empty()) ki.block_bytes = block_bytes;
+        else                    ki.levels = std::move(mip_levels);
+        ki.supercompress_zstd = cfg.ktx2_zstd;
+        file_bytes = ktx2::write(ki);
     }
-    ki.supercompress_zstd = cfg.ktx2_zstd;
-    auto file_bytes = ktx2::write(ki);
 
     if (!cfg.output_path.empty()) {
         std::ofstream of(cfg.output_path, std::ios::binary);

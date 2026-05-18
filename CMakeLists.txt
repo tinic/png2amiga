@@ -80,6 +80,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/bc1.cpp
     src/bc7.cpp
     src/ktx2.cpp
+    src/dds.cpp
     src/api.cpp
     src/ocs_cand_table.cpp
 )
