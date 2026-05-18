@@ -967,6 +967,11 @@ struct Config {
     std::string channel_b_path;
     std::string channel_a_path;
 
+    // When channel assembly runs in run_main, it builds the final Image
+    // here so the run_* dispatchers can use it directly instead of
+    // round-tripping through a temp PNG. Pure in-memory flow.
+    std::optional<Image> preloaded_input;
+
     // Multi-restart best-quality sweep. Tries N jitter seeds × dither
     // strengths × palette-diversity values, ranks trials by SSIMULACRA2,
     // keeps the winner. Active in HAM6/HAM8, plain EHB, sliced palette,
@@ -5658,13 +5663,19 @@ int run_etc2(Config cfg) {
         std::println(stderr, "Error: --mode etc2 needs an output (.ktx2) or --preview");
         return exit_code::usage;
     }
-    auto loaded = png_io::load(cfg.input_path);
-    if (!loaded) {
-        std::println(stderr, "Error: cannot read '{}': {}",
-                     cfg.input_path, loaded.error().message);
-        return exit_code::cant_create;
+    Image src;
+    if (cfg.preloaded_input) {
+        // Channel-assembly path injected this in run_main; skip the disk load.
+        src = *std::move(cfg.preloaded_input);
+    } else {
+        auto loaded = png_io::load(cfg.input_path);
+        if (!loaded) {
+            std::println(stderr, "Error: cannot read '{}': {}",
+                         cfg.input_path, loaded.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(loaded);
     }
-    Image src = *std::move(loaded);
 
     // Optional --width / --height rescale. Preserve source aspect when
     // only one dimension is given. The ETC2 encoder pads the source up
@@ -5894,13 +5905,19 @@ int run_bc1(Config cfg) {
         std::println(stderr, "Error: --mode bc1 output path must end in .ktx2 or .dds");
         return exit_code::usage;
     }
-    auto loaded = png_io::load(cfg.input_path);
-    if (!loaded) {
-        std::println(stderr, "Error: cannot read '{}': {}",
-                     cfg.input_path, loaded.error().message);
-        return exit_code::cant_create;
+    Image src;
+    if (cfg.preloaded_input) {
+        // Channel-assembly path injected this in run_main; skip the disk load.
+        src = *std::move(cfg.preloaded_input);
+    } else {
+        auto loaded = png_io::load(cfg.input_path);
+        if (!loaded) {
+            std::println(stderr, "Error: cannot read '{}': {}",
+                         cfg.input_path, loaded.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(loaded);
     }
-    Image src = *std::move(loaded);
 
     if (cfg.width.has_value() || cfg.height.has_value()) {
         double aspect = double(src.height()) / double(src.width());
@@ -6050,13 +6067,19 @@ int run_bc7(Config cfg) {
         std::println(stderr, "Error: --mode bc7 output path must end in .ktx2 or .dds");
         return exit_code::usage;
     }
-    auto loaded = png_io::load(cfg.input_path);
-    if (!loaded) {
-        std::println(stderr, "Error: cannot read '{}': {}",
-                     cfg.input_path, loaded.error().message);
-        return exit_code::cant_create;
+    Image src;
+    if (cfg.preloaded_input) {
+        // Channel-assembly path injected this in run_main; skip the disk load.
+        src = *std::move(cfg.preloaded_input);
+    } else {
+        auto loaded = png_io::load(cfg.input_path);
+        if (!loaded) {
+            std::println(stderr, "Error: cannot read '{}': {}",
+                         cfg.input_path, loaded.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(loaded);
     }
-    Image src = *std::move(loaded);
 
     if (cfg.width.has_value() || cfg.height.has_value()) {
         double aspect = double(src.height()) / double(src.width());
@@ -6231,20 +6254,25 @@ int run_main(int argc, char* argv[]) {
         config->input_path.clear();
     }
     if (assembling) {
-        // Optional base input.
+        // Optional base input — load with png_io so it shares the
+        // gamma + alpha decode logic with the normal pipeline path.
+        Image assembled;
         int W = 0, H = 0;
-        std::vector<std::uint8_t> base_rgba;
+        std::vector<float> alpha_plane;
         if (!config->input_path.empty()) {
-            int ch{};
-            unsigned char* px =
-                stbi_load(config->input_path.c_str(), &W, &H, &ch, 4);
-            if (!px) {
+            auto loaded = png_io::load(config->input_path);
+            if (!loaded) {
                 std::println(stderr, "Error: base input '{}' failed to load: {}",
-                             config->input_path, stbi_failure_reason());
+                             config->input_path, loaded.error().message);
                 return exit_code::cant_create;
             }
-            base_rgba.assign(px, px + std::size_t(W) * std::size_t(H) * 4u);
-            stbi_image_free(px);
+            assembled = *std::move(loaded);
+            W = int(assembled.width());
+            H = int(assembled.height());
+            if (assembled.has_alpha()) {
+                auto a = assembled.alpha();
+                alpha_plane.assign(a.begin(), a.end());
+            }
         }
 
         struct ChannelIn {
@@ -6257,7 +6285,10 @@ int run_main(int argc, char* argv[]) {
         if (!config->channel_b_path.empty()) sources.push_back({config->channel_b_path, 2});
         if (!config->channel_a_path.empty()) sources.push_back({config->channel_a_path, 3});
 
-        std::vector<std::vector<std::uint8_t>> loaded(sources.size());
+        // Load each per-channel PNG and pull its red channel as the
+        // override value. stb_image flow keeps this fast — we don't need
+        // the gamma-correction round-trip for a single channel.
+        std::vector<std::vector<std::uint8_t>> ch_data(sources.size());
         for (std::size_t s = 0; s < sources.size(); ++s) {
             int w{}, h{}, ch{};
             unsigned char* px = stbi_load(sources[s].path.c_str(), &w, &h, &ch, 4);
@@ -6275,51 +6306,53 @@ int run_main(int argc, char* argv[]) {
                 stbi_image_free(px);
                 return exit_code::cant_create;
             }
-            loaded[s].assign(px, px + std::size_t(w) * std::size_t(h) * 4u);
+            ch_data[s].assign(px, px + std::size_t(w) * std::size_t(h) * 4u);
             stbi_image_free(px);
         }
 
-        // Assemble: start from base (or default fill) then apply each
-        // per-channel override.
-        std::vector<std::uint8_t> rgba(std::size_t(W) * std::size_t(H) * 4u);
-        if (!base_rgba.empty()) {
-            rgba = std::move(base_rgba);
-        } else {
-            for (std::size_t i = 0; i < std::size_t(W) * std::size_t(H); ++i) {
-                rgba[i * 4u + 0] = 0;
-                rgba[i * 4u + 1] = 0;
-                rgba[i * 4u + 2] = 0;
-                rgba[i * 4u + 3] = 255;
-            }
+        // If we had no base input, allocate a default Image (black RGB).
+        if (assembled.width() == 0) {
+            assembled = Image(std::size_t(W), std::size_t(H));
+            alpha_plane.assign(std::size_t(W) * std::size_t(H), 1.0f);
+        } else if (alpha_plane.empty()) {
+            alpha_plane.assign(std::size_t(W) * std::size_t(H), 1.0f);
         }
+
+        // Apply each channel override directly onto the Image (RGB
+        // channels go through sRGB→linear so they survive the rest of
+        // the pipeline; alpha stays as a linear scalar in [0, 1]).
+        const std::size_t pix_count = std::size_t(W) * std::size_t(H);
         for (std::size_t s = 0; s < sources.size(); ++s) {
             int dst_ch = sources[s].idx;
-            for (std::size_t i = 0; i < std::size_t(W) * std::size_t(H); ++i) {
-                rgba[i * 4u + std::size_t(dst_ch)] = loaded[s][i * 4u + 0];
+            const auto& data = ch_data[s];
+            for (std::size_t i = 0; i < pix_count; ++i) {
+                std::uint8_t v = data[i * 4u + 0];  // red channel
+                std::size_t y = i / std::size_t(W);
+                std::size_t x = i - y * std::size_t(W);
+                if (dst_ch == 3) {
+                    alpha_plane[i] = float(v) * (1.f / 255.f);
+                } else {
+                    auto& px = assembled[x, y];
+                    // sRGB single-channel byte → linear: scalar via the
+                    // 3-channel helper (only the matching channel matters).
+                    Color3f lin3 = color_space::srgb_u8_to_linear(v, v, v);
+                    if (dst_ch == 0) px.r = lin3.r;
+                    else if (dst_ch == 1) px.g = lin3.g;
+                    else                  px.b = lin3.b;
+                }
             }
         }
 
-        // Write to a unique temp PNG path; pipeline picks it up as normal input.
-        // Portable: std::filesystem::temp_directory_path + a pid-based suffix.
-        // Single-shot tool so true uniqueness isn't critical; this is good
-        // enough to avoid collisions across concurrent invocations on the
-        // same host.
-        auto tmpdir = std::filesystem::temp_directory_path();
-        auto pid = std::uint64_t(
-#ifdef _WIN32
-            GetCurrentProcessId()
-#else
-            getpid()
-#endif
-        );
-        auto tmp_path = tmpdir / std::format("png2amiga_assembled_{}.png", pid);
-        auto tmp_str = tmp_path.string();
-        if (!stbi_write_png(tmp_str.c_str(), W, H, 4, rgba.data(), W * 4)) {
-            std::println(stderr, "Error: could not write assembled input PNG to '{}'",
-                         tmp_str);
-            return exit_code::cant_create;
-        }
-        config->input_path = tmp_str;
+        // Attach alpha plane (always, since we may have overridden it or
+        // need to preserve the base's alpha).
+        bool any_transparent = false;
+        for (float a : alpha_plane) if (a < 0.999f) { any_transparent = true; break; }
+        if (any_transparent) assembled.set_alpha(std::move(alpha_plane));
+
+        config->preloaded_input = std::move(assembled);
+        // Clear input_path so dispatchers know the data is preloaded.
+        // (output_path was already set above for shape #3.)
+        config->input_path.clear();
     }
 
     // ETC2 (KTX2) — fixed-rate block format; bypass the Amiga pipeline.
