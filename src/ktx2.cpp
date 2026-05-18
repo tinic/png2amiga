@@ -28,7 +28,11 @@ constexpr std::uint32_t kTransferLinear = 1;
 constexpr std::uint32_t kTransferSrgb = 2;
 
 // KDFS ETC2 channel types (KDFS v1.3 §15.4 ETC2).
-constexpr std::uint8_t kEtc2ChannelRGB = 0;
+// KHR_DF_CHANNEL_ETC2_COLOR (= 2) is the combined-RGB sample type used
+// when a single sample covers all three colour channels of an ETC2 block.
+// 0 = ETC2_RED, 1 = GREEN — those split colour into separate planes
+// which our R8G8B8 vkFormat doesn't do. Verified against khr_df.h.
+constexpr std::uint8_t kEtc2ChannelColor = 2;
 
 // Helpers — pack little-endian integers into the output buffer.
 void put_u16(std::vector<std::uint8_t>& out, std::uint16_t v) {
@@ -144,7 +148,7 @@ std::vector<std::uint8_t> build_dfd(const Inputs& in) {
     // Sample 0 — single sample covering all RGB bits of the block.
     put_u16(dfd, 0);                                  // bitOffset = 0
     dfd.push_back(static_cast<std::uint8_t>(in.bytes_per_block * 8 - 1));  // bitLength - 1
-    dfd.push_back(kEtc2ChannelRGB);                   // channelType + qualifiers
+    dfd.push_back(kEtc2ChannelColor);                 // channelType + qualifiers
     dfd.push_back(0);                                 // samplePosition[0]
     dfd.push_back(0);
     dfd.push_back(0);
@@ -202,8 +206,9 @@ std::vector<std::uint8_t> write(const Inputs& in) {
     out.insert(out.end(), dfd.begin(), dfd.end());
 
     // --- KVD ---------------------------------------------------------------
-    std::uint32_t kvd_offset = static_cast<std::uint32_t>(out.size());
-    // empty
+    // Per KTX2 spec: when kvdByteLength == 0, kvdByteOffset MUST be 0
+    // (not the position-after-DFD). The Khronos `ktx validate` flags this.
+    std::uint32_t kvd_offset = 0;
 
     // --- Mip level data ----------------------------------------------------
     // KTX2 spec requires level data to be 8-byte-aligned relative to file
