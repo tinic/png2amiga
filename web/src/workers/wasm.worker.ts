@@ -95,6 +95,7 @@ const DISPATCHERS: Record<string, Dispatcher> = {
   convertRGBA:    (m, args) => m.convertRGBA(args[0] as Uint8Array, args[1] as WasmOptions),
   convert:        (m, args) => m.convert(args[0] as Uint8Array, args[1] as WasmOptions),
   convertIFF:     (m, args) => m.convertIFF(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertKtx2:    (m, args) => m.convertKtx2(args[0] as Uint8Array, args[1] as WasmOptions),
   convertHeader:  (m, args) => m.convertHeader(args[0] as Uint8Array, args[1] as WasmOptions, args[2] as string),
   convertViewer:  (m, args) => m.convertViewer(args[0] as Uint8Array, args[1] as WasmOptions),
   convertDegas:   (m, args) => m.convertDegas(args[0] as Uint8Array, args[1] as WasmOptions),

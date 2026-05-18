@@ -202,6 +202,7 @@ declare module '@wasm/png2amiga.js' {
     convertRGBA(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convert(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertIFF(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertKtx2(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertHeader(bytes: Uint8Array, opts: WasmOptions, symbolName: string): ConvertResult
     convertViewer(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertDegas(bytes: Uint8Array, opts: WasmOptions): ConvertResult

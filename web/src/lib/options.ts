@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'etc2'
 
 export interface ModeOption {
   value: string
@@ -190,11 +190,14 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h40',    label: 'H40 (320x224)',    chipset: 'genesis' },
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
+  // ETC2 RGB8 — block-compressed texture format (4 bpp, 4×4 blocks).
+  // Not a retro mode but available via --mode etc2. Output is KTX2.
+  { value: 'etc2',           label: 'ETC2 RGB8 (KTX2)', chipset: 'etc2' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'etc2'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -230,6 +233,7 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'cga',     label: 'IBM PC CGA (fixed palette)' },
   { value: 'snes',    label: 'SNES Mode 7' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
+  { value: 'etc2',    label: 'ETC2 (KTX2 texture)' },
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
@@ -581,6 +585,7 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   c64:     C64_EXAMPLES,
   snes:    AMIGA_EXAMPLES,
   genesis: AMIGA_EXAMPLES,
+  etc2:    AMIGA_EXAMPLES,
 }
 
 export function examplesForChipset(chipset: Chipset): Example[] {
