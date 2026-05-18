@@ -5488,8 +5488,16 @@ int run_batch(const Config& cfg) {
 // writes the .ktx2 file. Reports the same "Encoded:" status shape as
 // the other modes so the bench harness can grep for it.
 int run_etc2(const Config& cfg) {
-    if (!ends_with(cfg.output_path, ".ktx2")) {
-        std::println(stderr, "Error: --mode etc2 requires .ktx2 output extension");
+    // Output path is optional: --preview alone (no output) is fine, and any
+    // file output must be .ktx2. When --preview is set, we decode the encoded
+    // blocks back to RGB and show them in the terminal — same shape as the
+    // other modes' preview paths.
+    if (!cfg.output_path.empty() && !ends_with(cfg.output_path, ".ktx2")) {
+        std::println(stderr, "Error: --mode etc2 output path must end in .ktx2");
+        return exit_code::usage;
+    }
+    if (cfg.output_path.empty() && !cfg.preview) {
+        std::println(stderr, "Error: --mode etc2 needs an output (.ktx2) or --preview");
         return exit_code::usage;
     }
     auto loaded = png_io::load(cfg.input_path);
@@ -5599,7 +5607,7 @@ int run_etc2(const Config& cfg) {
     ki.block_bytes = block_bytes;
     auto file_bytes = ktx2::write(ki);
 
-    {
+    if (!cfg.output_path.empty()) {
         std::ofstream of(cfg.output_path, std::ios::binary);
         if (!of) {
             std::println(stderr, "Error: cannot write '{}'", cfg.output_path);
@@ -5612,15 +5620,24 @@ int run_etc2(const Config& cfg) {
     // Status line shape mirrors cli_print_encoded_other so bench scripts
     // can scrape uniformly. ETC2 has no palette — colors=0.
     cli_status(
-        "Encoded:  ETC2 {}×{}, {} blocks ({} bytes), file: {}, error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
+        "Encoded:  ETC2 {}×{}, {} blocks ({} bytes){}{}, error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
         W,
         H,
         int(enc.blocks.size()),
         fmt_size(int(file_bytes.size())),
+        cfg.output_path.empty() ? "" : ", file: ",
         cfg.output_path,
         double(enc.total_oklab2_error),
         psnr,
         s2);
+
+    // Terminal preview — decode our own blocks into an Image and pass
+    // through the existing show_terminal_preview pipeline (square pixels,
+    // no PAR shenanigans, so mode-specific scaling is a no-op for etc2).
+    if (cfg.preview) {
+        Image preview(std::size_t(W), std::size_t(H), decoded_lin);
+        show_terminal_preview(preview, amiga::Mode::etc2);
+    }
     return exit_code::ok;
 }
 
