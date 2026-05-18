@@ -940,6 +940,59 @@ inline bool refit_endpoints_m6(const Sample16& s,
     return true;
 }
 
+// Generic per-subset LSQ refit: given selectors on a subset of pixels, solve
+// the 2-var least-squares for (e0, e1) ∈ [0,255]^C minimising
+//   Σ_{p ∈ subset} (S[p] - w0(sel[p])·e0 - w1(sel[p])·e1)²
+// in 8-bit sRGB space. Mirrors refit_endpoints_m6 but parameterised on:
+//   - channel count C (3 = RGB, 4 = RGBA)
+//   - selector ramp (kWeight2 / kWeight3 / kWeight4 → N levels)
+//   - which pixels participate (pixel_idx[0..n_pixels) for multi-subset modes)
+//
+// Returns false if the linear system is singular (selectors degenerate).
+// Caller re-quantises e0/e1 to the mode's bit grid + P-bits.
+template<int C, int NLevels>
+inline bool refit_endpoints_subset(const Sample16& s,
+                                   const std::uint8_t pixel_idx[16],
+                                   int n_pixels,
+                                   const std::uint8_t sel[16],
+                                   const int weight_lut[NLevels],
+                                   std::uint8_t e0[C], std::uint8_t e1[C]) {
+    int n[NLevels] = {};
+    int sum[NLevels][C] = {};
+    for (int i = 0; i < n_pixels; ++i) {
+        int p = pixel_idx[i];
+        int k = sel[p];
+        ++n[k];
+        for (int ch = 0; ch < C; ++ch) sum[k][ch] += int(s.rgba8[p][ch]);
+    }
+    float A00 = 0.f, A11 = 0.f, A01 = 0.f;
+    float B[C] = {0.f};
+    float Bb[C] = {0.f};
+    for (int k = 0; k < NLevels; ++k) {
+        if (n[k] == 0) continue;
+        float w1 = float(weight_lut[k]) * (1.f / 64.f);
+        float w0 = 1.f - w1;
+        float nk = float(n[k]);
+        A00 += nk * w0 * w0;
+        A11 += nk * w1 * w1;
+        A01 += nk * w0 * w1;
+        for (int ch = 0; ch < C; ++ch) {
+            B[ch] += w0 * float(sum[k][ch]);
+            Bb[ch] += w1 * float(sum[k][ch]);
+        }
+    }
+    float det = A00 * A11 - A01 * A01;
+    if (std::abs(det) < 1e-6f) return false;
+    float inv = 1.f / det;
+    for (int ch = 0; ch < C; ++ch) {
+        float c0_f = (A11 * B[ch] - A01 * Bb[ch]) * inv;
+        float c1_f = (-A01 * B[ch] + A00 * Bb[ch]) * inv;
+        e0[ch] = clamp_u8(int(std::lround(c0_f)));
+        e1[ch] = clamp_u8(int(std::lround(c1_f)));
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Mode 1 helpers — 2 subsets, partition table, 6-bit endpoints + shared
 // P-bit per subset, 3-bit selectors (kWeight3 ramp).
@@ -1295,6 +1348,13 @@ inline Candidate encode_mode1(const Sample16& s) {
             for (int ss = 0; ss < 2; ++ss) {
                 std::uint8_t e0_8[3] = {e0_full[ss][0], e0_full[ss][1], e0_full[ss][2]};
                 std::uint8_t e1_8[3] = {e1_full[ss][0], e1_full[ss][1], e1_full[ss][2]};
+                // LSQ refit per subset given current selectors.
+                std::uint8_t lsq_e0[3], lsq_e1[3];
+                if (refit_endpoints_subset<3, 8>(s, idx_ss[ss], n_ss[ss], sel,
+                                                  kWeight3, lsq_e0, lsq_e1)) {
+                    e0_8[0] = lsq_e0[0]; e0_8[1] = lsq_e0[1]; e0_8[2] = lsq_e0[2];
+                    e1_8[0] = lsq_e1[0]; e1_8[1] = lsq_e1[1]; e1_8[2] = lsq_e1[2];
+                }
                 quantise_subset_m1(e0_8, e1_8, v6_e0[ss], v6_e1[ss], p_bits[ss]);
                 for (int ch = 0; ch < 3; ++ch) {
                     e0_full[ss][ch] = expand6p(v6_e0[ss][ch], p_bits[ss]);
@@ -1580,6 +1640,12 @@ inline Candidate encode_mode3(const Sample16& s) {
             for (int ss = 0; ss < 2; ++ss) {
                 std::uint8_t e0_8[3] = {e0_full[ss][0], e0_full[ss][1], e0_full[ss][2]};
                 std::uint8_t e1_8[3] = {e1_full[ss][0], e1_full[ss][1], e1_full[ss][2]};
+                std::uint8_t lsq_e0[3], lsq_e1[3];
+                if (refit_endpoints_subset<3, 4>(s, idx_ss[ss], n_ss[ss], sel,
+                                                  kWeight2, lsq_e0, lsq_e1)) {
+                    e0_8[0] = lsq_e0[0]; e0_8[1] = lsq_e0[1]; e0_8[2] = lsq_e0[2];
+                    e1_8[0] = lsq_e1[0]; e1_8[1] = lsq_e1[1]; e1_8[2] = lsq_e1[2];
+                }
                 quantise_endpoint_m3(e0_8, v7_e0[ss], p_e0[ss]);
                 quantise_endpoint_m3(e1_8, v7_e1[ss], p_e1[ss]);
                 for (int ch = 0; ch < 3; ++ch) {
@@ -1828,6 +1894,12 @@ inline Candidate encode_mode0(const Sample16& s) {
             for (int ss = 0; ss < 3; ++ss) {
                 std::uint8_t e0_8[3] = {e0_full[ss][0], e0_full[ss][1], e0_full[ss][2]};
                 std::uint8_t e1_8[3] = {e1_full[ss][0], e1_full[ss][1], e1_full[ss][2]};
+                std::uint8_t lsq_e0[3], lsq_e1[3];
+                if (refit_endpoints_subset<3, 8>(s, idx_ss[ss], n_ss[ss], sel,
+                                                  kWeight3, lsq_e0, lsq_e1)) {
+                    e0_8[0] = lsq_e0[0]; e0_8[1] = lsq_e0[1]; e0_8[2] = lsq_e0[2];
+                    e1_8[0] = lsq_e1[0]; e1_8[1] = lsq_e1[1]; e1_8[2] = lsq_e1[2];
+                }
                 quantise_endpoint_m0(e0_8, v4_e0[ss], p_e0[ss]);
                 quantise_endpoint_m0(e1_8, v4_e1[ss], p_e1[ss]);
                 for (int ch = 0; ch < 3; ++ch) {
@@ -2048,6 +2120,12 @@ inline Candidate encode_mode2(const Sample16& s) {
             for (int ss = 0; ss < 3; ++ss) {
                 std::uint8_t e0_8[3] = {e0_full[ss][0], e0_full[ss][1], e0_full[ss][2]};
                 std::uint8_t e1_8[3] = {e1_full[ss][0], e1_full[ss][1], e1_full[ss][2]};
+                std::uint8_t lsq_e0[3], lsq_e1[3];
+                if (refit_endpoints_subset<3, 4>(s, idx_ss[ss], n_ss[ss], sel,
+                                                  kWeight2, lsq_e0, lsq_e1)) {
+                    e0_8[0] = lsq_e0[0]; e0_8[1] = lsq_e0[1]; e0_8[2] = lsq_e0[2];
+                    e1_8[0] = lsq_e1[0]; e1_8[1] = lsq_e1[1]; e1_8[2] = lsq_e1[2];
+                }
                 quantise_endpoint_m2(e0_8, v5_e0[ss]);
                 quantise_endpoint_m2(e1_8, v5_e1[ss]);
                 for (int ch = 0; ch < 3; ++ch) {
@@ -2239,6 +2317,53 @@ inline Candidate encode_mode5(const Sample16& s) {
     std::uint8_t csel[16], asel[16];
     std::uint8_t decoded[16][4];
     pick_selectors_m5<M>(s, e0_full, e1_full, csel, asel, decoded);
+
+    // LSQ refit pass: refit RGB endpoints against csel, alpha endpoints
+    // against asel, requantise, re-pick.
+    {
+        std::uint8_t all_idx[16];
+        for (int i = 0; i < 16; ++i) all_idx[i] = std::uint8_t(i);
+        std::uint8_t rgb_e0[3], rgb_e1[3];
+        if (refit_endpoints_subset<3, 4>(s, all_idx, 16, csel, kWeight2,
+                                          rgb_e0, rgb_e1)) {
+            quantise_endpoint_m5_rgb(rgb_e0, v7_e0);
+            quantise_endpoint_m5_rgb(rgb_e1, v7_e1);
+            e0_full[0] = expand7_nop(v7_e0[0]);
+            e0_full[1] = expand7_nop(v7_e0[1]);
+            e0_full[2] = expand7_nop(v7_e0[2]);
+            e1_full[0] = expand7_nop(v7_e1[0]);
+            e1_full[1] = expand7_nop(v7_e1[1]);
+            e1_full[2] = expand7_nop(v7_e1[2]);
+        }
+        // Alpha refit using asel (1-channel via a small wrapper struct).
+        // Closed form for 1-channel reduces to the same 2x2 solve.
+        int n[4] = {0, 0, 0, 0};
+        int sum[4] = {0, 0, 0, 0};
+        for (int p = 0; p < 16; ++p) {
+            ++n[asel[p]];
+            sum[asel[p]] += int(s.alpha[p]);
+        }
+        float A00 = 0, A11 = 0, A01 = 0, B = 0, Bb = 0;
+        for (int k = 0; k < 4; ++k) {
+            if (n[k] == 0) continue;
+            float w1 = float(kWeight2[k]) * (1.f / 64.f);
+            float w0 = 1.f - w1;
+            A00 += float(n[k]) * w0 * w0;
+            A11 += float(n[k]) * w1 * w1;
+            A01 += float(n[k]) * w0 * w1;
+            B += w0 * float(sum[k]);
+            Bb += w1 * float(sum[k]);
+        }
+        float det = A00 * A11 - A01 * A01;
+        if (std::abs(det) > 1e-6f) {
+            float inv = 1.f / det;
+            int a0_new = clamp_u8(int(std::lround((A11 * B - A01 * Bb) * inv)));
+            int a1_new = clamp_u8(int(std::lround((-A01 * B + A00 * Bb) * inv)));
+            e0_full[3] = std::uint8_t(a0_new);
+            e1_full[3] = std::uint8_t(a1_new);
+        }
+        pick_selectors_m5<M>(s, e0_full, e1_full, csel, asel, decoded);
+    }
     // Anchor pixel 0 fix: if csel[0] >= 2, swap RGB endpoints + complement
     // color selectors. Independent alpha anchor: if asel[0] >= 2, swap
     // alpha endpoints + complement alpha selectors.
@@ -2471,6 +2596,14 @@ inline Candidate encode_mode7(const Sample16& s) {
             for (int ss = 0; ss < 2; ++ss) {
                 std::uint8_t e0_8[4] = {e0_full[ss][0], e0_full[ss][1], e0_full[ss][2], e0_full[ss][3]};
                 std::uint8_t e1_8[4] = {e1_full[ss][0], e1_full[ss][1], e1_full[ss][2], e1_full[ss][3]};
+                std::uint8_t lsq_e0[4], lsq_e1[4];
+                if (refit_endpoints_subset<4, 4>(s, idx_ss[ss], n_ss[ss], sel,
+                                                  kWeight2, lsq_e0, lsq_e1)) {
+                    for (int ch = 0; ch < 4; ++ch) {
+                        e0_8[ch] = lsq_e0[ch];
+                        e1_8[ch] = lsq_e1[ch];
+                    }
+                }
                 quantise_endpoint_m7(e0_8, v5_e0[ss], p_e0[ss]);
                 quantise_endpoint_m7(e1_8, v5_e1[ss], p_e1[ss]);
                 for (int ch = 0; ch < 4; ++ch) {
