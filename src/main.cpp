@@ -5781,7 +5781,14 @@ int run_bc1(const Config& cfg) {
     bopts.block_ed.strength = cfg.etc2_block_ed;
     bopts.block_ed.method = cfg.dither_method;
 
-    auto enc = bc1::encode_image(rgb_srgb8, W, H, bopts);
+    // --profile N: run encode N times back-to-back so a sampling
+    // profiler (AMD uProf, sample, perf) sees enough hot stacks. Only
+    // the last result is kept; scoring + output are done once.
+    bc1::EncodeResult enc;
+    int reps = std::max(cfg.profile_repeats, 1);
+    for (int r = 0; r < reps; ++r) {
+        enc = bc1::encode_image(rgb_srgb8, W, H, bopts);
+    }
 
     auto decoded_rgb8 = bc1::decode_image(enc.blocks, W, H);
     std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
