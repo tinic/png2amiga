@@ -933,7 +933,6 @@ struct Config {
 
     // ETC2 (--mode etc2) knobs. Defaults mirror etc2::Options.
     int etc2_effort = 2;
-    float etc2_block_ed = 0.5f;
     std::string etc2_metric = "oklab2";
     int etc2_refine = 0;
     int etc2_jitter = 1;
@@ -1307,7 +1306,6 @@ void print_usage() {
         "ETC2 / BC1 / BC7 (--mode etc2|bc1|bc7 → .ktx2):\n"
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Endpoint search width (default: 1)\n"
-        "  --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5)\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
         "\n"
         "HAM:\n"
@@ -2245,10 +2243,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 config.etc2_effort = std::atoi(std::string(val).c_str());
                 if (config.etc2_effort < 0) config.etc2_effort = 0;
                 if (config.etc2_effort > 3) config.etc2_effort = 3;
-            } else if (arg == "--etc2-block-ed") {
-                config.etc2_block_ed = std::strtof(std::string(val).c_str(), nullptr);
-                if (config.etc2_block_ed < 0.f) config.etc2_block_ed = 0.f;
-                if (config.etc2_block_ed > 1.5f) config.etc2_block_ed = 1.5f;
             } else if (arg == "--etc2-jitter") {
                 config.etc2_jitter = std::atoi(std::string(val).c_str());
                 if (config.etc2_jitter < 0) config.etc2_jitter = 0;
@@ -5720,7 +5714,7 @@ int run_etc2(Config cfg) {
                        ? block_compress::BlockMetric::srgb_mse
                        : block_compress::BlockMetric::oklab2;
     eopts.effort = cfg.etc2_effort;
-    eopts.block_ed.strength = cfg.etc2_block_ed;
+    eopts.block_ed.strength = cfg.dither_strength;
     eopts.refine_passes = cfg.etc2_refine;
     eopts.jitter = cfg.etc2_jitter;
     // Block-grid ED uses the SAME --dither method as the per-pixel ED
@@ -5957,7 +5951,7 @@ int run_bc1(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.etc2_block_ed;
+    bopts.block_ed.strength = cfg.dither_strength;
     bopts.block_ed.method = cfg.dither_method;
 
     // --profile N is handled by main()'s outer loop (re-runs run_main).
@@ -6128,7 +6122,7 @@ int run_bc7(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.etc2_block_ed;
+    bopts.block_ed.strength = cfg.dither_strength;
     bopts.block_ed.method = cfg.dither_method;
 
     auto enc = bc7::encode_image(rgba_srgb8, W, H, bopts);
@@ -6289,7 +6283,7 @@ int run_bc3(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.etc2_block_ed;
+    bopts.block_ed.strength = cfg.dither_strength;
     bopts.block_ed.method = cfg.dither_method;
 
     auto enc = bc3::encode_image(rgba_srgb8, W, H, bopts);
@@ -6448,7 +6442,7 @@ int run_bc2(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.etc2_block_ed;
+    bopts.block_ed.strength = cfg.dither_strength;
     bopts.block_ed.method = cfg.dither_method;
 
     auto enc = bc2::encode_image(rgba_srgb8, W, H, bopts);

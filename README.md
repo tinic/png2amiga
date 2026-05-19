@@ -513,7 +513,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.97.0.1169
+png2amiga 1.97.0.1211
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
 
@@ -629,7 +629,6 @@ Cross-fade (lores/hires/EHB; --preview animates):
 ETC2 / BC1 / BC7 (--mode etc2|bc1|bc7 → .ktx2):
   --etc2-effort <0-3>             Search depth (default: 2)
   --etc2-jitter <0-15>            Endpoint search width (default: 1)
-  --etc2-block-ed <0.0-1.5>       Block-grid ED strength (default: 0.5)
   --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)
 
 HAM:
