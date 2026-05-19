@@ -3777,6 +3777,28 @@ std::vector<bool> scale_mask_for_display(const std::vector<bool>& mask,
     return scaled;
 }
 
+// Continuous-alpha counterpart for the block-compressed RGBA modes
+// (BC2/BC3/BC7/ASTC), where alpha is 8-bit not 1-bit.
+std::vector<float> scale_alpha_for_display(std::span<const float> alpha,
+                                           std::size_t src_w,
+                                           std::size_t src_h,
+                                           amiga::Mode mode,
+                                           bool hires,
+                                           bool interlace) {
+    auto [pw, ph] = preview_display_dims(src_w, src_h, mode, hires, interlace);
+    if (pw == src_w && ph == src_h) return {alpha.begin(), alpha.end()};
+    std::vector<float> scaled(pw * ph, 1.f);
+    if (src_w == 0 || src_h == 0) return scaled;
+    for (std::size_t y = 0; y < ph; ++y) {
+        auto sy = std::min(src_h - 1, (y * src_h) / ph);
+        for (std::size_t x = 0; x < pw; ++x) {
+            auto sx = std::min(src_w - 1, (x * src_w) / pw);
+            scaled[y * pw + x] = alpha[sy * src_w + sx];
+        }
+    }
+    return scaled;
+}
+
 Result<void> save_preview(std::string_view path,
                           const Image& preview,
                           bool has_trans,
@@ -3815,6 +3837,36 @@ Image composite_on_checkerboard(const Image& preview, const std::vector<bool>& m
     return out;
 }
 
+// Continuous-alpha overload: src*alpha + checker*(1-alpha) per pixel.
+// Used by BC2/BC3/BC7/ASTC where the decoded RGBA has 8-bit alpha.
+// Compositing happens in linear RGB to match Image storage.
+Image composite_on_checkerboard(const Image& preview, std::span<const float> alpha) {
+    constexpr int kTile = 8;
+    static const auto kLight = color_space::srgb_to_linear(
+        Color3f{0xC0 / 255.0f, 0xC0 / 255.0f, 0xC0 / 255.0f});
+    static const auto kDark = color_space::srgb_to_linear(
+        Color3f{0x80 / 255.0f, 0x80 / 255.0f, 0x80 / 255.0f});
+    auto w = preview.width(), h = preview.height();
+    Image out = preview;
+    for (std::size_t y = 0; y < h; ++y) {
+        for (std::size_t x = 0; x < w; ++x) {
+            std::size_t i = y * w + x;
+            if (i >= alpha.size()) continue;
+            float a = std::clamp(alpha[i], 0.f, 1.f);
+            if (a >= 1.f) continue;
+            bool dark = ((x / kTile) + (y / kTile)) & 1;
+            Color3f bg = dark ? kDark : kLight;
+            Color3f src = preview[x, y];
+            out[x, y] = Color3f{
+                src.r * a + bg.r * (1.f - a),
+                src.g * a + bg.g * (1.f - a),
+                src.b * a + bg.b * (1.f - a),
+            };
+        }
+    }
+    return out;
+}
+
 // Show preview in terminal (iTerm2 inline image protocol). When the
 // encoder reports transparency, composite onto a checkerboard so the
 // terminal preview matches what the web shows through alpha=0 pixels.
@@ -3823,9 +3875,14 @@ void show_terminal_preview(const Image& preview,
                            bool hires = false,
                            bool interlace = false,
                            bool has_trans = false,
-                           const std::vector<bool>& mask = {}) {
+                           const std::vector<bool>& mask = {},
+                           std::span<const float> alpha = {}) {
     auto scaled = scale_for_display(preview, mode, hires, interlace);
-    if (has_trans && !mask.empty()) {
+    if (!alpha.empty()) {
+        auto scaled_alpha = scale_alpha_for_display(
+            alpha, preview.width(), preview.height(), mode, hires, interlace);
+        scaled = composite_on_checkerboard(scaled, std::span<const float>(scaled_alpha));
+    } else if (has_trans && !mask.empty()) {
         auto scaled_mask = scale_mask_for_display(
             mask, preview.width(), preview.height(), mode, hires, interlace);
         scaled = composite_on_checkerboard(scaled, scaled_mask);
@@ -6214,7 +6271,13 @@ int run_bc7(Config cfg) {
 
     if (cfg.preview) {
         Image preview(std::size_t(W), std::size_t(H), decoded_lin);
-        show_terminal_preview(preview, amiga::Mode::bc7);
+        std::vector<float> alpha;
+        if (has_alpha) {
+            alpha.resize(std::size_t(W) * std::size_t(H));
+            for (std::size_t i = 0; i < alpha.size(); ++i)
+                alpha[i] = float(decoded_rgba[i * 4u + 3u]) * (1.0f / 255.0f);
+        }
+        show_terminal_preview(preview, amiga::Mode::bc7, false, false, false, {}, alpha);
     }
     return exit_code::ok;
 }
@@ -6377,7 +6440,13 @@ int run_bc3(Config cfg) {
 
     if (cfg.preview) {
         Image preview(std::size_t(W), std::size_t(H), decoded_lin);
-        show_terminal_preview(preview, amiga::Mode::bc3);
+        std::vector<float> alpha;
+        if (has_alpha) {
+            alpha.resize(std::size_t(W) * std::size_t(H));
+            for (std::size_t i = 0; i < alpha.size(); ++i)
+                alpha[i] = float(decoded_rgba[i * 4u + 3u]) * (1.0f / 255.0f);
+        }
+        show_terminal_preview(preview, amiga::Mode::bc3, false, false, false, {}, alpha);
     }
     return exit_code::ok;
 }
@@ -6538,7 +6607,13 @@ int run_bc2(Config cfg) {
 
     if (cfg.preview) {
         Image preview(std::size_t(W), std::size_t(H), decoded_lin);
-        show_terminal_preview(preview, amiga::Mode::bc2);
+        std::vector<float> alpha;
+        if (has_alpha) {
+            alpha.resize(std::size_t(W) * std::size_t(H));
+            for (std::size_t i = 0; i < alpha.size(); ++i)
+                alpha[i] = float(decoded_rgba[i * 4u + 3u]) * (1.0f / 255.0f);
+        }
+        show_terminal_preview(preview, amiga::Mode::bc2, false, false, false, {}, alpha);
     }
     return exit_code::ok;
 }
@@ -6672,7 +6747,13 @@ int run_astc(Config cfg) {
 
     if (cfg.preview) {
         Image preview(std::size_t(W), std::size_t(H), decoded_lin);
-        show_terminal_preview(preview, amiga::Mode::astc_4x4);
+        std::vector<float> alpha;
+        if (has_alpha) {
+            alpha.resize(std::size_t(W) * std::size_t(H));
+            for (std::size_t i = 0; i < alpha.size(); ++i)
+                alpha[i] = float(decoded_rgba[i * 4u + 3u]) * (1.0f / 255.0f);
+        }
+        show_terminal_preview(preview, amiga::Mode::astc_4x4, false, false, false, {}, alpha);
     }
     return exit_code::ok;
 }
