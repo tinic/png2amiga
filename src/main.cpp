@@ -1305,7 +1305,7 @@ void print_usage() {
         "  --fade-loop                     Loop forward (source→...→target→source); else\n"
         "                                  ping-pong (source→...→target→...→source).\n"
         "\n"
-        "ETC2 / BC1 / BC7 (--mode etc2|bc1|bc7 → .ktx2):\n"
+        "ETC2 / BC1-7 / ASTC (--mode etc2|bc1|bc2|bc3|bc7|astc-4x4|astc-5x4 → .ktx2):\n"
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Endpoint search width (default: 1)\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
@@ -2187,6 +2187,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::bc7;
                 else if (v == "astc-4x4" || v == "astc-rgba-4x4")
                     config.mode = amiga::Mode::astc_4x4;
+                else if (v == "astc-5x4")
+                    config.mode = amiga::Mode::astc_5x4;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -6623,12 +6625,28 @@ int run_bc2(Config cfg) {
 // astcenc handles only the decode path (cross-validation + the
 // terminal-preview lookback).
 int run_astc(Config cfg) {
+    // Per-footprint dispatch table — only entries that have a working
+    // encoder. Phase 4 will add the rest.
+    struct AstcFootprint {
+        int w, h;
+        ktx2::VkFormat vk;
+        const char* tag;
+    };
+    AstcFootprint fp{};
+    switch (cfg.mode) {
+        case amiga::Mode::astc_4x4: fp = {4, 4, ktx2::VkFormat::astc_4x4_srgb_block, "astc-4x4"}; break;
+        case amiga::Mode::astc_5x4: fp = {5, 4, ktx2::VkFormat::astc_5x4_srgb_block, "astc-5x4"}; break;
+        default:
+            std::println(stderr, "Error: run_astc: unsupported mode");
+            return exit_code::usage;
+    }
+
     if (cfg.output_path.empty() && !cfg.preview && !cfg.input_path.empty()) {
         std::filesystem::path in_p(cfg.input_path);
         cfg.output_path = (in_p.parent_path() / in_p.stem()).string() + ".ktx2";
     }
     if (!cfg.output_path.empty() && !ends_with(cfg.output_path, ".ktx2")) {
-        std::println(stderr, "Error: --mode astc-4x4 output path must end in .ktx2");
+        std::println(stderr, "Error: --mode {} output path must end in .ktx2", fp.tag);
         return exit_code::usage;
     }
     Image src;
@@ -6683,14 +6701,14 @@ int run_astc(Config cfg) {
     }
 
     astc::Options aopts;
-    aopts.block_w = 4;
-    aopts.block_h = 4;
+    aopts.block_w = fp.w;
+    aopts.block_h = fp.h;
     aopts.metric = (cfg.etc2_metric == "srgb-mse")
                        ? block_compress::BlockMetric::srgb_mse
                        : block_compress::BlockMetric::oklab2;
     aopts.block_ed.strength = cfg.dither_strength_explicit
         ? cfg.dither_strength
-        : dither_tuning::defaults_for({amiga::Mode::astc_4x4, 8, false, false, false}).strength;
+        : dither_tuning::defaults_for({cfg.mode, 8, false, false, false}).strength;
     aopts.block_ed.method = cfg.dither_method;
 
     auto enc = astc::encode_image(rgba_srgb8, W, H, aopts);
@@ -6699,7 +6717,7 @@ int run_astc(Config cfg) {
         return exit_code::cant_create;
     }
 
-    auto decoded_rgba = astc::decode_image(enc.blocks, W, H, 4, 4);
+    auto decoded_rgba = astc::decode_image(enc.blocks, W, H, fp.w, fp.h);
     std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
     for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
         decoded_lin[i] = color_space::srgb_to_linear(Color3f{
@@ -6718,8 +6736,8 @@ int run_astc(Config cfg) {
         enc.blocks.size() * std::size_t(astc::kBlockBytes));
 
     ktx2::Inputs ki;
-    ki.format = ktx2::VkFormat::astc_4x4_srgb_block;
-    ki.block_dim = {4, 4, 1};
+    ki.format = fp.vk;
+    ki.block_dim = {fp.w, fp.h, 1};
     ki.image_w = W;
     ki.image_h = H;
     ki.bytes_per_block = astc::kBlockBytes;
@@ -6738,8 +6756,8 @@ int run_astc(Config cfg) {
     }
 
     cli_status(
-        "Encoded:  ASTC 4x4 {}×{}, {} blocks ({} bytes){}{}, error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
-        W, H, int(enc.blocks.size()), fmt_size(int(file_bytes.size())),
+        "Encoded:  ASTC {}x{} {}×{}, {} blocks ({} bytes){}{}, error: {:.4f}, PSNR: {:.2f} dB, S2: {:.2f}",
+        fp.w, fp.h, W, H, int(enc.blocks.size()), fmt_size(int(file_bytes.size())),
         cfg.output_path.empty() ? "" : ", file: ",
         cfg.output_path,
         double(enc.total_oklab2_error),
@@ -6753,7 +6771,7 @@ int run_astc(Config cfg) {
             for (std::size_t i = 0; i < alpha.size(); ++i)
                 alpha[i] = float(decoded_rgba[i * 4u + 3u]) * (1.0f / 255.0f);
         }
-        show_terminal_preview(preview, amiga::Mode::astc_4x4, false, false, false, {}, alpha);
+        show_terminal_preview(preview, cfg.mode, false, false, false, {}, alpha);
     }
     return exit_code::ok;
 }
@@ -6911,7 +6929,7 @@ int run_main(int argc, char* argv[]) {
     if (config->mode == amiga::Mode::bc7) {
         return run_bc7(*config);
     }
-    if (config->mode == amiga::Mode::astc_4x4) {
+    if (amiga::is_astc(config->mode)) {
         return run_astc(*config);
     }
 

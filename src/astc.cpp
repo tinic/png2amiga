@@ -35,57 +35,65 @@ namespace png2amiga::astc {
 
 namespace {
 
+// Footprint defaults for the 4x4 case, kept as constants so the
+// existing 2-partition / RGBA paths (which are 4x4-specific) read
+// the same way they always did.
 constexpr int kBlockW = 4;
 constexpr int kBlockH = 4;
 
-// Two fixed block modes are used per block:
+// Block-mode constants (encode weight grid + weight quant — see ASTC
+// §16.5 / astcenc decode_block_mode_2d):
 //
-//   RGB-only blocks (alpha = 255 everywhere):
-//     block_mode = 0x53,   CEM = 8  (LDR RGB direct, 6 endpoint values)
-//     weights = QUANT_8 (3-bit, 8 levels, 48 weight bits)
-//     endpoints = QUANT_256 (8-bit straight, 6 × 8 = 48 endpoint bits)
+//   4x4 RGB  (CEM 8):  0x53  — QUANT_8 weights (3-bit), 16 weights
+//   4x4 RGBA (CEM 12): 0x42  — QUANT_4 weights (2-bit), 16 weights
+//   5x4 RGB  (CEM 8):  0xD3  — QUANT_8 weights, 20 weights
 //
-//   RGBA blocks (any non-trivial alpha):
-//     block_mode = 0x42,   CEM = 12 (LDR RGBA direct, 8 endpoint values)
-//     weights = QUANT_4 (2-bit, 4 levels, 32 weight bits)
-//     endpoints = QUANT_256 (8-bit straight, 8 × 8 = 64 endpoint bits)
-//
-// Both quant levels have identity scramble maps (power-of-2 ranges so
-// no trit/quint BISE encoding required).
-constexpr std::uint32_t kBlockModeRgb  = 0x53;   // QUANT_8 weights, 4x4 grid
-constexpr std::uint32_t kBlockModeRgba = 0x42;   // QUANT_4 weights, 4x4 grid
+// Power-of-2 endpoint quant levels (QUANT_2/4/8/16/32/64/128/256)
+// have identity-monotonic scramble, so no trit/quint BISE needed
+// for any of the footprints listed above.
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb4x4  = 0x53;
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgba4x4 = 0x42;
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb5x4  = 0xD3;
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb  = kBlockModeRgb4x4;
+constexpr std::uint32_t kBlockModeRgba = kBlockModeRgba4x4;
 
 constexpr int kWeightLevels8 = 8;
 constexpr int kWeightLevels4 = 4;
 
 // Pre-computed weight ramps scaled to the canonical 0..64 range used
 // in the ASTC paint formula `((64-w)*e0 + w*e1) / 64`. Per ASTC §16:
-//   QUANT_8 = {0, 9, 18, 27, 37, 46, 55, 64}     (table row above kBlockMode)
+//   QUANT_8 = {0, 9, 18, 27, 37, 46, 55, 64}
 //   QUANT_4 = {0, 21, 43, 64}
 constexpr int kWeightToInterp8[kWeightLevels8] = {0, 9, 18, 27, 37, 46, 55, 64};
 constexpr int kWeightToInterp4[kWeightLevels4] = {0, 21, 43, 64};
 
-// Legacy alias for phase-1 RGB path.
+// 4x4 RGB path aliases — the 1-partition QUANT_8 RGB code uses these.
 constexpr int kWeightLevels = kWeightLevels8;
 constexpr const int* kWeightToInterp = kWeightToInterp8;
 
-// Sample16 — same shape as bc7.cpp. Holds source RGBA8 + per-pixel
-// OKLab values for fast scoring.
-struct Sample16 {
-    std::uint8_t rgba8[16][4];
-    color_space::OKLab lab[16];
-    std::uint8_t alpha[16];
+// Per-texel sample buffer parameterised on texel count. Same shape as
+// bc7.cpp's Sample16. Sample16 = SampleT<16> is kept as a type alias
+// so the 4x4-specific 2-partition + RGBA code paths compile unchanged.
+template <int N>
+struct SampleT {
+    std::uint8_t rgba8[N][4];
+    color_space::OKLab lab[N];
+    std::uint8_t alpha[N];
 };
+using Sample16 = SampleT<16>;
+using Sample20 = SampleT<20>;
 
-void load_sample(Sample16& s,
+template <int W, int H>
+void load_sample(SampleT<W * H>& s,
                  const std::vector<std::uint8_t>& padded,
                  std::size_t pad_w,
                  int bx_px,
                  int by_px,
                  color_space::OKLab shift) {
-    for (int dy = 0; dy < kBlockH; ++dy) {
-        for (int dx = 0; dx < kBlockW; ++dx) {
-            int i = dy * kBlockW + dx;
+    constexpr int N = W * H;
+    for (int dy = 0; dy < H; ++dy) {
+        for (int dx = 0; dx < W; ++dx) {
+            int i = dy * W + dx;
             std::size_t p = (std::size_t(by_px + dy) * pad_w + std::size_t(bx_px + dx)) * 4u;
             s.rgba8[i][0] = padded[p + 0];
             s.rgba8[i][1] = padded[p + 1];
@@ -94,7 +102,9 @@ void load_sample(Sample16& s,
             s.alpha[i] = padded[p + 3];
         }
     }
-    for (int g = 0; g < 16; g += 4) {
+    // OKLab batches of 4, then scalar tail for N % 4 != 0.
+    int g = 0;
+    for (; g + 4 <= N; g += 4) {
         std::uint8_t rgb4[4][3];
         for (int j = 0; j < 4; ++j) {
             rgb4[j][0] = s.rgba8[g + j][0];
@@ -108,18 +118,26 @@ void load_sample(Sample16& s,
             s.lab[g + j].b = labs.labs[j].b + shift.b;
         }
     }
+    for (; g < N; ++g) {
+        auto l = color_space::srgb8_to_oklab(s.rgba8[g][0], s.rgba8[g][1], s.rgba8[g][2]);
+        s.lab[g].L = l.L + shift.L;
+        s.lab[g].a = l.a + shift.a;
+        s.lab[g].b = l.b + shift.b;
+    }
 }
 
 // PCA seed in OKLab — pulls extreme sRGB endpoints along the principal
 // axis. Same algorithm as bc7.cpp's pca_seed_rgba but RGB-only.
-void pca_seed_rgb(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
+template <int N>
+void pca_seed_rgb(const SampleT<N>& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
     float mL = 0, mA = 0, mB = 0;
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < N; ++i) {
         mL += s.lab[i].L; mA += s.lab[i].a; mB += s.lab[i].b;
     }
-    mL *= 1.f / 16.f; mA *= 1.f / 16.f; mB *= 1.f / 16.f;
+    constexpr float inv_n = 1.f / float(N);
+    mL *= inv_n; mA *= inv_n; mB *= inv_n;
     float cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < N; ++i) {
         float dx = s.lab[i].L - mL;
         float dy = s.lab[i].a - mA;
         float dz = s.lab[i].b - mB;
@@ -131,7 +149,7 @@ void pca_seed_rgb(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
         // Monochrome block — bounding-box seed.
         for (int ch = 0; ch < 3; ++ch) {
             int lo = 255, hi = 0;
-            for (int i = 0; i < 16; ++i) {
+            for (int i = 0; i < N; ++i) {
                 int v = int(s.rgba8[i][ch]);
                 if (v < lo) lo = v;
                 if (v > hi) hi = v;
@@ -156,7 +174,7 @@ void pca_seed_rgb(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
     int imin = 0, imax = 0;
     float pmin = std::numeric_limits<float>::infinity();
     float pmax = -std::numeric_limits<float>::infinity();
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < N; ++i) {
         float t = (s.lab[i].L - mL) * vx + (s.lab[i].a - mA) * vy + (s.lab[i].b - mB) * vz;
         if (t < pmin) { pmin = t; imin = i; }
         if (t > pmax) { pmax = t; imax = i; }
@@ -165,14 +183,15 @@ void pca_seed_rgb(const Sample16& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
     e1[0] = s.rgba8[imax][0]; e1[1] = s.rgba8[imax][1]; e1[2] = s.rgba8[imax][2];
 }
 
-// Pick the 8-level weight per pixel minimising OKLab² (and return the
-// total err). Mirrors pick_selectors_m6 from bc7.cpp.
-template <block_compress::BlockMetric M>
-float pick_weights(const Sample16& s,
+// Pick the QUANT_8 weight per pixel minimising OKLab² (and return the
+// total err). Mirrors pick_selectors_m6 from bc7.cpp. M is explicit
+// (callers pass `<oklab2>` or `<srgb_mse>`), N is deduced from SampleT.
+template <block_compress::BlockMetric M, int N>
+float pick_weights(const SampleT<N>& s,
                    const std::uint8_t e0[3],
                    const std::uint8_t e1[3],
-                   std::uint8_t out_w[16],
-                   std::uint8_t decoded[16][4]) {
+                   std::uint8_t out_w[N],
+                   std::uint8_t decoded[N][4]) {
     std::uint8_t paint[kWeightLevels][3];
     for (int w_i = 0; w_i < kWeightLevels; ++w_i) {
         int w = kWeightToInterp[w_i];
@@ -202,7 +221,7 @@ float pick_weights(const Sample16& s,
         }
     }
     float tot = 0.f;
-    for (int p = 0; p < 16; ++p) {
+    for (int p = 0; p < N; ++p) {
         int best = 0;
         float best_e = std::numeric_limits<float>::infinity();
         if constexpr (M == block_compress::BlockMetric::srgb_mse) {
@@ -241,13 +260,14 @@ float pick_weights(const Sample16& s,
 
 // LSQ refit endpoints given fixed weights (closed-form 2×2 normal-eq
 // solve in 8-bit sRGB space). Same shape as BC1/BC7 LSQ.
-bool refit_endpoints(const Sample16& s,
-                     const std::uint8_t w[16],
+template <int N>
+bool refit_endpoints(const SampleT<N>& s,
+                     const std::uint8_t w[N],
                      std::uint8_t e0[3],
                      std::uint8_t e1[3]) {
     int n[kWeightLevels] = {};
     int sum[kWeightLevels][3] = {};
-    for (int p = 0; p < 16; ++p) {
+    for (int p = 0; p < N; ++p) {
         int k = w[p];
         ++n[k];
         sum[k][0] += s.rgba8[p][0];
@@ -308,42 +328,33 @@ inline std::uint8_t bitrev8(std::uint8_t v) {
     return v;
 }
 
-// Pack one 4×4 block:
-//   - 11-bit block mode
-//   - 2-bit partition count - 1
-//   - 4-bit CEM (LDR RGB direct = 8)
-//   - 48-bit endpoint BISE (6 × straight-8-bit, QUANT_256)
-//   - 48-bit weight BISE (16 × straight-3-bit, QUANT_8) packed top-down
-//     with per-byte bit-reversal at the file's top (bytes 10..15 carry
-//     the reversed weight stream).
+// Pack a single-partition CEM-8 LDR-RGB block. Templated on:
+//   - N: weight count (= W * H for 1:1 weight grid up to 8x8 = 64)
+//   - BlockMode: 11-bit block_mode that encodes (W, H, weight quant)
+// QUANT_8 weights (3 bits each, BPW = 3) and QUANT_256 endpoints (8 bits
+// straight, 6 values × 8 = 48 bits) are hardcoded — they're the values
+// used for every 1:1 footprint that has bit-budget room.
+template <int N, std::uint32_t BlockMode>
 void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
-                const std::uint8_t weights[16], Block& out) {
+                const std::uint8_t weights[N], Block& out) {
     std::uint8_t pcb[16] = {};
 
-    // Build the weight buffer (bottom-up): 16 × 3-bit values written
-    // LSB-first into a temporary 16-byte buffer, then reversed and
-    // bit-reversed into the top of the physical block.
+    // Weight buffer: N × 3-bit values LSB-first, then per-byte bit-
+    // reversed and placed top-down per ASTC §16.7.
     std::uint8_t weightbuf[16] = {};
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < N; ++i) {
         write_bits(std::uint32_t(weights[i] & 0x7), 3, i * 3, weightbuf);
     }
-    // Per ASTC §16.7: weights are written top-down from byte 15 of the
-    // physical block, with each weight-stream byte bit-reversed.
     for (int i = 0; i < 16; ++i) {
         pcb[i] = bitrev8(weightbuf[15 - i]);
     }
 
-    // Now overwrite the low bits with header + endpoints. The endpoint
-    // section ends at bit 64; bits 65..79 are unused. The weight area
-    // (bits 80..127) was prepopulated above and is not overwritten by
-    // these write_bits calls (max offset = 17 + 47 = 64).
-    write_bits(kBlockModeRgb, 11, 0, pcb);
+    write_bits(BlockMode, 11, 0, pcb);
     write_bits(0, 2, 11, pcb);  // partition_count - 1
     write_bits(8, 4, 13, pcb);  // CEM = LDR RGB direct
 
-    // Endpoint order for CEM 8 (LDR RGB direct): r0, r1, g0, g1, b0, b1.
-    // Each value is 8-bit (QUANT_256 straight encoding; scramble table
-    // is identity for power-of-2 quant levels).
+    // CEM-8 endpoint order: r0, r1, g0, g1, b0, b1. Straight-8-bit
+    // QUANT_256 (identity scramble for power-of-2 quant levels).
     const std::uint8_t ep[6] = {e0[0], e1[0], e0[1], e1[1], e0[2], e1[2]};
     int off = 17;
     for (int i = 0; i < 6; ++i) {
@@ -396,9 +407,13 @@ void pack_block_rgba(const std::uint8_t e0[4], const std::uint8_t e1[4],
 // Per-block encoder (BC7 Mode 6 shape, hardcoded ASTC block mode).
 // ---------------------------------------------------------------------------
 
+// Max supported texel count (8x8 = 64; larger footprints need bilinear
+// weight interp and aren't on the 1:1 path).
+constexpr int kMaxTexels = 64;
+
 struct Candidate {
     Block block{};
-    std::uint8_t decoded[16][4]{};  // RGBA — alpha=255 for CEM 8 outputs
+    std::uint8_t decoded[kMaxTexels][4]{};  // RGBA — alpha=255 for CEM-8 outputs
     float err{};
 };
 
@@ -573,8 +588,12 @@ Candidate encode_block_rgba(const Sample16& s) {
     return out;
 }
 
-template <block_compress::BlockMetric M>
-Candidate encode_block_rgb(const Sample16& s) {
+// Single-partition CEM-8 RGB encoder, templated on (W, H, BlockMode).
+// Uses QUANT_8 weights + QUANT_256 endpoints (the bit budget fits both
+// for any 1:1 weight-grid footprint up to 8x8 = 64 weights).
+template <int W, int H, std::uint32_t BlockMode, block_compress::BlockMetric M>
+Candidate encode_block_rgb(const SampleT<W * H>& s) {
+    constexpr int N = W * H;
     Candidate out{};
 
     // 1. PCA seed.
@@ -582,42 +601,39 @@ Candidate encode_block_rgb(const Sample16& s) {
     pca_seed_rgb(s, e0, e1);
 
     // 2. Initial weight pick.
-    std::uint8_t weights[16];
+    std::uint8_t weights[N];
     float err = pick_weights<M>(s, e0, e1, weights, out.decoded);
 
     // 3. LSQ refit + re-pick loop. 4 iters mirrors BC7 Mode 6's convergence.
     for (int it = 0; it < 4; ++it) {
         std::uint8_t ne0[3], ne1[3];
         if (!refit_endpoints(s, weights, ne0, ne1)) break;
-        std::uint8_t new_w[16];
-        std::uint8_t new_dec[16][4];
+        std::uint8_t new_w[N];
+        std::uint8_t new_dec[N][4];
         float new_err = pick_weights<M>(s, ne0, ne1, new_w, new_dec);
         if (new_err >= err - 1e-7f) break;
         err = new_err;
         std::memcpy(e0, ne0, 3);
         std::memcpy(e1, ne1, 3);
-        std::memcpy(weights, new_w, 16);
+        std::memcpy(weights, new_w, N);
         std::memcpy(out.decoded, new_dec, sizeof(new_dec));
     }
 
     // ASTC RGB-direct decoder applies the "blue-contract" inverse when
     // sum(e0_rgb) > sum(e1_rgb): it swaps the endpoint pair AND
-    // uncontracts the colors. If we don't pre-contract on the encoder
-    // side, that path corrupts the output (inverted blocks). Force the
-    // encoded endpoint pair to satisfy sum(e0) ≤ sum(e1) by swapping
+    // uncontracts the colors. Force sum(e0) <= sum(e1) by swapping
     // endpoints + complementing weights (w → 7 - w), which is a
-    // decode-preserving identity transform (kWeightToInterp[s] +
-    // kWeightToInterp[7-s] == 64).
+    // decode-preserving identity transform under QUANT_8.
     int s0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
     int s1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
     if (s0 > s1) {
         std::swap(e0[0], e1[0]);
         std::swap(e0[1], e1[1]);
         std::swap(e0[2], e1[2]);
-        for (int i = 0; i < 16; ++i) weights[i] = std::uint8_t(7 - int(weights[i]));
+        for (int i = 0; i < N; ++i) weights[i] = std::uint8_t(7 - int(weights[i]));
     }
 
-    pack_block(e0, e1, weights, out.block);
+    pack_block<N, BlockMode>(e0, e1, weights, out.block);
     out.err = err;
     return out;
 }
@@ -1134,36 +1150,53 @@ Candidate encode_block_rgb_2p(const Sample16& s) {
 //
 // 4-partition CEM-8 is INFEASIBLE — ASTC color_integer_count caps at
 // 18 vs 4 × 6 = 24 — would require CEM-6 (base+scale).
+// 4x4 dispatch — alpha + 2-partition specialisations all live in the
+// 4x4 path because their partition tables / endpoint quants are sized
+// to the 16-texel footprint.
 template <block_compress::BlockMetric M>
-Candidate encode_block(const Sample16& s) {
+Candidate encode_block_4x4(const Sample16& s) {
     bool any_alpha = false;
     for (int i = 0; i < 16; ++i) {
         if (s.alpha[i] != 255) { any_alpha = true; break; }
     }
     if (any_alpha) return encode_block_rgba<M>(s);
-    Candidate one = encode_block_rgb<M>(s);
+    Candidate one = encode_block_rgb<4, 4, kBlockModeRgb4x4, M>(s);
     Candidate two = encode_block_rgb_2p<M>(s);
     return (two.err < one.err) ? two : one;
 }
 
+// Generic non-4x4 dispatch — 1-partition CEM-8 RGB only. No alpha,
+// no multi-partition. Alpha gets the same RGB encoding (alpha is
+// dropped from the encode but preserved as 255 in the decoder, which
+// is correct for opaque source images).
+template <int W, int H, std::uint32_t BlockMode, block_compress::BlockMetric M>
+Candidate encode_block_wh(const SampleT<W * H>& s) {
+    return encode_block_rgb<W, H, BlockMode, M>(s);
+}
+
 }  // namespace
 
-EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
-                          int image_w,
-                          int image_h,
-                          const Options& options) {
-    EncodeResult res;
-    // Phase 1: 4×4 only — other footprints come later.
-    if (options.block_w != 4 || options.block_h != 4) return res;
+// Shared block-loop kernel — templated on the per-block encoder. The
+// 4x4 path passes encode_block_4x4 (which itself tries 1p + 2p +
+// RGBA); other footprints pass encode_block_wh<W,H,Mode>.
+namespace {
 
-    res.block_cols = (image_w + kBlockW - 1) / kBlockW;
-    res.block_rows = (image_h + kBlockH - 1) / kBlockH;
+template <int W, int H, typename EncodeBlockFn>
+EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
+                               int image_w,
+                               int image_h,
+                               const Options& options,
+                               EncodeBlockFn encode_block_fn) {
+    constexpr int N = W * H;
+    EncodeResult res;
+
+    res.block_cols = (image_w + W - 1) / W;
+    res.block_rows = (image_h + H - 1) / H;
     const auto bcols = static_cast<std::size_t>(res.block_cols);
     res.blocks.assign(bcols * static_cast<std::size_t>(res.block_rows), Block{});
 
-    // Pad source so load_sample doesn't need per-edge clamps.
-    int pad_w = res.block_cols * kBlockW;
-    int pad_h = res.block_rows * kBlockH;
+    int pad_w = res.block_cols * W;
+    int pad_h = res.block_rows * H;
     const auto pw = static_cast<std::size_t>(pad_w);
     const auto iw = static_cast<std::size_t>(image_w);
     std::vector<std::uint8_t> padded(pw * static_cast<std::size_t>(pad_h) * 4u, 0);
@@ -1190,78 +1223,118 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
 
     std::atomic<float> total_err_atom{0.0f};
 
-    auto run_one = [&](auto metric_tag) {
-        [[maybe_unused]] constexpr block_compress::BlockMetric M = decltype(metric_tag)::value;
-        pipeline::parallel_for(std::size_t(n_strips), [&](std::size_t strip) {
-            const int by_lo = int(strip) * rows_per_strip;
-            const int by_hi = std::min(by_lo + rows_per_strip, res.block_rows);
-            if (by_lo >= by_hi) return;
+    pipeline::parallel_for(std::size_t(n_strips), [&](std::size_t strip) {
+        const int by_lo = int(strip) * rows_per_strip;
+        const int by_hi = std::min(by_lo + rows_per_strip, res.block_rows);
+        if (by_lo >= by_hi) return;
 
-            block_compress::BlockGrid<color_space::OKLab> err_carry(
-                res.block_cols, by_hi - by_lo);
-            for (auto& v : err_carry.as_span()) v = {0.f, 0.f, 0.f};
+        block_compress::BlockGrid<color_space::OKLab> err_carry(
+            res.block_cols, by_hi - by_lo);
+        for (auto& v : err_carry.as_span()) v = {0.f, 0.f, 0.f};
 
-            Sample16 s{};
-            float strip_err = 0.0f;
+        SampleT<N> s{};
+        float strip_err = 0.0f;
 
-            for (int by = by_lo; by < by_hi; ++by) {
-                const int local_by = by - by_lo;
-                bool reverse_row = use_block_ed && options.block_ed.serpentine &&
-                                   (local_by & 1);
-                int bx_start = reverse_row ? res.block_cols - 1 : 0;
-                int bx_end = reverse_row ? -1 : res.block_cols;
-                int bx_step = reverse_row ? -1 : 1;
-                for (int bx = bx_start; bx != bx_end; bx += bx_step) {
-                    color_space::OKLab shift =
-                        use_block_ed ? err_carry[bx, local_by]
-                                     : color_space::OKLab{0.f, 0.f, 0.f};
-                    load_sample(s, padded, pw, bx * kBlockW, by * kBlockH, shift);
+        for (int by = by_lo; by < by_hi; ++by) {
+            const int local_by = by - by_lo;
+            bool reverse_row = use_block_ed && options.block_ed.serpentine &&
+                               (local_by & 1);
+            int bx_start = reverse_row ? res.block_cols - 1 : 0;
+            int bx_end = reverse_row ? -1 : res.block_cols;
+            int bx_step = reverse_row ? -1 : 1;
+            for (int bx = bx_start; bx != bx_end; bx += bx_step) {
+                color_space::OKLab shift =
+                    use_block_ed ? err_carry[bx, local_by]
+                                 : color_space::OKLab{0.f, 0.f, 0.f};
+                load_sample<W, H>(s, padded, pw, bx * W, by * H, shift);
 
-                    Candidate c = encode_block<M>(s);
+                Candidate c = encode_block_fn(s);
 
-                    if (use_block_ed && !ed_kernel.empty()) {
-                        float tL = 0.f, ta = 0.f, tb = 0.f;
-                        float dL = 0.f, da = 0.f, db = 0.f;
-                        for (int i = 0; i < 16; ++i) {
-                            tL += s.lab[i].L; ta += s.lab[i].a; tb += s.lab[i].b;
-                            auto dec_lab = color_space::srgb8_to_oklab(
-                                c.decoded[i][0], c.decoded[i][1], c.decoded[i][2]);
-                            dL += dec_lab.L; da += dec_lab.a; db += dec_lab.b;
-                        }
-                        color_space::OKLab residual{(tL - dL) * (1.f / 16.f),
-                                                    (ta - da) * (1.f / 16.f),
-                                                    (tb - db) * (1.f / 16.f)};
-                        block_compress::propagate_block_residual(
-                            err_carry, {bx, local_by}, residual, ed_kernel,
-                            options.block_ed, reverse_row);
+                if (use_block_ed && !ed_kernel.empty()) {
+                    float tL = 0.f, ta = 0.f, tb = 0.f;
+                    float dL = 0.f, da = 0.f, db = 0.f;
+                    for (int i = 0; i < N; ++i) {
+                        tL += s.lab[i].L; ta += s.lab[i].a; tb += s.lab[i].b;
+                        auto dec_lab = color_space::srgb8_to_oklab(
+                            c.decoded[i][0], c.decoded[i][1], c.decoded[i][2]);
+                        dL += dec_lab.L; da += dec_lab.a; db += dec_lab.b;
                     }
-
-                    std::size_t bidx = static_cast<std::size_t>(by) * bcols +
-                                       static_cast<std::size_t>(bx);
-                    res.blocks[bidx] = c.block;
-                    strip_err += c.err;
+                    const float inv_n = 1.f / float(N);
+                    color_space::OKLab residual{(tL - dL) * inv_n,
+                                                (ta - da) * inv_n,
+                                                (tb - db) * inv_n};
+                    block_compress::propagate_block_residual(
+                        err_carry, {bx, local_by}, residual, ed_kernel,
+                        options.block_ed, reverse_row);
                 }
+
+                std::size_t bidx = static_cast<std::size_t>(by) * bcols +
+                                   static_cast<std::size_t>(bx);
+                res.blocks[bidx] = c.block;
+                strip_err += c.err;
             }
+        }
 
-            // Atomic float-add via CAS.
-            float prev = total_err_atom.load(std::memory_order_relaxed);
-            float next;
-            do {
-                next = prev + strip_err;
-            } while (!total_err_atom.compare_exchange_weak(prev, next,
-                                                            std::memory_order_relaxed));
-        });
-    };
-
-    if (options.metric == block_compress::BlockMetric::srgb_mse) {
-        run_one(std::integral_constant<block_compress::BlockMetric,
-                                       block_compress::BlockMetric::srgb_mse>{});
-    } else {
-        run_one(std::integral_constant<block_compress::BlockMetric,
-                                       block_compress::BlockMetric::oklab2>{});
-    }
+        float prev = total_err_atom.load(std::memory_order_relaxed);
+        float next;
+        do {
+            next = prev + strip_err;
+        } while (!total_err_atom.compare_exchange_weak(prev, next,
+                                                        std::memory_order_relaxed));
+    });
     res.total_oklab2_error = total_err_atom.load();
     return res;
+}
+
+}  // namespace
+
+EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
+                          int image_w,
+                          int image_h,
+                          const Options& options) {
+    const int W = options.block_w;
+    const int H = options.block_h;
+
+    auto dispatch_metric = [&](auto encode_fn_4x4, auto encode_fn_wh) -> EncodeResult {
+        if (options.metric == block_compress::BlockMetric::srgb_mse) {
+            constexpr auto M = block_compress::BlockMetric::srgb_mse;
+            if (W == 4 && H == 4)
+                return encode_image_impl<4, 4>(rgba_srgb8, image_w, image_h, options,
+                                               encode_fn_4x4(std::integral_constant<block_compress::BlockMetric, M>{}));
+            if (W == 5 && H == 4)
+                return encode_image_impl<5, 4>(rgba_srgb8, image_w, image_h, options,
+                                               encode_fn_wh(std::integral_constant<block_compress::BlockMetric, M>{},
+                                                            std::integral_constant<int, 5>{},
+                                                            std::integral_constant<int, 4>{},
+                                                            std::integral_constant<std::uint32_t, kBlockModeRgb5x4>{}));
+        } else {
+            constexpr auto M = block_compress::BlockMetric::oklab2;
+            if (W == 4 && H == 4)
+                return encode_image_impl<4, 4>(rgba_srgb8, image_w, image_h, options,
+                                               encode_fn_4x4(std::integral_constant<block_compress::BlockMetric, M>{}));
+            if (W == 5 && H == 4)
+                return encode_image_impl<5, 4>(rgba_srgb8, image_w, image_h, options,
+                                               encode_fn_wh(std::integral_constant<block_compress::BlockMetric, M>{},
+                                                            std::integral_constant<int, 5>{},
+                                                            std::integral_constant<int, 4>{},
+                                                            std::integral_constant<std::uint32_t, kBlockModeRgb5x4>{}));
+        }
+        return EncodeResult{};  // unsupported footprint
+    };
+
+    auto fn_4x4 = [](auto m_tag) {
+        constexpr auto M = decltype(m_tag)::value;
+        return [](const Sample16& s) { return encode_block_4x4<M>(s); };
+    };
+    auto fn_wh = [](auto m_tag, auto w_tag, auto h_tag, auto mode_tag) {
+        constexpr auto M  = decltype(m_tag)::value;
+        constexpr int W2  = decltype(w_tag)::value;
+        constexpr int H2  = decltype(h_tag)::value;
+        constexpr auto BM = decltype(mode_tag)::value;
+        return [](const SampleT<W2 * H2>& s) { return encode_block_wh<W2, H2, BM, M>(s); };
+    };
+
+    return dispatch_metric(fn_4x4, fn_wh);
 }
 
 std::vector<std::uint8_t> decode_image(std::span<const Block> blocks,

@@ -155,9 +155,12 @@ enum class Mode : unsigned char {
     // Same per-block search + block-grid ED pipeline as etc2.
     bc1,
 
-    // ASTC RGBA block-compressed texture. Phase 1: 4×4 LDR RGB direct
-    // single-partition single-plane. KTX2 VK_FORMAT_ASTC_4x4_*_BLOCK.
+    // ASTC RGBA block-compressed texture. Native OKLab² encoder.
+    // 4x4: full path (1p RGB + 2p RGB + RGBA single-partition CEM-12).
+    // 5x4: 1-partition CEM-8 RGB only (alpha dropped — opaque source assumed).
+    // KTX2 VK_FORMAT_ASTC_NxM_*_BLOCK.
     astc_4x4,
+    astc_5x4,
 
     // BC2 (DXT3) RGBA block-compressed texture. 4×4 blocks, 8 bpp.
     // BC1 RGB color block + 16 × 4-bit explicit alpha (no interp).
@@ -383,6 +386,7 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     case Mode::bc1:
         return {0, 0, 4, 0, false, false, false, false, 1, 1, 1.0f};
     case Mode::astc_4x4:
+    case Mode::astc_5x4:
     case Mode::bc2:
     case Mode::bc3:
     case Mode::bc7:
@@ -468,7 +472,9 @@ constexpr bool is_etc2(Mode mode) noexcept { return mode == Mode::etc2; }
 constexpr bool is_bc1(Mode mode) noexcept { return mode == Mode::bc1; }
 constexpr bool is_bc2(Mode mode) noexcept { return mode == Mode::bc2; }
 constexpr bool is_bc3(Mode mode) noexcept { return mode == Mode::bc3; }
-constexpr bool is_astc(Mode mode) noexcept { return mode == Mode::astc_4x4; }
+constexpr bool is_astc(Mode mode) noexcept {
+    return mode == Mode::astc_4x4 || mode == Mode::astc_5x4;
+}
 
 // BC7 RGBA block compression — same bypass treatment as etc2.
 constexpr bool is_bc7(Mode mode) noexcept { return mode == Mode::bc7; }

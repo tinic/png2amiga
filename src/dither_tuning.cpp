@@ -62,6 +62,9 @@ Defaults defaults_for(const Context& ctx) {
     if (ctx.mode == amiga::Mode::bc2) return Defaults{0.40f, 0.35f};
     if (ctx.mode == amiga::Mode::bc3) return Defaults{0.50f, 0.35f};
     if (ctx.mode == amiga::Mode::bc7) return Defaults{0.75f, 0.35f};
+    // ASTC: matches BC7 (similar OKLab² + LSQ shape; sweep TBD).
+    if (ctx.mode == amiga::Mode::astc_4x4) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_5x4) return Defaults{0.75f, 0.35f};
 
     // ---- Palette-aware ordered methods: per-(method, mode, depth)
     // optimal strength against SSIMULACRA2.
