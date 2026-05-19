@@ -8,14 +8,23 @@
 //   - 2-partition RGB:           block_mode 0x42, CEM 8,  QUANT_4 weights,
 //                                QUANT_40  endpoints (BISE quint-pack),
 //                                partition_index from spec hash.
-//                                Selected when 2-partition err < 1-partition.
+//   - 3-partition RGB:           block_mode 0x42, CEM 8,  QUANT_4 weights,
+//                                QUANT_12  endpoints (BISE trit-pack).
+//                                Spec caps color_integer_count at 18, which
+//                                pins 3-partition CEM-8 to QUANT_12 (12
+//                                levels per channel — coarse).
+//   4-partition CEM-8 is INFEASIBLE: 4×6 = 24 endpoint values exceeds
+//   ASTC's 18-value cap. Would require CEM 6 (LDR RGB base+scale), not
+//   in this commit.
 //
-// 2-partition fits 12 endpoint values into 67 color-bits via QUANT_40
-// (3 chars per BISE quint-block: 3 data bits + 1 packed quint = 16
-// bits; 12 chars = 4 full blocks = 64 bits). The ASTC decoder picks
-// the largest quant level that the available color-bits allow, which
-// at 67 bits is QUANT_40 — writing any other scheme would be
-// reinterpreted as QUANT_40 BISE and decode to garbage.
+// Selection: encoder tries 1p, 2p, 3p for every RGB block and picks
+// whichever has lowest OKLab² error.
+//
+// The ASTC decoder always picks the largest quant level that fits the
+// available color-bits, so the encoder must match that choice exactly
+// or the bits decode as garbage:
+//   - 2p (12 values, 67 color-bits): QUANT_40 (3 bits + quint, 64 bits)
+//   - 3p (18 values, 67 color-bits): QUANT_12 (2 bits + trit, 65 bits)
 
 #include "astc.hpp"
 
@@ -680,6 +689,22 @@ std::uint8_t spec_select_partition(int seed, int x, int y, int z,
     return 3;
 }
 
+// QUANT_12 unquant table (decoded uint8 levels for 12 stored values).
+// Scrambled ordering.
+constexpr std::uint8_t kQuant12Unpack[12] = {
+      0, 255,  69, 186,  23, 232,  92, 163,  46, 209, 116, 139,
+};
+
+inline std::uint8_t quant12_pack(std::uint8_t v) {
+    int best = 0;
+    int best_d = std::abs(int(v) - int(kQuant12Unpack[0]));
+    for (int k = 1; k < 12; ++k) {
+        int d = std::abs(int(v) - int(kQuant12Unpack[k]));
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    return std::uint8_t(best);
+}
+
 // QUANT_40 unquant table (decoded uint8 levels for 40 stored values).
 // Scrambled ordering — encoder must search for nearest.
 constexpr std::uint8_t kQuant40Unpack[40] = {
@@ -698,6 +723,95 @@ inline std::uint8_t quant40_pack(std::uint8_t v) {
         if (d < best_d) { best_d = d; best = k; }
     }
     return std::uint8_t(best);
+}
+
+// integer_of_trits[i4][i3][i2][i1][i0] — ASTC spec §16.6 trit-pack
+// lookup. 243 entries, ported verbatim from astcenc.
+constexpr std::uint8_t kTritOf[3][3][3][3][3] = {
+    {
+        {{{0, 1, 2},     {4, 5, 6},     {8, 9, 10}},
+         {{16, 17, 18},  {20, 21, 22},  {24, 25, 26}},
+         {{3, 7, 15},    {19, 23, 27},  {12, 13, 14}}},
+        {{{32, 33, 34},  {36, 37, 38},  {40, 41, 42}},
+         {{48, 49, 50},  {52, 53, 54},  {56, 57, 58}},
+         {{35, 39, 47},  {51, 55, 59},  {44, 45, 46}}},
+        {{{64, 65, 66},  {68, 69, 70},  {72, 73, 74}},
+         {{80, 81, 82},  {84, 85, 86},  {88, 89, 90}},
+         {{67, 71, 79},  {83, 87, 91},  {76, 77, 78}}},
+    },
+    {
+        {{{128, 129, 130}, {132, 133, 134}, {136, 137, 138}},
+         {{144, 145, 146}, {148, 149, 150}, {152, 153, 154}},
+         {{131, 135, 143}, {147, 151, 155}, {140, 141, 142}}},
+        {{{160, 161, 162}, {164, 165, 166}, {168, 169, 170}},
+         {{176, 177, 178}, {180, 181, 182}, {184, 185, 186}},
+         {{163, 167, 175}, {179, 183, 187}, {172, 173, 174}}},
+        {{{192, 193, 194}, {196, 197, 198}, {200, 201, 202}},
+         {{208, 209, 210}, {212, 213, 214}, {216, 217, 218}},
+         {{195, 199, 207}, {211, 215, 219}, {204, 205, 206}}},
+    },
+    {
+        {{{96, 97, 98},     {100, 101, 102}, {104, 105, 106}},
+         {{112, 113, 114},  {116, 117, 118}, {120, 121, 122}},
+         {{99, 103, 111},   {115, 119, 123}, {108, 109, 110}}},
+        {{{224, 225, 226},  {228, 229, 230}, {232, 233, 234}},
+         {{240, 241, 242},  {244, 245, 246}, {248, 249, 250}},
+         {{227, 231, 239},  {243, 247, 251}, {236, 237, 238}}},
+        {{{28, 29, 30},     {60, 61, 62},    {92, 93, 94}},
+         {{156, 157, 158},  {188, 189, 190}, {220, 221, 222}},
+         {{31, 63, 127},    {159, 191, 255}, {252, 253, 254}}},
+    },
+};
+
+// BISE encode N values × QUANT_12 (2 bits + 1 trit) into output_data.
+// 5 chars per trit-block; trit-pack via kTritOf. Partial-block tail
+// mirrors astcenc's truncated tbits[]/tshift[] for N % 5 != 0.
+void encode_ise_q12(const std::uint8_t* input_data,
+                    int character_count,
+                    std::uint8_t* output_data,
+                    int bit_offset) {
+    constexpr int bits = 2;
+    constexpr int mask = (1 << bits) - 1;
+    int i = 0;
+    int full_blocks = character_count / 5;
+
+    for (int j = 0; j < full_blocks; ++j) {
+        int i0 = input_data[i + 0] >> bits;
+        int i1 = input_data[i + 1] >> bits;
+        int i2 = input_data[i + 2] >> bits;
+        int i3 = input_data[i + 3] >> bits;
+        int i4 = input_data[i + 4] >> bits;
+        int T = kTritOf[i4][i3][i2][i1][i0];
+
+        std::uint32_t pack;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 0) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 2) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 4) & 0x1) << bits));
+        write_bits(pack, bits + 1, bit_offset, output_data); bit_offset += bits + 1; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 5) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 7) & 0x1) << bits));
+        write_bits(pack, bits + 1, bit_offset, output_data); bit_offset += bits + 1; ++i;
+    }
+    if (i != character_count) {
+        int i4 = 0;
+        int i3 = (i + 3 >= character_count) ? 0 : (input_data[i + 3] >> bits);
+        int i2 = (i + 2 >= character_count) ? 0 : (input_data[i + 2] >> bits);
+        int i1 = (i + 1 >= character_count) ? 0 : (input_data[i + 1] >> bits);
+        int i0 = input_data[i + 0] >> bits;
+        int T = kTritOf[i4][i3][i2][i1][i0];
+        static const int tbits[4]  = {2, 2, 1, 2};
+        static const int tshift[4] = {0, 2, 4, 5};
+        for (int j = 0; i < character_count; ++i, ++j) {
+            std::uint32_t pack = std::uint32_t(
+                (input_data[i] & mask) |
+                (((T >> tshift[j]) & ((1 << tbits[j]) - 1)) << bits));
+            write_bits(pack, bits + tbits[j], bit_offset, output_data);
+            bit_offset += bits + tbits[j];
+        }
+    }
 }
 
 // integer_of_quints[i2][i1][i0] — ASTC spec §16.6 quint-pack lookup.
@@ -774,19 +888,21 @@ void encode_ise_q40(const std::uint8_t* input_data,
     }
 }
 
-// Per-block partition assignment cache. partition_assign[pidx][texel]
-// stores 0/1 for 2-partition 4×4 blocks (small_block=true, z=0).
-struct PartitionTable2P {
+// Per-block partition assignment cache. assign[pidx][texel] stores
+// 0..(N-1) for N-partition 4×4 blocks (small_block=true, z=0).
+template <int N>
+struct PartitionTableNP {
     std::uint8_t assign[1024][16];
 };
-const PartitionTable2P& partition_table_2p_4x4() {
-    static const PartitionTable2P table = []{
-        PartitionTable2P t{};
+template <int N>
+const PartitionTableNP<N>& partition_table_np_4x4() {
+    static const PartitionTableNP<N> table = []{
+        PartitionTableNP<N> t{};
         for (int pi = 0; pi < 1024; ++pi) {
             for (int dy = 0; dy < kBlockH; ++dy) {
                 for (int dx = 0; dx < kBlockW; ++dx) {
                     t.assign[pi][dy * kBlockW + dx] =
-                        spec_select_partition(pi, dx, dy, 0, 2, /*small=*/true);
+                        spec_select_partition(pi, dx, dy, 0, N, /*small=*/true);
                 }
             }
         }
@@ -861,18 +977,17 @@ void pca_seed_rgb_subset(const Sample16& s, const std::uint8_t mask[16],
     e1[0] = s.rgba8[imax][0]; e1[1] = s.rgba8[imax][1]; e1[2] = s.rgba8[imax][2];
 }
 
-// Joint weight pick across both partitions: each pixel picks the
-// QUANT_4 weight (0..3) minimising err against its own partition's
-// paint ramp. Returns total error.
-template <block_compress::BlockMetric M>
-float pick_weights_2p_q4(const Sample16& s,
+// Joint weight pick across N partitions: each pixel picks the QUANT_4
+// weight (0..3) minimising err against its own partition's paint ramp.
+template <int N, block_compress::BlockMetric M>
+float pick_weights_np_q4(const Sample16& s,
                          const std::uint8_t assign[16],
-                         const std::uint8_t e0[2][3],
-                         const std::uint8_t e1[2][3],
+                         const std::uint8_t e0[N][3],
+                         const std::uint8_t e1[N][3],
                          std::uint8_t out_w[16],
                          std::uint8_t decoded[16][4]) {
-    std::uint8_t paint[2][kWeightLevels4][3];
-    for (int k = 0; k < 2; ++k) {
+    std::uint8_t paint[N][kWeightLevels4][3];
+    for (int k = 0; k < N; ++k) {
         for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
             int w = kWeightToInterp4[w_i];
             int inv = 64 - w;
@@ -882,11 +997,11 @@ float pick_weights_2p_q4(const Sample16& s,
             }
         }
     }
-    alignas(16) float paint_L[2][kWeightLevels4],
-                      paint_A[2][kWeightLevels4],
-                      paint_B[2][kWeightLevels4];
+    alignas(16) float paint_L[N][kWeightLevels4],
+                      paint_A[N][kWeightLevels4],
+                      paint_B[N][kWeightLevels4];
     if constexpr (M == block_compress::BlockMetric::oklab2) {
-        for (int k = 0; k < 2; ++k) {
+        for (int k = 0; k < N; ++k) {
             std::uint8_t rgb4[4][3];
             for (int j = 0; j < 4; ++j) {
                 rgb4[j][0] = paint[k][j][0];
@@ -940,13 +1055,14 @@ float pick_weights_2p_q4(const Sample16& s,
     return tot;
 }
 
-// LSQ refit endpoints per partition (single channel solved 3×; one 2x2
-// system per partition). Returns false if either partition is singular.
-bool refit_endpoints_2p(const Sample16& s, const std::uint8_t assign[16],
+// LSQ refit endpoints per partition (one 2×2 system per partition).
+// Returns false if ANY partition is singular (caller falls back).
+template <int N>
+bool refit_endpoints_np(const Sample16& s, const std::uint8_t assign[16],
                         const std::uint8_t w[16],
-                        std::uint8_t e0[2][3], std::uint8_t e1[2][3]) {
-    int n[2][kWeightLevels4] = {};
-    int sum[2][kWeightLevels4][3] = {};
+                        std::uint8_t e0[N][3], std::uint8_t e1[N][3]) {
+    int n[N][kWeightLevels4] = {};
+    int sum[N][kWeightLevels4][3] = {};
     for (int p = 0; p < 16; ++p) {
         int k = assign[p], q = w[p];
         ++n[k][q];
@@ -954,7 +1070,7 @@ bool refit_endpoints_2p(const Sample16& s, const std::uint8_t assign[16],
         sum[k][q][1] += s.rgba8[p][1];
         sum[k][q][2] += s.rgba8[p][2];
     }
-    for (int k = 0; k < 2; ++k) {
+    for (int k = 0; k < N; ++k) {
         float A00 = 0, A11 = 0, A01 = 0;
         float B[3] = {0, 0, 0}, Bb[3] = {0, 0, 0};
         for (int q = 0; q < kWeightLevels4; ++q) {
@@ -983,18 +1099,16 @@ bool refit_endpoints_2p(const Sample16& s, const std::uint8_t assign[16],
     return true;
 }
 
-// Pack a 2-partition CEM-8 4×4 block:
-//   - bit 0..10:  block mode = 0x42  (QUANT_4 weights, 4×4 grid)
-//   - bit 11..12: partition_count - 1 = 1
-//   - bit 13..22: partition_index (10 bits)
-//   - bit 23..28: matched-CEM = (CEM_8 << 2) = 32  (6 bits)
-//   - bit 29..84: endpoint BISE, 12 × QUANT_24 (3 bits + 1 trit each),
-//                 packed in 2 full blocks (5 chars × 23 bits) + 1 partial
-//                 (2 chars × 5 bits) = 56 bits
-//   - bit 96..127: weight BISE, 16 × 2-bit QUANT_4, top-down bit-reversed
-void pack_block_2p(int partition_index,
-                   const std::uint8_t e0[2][3], const std::uint8_t e1[2][3],
+// Pack an N-partition CEM-8 4×4 block (N=2 or 3). block_mode 0x42
+// (QUANT_4 weights, 4×4 grid). Endpoint quant is whichever level the
+// ASTC decoder picks given color_bits=67:
+//   N=2 → QUANT_40 (3 data + 1 quint, 12 vals fit in 64 bits)
+//   N=3 → QUANT_12 (2 data + 1 trit, 18 vals fit in 65 bits)
+template <int N>
+void pack_block_np(int partition_index,
+                   const std::uint8_t e0[N][3], const std::uint8_t e1[N][3],
                    const std::uint8_t weights[16], Block& out) {
+    static_assert(N == 2 || N == 3, "Only 2/3-partition CEM-8 supported");
     std::uint8_t pcb[16] = {};
 
     std::uint8_t weightbuf[16] = {};
@@ -1004,44 +1118,46 @@ void pack_block_2p(int partition_index,
     for (int i = 0; i < 16; ++i) pcb[i] = bitrev8(weightbuf[15 - i]);
 
     write_bits(kBlockModeRgba, 11, 0, pcb);
-    write_bits(1, 2, 11, pcb);  // partition_count - 1
+    write_bits(N - 1, 2, 11, pcb);
 
-    // partition_index (10 bits, low 6 at bit 13, high 4 at bit 19).
     write_bits(std::uint32_t(partition_index) & 0x3Fu, 6, 13, pcb);
     write_bits(std::uint32_t(partition_index) >> 6, 4, 19, pcb);
 
-    // matched-CEM 6 bits at bit 23: (CEM_8 << 2) = 0b100000 = 32.
-    write_bits(32, 6, 23, pcb);
+    write_bits(32, 6, 23, pcb);  // matched-CEM = CEM_8 << 2
 
-    // 12 endpoint values × QUANT_40 BISE at bit 29.
-    // Order per partition (CEM_8): r0, r1, g0, g1, b0, b1.
-    std::uint8_t ep_packed[12];
+    constexpr int kValues = 6 * N;
+    std::uint8_t ep_packed[kValues];
     int idx = 0;
-    for (int k = 0; k < 2; ++k) {
-        ep_packed[idx++] = quant40_pack(e0[k][0]);
-        ep_packed[idx++] = quant40_pack(e1[k][0]);
-        ep_packed[idx++] = quant40_pack(e0[k][1]);
-        ep_packed[idx++] = quant40_pack(e1[k][1]);
-        ep_packed[idx++] = quant40_pack(e0[k][2]);
-        ep_packed[idx++] = quant40_pack(e1[k][2]);
+    for (int k = 0; k < N; ++k) {
+        for (int ch = 0; ch < 3; ++ch) {
+            if constexpr (N == 2) {
+                ep_packed[idx++] = quant40_pack(e0[k][ch]);
+                ep_packed[idx++] = quant40_pack(e1[k][ch]);
+            } else {
+                ep_packed[idx++] = quant12_pack(e0[k][ch]);
+                ep_packed[idx++] = quant12_pack(e1[k][ch]);
+            }
+        }
     }
-    encode_ise_q40(ep_packed, 12, pcb, 29);
-    (void)idx;
+    if constexpr (N == 2) encode_ise_q40(ep_packed, kValues, pcb, 29);
+    else                  encode_ise_q12(ep_packed, kValues, pcb, 29);
 
     for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
 }
 
-// Full 2-partition encoder. Brute-forces all 1024 partition indices
-// using a cheap PCA+pick scoring inner loop, then performs a full LSQ
-// refit on the winning index.
-template <block_compress::BlockMetric M>
-Candidate encode_block_rgb_2p(const Sample16& s) {
+// Full N-partition encoder. Brute-forces all 1024 partition indices
+// using a cheap PCA+pick scoring inner loop, then performs full LSQ
+// convergence on the winning index. Per-partition blue-contract sum-
+// normalisation matches the ASTC decoder's swap rule.
+template <int N, block_compress::BlockMetric M>
+Candidate encode_block_rgb_np(const Sample16& s) {
+    static_assert(N == 2 || N == 3, "Only 2/3-partition CEM-8 supported");
     Candidate best{};
     best.err = std::numeric_limits<float>::infinity();
-    const auto& table = partition_table_2p_4x4();
+    const auto& table = partition_table_np_4x4<N>();
 
-    std::uint8_t mask_a[16], mask_b[16];
-    std::uint8_t e0[2][3], e1[2][3];
+    std::uint8_t mask[N][16];
+    std::uint8_t e0[N][3], e1[N][3];
     std::uint8_t weights[16];
     std::uint8_t decoded[16][4];
 
@@ -1050,41 +1166,39 @@ Candidate encode_block_rgb_2p(const Sample16& s) {
 
     for (int pi = 0; pi < 1024; ++pi) {
         const std::uint8_t* assign = table.assign[pi];
-        int n0 = 0;
+        int counts[N] = {};
         for (int i = 0; i < 16; ++i) {
-            mask_a[i] = (assign[i] == 0) ? 1 : 0;
-            mask_b[i] = (assign[i] == 1) ? 1 : 0;
-            n0 += mask_a[i];
+            for (int k = 0; k < N; ++k) mask[k][i] = (assign[i] == k) ? 1 : 0;
+            ++counts[assign[i]];
         }
-        // Degenerate partition (one cluster empty in this 4×4 block) — skip.
-        if (n0 == 0 || n0 == 16) continue;
+        // Degenerate partition (any cluster empty in this 4×4) — skip.
+        bool degenerate = false;
+        for (int k = 0; k < N; ++k) if (counts[k] == 0) { degenerate = true; break; }
+        if (degenerate) continue;
 
-        pca_seed_rgb_subset(s, mask_a, e0[0], e1[0]);
-        pca_seed_rgb_subset(s, mask_b, e0[1], e1[1]);
+        for (int k = 0; k < N; ++k) pca_seed_rgb_subset(s, mask[k], e0[k], e1[k]);
 
         std::uint8_t tw[16];
         std::uint8_t td[16][4];
-        float err = pick_weights_2p_q4<M>(s, assign, e0, e1, tw, td);
+        float err = pick_weights_np_q4<N, M>(s, assign, e0, e1, tw, td);
         if (err < best_pi_err) { best_pi_err = err; best_pi = pi; }
     }
 
     // Full convergence for the winning partition index.
     const std::uint8_t* assign = table.assign[best_pi];
     for (int i = 0; i < 16; ++i) {
-        mask_a[i] = (assign[i] == 0) ? 1 : 0;
-        mask_b[i] = (assign[i] == 1) ? 1 : 0;
+        for (int k = 0; k < N; ++k) mask[k][i] = (assign[i] == k) ? 1 : 0;
     }
-    pca_seed_rgb_subset(s, mask_a, e0[0], e1[0]);
-    pca_seed_rgb_subset(s, mask_b, e0[1], e1[1]);
-    float err = pick_weights_2p_q4<M>(s, assign, e0, e1, weights, decoded);
+    for (int k = 0; k < N; ++k) pca_seed_rgb_subset(s, mask[k], e0[k], e1[k]);
+    float err = pick_weights_np_q4<N, M>(s, assign, e0, e1, weights, decoded);
     for (int it = 0; it < 4; ++it) {
-        std::uint8_t ne0[2][3], ne1[2][3];
+        std::uint8_t ne0[N][3], ne1[N][3];
         std::memcpy(ne0, e0, sizeof(ne0));
         std::memcpy(ne1, e1, sizeof(ne1));
-        if (!refit_endpoints_2p(s, assign, weights, ne0, ne1)) break;
+        if (!refit_endpoints_np<N>(s, assign, weights, ne0, ne1)) break;
         std::uint8_t new_w[16];
         std::uint8_t new_dec[16][4];
-        float new_err = pick_weights_2p_q4<M>(s, assign, ne0, ne1, new_w, new_dec);
+        float new_err = pick_weights_np_q4<N, M>(s, assign, ne0, ne1, new_w, new_dec);
         if (new_err >= err - 1e-7f) break;
         err = new_err;
         std::memcpy(e0, ne0, sizeof(e0));
@@ -1093,32 +1207,26 @@ Candidate encode_block_rgb_2p(const Sample16& s) {
         std::memcpy(decoded, new_dec, sizeof(new_dec));
     }
 
-    // Quantize endpoints to QUANT_40 (decoder's actual paint endpoints).
-    std::uint8_t e0d[2][3], e1d[2][3];
-    for (int k = 0; k < 2; ++k) {
+    // Quantize endpoints to the per-N quant level the decoder will pick.
+    std::uint8_t e0d[N][3], e1d[N][3];
+    for (int k = 0; k < N; ++k) {
         for (int ch = 0; ch < 3; ++ch) {
-            e0d[k][ch] = kQuant40Unpack[quant40_pack(e0[k][ch])];
-            e1d[k][ch] = kQuant40Unpack[quant40_pack(e1[k][ch])];
+            if constexpr (N == 2) {
+                e0d[k][ch] = kQuant40Unpack[quant40_pack(e0[k][ch])];
+                e1d[k][ch] = kQuant40Unpack[quant40_pack(e1[k][ch])];
+            } else {
+                e0d[k][ch] = kQuant12Unpack[quant12_pack(e0[k][ch])];
+                e1d[k][ch] = kQuant12Unpack[quant12_pack(e1[k][ch])];
+            }
         }
     }
 
-    // Per-partition blue-contract sum-normalisation on the QUANTIZED
-    // endpoints — the decoder's swap rule fires on the DECODED sums,
-    // not the encoder's pre-quant LSQ output. Swap + complement-weights
-    // here so the decoder transform is a no-op.
-    for (int k = 0; k < 2; ++k) {
+    // Per-partition blue-contract sum-normalisation on QUANTIZED endpoints.
+    for (int k = 0; k < N; ++k) {
         int sa = int(e0d[k][0]) + int(e0d[k][1]) + int(e0d[k][2]);
         int sb = int(e1d[k][0]) + int(e1d[k][1]) + int(e1d[k][2]);
         if (sa > sb) {
-            std::swap(e0d[k][0], e1d[k][0]);
-            std::swap(e0d[k][1], e1d[k][1]);
-            std::swap(e0d[k][2], e1d[k][2]);
-            // Also swap the matching pre-quant values used by pack — pack
-            // calls quant24_pack on (e0[k], e1[k]) and the bit-stream
-            // ordering must match the post-swap endpoints.
-            std::swap(e0[k][0], e1[k][0]);
-            std::swap(e0[k][1], e1[k][1]);
-            std::swap(e0[k][2], e1[k][2]);
+            for (int ch = 0; ch < 3; ++ch) std::swap(e0d[k][ch], e1d[k][ch]);
             for (int i = 0; i < 16; ++i) {
                 if (assign[i] == k)
                     weights[i] = std::uint8_t(3 - int(weights[i]));
@@ -1126,23 +1234,25 @@ Candidate encode_block_rgb_2p(const Sample16& s) {
         }
     }
 
-    // Re-pick weights against the decoded paint ramp + the (possibly
-    // swapped) endpoints so reported err matches the decoder's output.
+    // Re-pick weights against the decoded paint ramp + swapped endpoints
+    // so reported err matches the decoder's output.
     std::uint8_t final_w[16];
     std::uint8_t final_dec[16][4];
-    float final_err = pick_weights_2p_q4<M>(s, assign, e0d, e1d, final_w, final_dec);
+    float final_err = pick_weights_np_q4<N, M>(s, assign, e0d, e1d, final_w, final_dec);
 
-    pack_block_2p(best_pi, e0d, e1d, final_w, best.block);
+    pack_block_np<N>(best_pi, e0d, e1d, final_w, best.block);
     std::memcpy(best.decoded, final_dec, sizeof(final_dec));
     best.err = final_err;
     return best;
 }
 
-// Per-block dispatch: blocks whose alpha is constant 255 use the
-// QUANT_8-weight RGB-direct path (CEM 8, 3-bit weights for sharper
-// gradients). Blocks with any non-trivial alpha use the QUANT_4-weight
-// RGBA-direct path (CEM 12). For RGB blocks we also try a 2-partition
-// fit and keep whichever has lower error.
+// Per-block dispatch: alpha blocks → CEM-12 (1-partition); RGB blocks
+// try 1p (CEM-8 QUANT_8 weights + QUANT_256 endpoints), 2p (CEM-8
+// QUANT_4 weights + QUANT_40 endpoints), 3p (CEM-8 QUANT_4 weights +
+// QUANT_12 endpoints), and pick whichever has lowest OKLab² error.
+//
+// 4-partition CEM-8 is infeasible — ASTC's color_integer_count cap of
+// 18 vs 4 partitions × 6 vals = 24 — would require CEM-6 (base+scale).
 template <block_compress::BlockMetric M>
 Candidate encode_block(const Sample16& s) {
     bool any_alpha = false;
@@ -1150,9 +1260,13 @@ Candidate encode_block(const Sample16& s) {
         if (s.alpha[i] != 255) { any_alpha = true; break; }
     }
     if (any_alpha) return encode_block_rgba<M>(s);
-    Candidate one = encode_block_rgb<M>(s);
-    Candidate two = encode_block_rgb_2p<M>(s);
-    return (two.err < one.err) ? two : one;
+    Candidate one   = encode_block_rgb<M>(s);
+    Candidate two   = encode_block_rgb_np<2, M>(s);
+    Candidate three = encode_block_rgb_np<3, M>(s);
+    Candidate best = one;
+    if (two.err   < best.err) best = two;
+    if (three.err < best.err) best = three;
+    return best;
 }
 
 }  // namespace
