@@ -383,6 +383,23 @@ Candidate encode_block(const Sample16& s) {
         std::memcpy(out.decoded, new_dec, sizeof(new_dec));
     }
 
+    // ASTC RGB-direct decoder applies the "blue-contract" inverse when
+    // sum(e0_rgb) > sum(e1_rgb): it swaps the endpoint pair AND
+    // uncontracts the colors. If we don't pre-contract on the encoder
+    // side, that path corrupts the output (inverted blocks). Force the
+    // encoded endpoint pair to satisfy sum(e0) ≤ sum(e1) by swapping
+    // endpoints + complementing weights (w → 7 - w), which is a
+    // decode-preserving identity transform (kWeightToInterp[s] +
+    // kWeightToInterp[7-s] == 64).
+    int s0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
+    int s1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
+    if (s0 > s1) {
+        std::swap(e0[0], e1[0]);
+        std::swap(e0[1], e1[1]);
+        std::swap(e0[2], e1[2]);
+        for (int i = 0; i < 16; ++i) weights[i] = std::uint8_t(7 - int(weights[i]));
+    }
+
     pack_block(e0, e1, weights, out.block);
     out.err = err;
     return out;
