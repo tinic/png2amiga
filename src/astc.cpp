@@ -628,10 +628,128 @@ Candidate encode_block_rgba(const Sample16& s) {
 }
 
 // ---------------------------------------------------------------------------
-// QUANT_40 endpoint encoding (shared by dual-plane RGBA + 2-partition
-// CEM-8). Power-of-2 endpoint quants (QUANT_2/4/8/16/32/64/128/256)
-// have monotonic scramble; QUANT_40 + lower-than-256 levels do not,
-// so this scramble table is needed for the encoder side.
+// QUANT_40 (quint-pack) + QUANT_48 (trit-pack) endpoint encoding —
+// non-power-of-2 quant levels needed by 2-partition CEM-8 and
+// dual-plane CEM-12 paths, respectively. The decoder picks the
+// largest quant level that fits the per-block bit budget, so the
+// encoder MUST match that level exactly.
+//
+// QUANT_48 (47-stored-values, 4 data bits + 1 trit per char) is
+// picked at color_bits=45 (dual-plane CEM-12 1-partition).
+// QUANT_40 (39-stored-values, 3 data bits + 1 quint per char) is
+// picked at color_bits=67 (2-partition CEM-8).
+// ---------------------------------------------------------------------------
+
+// QUANT_48 unquant table (scrambled stored → uquant uint8).
+constexpr std::uint8_t kQuant48Unpack[48] = {
+      0, 255,  16, 239,  32, 223,  48, 207,  65, 190,  81, 174,  97, 158, 113, 142,
+      5, 250,  21, 234,  38, 217,  54, 201,  70, 185,  86, 169, 103, 152, 119, 136,
+     11, 244,  27, 228,  43, 212,  59, 196,  76, 179,  92, 163, 108, 147, 124, 131,
+};
+
+inline std::uint8_t quant48_pack(std::uint8_t v) {
+    int best = 0;
+    int best_d = std::abs(int(v) - int(kQuant48Unpack[0]));
+    for (int k = 1; k < 48; ++k) {
+        int d = std::abs(int(v) - int(kQuant48Unpack[k]));
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    return std::uint8_t(best);
+}
+
+// integer_of_trits[i4][i3][i2][i1][i0] — ASTC §16.6 trit-pack lookup,
+// 243 entries. Restored from the phase-3 work for QUANT_48 + future
+// trit-encoded paths.
+constexpr std::uint8_t kTritOf[3][3][3][3][3] = {
+    {
+        {{{0, 1, 2},     {4, 5, 6},     {8, 9, 10}},
+         {{16, 17, 18},  {20, 21, 22},  {24, 25, 26}},
+         {{3, 7, 15},    {19, 23, 27},  {12, 13, 14}}},
+        {{{32, 33, 34},  {36, 37, 38},  {40, 41, 42}},
+         {{48, 49, 50},  {52, 53, 54},  {56, 57, 58}},
+         {{35, 39, 47},  {51, 55, 59},  {44, 45, 46}}},
+        {{{64, 65, 66},  {68, 69, 70},  {72, 73, 74}},
+         {{80, 81, 82},  {84, 85, 86},  {88, 89, 90}},
+         {{67, 71, 79},  {83, 87, 91},  {76, 77, 78}}},
+    },
+    {
+        {{{128, 129, 130}, {132, 133, 134}, {136, 137, 138}},
+         {{144, 145, 146}, {148, 149, 150}, {152, 153, 154}},
+         {{131, 135, 143}, {147, 151, 155}, {140, 141, 142}}},
+        {{{160, 161, 162}, {164, 165, 166}, {168, 169, 170}},
+         {{176, 177, 178}, {180, 181, 182}, {184, 185, 186}},
+         {{163, 167, 175}, {179, 183, 187}, {172, 173, 174}}},
+        {{{192, 193, 194}, {196, 197, 198}, {200, 201, 202}},
+         {{208, 209, 210}, {212, 213, 214}, {216, 217, 218}},
+         {{195, 199, 207}, {211, 215, 219}, {204, 205, 206}}},
+    },
+    {
+        {{{96, 97, 98},     {100, 101, 102}, {104, 105, 106}},
+         {{112, 113, 114},  {116, 117, 118}, {120, 121, 122}},
+         {{99, 103, 111},   {115, 119, 123}, {108, 109, 110}}},
+        {{{224, 225, 226},  {228, 229, 230}, {232, 233, 234}},
+         {{240, 241, 242},  {244, 245, 246}, {248, 249, 250}},
+         {{227, 231, 239},  {243, 247, 251}, {236, 237, 238}}},
+        {{{28, 29, 30},     {60, 61, 62},    {92, 93, 94}},
+         {{156, 157, 158},  {188, 189, 190}, {220, 221, 222}},
+         {{31, 63, 127},    {159, 191, 255}, {252, 253, 254}}},
+    },
+};
+
+// BISE encode N values × QUANT_48 (4 bits + 1 trit). 5 chars per trit
+// block (23 bits / block: 5×4 data + 8 trit-pack bits, but stored
+// interleaved as 4+2 / 4+2 / 4+1 / 4+2 / 4+1 = 23). For 8 endpoints
+// (dual-plane CEM-12): 1 full block (5) + partial (3) = 45 bits.
+void encode_ise_q48(const std::uint8_t* input_data,
+                    int character_count,
+                    std::uint8_t* output_data,
+                    int bit_offset) {
+    constexpr int bits = 4;
+    constexpr int mask = (1 << bits) - 1;
+    int i = 0;
+    int full_blocks = character_count / 5;
+
+    for (int j = 0; j < full_blocks; ++j) {
+        int i0 = input_data[i + 0] >> bits;
+        int i1 = input_data[i + 1] >> bits;
+        int i2 = input_data[i + 2] >> bits;
+        int i3 = input_data[i + 3] >> bits;
+        int i4 = input_data[i + 4] >> bits;
+        int T = kTritOf[i4][i3][i2][i1][i0];
+
+        std::uint32_t pack;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 0) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 2) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 4) & 0x1) << bits));
+        write_bits(pack, bits + 1, bit_offset, output_data); bit_offset += bits + 1; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 5) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 7) & 0x1) << bits));
+        write_bits(pack, bits + 1, bit_offset, output_data); bit_offset += bits + 1; ++i;
+    }
+    if (i != character_count) {
+        int i4 = 0;
+        int i3 = (i + 3 >= character_count) ? 0 : (input_data[i + 3] >> bits);
+        int i2 = (i + 2 >= character_count) ? 0 : (input_data[i + 2] >> bits);
+        int i1 = (i + 1 >= character_count) ? 0 : (input_data[i + 1] >> bits);
+        int i0 = input_data[i + 0] >> bits;
+        int T = kTritOf[i4][i3][i2][i1][i0];
+        static const int tbits[4]  = {2, 2, 1, 2};
+        static const int tshift[4] = {0, 2, 4, 5};
+        for (int j = 0; i < character_count; ++i, ++j) {
+            std::uint32_t pack = std::uint32_t(
+                (input_data[i] & mask) |
+                (((T >> tshift[j]) & ((1 << tbits[j]) - 1)) << bits));
+            write_bits(pack, bits + tbits[j], bit_offset, output_data);
+            bit_offset += bits + tbits[j];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// QUANT_40 endpoint encoding (used by 2-partition CEM-8).
 // ---------------------------------------------------------------------------
 
 // QUANT_40 unquant table (decoded uint8 levels for 40 stored values).
@@ -796,11 +914,11 @@ void pack_block_rgba_dual(const std::uint8_t e0[4], const std::uint8_t e1[4],
     // 8 endpoint values × QUANT_40 BISE (43 bits) at bit 17.
     // Order: r0, r1, g0, g1, b0, b1, a0, a1.
     std::uint8_t ep_packed[8];
-    ep_packed[0] = quant40_pack(e0[0]); ep_packed[1] = quant40_pack(e1[0]);
-    ep_packed[2] = quant40_pack(e0[1]); ep_packed[3] = quant40_pack(e1[1]);
-    ep_packed[4] = quant40_pack(e0[2]); ep_packed[5] = quant40_pack(e1[2]);
-    ep_packed[6] = quant40_pack(e0[3]); ep_packed[7] = quant40_pack(e1[3]);
-    encode_ise_q40(ep_packed, 8, pcb, 17);
+    ep_packed[0] = quant48_pack(e0[0]); ep_packed[1] = quant48_pack(e1[0]);
+    ep_packed[2] = quant48_pack(e0[1]); ep_packed[3] = quant48_pack(e1[1]);
+    ep_packed[4] = quant48_pack(e0[2]); ep_packed[5] = quant48_pack(e1[2]);
+    ep_packed[6] = quant48_pack(e0[3]); ep_packed[7] = quant48_pack(e1[3]);
+    encode_ise_q48(ep_packed, 8, pcb, 17);
 
     for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
 }
@@ -1570,16 +1688,9 @@ Candidate encode_block_4x4(const Sample16& s) {
         if (s.alpha[i] != 255) { any_alpha = true; break; }
     }
     if (any_alpha) {
-        // Phase 5 scaffolding (encode_block_rgba_dual) is in tree but
-        // gated off — the BISE-quint endpoint stream decodes correctly
-        // bit-for-bit when traced manually, yet astcenc reports a per-
-        // channel offset on round-trip (G/A channels off by one stored
-        // index). Single-plane CEM-12 already produces high-quality
-        // RGBA encodes; dual-plane is a niche win for textures with
-        // uncorrelated alpha. Leaving the path callable but unused so
-        // the next debugging pass has it ready.
-        (void)encode_block_rgba_dual<M>;
-        return encode_block_rgba<M>(s);
+        Candidate sp = encode_block_rgba<M>(s);
+        Candidate dp = encode_block_rgba_dual<M>(s);
+        return (dp.err < sp.err) ? dp : sp;
     }
     Candidate one = encode_block_rgb<4, 4, kBlockModeRgb4x4, 8, M>(s);
     Candidate two = encode_block_rgb_2p<M>(s);
