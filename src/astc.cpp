@@ -1184,7 +1184,11 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
     // in pass 1; passes 2-3 polish endpoints once grid weights stabilise).
     std::uint8_t grid_weights[GN] = {};
     for (int iter = 0; iter < 3; ++iter) {
-        // 2. Ideal continuous weight per texel = projection onto e0..e1 axis.
+        // 2. Ideal continuous weight per texel — sRGB-axis projection.
+        //    (Tested an OKLab-axis variant: regressed by ~0.2 S2 mean.
+        //    The downstream coord descent already scores in OKLab² when
+        //    M = oklab2; pre-aligning the LSQ target overshoots since
+        //    the actual decode + infill is sRGB-linear.)
         float dr = float(e1[0]) - float(e0[0]);
         float dg = float(e1[1]) - float(e0[1]);
         float db = float(e1[2]) - float(e0[2]);
@@ -1309,10 +1313,24 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
             int w_int = (w_sum + 8) >> 4;
             w_int = std::clamp(w_int, 0, 64);
             int inv = 64 - w_int;
-            int dr = int(s.rgba8[j][0]) - (((inv * int(e0[0]) + w_int * int(e1[0])) + 32) >> 6);
-            int dg = int(s.rgba8[j][1]) - (((inv * int(e0[1]) + w_int * int(e1[1])) + 32) >> 6);
-            int db = int(s.rgba8[j][2]) - (((inv * int(e0[2]) + w_int * int(e1[2])) + 32) >> 6);
-            e += float(dr * dr + dg * dg + db * db);
+            std::uint8_t pr = std::uint8_t((inv * int(e0[0]) + w_int * int(e1[0]) + 32) >> 6);
+            std::uint8_t pg = std::uint8_t((inv * int(e0[1]) + w_int * int(e1[1]) + 32) >> 6);
+            std::uint8_t pb = std::uint8_t((inv * int(e0[2]) + w_int * int(e1[2]) + 32) >> 6);
+            if constexpr (M == block_compress::BlockMetric::oklab2) {
+                // Match the dispatcher's scoring metric — minimising OKLab²
+                // here puts the coord descent on the same axis as the
+                // pick-best comparison downstream.
+                auto l = color_space::srgb8_to_oklab(pr, pg, pb);
+                float dL = s.lab[j].L - l.L;
+                float dA = s.lab[j].a - l.a;
+                float dB = s.lab[j].b - l.b;
+                e += dL * dL + dA * dA + dB * dB;
+            } else {
+                int dr = int(s.rgba8[j][0]) - int(pr);
+                int dg = int(s.rgba8[j][1]) - int(pg);
+                int db = int(s.rgba8[j][2]) - int(pb);
+                e += float(dr * dr + dg * dg + db * db);
+            }
         }
         return e;
     };
