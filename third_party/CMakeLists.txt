@@ -12,7 +12,8 @@ set(_p2a_required_submodule_files
     "${CMAKE_CURRENT_SOURCE_DIR}/libwebp/CMakeLists.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/ssimulacra2/README.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/constixel/constixel.hpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib/zstd.h")
+    "${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib/zstd.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/astc-encoder/Source/astcenc.h")
 set(_p2a_need_init FALSE)
 foreach(_p2a_f IN LISTS _p2a_required_submodule_files)
     if(NOT EXISTS "${_p2a_f}")
@@ -147,4 +148,38 @@ target_include_directories(smol_atlas SYSTEM PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/smol-atlas)
 if(EMSCRIPTEN)
     target_compile_options(smol_atlas PRIVATE -pthread)
+endif()
+
+# astc-encoder (ARM reference; same role bcdec/bc7enc play for BC7/BC1).
+# We build the lib only — the astcenccli_*.cpp CLI files are excluded.
+# Pick the ISA from the host: AVX2 on x86_64, NEON on AArch64. The "none"
+# portable path is fine too — used as a fallback when neither is set.
+file(GLOB _astcenc_lib_sources CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/astc-encoder/Source/astcenc_*.cpp")
+add_library(astcenc STATIC ${_astcenc_lib_sources})
+target_include_directories(astcenc SYSTEM PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/astc-encoder/Source)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(amd64)|(AMD64)|(x86_64)" OR
+   CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "(amd64)|(AMD64)|(x86_64)")
+    target_compile_definitions(astcenc PUBLIC
+        ASTCENC_AVX=2 ASTCENC_SSE=41 ASTCENC_POPCNT=1 ASTCENC_F16C=1 ASTCENC_NEON=0)
+    if(NOT MSVC)
+        target_compile_options(astcenc PRIVATE -mavx2 -mpopcnt -mf16c)
+    endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(arm64|aarch64)" OR
+       CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "(arm64|aarch64)")
+    target_compile_definitions(astcenc PUBLIC
+        ASTCENC_AVX=0 ASTCENC_SSE=0 ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_NEON=1)
+else()
+    target_compile_definitions(astcenc PUBLIC
+        ASTCENC_AVX=0 ASTCENC_SSE=0 ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_NEON=0)
+endif()
+# astcenc uses unprefixed warnings we don't want polluting our build.
+if(NOT MSVC)
+    target_compile_options(astcenc PRIVATE -w)
+else()
+    target_compile_options(astcenc PRIVATE /w)
+endif()
+if(EMSCRIPTEN)
+    target_compile_options(astcenc PRIVATE -pthread)
 endif()

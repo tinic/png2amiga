@@ -13,3 +13,6 @@
 [submodule "third_party/zstd"]
 	path = third_party/zstd
 	url = https://github.com/facebook/zstd.git
+[submodule "third_party/astc-encoder"]
+	path = third_party/astc-encoder
+	url = https://github.com/ARM-software/astc-encoder.git
