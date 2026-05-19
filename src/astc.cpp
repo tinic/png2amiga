@@ -83,24 +83,39 @@ constexpr std::uint32_t kBlockModeRgba = kBlockModeRgba4x4;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb4x3_Q16 = 0x222;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb3x4_Q16 = 0x3CE;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb3x5_Q16 = 0x3EE;
+// Q12-weight block modes (12-level ramp, trit-packed BISE).
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb4x4_Q12 = 0x251;
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb5x3_Q12 = 0x2B1;
 
 constexpr int kWeightLevels16 = 16;
+constexpr int kWeightLevels12 = 12;
 constexpr int kWeightLevels8 = 8;
 constexpr int kWeightLevels4 = 4;
 [[maybe_unused]] constexpr int kWeightLevels2 = 2;
 
 // Pre-computed weight ramps scaled to the canonical 0..64 range used
 // in the ASTC paint formula `((64-w)*e0 + w*e1) / 64`. Per ASTC §16
-// (table sourced from astcenc_weight_quant_xfer_tables.cpp):
+// (tables sourced from astcenc_weight_quant_xfer_tables.cpp):
 //   QUANT_16 = 16-level: {0,4,8,12,17,21,25,29,35,39,43,47,52,56,60,64}
-//   QUANT_8 = {0, 9, 18, 27, 37, 46, 55, 64}
-//   QUANT_4 = {0, 21, 43, 64}
-//   QUANT_2 = {0, 64}                  (binary, used for 6x6+ footprints)
+//   QUANT_12 = 12-level: {0,5,11,17,23,28,36,41,47,53,59,64} — trit-packed
+//   QUANT_8  = {0, 9, 18, 27, 37, 46, 55, 64}
+//   QUANT_4  = {0, 21, 43, 64}
+//   QUANT_2  = {0, 64}                 (binary, used for 6x6+ footprints)
 constexpr int kWeightToInterp16[kWeightLevels16] = {
     0, 4, 8, 12, 17, 21, 25, 29, 35, 39, 43, 47, 52, 56, 60, 64};
+constexpr int kWeightToInterp12[kWeightLevels12] = {
+    0, 5, 11, 17, 23, 28, 36, 41, 47, 53, 59, 64};
 constexpr int kWeightToInterp8[kWeightLevels8] = {0, 9, 18, 27, 37, 46, 55, 64};
 constexpr int kWeightToInterp4[kWeightLevels4] = {0, 21, 43, 64};
 constexpr int kWeightToInterp2[kWeightLevels2] = {0, 64};
+
+// QUANT_12 stored-value → unquantized-level scramble table. ASTC §C.2.7
+// stores weights in a BISE-friendly permutation rather than direct
+// integer; the encoder writes `kQuant12Scramble[level]` to the bitstream
+// so the decoder's inverse-scramble lookup produces `level` back.
+// From astcenc_weight_quant_xfer_tables.cpp QUANT_12 row, second field.
+constexpr std::uint8_t kQuant12Scramble[kWeightLevels12] = {
+    0, 4, 8, 2, 6, 10, 11, 7, 3, 9, 5, 1};
 
 // (legacy kWeightLevels / kWeightToInterp aliases removed — superseded
 // by weight_ramp<WL>() + the kWeightLevels8 / kWeightLevels4 constants.)
@@ -218,16 +233,17 @@ void pca_seed_rgb(const SampleT<N>& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
 }
 
 // Compile-time weight ramp lookup. WL is the weight-quant level
-// (number of stored values: 2, 4, 8, 16).
+// (number of stored values: 2, 4, 8, 12, 16).
 template <int WL>
 constexpr const int* weight_ramp() {
     if constexpr (WL == 16) return kWeightToInterp16;
+    else if constexpr (WL == 12) return kWeightToInterp12;
     else if constexpr (WL == 8) return kWeightToInterp8;
     else if constexpr (WL == 4) return kWeightToInterp4;
     else if constexpr (WL == 2) return kWeightToInterp2;
     else {
-        static_assert(WL == 16 || WL == 8 || WL == 4 || WL == 2,
-                      "WL must be 2, 4, 8, or 16");
+        static_assert(WL == 16 || WL == 12 || WL == 8 || WL == 4 || WL == 2,
+                      "WL must be 2, 4, 8, 12, or 16");
         return nullptr;
     }
 }
@@ -384,25 +400,43 @@ inline std::uint8_t bitrev8(std::uint8_t v) {
     return v;
 }
 
+// Forward decl: pack_block<…, WL=12> needs the trit BISE encoder, but
+// kTritOf + the body live further down with the endpoint-pack helpers.
+template <int bits>
+void encode_ise_trit(const std::uint8_t* input_data,
+                     int character_count,
+                     std::uint8_t* output_data,
+                     int bit_offset);
+
 // Pack a single-partition CEM-8 LDR-RGB block. Templated on:
 //   - N: weight count (= grid width × grid height)
 //   - BlockMode: 11-bit block_mode that encodes (W, H, weight quant)
-//   - WL: weight quant level (16 / 8 / 4 / 2 — all power-of-2, straight binary)
+//   - WL: weight quant level
+//       Power-of-2 (16/8/4/2): straight binary packing of BPW bits/weight.
+//       Q12: BISE trit-packed (2 data bits + 1 trit/weight, 18 bits per 5).
 // QUANT_256 endpoints (8-bit straight) are used unconditionally — the
-// bit budget supports them for any grid where BPW × N + 17 + 48 ≤ 128.
+// bit budget supports them for any grid where weight_bits + 17 + 48 ≤ 128.
 template <int N, std::uint32_t BlockMode, int WL>
 void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
                 const std::uint8_t weights[N], Block& out) {
-    constexpr int BPW =
-        (WL == 16) ? 4 : (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
-    constexpr std::uint32_t WMask = (1u << BPW) - 1u;
     std::uint8_t pcb[16] = {};
 
-    // Weight buffer: N × BPW-bit values LSB-first, then per-byte bit-
-    // reversed and placed top-down per ASTC §16.7.
+    // Weight buffer: N values, LSB-first, then per-byte bit-reversed
+    // and placed top-down per ASTC §16.7.
     std::uint8_t weightbuf[16] = {};
-    for (int i = 0; i < N; ++i) {
-        write_bits(std::uint32_t(weights[i]) & WMask, BPW, i * BPW, weightbuf);
+    if constexpr (WL == 12) {
+        // Scramble per QUANT_12 store-order then trit-pack 2 data + 1 trit.
+        std::uint8_t scrambled[N];
+        for (int i = 0; i < N; ++i)
+            scrambled[i] = kQuant12Scramble[weights[i]];
+        encode_ise_trit<2>(scrambled, N, weightbuf, 0);
+    } else {
+        constexpr int BPW =
+            (WL == 16) ? 4 : (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
+        constexpr std::uint32_t WMask = (1u << BPW) - 1u;
+        for (int i = 0; i < N; ++i) {
+            write_bits(std::uint32_t(weights[i]) & WMask, BPW, i * BPW, weightbuf);
+        }
     }
     for (int i = 0; i < 16; ++i) {
         pcb[i] = bitrev8(weightbuf[15 - i]);
@@ -718,15 +752,15 @@ constexpr std::uint8_t kTritOf[3][3][3][3][3] = {
     },
 };
 
-// BISE encode N values × QUANT_48 (4 bits + 1 trit). 5 chars per trit
-// block (23 bits / block: 5×4 data + 8 trit-pack bits, but stored
-// interleaved as 4+2 / 4+2 / 4+1 / 4+2 / 4+1 = 23). For 8 endpoints
-// (dual-plane CEM-12): 1 full block (5) + partial (3) = 45 bits.
-void encode_ise_q48(const std::uint8_t* input_data,
-                    int character_count,
-                    std::uint8_t* output_data,
-                    int bit_offset) {
-    constexpr int bits = 4;
+// BISE encode N values × trit-packed quant level. Bits per data lane
+// fixes the quant: bits=4 → QUANT_48, bits=2 → QUANT_12, bits=3 →
+// QUANT_24. Stored interleaved as (bits+2)+(bits+2)+(bits+1)+(bits+2)
+// +(bits+1) per 5-value block = 5·bits + 8 bits/block.
+template <int bits>
+void encode_ise_trit(const std::uint8_t* input_data,
+                     int character_count,
+                     std::uint8_t* output_data,
+                     int bit_offset) {
     constexpr int mask = (1 << bits) - 1;
     int i = 0;
     int full_blocks = character_count / 5;
@@ -768,6 +802,15 @@ void encode_ise_q48(const std::uint8_t* input_data,
             bit_offset += bits + tbits[j];
         }
     }
+}
+
+// Back-compat: existing endpoint-pack call sites use the explicit
+// QUANT_48 name. Dispatch to the templated trit-pack with bits=4.
+inline void encode_ise_q48(const std::uint8_t* input_data,
+                           int character_count,
+                           std::uint8_t* output_data,
+                           int bit_offset) {
+    encode_ise_trit<4>(input_data, character_count, output_data, bit_offset);
 }
 
 // ---------------------------------------------------------------------------
@@ -2105,6 +2148,27 @@ auto make_encode_fn_mix1d2() {
     };
 }
 
+// 1:1 + three decim hybrid.
+template <int TexW, int TexH,
+          std::uint32_t BM_11, int WL_11,
+          int G1w, int G1h, std::uint32_t BM1, int WL1,
+          int G2w, int G2h, std::uint32_t BM2, int WL2,
+          int G3w, int G3h, std::uint32_t BM3, int WL3,
+          block_compress::BlockMetric M>
+auto make_encode_fn_mix1d3() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate a = encode_block_rgb<TexW, TexH, BM_11, WL_11, M>(s);
+        Candidate b = encode_block_rgb_decim<TexW, TexH, G1w, G1h, BM1, WL1, M>(s);
+        Candidate c = encode_block_rgb_decim<TexW, TexH, G2w, G2h, BM2, WL2, M>(s);
+        Candidate d = encode_block_rgb_decim<TexW, TexH, G3w, G3h, BM3, WL3, M>(s);
+        Candidate best = a;
+        if (b.err < best.err) best = b;
+        if (c.err < best.err) best = c;
+        if (d.err < best.err) best = d;
+        return best;
+    };
+}
+
 template <int TexW, int TexH,
           int G1w, int G1h, std::uint32_t BM1, int WL1,
           int G2w, int G2h, std::uint32_t BM2, int WL2,
@@ -2138,6 +2202,32 @@ auto make_encode_fn_decim4() {
         if (b.err < best.err) best = b;
         if (c.err < best.err) best = c;
         if (d.err < best.err) best = d;
+        return best;
+    };
+}
+
+template <int TexW, int TexH,
+          int G1w, int G1h, std::uint32_t BM1, int WL1,
+          int G2w, int G2h, std::uint32_t BM2, int WL2,
+          int G3w, int G3h, std::uint32_t BM3, int WL3,
+          int G4w, int G4h, std::uint32_t BM4, int WL4,
+          int G5w, int G5h, std::uint32_t BM5, int WL5,
+          int G6w, int G6h, std::uint32_t BM6, int WL6,
+          block_compress::BlockMetric M>
+auto make_encode_fn_decim6() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate a = encode_block_rgb_decim<TexW, TexH, G1w, G1h, BM1, WL1, M>(s);
+        Candidate b = encode_block_rgb_decim<TexW, TexH, G2w, G2h, BM2, WL2, M>(s);
+        Candidate c = encode_block_rgb_decim<TexW, TexH, G3w, G3h, BM3, WL3, M>(s);
+        Candidate d = encode_block_rgb_decim<TexW, TexH, G4w, G4h, BM4, WL4, M>(s);
+        Candidate e = encode_block_rgb_decim<TexW, TexH, G5w, G5h, BM5, WL5, M>(s);
+        Candidate f = encode_block_rgb_decim<TexW, TexH, G6w, G6h, BM6, WL6, M>(s);
+        Candidate best = a;
+        if (b.err < best.err) best = b;
+        if (c.err < best.err) best = c;
+        if (d.err < best.err) best = d;
+        if (e.err < best.err) best = e;
+        if (f.err < best.err) best = f;
         return best;
     };
 }
@@ -2187,16 +2277,18 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // ramp). Per-block best closes more of the gap to astcenc.
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_mix1d2<5, 5,
+                make_encode_fn_mix1d3<5, 5,
                     kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_mix1d2<6, 5,
+                make_encode_fn_mix1d3<6, 5,
                     kBlockModeRgb6x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         // 6x6 / 8x5 / 8x6 use bilinear-decim (1:1 QUANT_2 was binary
         // weights — S2 ~50 — so we drop down to a smaller weight grid
         // with a finer ramp). Two-config search: 4×4 QUANT_8 (8-level
@@ -2204,25 +2296,28 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // for blocks where extra spatial resolution helps.
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim4<6, 6,
+                make_encode_fn_decim5<6, 6,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
                     6, 5, kBlockModeRgb6x5, 4,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim4<8, 5,
+                make_encode_fn_decim5<8, 5,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 4, kBlockModeRgb5x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16, M>());
+                    5, 3, kBlockModeRgb5x3_Q16, 16,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim4<8, 6,
+                make_encode_fn_decim5<8, 6,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
                     6, 5, kBlockModeRgb6x5, 4,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         // Bilinear-decimated footprints (texel dim > weight dim). Each
         // tries multiple (grid, weight-quant) candidates per block and
         // keeps the lowest-err pick — same trick astcenc uses to spread
@@ -2233,56 +2328,63 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // on smooth low-frequency content where more grid points help.
         if (W == 8 && H == 8)
             return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim4<8, 8,
+                make_encode_fn_decim5<8, 8,
                     5, 5, kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
                     6, 5, kBlockModeRgb6x5, 4,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim4<10, 5,
+                make_encode_fn_decim5<10, 5,
                     5, 4, kBlockModeRgb5x4, 8,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16, M>());
+                    5, 3, kBlockModeRgb5x3_Q16, 16,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 10 && H == 6)
             return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim4<10, 6,
+                make_encode_fn_decim5<10, 6,
                     5, 5, kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 4, kBlockModeRgb5x4, 8,
-                    5, 3, kBlockModeRgb5x3_Q16, 16, M>());
+                    5, 3, kBlockModeRgb5x3_Q16, 16,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 10 && H == 8)
             return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim4<10, 8,
+                make_encode_fn_decim5<10, 8,
                     5, 5, kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 4, kBlockModeRgb5x4, 8,
-                    5, 3, kBlockModeRgb5x3_Q16, 16, M>());
+                    5, 3, kBlockModeRgb5x3_Q16, 16,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<10, 10,
+                make_encode_fn_decim6<10, 10,
                     5, 5, kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
                     6, 5, kBlockModeRgb6x5, 4,
                     5, 4, kBlockModeRgb5x4, 8,
-                    5, 3, kBlockModeRgb5x3_Q16, 16, M>());
+                    5, 3, kBlockModeRgb5x3_Q16, 16,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 12 && H == 10)
             return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<12, 10,
+                make_encode_fn_decim6<12, 10,
                     6, 5, kBlockModeRgb6x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 4, kBlockModeRgb5x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16, M>());
+                    5, 3, kBlockModeRgb5x3_Q16, 16,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<12, 12,
+                make_encode_fn_decim6<12, 12,
                     6, 5, kBlockModeRgb6x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 4, kBlockModeRgb5x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16, M>());
+                    5, 3, kBlockModeRgb5x3_Q16, 16,
+                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
         return EncodeResult{};  // unsupported footprint
     };
 
