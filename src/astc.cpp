@@ -1174,42 +1174,122 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
     std::uint8_t e0[3], e1[3];
     pca_seed_rgb(s, e0, e1);
 
-    // 2. Ideal continuous weight per texel (projection onto e0..e1 axis).
-    float dr = float(e1[0]) - float(e0[0]);
-    float dg = float(e1[1]) - float(e0[1]);
-    float db = float(e1[2]) - float(e0[2]);
-    float ramp_sq = dr * dr + dg * dg + db * db;
-    float inv_ramp_sq = (ramp_sq > 1e-9f) ? (1.f / ramp_sq) : 0.f;
-    float w_ideal[TN];
-    for (int j = 0; j < TN; ++j) {
-        float pr = float(s.rgba8[j][0]) - float(e0[0]);
-        float pg = float(s.rgba8[j][1]) - float(e0[1]);
-        float pb = float(s.rgba8[j][2]) - float(e0[2]);
-        float w = (pr * dr + pg * dg + pb * db) * inv_ramp_sq;
-        w_ideal[j] = std::clamp(w, 0.f, 1.f);
-    }
+    // 2-4. Alternating LSQ:
+    //   a. Compute ideal continuous weight per texel given current e0/e1
+    //   b. LSQ grid weights against bilinear infill (Gauss-Jordan on GN×GN)
+    //   c. Refit endpoints given the quantized grid weights
+    // Three iterations is enough for natural images (most movement happens
+    // in pass 1; passes 2-3 polish endpoints once grid weights stabilise).
+    std::uint8_t grid_weights[GN] = {};
+    for (int iter = 0; iter < 3; ++iter) {
+        // 2. Ideal continuous weight per texel = projection onto e0..e1 axis.
+        float dr = float(e1[0]) - float(e0[0]);
+        float dg = float(e1[1]) - float(e0[1]);
+        float db = float(e1[2]) - float(e0[2]);
+        float ramp_sq = dr * dr + dg * dg + db * db;
+        float inv_ramp_sq = (ramp_sq > 1e-9f) ? (1.f / ramp_sq) : 0.f;
+        float w_ideal[TN];
+        for (int j = 0; j < TN; ++j) {
+            float pr = float(s.rgba8[j][0]) - float(e0[0]);
+            float pg = float(s.rgba8[j][1]) - float(e0[1]);
+            float pb = float(s.rgba8[j][2]) - float(e0[2]);
+            float w = (pr * dr + pg * dg + pb * db) * inv_ramp_sq;
+            w_ideal[j] = std::clamp(w, 0.f, 1.f);
+        }
 
-    // 3. Each grid point's weight = bilinear-coefficient-weighted average
-    //    of texel ideal weights it contributes to. Quantize to WL levels.
-    float grid_num[GN] = {};
-    float grid_den[GN] = {};
-    for (int j = 0; j < TN; ++j) {
-        const auto& t = bm.texels[j];
-        for (int k = 0; k < 4; ++k) {
-            float c = float(t.weight[k]);
-            if (c <= 0.f) continue;
-            grid_num[t.grid[k]] += c * w_ideal[j];
-            grid_den[t.grid[k]] += c;
+        // 3. LSQ on the sparse bilinear contribution system.
+        //   paint_j = sum_i (c[i][j] / 16) * v_i,  v_i in [0..64].
+        //   Closed-form via normal equations A^T A v = A^T T, solved by
+        //   Gauss-Jordan (GN ≤ 36, ~50k flops/iter — negligible).
+        //   Small Tikhonov ridge regularises uncovered grid points.
+        float ata[GN][GN] = {};
+        float atb[GN] = {};
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            float T_j = w_ideal[j] * 64.f;
+            for (int k = 0; k < 4; ++k) {
+                float ck = float(t.weight[k]) * (1.f / 16.f);
+                if (ck <= 0.f) continue;
+                int gi = t.grid[k];
+                atb[gi] += ck * T_j;
+                for (int kk = 0; kk < 4; ++kk) {
+                    float cc = float(t.weight[kk]) * (1.f / 16.f);
+                    if (cc <= 0.f) continue;
+                    ata[gi][t.grid[kk]] += ck * cc;
+                }
+            }
+        }
+        constexpr float kRidge = 1e-3f;
+        for (int i = 0; i < GN; ++i) ata[i][i] += kRidge;
+
+        for (int i = 0; i < GN; ++i) {
+            int piv = i;
+            float bestmag = std::abs(ata[i][i]);
+            for (int r = i + 1; r < GN; ++r) {
+                float m = std::abs(ata[r][i]);
+                if (m > bestmag) { bestmag = m; piv = r; }
+            }
+            if (bestmag < 1e-9f) continue;
+            if (piv != i) {
+                for (int c = 0; c < GN; ++c) std::swap(ata[i][c], ata[piv][c]);
+                std::swap(atb[i], atb[piv]);
+            }
+            float pinv = 1.f / ata[i][i];
+            for (int c = 0; c < GN; ++c) ata[i][c] *= pinv;
+            atb[i] *= pinv;
+            for (int r = 0; r < GN; ++r) {
+                if (r == i) continue;
+                float f = ata[r][i];
+                if (f == 0.f) continue;
+                for (int c = 0; c < GN; ++c) ata[r][c] -= f * ata[i][c];
+                atb[r] -= f * atb[i];
+            }
+        }
+
+        // Quantize each continuous v_i to nearest ramp[WL] level.
+        for (int i = 0; i < GN; ++i) {
+            float v = std::clamp(atb[i], 0.f, 64.f);
+            int best = 0;
+            int best_d = std::abs(int(v + 0.5f) - ramp[0]);
+            for (int k = 1; k < WL; ++k) {
+                int d = std::abs(int(v + 0.5f) - ramp[k]);
+                if (d < best_d) { best_d = d; best = k; }
+            }
+            grid_weights[i] = std::uint8_t(best);
+        }
+
+        // 4. LSQ refit endpoints given the quantized grid weights.
+        float A00 = 0, A11 = 0, A01 = 0;
+        float B[3] = {}, Bb[3] = {};
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            int w_sum = 0;
+            for (int k = 0; k < 4; ++k) {
+                w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+            }
+            float w1 = float(w_sum) * (1.f / (16.f * 64.f));
+            float w0 = 1.f - w1;
+            A00 += w0 * w0;
+            A11 += w1 * w1;
+            A01 += w0 * w1;
+            for (int ch = 0; ch < 3; ++ch) {
+                B[ch]  += w0 * float(s.rgba8[j][ch]);
+                Bb[ch] += w1 * float(s.rgba8[j][ch]);
+            }
+        }
+        float det = A00 * A11 - A01 * A01;
+        if (std::abs(det) >= 1e-6f) {
+            float einv = 1.f / det;
+            for (int ch = 0; ch < 3; ++ch) {
+                float c0 = (A11 * B[ch] - A01 * Bb[ch]) * einv;
+                float c1 = (-A01 * B[ch] + A00 * Bb[ch]) * einv;
+                e0[ch] = std::uint8_t(std::clamp(int(std::lround(c0)), 0, 255));
+                e1[ch] = std::uint8_t(std::clamp(int(std::lround(c1)), 0, 255));
+            }
         }
     }
-    std::uint8_t grid_weights[GN];
-    for (int i = 0; i < GN; ++i) {
-        float w_avg = grid_den[i] > 1e-6f ? grid_num[i] / grid_den[i] : 0.5f;
-        int wq = int(std::lround(w_avg * (WL - 1)));
-        grid_weights[i] = std::uint8_t(std::clamp(wq, 0, WL - 1));
-    }
 
-    // 4. Blue-contract sum normalisation.
+    // 5. Blue-contract sum normalisation on the refitted endpoints.
     int s0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
     int s1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
     if (s0 > s1) {
@@ -1220,7 +1300,7 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
             grid_weights[i] = std::uint8_t((WL - 1) - int(grid_weights[i]));
     }
 
-    // 5. Bilinear-infill decoded[] using the same truncated-precision
+    // 6. Bilinear-infill decoded[] using the same truncated-precision
     //    formula the decoder applies. Final texel weight is sum_k of
     //    (coeff[k] * grid_weight_ramp[k]) >> 4.
     float total_err = 0.f;
@@ -1869,21 +1949,30 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         if (W == 5 && H == 4)
             return encode_image_impl<5, 4>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn<5, 4, kBlockModeRgb5x4, 8, M>());
+        // 5x5 / 6x5 keep 1:1 QUANT_4 — having a weight grid point per
+        // texel (25 / 30 weights) beats coarser 4×4-grid bilinear-infill
+        // here, even though each weight only spans 4 levels. Tested both
+        // empirically on DIV2K 0001 @ 256w: 1:1 wins by +4 / +7 S2.
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn<5, 5, kBlockModeRgb5x5, 4, M>());
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn<6, 5, kBlockModeRgb6x5, 4, M>());
+        // 6x6 / 8x5 / 8x6 were previously 1:1 QUANT_2 (binary weights —
+        // S2 ~50 on natural images). Switching to 4×4 weight grid +
+        // QUANT_8 weights with bilinear infill recovers ~30 S2 because
+        // the LSQ grid-weight refit can spread per-texel error across
+        // a smooth 8-level ramp.
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn<6, 6, kBlockModeRgb6x6, 2, M>());
+                                           make_encode_fn_decim<6, 6, 4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn<8, 5, kBlockModeRgb8x5, 2, M>());
+                                           make_encode_fn_decim<8, 5, 4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn<8, 6, kBlockModeRgb8x6, 2, M>());
+                                           make_encode_fn_decim<8, 6, 4, 4, kBlockModeRgb4x4, 8, M>());
         // Bilinear-decimated footprints (texel dim > weight dim).
         // Block-mode constant is the same one used by the 1:1 weight
         // grid for that size — the texel dim comes from KTX format,
