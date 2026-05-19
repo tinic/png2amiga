@@ -1291,7 +1291,54 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
         }
     }
 
-    // 5. Blue-contract sum normalisation on the refitted endpoints.
+    // 5. Coordinate-descent refinement of QUANTIZED grid weights.
+    //    The continuous LSQ → nearest-ramp-level quantization in step 3
+    //    is locally suboptimal: a one-step ±1 perturbation in any grid
+    //    weight may reduce the total per-texel error if the rounding
+    //    cluster boundary fell on a coarse texel contribution. Per-
+    //    grid-point trial flips, accept on improvement, iterate to
+    //    convergence (typically 2-3 sweeps on natural images).
+    auto compute_total_err = [&]() {
+        float e = 0.f;
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            int w_sum = 0;
+            for (int k = 0; k < 4; ++k) {
+                w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+            }
+            int w_int = (w_sum + 8) >> 4;
+            w_int = std::clamp(w_int, 0, 64);
+            int inv = 64 - w_int;
+            int dr = int(s.rgba8[j][0]) - (((inv * int(e0[0]) + w_int * int(e1[0])) + 32) >> 6);
+            int dg = int(s.rgba8[j][1]) - (((inv * int(e0[1]) + w_int * int(e1[1])) + 32) >> 6);
+            int db = int(s.rgba8[j][2]) - (((inv * int(e0[2]) + w_int * int(e1[2])) + 32) >> 6);
+            e += float(dr * dr + dg * dg + db * db);
+        }
+        return e;
+    };
+    float best_err = compute_total_err();
+    for (int sweep = 0; sweep < 4; ++sweep) {
+        bool improved = false;
+        for (int gi = 0; gi < GN; ++gi) {
+            std::uint8_t orig = grid_weights[gi];
+            for (int delta = -1; delta <= 1; delta += 2) {
+                int nw = int(orig) + delta;
+                if (nw < 0 || nw >= WL) continue;
+                grid_weights[gi] = std::uint8_t(nw);
+                float e = compute_total_err();
+                if (e < best_err - 1e-3f) {
+                    best_err = e;
+                    orig = std::uint8_t(nw);
+                    improved = true;
+                } else {
+                    grid_weights[gi] = orig;
+                }
+            }
+        }
+        if (!improved) break;
+    }
+
+    // 6. Blue-contract sum normalisation on the refitted endpoints.
     int s0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
     int s1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
     if (s0 > s1) {
@@ -1302,7 +1349,7 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
             grid_weights[i] = std::uint8_t((WL - 1) - int(grid_weights[i]));
     }
 
-    // 6. Bilinear-infill decoded[] using the same truncated-precision
+    // 7. Bilinear-infill decoded[] using the same truncated-precision
     //    formula the decoder applies. Final texel weight is sum_k of
     //    (coeff[k] * grid_weight_ramp[k]) >> 4.
     float total_err = 0.f;
