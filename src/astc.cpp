@@ -2144,6 +2144,99 @@ struct EPQuantOps<64> {
     }
 };
 
+// Try to encode (e0, e1) as CEM-9 (LDR RGB delta) at the given endpoint
+// quant level. Ports astcenc_color_quantize.cpp:try_quantize_rgb_delta.
+// On success, writes the BISE-stored values for color0 (base) and
+// color1 (delta-with-borrowed-LSB), plus the rendered/decoded endpoint
+// values that the decoder will produce — so caller can use them in
+// pick_weights to get correct err. Returns false if delta out of
+// ±64 unorm9 range, quant corrupts top bits, or blue-contract would
+// trigger; caller falls back to CEM-8 encoding.
+template <int EPQuant>
+bool try_quant_rgb_delta(const std::uint8_t e0[3], const std::uint8_t e1[3],
+                         std::uint8_t out0[3], std::uint8_t out1[3],
+                         std::uint8_t e0_rendered[3] = nullptr,
+                         std::uint8_t e1_rendered[3] = nullptr) {
+    int color0a[3], color0b[3], color0be_unq[3], color0be_st[3];
+    int color1d[3], color1de_unq[3], color1de_st[3];
+
+    for (int ch = 0; ch < 3; ++ch) {
+        // Convert e0 to unorm9 (multiply by 2). color0a holds the full
+        // 9-bit value; color0b is the low 8 bits.
+        color0a[ch] = int(e0[ch]) << 1;
+        color0b[ch] = color0a[ch] & 0xFF;
+
+        // Quantize-then-unquantize the low 8 bits.
+        color0be_st[ch] = EPQuantOps<EPQuant>::pack(std::uint8_t(color0b[ch]));
+        color0be_unq[ch] = EPQuantOps<EPQuant>::unpack(std::uint8_t(color0be_st[ch]));
+
+        // Restore the top bit (bit 8) onto the quantize-unquantize'd base.
+        color0b[ch] = color0be_unq[ch] | (color0a[ch] & 0x100);
+    }
+
+    // Compute the delta in unorm9 space.
+    for (int ch = 0; ch < 3; ++ch) {
+        color1d[ch] = (int(e1[ch]) << 1) - color0b[ch];
+        // Reject deltas outside the encodable signed-7-bit range.
+        if (color1d[ch] > 63 || color1d[ch] < -64) return false;
+    }
+
+    // Stuff the LSB of the base (bit 8 of unorm9) into bit 7 of the
+    // delta-stored value, leaving bits 0-6 to hold the signed 7-bit delta.
+    for (int ch = 0; ch < 3; ++ch) {
+        color1d[ch] = color1d[ch] & 0x7F;
+        color1d[ch] |= (color0b[ch] & 0x100) >> 1;  // bit 8 → bit 7
+    }
+
+    // Quantize-then-unquantize the delta-with-borrowed-bit.
+    for (int ch = 0; ch < 3; ++ch) {
+        color1de_st[ch] = EPQuantOps<EPQuant>::pack(std::uint8_t(color1d[ch]));
+        color1de_unq[ch] = EPQuantOps<EPQuant>::unpack(std::uint8_t(color1de_st[ch]));
+
+        // If the quant changed bits 6 or 7 (sign of delta or top bit of
+        // base), the encoding is corrupted — abort.
+        int flips = (color1d[ch] ^ color1de_unq[ch]) & 0xC0;
+        if (flips != 0) return false;
+    }
+
+    // Apply ASTC's bit_transfer_signed to simulate the decoder, then
+    // check that the sum of (transferred) delta values stays ≥ 0 (else
+    // the decoder would trigger blue-contract, which produces different
+    // output than what the encoder targeted).
+    int ep0[3], ep1[3];
+    for (int ch = 0; ch < 3; ++ch) {
+        ep0[ch] = color0be_unq[ch];
+        ep1[ch] = color1de_unq[ch];
+        int new_ep1 = (ep1[ch] >> 1) | (ep0[ch] & 0x80);
+        int new_ep0 = (ep0[ch] >> 1) & 0x3F;
+        if (new_ep0 & 0x20) new_ep0 -= 0x40;
+        ep0[ch] = new_ep0;
+        ep1[ch] = new_ep1;
+    }
+    int rgb_sum = ep1[0] + ep1[1] + ep1[2];
+    if (rgb_sum < 0) return false;
+
+    // Check that the decoded sum e0+e1 fits in [0, 255] per channel.
+    for (int ch = 0; ch < 3; ++ch) {
+        int sum = ep0[ch] + ep1[ch];
+        if (sum < 0 || sum > 255) return false;
+    }
+
+    for (int ch = 0; ch < 3; ++ch) {
+        out0[ch] = std::uint8_t(color0be_st[ch]);
+        out1[ch] = std::uint8_t(color1de_st[ch]);
+    }
+    if (e0_rendered && e1_rendered) {
+        // Decoder produces clamp(0, 255, ep0) and clamp(0, 255, ep0 + ep1)
+        // (already computed above with bit-transfer applied).
+        for (int ch = 0; ch < 3; ++ch) {
+            e0_rendered[ch] = std::uint8_t(std::clamp(ep0[ch], 0, 255));
+            e1_rendered[ch] = std::uint8_t(std::clamp(ep0[ch] + ep1[ch], 0, 255));
+        }
+    }
+    return true;
+}
+
 // Pack a 2-partition CEM-8 bilinear-decim block. Templated on:
 //   - GN: weight count (= grid_w * grid_h)
 //   - BlockMode: 11-bit block_mode (encodes weight grid + weight quant)
@@ -2186,6 +2279,49 @@ void pack_block_2p_decim(int partition_index,
         for (int ch = 0; ch < 3; ++ch) {
             ep_packed[idx++] = EPQuantOps<EPQuant>::pack(e0[k][ch]);
             ep_packed[idx++] = EPQuantOps<EPQuant>::pack(e1[k][ch]);
+        }
+    }
+    EPQuantOps<EPQuant>::encode(ep_packed, 12, pcb, 29);
+
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+// Pack a 2-partition CEM-9 (RGB delta) block. Same bit layout as the
+// CEM-8 version but matched-CEM = CEM_9 << 2 = 36, and the 12 endpoint
+// values are the pre-computed (base_stored, delta_stored) tuples from
+// try_quant_rgb_delta.
+template <int GN, std::uint32_t BlockMode, int WL, int EPQuant>
+void pack_block_2p_decim_cem9(int partition_index,
+                              const std::uint8_t stored0[2][3],
+                              const std::uint8_t stored1[2][3],
+                              const std::uint8_t weights[GN], Block& out) {
+    std::uint8_t pcb[16] = {};
+
+    std::uint8_t weightbuf[16] = {};
+    constexpr int BPW =
+        (WL == 32) ? 5 : (WL == 16) ? 4 : (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
+    constexpr std::uint32_t WMask = (1u << BPW) - 1u;
+    for (int i = 0; i < GN; ++i) {
+        write_bits(std::uint32_t(weights[i]) & WMask, BPW, i * BPW, weightbuf);
+    }
+    for (int i = 0; i < 16; ++i) {
+        pcb[i] = bitrev8(weightbuf[15 - i]);
+    }
+
+    write_bits(BlockMode, 11, 0, pcb);
+    write_bits(1, 2, 11, pcb);
+    write_bits(std::uint32_t(partition_index) & 0x3Fu, 6, 13, pcb);
+    write_bits(std::uint32_t(partition_index) >> 6, 4, 19, pcb);
+    write_bits(36, 6, 23, pcb);  // matched-CEM = CEM_9 << 2
+
+    // CEM-9 stored layout: (base[0].R, delta[0].R, base[0].G, delta[0].G,
+    //                        base[0].B, delta[0].B, base[1].R, delta[1].R, ...)
+    std::uint8_t ep_packed[12];
+    int idx = 0;
+    for (int k = 0; k < 2; ++k) {
+        for (int ch = 0; ch < 3; ++ch) {
+            ep_packed[idx++] = stored0[k][ch];
+            ep_packed[idx++] = stored1[k][ch];
         }
     }
     EPQuantOps<EPQuant>::encode(ep_packed, 12, pcb, 29);
@@ -2452,6 +2588,42 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s) {
     std::uint8_t final_dec[TN][4];
     float final_err = pick_weights_2p_decim<TexW, TexH, GridW, GridH, WL, M>(
         s, assign, grid_weights, bm, e0d, e1d, final_dec);
+
+    // Try CEM-9 (RGB delta) encoding of the LSQ-converged endpoints.
+    // CEM-9 has a different quantisation lattice — base + signed-offset
+    // gives finer effective e1 placement at coarse endpoint quants.
+    // try_quant_rgb_delta returns the BISE-stored values plus the
+    // decoder-rendered endpoint values; we score both encodings and
+    // pick whichever has lower err. The CEM-9 partition swap rule is
+    // baked into the delta encoding (sum-of-deltas ≥ 0 required), so
+    // we test CEM-9 on the LSQ-converged endpoints BEFORE the per-
+    // partition blue-contract swap. e0/e1 here refer to the
+    // pre-blue-contract values stashed for the CEM-9 trial.
+    std::uint8_t cem9_st0[2][3], cem9_st1[2][3];
+    std::uint8_t cem9_rd0[2][3], cem9_rd1[2][3];
+    bool cem9_ok = true;
+    for (int k = 0; k < 2 && cem9_ok; ++k) {
+        cem9_ok = try_quant_rgb_delta<EPQuant>(
+            e0[k], e1[k], cem9_st0[k], cem9_st1[k], cem9_rd0[k], cem9_rd1[k]);
+    }
+    if (cem9_ok) {
+        // Re-pick weights against the CEM-9-rendered endpoints.
+        std::uint8_t cem9_dec[TN][4];
+        float cem9_err = pick_weights_2p_decim<TexW, TexH, GridW, GridH, WL, M>(
+            s, assign, grid_weights, bm, cem9_rd0, cem9_rd1, cem9_dec);
+        if (cem9_err < final_err) {
+            pack_block_2p_decim_cem9<GN, BlockMode, WL, EPQuant>(
+                best_pi, cem9_st0, cem9_st1, grid_weights, out.block);
+            for (int j = 0; j < TN; ++j) {
+                out.decoded[j][0] = cem9_dec[j][0];
+                out.decoded[j][1] = cem9_dec[j][1];
+                out.decoded[j][2] = cem9_dec[j][2];
+                out.decoded[j][3] = cem9_dec[j][3];
+            }
+            out.err = cem9_err;
+            return out;
+        }
+    }
 
     pack_block_2p_decim<GN, BlockMode, WL, EPQuant>(
         best_pi, e0d, e1d, grid_weights, out.block);
