@@ -1,34 +1,21 @@
-// ASTC encoder — phase 1: 4×4 single-partition single-plane LDR RGB Direct.
+// ASTC encoder — 4×4 LDR single-plane.
 //
-// Bit layout we emit (single fixed block-mode):
+// Per-block layout (mixed):
+//   - RGB blocks (alpha=255):    block_mode 0x53, CEM 8,  QUANT_8 weights,
+//                                QUANT_256 endpoints, single partition
+//   - RGBA blocks (any alpha):   block_mode 0x42, CEM 12, QUANT_4 weights,
+//                                QUANT_256 endpoints, single partition
+//   - 2-partition RGB:           block_mode 0x42, CEM 8,  QUANT_4 weights,
+//                                QUANT_40  endpoints (BISE quint-pack),
+//                                partition_index from spec hash.
+//                                Selected when 2-partition err < 1-partition.
 //
-//   bit  0..10  block mode = 0x53
-//                 → x_weights = 4, y_weights = 4
-//                 → weight quant = QUANT_8 (3-bit weights, 8 levels)
-//                 → single plane, low precision range
-//   bit 11..12  partition count - 1 = 0  (single partition)
-//   bit 13..16  color endpoint mode = 8  (LDR RGB direct)
-//   bit 17..64  endpoint BISE: 6 × QUANT_256 (straight 8-bit) = 48 bits
-//                 order: r0, r1, g0, g1, b0, b1
-//   bit 65..79  unused (15 bits — could pack tighter later)
-//   bit 80..127 weight BISE: 16 × QUANT_8 (straight 3-bit) = 48 bits,
-//                 stored MSB→LSB through the bytes, then bit-reversed
-//                 per byte at byte 0..15 position 15..0 (the ASTC top-
-//                 down packing convention; see spec §16.7).
-//
-// Endpoint search: BC7 Mode 6 shape:
-//   1. PCA seed in OKLab → 2 sRGB endpoints
-//   2. Pick per-pixel 3-bit weights against the 8-level paint ramp,
-//      scored in OKLab²
-//   3. LSQ refit endpoints given fixed weights
-//   4. Re-pick weights, iterate to convergence
-//
-// Block-grid Floyd-Steinberg residual diffusion between 4×4 neighbours
-// uses the shared block_compress::propagate_block_residual scaffold,
-// same as BC7.
-//
-// astcenc lives under third_party/ for decode (here) + bench (later);
-// it is NOT used to encode any block.
+// 2-partition fits 12 endpoint values into 67 color-bits via QUANT_40
+// (3 chars per BISE quint-block: 3 data bits + 1 packed quint = 16
+// bits; 12 chars = 4 full blocks = 64 bits). The ASTC decoder picks
+// the largest quant level that the available color-bits allow, which
+// at 67 bits is QUANT_40 — writing any other scheme would be
+// reinterpreted as QUANT_40 BISE and decode to garbage.
 
 #include "astc.hpp"
 
@@ -635,18 +622,537 @@ Candidate encode_block_rgb(const Sample16& s) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// 2-partition CEM-8 RGB path (QUANT_4 weights, QUANT_32 endpoints).
+// ---------------------------------------------------------------------------
+
+// Spec partition hash (ASTC §C.2.21). Ported verbatim from astcenc — pure
+// format-spec math, not an encoder quality choice.
+std::uint8_t spec_select_partition(int seed, int x, int y, int z,
+                                   int partition_count, bool small_block) {
+    if (small_block) { x <<= 1; y <<= 1; z <<= 1; }
+    seed += (partition_count - 1) * 1024;
+    std::uint32_t rnum = std::uint32_t(seed);
+    rnum ^= rnum >> 15;
+    rnum *= 0xEEDE0891u;
+    rnum ^= rnum >> 5;
+    rnum += rnum << 16;
+    rnum ^= rnum >> 7;
+    rnum ^= rnum >> 3;
+    rnum ^= rnum << 6;
+    rnum ^= rnum >> 17;
+
+    std::uint32_t s1 = rnum & 0xF, s2 = (rnum >> 4) & 0xF,
+                  s3 = (rnum >> 8) & 0xF, s4 = (rnum >> 12) & 0xF,
+                  s5 = (rnum >> 16) & 0xF, s6 = (rnum >> 20) & 0xF,
+                  s7 = (rnum >> 24) & 0xF, s8 = (rnum >> 28) & 0xF,
+                  s9 = (rnum >> 18) & 0xF, s10 = (rnum >> 22) & 0xF,
+                  s11 = (rnum >> 26) & 0xF,
+                  s12 = ((rnum >> 30) | (rnum << 2)) & 0xF;
+    s1 *= s1; s2 *= s2; s3 *= s3; s4 *= s4;
+    s5 *= s5; s6 *= s6; s7 *= s7; s8 *= s8;
+    s9 *= s9; s10 *= s10; s11 *= s11; s12 *= s12;
+
+    int sh1, sh2;
+    if (seed & 1) {
+        sh1 = (seed & 2) ? 4 : 5;
+        sh2 = (partition_count == 3) ? 6 : 5;
+    } else {
+        sh1 = (partition_count == 3) ? 6 : 5;
+        sh2 = (seed & 2) ? 4 : 5;
+    }
+    int sh3 = (seed & 0x10) ? sh1 : sh2;
+    s1 >>= sh1; s2 >>= sh2; s3 >>= sh1; s4 >>= sh2;
+    s5 >>= sh1; s6 >>= sh2; s7 >>= sh1; s8 >>= sh2;
+    s9 >>= sh3; s10 >>= sh3; s11 >>= sh3; s12 >>= sh3;
+
+    int a = int(s1) * x + int(s2) * y + int(s11) * z + int(rnum >> 14);
+    int b = int(s3) * x + int(s4) * y + int(s12) * z + int(rnum >> 10);
+    int c = int(s5) * x + int(s6) * y + int(s9)  * z + int(rnum >> 6);
+    int d = int(s7) * x + int(s8) * y + int(s10) * z + int(rnum >> 2);
+    a &= 0x3F; b &= 0x3F; c &= 0x3F; d &= 0x3F;
+    if (partition_count <= 3) d = 0;
+    if (partition_count <= 2) c = 0;
+    if (partition_count <= 1) b = 0;
+    if (a >= b && a >= c && a >= d) return 0;
+    if (b >= c && b >= d) return 1;
+    if (c >= d) return 2;
+    return 3;
+}
+
+// QUANT_40 unquant table (decoded uint8 levels for 40 stored values).
+// Scrambled ordering — encoder must search for nearest.
+constexpr std::uint8_t kQuant40Unpack[40] = {
+      0, 255,  32, 223,  65, 190,  97, 158,
+      6, 249,  39, 216,  71, 184, 104, 151,
+     13, 242,  45, 210,  78, 177, 110, 145,
+     19, 236,  52, 203,  84, 171, 117, 138,
+     26, 229,  58, 197,  91, 164, 123, 132,
+};
+
+inline std::uint8_t quant40_pack(std::uint8_t v) {
+    int best = 0;
+    int best_d = std::abs(int(v) - int(kQuant40Unpack[0]));
+    for (int k = 1; k < 40; ++k) {
+        int d = std::abs(int(v) - int(kQuant40Unpack[k]));
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    return std::uint8_t(best);
+}
+
+// integer_of_quints[i2][i1][i0] — ASTC spec §16.6 quint-pack lookup.
+// 125 entries, ported verbatim from astcenc.
+constexpr std::uint8_t kQuintOf[5][5][5] = {
+    {{0, 1, 2, 3, 4},
+     {8, 9, 10, 11, 12},
+     {16, 17, 18, 19, 20},
+     {24, 25, 26, 27, 28},
+     {5, 13, 21, 29, 6}},
+    {{32, 33, 34, 35, 36},
+     {40, 41, 42, 43, 44},
+     {48, 49, 50, 51, 52},
+     {56, 57, 58, 59, 60},
+     {37, 45, 53, 61, 14}},
+    {{64, 65, 66, 67, 68},
+     {72, 73, 74, 75, 76},
+     {80, 81, 82, 83, 84},
+     {88, 89, 90, 91, 92},
+     {69, 77, 85, 93, 22}},
+    {{96, 97, 98, 99, 100},
+     {104, 105, 106, 107, 108},
+     {112, 113, 114, 115, 116},
+     {120, 121, 122, 123, 124},
+     {101, 109, 117, 125, 30}},
+    {{102, 103, 70, 71, 38},
+     {110, 111, 78, 79, 46},
+     {118, 119, 86, 87, 54},
+     {126, 127, 94, 95, 62},
+     {39, 47, 55, 63, 31}},
+};
+
+// BISE encode N values × QUANT_40 (3 bits + 1 quint) into output_data,
+// starting at bit_offset. 3 chars per quint block (16 bits). 12 chars
+// uses 4 full blocks (64 bits) — no partial tail needed for our 2-part
+// CEM-8 case but the partial branch is here for completeness.
+void encode_ise_q40(const std::uint8_t* input_data,
+                    int character_count,
+                    std::uint8_t* output_data,
+                    int bit_offset) {
+    constexpr int bits = 3;
+    constexpr int mask = (1 << bits) - 1;
+    int i = 0;
+    int full_blocks = character_count / 3;
+
+    for (int j = 0; j < full_blocks; ++j) {
+        int i0 = input_data[i + 0] >> bits;
+        int i1 = input_data[i + 1] >> bits;
+        int i2 = input_data[i + 2] >> bits;
+        int T = kQuintOf[i2][i1][i0];
+
+        std::uint32_t pack;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 0) & 0x7) << bits));
+        write_bits(pack, bits + 3, bit_offset, output_data); bit_offset += bits + 3; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 3) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 5) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+    }
+    if (i != character_count) {
+        int i2 = 0;
+        int i1 = (i + 1 >= character_count) ? 0 : (input_data[i + 1] >> bits);
+        int i0 = input_data[i + 0] >> bits;
+        int T = kQuintOf[i2][i1][i0];
+        static const int tbits[2]  = {3, 2};
+        static const int tshift[2] = {0, 3};
+        for (int j = 0; i < character_count; ++i, ++j) {
+            std::uint32_t pack = std::uint32_t(
+                (input_data[i] & mask) |
+                (((T >> tshift[j]) & ((1 << tbits[j]) - 1)) << bits));
+            write_bits(pack, bits + tbits[j], bit_offset, output_data);
+            bit_offset += bits + tbits[j];
+        }
+    }
+}
+
+// Per-block partition assignment cache. partition_assign[pidx][texel]
+// stores 0/1 for 2-partition 4×4 blocks (small_block=true, z=0).
+struct PartitionTable2P {
+    std::uint8_t assign[1024][16];
+};
+const PartitionTable2P& partition_table_2p_4x4() {
+    static const PartitionTable2P table = []{
+        PartitionTable2P t{};
+        for (int pi = 0; pi < 1024; ++pi) {
+            for (int dy = 0; dy < kBlockH; ++dy) {
+                for (int dx = 0; dx < kBlockW; ++dx) {
+                    t.assign[pi][dy * kBlockW + dx] =
+                        spec_select_partition(pi, dx, dy, 0, 2, /*small=*/true);
+                }
+            }
+        }
+        return t;
+    }();
+    return table;
+}
+
+// PCA seed over a pixel subset (mask = 1 for "include").
+void pca_seed_rgb_subset(const Sample16& s, const std::uint8_t mask[16],
+                         std::uint8_t e0[3], std::uint8_t e1[3]) {
+    int n = 0;
+    float mL = 0, mA = 0, mB = 0;
+    for (int i = 0; i < 16; ++i) if (mask[i]) {
+        mL += s.lab[i].L; mA += s.lab[i].a; mB += s.lab[i].b; ++n;
+    }
+    if (n == 0) { for (int c = 0; c < 3; ++c) e0[c] = e1[c] = 0; return; }
+    float inv_n = 1.f / float(n);
+    mL *= inv_n; mA *= inv_n; mB *= inv_n;
+    if (n == 1) {
+        for (int i = 0; i < 16; ++i) if (mask[i]) {
+            e0[0] = e1[0] = s.rgba8[i][0];
+            e0[1] = e1[1] = s.rgba8[i][1];
+            e0[2] = e1[2] = s.rgba8[i][2];
+            return;
+        }
+    }
+    float cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+    for (int i = 0; i < 16; ++i) if (mask[i]) {
+        float dx = s.lab[i].L - mL;
+        float dy = s.lab[i].a - mA;
+        float dz = s.lab[i].b - mB;
+        cxx += dx * dx; cxy += dx * dy; cxz += dx * dz;
+        cyy += dy * dy; cyz += dy * dz;
+        czz += dz * dz;
+    }
+    if (cxx + cyy + czz < 1e-7f) {
+        for (int ch = 0; ch < 3; ++ch) {
+            int lo = 255, hi = 0;
+            for (int i = 0; i < 16; ++i) if (mask[i]) {
+                int v = int(s.rgba8[i][ch]);
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
+            e0[ch] = std::uint8_t(lo);
+            e1[ch] = std::uint8_t(hi);
+        }
+        return;
+    }
+    float vx = cxx + cxy + cxz;
+    float vy = cxy + cyy + cyz;
+    float vz = cxz + cyz + czz;
+    for (int it = 0; it < 4; ++it) {
+        float nx = cxx * vx + cxy * vy + cxz * vz;
+        float ny = cxy * vx + cyy * vy + cyz * vz;
+        float nz = cxz * vx + cyz * vy + czz * vz;
+        float m = std::max({std::abs(nx), std::abs(ny), std::abs(nz)});
+        if (m < 1e-9f) break;
+        float invm = 1.f / m;
+        vx = nx * invm; vy = ny * invm; vz = nz * invm;
+    }
+    int imin = -1, imax = -1;
+    float pmin = std::numeric_limits<float>::infinity();
+    float pmax = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < 16; ++i) if (mask[i]) {
+        float t = (s.lab[i].L - mL) * vx + (s.lab[i].a - mA) * vy +
+                  (s.lab[i].b - mB) * vz;
+        if (t < pmin) { pmin = t; imin = i; }
+        if (t > pmax) { pmax = t; imax = i; }
+    }
+    e0[0] = s.rgba8[imin][0]; e0[1] = s.rgba8[imin][1]; e0[2] = s.rgba8[imin][2];
+    e1[0] = s.rgba8[imax][0]; e1[1] = s.rgba8[imax][1]; e1[2] = s.rgba8[imax][2];
+}
+
+// Joint weight pick across both partitions: each pixel picks the
+// QUANT_4 weight (0..3) minimising err against its own partition's
+// paint ramp. Returns total error.
+template <block_compress::BlockMetric M>
+float pick_weights_2p_q4(const Sample16& s,
+                         const std::uint8_t assign[16],
+                         const std::uint8_t e0[2][3],
+                         const std::uint8_t e1[2][3],
+                         std::uint8_t out_w[16],
+                         std::uint8_t decoded[16][4]) {
+    std::uint8_t paint[2][kWeightLevels4][3];
+    for (int k = 0; k < 2; ++k) {
+        for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+            int w = kWeightToInterp4[w_i];
+            int inv = 64 - w;
+            for (int ch = 0; ch < 3; ++ch) {
+                paint[k][w_i][ch] =
+                    std::uint8_t((inv * int(e0[k][ch]) + w * int(e1[k][ch]) + 32) >> 6);
+            }
+        }
+    }
+    alignas(16) float paint_L[2][kWeightLevels4],
+                      paint_A[2][kWeightLevels4],
+                      paint_B[2][kWeightLevels4];
+    if constexpr (M == block_compress::BlockMetric::oklab2) {
+        for (int k = 0; k < 2; ++k) {
+            std::uint8_t rgb4[4][3];
+            for (int j = 0; j < 4; ++j) {
+                rgb4[j][0] = paint[k][j][0];
+                rgb4[j][1] = paint[k][j][1];
+                rgb4[j][2] = paint[k][j][2];
+            }
+            auto labs = color_space::srgb8_to_oklab_batch4(rgb4);
+            for (int j = 0; j < 4; ++j) {
+                paint_L[k][j] = labs.labs[j].L;
+                paint_A[k][j] = labs.labs[j].a;
+                paint_B[k][j] = labs.labs[j].b;
+            }
+        }
+    }
+    float tot = 0.f;
+    for (int p = 0; p < 16; ++p) {
+        int k = assign[p];
+        int best = 0;
+        float best_e = std::numeric_limits<float>::infinity();
+        if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+            int sr = int(s.rgba8[p][0]);
+            int sg = int(s.rgba8[p][1]);
+            int sb = int(s.rgba8[p][2]);
+            for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+                int dr = sr - int(paint[k][w_i][0]);
+                int dg = sg - int(paint[k][w_i][1]);
+                int db = sb - int(paint[k][w_i][2]);
+                float e = float(dr * dr + dg * dg + db * db);
+                if (e < best_e) { best_e = e; best = w_i; }
+            }
+        } else {
+            float sL = s.lab[p].L, sA = s.lab[p].a, sB = s.lab[p].b;
+            for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+                float dL = sL - paint_L[k][w_i];
+                float dA = sA - paint_A[k][w_i];
+                float dB = sB - paint_B[k][w_i];
+                float e = dL * dL + dA * dA + dB * dB;
+                if (e < best_e) { best_e = e; best = w_i; }
+            }
+        }
+        out_w[p] = std::uint8_t(best);
+        decoded[p][0] = paint[k][best][0];
+        decoded[p][1] = paint[k][best][1];
+        decoded[p][2] = paint[k][best][2];
+        decoded[p][3] = 255;
+        tot += best_e;
+    }
+    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+        tot *= (1.f / 65536.f);
+    }
+    return tot;
+}
+
+// LSQ refit endpoints per partition (single channel solved 3×; one 2x2
+// system per partition). Returns false if either partition is singular.
+bool refit_endpoints_2p(const Sample16& s, const std::uint8_t assign[16],
+                        const std::uint8_t w[16],
+                        std::uint8_t e0[2][3], std::uint8_t e1[2][3]) {
+    int n[2][kWeightLevels4] = {};
+    int sum[2][kWeightLevels4][3] = {};
+    for (int p = 0; p < 16; ++p) {
+        int k = assign[p], q = w[p];
+        ++n[k][q];
+        sum[k][q][0] += s.rgba8[p][0];
+        sum[k][q][1] += s.rgba8[p][1];
+        sum[k][q][2] += s.rgba8[p][2];
+    }
+    for (int k = 0; k < 2; ++k) {
+        float A00 = 0, A11 = 0, A01 = 0;
+        float B[3] = {0, 0, 0}, Bb[3] = {0, 0, 0};
+        for (int q = 0; q < kWeightLevels4; ++q) {
+            if (n[k][q] == 0) continue;
+            float w1 = float(kWeightToInterp4[q]) * (1.f / 64.f);
+            float w0 = 1.f - w1;
+            float nk = float(n[k][q]);
+            A00 += nk * w0 * w0;
+            A11 += nk * w1 * w1;
+            A01 += nk * w0 * w1;
+            for (int ch = 0; ch < 3; ++ch) {
+                B[ch]  += w0 * float(sum[k][q][ch]);
+                Bb[ch] += w1 * float(sum[k][q][ch]);
+            }
+        }
+        float det = A00 * A11 - A01 * A01;
+        if (std::abs(det) < 1e-6f) return false;
+        float inv = 1.f / det;
+        for (int ch = 0; ch < 3; ++ch) {
+            float c0 = (A11 * B[ch] - A01 * Bb[ch]) * inv;
+            float c1 = (-A01 * B[ch] + A00 * Bb[ch]) * inv;
+            e0[k][ch] = std::uint8_t(std::clamp(int(std::lround(c0)), 0, 255));
+            e1[k][ch] = std::uint8_t(std::clamp(int(std::lround(c1)), 0, 255));
+        }
+    }
+    return true;
+}
+
+// Pack a 2-partition CEM-8 4×4 block:
+//   - bit 0..10:  block mode = 0x42  (QUANT_4 weights, 4×4 grid)
+//   - bit 11..12: partition_count - 1 = 1
+//   - bit 13..22: partition_index (10 bits)
+//   - bit 23..28: matched-CEM = (CEM_8 << 2) = 32  (6 bits)
+//   - bit 29..84: endpoint BISE, 12 × QUANT_24 (3 bits + 1 trit each),
+//                 packed in 2 full blocks (5 chars × 23 bits) + 1 partial
+//                 (2 chars × 5 bits) = 56 bits
+//   - bit 96..127: weight BISE, 16 × 2-bit QUANT_4, top-down bit-reversed
+void pack_block_2p(int partition_index,
+                   const std::uint8_t e0[2][3], const std::uint8_t e1[2][3],
+                   const std::uint8_t weights[16], Block& out) {
+    std::uint8_t pcb[16] = {};
+
+    std::uint8_t weightbuf[16] = {};
+    for (int i = 0; i < 16; ++i) {
+        write_bits(std::uint32_t(weights[i] & 0x3), 2, i * 2, weightbuf);
+    }
+    for (int i = 0; i < 16; ++i) pcb[i] = bitrev8(weightbuf[15 - i]);
+
+    write_bits(kBlockModeRgba, 11, 0, pcb);
+    write_bits(1, 2, 11, pcb);  // partition_count - 1
+
+    // partition_index (10 bits, low 6 at bit 13, high 4 at bit 19).
+    write_bits(std::uint32_t(partition_index) & 0x3Fu, 6, 13, pcb);
+    write_bits(std::uint32_t(partition_index) >> 6, 4, 19, pcb);
+
+    // matched-CEM 6 bits at bit 23: (CEM_8 << 2) = 0b100000 = 32.
+    write_bits(32, 6, 23, pcb);
+
+    // 12 endpoint values × QUANT_40 BISE at bit 29.
+    // Order per partition (CEM_8): r0, r1, g0, g1, b0, b1.
+    std::uint8_t ep_packed[12];
+    int idx = 0;
+    for (int k = 0; k < 2; ++k) {
+        ep_packed[idx++] = quant40_pack(e0[k][0]);
+        ep_packed[idx++] = quant40_pack(e1[k][0]);
+        ep_packed[idx++] = quant40_pack(e0[k][1]);
+        ep_packed[idx++] = quant40_pack(e1[k][1]);
+        ep_packed[idx++] = quant40_pack(e0[k][2]);
+        ep_packed[idx++] = quant40_pack(e1[k][2]);
+    }
+    encode_ise_q40(ep_packed, 12, pcb, 29);
+    (void)idx;
+
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+// Full 2-partition encoder. Brute-forces all 1024 partition indices
+// using a cheap PCA+pick scoring inner loop, then performs a full LSQ
+// refit on the winning index.
+template <block_compress::BlockMetric M>
+Candidate encode_block_rgb_2p(const Sample16& s) {
+    Candidate best{};
+    best.err = std::numeric_limits<float>::infinity();
+    const auto& table = partition_table_2p_4x4();
+
+    std::uint8_t mask_a[16], mask_b[16];
+    std::uint8_t e0[2][3], e1[2][3];
+    std::uint8_t weights[16];
+    std::uint8_t decoded[16][4];
+
+    int best_pi = 0;
+    float best_pi_err = std::numeric_limits<float>::infinity();
+
+    for (int pi = 0; pi < 1024; ++pi) {
+        const std::uint8_t* assign = table.assign[pi];
+        int n0 = 0;
+        for (int i = 0; i < 16; ++i) {
+            mask_a[i] = (assign[i] == 0) ? 1 : 0;
+            mask_b[i] = (assign[i] == 1) ? 1 : 0;
+            n0 += mask_a[i];
+        }
+        // Degenerate partition (one cluster empty in this 4×4 block) — skip.
+        if (n0 == 0 || n0 == 16) continue;
+
+        pca_seed_rgb_subset(s, mask_a, e0[0], e1[0]);
+        pca_seed_rgb_subset(s, mask_b, e0[1], e1[1]);
+
+        std::uint8_t tw[16];
+        std::uint8_t td[16][4];
+        float err = pick_weights_2p_q4<M>(s, assign, e0, e1, tw, td);
+        if (err < best_pi_err) { best_pi_err = err; best_pi = pi; }
+    }
+
+    // Full convergence for the winning partition index.
+    const std::uint8_t* assign = table.assign[best_pi];
+    for (int i = 0; i < 16; ++i) {
+        mask_a[i] = (assign[i] == 0) ? 1 : 0;
+        mask_b[i] = (assign[i] == 1) ? 1 : 0;
+    }
+    pca_seed_rgb_subset(s, mask_a, e0[0], e1[0]);
+    pca_seed_rgb_subset(s, mask_b, e0[1], e1[1]);
+    float err = pick_weights_2p_q4<M>(s, assign, e0, e1, weights, decoded);
+    for (int it = 0; it < 4; ++it) {
+        std::uint8_t ne0[2][3], ne1[2][3];
+        std::memcpy(ne0, e0, sizeof(ne0));
+        std::memcpy(ne1, e1, sizeof(ne1));
+        if (!refit_endpoints_2p(s, assign, weights, ne0, ne1)) break;
+        std::uint8_t new_w[16];
+        std::uint8_t new_dec[16][4];
+        float new_err = pick_weights_2p_q4<M>(s, assign, ne0, ne1, new_w, new_dec);
+        if (new_err >= err - 1e-7f) break;
+        err = new_err;
+        std::memcpy(e0, ne0, sizeof(e0));
+        std::memcpy(e1, ne1, sizeof(e1));
+        std::memcpy(weights, new_w, 16);
+        std::memcpy(decoded, new_dec, sizeof(new_dec));
+    }
+
+    // Quantize endpoints to QUANT_40 (decoder's actual paint endpoints).
+    std::uint8_t e0d[2][3], e1d[2][3];
+    for (int k = 0; k < 2; ++k) {
+        for (int ch = 0; ch < 3; ++ch) {
+            e0d[k][ch] = kQuant40Unpack[quant40_pack(e0[k][ch])];
+            e1d[k][ch] = kQuant40Unpack[quant40_pack(e1[k][ch])];
+        }
+    }
+
+    // Per-partition blue-contract sum-normalisation on the QUANTIZED
+    // endpoints — the decoder's swap rule fires on the DECODED sums,
+    // not the encoder's pre-quant LSQ output. Swap + complement-weights
+    // here so the decoder transform is a no-op.
+    for (int k = 0; k < 2; ++k) {
+        int sa = int(e0d[k][0]) + int(e0d[k][1]) + int(e0d[k][2]);
+        int sb = int(e1d[k][0]) + int(e1d[k][1]) + int(e1d[k][2]);
+        if (sa > sb) {
+            std::swap(e0d[k][0], e1d[k][0]);
+            std::swap(e0d[k][1], e1d[k][1]);
+            std::swap(e0d[k][2], e1d[k][2]);
+            // Also swap the matching pre-quant values used by pack — pack
+            // calls quant24_pack on (e0[k], e1[k]) and the bit-stream
+            // ordering must match the post-swap endpoints.
+            std::swap(e0[k][0], e1[k][0]);
+            std::swap(e0[k][1], e1[k][1]);
+            std::swap(e0[k][2], e1[k][2]);
+            for (int i = 0; i < 16; ++i) {
+                if (assign[i] == k)
+                    weights[i] = std::uint8_t(3 - int(weights[i]));
+            }
+        }
+    }
+
+    // Re-pick weights against the decoded paint ramp + the (possibly
+    // swapped) endpoints so reported err matches the decoder's output.
+    std::uint8_t final_w[16];
+    std::uint8_t final_dec[16][4];
+    float final_err = pick_weights_2p_q4<M>(s, assign, e0d, e1d, final_w, final_dec);
+
+    pack_block_2p(best_pi, e0d, e1d, final_w, best.block);
+    std::memcpy(best.decoded, final_dec, sizeof(final_dec));
+    best.err = final_err;
+    return best;
+}
+
 // Per-block dispatch: blocks whose alpha is constant 255 use the
 // QUANT_8-weight RGB-direct path (CEM 8, 3-bit weights for sharper
 // gradients). Blocks with any non-trivial alpha use the QUANT_4-weight
-// RGBA-direct path (CEM 12). Both paths land in the same stream — ASTC
-// allows mixing block modes / CEMs per block.
+// RGBA-direct path (CEM 12). For RGB blocks we also try a 2-partition
+// fit and keep whichever has lower error.
 template <block_compress::BlockMetric M>
 Candidate encode_block(const Sample16& s) {
     bool any_alpha = false;
     for (int i = 0; i < 16; ++i) {
         if (s.alpha[i] != 255) { any_alpha = true; break; }
     }
-    return any_alpha ? encode_block_rgba<M>(s) : encode_block_rgb<M>(s);
+    if (any_alpha) return encode_block_rgba<M>(s);
+    Candidate one = encode_block_rgb<M>(s);
+    Candidate two = encode_block_rgb_2p<M>(s);
+    return (two.err < one.err) ? two : one;
 }
 
 }  // namespace
