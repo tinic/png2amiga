@@ -87,35 +87,60 @@ constexpr std::uint32_t kBlockModeRgba = kBlockModeRgba4x4;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb4x4_Q12 = 0x251;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb5x3_Q12 = 0x2B1;
 
+constexpr int kWeightLevels32 = 32;
+constexpr int kWeightLevels24 = 24;
+constexpr int kWeightLevels20 = 20;
 constexpr int kWeightLevels16 = 16;
 constexpr int kWeightLevels12 = 12;
+constexpr int kWeightLevels10 = 10;
 constexpr int kWeightLevels8 = 8;
+constexpr int kWeightLevels6 = 6;
+constexpr int kWeightLevels5 = 5;
 constexpr int kWeightLevels4 = 4;
+constexpr int kWeightLevels3 = 3;
 [[maybe_unused]] constexpr int kWeightLevels2 = 2;
 
 // Pre-computed weight ramps scaled to the canonical 0..64 range used
 // in the ASTC paint formula `((64-w)*e0 + w*e1) / 64`. Per ASTC §16
-// (tables sourced from astcenc_weight_quant_xfer_tables.cpp):
-//   QUANT_16 = 16-level: {0,4,8,12,17,21,25,29,35,39,43,47,52,56,60,64}
-//   QUANT_12 = 12-level: {0,5,11,17,23,28,36,41,47,53,59,64} — trit-packed
-//   QUANT_8  = {0, 9, 18, 27, 37, 46, 55, 64}
-//   QUANT_4  = {0, 21, 43, 64}
-//   QUANT_2  = {0, 64}                 (binary, used for 6x6+ footprints)
+// (tables sourced from astcenc_weight_quant_xfer_tables.cpp).
+// Power-of-2 levels use straight binary pack; others use trit-pack
+// (Q3 / Q6 / Q12 / Q24) or quint-pack (Q5 / Q10 / Q20).
+constexpr int kWeightToInterp32[kWeightLevels32] = {
+    0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30,
+    34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64};
+constexpr int kWeightToInterp24[kWeightLevels24] = {
+    0, 2, 5, 8, 11, 13, 16, 19, 22, 24, 27, 30,
+    34, 37, 40, 42, 45, 48, 51, 53, 56, 59, 62, 64};
+constexpr int kWeightToInterp20[kWeightLevels20] = {
+    0, 3, 6, 9, 13, 16, 19, 23, 26, 29, 35, 38, 41, 45, 48, 51, 55, 58, 61, 64};
 constexpr int kWeightToInterp16[kWeightLevels16] = {
     0, 4, 8, 12, 17, 21, 25, 29, 35, 39, 43, 47, 52, 56, 60, 64};
 constexpr int kWeightToInterp12[kWeightLevels12] = {
     0, 5, 11, 17, 23, 28, 36, 41, 47, 53, 59, 64};
+constexpr int kWeightToInterp10[kWeightLevels10] = {
+    0, 7, 14, 21, 28, 36, 43, 50, 57, 64};
 constexpr int kWeightToInterp8[kWeightLevels8] = {0, 9, 18, 27, 37, 46, 55, 64};
+constexpr int kWeightToInterp6[kWeightLevels6] = {0, 12, 25, 39, 52, 64};
+constexpr int kWeightToInterp5[kWeightLevels5] = {0, 16, 32, 48, 64};
 constexpr int kWeightToInterp4[kWeightLevels4] = {0, 21, 43, 64};
+constexpr int kWeightToInterp3[kWeightLevels3] = {0, 32, 64};
 constexpr int kWeightToInterp2[kWeightLevels2] = {0, 64};
 
-// QUANT_12 stored-value → unquantized-level scramble table. ASTC §C.2.7
-// stores weights in a BISE-friendly permutation rather than direct
-// integer; the encoder writes `kQuant12Scramble[level]` to the bitstream
-// so the decoder's inverse-scramble lookup produces `level` back.
-// From astcenc_weight_quant_xfer_tables.cpp QUANT_12 row, second field.
+// Stored-value → unquantized-level scramble tables. ASTC stores BISE
+// values in a permutation rather than direct integer; the encoder
+// writes `kQuantNScramble[level]` so the decoder's inverse lookup
+// reads `level` back. Identity scrambles (Q2/Q3/Q4/Q5/Q8/Q16/Q32) are
+// omitted — the pack code skips the scramble for those.
+constexpr std::uint8_t kQuant6Scramble[kWeightLevels6] = {0, 2, 4, 5, 3, 1};
+constexpr std::uint8_t kQuant10Scramble[kWeightLevels10] = {
+    0, 2, 4, 6, 8, 9, 7, 5, 3, 1};
 constexpr std::uint8_t kQuant12Scramble[kWeightLevels12] = {
     0, 4, 8, 2, 6, 10, 11, 7, 3, 9, 5, 1};
+constexpr std::uint8_t kQuant20Scramble[kWeightLevels20] = {
+    0, 4, 8, 12, 16, 2, 6, 10, 14, 18, 19, 15, 11, 7, 3, 17, 13, 9, 5, 1};
+constexpr std::uint8_t kQuant24Scramble[kWeightLevels24] = {
+    0, 8, 16, 2, 10, 18, 4, 12, 20, 6, 14, 22, 23, 15, 7, 21, 13, 5, 19, 11,
+    3, 17, 9, 1};
 
 // (legacy kWeightLevels / kWeightToInterp aliases removed — superseded
 // by weight_ramp<WL>() + the kWeightLevels8 / kWeightLevels4 constants.)
@@ -232,18 +257,25 @@ void pca_seed_rgb(const SampleT<N>& s, std::uint8_t e0[3], std::uint8_t e1[3]) {
     e1[0] = s.rgba8[imax][0]; e1[1] = s.rgba8[imax][1]; e1[2] = s.rgba8[imax][2];
 }
 
-// Compile-time weight ramp lookup. WL is the weight-quant level
-// (number of stored values: 2, 4, 8, 12, 16).
+// Compile-time weight ramp lookup. WL = number of stored values for the
+// quant level (2..32, sparse).
 template <int WL>
 constexpr const int* weight_ramp() {
-    if constexpr (WL == 16) return kWeightToInterp16;
+    if constexpr (WL == 32) return kWeightToInterp32;
+    else if constexpr (WL == 24) return kWeightToInterp24;
+    else if constexpr (WL == 20) return kWeightToInterp20;
+    else if constexpr (WL == 16) return kWeightToInterp16;
     else if constexpr (WL == 12) return kWeightToInterp12;
-    else if constexpr (WL == 8) return kWeightToInterp8;
-    else if constexpr (WL == 4) return kWeightToInterp4;
-    else if constexpr (WL == 2) return kWeightToInterp2;
+    else if constexpr (WL == 10) return kWeightToInterp10;
+    else if constexpr (WL == 8)  return kWeightToInterp8;
+    else if constexpr (WL == 6)  return kWeightToInterp6;
+    else if constexpr (WL == 5)  return kWeightToInterp5;
+    else if constexpr (WL == 4)  return kWeightToInterp4;
+    else if constexpr (WL == 3)  return kWeightToInterp3;
+    else if constexpr (WL == 2)  return kWeightToInterp2;
     else {
-        static_assert(WL == 16 || WL == 12 || WL == 8 || WL == 4 || WL == 2,
-                      "WL must be 2, 4, 8, 12, or 16");
+        static_assert(WL >= 2 && WL <= 32,
+                      "WL must be one of {2,3,4,5,6,8,10,12,16,20,24,32}");
         return nullptr;
     }
 }
@@ -400,20 +432,27 @@ inline std::uint8_t bitrev8(std::uint8_t v) {
     return v;
 }
 
-// Forward decl: pack_block<…, WL=12> needs the trit BISE encoder, but
-// kTritOf + the body live further down with the endpoint-pack helpers.
+// Forward decls: pack_block<…, WL∈{3,6,12,24}> needs the trit BISE
+// encoder, WL∈{5,10,20} needs the quint BISE encoder. Tables + bodies
+// live further down alongside the endpoint-pack helpers.
 template <int bits>
 void encode_ise_trit(const std::uint8_t* input_data,
                      int character_count,
                      std::uint8_t* output_data,
                      int bit_offset);
+template <int bits>
+void encode_ise_quint(const std::uint8_t* input_data,
+                      int character_count,
+                      std::uint8_t* output_data,
+                      int bit_offset);
 
 // Pack a single-partition CEM-8 LDR-RGB block. Templated on:
 //   - N: weight count (= grid width × grid height)
 //   - BlockMode: 11-bit block_mode that encodes (W, H, weight quant)
 //   - WL: weight quant level
-//       Power-of-2 (16/8/4/2): straight binary packing of BPW bits/weight.
-//       Q12: BISE trit-packed (2 data bits + 1 trit/weight, 18 bits per 5).
+//       Power-of-2 (32/16/8/4/2): straight binary packing of BPW bits/weight.
+//       Trit-packed (3/6/12/24): BISE trit-pack (bits + 1 trit/weight).
+//       Quint-packed (5/10/20):  BISE quint-pack (bits + 1 quint/weight).
 // QUANT_256 endpoints (8-bit straight) are used unconditionally — the
 // bit budget supports them for any grid where weight_bits + 17 + 48 ≤ 128.
 template <int N, std::uint32_t BlockMode, int WL>
@@ -422,17 +461,31 @@ void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
     std::uint8_t pcb[16] = {};
 
     // Weight buffer: N values, LSB-first, then per-byte bit-reversed
-    // and placed top-down per ASTC §16.7.
+    // and placed top-down per ASTC §16.7. Trit/quint quants use BISE
+    // with a per-level scramble table for non-identity store orders.
     std::uint8_t weightbuf[16] = {};
-    if constexpr (WL == 12) {
-        // Scramble per QUANT_12 store-order then trit-pack 2 data + 1 trit.
+    if constexpr (WL == 3 || WL == 6 || WL == 12 || WL == 24) {
         std::uint8_t scrambled[N];
-        for (int i = 0; i < N; ++i)
-            scrambled[i] = kQuant12Scramble[weights[i]];
-        encode_ise_trit<2>(scrambled, N, weightbuf, 0);
+        for (int i = 0; i < N; ++i) {
+            if constexpr (WL == 6)        scrambled[i] = kQuant6Scramble[weights[i]];
+            else if constexpr (WL == 12)  scrambled[i] = kQuant12Scramble[weights[i]];
+            else if constexpr (WL == 24)  scrambled[i] = kQuant24Scramble[weights[i]];
+            else                          scrambled[i] = weights[i];  // Q3 identity
+        }
+        constexpr int trit_bits = (WL == 3) ? 0 : (WL == 6) ? 1 : (WL == 12) ? 2 : 3;
+        encode_ise_trit<trit_bits>(scrambled, N, weightbuf, 0);
+    } else if constexpr (WL == 5 || WL == 10 || WL == 20) {
+        std::uint8_t scrambled[N];
+        for (int i = 0; i < N; ++i) {
+            if constexpr (WL == 10)       scrambled[i] = kQuant10Scramble[weights[i]];
+            else if constexpr (WL == 20)  scrambled[i] = kQuant20Scramble[weights[i]];
+            else                          scrambled[i] = weights[i];  // Q5 identity
+        }
+        constexpr int quint_bits = (WL == 5) ? 0 : (WL == 10) ? 1 : 2;
+        encode_ise_quint<quint_bits>(scrambled, N, weightbuf, 0);
     } else {
         constexpr int BPW =
-            (WL == 16) ? 4 : (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
+            (WL == 32) ? 5 : (WL == 16) ? 4 : (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
         constexpr std::uint32_t WMask = (1u << BPW) - 1u;
         for (int i = 0; i < N; ++i) {
             write_bits(std::uint32_t(weights[i]) & WMask, BPW, i * BPW, weightbuf);
@@ -866,14 +919,14 @@ constexpr std::uint8_t kQuintOf[5][5][5] = {
      {39, 47, 55, 63, 31}},
 };
 
-// BISE encode N values × QUANT_40 (3 bits + 1 quint) into output_data
-// starting at bit_offset. 3 chars per quint block (16 bits); 8 chars
-// (dual-plane RGBA) = 2 full blocks + 2-char partial = 43 bits total.
-void encode_ise_q40(const std::uint8_t* input_data,
-                    int character_count,
-                    std::uint8_t* output_data,
-                    int bit_offset) {
-    constexpr int bits = 3;
+// BISE encode N values × quint-packed quant level. Bits per data lane
+// fixes the quant: bits=3 → QUANT_40, bits=0 → QUANT_5, bits=1 →
+// QUANT_10, bits=2 → QUANT_20. 3 chars per quint block (3·bits + 7 bits).
+template <int bits>
+void encode_ise_quint(const std::uint8_t* input_data,
+                      int character_count,
+                      std::uint8_t* output_data,
+                      int bit_offset) {
     constexpr int mask = (1 << bits) - 1;
     int i = 0;
     int full_blocks = character_count / 3;
@@ -907,6 +960,14 @@ void encode_ise_q40(const std::uint8_t* input_data,
             bit_offset += bits + tbits[j];
         }
     }
+}
+
+// Back-compat: existing endpoint-pack call sites use the explicit name.
+inline void encode_ise_q40(const std::uint8_t* input_data,
+                           int character_count,
+                           std::uint8_t* output_data,
+                           int bit_offset) {
+    encode_ise_quint<3>(input_data, character_count, output_data, bit_offset);
 }
 
 // ---------------------------------------------------------------------------
@@ -2148,6 +2209,32 @@ auto make_encode_fn_mix1d2() {
     };
 }
 
+// Parameter-pack dispatcher: one entry per candidate decimation config.
+// Each DecimCfg is a structural NTTP carrying (grid_w, grid_h,
+// block_mode, weight_quant). The fold expression instantiates
+// encode_block_rgb_decim once per Cfg and keeps the lowest-err result.
+struct DecimCfg {
+    int gw, gh;
+    std::uint32_t bm;
+    int wl;
+};
+
+template <int TexW, int TexH, block_compress::BlockMetric M, DecimCfg... Cfgs>
+auto make_encode_fn_decim_pack() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate best{};
+        best.err = std::numeric_limits<float>::infinity();
+        ((
+            [&] {
+                Candidate c = encode_block_rgb_decim<
+                    TexW, TexH, Cfgs.gw, Cfgs.gh, Cfgs.bm, Cfgs.wl, M>(s);
+                if (c.err < best.err) best = c;
+            }()
+        ), ...);
+        return best;
+    };
+}
+
 // 1:1 + three decim hybrid.
 template <int TexW, int TexH,
           std::uint32_t BM_11, int WL_11,
@@ -2268,123 +2355,329 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         if (W == 4 && H == 4)
             return encode_image_impl<4, 4>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn_4x4<M>());
+        // Non-4x4 / non-5x4 dispatch: per-footprint exhaustive search
+        // over every valid 2D block_mode whose (grid, weight_quant)
+        // fits 6-endpoint CEM-8 QUANT_256 (weight_bits ≤ 63). Each
+        // candidate runs encode_block_rgb_decim and contributes to the
+        // per-block min-err pick. Candidate lists generated from a
+        // port of astcenc_block_sizes.cpp:decode_block_mode_2d — see
+        // tools/enum_astc_modes.py for the regen script.
+        // 5x4 keeps the dedicated 1:1 encode_block_rgb path (Q8 ramp,
+        // per-texel exact weight assignment). The exhaustive decim
+        // pack regresses on 5x4 because encode_block_rgb_decim's
+        // bilinear LSQ + coord descent finds a worse local optimum
+        // for the trivially-bilinear 1:1 case than the per-texel
+        // direct pick used by the 1:1 specialization.
         if (W == 5 && H == 4)
             return encode_image_impl<5, 4>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn<5, 4, kBlockModeRgb5x4, 8, M>());
-        // 5x5 / 6x5 hybrid: 1:1 QUANT_4 (25/30 grid points, 4-level
-        // ramp) wins on average for natural-image gradients, but some
-        // blocks prefer the 4×4-decim QUANT_8 path (16 grid + 8-level
-        // ramp). Per-block best closes more of the gap to astcenc.
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_mix1d3<5, 5,
-                    kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<5, 5, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
+                    DecimCfg{3,3,0x3BF,32}, DecimCfg{3,4,0x3DF,32},
+                    DecimCfg{3,5,0x3EE,16}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{5,2,0x293,32},
+                    DecimCfg{5,3,0x2A2,16}, DecimCfg{5,4,0x0D3,8},
+                    DecimCfg{5,5,0x0F2,5}>());
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_mix1d3<6, 5,
-                    kBlockModeRgb6x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
-        // 6x6 / 8x5 / 8x6 use bilinear-decim (1:1 QUANT_2 was binary
-        // weights — S2 ~50 — so we drop down to a smaller weight grid
-        // with a finer ramp). Two-config search: 4×4 QUANT_8 (8-level
-        // ramp, 16 grid points) primary; 5×5/5×4 QUANT_4 secondary
-        // for blocks where extra spatial resolution helps.
+                make_encode_fn_decim_pack<6, 5, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
+                    DecimCfg{3,3,0x3BF,32}, DecimCfg{3,4,0x3DF,32},
+                    DecimCfg{3,5,0x3EE,16}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{5,2,0x293,32},
+                    DecimCfg{5,3,0x2A2,16}, DecimCfg{5,4,0x0D3,8},
+                    DecimCfg{5,5,0x0F2,5}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}>());
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<6, 6,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    6, 5, kBlockModeRgb6x5, 4,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<6, 6, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3}>());
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<8, 5,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<8, 5, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
+                    DecimCfg{3,3,0x3BF,32}, DecimCfg{3,4,0x3DF,32},
+                    DecimCfg{3,5,0x3EE,16}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{5,2,0x293,32},
+                    DecimCfg{5,3,0x2A2,16}, DecimCfg{5,4,0x0D3,8},
+                    DecimCfg{5,5,0x0F2,5}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{7,2,0x392,20},
+                    DecimCfg{7,3,0x1B3,8}, DecimCfg{7,4,0x1C2,4},
+                    DecimCfg{7,5,0x1F1,3}, DecimCfg{8,2,0x215,12},
+                    DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
+                    DecimCfg{8,5,0x065,2}>());
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<8, 6,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    6, 5, kBlockModeRgb6x5, 4,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
-        // Bilinear-decimated footprints (texel dim > weight dim). Each
-        // tries multiple (grid, weight-quant) candidates per block and
-        // keeps the lowest-err pick — same trick astcenc uses to spread
-        // the bit budget between spatial resolution (grid points) and
-        // ramp resolution (weight quant) per-block content. The 4×4 +
-        // QUANT_8 + QUANT_256-endpoint combo is the baseline (matches
-        // what 1:1 4x4 does); the 5×5 / 6×5 + QUANT_4 alternative wins
-        // on smooth low-frequency content where more grid points help.
+                make_encode_fn_decim_pack<8, 6, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
+                    DecimCfg{7,2,0x392,20}, DecimCfg{7,3,0x1B3,8},
+                    DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
+                    DecimCfg{7,6,0x124,2}, DecimCfg{8,2,0x215,12},
+                    DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
+                    DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2}>());
         if (W == 8 && H == 8)
             return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<8, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    6, 5, kBlockModeRgb6x5, 4,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<8, 8, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{2,7,0x29E,20}, DecimCfg{2,8,0x219,12},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{3,7,0x0BF,8},
+                    DecimCfg{3,8,0x02B,6}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{4,7,0x0CE,4}, DecimCfg{4,8,0x059,3},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{5,7,0x0FD,3},
+                    DecimCfg{5,8,0x069,2}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
+                    DecimCfg{6,7,0x304,2}, DecimCfg{6,8,0x504,2},
+                    DecimCfg{7,2,0x392,20}, DecimCfg{7,3,0x1B3,8},
+                    DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
+                    DecimCfg{7,6,0x124,2}, DecimCfg{7,7,0x324,2},
+                    DecimCfg{7,8,0x524,2}, DecimCfg{8,2,0x215,12},
+                    DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
+                    DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2},
+                    DecimCfg{8,7,0x344,2}>());
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<10, 5,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<10, 5, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
+                    DecimCfg{3,3,0x3BF,32}, DecimCfg{3,4,0x3DF,32},
+                    DecimCfg{3,5,0x3EE,16}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{5,2,0x293,32},
+                    DecimCfg{5,3,0x2A2,16}, DecimCfg{5,4,0x0D3,8},
+                    DecimCfg{5,5,0x0F2,5}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{7,2,0x392,20},
+                    DecimCfg{7,3,0x1B3,8}, DecimCfg{7,4,0x1C2,4},
+                    DecimCfg{7,5,0x1F1,3}, DecimCfg{8,2,0x215,12},
+                    DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
+                    DecimCfg{8,5,0x065,2}, DecimCfg{9,2,0x285,10},
+                    DecimCfg{9,3,0x0B6,5}, DecimCfg{9,4,0x0D5,3},
+                    DecimCfg{9,5,0x0E5,2}, DecimCfg{10,2,0x117,8},
+                    DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
+                    DecimCfg{10,5,0x165,2}>());
         if (W == 10 && H == 6)
             return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<10, 6,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    5, 3, kBlockModeRgb5x3_Q16, 16,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<10, 6, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
+                    DecimCfg{7,2,0x392,20}, DecimCfg{7,3,0x1B3,8},
+                    DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
+                    DecimCfg{7,6,0x124,2}, DecimCfg{8,2,0x215,12},
+                    DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
+                    DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2},
+                    DecimCfg{9,2,0x285,10}, DecimCfg{9,3,0x0B6,5},
+                    DecimCfg{9,4,0x0D5,3}, DecimCfg{9,5,0x0E5,2},
+                    DecimCfg{9,6,0x164,2}, DecimCfg{10,2,0x117,8},
+                    DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
+                    DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2}>());
         if (W == 10 && H == 8)
             return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim5<10, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    5, 3, kBlockModeRgb5x3_Q16, 16,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<10, 8, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{2,7,0x29E,20}, DecimCfg{2,8,0x219,12},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{3,7,0x0BF,8},
+                    DecimCfg{3,8,0x02B,6}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{4,7,0x0CE,4}, DecimCfg{4,8,0x059,3},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{5,7,0x0FD,3},
+                    DecimCfg{5,8,0x069,2}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
+                    DecimCfg{6,7,0x304,2}, DecimCfg{6,8,0x504,2},
+                    DecimCfg{7,2,0x392,20}, DecimCfg{7,3,0x1B3,8},
+                    DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
+                    DecimCfg{7,6,0x124,2}, DecimCfg{7,7,0x324,2},
+                    DecimCfg{7,8,0x524,2}, DecimCfg{8,2,0x215,12},
+                    DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
+                    DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2},
+                    DecimCfg{8,7,0x344,2}, DecimCfg{9,2,0x285,10},
+                    DecimCfg{9,3,0x0B6,5}, DecimCfg{9,4,0x0D5,3},
+                    DecimCfg{9,5,0x0E5,2}, DecimCfg{9,6,0x164,2},
+                    DecimCfg{9,7,0x364,2}, DecimCfg{10,2,0x117,8},
+                    DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
+                    DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2}>());
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim6<10, 10,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    6, 5, kBlockModeRgb6x5, 4,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    5, 3, kBlockModeRgb5x3_Q16, 16,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<10, 10, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{2,7,0x29E,20}, DecimCfg{2,8,0x219,12},
+                    DecimCfg{2,9,0x289,10}, DecimCfg{2,10,0x11B,8},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{3,7,0x0BF,8},
+                    DecimCfg{3,8,0x02B,6}, DecimCfg{3,9,0x0BA,5},
+                    DecimCfg{3,10,0x12A,4}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{4,7,0x0CE,4}, DecimCfg{4,8,0x059,3},
+                    DecimCfg{4,9,0x0D9,3}, DecimCfg{4,10,0x149,2},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{5,7,0x0FD,3},
+                    DecimCfg{5,8,0x069,2}, DecimCfg{5,9,0x0E9,2},
+                    DecimCfg{5,10,0x169,2}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
+                    DecimCfg{6,7,0x304,2}, DecimCfg{6,8,0x504,2},
+                    DecimCfg{6,9,0x704,2}, DecimCfg{6,10,0x184,2},
+                    DecimCfg{7,2,0x392,20}, DecimCfg{7,3,0x1B3,8},
+                    DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
+                    DecimCfg{7,6,0x124,2}, DecimCfg{7,7,0x324,2},
+                    DecimCfg{7,8,0x524,2}, DecimCfg{7,9,0x724,2},
+                    DecimCfg{8,2,0x215,12}, DecimCfg{8,3,0x027,6},
+                    DecimCfg{8,4,0x055,3}, DecimCfg{8,5,0x065,2},
+                    DecimCfg{8,6,0x144,2}, DecimCfg{8,7,0x344,2},
+                    DecimCfg{9,2,0x285,10}, DecimCfg{9,3,0x0B6,5},
+                    DecimCfg{9,4,0x0D5,3}, DecimCfg{9,5,0x0E5,2},
+                    DecimCfg{9,6,0x164,2}, DecimCfg{9,7,0x364,2},
+                    DecimCfg{10,2,0x117,8}, DecimCfg{10,3,0x126,4},
+                    DecimCfg{10,4,0x145,2}, DecimCfg{10,5,0x165,2},
+                    DecimCfg{10,6,0x1A4,2}>());
         if (W == 12 && H == 10)
             return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim6<12, 10,
-                    6, 5, kBlockModeRgb6x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<12, 10, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{2,7,0x29E,20}, DecimCfg{2,8,0x219,12},
+                    DecimCfg{2,9,0x289,10}, DecimCfg{2,10,0x11B,8},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{3,7,0x0BF,8},
+                    DecimCfg{3,8,0x02B,6}, DecimCfg{3,9,0x0BA,5},
+                    DecimCfg{3,10,0x12A,4}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{4,7,0x0CE,4}, DecimCfg{4,8,0x059,3},
+                    DecimCfg{4,9,0x0D9,3}, DecimCfg{4,10,0x149,2},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{5,7,0x0FD,3},
+                    DecimCfg{5,8,0x069,2}, DecimCfg{5,9,0x0E9,2},
+                    DecimCfg{5,10,0x169,2}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
+                    DecimCfg{6,7,0x304,2}, DecimCfg{6,8,0x504,2},
+                    DecimCfg{6,9,0x704,2}, DecimCfg{6,10,0x184,2},
+                    DecimCfg{7,2,0x392,20}, DecimCfg{7,3,0x1B3,8},
+                    DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
+                    DecimCfg{7,6,0x124,2}, DecimCfg{7,7,0x324,2},
+                    DecimCfg{7,8,0x524,2}, DecimCfg{7,9,0x724,2},
+                    DecimCfg{8,2,0x215,12}, DecimCfg{8,3,0x027,6},
+                    DecimCfg{8,4,0x055,3}, DecimCfg{8,5,0x065,2},
+                    DecimCfg{8,6,0x144,2}, DecimCfg{8,7,0x344,2},
+                    DecimCfg{9,2,0x285,10}, DecimCfg{9,3,0x0B6,5},
+                    DecimCfg{9,4,0x0D5,3}, DecimCfg{9,5,0x0E5,2},
+                    DecimCfg{9,6,0x164,2}, DecimCfg{9,7,0x364,2},
+                    DecimCfg{10,2,0x117,8}, DecimCfg{10,3,0x126,4},
+                    DecimCfg{10,4,0x145,2}, DecimCfg{10,5,0x165,2},
+                    DecimCfg{10,6,0x1A4,2}, DecimCfg{11,2,0x187,6},
+                    DecimCfg{11,3,0x1B5,3}, DecimCfg{11,4,0x1C5,2},
+                    DecimCfg{11,5,0x1E5,2}, DecimCfg{12,2,0x00C,6},
+                    DecimCfg{12,3,0x034,3}, DecimCfg{12,4,0x044,2},
+                    DecimCfg{12,5,0x064,2}>());
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim6<12, 12,
-                    6, 5, kBlockModeRgb6x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4,
-                    5, 3, kBlockModeRgb5x3_Q16, 16,
-                    4, 4, kBlockModeRgb4x4_Q12, 12, M>());
+                make_encode_fn_decim_pack<12, 12, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
+                    DecimCfg{2,7,0x29E,20}, DecimCfg{2,8,0x219,12},
+                    DecimCfg{2,9,0x289,10}, DecimCfg{2,10,0x11B,8},
+                    DecimCfg{2,11,0x18B,6}, DecimCfg{2,12,0x08C,6},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{3,5,0x3EE,16},
+                    DecimCfg{3,6,0x22D,10}, DecimCfg{3,7,0x0BF,8},
+                    DecimCfg{3,8,0x02B,6}, DecimCfg{3,9,0x0BA,5},
+                    DecimCfg{3,10,0x12A,4}, DecimCfg{3,11,0x1B9,3},
+                    DecimCfg{3,12,0x0B4,3}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{4,5,0x073,8}, DecimCfg{4,6,0x04F,6},
+                    DecimCfg{4,7,0x0CE,4}, DecimCfg{4,8,0x059,3},
+                    DecimCfg{4,9,0x0D9,3}, DecimCfg{4,10,0x149,2},
+                    DecimCfg{4,11,0x1C9,2}, DecimCfg{4,12,0x0C4,2},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
+                    DecimCfg{5,6,0x06E,4}, DecimCfg{5,7,0x0FD,3},
+                    DecimCfg{5,8,0x069,2}, DecimCfg{5,9,0x0E9,2},
+                    DecimCfg{5,10,0x169,2}, DecimCfg{5,11,0x1E9,2},
+                    DecimCfg{5,12,0x0E4,2}, DecimCfg{6,2,0x313,32},
+                    DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
+                    DecimCfg{6,7,0x304,2}, DecimCfg{6,8,0x504,2},
+                    DecimCfg{6,9,0x704,2}, DecimCfg{6,10,0x184,2},
+                    DecimCfg{7,2,0x392,20}, DecimCfg{7,3,0x1B3,8},
+                    DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
+                    DecimCfg{7,6,0x124,2}, DecimCfg{7,7,0x324,2},
+                    DecimCfg{7,8,0x524,2}, DecimCfg{7,9,0x724,2},
+                    DecimCfg{8,2,0x215,12}, DecimCfg{8,3,0x027,6},
+                    DecimCfg{8,4,0x055,3}, DecimCfg{8,5,0x065,2},
+                    DecimCfg{8,6,0x144,2}, DecimCfg{8,7,0x344,2},
+                    DecimCfg{9,2,0x285,10}, DecimCfg{9,3,0x0B6,5},
+                    DecimCfg{9,4,0x0D5,3}, DecimCfg{9,5,0x0E5,2},
+                    DecimCfg{9,6,0x164,2}, DecimCfg{9,7,0x364,2},
+                    DecimCfg{10,2,0x117,8}, DecimCfg{10,3,0x126,4},
+                    DecimCfg{10,4,0x145,2}, DecimCfg{10,5,0x165,2},
+                    DecimCfg{10,6,0x1A4,2}, DecimCfg{11,2,0x187,6},
+                    DecimCfg{11,3,0x1B5,3}, DecimCfg{11,4,0x1C5,2},
+                    DecimCfg{11,5,0x1E5,2}, DecimCfg{12,2,0x00C,6},
+                    DecimCfg{12,3,0x034,3}, DecimCfg{12,4,0x044,2},
+                    DecimCfg{12,5,0x064,2}>());
         return EncodeResult{};  // unsupported footprint
     };
 
