@@ -2070,6 +2070,24 @@ auto make_encode_fn_mix11() {
     };
 }
 
+// 1:1 + two decim hybrid.
+template <int TexW, int TexH,
+          std::uint32_t BM_11, int WL_11,
+          int G1w, int G1h, std::uint32_t BM1, int WL1,
+          int G2w, int G2h, std::uint32_t BM2, int WL2,
+          block_compress::BlockMetric M>
+auto make_encode_fn_mix1d2() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate a = encode_block_rgb<TexW, TexH, BM_11, WL_11, M>(s);
+        Candidate b = encode_block_rgb_decim<TexW, TexH, G1w, G1h, BM1, WL1, M>(s);
+        Candidate c = encode_block_rgb_decim<TexW, TexH, G2w, G2h, BM2, WL2, M>(s);
+        Candidate best = a;
+        if (b.err < best.err) best = b;
+        if (c.err < best.err) best = c;
+        return best;
+    };
+}
+
 template <int TexW, int TexH,
           int G1w, int G1h, std::uint32_t BM1, int WL1,
           int G2w, int G2h, std::uint32_t BM2, int WL2,
@@ -2083,6 +2101,26 @@ auto make_encode_fn_decim3() {
         Candidate best = a;
         if (b.err < best.err) best = b;
         if (c.err < best.err) best = c;
+        return best;
+    };
+}
+
+template <int TexW, int TexH,
+          int G1w, int G1h, std::uint32_t BM1, int WL1,
+          int G2w, int G2h, std::uint32_t BM2, int WL2,
+          int G3w, int G3h, std::uint32_t BM3, int WL3,
+          int G4w, int G4h, std::uint32_t BM4, int WL4,
+          block_compress::BlockMetric M>
+auto make_encode_fn_decim4() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate a = encode_block_rgb_decim<TexW, TexH, G1w, G1h, BM1, WL1, M>(s);
+        Candidate b = encode_block_rgb_decim<TexW, TexH, G2w, G2h, BM2, WL2, M>(s);
+        Candidate c = encode_block_rgb_decim<TexW, TexH, G3w, G3h, BM3, WL3, M>(s);
+        Candidate d = encode_block_rgb_decim<TexW, TexH, G4w, G4h, BM4, WL4, M>(s);
+        Candidate best = a;
+        if (b.err < best.err) best = b;
+        if (c.err < best.err) best = c;
+        if (d.err < best.err) best = d;
         return best;
     };
 }
@@ -2109,14 +2147,16 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // ramp). Per-block best closes more of the gap to astcenc.
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_mix11<5, 5,
+                make_encode_fn_mix1d2<5, 5,
                     kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_mix11<6, 5,
+                make_encode_fn_mix1d2<6, 5,
                     kBlockModeRgb6x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         // 6x6 / 8x5 / 8x6 use bilinear-decim (1:1 QUANT_2 was binary
         // weights — S2 ~50 — so we drop down to a smaller weight grid
         // with a finer ramp). Two-config search: 4×4 QUANT_8 (8-level
@@ -2124,22 +2164,25 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // for blocks where extra spatial resolution helps.
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<6, 6,
+                make_encode_fn_decim4<6, 6,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    6, 5, kBlockModeRgb6x5, 4, M>());
+                    6, 5, kBlockModeRgb6x5, 4,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<8, 5,
+                make_encode_fn_decim4<8, 5,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 4, kBlockModeRgb5x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4, M>());
+                    5, 5, kBlockModeRgb5x5, 4,
+                    5, 3, kBlockModeRgb5x3, 8, M>());
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<8, 6,
+                make_encode_fn_decim4<8, 6,
                     4, 4, kBlockModeRgb4x4, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    6, 5, kBlockModeRgb6x5, 4, M>());
+                    6, 5, kBlockModeRgb6x5, 4,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         // Bilinear-decimated footprints (texel dim > weight dim). Each
         // tries multiple (grid, weight-quant) candidates per block and
         // keeps the lowest-err pick — same trick astcenc uses to spread
@@ -2150,22 +2193,25 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // on smooth low-frequency content where more grid points help.
         if (W == 8 && H == 8)
             return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<8, 8,
+                make_encode_fn_decim4<8, 8,
                     5, 5, kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    6, 5, kBlockModeRgb6x5, 4, M>());
+                    6, 5, kBlockModeRgb6x5, 4,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<10, 5,
+                make_encode_fn_decim4<10, 5,
                     5, 4, kBlockModeRgb5x4, 8,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4, M>());
+                    5, 5, kBlockModeRgb5x5, 4,
+                    5, 3, kBlockModeRgb5x3, 8, M>());
         if (W == 10 && H == 6)
             return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<10, 6,
+                make_encode_fn_decim4<10, 6,
                     5, 5, kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    5, 3, kBlockModeRgb5x3, 8, M>());
         if (W == 10 && H == 8)
             return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
                 make_encode_fn_decim3<10, 8,
@@ -2174,22 +2220,25 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<10, 10,
+                make_encode_fn_decim4<10, 10,
                     5, 5, kBlockModeRgb5x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    6, 5, kBlockModeRgb6x5, 4, M>());
+                    6, 5, kBlockModeRgb6x5, 4,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 12 && H == 10)
             return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<12, 10,
+                make_encode_fn_decim4<12, 10,
                     6, 5, kBlockModeRgb6x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim3<12, 12,
+                make_encode_fn_decim4<12, 12,
                     6, 5, kBlockModeRgb6x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
         return EncodeResult{};  // unsupported footprint
     };
 

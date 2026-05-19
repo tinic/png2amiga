@@ -20,13 +20,14 @@ const BUDGETS = [
   // glue. Without pthreads we sit at ~24 KB; with pthreads ~50 KB.
   // Headroom for future Emscripten updates.
   { match: /^png2amiga-.*\.js$/,    max:  64 * 1024, label: 'wasm glue'  },
-  // 2.45 MB up from 2.40 MB — cga-composite mode replaced its fixed
-  // 16-color palette dither with a port of Andrew "reenigne" Jenner's
-  // NTSC chroma-multiplexer (the same decoder MartyPC / DOSBox / 86Box
-  // use). The 1024-entry signal table + IQ rotation + per-row aabb
-  // cell-pattern search adds ~5 KB to the WASM binary in exchange for
-  // an artifact-colour gamut the user actually sees on hardware.
-  { match: /^png2amiga-.*\.wasm$/,  max:   2.45 * 1024 * 1024, label: 'wasm binary' },
+  // 3.05 MB up from 2.45 MB — ASTC bilinear-decim encoder now dispatches
+  // 4 (grid, weight-quant) candidates per block on 6x6/8x*/10x*/12x*
+  // and 1:1+2-decim on 5x5/6x5. Each new (TexW, TexH, GridW, GridH, WL)
+  // tuple instantiates a fresh template, and the LSQ/coord-descent/
+  // refit kernels balloon under -O3. Mean ΔS2 vs astcenc -medium
+  // closes by ~0.4 across the decim footprints (5x5 +1.38, 10x10
+  // +0.80) — the bundle cost buys real quality.
+  { match: /^png2amiga-.*\.wasm$/,  max:   3.05 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
   { match: /^index-.*\.css$/,       max: 500 * 1024, label: 'css'        },
