@@ -47,19 +47,21 @@ Defaults defaults_for(const Context& ctx) {
     }
 
     // ---- Block-compressed modes: block-grid Floyd-Steinberg between
-    // 4×4 block neighbours. 10-image DIV2K 512² sweep 2026-05-18,
-    // strengths {0, 0.25, 0.5, 0.75, 1.0}:
-    //   etc2 0.5 → S2 82.72 (peak); 1.0 → 82.26 (-0.46)
-    //   bc1  0.5 → S2 83.58 (peak); 1.0 → 83.21 (-0.38)
-    //   bc3  0.5 → S2 83.21 (peak); 1.0 → 82.85 (-0.37)
-    //   bc7  0.75 → S2 93.10 (peak); 1.0 → 92.97 (-0.13)
-    if (ctx.mode == amiga::Mode::etc2 || ctx.mode == amiga::Mode::bc1 ||
-        ctx.mode == amiga::Mode::bc2 || ctx.mode == amiga::Mode::bc3) {
-        return Defaults{0.50f, 0.35f};
-    }
-    if (ctx.mode == amiga::Mode::bc7) {
-        return Defaults{0.75f, 0.35f};
-    }
+    // 4×4 block neighbours. 15-image DIV2K 512² fine sweep 2026-05-18
+    // at 0.05 step. Each curve is flat ±0.05 S2 across a ~0.2-wide band
+    // around the peak, so the exact pinned value isn't load-bearing —
+    // these are best-of-grid:
+    //   etc2: peak 0.55 (S2 82.63); flat 0.45-0.65
+    //   bc1:  peak 0.40 (S2 83.53); flat 0.30-0.50
+    //   bc3:  peak 0.50 (S2 83.14); flat 0.35-0.55
+    //   bc7:  peak 0.75 (S2 93.20); flat 0.45-0.85
+    // BC2 has no separate sweep — same BC1 RGB path; alpha is 4-bit
+    // explicit and unaffected by dither strength. Use the BC1 peak.
+    if (ctx.mode == amiga::Mode::etc2) return Defaults{0.55f, 0.35f};
+    if (ctx.mode == amiga::Mode::bc1) return Defaults{0.40f, 0.35f};
+    if (ctx.mode == amiga::Mode::bc2) return Defaults{0.40f, 0.35f};
+    if (ctx.mode == amiga::Mode::bc3) return Defaults{0.50f, 0.35f};
+    if (ctx.mode == amiga::Mode::bc7) return Defaults{0.75f, 0.35f};
 
     // ---- Palette-aware ordered methods: per-(method, mode, depth)
     // optimal strength against SSIMULACRA2.
