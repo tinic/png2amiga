@@ -2022,19 +2022,22 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // for blocks where extra spatial resolution helps.
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<6, 6,
+                make_encode_fn_decim3<6, 6,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4, M>());
+                    5, 5, kBlockModeRgb5x5, 4,
+                    6, 5, kBlockModeRgb6x5, 4, M>());
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<8, 5,
+                make_encode_fn_decim3<8, 5,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 4, kBlockModeRgb5x4, 8, M>());
+                    5, 4, kBlockModeRgb5x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<8, 6,
+                make_encode_fn_decim3<8, 6,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4, M>());
+                    5, 5, kBlockModeRgb5x5, 4,
+                    6, 5, kBlockModeRgb6x5, 4, M>());
         // Bilinear-decimated footprints (texel dim > weight dim). Each
         // tries multiple (grid, weight-quant) candidates per block and
         // keeps the lowest-err pick — same trick astcenc uses to spread
