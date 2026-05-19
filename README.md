@@ -627,7 +627,8 @@ Cross-fade (lores/hires/EHB; --preview animates):
                                   ping-pong (source→...→target→...→source).
 
 ETC2 / BC1-7 / ASTC (--mode etc2|bc1|bc2|bc3|bc7|astc-NxM → .ktx2):
-                                  ASTC NxM in 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6
+                                  ASTC NxM: 4x4, 5x4, 5x5, 6x5, 6x6, 8x5,
+                                  8x6, 8x8, 10x5, 10x6, 10x8, 10x10, 12x10, 12x12
   --etc2-effort <0-3>             Search depth (default: 2)
   --etc2-jitter <0-15>            Endpoint search width (default: 1)
   --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)

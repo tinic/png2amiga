@@ -1306,7 +1306,8 @@ void print_usage() {
         "                                  ping-pong (source→...→target→...→source).\n"
         "\n"
         "ETC2 / BC1-7 / ASTC (--mode etc2|bc1|bc2|bc3|bc7|astc-NxM → .ktx2):\n"
-        "                                  ASTC NxM in 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6\n"
+        "                                  ASTC NxM: 4x4, 5x4, 5x5, 6x5, 6x6, 8x5,\n"
+        "                                  8x6, 8x8, 10x5, 10x6, 10x8, 10x10, 12x10, 12x12\n"
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Endpoint search width (default: 1)\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
@@ -2200,6 +2201,20 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::astc_8x5;
                 else if (v == "astc-8x6")
                     config.mode = amiga::Mode::astc_8x6;
+                else if (v == "astc-8x8")
+                    config.mode = amiga::Mode::astc_8x8;
+                else if (v == "astc-10x5")
+                    config.mode = amiga::Mode::astc_10x5;
+                else if (v == "astc-10x6")
+                    config.mode = amiga::Mode::astc_10x6;
+                else if (v == "astc-10x8")
+                    config.mode = amiga::Mode::astc_10x8;
+                else if (v == "astc-10x10")
+                    config.mode = amiga::Mode::astc_10x10;
+                else if (v == "astc-12x10")
+                    config.mode = amiga::Mode::astc_12x10;
+                else if (v == "astc-12x12")
+                    config.mode = amiga::Mode::astc_12x12;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -6652,6 +6667,13 @@ int run_astc(Config cfg) {
         case amiga::Mode::astc_6x6: fp = {6, 6, ktx2::VkFormat::astc_6x6_srgb_block, "astc-6x6"}; break;
         case amiga::Mode::astc_8x5: fp = {8, 5, ktx2::VkFormat::astc_8x5_srgb_block, "astc-8x5"}; break;
         case amiga::Mode::astc_8x6: fp = {8, 6, ktx2::VkFormat::astc_8x6_srgb_block, "astc-8x6"}; break;
+        case amiga::Mode::astc_8x8:   fp = {8, 8,   ktx2::VkFormat::astc_8x8_srgb_block,   "astc-8x8"};   break;
+        case amiga::Mode::astc_10x5:  fp = {10, 5,  ktx2::VkFormat::astc_10x5_srgb_block,  "astc-10x5"};  break;
+        case amiga::Mode::astc_10x6:  fp = {10, 6,  ktx2::VkFormat::astc_10x6_srgb_block,  "astc-10x6"};  break;
+        case amiga::Mode::astc_10x8:  fp = {10, 8,  ktx2::VkFormat::astc_10x8_srgb_block,  "astc-10x8"};  break;
+        case amiga::Mode::astc_10x10: fp = {10, 10, ktx2::VkFormat::astc_10x10_srgb_block, "astc-10x10"}; break;
+        case amiga::Mode::astc_12x10: fp = {12, 10, ktx2::VkFormat::astc_12x10_srgb_block, "astc-12x10"}; break;
+        case amiga::Mode::astc_12x12: fp = {12, 12, ktx2::VkFormat::astc_12x12_srgb_block, "astc-12x12"}; break;
         default:
             std::println(stderr, "Error: run_astc: unsupported mode");
             return exit_code::usage;

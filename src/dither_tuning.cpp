@@ -70,6 +70,13 @@ Defaults defaults_for(const Context& ctx) {
     if (ctx.mode == amiga::Mode::astc_6x6) return Defaults{0.75f, 0.35f};
     if (ctx.mode == amiga::Mode::astc_8x5) return Defaults{0.75f, 0.35f};
     if (ctx.mode == amiga::Mode::astc_8x6) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_8x8) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x5) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x6) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x8) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x10) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_12x10) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_12x12) return Defaults{0.75f, 0.35f};
 
     // ---- Palette-aware ordered methods: per-(method, mode, depth)
     // optimal strength against SSIMULACRA2.

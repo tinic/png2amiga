@@ -675,6 +675,177 @@ Candidate encode_block_rgb(const SampleT<W * H>& s) {
 }
 
 // ---------------------------------------------------------------------------
+// Bilinear-decimation path — texel grid bigger than weight grid.
+// ASTC §16.3 maps each texel (tx, ty) → fractional position in weight
+// space; the per-texel weight is the bilinear blend of 4 corner grid
+// weights. The encoder reverses this: pick grid weights such that the
+// blended per-texel weight tracks the ideal continuous weight (projection
+// of each texel onto the e0..e1 axis).
+//
+// First-cut heuristic (no LSQ on the sparse bilinear system yet):
+//   1. PCA on the full texel set → e0, e1
+//   2. For each texel: ideal w_j = (texel - e0) · (e1 - e0) / |e1 - e0|^2
+//   3. Each grid weight = bilinear-coefficient-weighted average of the
+//      texel ideal weights that include it
+//   4. Quantize each grid weight to WL levels
+//   5. Bilinear-infill decoded[] back to full texel resolution so the
+//      block-grid ED residual loop has real reconstructed data
+// ---------------------------------------------------------------------------
+
+// Compile-time bilinear contribution map: each texel records the 4
+// grid neighbours that contribute to it plus a 4-bit (0..16, sum=16)
+// truncated-precision bilinear coefficient per neighbour. The math
+// matches astcenc_block_sizes.cpp::assign_kmeans_texels exactly so
+// the texel weights the encoder produces match what the decoder
+// reconstructs bit-for-bit.
+template <int TexW, int TexH, int GridW, int GridH>
+struct BilinearMap {
+    struct TexelContrib {
+        std::uint8_t grid[4];   // qweight indices into the GridW × GridH array
+        std::uint8_t weight[4]; // 0..16 each; sum = 16
+    };
+    TexelContrib texels[TexW * TexH];
+
+    constexpr BilinearMap() : texels{} {
+        constexpr int sx = (TexW > 1) ? ((1024 + TexW / 2) / (TexW - 1)) : 0;
+        constexpr int sy = (TexH > 1) ? ((1024 + TexH / 2) / (TexH - 1)) : 0;
+        for (int y = 0; y < TexH; ++y) {
+            for (int x = 0; x < TexW; ++x) {
+                int xw = (sx * x * (GridW - 1) + 32) >> 6;
+                int yw = (sy * y * (GridH - 1) + 32) >> 6;
+                int xfrac = xw & 0xF;
+                int yfrac = yw & 0xF;
+                int xint  = xw >> 4;
+                int yint  = yw >> 4;
+
+                int q0 = yint * GridW + xint;
+                int q1 = q0 + 1;
+                int q2 = q0 + GridW;
+                int q3 = q2 + 1;
+                // Right-/bottom-edge texels have xfrac/yfrac == 0, so
+                // their contributions to q1/q2/q3 are zero — but we
+                // still need a valid index. Clamp out-of-grid.
+                if (xint >= GridW - 1) { q1 = q0; q3 = q2; }
+                if (yint >= GridH - 1) { q2 = q0; q3 = q1; }
+
+                int prod = xfrac * yfrac;
+                int w3 = (prod + 8) >> 4;
+                int w1 = xfrac - w3;
+                int w2 = yfrac - w3;
+                int w0 = 16 - xfrac - yfrac + w3;
+
+                auto& t = texels[y * TexW + x];
+                t.grid[0]   = std::uint8_t(q0);
+                t.grid[1]   = std::uint8_t(q1);
+                t.grid[2]   = std::uint8_t(q2);
+                t.grid[3]   = std::uint8_t(q3);
+                t.weight[0] = std::uint8_t(w0);
+                t.weight[1] = std::uint8_t(w1);
+                t.weight[2] = std::uint8_t(w2);
+                t.weight[3] = std::uint8_t(w3);
+            }
+        }
+    }
+};
+
+template <int TexW, int TexH, int GridW, int GridH,
+          std::uint32_t BlockMode, int WL, block_compress::BlockMetric M>
+Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
+    constexpr int TN = TexW * TexH;
+    constexpr int GN = GridW * GridH;
+    static constexpr BilinearMap<TexW, TexH, GridW, GridH> bm{};
+    constexpr const int* ramp = weight_ramp<WL>();
+
+    Candidate out{};
+
+    // 1. PCA on full texel set.
+    std::uint8_t e0[3], e1[3];
+    pca_seed_rgb(s, e0, e1);
+
+    // 2. Ideal continuous weight per texel (projection onto e0..e1 axis).
+    float dr = float(e1[0]) - float(e0[0]);
+    float dg = float(e1[1]) - float(e0[1]);
+    float db = float(e1[2]) - float(e0[2]);
+    float ramp_sq = dr * dr + dg * dg + db * db;
+    float inv_ramp_sq = (ramp_sq > 1e-9f) ? (1.f / ramp_sq) : 0.f;
+    float w_ideal[TN];
+    for (int j = 0; j < TN; ++j) {
+        float pr = float(s.rgba8[j][0]) - float(e0[0]);
+        float pg = float(s.rgba8[j][1]) - float(e0[1]);
+        float pb = float(s.rgba8[j][2]) - float(e0[2]);
+        float w = (pr * dr + pg * dg + pb * db) * inv_ramp_sq;
+        w_ideal[j] = std::clamp(w, 0.f, 1.f);
+    }
+
+    // 3. Each grid point's weight = bilinear-coefficient-weighted average
+    //    of texel ideal weights it contributes to. Quantize to WL levels.
+    float grid_num[GN] = {};
+    float grid_den[GN] = {};
+    for (int j = 0; j < TN; ++j) {
+        const auto& t = bm.texels[j];
+        for (int k = 0; k < 4; ++k) {
+            float c = float(t.weight[k]);
+            if (c <= 0.f) continue;
+            grid_num[t.grid[k]] += c * w_ideal[j];
+            grid_den[t.grid[k]] += c;
+        }
+    }
+    std::uint8_t grid_weights[GN];
+    for (int i = 0; i < GN; ++i) {
+        float w_avg = grid_den[i] > 1e-6f ? grid_num[i] / grid_den[i] : 0.5f;
+        int wq = int(std::lround(w_avg * (WL - 1)));
+        grid_weights[i] = std::uint8_t(std::clamp(wq, 0, WL - 1));
+    }
+
+    // 4. Blue-contract sum normalisation.
+    int s0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
+    int s1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
+    if (s0 > s1) {
+        std::swap(e0[0], e1[0]);
+        std::swap(e0[1], e1[1]);
+        std::swap(e0[2], e1[2]);
+        for (int i = 0; i < GN; ++i)
+            grid_weights[i] = std::uint8_t((WL - 1) - int(grid_weights[i]));
+    }
+
+    // 5. Bilinear-infill decoded[] using the same truncated-precision
+    //    formula the decoder applies. Final texel weight is sum_k of
+    //    (coeff[k] * grid_weight_ramp[k]) >> 4.
+    float total_err = 0.f;
+    for (int j = 0; j < TN; ++j) {
+        const auto& t = bm.texels[j];
+        int w_sum = 0;
+        for (int k = 0; k < 4; ++k) {
+            w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+        }
+        int w_int = (w_sum + 8) >> 4;  // div by 16
+        w_int = std::clamp(w_int, 0, 64);
+        int inv = 64 - w_int;
+        out.decoded[j][0] = std::uint8_t((inv * int(e0[0]) + w_int * int(e1[0]) + 32) >> 6);
+        out.decoded[j][1] = std::uint8_t((inv * int(e0[1]) + w_int * int(e1[1]) + 32) >> 6);
+        out.decoded[j][2] = std::uint8_t((inv * int(e0[2]) + w_int * int(e1[2]) + 32) >> 6);
+        out.decoded[j][3] = 255;
+        if constexpr (M == block_compress::BlockMetric::oklab2) {
+            auto l = color_space::srgb8_to_oklab(
+                out.decoded[j][0], out.decoded[j][1], out.decoded[j][2]);
+            float dL = s.lab[j].L - l.L;
+            float dA = s.lab[j].a - l.a;
+            float dB = s.lab[j].b - l.b;
+            total_err += dL * dL + dA * dA + dB * dB;
+        } else {
+            int er = int(s.rgba8[j][0]) - int(out.decoded[j][0]);
+            int eg = int(s.rgba8[j][1]) - int(out.decoded[j][1]);
+            int eb = int(s.rgba8[j][2]) - int(out.decoded[j][2]);
+            total_err += float(er * er + eg * eg + eb * eb) * (1.f / 65536.f);
+        }
+    }
+
+    pack_block<GN, BlockMode, WL>(e0, e1, grid_weights, out.block);
+    out.err = total_err;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // 2-partition CEM-8 RGB path (QUANT_4 weights, QUANT_32 endpoints).
 // ---------------------------------------------------------------------------
 
@@ -1347,6 +1518,16 @@ auto make_encode_fn_4x4() {
     return [](const Sample16& s) { return encode_block_4x4<M>(s); };
 }
 
+// Bilinear-decimation encode lambda factory. Block dim is TexW × TexH;
+// weights live on a smaller GridW × GridH grid.
+template <int TexW, int TexH, int GridW, int GridH,
+          std::uint32_t BM, int WL, block_compress::BlockMetric M>
+auto make_encode_fn_decim() {
+    return [](const SampleT<TexW * TexH>& s) {
+        return encode_block_rgb_decim<TexW, TexH, GridW, GridH, BM, WL, M>(s);
+    };
+}
+
 }  // namespace
 
 EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
@@ -1378,6 +1559,31 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn<8, 6, kBlockModeRgb8x6, 2, M>());
+        // Bilinear-decimated footprints (texel dim > weight dim).
+        // Block-mode constant is the same one used by the 1:1 weight
+        // grid for that size — the texel dim comes from KTX format,
+        // and the bit budget for endpoints+weights is unchanged.
+        if (W == 8 && H == 8)
+            return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
+                                           make_encode_fn_decim<8, 8, 5, 5, kBlockModeRgb5x5, 4, M>());
+        if (W == 10 && H == 5)
+            return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
+                                            make_encode_fn_decim<10, 5, 5, 4, kBlockModeRgb5x4, 8, M>());
+        if (W == 10 && H == 6)
+            return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
+                                            make_encode_fn_decim<10, 6, 5, 5, kBlockModeRgb5x5, 4, M>());
+        if (W == 10 && H == 8)
+            return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
+                                            make_encode_fn_decim<10, 8, 5, 5, kBlockModeRgb5x5, 4, M>());
+        if (W == 10 && H == 10)
+            return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
+                                             make_encode_fn_decim<10, 10, 5, 5, kBlockModeRgb5x5, 4, M>());
+        if (W == 12 && H == 10)
+            return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
+                                             make_encode_fn_decim<12, 10, 6, 5, kBlockModeRgb6x5, 4, M>());
+        if (W == 12 && H == 12)
+            return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
+                                             make_encode_fn_decim<12, 12, 6, 5, kBlockModeRgb6x5, 4, M>());
         return EncodeResult{};  // unsupported footprint
     };
 
