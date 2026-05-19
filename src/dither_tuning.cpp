@@ -46,6 +46,21 @@ Defaults defaults_for(const Context& ctx) {
         return Defaults{0.82f, 0.10f};                  // mean S2 83.30
     }
 
+    // ---- Block-compressed modes: block-grid Floyd-Steinberg between
+    // 4×4 block neighbours. 10-image DIV2K 512² sweep 2026-05-18,
+    // strengths {0, 0.25, 0.5, 0.75, 1.0}:
+    //   etc2 0.5 → S2 82.72 (peak); 1.0 → 82.26 (-0.46)
+    //   bc1  0.5 → S2 83.58 (peak); 1.0 → 83.21 (-0.38)
+    //   bc3  0.5 → S2 83.21 (peak); 1.0 → 82.85 (-0.37)
+    //   bc7  0.75 → S2 93.10 (peak); 1.0 → 92.97 (-0.13)
+    if (ctx.mode == amiga::Mode::etc2 || ctx.mode == amiga::Mode::bc1 ||
+        ctx.mode == amiga::Mode::bc2 || ctx.mode == amiga::Mode::bc3) {
+        return Defaults{0.50f, 0.35f};
+    }
+    if (ctx.mode == amiga::Mode::bc7) {
+        return Defaults{0.75f, 0.35f};
+    }
+
     // ---- Palette-aware ordered methods: per-(method, mode, depth)
     // optimal strength against SSIMULACRA2.
     //

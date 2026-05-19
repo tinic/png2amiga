@@ -5714,7 +5714,9 @@ int run_etc2(Config cfg) {
                        ? block_compress::BlockMetric::srgb_mse
                        : block_compress::BlockMetric::oklab2;
     eopts.effort = cfg.etc2_effort;
-    eopts.block_ed.strength = cfg.dither_strength_explicit ? cfg.dither_strength : 0.5f;
+    eopts.block_ed.strength = cfg.dither_strength_explicit
+        ? cfg.dither_strength
+        : dither_tuning::defaults_for({amiga::Mode::etc2, 4, false, false, false}).strength;
     eopts.refine_passes = cfg.etc2_refine;
     eopts.jitter = cfg.etc2_jitter;
     // Block-grid ED uses the SAME --dither method as the per-pixel ED
@@ -5951,7 +5953,9 @@ int run_bc1(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.dither_strength_explicit ? cfg.dither_strength : 0.5f;
+    bopts.block_ed.strength = cfg.dither_strength_explicit
+        ? cfg.dither_strength
+        : dither_tuning::defaults_for({amiga::Mode::bc1, 4, false, false, false}).strength;
     bopts.block_ed.method = cfg.dither_method;
 
     // --profile N is handled by main()'s outer loop (re-runs run_main).
@@ -6122,7 +6126,9 @@ int run_bc7(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.dither_strength_explicit ? cfg.dither_strength : 0.5f;
+    bopts.block_ed.strength = cfg.dither_strength_explicit
+        ? cfg.dither_strength
+        : dither_tuning::defaults_for({amiga::Mode::bc7, 8, false, false, false}).strength;
     bopts.block_ed.method = cfg.dither_method;
 
     auto enc = bc7::encode_image(rgba_srgb8, W, H, bopts);
@@ -6283,7 +6289,9 @@ int run_bc3(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.dither_strength_explicit ? cfg.dither_strength : 0.5f;
+    bopts.block_ed.strength = cfg.dither_strength_explicit
+        ? cfg.dither_strength
+        : dither_tuning::defaults_for({amiga::Mode::bc3, 8, false, false, false}).strength;
     bopts.block_ed.method = cfg.dither_method;
 
     auto enc = bc3::encode_image(rgba_srgb8, W, H, bopts);
@@ -6442,7 +6450,9 @@ int run_bc2(Config cfg) {
                        : block_compress::BlockMetric::oklab2;
     bopts.effort = cfg.etc2_effort;
     bopts.jitter = cfg.etc2_jitter;
-    bopts.block_ed.strength = cfg.dither_strength_explicit ? cfg.dither_strength : 0.5f;
+    bopts.block_ed.strength = cfg.dither_strength_explicit
+        ? cfg.dither_strength
+        : dither_tuning::defaults_for({amiga::Mode::bc2, 8, false, false, false}).strength;
     bopts.block_ed.method = cfg.dither_method;
 
     auto enc = bc2::encode_image(rgba_srgb8, W, H, bopts);
