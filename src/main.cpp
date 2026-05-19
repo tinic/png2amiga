@@ -14,6 +14,7 @@
 #include "cga_text.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
+#include "astc.hpp"
 #include "bc1.hpp"
 #include "bc2.hpp"
 #include "bc3.hpp"
@@ -934,6 +935,12 @@ struct Config {
     // ETC2 (--mode etc2) knobs. Defaults mirror etc2::Options.
     int etc2_effort = 2;
     std::string etc2_metric = "oklab2";
+
+    // ASTC (--mode astc) knobs. block_w × block_h selects the footprint
+    // (4×4 through 12×12). quality maps to astcenc's 0-100 preset scale.
+    int astc_block_w = 4;
+    int astc_block_h = 4;
+    float astc_quality = 60.0f;
     int etc2_refine = 0;
     int etc2_jitter = 1;
     bool etc2_jitter_explicit = false;  // user --etc2-jitter overrides --best auto-bump
@@ -1307,6 +1314,8 @@ void print_usage() {
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Endpoint search width (default: 1)\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
+        "  --astc-block <WxH>              ASTC footprint, 4x4..12x12 (default: 4x4)\n"
+        "  --astc-quality <0-100>          ASTC quality preset (default: 60)\n"
         "\n"
         "HAM:\n"
         "  --ham-beam <1-256>              DP search beam (default: 48)\n"
@@ -2183,6 +2192,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::bc3;
                 else if (v == "bc7" || v == "bc7-rgba")
                     config.mode = amiga::Mode::bc7;
+                else if (v == "astc" || v == "astc-rgba")
+                    config.mode = amiga::Mode::astc;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -2260,6 +2271,21 @@ Result<Config> parse_args(int argc, char* argv[]) {
                                                              "'srgb-mse' or 'oklab2' (default)",
                                                              config.etc2_metric)}};
                 }
+            } else if (arg == "--astc-block") {
+                // Format: WxH (e.g. 4x4, 6x6, 8x8, 12x12).
+                std::string v(val);
+                auto pos = v.find('x');
+                if (pos == std::string::npos) {
+                    return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                                 std::format("Invalid --astc-block '{}': expected WxH",
+                                                             v)}};
+                }
+                config.astc_block_w = std::atoi(v.substr(0, pos).c_str());
+                config.astc_block_h = std::atoi(v.substr(pos + 1).c_str());
+            } else if (arg == "--astc-quality") {
+                config.astc_quality = std::strtof(std::string(val).c_str(), nullptr);
+                if (config.astc_quality < 0.f) config.astc_quality = 0.f;
+                if (config.astc_quality > 100.f) config.astc_quality = 100.f;
             } else if (arg == "--palette-diversity") {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
                 if (config.palette_diversity < 0) config.palette_diversity = 0;
@@ -6539,6 +6565,163 @@ int run_bc2(Config cfg) {
     return exit_code::ok;
 }
 
+// Map ASTC (block_w, block_h) → KTX2 sRGB VkFormat. Unsupported
+// footprints return etc2_r8g8b8_srgb_block (sentinel — caller checks).
+ktx2::VkFormat astc_vkformat_for(int bw, int bh) {
+    using F = ktx2::VkFormat;
+    if (bw == 4  && bh == 4)  return F::astc_4x4_srgb_block;
+    if (bw == 5  && bh == 4)  return F::astc_5x4_srgb_block;
+    if (bw == 5  && bh == 5)  return F::astc_5x5_srgb_block;
+    if (bw == 6  && bh == 5)  return F::astc_6x5_srgb_block;
+    if (bw == 6  && bh == 6)  return F::astc_6x6_srgb_block;
+    if (bw == 8  && bh == 5)  return F::astc_8x5_srgb_block;
+    if (bw == 8  && bh == 6)  return F::astc_8x6_srgb_block;
+    if (bw == 8  && bh == 8)  return F::astc_8x8_srgb_block;
+    if (bw == 10 && bh == 5)  return F::astc_10x5_srgb_block;
+    if (bw == 10 && bh == 6)  return F::astc_10x6_srgb_block;
+    if (bw == 10 && bh == 8)  return F::astc_10x8_srgb_block;
+    if (bw == 10 && bh == 10) return F::astc_10x10_srgb_block;
+    if (bw == 12 && bh == 10) return F::astc_12x10_srgb_block;
+    if (bw == 12 && bh == 12) return F::astc_12x12_srgb_block;
+    return F::etc2_r8g8b8_srgb_block;  // sentinel
+}
+
+// ASTC dispatch — wraps astcenc reference encoder for production output.
+// Per-mode perceptual encoder is on the roadmap; for now this gives
+// functional --mode astc across all 14 LDR 2D footprints.
+int run_astc(Config cfg) {
+    if (cfg.output_path.empty() && !cfg.preview && !cfg.input_path.empty()) {
+        std::filesystem::path in_p(cfg.input_path);
+        cfg.output_path = (in_p.parent_path() / in_p.stem()).string() + ".ktx2";
+    }
+    if (!cfg.output_path.empty() && !ends_with(cfg.output_path, ".ktx2")) {
+        std::println(stderr, "Error: --mode astc output path must end in .ktx2");
+        return exit_code::usage;
+    }
+    auto vkf = astc_vkformat_for(cfg.astc_block_w, cfg.astc_block_h);
+    if (vkf == ktx2::VkFormat::etc2_r8g8b8_srgb_block) {
+        std::println(stderr,
+                     "Error: --astc-block {}x{} is not a valid ASTC LDR 2D footprint",
+                     cfg.astc_block_w, cfg.astc_block_h);
+        return exit_code::usage;
+    }
+
+    Image src;
+    if (cfg.preloaded_input) {
+        src = *std::move(cfg.preloaded_input);
+    } else {
+        auto loaded = png_io::load(cfg.input_path);
+        if (!loaded) {
+            std::println(stderr, "Error: cannot read '{}': {}",
+                         cfg.input_path, loaded.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(loaded);
+    }
+    if (cfg.width.has_value() || cfg.height.has_value()) {
+        double aspect = double(src.height()) / double(src.width());
+        int tw = cfg.width.has_value() ? int(*cfg.width)
+                                       : int(std::lround(double(*cfg.height) / aspect));
+        int th = cfg.height.has_value() ? int(*cfg.height)
+                                        : int(std::lround(double(tw) * aspect));
+        auto resized = scale::resample(src, std::size_t(tw), std::size_t(th));
+        if (!resized) {
+            std::println(stderr, "Error: resample failed: {}", resized.error().message);
+            return exit_code::cant_create;
+        }
+        src = *std::move(resized);
+    }
+
+    const int W = int(src.width());
+    const int H = int(src.height());
+    if (W <= 0 || H <= 0) {
+        std::println(stderr, "Error: empty source image");
+        return exit_code::cant_create;
+    }
+
+    const bool has_alpha = src.has_alpha();
+    auto src_alpha = src.alpha();
+    std::vector<std::uint8_t> rgba_srgb8(std::size_t(W) * std::size_t(H) * 4u);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            Color3f lin = src[std::size_t(x), std::size_t(y)];
+            Color3f sc = color_space::linear_to_srgb(lin).clamped();
+            std::size_t i = (std::size_t(y) * std::size_t(W) + std::size_t(x)) * 4u;
+            rgba_srgb8[i + 0u] = std::uint8_t(sc.r * 255.0f + 0.5f);
+            rgba_srgb8[i + 1u] = std::uint8_t(sc.g * 255.0f + 0.5f);
+            rgba_srgb8[i + 2u] = std::uint8_t(sc.b * 255.0f + 0.5f);
+            rgba_srgb8[i + 3u] = has_alpha
+                ? std::uint8_t(std::clamp(src_alpha[std::size_t(y) * std::size_t(W) + std::size_t(x)],
+                                          0.f, 1.f) * 255.f + 0.5f)
+                : std::uint8_t(255u);
+        }
+    }
+
+    astc::Options aopts;
+    aopts.block_w = cfg.astc_block_w;
+    aopts.block_h = cfg.astc_block_h;
+    aopts.srgb = true;
+    aopts.quality = cfg.astc_quality;
+    auto enc = astc::encode_image(rgba_srgb8, W, H, aopts);
+    if (enc.blocks.empty()) {
+        std::println(stderr, "Error: ASTC encode failed");
+        return exit_code::cant_create;
+    }
+
+    auto decoded_rgba = astc::decode_image(enc.blocks, W, H,
+                                           cfg.astc_block_w, cfg.astc_block_h);
+    std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
+    for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
+        decoded_lin[i] = color_space::srgb_to_linear(Color3f{
+            float(decoded_rgba[i * 4u + 0u]) * (1.0f / 255.0f),
+            float(decoded_rgba[i * 4u + 1u]) * (1.0f / 255.0f),
+            float(decoded_rgba[i * 4u + 2u]) * (1.0f / 255.0f),
+        });
+    }
+    float s2 = ssimulacra2::compute(
+        src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
+    float psnr =
+        color_space::compute_psnr_blurred(src.pixels(), decoded_lin, std::size_t(W), std::size_t(H));
+
+    std::span<const std::uint8_t> block_bytes(
+        reinterpret_cast<const std::uint8_t*>(enc.blocks.data()),
+        enc.blocks.size() * std::size_t(astc::kBlockBytes));
+
+    ktx2::Inputs ki;
+    ki.format = vkf;
+    ki.block_dim = {cfg.astc_block_w, cfg.astc_block_h, 1};
+    ki.image_w = W;
+    ki.image_h = H;
+    ki.bytes_per_block = astc::kBlockBytes;
+    ki.block_bytes = block_bytes;
+    ki.supercompress_zstd = cfg.ktx2_zstd;
+    auto file_bytes = ktx2::write(ki);
+
+    if (!cfg.output_path.empty()) {
+        std::ofstream of(cfg.output_path, std::ios::binary);
+        if (!of) {
+            std::println(stderr, "Error: cannot write '{}'", cfg.output_path);
+            return exit_code::cant_create;
+        }
+        of.write(reinterpret_cast<const char*>(file_bytes.data()),
+                 std::streamsize(file_bytes.size()));
+    }
+
+    cli_status(
+        "Encoded:  ASTC {}x{} {}×{}, {} blocks ({} bytes){}{}, PSNR: {:.2f} dB, S2: {:.2f}",
+        cfg.astc_block_w, cfg.astc_block_h, W, H,
+        int(enc.blocks.size()), fmt_size(int(file_bytes.size())),
+        cfg.output_path.empty() ? "" : ", file: ",
+        cfg.output_path,
+        psnr, s2);
+
+    if (cfg.preview) {
+        Image preview(std::size_t(W), std::size_t(H), decoded_lin);
+        show_terminal_preview(preview, amiga::Mode::astc);
+    }
+    return exit_code::ok;
+}
+
 }  // namespace
 
 int run_main(int argc, char* argv[]) {
@@ -6691,6 +6874,9 @@ int run_main(int argc, char* argv[]) {
     }
     if (config->mode == amiga::Mode::bc7) {
         return run_bc7(*config);
+    }
+    if (config->mode == amiga::Mode::astc) {
+        return run_astc(*config);
     }
 
     // --no-scale + .cpp/.c viewer is incoherent: the generated viewer
