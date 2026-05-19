@@ -446,9 +446,11 @@ void pack_block_rgba(const std::uint8_t e0[4], const std::uint8_t e1[4],
 // Per-block encoder (BC7 Mode 6 shape, hardcoded ASTC block mode).
 // ---------------------------------------------------------------------------
 
-// Max supported texel count (8x8 = 64; larger footprints need bilinear
-// weight interp and aren't on the 1:1 path).
-constexpr int kMaxTexels = 64;
+// Max supported texel count — 12x12 = 144 is the largest ASTC LDR 2D
+// footprint. Decoded[] must accommodate every footprint we dispatch
+// (bilinear-decim paths reconstruct all texels via infill, so this
+// has to cover them too, not just the weight grid).
+constexpr int kMaxTexels = 144;
 
 struct Candidate {
     Block block{};
@@ -1933,6 +1935,56 @@ auto make_encode_fn_decim() {
     };
 }
 
+// Two-config block-mode search: try a primary (grid, quant) plus a
+// secondary, keep lowest-err per block. Trades 2× encode cost for the
+// astcenc-style wider block-mode exploration that closes more of the
+// quality gap on bilinear-decim footprints. Costs nothing on blocks
+// where the primary config wins.
+template <int TexW, int TexH,
+          int G1w, int G1h, std::uint32_t BM1, int WL1,
+          int G2w, int G2h, std::uint32_t BM2, int WL2,
+          block_compress::BlockMetric M>
+auto make_encode_fn_decim2() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate a = encode_block_rgb_decim<TexW, TexH, G1w, G1h, BM1, WL1, M>(s);
+        Candidate b = encode_block_rgb_decim<TexW, TexH, G2w, G2h, BM2, WL2, M>(s);
+        return (b.err < a.err) ? b : a;
+    };
+}
+
+// 1:1 + decim hybrid: try the 1:1 grid (no infill) AND a smaller
+// bilinear-decim grid, keep lowest-err per block. Used for footprints
+// where 1:1 wins on average but specific blocks benefit from a finer
+// weight ramp at coarser spatial resolution.
+template <int TexW, int TexH,
+          std::uint32_t BM_11, int WL_11,
+          int Gw, int Gh, std::uint32_t BM_d, int WL_d,
+          block_compress::BlockMetric M>
+auto make_encode_fn_mix11() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate a = encode_block_rgb<TexW, TexH, BM_11, WL_11, M>(s);
+        Candidate b = encode_block_rgb_decim<TexW, TexH, Gw, Gh, BM_d, WL_d, M>(s);
+        return (b.err < a.err) ? b : a;
+    };
+}
+
+template <int TexW, int TexH,
+          int G1w, int G1h, std::uint32_t BM1, int WL1,
+          int G2w, int G2h, std::uint32_t BM2, int WL2,
+          int G3w, int G3h, std::uint32_t BM3, int WL3,
+          block_compress::BlockMetric M>
+auto make_encode_fn_decim3() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate a = encode_block_rgb_decim<TexW, TexH, G1w, G1h, BM1, WL1, M>(s);
+        Candidate b = encode_block_rgb_decim<TexW, TexH, G2w, G2h, BM2, WL2, M>(s);
+        Candidate c = encode_block_rgb_decim<TexW, TexH, G3w, G3h, BM3, WL3, M>(s);
+        Candidate best = a;
+        if (b.err < best.err) best = b;
+        if (c.err < best.err) best = c;
+        return best;
+    };
+}
+
 }  // namespace
 
 EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
@@ -1949,55 +2001,83 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         if (W == 5 && H == 4)
             return encode_image_impl<5, 4>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn<5, 4, kBlockModeRgb5x4, 8, M>());
-        // 5x5 / 6x5 keep 1:1 QUANT_4 — having a weight grid point per
-        // texel (25 / 30 weights) beats coarser 4×4-grid bilinear-infill
-        // here, even though each weight only spans 4 levels. Tested both
-        // empirically on DIV2K 0001 @ 256w: 1:1 wins by +4 / +7 S2.
+        // 5x5 / 6x5 hybrid: 1:1 QUANT_4 (25/30 grid points, 4-level
+        // ramp) wins on average for natural-image gradients, but some
+        // blocks prefer the 4×4-decim QUANT_8 path (16 grid + 8-level
+        // ramp). Per-block best closes more of the gap to astcenc.
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn<5, 5, kBlockModeRgb5x5, 4, M>());
+                make_encode_fn_mix11<5, 5,
+                    kBlockModeRgb5x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn<6, 5, kBlockModeRgb6x5, 4, M>());
-        // 6x6 / 8x5 / 8x6 were previously 1:1 QUANT_2 (binary weights —
-        // S2 ~50 on natural images). Switching to 4×4 weight grid +
-        // QUANT_8 weights with bilinear infill recovers ~30 S2 because
-        // the LSQ grid-weight refit can spread per-texel error across
-        // a smooth 8-level ramp.
+                make_encode_fn_mix11<6, 5,
+                    kBlockModeRgb6x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
+        // 6x6 / 8x5 / 8x6 use bilinear-decim (1:1 QUANT_2 was binary
+        // weights — S2 ~50 — so we drop down to a smaller weight grid
+        // with a finer ramp). Two-config search: 4×4 QUANT_8 (8-level
+        // ramp, 16 grid points) primary; 5×5/5×4 QUANT_4 secondary
+        // for blocks where extra spatial resolution helps.
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn_decim<6, 6, 4, 4, kBlockModeRgb4x4, 8, M>());
+                make_encode_fn_decim2<6, 6,
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn_decim<8, 5, 4, 4, kBlockModeRgb4x4, 8, M>());
+                make_encode_fn_decim2<8, 5,
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn_decim<8, 6, 4, 4, kBlockModeRgb4x4, 8, M>());
-        // Bilinear-decimated footprints (texel dim > weight dim).
-        // Block-mode constant is the same one used by the 1:1 weight
-        // grid for that size — the texel dim comes from KTX format,
-        // and the bit budget for endpoints+weights is unchanged.
+                make_encode_fn_decim2<8, 6,
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
+        // Bilinear-decimated footprints (texel dim > weight dim). Each
+        // tries multiple (grid, weight-quant) candidates per block and
+        // keeps the lowest-err pick — same trick astcenc uses to spread
+        // the bit budget between spatial resolution (grid points) and
+        // ramp resolution (weight quant) per-block content. The 4×4 +
+        // QUANT_8 + QUANT_256-endpoint combo is the baseline (matches
+        // what 1:1 4x4 does); the 5×5 / 6×5 + QUANT_4 alternative wins
+        // on smooth low-frequency content where more grid points help.
         if (W == 8 && H == 8)
             return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn_decim<8, 8, 5, 5, kBlockModeRgb5x5, 4, M>());
+                make_encode_fn_decim2<8, 8,
+                    5, 5, kBlockModeRgb5x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
-                                            make_encode_fn_decim<10, 5, 5, 4, kBlockModeRgb5x4, 8, M>());
+                make_encode_fn_decim2<10, 5,
+                    5, 4, kBlockModeRgb5x4, 8,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 10 && H == 6)
             return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
-                                            make_encode_fn_decim<10, 6, 5, 5, kBlockModeRgb5x5, 4, M>());
+                make_encode_fn_decim2<10, 6,
+                    5, 5, kBlockModeRgb5x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 10 && H == 8)
             return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
-                                            make_encode_fn_decim<10, 8, 5, 5, kBlockModeRgb5x5, 4, M>());
+                make_encode_fn_decim2<10, 8,
+                    5, 5, kBlockModeRgb5x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
-                                             make_encode_fn_decim<10, 10, 5, 5, kBlockModeRgb5x5, 4, M>());
+                make_encode_fn_decim2<10, 10,
+                    5, 5, kBlockModeRgb5x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 12 && H == 10)
             return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
-                                             make_encode_fn_decim<12, 10, 6, 5, kBlockModeRgb6x5, 4, M>());
+                make_encode_fn_decim2<12, 10,
+                    6, 5, kBlockModeRgb6x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
-                                             make_encode_fn_decim<12, 12, 6, 5, kBlockModeRgb6x5, 4, M>());
+                make_encode_fn_decim2<12, 12,
+                    6, 5, kBlockModeRgb6x5, 4,
+                    4, 4, kBlockModeRgb4x4, 8, M>());
         return EncodeResult{};  // unsupported footprint
     };
 
