@@ -2045,9 +2045,10 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // on smooth low-frequency content where more grid points help.
         if (W == 8 && H == 8)
             return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<8, 8,
+                make_encode_fn_decim3<8, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    6, 5, kBlockModeRgb6x5, 4, M>());
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
                 make_encode_fn_decim2<10, 5,
@@ -2065,19 +2066,22 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     4, 4, kBlockModeRgb4x4, 8, M>());
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<10, 10,
+                make_encode_fn_decim3<10, 10,
                     5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    6, 5, kBlockModeRgb6x5, 4, M>());
         if (W == 12 && H == 10)
             return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<12, 10,
+                make_encode_fn_decim3<12, 10,
                     6, 5, kBlockModeRgb6x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<12, 12,
+                make_encode_fn_decim3<12, 12,
                     6, 5, kBlockModeRgb6x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
         return EncodeResult{};  // unsupported footprint
     };
 
