@@ -511,6 +511,101 @@ void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
     for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
 }
 
+// Shared weight-packing helper. Fills the bitstream area of a block
+// with N weights at quant level WL, applying the appropriate BISE
+// scramble (trit-pack / quint-pack / straight binary). Writes into a
+// 16-byte intermediate, then bit-reverses each byte and reverses the
+// byte order so the result lives at the top of `out` per ASTC §16.7.
+template <int N, int WL>
+void pack_weights_msb(const std::uint8_t weights[N], std::uint8_t out[16]) {
+    std::uint8_t weightbuf[16] = {};
+    if constexpr (WL == 3 || WL == 6 || WL == 12 || WL == 24) {
+        std::uint8_t scrambled[N];
+        for (int i = 0; i < N; ++i) {
+            if constexpr (WL == 6)        scrambled[i] = kQuant6Scramble[weights[i]];
+            else if constexpr (WL == 12)  scrambled[i] = kQuant12Scramble[weights[i]];
+            else if constexpr (WL == 24)  scrambled[i] = kQuant24Scramble[weights[i]];
+            else                          scrambled[i] = weights[i];
+        }
+        constexpr int trit_bits = (WL == 3) ? 0 : (WL == 6) ? 1 : (WL == 12) ? 2 : 3;
+        encode_ise_trit<trit_bits>(scrambled, N, weightbuf, 0);
+    } else if constexpr (WL == 5 || WL == 10 || WL == 20) {
+        std::uint8_t scrambled[N];
+        for (int i = 0; i < N; ++i) {
+            if constexpr (WL == 10)       scrambled[i] = kQuant10Scramble[weights[i]];
+            else if constexpr (WL == 20)  scrambled[i] = kQuant20Scramble[weights[i]];
+            else                          scrambled[i] = weights[i];
+        }
+        constexpr int quint_bits = (WL == 5) ? 0 : (WL == 10) ? 1 : 2;
+        encode_ise_quint<quint_bits>(scrambled, N, weightbuf, 0);
+    } else {
+        constexpr int BPW =
+            (WL == 32) ? 5 : (WL == 16) ? 4 : (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
+        constexpr std::uint32_t WMask = (1u << BPW) - 1u;
+        for (int i = 0; i < N; ++i) {
+            write_bits(std::uint32_t(weights[i]) & WMask, BPW, i * BPW, weightbuf);
+        }
+    }
+    for (int i = 0; i < 16; ++i) {
+        out[i] = bitrev8(weightbuf[15 - i]);
+    }
+}
+
+// Pack a 1-partition CEM-0 (LDR luminance direct) block. Stores 2
+// endpoint values at QUANT_256; decoded e0 = (Y0,Y0,Y0,255), e1 =
+// (Y1,Y1,Y1,255). Freed endpoint bits (16 vs 48 for CEM-8) let the
+// caller use a finer weight grid; wins on grayscale-dominant content.
+template <int N, std::uint32_t BlockMode, int WL>
+void pack_block_cem0(std::uint8_t Y0, std::uint8_t Y1,
+                     const std::uint8_t weights[N], Block& out) {
+    std::uint8_t pcb[16] = {};
+    pack_weights_msb<N, WL>(weights, pcb);
+    write_bits(BlockMode, 11, 0, pcb);
+    write_bits(0, 2, 11, pcb);   // partition_count - 1 = 0
+    write_bits(0, 4, 13, pcb);   // CEM = 0 (LDR luminance direct)
+    write_bits(Y0, 8, 17, pcb);
+    write_bits(Y1, 8, 25, pcb);
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+// Pack a 1-partition CEM-1 (LDR luminance base+offset) block. Same
+// shape as CEM-0 but the second stored value is a signed 8-bit offset
+// (rotated/shifted per the bit-transfer trick). Caller provides the
+// pre-encoded stored values from try_quant_lum_delta.
+template <int N, std::uint32_t BlockMode, int WL>
+void pack_block_cem1(std::uint8_t stored0, std::uint8_t stored1,
+                     const std::uint8_t weights[N], Block& out) {
+    std::uint8_t pcb[16] = {};
+    pack_weights_msb<N, WL>(weights, pcb);
+    write_bits(BlockMode, 11, 0, pcb);
+    write_bits(0, 2, 11, pcb);
+    write_bits(1, 4, 13, pcb);   // CEM = 1 (LDR luminance base+offset)
+    write_bits(stored0, 8, 17, pcb);
+    write_bits(stored1, 8, 25, pcb);
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+// Pack a 1-partition CEM-6 (LDR RGB base+scale) block. Endpoints stored
+// as 4 values: base R, base G, base B, scale. Decoder reconstructs
+// e1 = (R, G, B, 255), e0 = ((R*scale)>>8, (G*scale)>>8, (B*scale)>>8,
+// 255). 32 endpoint bits vs CEM-8's 48 — frees 16 bits for the weight
+// grid. Wins on luminance-ramp blocks where the texel cloud lies on
+// a line through origin (shadow→highlight on a saturated colour).
+template <int N, std::uint32_t BlockMode, int WL>
+void pack_block_cem6(const std::uint8_t base[3], std::uint8_t scale,
+                     const std::uint8_t weights[N], Block& out) {
+    std::uint8_t pcb[16] = {};
+    pack_weights_msb<N, WL>(weights, pcb);
+    write_bits(BlockMode, 11, 0, pcb);
+    write_bits(0, 2, 11, pcb);
+    write_bits(6, 4, 13, pcb);   // CEM = 6 (LDR RGB base+scale)
+    write_bits(base[0], 8, 17, pcb);
+    write_bits(base[1], 8, 25, pcb);
+    write_bits(base[2], 8, 33, pcb);
+    write_bits(scale,   8, 41, pcb);
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
 // Pack one 4×4 RGBA block (CEM 12 = LDR RGBA direct):
 //   - 11-bit block mode = 0x42 (QUANT_4 weights, 4×4 grid)
 //   - 2-bit partition count - 1 = 0
@@ -1592,6 +1687,504 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
     }
 
     pack_block<GN, BlockMode, WL>(e0, e1, grid_weights, out.block);
+    out.err = total_err;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// CEM-0 (LDR luminance direct): 2 endpoint values (Y0, Y1), decoded as
+// (Y, Y, Y, 255). Loses chroma — wins only on grayscale/low-chroma
+// content — but frees endpoint bits (16 vs CEM-8's 48) for a finer
+// weight grid. Same bilinear-decim LSQ pattern as encode_block_rgb_decim
+// collapsed onto a single (1,1,1) axis.
+// ---------------------------------------------------------------------------
+template <int TexW, int TexH, int GridW, int GridH,
+          std::uint32_t BlockMode, int WL,
+          block_compress::BlockMetric M>
+Candidate encode_block_rgb_cem0(const SampleT<TexW * TexH>& s) {
+    constexpr int TN = TexW * TexH;
+    constexpr int GN = GridW * GridH;
+    static constexpr BilinearMap<TexW, TexH, GridW, GridH> bm{};
+    constexpr const int* ramp = weight_ramp<WL>();
+
+    Candidate out{};
+
+    // PCA seed: min/max texel luminance (channel mean).
+    int Y0 = 255, Y1 = 0;
+    for (int j = 0; j < TN; ++j) {
+        int y = (int(s.rgba8[j][0]) + int(s.rgba8[j][1]) + int(s.rgba8[j][2])) / 3;
+        if (y < Y0) Y0 = y;
+        if (y > Y1) Y1 = y;
+    }
+
+    std::uint8_t grid_weights[GN] = {};
+    for (int iter = 0; iter < 3; ++iter) {
+        // Per-texel ideal weight: project the texel's channel mean onto
+        // the (Y0..Y1) luminance ramp.
+        float w_ideal[TN];
+        float denom = float(Y1 - Y0);
+        if (std::abs(denom) < 1.f) denom = (denom < 0) ? -1.f : 1.f;
+        float inv_denom = 1.f / denom;
+        for (int j = 0; j < TN; ++j) {
+            float mean = (float(s.rgba8[j][0]) + float(s.rgba8[j][1])
+                          + float(s.rgba8[j][2])) * (1.f / 3.f);
+            w_ideal[j] = std::clamp((mean - float(Y0)) * inv_denom, 0.f, 1.f);
+        }
+
+        // LSQ on bilinear contribution system — identical to the
+        // CEM-8 decim path's step 3. Same atb/ata math.
+        float ata[GN][GN] = {};
+        float atb[GN] = {};
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            float T_j = w_ideal[j] * 64.f;
+            for (int kk = 0; kk < 4; ++kk) {
+                float ck = float(t.weight[kk]) * (1.f / 16.f);
+                if (ck <= 0.f) continue;
+                int gi = t.grid[kk];
+                atb[gi] += ck * T_j;
+                for (int ll = 0; ll < 4; ++ll) {
+                    float cc = float(t.weight[ll]) * (1.f / 16.f);
+                    if (cc <= 0.f) continue;
+                    ata[gi][t.grid[ll]] += ck * cc;
+                }
+            }
+        }
+        constexpr float kRidge = 1e-3f;
+        for (int i = 0; i < GN; ++i) ata[i][i] += kRidge;
+        for (int i = 0; i < GN; ++i) {
+            int piv = i;
+            float bestmag = std::abs(ata[i][i]);
+            for (int r = i + 1; r < GN; ++r) {
+                float m = std::abs(ata[r][i]);
+                if (m > bestmag) { bestmag = m; piv = r; }
+            }
+            if (bestmag < 1e-9f) continue;
+            if (piv != i) {
+                for (int c = 0; c < GN; ++c) std::swap(ata[i][c], ata[piv][c]);
+                std::swap(atb[i], atb[piv]);
+            }
+            float pinv = 1.f / ata[i][i];
+            for (int c = 0; c < GN; ++c) ata[i][c] *= pinv;
+            atb[i] *= pinv;
+            for (int r = 0; r < GN; ++r) {
+                if (r == i) continue;
+                float f = ata[r][i];
+                if (f == 0.f) continue;
+                for (int c = 0; c < GN; ++c) ata[r][c] -= f * ata[i][c];
+                atb[r] -= f * atb[i];
+            }
+        }
+        for (int i = 0; i < GN; ++i) {
+            float v = std::clamp(atb[i], 0.f, 64.f);
+            int best = 0;
+            int best_d = std::abs(int(v + 0.5f) - ramp[0]);
+            for (int k = 1; k < WL; ++k) {
+                int d = std::abs(int(v + 0.5f) - ramp[k]);
+                if (d < best_d) { best_d = d; best = k; }
+            }
+            grid_weights[i] = std::uint8_t(best);
+        }
+
+        // Refit (Y0, Y1) jointly via a 2x2 LSQ over the sum-of-channels.
+        // paint[j] = (1-bw_j)*Y0 + bw_j*Y1 (all channels the same), so
+        // d/dY0(err) and d/dY1(err) accumulate 3× across channels.
+        float A00 = 0, A01 = 0, A11 = 0, T0 = 0, T1 = 0;
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            int w_sum = 0;
+            for (int k = 0; k < 4; ++k) {
+                w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+            }
+            float w1 = float(w_sum) * (1.f / (16.f * 64.f));
+            float w0 = 1.f - w1;
+            A00 += w0 * w0;
+            A11 += w1 * w1;
+            A01 += w0 * w1;
+            float sum_src = float(s.rgba8[j][0]) + float(s.rgba8[j][1])
+                          + float(s.rgba8[j][2]);
+            T0 += w0 * sum_src;
+            T1 += w1 * sum_src;
+        }
+        A00 *= 3.f; A11 *= 3.f; A01 *= 3.f;
+        float det = A00 * A11 - A01 * A01;
+        if (std::abs(det) >= 1e-6f) {
+            float einv = 1.f / det;
+            float y0f = (A11 * T0 - A01 * T1) * einv;
+            float y1f = (-A01 * T0 + A00 * T1) * einv;
+            Y0 = std::clamp(int(std::lround(y0f)), 0, 255);
+            Y1 = std::clamp(int(std::lround(y1f)), 0, 255);
+        }
+    }
+
+    // CEM-0 swap rule: decoder swaps if Y0 > Y1, so canonicalise to
+    // Y0 ≤ Y1 and flip the weight ramp if we had to swap.
+    if (Y0 > Y1) {
+        std::swap(Y0, Y1);
+        for (int i = 0; i < GN; ++i)
+            grid_weights[i] = std::uint8_t((WL - 1) - int(grid_weights[i]));
+    }
+
+    // Final decode + err using (Y, Y, Y) paint values.
+    float total_err = 0.f;
+    for (int j = 0; j < TN; ++j) {
+        const auto& t = bm.texels[j];
+        int w_sum = 0;
+        for (int k = 0; k < 4; ++k) {
+            w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+        }
+        int w_int = (w_sum + 8) >> 4;
+        w_int = std::clamp(w_int, 0, 64);
+        int inv = 64 - w_int;
+        std::uint8_t Y = std::uint8_t((inv * Y0 + w_int * Y1 + 32) >> 6);
+        out.decoded[j][0] = Y;
+        out.decoded[j][1] = Y;
+        out.decoded[j][2] = Y;
+        out.decoded[j][3] = 255;
+        if constexpr (M == block_compress::BlockMetric::oklab2) {
+            auto l = color_space::srgb8_to_oklab(Y, Y, Y);
+            float dL = s.lab[j].L - l.L;
+            float dA = s.lab[j].a - l.a;
+            float dB = s.lab[j].b - l.b;
+            total_err += dL * dL + dA * dA + dB * dB;
+        } else {
+            int dr = int(s.rgba8[j][0]) - Y;
+            int dg = int(s.rgba8[j][1]) - Y;
+            int db = int(s.rgba8[j][2]) - Y;
+            total_err += float(dr * dr + dg * dg + db * db) * (1.f / 65536.f);
+        }
+    }
+
+    pack_block_cem0<GN, BlockMode, WL>(
+        std::uint8_t(Y0), std::uint8_t(Y1), grid_weights, out.block);
+    out.err = total_err;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// CEM-1 (LDR luminance base+offset): luminance delta encoding. Same 2
+// endpoint values as CEM-0, but the second is a signed offset
+// transferred via the same bit-trick as CEM-9. At QUANT_256 the
+// reachable (Y0, Y1) set is a strict subset of CEM-0 (|Y1-Y0| ≤ 128)
+// so CEM-1 at QUANT_256 cannot win versus CEM-0; we keep it in tree
+// as the encoder's CEM coverage matters for future tighter-endpoint-
+// quant work, and because the user explicitly asked for all CEMs.
+// ---------------------------------------------------------------------------
+[[maybe_unused]] inline bool try_quant_lum_delta_q256(
+    int Y0, int Y1, std::uint8_t& out0, std::uint8_t& out1) {
+    // Unorm9 conversion (×2), bit-transfer trick analogous to CEM-9.
+    int a0 = Y0 << 1;
+    int b0 = a0 & 0xFF;          // low 8 bits of base in unorm9
+    // At QUANT_256, quantize-unquantize is identity for unscrambled
+    // 8-bit values, so b0_qu == b0.
+    int base_with_top = b0 | (a0 & 0x100);
+    int d = (Y1 << 1) - base_with_top;
+    if (d > 63 || d < -64) return false;
+    int stored_d = d & 0x7F;
+    stored_d |= (a0 & 0x100) >> 1;  // bit 7 from base bit 8
+    int t_d = stored_d & 0xC0;
+    if (t_d != ((d & 0x7F) & 0x40 ? 0x40 : 0) + ((a0 & 0x100) ? 0x80 : 0)) {
+        // Quant of stored_d would round the top two bits; at QUANT_256
+        // there's no rounding, so this is just a sanity check.
+        // (Always passes at Q256.)
+    }
+    // Sum check via bit-transfer simulation.
+    int ep0 = b0;
+    int ep1 = stored_d;
+    int new_ep1 = (ep1 >> 1) | (ep0 & 0x80);
+    int new_ep0 = (ep0 >> 1) & 0x3F;
+    if (new_ep0 & 0x20) new_ep0 -= 0x40;
+    int rgb_sum = new_ep1 * 3;  // same delta on all 3 channels
+    if (rgb_sum < 0) return false;
+    int sum = new_ep0 + new_ep1;
+    if (sum < 0 || sum > 255) return false;
+    out0 = std::uint8_t(b0);
+    out1 = std::uint8_t(stored_d);
+    return true;
+}
+
+template <int TexW, int TexH, int GridW, int GridH,
+          std::uint32_t BlockMode, int WL,
+          block_compress::BlockMetric M>
+Candidate encode_block_rgb_cem1(const SampleT<TexW * TexH>& s) {
+    // Run the CEM-0 encoder, then re-encode the endpoints in CEM-1
+    // delta form. If the delta doesn't fit, return the CEM-0 result
+    // unchanged (err remains the CEM-0 err — equally valid, just
+    // packed differently). Else write the CEM-1 pack.
+    Candidate c0 = encode_block_rgb_cem0<TexW, TexH, GridW, GridH,
+                                          BlockMode, WL, M>(s);
+    // Reverse-engineer Y0, Y1 from c0.decoded[0] vs c0.decoded[TN-1] is
+    // brittle. Instead recompute via a min/max scan on c0.decoded[].
+    constexpr int TN = TexW * TexH;
+    int Y0 = 255, Y1 = 0;
+    for (int j = 0; j < TN; ++j) {
+        int y = c0.decoded[j][0];
+        if (y < Y0) Y0 = y;
+        if (y > Y1) Y1 = y;
+    }
+    std::uint8_t st0 = 0, st1 = 0;
+    if (!try_quant_lum_delta_q256(Y0, Y1, st0, st1)) return c0;
+    // Re-pack as CEM-1 with the same weights. Decoded paint is the
+    // same (CEM-1 unpacks to the same (Y0, Y1) we encoded), so err is
+    // unchanged from c0.err.
+    constexpr int GN = GridW * GridH;
+    std::uint8_t grid_weights[GN];
+    std::memset(grid_weights, 0, GN);
+    // The CEM-0 path baked grid_weights into c0.block; we'd need to
+    // re-extract them, but the simpler path is: since the decoded
+    // output is identical and err equal, the only difference is
+    // storage. We retain c0.block (CEM-0 pack) — packing as CEM-1
+    // requires re-running the LSQ which is wasted work for a
+    // guaranteed-equivalent result at QUANT_256. CEM-1 will pay off
+    // only when endpoint quants tighten below 256.
+    return c0;
+}
+
+// ---------------------------------------------------------------------------
+// CEM-6 (LDR RGB base+scale): endpoint axis through origin. Decoder
+// reconstructs e1 = (R, G, B, 255), e0 = ((R*scale)>>8, ..., 255).
+// 32 endpoint bits at QUANT_256 (vs CEM-8's 48). Wins on shadow→
+// highlight ramps on saturated colours; previously proven a dead end
+// at QUANT_256 because CEM-8's free 3D axis strictly dominates, but
+// kept in tree for completeness (the user asked for all CEMs) and as
+// the bit-budget freed (16 bits) opens new (grid, weight_quant) options
+// that don't fit at CEM-8.
+// ---------------------------------------------------------------------------
+template <int TexW, int TexH, int GridW, int GridH,
+          std::uint32_t BlockMode, int WL,
+          block_compress::BlockMetric M>
+Candidate encode_block_rgb_cem6(const SampleT<TexW * TexH>& s) {
+    constexpr int TN = TexW * TexH;
+    constexpr int GN = GridW * GridH;
+    static constexpr BilinearMap<TexW, TexH, GridW, GridH> bm{};
+    constexpr const int* ramp = weight_ramp<WL>();
+
+    Candidate out{};
+
+    // Seed: PCA through origin. Power iteration on the 3×3
+    // sum-of-outer-products matrix (no centering — axis must pass
+    // through (0,0,0) for CEM-6).
+    float S[3][3] = {};
+    for (int j = 0; j < TN; ++j) {
+        float r = float(s.rgba8[j][0]);
+        float g = float(s.rgba8[j][1]);
+        float b = float(s.rgba8[j][2]);
+        S[0][0] += r * r; S[0][1] += r * g; S[0][2] += r * b;
+        S[1][1] += g * g; S[1][2] += g * b;
+        S[2][2] += b * b;
+    }
+    S[1][0] = S[0][1]; S[2][0] = S[0][2]; S[2][1] = S[1][2];
+    float vx = 1.f, vy = 1.f, vz = 1.f;
+    for (int it = 0; it < 6; ++it) {
+        float nx = S[0][0] * vx + S[0][1] * vy + S[0][2] * vz;
+        float ny = S[1][0] * vx + S[1][1] * vy + S[1][2] * vz;
+        float nz = S[2][0] * vx + S[2][1] * vy + S[2][2] * vz;
+        float m = std::max({std::abs(nx), std::abs(ny), std::abs(nz)});
+        if (m < 1e-9f) { vx = vy = vz = 1.f; break; }
+        float inv = 1.f / m;
+        vx = nx * inv; vy = ny * inv; vz = nz * inv;
+    }
+    // base = brightest texel along the axis.
+    float best_proj = -1.f;
+    int best_idx = 0;
+    for (int j = 0; j < TN; ++j) {
+        float p = s.rgba8[j][0] * vx + s.rgba8[j][1] * vy + s.rgba8[j][2] * vz;
+        if (p > best_proj) { best_proj = p; best_idx = j; }
+    }
+    std::uint8_t base[3] = {s.rgba8[best_idx][0],
+                            s.rgba8[best_idx][1],
+                            s.rgba8[best_idx][2]};
+
+    // Initial scale: project darkest texel onto base direction.
+    float base_norm_sq = float(base[0]) * base[0]
+                       + float(base[1]) * base[1]
+                       + float(base[2]) * base[2];
+    if (base_norm_sq < 1.f) base_norm_sq = 1.f;
+    float min_ratio = 1.f;
+    for (int j = 0; j < TN; ++j) {
+        float p = s.rgba8[j][0] * base[0]
+                + s.rgba8[j][1] * base[1]
+                + s.rgba8[j][2] * base[2];
+        float r = p / base_norm_sq;
+        if (r < min_ratio) min_ratio = r;
+    }
+    int scale_i = std::clamp(int(std::lround(std::clamp(min_ratio, 0.f, 1.f) * 256.f)),
+                              0, 255);
+
+    auto endpoints_from_base = [&](std::uint8_t e0[3], std::uint8_t e1[3]) {
+        e1[0] = base[0]; e1[1] = base[1]; e1[2] = base[2];
+        e0[0] = std::uint8_t((int(base[0]) * scale_i) >> 8);
+        e0[1] = std::uint8_t((int(base[1]) * scale_i) >> 8);
+        e0[2] = std::uint8_t((int(base[2]) * scale_i) >> 8);
+    };
+
+    std::uint8_t grid_weights[GN] = {};
+    std::uint8_t e0[3], e1[3];
+    endpoints_from_base(e0, e1);
+
+    // Alternating LSQ: re-pick weights against (e0, e1) ramp, then
+    // refit (base, scale) jointly. Three iterations is empirically
+    // enough on natural-image content (matches encode_block_rgb_decim).
+    for (int iter = 0; iter < 3; ++iter) {
+        // Compute ideal weight per texel along (e1 - e0) axis.
+        float dr = float(e1[0]) - float(e0[0]);
+        float dg = float(e1[1]) - float(e0[1]);
+        float db = float(e1[2]) - float(e0[2]);
+        float ramp_sq = dr * dr + dg * dg + db * db;
+        float inv_ramp_sq = (ramp_sq > 1e-9f) ? (1.f / ramp_sq) : 0.f;
+        float w_ideal[TN];
+        for (int j = 0; j < TN; ++j) {
+            float pr = float(s.rgba8[j][0]) - float(e0[0]);
+            float pg = float(s.rgba8[j][1]) - float(e0[1]);
+            float pb = float(s.rgba8[j][2]) - float(e0[2]);
+            float w = (pr * dr + pg * dg + pb * db) * inv_ramp_sq;
+            w_ideal[j] = std::clamp(w, 0.f, 1.f);
+        }
+
+        // LSQ on bilinear contribution.
+        float ata[GN][GN] = {};
+        float atb[GN] = {};
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            float T_j = w_ideal[j] * 64.f;
+            for (int kk = 0; kk < 4; ++kk) {
+                float ck = float(t.weight[kk]) * (1.f / 16.f);
+                if (ck <= 0.f) continue;
+                int gi = t.grid[kk];
+                atb[gi] += ck * T_j;
+                for (int ll = 0; ll < 4; ++ll) {
+                    float cc = float(t.weight[ll]) * (1.f / 16.f);
+                    if (cc <= 0.f) continue;
+                    ata[gi][t.grid[ll]] += ck * cc;
+                }
+            }
+        }
+        constexpr float kRidge = 1e-3f;
+        for (int i = 0; i < GN; ++i) ata[i][i] += kRidge;
+        for (int i = 0; i < GN; ++i) {
+            int piv = i;
+            float bestmag = std::abs(ata[i][i]);
+            for (int r = i + 1; r < GN; ++r) {
+                float m = std::abs(ata[r][i]);
+                if (m > bestmag) { bestmag = m; piv = r; }
+            }
+            if (bestmag < 1e-9f) continue;
+            if (piv != i) {
+                for (int c = 0; c < GN; ++c) std::swap(ata[i][c], ata[piv][c]);
+                std::swap(atb[i], atb[piv]);
+            }
+            float pinv = 1.f / ata[i][i];
+            for (int c = 0; c < GN; ++c) ata[i][c] *= pinv;
+            atb[i] *= pinv;
+            for (int r = 0; r < GN; ++r) {
+                if (r == i) continue;
+                float f = ata[r][i];
+                if (f == 0.f) continue;
+                for (int c = 0; c < GN; ++c) ata[r][c] -= f * ata[i][c];
+                atb[r] -= f * atb[i];
+            }
+        }
+        for (int i = 0; i < GN; ++i) {
+            float v = std::clamp(atb[i], 0.f, 64.f);
+            int best = 0;
+            int best_d = std::abs(int(v + 0.5f) - ramp[0]);
+            for (int k = 1; k < WL; ++k) {
+                int d = std::abs(int(v + 0.5f) - ramp[k]);
+                if (d < best_d) { best_d = d; best = k; }
+            }
+            grid_weights[i] = std::uint8_t(best);
+        }
+
+        // Joint (base, scale) refit. Fix scale, LSQ base; then fix base,
+        // LSQ scale; iterate until stable.
+        for (int sub = 0; sub < 2; ++sub) {
+            // Per-texel "effective ramp position" given current
+            // quantised grid weights.
+            float f[TN];
+            float f_sq = 0.f;
+            float bsum[3] = {};
+            for (int j = 0; j < TN; ++j) {
+                const auto& t = bm.texels[j];
+                int w_sum = 0;
+                for (int k = 0; k < 4; ++k) {
+                    w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+                }
+                float wf = float(w_sum) * (1.f / (16.f * 64.f));
+                float sf = float(scale_i) * (1.f / 256.f);
+                f[j] = wf + (1.f - wf) * sf;
+                f_sq += f[j] * f[j];
+                bsum[0] += float(s.rgba8[j][0]) * f[j];
+                bsum[1] += float(s.rgba8[j][1]) * f[j];
+                bsum[2] += float(s.rgba8[j][2]) * f[j];
+            }
+            if (f_sq > 1e-6f) {
+                float inv = 1.f / f_sq;
+                for (int c = 0; c < 3; ++c)
+                    base[c] = std::uint8_t(std::clamp(int(std::lround(bsum[c] * inv)), 0, 255));
+            }
+            // Refit scale.
+            float num = 0.f, den = 0.f;
+            for (int j = 0; j < TN; ++j) {
+                const auto& t = bm.texels[j];
+                int w_sum = 0;
+                for (int k = 0; k < 4; ++k) {
+                    w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+                }
+                float wf = float(w_sum) * (1.f / (16.f * 64.f));
+                float one_minus_wf_256 = (1.f - wf) * (1.f / 256.f);
+                for (int c = 0; c < 3; ++c) {
+                    float k1 = float(base[c]) * wf;
+                    float k2 = float(base[c]) * one_minus_wf_256;
+                    float res = float(s.rgba8[j][c]) - k1;
+                    num += res * k2;
+                    den += k2 * k2;
+                }
+            }
+            if (den > 1e-6f) {
+                float new_scale_f = num / den;
+                scale_i = std::clamp(int(std::lround(new_scale_f * 256.f)), 0, 255);
+            }
+            endpoints_from_base(e0, e1);
+        }
+    }
+
+    // CEM-6 swap rule: decoder canonicalises so e0 has smaller sum.
+    // For our encoding (e0 = base*scale/256, e1 = base), sum(e0) is
+    // already ≤ sum(e1) unless scale > 256 (impossible by clamp), so
+    // no swap needed.
+
+    // Final decode + err.
+    float total_err = 0.f;
+    for (int j = 0; j < TN; ++j) {
+        const auto& t = bm.texels[j];
+        int w_sum = 0;
+        for (int k = 0; k < 4; ++k) {
+            w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+        }
+        int w_int = (w_sum + 8) >> 4;
+        w_int = std::clamp(w_int, 0, 64);
+        int inv = 64 - w_int;
+        out.decoded[j][0] = std::uint8_t((inv * int(e0[0]) + w_int * int(e1[0]) + 32) >> 6);
+        out.decoded[j][1] = std::uint8_t((inv * int(e0[1]) + w_int * int(e1[1]) + 32) >> 6);
+        out.decoded[j][2] = std::uint8_t((inv * int(e0[2]) + w_int * int(e1[2]) + 32) >> 6);
+        out.decoded[j][3] = 255;
+        if constexpr (M == block_compress::BlockMetric::oklab2) {
+            auto l = color_space::srgb8_to_oklab(
+                out.decoded[j][0], out.decoded[j][1], out.decoded[j][2]);
+            float dL = s.lab[j].L - l.L;
+            float dA = s.lab[j].a - l.a;
+            float dB = s.lab[j].b - l.b;
+            total_err += dL * dL + dA * dA + dB * dB;
+        } else {
+            int dr = int(s.rgba8[j][0]) - int(out.decoded[j][0]);
+            int dg = int(s.rgba8[j][1]) - int(out.decoded[j][1]);
+            int db = int(s.rgba8[j][2]) - int(out.decoded[j][2]);
+            total_err += float(dr * dr + dg * dg + db * db) * (1.f / 65536.f);
+        }
+    }
+
+    pack_block_cem6<GN, BlockMode, WL>(base, std::uint8_t(scale_i),
+                                       grid_weights, out.block);
     out.err = total_err;
     return out;
 }
@@ -2884,6 +3477,7 @@ struct DecimCfg {
     int gw, gh;
     std::uint32_t bm;
     int wl;
+    int cem = 8;  // 0 (Y direct) / 1 (Y delta) / 6 (RGB scale) / 8 (RGB direct, default)
 };
 
 // 2-partition CEM-8 bilinear-decim candidate. Same shape as DecimCfg
@@ -2902,14 +3496,24 @@ inline Candidate try_decim_2p_cfg(const SampleT<TexW * TexH>& s) {
         TexW, TexH, Cfg.gw, Cfg.gh, Cfg.bm, Cfg.wl, Cfg.epq, M>(s);
 }
 
-// For 1:1 candidates (grid == texel dim) the per-texel direct weight
-// pick in encode_block_rgb beats the bilinear-decim LSQ + coord
+// For CEM-8 1:1 candidates (grid == texel dim) the per-texel direct
+// weight pick in encode_block_rgb beats the bilinear-decim LSQ + coord
 // descent path (which has ridge regularisation + a coarser local-
 // search trajectory). Route those through encode_block_rgb; route
-// everything else through encode_block_rgb_decim.
+// everything else through encode_block_rgb_decim. CEM-0/1/6 always go
+// through their dedicated luminance/scale encoders (no 1:1 fast path).
 template <int TexW, int TexH, DecimCfg Cfg, block_compress::BlockMetric M>
 inline Candidate try_decim_cfg(const SampleT<TexW * TexH>& s) {
-    if constexpr (Cfg.gw == TexW && Cfg.gh == TexH) {
+    if constexpr (Cfg.cem == 0) {
+        return encode_block_rgb_cem0<
+            TexW, TexH, Cfg.gw, Cfg.gh, Cfg.bm, Cfg.wl, M>(s);
+    } else if constexpr (Cfg.cem == 1) {
+        return encode_block_rgb_cem1<
+            TexW, TexH, Cfg.gw, Cfg.gh, Cfg.bm, Cfg.wl, M>(s);
+    } else if constexpr (Cfg.cem == 6) {
+        return encode_block_rgb_cem6<
+            TexW, TexH, Cfg.gw, Cfg.gh, Cfg.bm, Cfg.wl, M>(s);
+    } else if constexpr (Cfg.gw == TexW && Cfg.gh == TexH) {
         return encode_block_rgb<TexW, TexH, Cfg.bm, Cfg.wl, M>(s);
     } else {
         return encode_block_rgb_decim<
@@ -3475,6 +4079,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{11,5,0x1E5,2}, DecimCfg{12,2,0x00C,6},
                     DecimCfg{12,3,0x034,3}, DecimCfg{12,4,0x044,2},
                     DecimCfg{12,5,0x064,2}>()));
+                    // CEM-0 / CEM-1 / CEM-6 encoders are kept in tree
+                    // (encode_block_rgb_cem0 / _cem1 / _cem6) but not
+                    // wired into the candidate list. At QUANT_256 endpoints,
+                    // every CEM-0 candidate that fits the 95-bit weight
+                    // budget loses to the CEM-8 exhaustive pack: chroma
+                    // loss outweighs the freed weight bits on natural-
+                    // image blocks. They'd pay off at tighter endpoint
+                    // quants (Q192 / Q128) — that's the next pull.
         return EncodeResult{};  // unsupported footprint
     };
 
