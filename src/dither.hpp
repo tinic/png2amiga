@@ -78,6 +78,15 @@ enum class Method : unsigned char {
     stucki,
     jarvis,
 
+    // Floyd-Steinberg with the residual transported in OKLab instead of
+    // sRGB. qe is one perceptual 3-vector, kernel is standard FS,
+    // accumulator lives in OKLab. Default strength 0.8 (tuned).
+    // Photographic content wins ~0.3–1.0 ΔS2 on 25-image DIV2K; hard-
+    // edge / flat-region graphics (logos) regress without --best, so
+    // opt-in only. Pairs strongly with --best (palette adapts to the
+    // residual transport).
+    floyd_steinberg_oklab,
+
     // Advanced error diffusion
     gilbert,            // Gilbert space-filling-curve error diffusion
     riemersma,          // Riemersma curve dither (exponential-decay error queue)

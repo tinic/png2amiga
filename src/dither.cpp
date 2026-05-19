@@ -3065,6 +3065,28 @@ DitherResult apply(const Image& image,
                                      jarvis_kernel,
                                      precomputed);
 
+    case Method::floyd_steinberg_oklab: {
+        // Experimental coupled-OKLab path: delegate to diffuse_raw_buffer
+        // with a plain palette-nearest picker. The shared scaffold branches
+        // internally on the experimental method and routes the residual
+        // through its OKLab accumulator instead of the sRGB one.
+        DitherResult result;
+        auto w = image.width();
+        auto h = image.height();
+        result.indices.resize(w * h);
+        PaletteSoA pal_soa;
+        fill_palette_soa(palette_lab, pal_soa);
+        auto picker = [&](const OKLab& target,
+                          std::size_t x,
+                          std::size_t y) -> PickResult {
+            auto [idx, chosen, dist_sq] = find_nearest_oklab_soa(target, pal_soa);
+            result.indices[y * w + x] = static_cast<std::uint8_t>(idx);
+            return PickResult{chosen, 0.5f};
+        };
+        result.total_error = diffuse_raw_buffer(image, settings, picker);
+        return result;
+    }
+
     case Method::dbs:
         return apply_dbs(image, pal_span, settings);
 
@@ -3282,6 +3304,8 @@ std::span<const DiffusionEntry> error_diffusion_kernel(Method method) {
         return floyd_steinberg_kernel;
     case Method::riemersma:
         return floyd_steinberg_kernel;
+    case Method::floyd_steinberg_oklab:
+        return floyd_steinberg_kernel;
     default:
         return {};
     }
@@ -3476,8 +3500,13 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
     auto kernel = error_diffusion_kernel(settings.method);
     bool is_diff = settings.method != Method::none && !is_ord && !kernel.empty();
     bool needs_riem = is_diff && needs_riemersma_queue(settings.method);
+    // v1 coupled-OKLab residual: qe is one perceptual 3-vector, accumulator
+    // lives in OKLab not sRGB. Picker contract is unchanged.
+    bool is_oklab = settings.method == Method::floyd_steinberg_oklab;
 
-    auto bias_map = is_diff ? compute_structure_bias(image, settings.method) : std::vector<float>{};
+    auto bias_map = (is_diff && !is_oklab)
+                        ? compute_structure_bias(image, settings.method)
+                        : std::vector<float>{};
 
     constexpr std::size_t RIEM_QSIZE = 16;
     std::array<float, RIEM_QSIZE> riem_weights{};
@@ -3506,11 +3535,26 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
     // structural difference behind their stronger-looking ED on
     // low-bit-depth output (EHB / OCS16).
     std::vector<Color3f> err_buf_s;
-    if (is_diff) err_buf_s.assign(w * h, Color3f{0, 0, 0});
+    if (is_diff && !is_oklab) err_buf_s.assign(w * h, Color3f{0, 0, 0});
     std::array<Color3f, RIEM_QSIZE> riem_queue_s{};
+
+    // Experimental path: OKLab accumulator (L, a, b stored per pixel).
+    // Per-axis ec_ab is half of ec_L because a/b have ~half the typical
+    // range of L in display-content OKLab. Both still scalar-tunable via
+    // the same --error-clamp knob for now; will split if blow-ups warrant.
+    std::vector<color_space::OKLab> err_buf_lab;
+    if (is_diff && is_oklab)
+        err_buf_lab.assign(w * h, color_space::OKLab{0.0f, 0.0f, 0.0f});
 
     float total_error = 0.0f;
     auto ec = settings.error_clamp;
+    // OKLab accumulator: L axis uses ec as-is; a/b halved because their
+    // typical range is half of L's. A 5×4 sweep (ec_L ∈ {0.20..0.60},
+    // ratio ∈ {0.25..2.0}) on 25-image DIV2K showed the clamp never
+    // binds in practice — the kernel + OKLab residual self-bound. Kept
+    // as a safety net.
+    auto ec_L = ec;
+    auto ec_ab = ec * 0.5f;
 
     for (std::size_t y = 0; y < h; ++y) {
         bool reverse = is_diff && settings.serpentine && (y & 1);
@@ -3521,36 +3565,52 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
             std::size_t x = reverse ? (w - 1 - step) : step;
             Color3f src_lin = image[x, y];
             auto src_lab = color_space::linear_to_oklab(src_lin);
-            Color3f src_s = color_space::linear_to_srgb(src_lin).clamped();
 
-            Color3f target_s = src_s;
-            if (needs_riem) {
-                Color3f carry{0, 0, 0};
-                for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
-                    std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
-                    carry.r += riem_queue_s[age].r * riem_weights[k];
-                    carry.g += riem_queue_s[age].g * riem_weights[k];
-                    carry.b += riem_queue_s[age].b * riem_weights[k];
+            color_space::OKLab target{};
+            Color3f target_s{0.0f, 0.0f, 0.0f};
+
+            if (is_oklab) {
+                // Coupled-OKLab residual: read accumulated perceptual
+                // error directly into the picker's space, no sRGB
+                // round-trip. ec is split per-axis.
+                target = src_lab;
+                if (is_diff) {
+                    auto& e = err_buf_lab[y * w + x];
+                    target.L += std::clamp(e.L, -ec_L, ec_L);
+                    target.a += std::clamp(e.a, -ec_ab, ec_ab);
+                    target.b += std::clamp(e.b, -ec_ab, ec_ab);
                 }
-                target_s.r += std::clamp(carry.r, -ec, ec);
-                target_s.g += std::clamp(carry.g, -ec, ec);
-                target_s.b += std::clamp(carry.b, -ec, ec);
-            } else if (is_diff) {
-                auto& e = err_buf_s[y * w + x];
-                target_s.r += std::clamp(e.r, -ec, ec);
-                target_s.g += std::clamp(e.g, -ec, ec);
-                target_s.b += std::clamp(e.b, -ec, ec);
-            }
-            // Round-trip target back to OKLab via linear so the
-            // picker keeps using a perceptual nearest-search.
-            Color3f target_lin = color_space::srgb_to_linear(target_s);
-            color_space::OKLab target = color_space::linear_to_oklab(target_lin);
-            if (!bias_map.empty()) target.L += bias_map[y * w + x];
-            if (is_ord) {
-                float thr = ordered_threshold(settings.method, x, y);
-                target.L += thr * settings.strength * 0.15f;
-                target.a += thr * settings.strength * 0.03f;
-                target.b += thr * settings.strength * 0.03f;
+            } else {
+                Color3f src_s = color_space::linear_to_srgb(src_lin).clamped();
+                target_s = src_s;
+                if (needs_riem) {
+                    Color3f carry{0, 0, 0};
+                    for (std::size_t k = 0; k < RIEM_QSIZE; ++k) {
+                        std::size_t age = (riem_head + RIEM_QSIZE - 1 - k) % RIEM_QSIZE;
+                        carry.r += riem_queue_s[age].r * riem_weights[k];
+                        carry.g += riem_queue_s[age].g * riem_weights[k];
+                        carry.b += riem_queue_s[age].b * riem_weights[k];
+                    }
+                    target_s.r += std::clamp(carry.r, -ec, ec);
+                    target_s.g += std::clamp(carry.g, -ec, ec);
+                    target_s.b += std::clamp(carry.b, -ec, ec);
+                } else if (is_diff) {
+                    auto& e = err_buf_s[y * w + x];
+                    target_s.r += std::clamp(e.r, -ec, ec);
+                    target_s.g += std::clamp(e.g, -ec, ec);
+                    target_s.b += std::clamp(e.b, -ec, ec);
+                }
+                // Round-trip target back to OKLab via linear so the
+                // picker keeps using a perceptual nearest-search.
+                Color3f target_lin = color_space::srgb_to_linear(target_s);
+                target = color_space::linear_to_oklab(target_lin);
+                if (!bias_map.empty()) target.L += bias_map[y * w + x];
+                if (is_ord) {
+                    float thr = ordered_threshold(settings.method, x, y);
+                    target.L += thr * settings.strength * 0.15f;
+                    target.a += thr * settings.strength * 0.03f;
+                    target.b += thr * settings.strength * 0.03f;
+                }
             }
 
             auto picked = pick(target, x, y);
@@ -3561,28 +3621,48 @@ float diffuse_raw_buffer(const Image& image, const Settings& settings, const Pix
             total_error += color_space::fma_dist_sq(dL, da, db);
 
             if (is_diff) {
-                Color3f chosen_lin = color_space::oklab_to_linear(picked.chosen_lab);
-                Color3f chosen_s = color_space::linear_to_srgb(chosen_lin).clamped();
-                Color3f qe_s{
-                    (target_s.r - chosen_s.r) * settings.strength,
-                    (target_s.g - chosen_s.g) * settings.strength,
-                    (target_s.b - chosen_s.b) * settings.strength,
-                };
-                if (needs_riem) {
-                    riem_queue_s[riem_head] = qe_s;
-                    riem_head = (riem_head + 1) % RIEM_QSIZE;
-                } else {
+                if (is_oklab) {
+                    // qe = (target − chosen) — leftover residual, matching
+                    // the sRGB path's semantics, just in OKLab.
+                    float qe_L = (target.L - picked.chosen_lab.L) * settings.strength;
+                    float qe_a = (target.a - picked.chosen_lab.a) * settings.strength;
+                    float qe_b = (target.b - picked.chosen_lab.b) * settings.strength;
                     for (auto& [kdx, kdy, kw] : kernel) {
                         auto nx = static_cast<std::ptrdiff_t>(x) + kdx * dir;
                         auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
                         if (nx < 0 || ny < 0) continue;
                         if (static_cast<std::size_t>(nx) >= w) continue;
                         if (static_cast<std::size_t>(ny) >= h) continue;
-                        auto& en = err_buf_s[static_cast<std::size_t>(ny) * w +
-                                             static_cast<std::size_t>(nx)];
-                        en.r += qe_s.r * kw;
-                        en.g += qe_s.g * kw;
-                        en.b += qe_s.b * kw;
+                        auto& en = err_buf_lab[static_cast<std::size_t>(ny) * w +
+                                               static_cast<std::size_t>(nx)];
+                        en.L += qe_L * kw;
+                        en.a += qe_a * kw;
+                        en.b += qe_b * kw;
+                    }
+                } else {
+                    Color3f chosen_lin = color_space::oklab_to_linear(picked.chosen_lab);
+                    Color3f chosen_s = color_space::linear_to_srgb(chosen_lin).clamped();
+                    Color3f qe_s{
+                        (target_s.r - chosen_s.r) * settings.strength,
+                        (target_s.g - chosen_s.g) * settings.strength,
+                        (target_s.b - chosen_s.b) * settings.strength,
+                    };
+                    if (needs_riem) {
+                        riem_queue_s[riem_head] = qe_s;
+                        riem_head = (riem_head + 1) % RIEM_QSIZE;
+                    } else {
+                        for (auto& [kdx, kdy, kw] : kernel) {
+                            auto nx = static_cast<std::ptrdiff_t>(x) + kdx * dir;
+                            auto ny = static_cast<std::ptrdiff_t>(y) + kdy;
+                            if (nx < 0 || ny < 0) continue;
+                            if (static_cast<std::size_t>(nx) >= w) continue;
+                            if (static_cast<std::size_t>(ny) >= h) continue;
+                            auto& en = err_buf_s[static_cast<std::size_t>(ny) * w +
+                                                 static_cast<std::size_t>(nx)];
+                            en.r += qe_s.r * kw;
+                            en.g += qe_s.g * kw;
+                            en.b += qe_s.b * kw;
+                        }
                     }
                 }
             }
@@ -3886,6 +3966,7 @@ constexpr MethodNameRow kMethodNames[] = {
     {"cluster-noise", Method::cluster_noise},
     {"fractal16", Method::fractal16},
     {"floyd-steinberg", Method::floyd_steinberg},
+    {"floyd-steinberg-oklab", Method::floyd_steinberg_oklab},
     {"atkinson", Method::atkinson},
     {"sierra-lite", Method::sierra_lite},
     {"stucki", Method::stucki},

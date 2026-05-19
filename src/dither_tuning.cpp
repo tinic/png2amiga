@@ -383,6 +383,22 @@ Defaults defaults_for(const Context& ctx) {
     switch (ctx.method) {
     case dither::Method::floyd_steinberg:
         return Defaults{0.76f, 0.35f};  // S2 56.80
+    case dither::Method::floyd_steinberg_oklab:
+        // 50-image DIV2K sweep, lores + hires, d=2..8 (OCS for d≤5 lores
+        // / d≤4 hires, AGA above). Peak strength is 0.80 at every depth;
+        // a single global tuning suffices. Mean ΔS2 vs FS at each peak:
+        //   lores  d2 +2.17  d3 +1.37  d4 +0.75  d5 +0.42
+        //          d6 +0.16  d7 +0.07  d8 +0.02
+        //   hires  d2 +1.05  d3 +1.79  d4 +1.02  d5 +0.44
+        //          d6 +0.22  d7 +0.12  d8 +0.05
+        // fs-oklab wins at every depth; the gap shrinks with depth, which
+        // is expected — a 256-color palette can satisfy almost any picker
+        // target so the residual transport space matters less. The high-
+        // strength robustness margin (S2 at s=1.0 minus S2 at peak) is
+        // also consistently smaller for fs-oklab than FS: FS collapses
+        // by 5–10 S2 past s=0.90 at low depth, fs-oklab stays within 2–4.
+        // ec is a safety net only; the OKLab residual self-bounds.
+        return Defaults{0.80f, 0.35f};
     case dither::Method::atkinson:
         return Defaults{0.74f, 0.35f};  // S2 56.53
     case dither::Method::sierra_lite:
