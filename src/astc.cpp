@@ -627,6 +627,300 @@ Candidate encode_block_rgba(const Sample16& s) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// QUANT_40 endpoint encoding (shared by dual-plane RGBA + 2-partition
+// CEM-8). Power-of-2 endpoint quants (QUANT_2/4/8/16/32/64/128/256)
+// have monotonic scramble; QUANT_40 + lower-than-256 levels do not,
+// so this scramble table is needed for the encoder side.
+// ---------------------------------------------------------------------------
+
+// QUANT_40 unquant table (decoded uint8 levels for 40 stored values).
+constexpr std::uint8_t kQuant40Unpack[40] = {
+      0, 255,  32, 223,  65, 190,  97, 158,
+      6, 249,  39, 216,  71, 184, 104, 151,
+     13, 242,  45, 210,  78, 177, 110, 145,
+     19, 236,  52, 203,  84, 171, 117, 138,
+     26, 229,  58, 197,  91, 164, 123, 132,
+};
+
+inline std::uint8_t quant40_pack(std::uint8_t v) {
+    int best = 0;
+    int best_d = std::abs(int(v) - int(kQuant40Unpack[0]));
+    for (int k = 1; k < 40; ++k) {
+        int d = std::abs(int(v) - int(kQuant40Unpack[k]));
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    return std::uint8_t(best);
+}
+
+// integer_of_quints[i2][i1][i0] — ASTC §16.6 quint-pack lookup (ported
+// from astcenc). 125 entries.
+constexpr std::uint8_t kQuintOf[5][5][5] = {
+    {{0, 1, 2, 3, 4},
+     {8, 9, 10, 11, 12},
+     {16, 17, 18, 19, 20},
+     {24, 25, 26, 27, 28},
+     {5, 13, 21, 29, 6}},
+    {{32, 33, 34, 35, 36},
+     {40, 41, 42, 43, 44},
+     {48, 49, 50, 51, 52},
+     {56, 57, 58, 59, 60},
+     {37, 45, 53, 61, 14}},
+    {{64, 65, 66, 67, 68},
+     {72, 73, 74, 75, 76},
+     {80, 81, 82, 83, 84},
+     {88, 89, 90, 91, 92},
+     {69, 77, 85, 93, 22}},
+    {{96, 97, 98, 99, 100},
+     {104, 105, 106, 107, 108},
+     {112, 113, 114, 115, 116},
+     {120, 121, 122, 123, 124},
+     {101, 109, 117, 125, 30}},
+    {{102, 103, 70, 71, 38},
+     {110, 111, 78, 79, 46},
+     {118, 119, 86, 87, 54},
+     {126, 127, 94, 95, 62},
+     {39, 47, 55, 63, 31}},
+};
+
+// BISE encode N values × QUANT_40 (3 bits + 1 quint) into output_data
+// starting at bit_offset. 3 chars per quint block (16 bits); 8 chars
+// (dual-plane RGBA) = 2 full blocks + 2-char partial = 43 bits total.
+void encode_ise_q40(const std::uint8_t* input_data,
+                    int character_count,
+                    std::uint8_t* output_data,
+                    int bit_offset) {
+    constexpr int bits = 3;
+    constexpr int mask = (1 << bits) - 1;
+    int i = 0;
+    int full_blocks = character_count / 3;
+
+    for (int j = 0; j < full_blocks; ++j) {
+        int i0 = input_data[i + 0] >> bits;
+        int i1 = input_data[i + 1] >> bits;
+        int i2 = input_data[i + 2] >> bits;
+        int T = kQuintOf[i2][i1][i0];
+
+        std::uint32_t pack;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 0) & 0x7) << bits));
+        write_bits(pack, bits + 3, bit_offset, output_data); bit_offset += bits + 3; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 3) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+        pack = std::uint32_t((input_data[i] & mask) | (((T >> 5) & 0x3) << bits));
+        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
+    }
+    if (i != character_count) {
+        int i2 = 0;
+        int i1 = (i + 1 >= character_count) ? 0 : (input_data[i + 1] >> bits);
+        int i0 = input_data[i + 0] >> bits;
+        int T = kQuintOf[i2][i1][i0];
+        static const int tbits[2]  = {3, 2};
+        static const int tshift[2] = {0, 3};
+        for (int j = 0; i < character_count; ++i, ++j) {
+            std::uint32_t pack = std::uint32_t(
+                (input_data[i] & mask) |
+                (((T >> tshift[j]) & ((1 << tbits[j]) - 1)) << bits));
+            write_bits(pack, bits + tbits[j], bit_offset, output_data);
+            bit_offset += bits + tbits[j];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dual-plane RGBA path (4x4, CEM 12 + D=1):
+//   - block_mode 0x442 (4x4 QUANT_4 weights + dual-plane bit set)
+//   - plane2_component = 3 (alpha)
+//   - 16 plane-1 weights drive RGB; 16 plane-2 weights drive alpha
+//   - QUANT_40 endpoints (BISE quint, 43 bits for 8 values — same quint
+//     pack the 2-partition path uses)
+// Decoupling alpha from the RGB ramp helps when alpha is poorly
+// correlated with colour (e.g., a particle texture with a soft mask).
+// ---------------------------------------------------------------------------
+
+// Pick QUANT_4 weights along a single 1D channel (used for the alpha
+// plane). Picks per-pixel w in 0..3 minimising err of the per-pixel
+// reconstruction against e0_alpha / e1_alpha.
+float pick_weights_q4_alpha(const Sample16& s,
+                            std::uint8_t e0_a, std::uint8_t e1_a,
+                            std::uint8_t out_w[16],
+                            std::uint8_t decoded_a[16]) {
+    std::uint8_t paint[kWeightLevels4];
+    for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+        int w = kWeightToInterp4[w_i];
+        int inv = 64 - w;
+        paint[w_i] = std::uint8_t((inv * int(e0_a) + w * int(e1_a) + 32) >> 6);
+    }
+    float tot = 0.f;
+    for (int p = 0; p < 16; ++p) {
+        int sa = int(s.alpha[p]);
+        int best = 0;
+        int best_e = 1 << 30;
+        for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+            int d = sa - int(paint[w_i]);
+            int e = d * d;
+            if (e < best_e) { best_e = e; best = w_i; }
+        }
+        out_w[p] = std::uint8_t(best);
+        decoded_a[p] = paint[best];
+        tot += float(best_e) * (1.f / 65536.f);
+    }
+    return tot;
+}
+
+// Pack a dual-plane CEM-12 4x4 block. Block mode 0x442 = 0x42 | (D<<10).
+void pack_block_rgba_dual(const std::uint8_t e0[4], const std::uint8_t e1[4],
+                          const std::uint8_t weights_rgb[16],
+                          const std::uint8_t weights_a[16],
+                          Block& out) {
+    std::uint8_t pcb[16] = {};
+
+    // Interleaved weight stream: [w_rgb[0], w_a[0], w_rgb[1], w_a[1], ...]
+    // 32 values × 2 bits = 64 weight bits, top-down with per-byte bit reverse.
+    std::uint8_t weightbuf[16] = {};
+    for (int i = 0; i < 16; ++i) {
+        write_bits(std::uint32_t(weights_rgb[i] & 0x3), 2, (i * 2) * 2 + 0, weightbuf);
+        write_bits(std::uint32_t(weights_a[i]   & 0x3), 2, (i * 2) * 2 + 2, weightbuf);
+    }
+    for (int i = 0; i < 16; ++i) {
+        pcb[i] = bitrev8(weightbuf[15 - i]);
+    }
+
+    constexpr std::uint32_t kBlockModeRgbaDual = 0x42 | (1u << 10);  // D=1
+    write_bits(kBlockModeRgbaDual, 11, 0, pcb);
+    write_bits(0, 2, 11, pcb);                 // partition_count - 1
+    write_bits(12, 4, 13, pcb);                // CEM = LDR RGBA direct
+
+    // Plane-2 component selector at (128 - 64 - 2) = bit 62.
+    write_bits(3, 2, 62, pcb);                 // 3 = alpha
+
+    // 8 endpoint values × QUANT_40 BISE (43 bits) at bit 17.
+    // Order: r0, r1, g0, g1, b0, b1, a0, a1.
+    std::uint8_t ep_packed[8];
+    ep_packed[0] = quant40_pack(e0[0]); ep_packed[1] = quant40_pack(e1[0]);
+    ep_packed[2] = quant40_pack(e0[1]); ep_packed[3] = quant40_pack(e1[1]);
+    ep_packed[4] = quant40_pack(e0[2]); ep_packed[5] = quant40_pack(e1[2]);
+    ep_packed[6] = quant40_pack(e0[3]); ep_packed[7] = quant40_pack(e1[3]);
+    encode_ise_q40(ep_packed, 8, pcb, 17);
+
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+template <block_compress::BlockMetric M>
+Candidate encode_block_rgba_dual(const Sample16& s) {
+    Candidate out{};
+
+    // Endpoint seed: PCA on RGB; alpha range min/max.
+    std::uint8_t e0[4], e1[4];
+    pca_seed_rgb(s, e0, e1);
+    int amin = 255, amax = 0;
+    for (int i = 0; i < 16; ++i) {
+        int a = int(s.alpha[i]);
+        if (a < amin) amin = a;
+        if (a > amax) amax = a;
+    }
+    e0[3] = std::uint8_t(amin);
+    e1[3] = std::uint8_t(amax);
+
+    // Initial weight pick — RGB plane uses 3-channel ramp, alpha plane is 1D.
+    std::uint8_t w_rgb[16], w_a[16];
+    std::uint8_t dec_rgb[16][4];
+    std::uint8_t dec_a[16];
+    float err_rgb = pick_weights<M, 4>(s, e0, e1, w_rgb, dec_rgb);
+    float err_a   = pick_weights_q4_alpha(s, e0[3], e1[3], w_a, dec_a);
+
+    // LSQ refit endpoints — separate 2x2 systems for RGB (uses w_rgb)
+    // and alpha (uses w_a). Reuse refit_endpoints<4> for RGB by ignoring
+    // alpha column; alpha solved inline below.
+    for (int it = 0; it < 4; ++it) {
+        std::uint8_t ne0[3], ne1[3];
+        bool ok_rgb = refit_endpoints<4>(s, w_rgb, ne0, ne1);
+        std::uint8_t ne0_a = e0[3], ne1_a = e1[3];
+        // Alpha LSQ refit (1D variant of refit_endpoints).
+        {
+            int n[kWeightLevels4] = {};
+            int sum[kWeightLevels4] = {};
+            for (int p = 0; p < 16; ++p) {
+                int k = w_a[p];
+                ++n[k];
+                sum[k] += int(s.alpha[p]);
+            }
+            float A00 = 0, A11 = 0, A01 = 0;
+            float B = 0, Bb = 0;
+            for (int k = 0; k < kWeightLevels4; ++k) {
+                if (n[k] == 0) continue;
+                float w1 = float(kWeightToInterp4[k]) * (1.f / 64.f);
+                float w0 = 1.f - w1;
+                float nk = float(n[k]);
+                A00 += nk * w0 * w0;
+                A11 += nk * w1 * w1;
+                A01 += nk * w0 * w1;
+                B  += w0 * float(sum[k]);
+                Bb += w1 * float(sum[k]);
+            }
+            float det = A00 * A11 - A01 * A01;
+            if (std::abs(det) >= 1e-6f) {
+                float inv = 1.f / det;
+                float c0 = (A11 * B - A01 * Bb) * inv;
+                float c1 = (-A01 * B + A00 * Bb) * inv;
+                ne0_a = std::uint8_t(std::clamp(int(std::lround(c0)), 0, 255));
+                ne1_a = std::uint8_t(std::clamp(int(std::lround(c1)), 0, 255));
+            }
+        }
+        if (!ok_rgb) break;
+        std::uint8_t new_w_rgb[16], new_w_a[16];
+        std::uint8_t new_dec_rgb[16][4], new_dec_a[16];
+        std::uint8_t ne[4] = {ne0[0], ne0[1], ne0[2], ne0_a};
+        std::uint8_t ne_hi[4] = {ne1[0], ne1[1], ne1[2], ne1_a};
+        float new_err_rgb = pick_weights<M, 4>(s, ne, ne_hi, new_w_rgb, new_dec_rgb);
+        float new_err_a   = pick_weights_q4_alpha(s, ne_hi[3], ne[3] == ne_hi[3] ? ne_hi[3] : ne_hi[3],
+                                                  new_w_a, new_dec_a);
+        // Use the simpler call without that swap (typo above):
+        new_err_a = pick_weights_q4_alpha(s, ne0_a, ne1_a, new_w_a, new_dec_a);
+        if (new_err_rgb + new_err_a >= err_rgb + err_a - 1e-7f) break;
+        err_rgb = new_err_rgb;
+        err_a   = new_err_a;
+        std::memcpy(e0, ne,    4);
+        std::memcpy(e1, ne_hi, 4);
+        std::memcpy(w_rgb, new_w_rgb, 16);
+        std::memcpy(w_a,   new_w_a,   16);
+        std::memcpy(dec_rgb, new_dec_rgb, sizeof(new_dec_rgb));
+        std::memcpy(dec_a,   new_dec_a,   sizeof(new_dec_a));
+    }
+
+    // Blue-contract on RGB (alpha is independent so left untouched).
+    int sum0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
+    int sum1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
+    if (sum0 > sum1) {
+        std::swap(e0[0], e1[0]);
+        std::swap(e0[1], e1[1]);
+        std::swap(e0[2], e1[2]);
+        for (int i = 0; i < 16; ++i) w_rgb[i] = std::uint8_t(3 - int(w_rgb[i]));
+    }
+
+    // Quantize endpoints to QUANT_40 then re-pick weights against the
+    // decoded paint ramps so reported err matches reconstruction.
+    std::uint8_t e0d[4], e1d[4];
+    for (int ch = 0; ch < 4; ++ch) {
+        e0d[ch] = kQuant40Unpack[quant40_pack(e0[ch])];
+        e1d[ch] = kQuant40Unpack[quant40_pack(e1[ch])];
+    }
+    std::uint8_t final_w_rgb[16], final_w_a[16];
+    std::uint8_t final_dec_rgb[16][4], final_dec_a[16];
+    float fr = pick_weights<M, 4>(s, e0d, e1d, final_w_rgb, final_dec_rgb);
+    float fa = pick_weights_q4_alpha(s, e0d[3], e1d[3], final_w_a, final_dec_a);
+
+    // Pack final decoded[] = RGB from plane 1, A from plane 2.
+    for (int i = 0; i < 16; ++i) {
+        out.decoded[i][0] = final_dec_rgb[i][0];
+        out.decoded[i][1] = final_dec_rgb[i][1];
+        out.decoded[i][2] = final_dec_rgb[i][2];
+        out.decoded[i][3] = final_dec_a[i];
+    }
+    pack_block_rgba_dual(e0d, e1d, final_w_rgb, final_w_a, out.block);
+    out.err = fr + fa;
+    return out;
+}
+
 // Single-partition CEM-8 RGB encoder, templated on (W, H, BlockMode, WL).
 // WL = weight-quant levels (8 or 4). QUANT_256 endpoints unconditional.
 template <int W, int H, std::uint32_t BlockMode, int WL, block_compress::BlockMetric M>
@@ -903,99 +1197,8 @@ std::uint8_t spec_select_partition(int seed, int x, int y, int z,
     return 3;
 }
 
-// QUANT_40 unquant table (decoded uint8 levels for 40 stored values).
-// Scrambled ordering — encoder must search for nearest.
-constexpr std::uint8_t kQuant40Unpack[40] = {
-      0, 255,  32, 223,  65, 190,  97, 158,
-      6, 249,  39, 216,  71, 184, 104, 151,
-     13, 242,  45, 210,  78, 177, 110, 145,
-     19, 236,  52, 203,  84, 171, 117, 138,
-     26, 229,  58, 197,  91, 164, 123, 132,
-};
-
-inline std::uint8_t quant40_pack(std::uint8_t v) {
-    int best = 0;
-    int best_d = std::abs(int(v) - int(kQuant40Unpack[0]));
-    for (int k = 1; k < 40; ++k) {
-        int d = std::abs(int(v) - int(kQuant40Unpack[k]));
-        if (d < best_d) { best_d = d; best = k; }
-    }
-    return std::uint8_t(best);
-}
-
-// integer_of_quints[i2][i1][i0] — ASTC spec §16.6 quint-pack lookup.
-// 125 entries, ported verbatim from astcenc.
-constexpr std::uint8_t kQuintOf[5][5][5] = {
-    {{0, 1, 2, 3, 4},
-     {8, 9, 10, 11, 12},
-     {16, 17, 18, 19, 20},
-     {24, 25, 26, 27, 28},
-     {5, 13, 21, 29, 6}},
-    {{32, 33, 34, 35, 36},
-     {40, 41, 42, 43, 44},
-     {48, 49, 50, 51, 52},
-     {56, 57, 58, 59, 60},
-     {37, 45, 53, 61, 14}},
-    {{64, 65, 66, 67, 68},
-     {72, 73, 74, 75, 76},
-     {80, 81, 82, 83, 84},
-     {88, 89, 90, 91, 92},
-     {69, 77, 85, 93, 22}},
-    {{96, 97, 98, 99, 100},
-     {104, 105, 106, 107, 108},
-     {112, 113, 114, 115, 116},
-     {120, 121, 122, 123, 124},
-     {101, 109, 117, 125, 30}},
-    {{102, 103, 70, 71, 38},
-     {110, 111, 78, 79, 46},
-     {118, 119, 86, 87, 54},
-     {126, 127, 94, 95, 62},
-     {39, 47, 55, 63, 31}},
-};
-
-// BISE encode N values × QUANT_40 (3 bits + 1 quint) into output_data,
-// starting at bit_offset. 3 chars per quint block (16 bits). 12 chars
-// uses 4 full blocks (64 bits) — no partial tail needed for our 2-part
-// CEM-8 case but the partial branch is here for completeness.
-void encode_ise_q40(const std::uint8_t* input_data,
-                    int character_count,
-                    std::uint8_t* output_data,
-                    int bit_offset) {
-    constexpr int bits = 3;
-    constexpr int mask = (1 << bits) - 1;
-    int i = 0;
-    int full_blocks = character_count / 3;
-
-    for (int j = 0; j < full_blocks; ++j) {
-        int i0 = input_data[i + 0] >> bits;
-        int i1 = input_data[i + 1] >> bits;
-        int i2 = input_data[i + 2] >> bits;
-        int T = kQuintOf[i2][i1][i0];
-
-        std::uint32_t pack;
-        pack = std::uint32_t((input_data[i] & mask) | (((T >> 0) & 0x7) << bits));
-        write_bits(pack, bits + 3, bit_offset, output_data); bit_offset += bits + 3; ++i;
-        pack = std::uint32_t((input_data[i] & mask) | (((T >> 3) & 0x3) << bits));
-        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
-        pack = std::uint32_t((input_data[i] & mask) | (((T >> 5) & 0x3) << bits));
-        write_bits(pack, bits + 2, bit_offset, output_data); bit_offset += bits + 2; ++i;
-    }
-    if (i != character_count) {
-        int i2 = 0;
-        int i1 = (i + 1 >= character_count) ? 0 : (input_data[i + 1] >> bits);
-        int i0 = input_data[i + 0] >> bits;
-        int T = kQuintOf[i2][i1][i0];
-        static const int tbits[2]  = {3, 2};
-        static const int tshift[2] = {0, 3};
-        for (int j = 0; i < character_count; ++i, ++j) {
-            std::uint32_t pack = std::uint32_t(
-                (input_data[i] & mask) |
-                (((T >> tshift[j]) & ((1 << tbits[j]) - 1)) << bits));
-            write_bits(pack, bits + tbits[j], bit_offset, output_data);
-            bit_offset += bits + tbits[j];
-        }
-    }
-}
+// (QUANT_40 helpers + encode_ise_q40 are defined earlier so the dual-
+// plane RGBA path + the 2-partition CEM-8 path can share them.)
 
 // Per-block partition assignment cache. assign[pidx][texel] stores
 // 0..(N-1) for N-partition 4×4 blocks (small_block=true, z=0).
@@ -1366,7 +1569,18 @@ Candidate encode_block_4x4(const Sample16& s) {
     for (int i = 0; i < 16; ++i) {
         if (s.alpha[i] != 255) { any_alpha = true; break; }
     }
-    if (any_alpha) return encode_block_rgba<M>(s);
+    if (any_alpha) {
+        // Phase 5 scaffolding (encode_block_rgba_dual) is in tree but
+        // gated off — the BISE-quint endpoint stream decodes correctly
+        // bit-for-bit when traced manually, yet astcenc reports a per-
+        // channel offset on round-trip (G/A channels off by one stored
+        // index). Single-plane CEM-12 already produces high-quality
+        // RGBA encodes; dual-plane is a niche win for textures with
+        // uncorrelated alpha. Leaving the path callable but unused so
+        // the next debugging pass has it ready.
+        (void)encode_block_rgba_dual<M>;
+        return encode_block_rgba<M>(s);
+    }
     Candidate one = encode_block_rgb<4, 4, kBlockModeRgb4x4, 8, M>(s);
     Candidate two = encode_block_rgb_2p<M>(s);
     return (two.err < one.err) ? two : one;
