@@ -22,6 +22,7 @@
 #define BCDEC_IMPLEMENTATION 1
 #include "bcdec/bcdec.h"
 
+#include "astcenc.h"
 #include <zstd.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION 1
@@ -43,6 +44,8 @@ constexpr std::uint32_t kVkFormatBc3Unorm = 137;
 constexpr std::uint32_t kVkFormatBc3Srgb = 138;
 constexpr std::uint32_t kVkFormatBc7Unorm = 145;
 constexpr std::uint32_t kVkFormatBc7Srgb = 146;
+// ASTC LDR 2D vkFormats span 157..184 (unorm/srgb interleaved per
+// footprint). is_astc() below uses the range check.
 constexpr std::uint32_t kVkFormatEtc2RgbUnorm = 147;
 constexpr std::uint32_t kVkFormatEtc2RgbSrgb = 148;
 
@@ -124,11 +127,12 @@ bool parse_ktx2(const std::vector<std::uint8_t>& f, Ktx2Image& out) {
                          out.vk_format == kVkFormatBc3Srgb);
     const bool is_bc7 = (out.vk_format == kVkFormatBc7Unorm ||
                          out.vk_format == kVkFormatBc7Srgb);
-    if (!is_etc2 && !is_bc1 && !is_bc2 && !is_bc3 && !is_bc7) {
+    const bool is_astc = (out.vk_format >= 157 && out.vk_format <= 184);
+    if (!is_etc2 && !is_bc1 && !is_bc2 && !is_bc3 && !is_bc7 && !is_astc) {
         std::fprintf(stderr,
                      "ktx2_to_png: unsupported vkFormat %u "
                      "(need 147/148 ETC2, 133/134 BC1, 135/136 BC2, "
-                     "137/138 BC3, or 145/146 BC7)\n",
+                     "137/138 BC3, 145/146 BC7, or 157-184 ASTC)\n",
                      out.vk_format);
         return false;
     }
@@ -202,6 +206,46 @@ int main(int argc, char* argv[]) {
     const int H = int(img.height);
     const int bcols = (W + 3) / 4;
     const int brows = (H + 3) / 4;
+
+    // ASTC: short-circuit to the whole-image astcenc decoder. Block
+    // footprint varies per vkFormat; the lookup below covers the 14
+    // LDR 2D formats (157..184).
+    const bool decode_astc = (img.vk_format >= 157 && img.vk_format <= 184);
+    if (decode_astc) {
+        static const std::pair<int, int> kAstcDims[] = {
+            {4, 4},   {5, 4},  {5, 5},   {6, 5},   {6, 6},
+            {8, 5},   {8, 6},  {8, 8},   {10, 5},  {10, 6},
+            {10, 8}, {10, 10}, {12, 10}, {12, 12}};
+        int idx = (int(img.vk_format) - 157) / 2;
+        int bw = kAstcDims[idx].first;
+        int bh = kAstcDims[idx].second;
+        astcenc_config cfg{};
+        astcenc_config_init(ASTCENC_PRF_LDR_SRGB,
+                            std::uint32_t(bw), std::uint32_t(bh), 1u,
+                            0.0f, ASTCENC_FLG_DECOMPRESS_ONLY, &cfg);
+        astcenc_context* ctx = nullptr;
+        if (astcenc_context_alloc(&cfg, 1u, &ctx) != ASTCENC_SUCCESS) {
+            std::fprintf(stderr, "ktx2_to_png: astcenc_context_alloc failed\n");
+            return 1;
+        }
+        std::vector<std::uint8_t> rgba_buf(std::size_t(W) * std::size_t(H) * 4u);
+        astcenc_image img2{};
+        img2.dim_x = std::uint32_t(W); img2.dim_y = std::uint32_t(H); img2.dim_z = 1u;
+        img2.data_type = ASTCENC_TYPE_U8;
+        void* slices[1] = {rgba_buf.data()};
+        img2.data = slices;
+        astcenc_swizzle sw{ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+        astcenc_decompress_image(ctx, blocks_ptr, blocks_len, &img2, &sw, 0u);
+        astcenc_context_free(ctx);
+        if (!stbi_write_png(argv[2], W, H, 4, rgba_buf.data(), W * 4)) {
+            std::fprintf(stderr, "ktx2_to_png: stbi_write_png failed for %s\n", argv[2]);
+            return 73;
+        }
+        std::fprintf(stderr, "ktx2_to_png: wrote %s (%dx%d 4ch ASTC %dx%d, vkFormat %u)\n",
+                     argv[2], W, H, bw, bh, img.vk_format);
+        return 0;
+    }
+
     const bool is16bpp = (img.vk_format == kVkFormatBc7Unorm ||
                           img.vk_format == kVkFormatBc7Srgb ||
                           img.vk_format == kVkFormatBc3Unorm ||
