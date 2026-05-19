@@ -60,18 +60,33 @@ constexpr int kBlockH = 4;
 // → bits 0..1 = 10, bit 4 = 0).
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb5x5  = 0xE2;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb6x5  = 0x162;
+// QUANT_2 weight footprints (binary, 1bpw). 6x6: 36w×1=36; 8x5: 40w;
+// 8x6: 48w. Quality is expected to suffer — block reduces to "snap each
+// pixel to one of two endpoints" — but the bit-budget supports
+// QUANT_256 endpoints for all three.
+//
+// Decoded via decode_block_mode_2d:
+//   6x6: else branch, case 2, A=0, B=0, (block_mode>>2)&3 = 1 → 0x104
+//   8x5: first branch, case 1 (x_w=B+8=8), A=3, B=0          → 0x065
+//   8x6: else branch, case 2, A=2 (x_w=8), B=0 (y_w=6)        → 0x144
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb6x6  = 0x104;
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb8x5  = 0x065;
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb8x6  = 0x144;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb  = kBlockModeRgb4x4;
 constexpr std::uint32_t kBlockModeRgba = kBlockModeRgba4x4;
 
 constexpr int kWeightLevels8 = 8;
 constexpr int kWeightLevels4 = 4;
+[[maybe_unused]] constexpr int kWeightLevels2 = 2;
 
 // Pre-computed weight ramps scaled to the canonical 0..64 range used
 // in the ASTC paint formula `((64-w)*e0 + w*e1) / 64`. Per ASTC §16:
 //   QUANT_8 = {0, 9, 18, 27, 37, 46, 55, 64}
 //   QUANT_4 = {0, 21, 43, 64}
+//   QUANT_2 = {0, 64}                  (binary, used for 6x6+ footprints)
 constexpr int kWeightToInterp8[kWeightLevels8] = {0, 9, 18, 27, 37, 46, 55, 64};
 constexpr int kWeightToInterp4[kWeightLevels4] = {0, 21, 43, 64};
+constexpr int kWeightToInterp2[kWeightLevels2] = {0, 64};
 
 // (legacy kWeightLevels / kWeightToInterp aliases removed — superseded
 // by weight_ramp<WL>() + the kWeightLevels8 / kWeightLevels4 constants.)
@@ -194,7 +209,8 @@ template <int WL>
 constexpr const int* weight_ramp() {
     if constexpr (WL == 8) return kWeightToInterp8;
     else if constexpr (WL == 4) return kWeightToInterp4;
-    else { static_assert(WL == 8 || WL == 4, "WL must be 4 or 8"); return nullptr; }
+    else if constexpr (WL == 2) return kWeightToInterp2;
+    else { static_assert(WL == 8 || WL == 4 || WL == 2, "WL must be 2, 4, or 8"); return nullptr; }
 }
 
 template <int WL>
@@ -358,8 +374,8 @@ inline std::uint8_t bitrev8(std::uint8_t v) {
 template <int N, std::uint32_t BlockMode, int WL>
 void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
                 const std::uint8_t weights[N], Block& out) {
-    constexpr int BPW = (WL == 8) ? 3 : 2;
-    constexpr std::uint32_t WMask = (WL == 8) ? 0x7u : 0x3u;
+    constexpr int BPW = (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
+    constexpr std::uint32_t WMask = (1u << BPW) - 1u;
     std::uint8_t pcb[16] = {};
 
     // Weight buffer: N × BPW-bit values LSB-first, then per-byte bit-
@@ -1353,6 +1369,15 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn<6, 5, kBlockModeRgb6x5, 4, M>());
+        if (W == 6 && H == 6)
+            return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
+                                           make_encode_fn<6, 6, kBlockModeRgb6x6, 2, M>());
+        if (W == 8 && H == 5)
+            return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
+                                           make_encode_fn<8, 5, kBlockModeRgb8x5, 2, M>());
+        if (W == 8 && H == 6)
+            return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
+                                           make_encode_fn<8, 6, kBlockModeRgb8x6, 2, M>());
         return EncodeResult{};  // unsupported footprint
     };
 

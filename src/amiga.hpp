@@ -163,6 +163,9 @@ enum class Mode : unsigned char {
     astc_5x4,
     astc_5x5,
     astc_6x5,
+    astc_6x6,
+    astc_8x5,
+    astc_8x6,
 
     // BC2 (DXT3) RGBA block-compressed texture. 4×4 blocks, 8 bpp.
     // BC1 RGB color block + 16 × 4-bit explicit alpha (no interp).
@@ -391,6 +394,9 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     case Mode::astc_5x4:
     case Mode::astc_5x5:
     case Mode::astc_6x5:
+    case Mode::astc_6x6:
+    case Mode::astc_8x5:
+    case Mode::astc_8x6:
     case Mode::bc2:
     case Mode::bc3:
     case Mode::bc7:
@@ -478,7 +484,9 @@ constexpr bool is_bc2(Mode mode) noexcept { return mode == Mode::bc2; }
 constexpr bool is_bc3(Mode mode) noexcept { return mode == Mode::bc3; }
 constexpr bool is_astc(Mode mode) noexcept {
     return mode == Mode::astc_4x4 || mode == Mode::astc_5x4 ||
-           mode == Mode::astc_5x5 || mode == Mode::astc_6x5;
+           mode == Mode::astc_5x5 || mode == Mode::astc_6x5 ||
+           mode == Mode::astc_6x6 || mode == Mode::astc_8x5 ||
+           mode == Mode::astc_8x6;
 }
 
 // BC7 RGBA block compression — same bypass treatment as etc2.
