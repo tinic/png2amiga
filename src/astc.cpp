@@ -2219,6 +2219,21 @@ struct DecimCfg {
     int wl;
 };
 
+// For 1:1 candidates (grid == texel dim) the per-texel direct weight
+// pick in encode_block_rgb beats the bilinear-decim LSQ + coord
+// descent path (which has ridge regularisation + a coarser local-
+// search trajectory). Route those through encode_block_rgb; route
+// everything else through encode_block_rgb_decim.
+template <int TexW, int TexH, DecimCfg Cfg, block_compress::BlockMetric M>
+inline Candidate try_decim_cfg(const SampleT<TexW * TexH>& s) {
+    if constexpr (Cfg.gw == TexW && Cfg.gh == TexH) {
+        return encode_block_rgb<TexW, TexH, Cfg.bm, Cfg.wl, M>(s);
+    } else {
+        return encode_block_rgb_decim<
+            TexW, TexH, Cfg.gw, Cfg.gh, Cfg.bm, Cfg.wl, M>(s);
+    }
+}
+
 template <int TexW, int TexH, block_compress::BlockMetric M, DecimCfg... Cfgs>
 auto make_encode_fn_decim_pack() {
     return [](const SampleT<TexW * TexH>& s) {
@@ -2226,8 +2241,7 @@ auto make_encode_fn_decim_pack() {
         best.err = std::numeric_limits<float>::infinity();
         ((
             [&] {
-                Candidate c = encode_block_rgb_decim<
-                    TexW, TexH, Cfgs.gw, Cfgs.gh, Cfgs.bm, Cfgs.wl, M>(s);
+                Candidate c = try_decim_cfg<TexW, TexH, Cfgs, M>(s);
                 if (c.err < best.err) best = c;
             }()
         ), ...);
@@ -2362,15 +2376,15 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // per-block min-err pick. Candidate lists generated from a
         // port of astcenc_block_sizes.cpp:decode_block_mode_2d — see
         // tools/enum_astc_modes.py for the regen script.
-        // 5x4 keeps the dedicated 1:1 encode_block_rgb path (Q8 ramp,
-        // per-texel exact weight assignment). The exhaustive decim
-        // pack regresses on 5x4 because encode_block_rgb_decim's
-        // bilinear LSQ + coord descent finds a worse local optimum
-        // for the trivially-bilinear 1:1 case than the per-texel
-        // direct pick used by the 1:1 specialization.
         if (W == 5 && H == 4)
             return encode_image_impl<5, 4>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn<5, 4, kBlockModeRgb5x4, 8, M>());
+                make_encode_fn_decim_pack<5, 4, M,
+                    DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+                    DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+                    DecimCfg{3,4,0x3DF,32}, DecimCfg{4,2,0x213,32},
+                    DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+                    DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
+                    DecimCfg{5,4,0x0D3,8}>());
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
                 make_encode_fn_decim_pack<5, 5, M,
